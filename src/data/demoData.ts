@@ -1,0 +1,245 @@
+import type {
+  Diagnosis,
+  HardwarePreview,
+  ReportSession,
+  TrainingRecommendation,
+} from "../types/report";
+import { productCopy } from "./productCopy";
+
+export const reportSession: ReportSession = {
+  athlete: "球馆体验用户 A",
+  venue: "北京体育大学匹克球训练场",
+  date: "2026-05-04",
+  level: "大众进阶",
+  reportId: "PV-20260504-018",
+  summary:
+    "本次训练以底线相持和中场上网衔接为主，落点控制稳定，但反手回球后的回位速度仍影响下一拍质量。",
+  metrics: [
+    {
+      id: "overall",
+      label: "综合评分",
+      value: "86",
+      detail: "击球稳定性和落点控制优于同级样本",
+      trend: "+8",
+      direction: "up",
+    },
+    {
+      id: "speed",
+      label: "最高球速",
+      value: "54 km/h",
+      detail: "正手抽击段速度峰值",
+      trend: "+5 km/h",
+      direction: "up",
+    },
+    {
+      id: "movement",
+      label: "移动效率",
+      value: "78%",
+      detail: "回位路径存在 2 次绕行",
+      trend: "-4%",
+      direction: "down",
+    },
+    {
+      id: "rally",
+      label: "相持稳定",
+      value: "12 拍",
+      detail: "最长有效回合",
+      trend: "持平",
+      direction: "steady",
+    },
+    {
+      id: "accuracy",
+      label: "落点准确",
+      value: "72%",
+      detail: "目标区命中率",
+      trend: "+6%",
+      direction: "up",
+    },
+  ],
+  landingPoints: [
+    { id: "p1", x: 71, y: 26, intensity: 0.88, label: "右侧底线深区" },
+    { id: "p2", x: 68, y: 42, intensity: 0.64, label: "右侧中场" },
+    { id: "p3", x: 41, y: 32, intensity: 0.72, label: "反手斜线压制" },
+    { id: "p4", x: 29, y: 67, intensity: 0.45, label: "网前小球" },
+    { id: "p5", x: 55, y: 74, intensity: 0.58, label: "中路回球" },
+    { id: "p6", x: 82, y: 63, intensity: 0.35, label: "边线尝试" },
+  ],
+  routes: [
+    {
+      id: "r1",
+      from: { id: "r1-from", x: 24, y: 76, intensity: 0.4, label: "左后场" },
+      to: { id: "r1-to", x: 72, y: 27, intensity: 0.9, label: "右后场" },
+      label: "反手斜线压底",
+      result: "受迫回球",
+    },
+    {
+      id: "r2",
+      from: { id: "r2-from", x: 58, y: 80, intensity: 0.5, label: "中后场" },
+      to: { id: "r2-to", x: 30, y: 38, intensity: 0.7, label: "左中场" },
+      label: "正手变线",
+      result: "得分",
+    },
+    {
+      id: "r3",
+      from: { id: "r3-from", x: 42, y: 73, intensity: 0.5, label: "反手位" },
+      to: { id: "r3-to", x: 57, y: 49, intensity: 0.45, label: "中路过渡" },
+      label: "过渡回合",
+      result: "相持",
+    },
+  ],
+  movementPath: [
+    { x: 50, y: 83 },
+    { x: 38, y: 74 },
+    { x: 31, y: 66 },
+    { x: 44, y: 58 },
+    { x: 63, y: 64 },
+    { x: 70, y: 72 },
+    { x: 54, y: 81 },
+    { x: 48, y: 83 },
+  ],
+  rallies: [
+    {
+      id: "ra1",
+      title: "第 3 回合",
+      duration: "18.6s",
+      shots: 12,
+      pattern: "反手斜线压制 → 正手变线",
+      result: "主动得分",
+      observation: "连续三拍压向对手反手后，正手变线质量高，是本场最佳进攻回合。",
+    },
+    {
+      id: "ra2",
+      title: "第 7 回合",
+      duration: "11.2s",
+      shots: 8,
+      pattern: "中场相持 → 回位滞后",
+      result: "受迫失误",
+      observation: "反手回球后重心停留在左侧，下一拍启动慢，导致击球点偏晚。",
+    },
+    {
+      id: "ra3",
+      title: "第 12 回合",
+      duration: "14.9s",
+      shots: 10,
+      pattern: "网前小球 → 底线恢复",
+      result: "相持延续",
+      observation: "网前处理稳定，但后撤路径偏长，可通过分腿垫步缩短恢复时间。",
+    },
+  ],
+};
+
+export const diagnoses: Diagnosis[] = [
+  {
+    id: "backswing",
+    issue: "引拍滞后",
+    severity: "中",
+    evidence: "反手位来球中，击球前 280ms 肘部展开不足，触球点平均后移 18cm。",
+    suggestion: "在反手准备阶段提前完成肩髋转向，降低拍头等待时间。",
+    expectedOutcome: "提升反手迎前击球比例，减少受迫高球。",
+    priority: "优先级 1",
+  },
+  {
+    id: "balance",
+    issue: "重心偏移",
+    severity: "高",
+    evidence: "中场连续相持时，身体重心 4 次偏离支撑脚连线外侧。",
+    suggestion: "加入分腿垫步和小碎步回位训练，限制击球后身体继续外飘。",
+    expectedOutcome: "提升下一拍启动速度，稳定连续回合质量。",
+    priority: "优先级 2",
+  },
+  {
+    id: "backhand-placement",
+    issue: "反手落点稳定性不足",
+    severity: "中",
+    evidence: "反手斜线目标区命中率 61%，低于本次正手变线命中率 78%。",
+    suggestion: "以 3 组 20 球为单位练习反手斜线深区，目标落点控制在底线前 1.2m。",
+    expectedOutcome: "增强反手回球深度，减少对手上网机会。",
+    priority: "优先级 3",
+  },
+];
+
+export const trainingRecommendations: TrainingRecommendation[] = [
+  {
+    id: "tr1",
+    issueId: "backswing",
+    title: "反手提前引拍对标",
+    learningContent: "教学视频占位：反手准备节奏与肩髋转向",
+    practiceTask: "连续 4 组反手斜线深区，每组 20 球，记录目标区命中率。",
+    nextTarget: "下次训练反手目标区命中率达到 68%",
+    progress: {
+      previous: 55,
+      current: 61,
+      target: 68,
+      unit: "%",
+    },
+  },
+  {
+    id: "tr2",
+    issueId: "balance",
+    title: "分腿垫步与回位路径",
+    learningContent: "动作对标占位：击球后第一步启动与回位路径",
+    practiceTask: "完成 6 轮中场相持-回位训练，每轮 45 秒，重点观察回位耗时。",
+    nextTarget: "平均回位时间从 1.42s 降至 1.25s",
+    progress: {
+      previous: 1.58,
+      current: 1.42,
+      target: 1.25,
+      unit: "s",
+    },
+  },
+];
+
+export const hardwarePreview: HardwarePreview = {
+  phaseLabel: productCopy.hardware.title,
+  disclaimer: productCopy.hardware.disclaimer,
+  metrics: [
+    {
+      id: "sweet",
+      label: "甜区命中率",
+      value: "74%",
+      detail: "TENG 3x3 阵列模拟输出",
+    },
+    {
+      id: "impact",
+      label: "击球力度",
+      value: "8.2 N*",
+      detail: "由电压幅值映射的演示值",
+    },
+    {
+      id: "swing",
+      label: "挥拍速度",
+      value: "21.4 m/s",
+      detail: "IMU 角速度与线加速度融合",
+    },
+    {
+      id: "quality",
+      label: "击球质量",
+      value: "88",
+      detail: "甜区、速度、角度综合评分",
+    },
+  ],
+  sweetZone: [
+    { id: "z1", row: 1, col: 1, intensity: 0.28 },
+    { id: "z2", row: 1, col: 2, intensity: 0.48 },
+    { id: "z3", row: 1, col: 3, intensity: 0.22 },
+    { id: "z4", row: 2, col: 1, intensity: 0.52 },
+    { id: "z5", row: 2, col: 2, intensity: 0.95 },
+    { id: "z6", row: 2, col: 3, intensity: 0.62 },
+    { id: "z7", row: 3, col: 1, intensity: 0.18 },
+    { id: "z8", row: 3, col: 2, intensity: 0.44 },
+    { id: "z9", row: 3, col: 3, intensity: 0.31 },
+  ],
+  highlightedCellId: "z5",
+  fusionPoints: [
+    {
+      visual: "球路压向右侧底线深区",
+      sensor: "甜区中心偏右命中，力度峰值稳定",
+      insight: "该拍线路质量高，可作为正手变线模板。",
+    },
+    {
+      visual: "反手回球后移动路径绕行",
+      sensor: "挥拍末段角速度下降",
+      insight: "需要先恢复支撑姿态，再追求反手深度。",
+    },
+  ],
+};
