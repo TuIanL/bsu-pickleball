@@ -1,8 +1,5 @@
-# interactive-performance-report Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change build-digital-interaction-platform. Update Purpose after archive.
-## Requirements
 ### Requirement: Report-first entry experience
 
 The system SHALL provide a product demo experience where users can enter a pickleball post-session analysis report through the layered overview, visual analysis workspace, and focused report detail pages rather than relying on one long report-first scrolling page.
@@ -57,4 +54,3 @@ The system SHALL keep report panels, controls, text, navigation, and visualizati
 
 - **WHEN** the viewport width is narrow
 - **THEN** report pages and visual analysis modules stack into stable blocks with constrained visualization aspect ratios and no incoherent overlap
-

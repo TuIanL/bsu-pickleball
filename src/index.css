@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  color: #f8fafc;
+  background: #070a0d;
+  font-family:
+    Inter, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial,
+    "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --surface-0: #070a0d;
+  --surface-1: #0b0f12;
+  --surface-2: #111318;
+  --surface-3: #151a1f;
+  --surface-4: #171c22;
+  --text-strong: #f8fafc;
+  --text-soft: #a7b0ba;
+  --line-dark: rgba(255, 255, 255, 0.08);
+  --action-green: #13d208;
+  --glow-green: #54fe49;
+  --pickle-lime: #d9ff3f;
+  --court-blue: #2f80ed;
+  --warning-orange: #ff9500;
+  --error-red: #ff4d4f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: #070a0d;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(84, 254, 73, 0.16), transparent 30rem),
+    radial-gradient(circle at 82% 12%, rgba(47, 128, 237, 0.14), transparent 28rem),
+    linear-gradient(180deg, #070a0d 0%, #0b0f12 42%, #070a0d 100%);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  color: #071008;
+  background: #54fe49;
+}
+
+@layer components {
+  .sport-card {
+    @apply rounded-2xl border border-white/10 bg-white/[0.055] backdrop-blur;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.32);
+  }
+
+  .glass-panel {
+    @apply border border-white/10 bg-white/[0.075] backdrop-blur-xl;
+  }
+
+  .green-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-[#13D208] px-5 py-3 text-sm font-bold text-[#071008] transition hover:-translate-y-0.5 hover:bg-[#54FE49] focus:outline-none focus:ring-2 focus:ring-[#54FE49] focus:ring-offset-2 focus:ring-offset-[#070A0D];
+    box-shadow: 0 0 42px rgba(84, 254, 73, 0.22);
+  }
+
+  .quiet-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-3 text-sm font-semibold text-slate-100 transition hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/[0.1] focus:outline-none focus:ring-2 focus:ring-white/30 focus:ring-offset-2 focus:ring-offset-[#070A0D];
+  }
+}

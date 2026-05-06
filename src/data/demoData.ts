@@ -1,8 +1,24 @@
 import type {
+  CoachNote,
+  DashboardMetric,
   Diagnosis,
+  DrillRecommendation,
   HardwarePreview,
+  Highlight,
+  MatchSummary,
+  NavigationItem,
+  OverviewCard,
+  PlayerMarker,
+  ProgressPoint,
+  ReportAction,
+  ReportDefinition,
   ReportSession,
+  ShotRow,
+  ShotTrajectory,
+  SkillRating,
+  TimelineMarker,
   TrainingRecommendation,
+  VideoOverlayLabel,
 } from "../types/report";
 import { productCopy } from "./productCopy";
 
@@ -243,3 +259,525 @@ export const hardwarePreview: HardwarePreview = {
     },
   ],
 };
+
+export const platformNavigation: NavigationItem[] = [
+  { id: "dashboard", label: "Dashboard", shortLabel: "Home", path: "/" },
+  { id: "matches", label: "Matches", shortLabel: "Vision", path: "/vision" },
+  { id: "shots", label: "Shot Explorer", shortLabel: "Reports", path: "/reports/landing" },
+  { id: "progress", label: "Progress", shortLabel: "Progress", path: "/training" },
+  { id: "drills", label: "Drills", shortLabel: "Drills", path: "/training" },
+  { id: "coach", label: "Coach Mode", shortLabel: "Hardware", path: "/hardware" },
+];
+
+export const matchSummary: MatchSummary = {
+  title: "Beijing Sport University Court Session",
+  subtitle: "AI match analysis · doubles training sample",
+  date: "2026-05-04",
+  venue: "北京体育大学匹克球训练场",
+  teams: "Team Lime vs Team Blue",
+  score: "11 - 8",
+  currentRally: "Rally 24 · 18 shots",
+  currentTime: "08:42",
+  duration: "12:16",
+};
+
+export const overviewCards: OverviewCard[] = [
+  {
+    id: "vision",
+    title: "AI 视频回放",
+    body: "从回合片段里直接看到球路轨迹、站位变化和关键失误原因。",
+    path: "/vision",
+    metric: "24 rallies indexed",
+  },
+  {
+    id: "reports",
+    title: "分层数据报告",
+    body: "落点、步法、战术和动作诊断拆成独立报告，适合讲解和复盘。",
+    path: "/reports/landing",
+    metric: "4 report views",
+  },
+  {
+    id: "training",
+    title: "训练建议闭环",
+    body: "把弱项转成下一次训练任务，而不是停留在一个分数。",
+    path: "/training",
+    metric: "4 drills ready",
+  },
+  {
+    id: "hardware",
+    title: "二期硬件融合",
+    body: "用模拟 TENG-IMU 数据说明未来智能球拍如何接入视觉分析。",
+    path: "/hardware",
+    metric: "Phase 2 preview",
+  },
+];
+
+export const playerMarkers: PlayerMarker[] = [
+  { id: "a", label: "A", team: "near", x: 28, y: 72, color: "#54FE49" },
+  { id: "b", label: "B", team: "near", x: 68, y: 76, color: "#D9FF3F" },
+  { id: "c", label: "C", team: "far", x: 34, y: 23, color: "#2F80ED" },
+  { id: "d", label: "D", team: "far", x: 75, y: 28, color: "#FF9500" },
+];
+
+export const shotTrajectories: ShotTrajectory[] = [
+  {
+    id: "third-drop",
+    path: "M28 72 C42 48, 52 43, 66 31",
+    color: "#54FE49",
+    label: "3rd Shot Drop",
+  },
+  {
+    id: "drive",
+    path: "M69 76 C62 60, 51 45, 35 25",
+    color: "#D9FF3F",
+    label: "High Risk Drive",
+  },
+  {
+    id: "dink",
+    path: "M35 24 C44 38, 53 39, 63 38",
+    color: "#2F80ED",
+    label: "Kitchen Pattern",
+  },
+];
+
+export const videoOverlayLabels: VideoOverlayLabel[] = [
+  { id: "drop", label: "3rd Shot Drop", tone: "training", x: 54, y: 42 },
+  { id: "drive", label: "High Risk Drive", tone: "risk", x: 39, y: 31 },
+  { id: "error", label: "Kitchen Error", tone: "error", x: 63, y: 47 },
+  { id: "pattern", label: "Winning Pattern", tone: "advantage", x: 72, y: 24 },
+];
+
+export const timelineMarkers: TimelineMarker[] = [
+  { id: "serve", time: "00:12", position: 9, label: "Deep serve starts pressure", tone: "advantage" },
+  { id: "third", time: "02:44", position: 28, label: "Third-shot drop lands short", tone: "risk" },
+  { id: "dink", time: "06:18", position: 56, label: "Late dink error after sixth exchange", tone: "error" },
+  { id: "winner", time: "08:42", position: 76, label: "Backhand depth sets up winner", tone: "advantage" },
+];
+
+export const highlights: Highlight[] = [
+  {
+    id: "h1",
+    title: "Long Rally #24",
+    time: "08:42",
+    result: "Winning Pattern",
+    tone: "advantage",
+    description: "反手深区接发后，第六拍获得正手变线窗口。",
+  },
+  {
+    id: "h2",
+    title: "Kitchen Exchange #17",
+    time: "06:18",
+    result: "Unforced Error",
+    tone: "error",
+    description: "网前第六拍后拍面打开过早，球弹起被抓攻。",
+  },
+  {
+    id: "h3",
+    title: "Third Shot #09",
+    time: "02:44",
+    result: "Short Drop",
+    tone: "risk",
+    description: "右侧半场第三拍吊球落点偏浅，进入过渡区压力增加。",
+  },
+  {
+    id: "h4",
+    title: "Return Depth #12",
+    time: "04:05",
+    result: "Setup Advantage",
+    tone: "training",
+    description: "接发压向对手反手底线时，回合胜率显著提升。",
+  },
+];
+
+export const coachNotes: CoachNote[] = [
+  {
+    id: "note-advantage",
+    tone: "advantage",
+    title: "Return depth creates the edge",
+    body: "当接发落在对手反手深区时，你方赢下 72% 的回合，这是最稳定的得分入口。",
+  },
+  {
+    id: "note-risk",
+    tone: "risk",
+    title: "Third shot drops fade on the right side",
+    body: "第三拍吊球总成功率为 61%，但右侧半场下降到 43%，需要更早完成拍面角度。",
+  },
+  {
+    id: "note-error",
+    tone: "error",
+    title: "Late dink errors are clustering",
+    body: "网前 dink 对抗进入第 6 拍后，非受迫失误明显升高，主要发生在反手斜线。",
+  },
+  {
+    id: "note-training",
+    tone: "training",
+    title: "Recommended focus",
+    body: "建议训练：反手斜线 dink 稳定性 + 第三拍落点深度控制，先稳定再加速。",
+  },
+];
+
+export const reportActions: ReportAction[] = [
+  {
+    type: "landing",
+    title: "落点分析报告",
+    description: "查看深区命中、边线风险与热力分布。",
+    path: "/reports/landing",
+  },
+  {
+    type: "movement",
+    title: "步法移动报告",
+    description: "拆解回位路径、覆盖平衡和启动延迟。",
+    path: "/reports/movement",
+  },
+  {
+    type: "rally",
+    title: "回合战术报告",
+    description: "追踪发接发、第三拍和网前模式。",
+    path: "/reports/rally",
+  },
+  {
+    type: "diagnosis",
+    title: "动作诊断报告",
+    description: "把动作问题转成证据和纠正方向。",
+    path: "/reports/diagnosis",
+  },
+];
+
+export const dashboardMetrics: DashboardMetric[] = [
+  {
+    id: "overall",
+    icon: "activity",
+    label: "Overall Performance Score",
+    value: "82",
+    detail: "Strong return depth offsets late dink errors",
+    trend: "+8% vs last match",
+    direction: "up",
+    progress: 82,
+    sparkline: [62, 66, 70, 68, 74, 82],
+  },
+  {
+    id: "serve",
+    icon: "target",
+    label: "Serve In Rate",
+    value: "87%",
+    detail: "Reliable first-ball pressure",
+    trend: "+4%",
+    direction: "up",
+    progress: 87,
+    sparkline: [74, 78, 76, 82, 84, 87],
+  },
+  {
+    id: "return",
+    icon: "send",
+    label: "Return Depth Score",
+    value: "74",
+    detail: "Best when targeting backhand deep court",
+    trend: "+12",
+    direction: "up",
+    progress: 74,
+    sparkline: [52, 58, 61, 64, 68, 74],
+  },
+  {
+    id: "third",
+    icon: "waves",
+    label: "3rd Shot Drop Success",
+    value: "61%",
+    detail: "Right-side pressure still pulls drops short",
+    trend: "-3%",
+    direction: "down",
+    progress: 61,
+    sparkline: [66, 68, 64, 65, 63, 61],
+  },
+  {
+    id: "dink",
+    icon: "shield",
+    label: "Dink Rally Win Rate",
+    value: "58%",
+    detail: "Errors rise after extended exchanges",
+    trend: "+2%",
+    direction: "steady",
+    progress: 58,
+    sparkline: [54, 55, 57, 56, 59, 58],
+  },
+  {
+    id: "errors",
+    icon: "alert",
+    label: "Unforced Errors",
+    value: "14",
+    detail: "Nine came from kitchen and transition zones",
+    trend: "-5 vs last match",
+    direction: "up",
+    progress: 66,
+    sparkline: [22, 21, 19, 18, 16, 14],
+  },
+  {
+    id: "kitchen",
+    icon: "radar",
+    label: "Kitchen Zone Control",
+    value: "68%",
+    detail: "Positioning is sound, touch quality can improve",
+    trend: "+6%",
+    direction: "up",
+    progress: 68,
+    sparkline: [49, 54, 58, 61, 63, 68],
+  },
+  {
+    id: "rally-length",
+    icon: "timer",
+    label: "Average Rally Length",
+    value: "9.6 shots",
+    detail: "Longer rallies reveal backhand stability gap",
+    trend: "+1.4",
+    direction: "up",
+    progress: 72,
+    sparkline: [6.8, 7.2, 7.6, 8.1, 8.9, 9.6],
+  },
+];
+
+export const shotFilters = [
+  "All",
+  "Serve",
+  "Return",
+  "3rd Shot",
+  "Dink",
+  "Drive",
+  "Reset",
+  "Volley",
+  "Smash",
+  "Error",
+] as const;
+
+export const shotRows: ShotRow[] = [
+  {
+    id: "s1",
+    time: "00:12",
+    type: "Serve",
+    player: "A",
+    placement: "Deep middle",
+    qualityScore: 88,
+    qualityBand: "high",
+    result: "Setup Advantage",
+  },
+  {
+    id: "s2",
+    time: "00:18",
+    type: "Return",
+    player: "C",
+    placement: "Backhand deep",
+    qualityScore: 91,
+    qualityBand: "high",
+    result: "Forced Error",
+  },
+  {
+    id: "s3",
+    time: "02:44",
+    type: "3rd Shot",
+    player: "B",
+    placement: "Right kitchen short",
+    qualityScore: 56,
+    qualityBand: "medium",
+    result: "Neutral",
+  },
+  {
+    id: "s4",
+    time: "03:08",
+    type: "Drive",
+    player: "A",
+    placement: "Cross-court shoulder",
+    qualityScore: 79,
+    qualityBand: "high",
+    result: "Setup Advantage",
+  },
+  {
+    id: "s5",
+    time: "06:18",
+    type: "Dink",
+    player: "B",
+    placement: "Backhand cross dink",
+    qualityScore: 42,
+    qualityBand: "low",
+    result: "Unforced Error",
+  },
+  {
+    id: "s6",
+    time: "07:34",
+    type: "Reset",
+    player: "A",
+    placement: "Transition middle",
+    qualityScore: 70,
+    qualityBand: "medium",
+    result: "Neutral",
+  },
+  {
+    id: "s7",
+    time: "08:42",
+    type: "Volley",
+    player: "B",
+    placement: "Open right court",
+    qualityScore: 86,
+    qualityBand: "high",
+    result: "Winner",
+  },
+  {
+    id: "s8",
+    time: "10:11",
+    type: "Error",
+    player: "A",
+    placement: "Late backhand dink",
+    qualityScore: 38,
+    qualityBand: "low",
+    result: "Unforced Error",
+  },
+];
+
+export const skillRatings: SkillRating[] = [
+  {
+    id: "serve-pressure",
+    label: "Serve Pressure 发球压迫",
+    score: 82,
+    note: "深区发球稳定，能让对手第一拍质量下降。",
+  },
+  {
+    id: "return-quality",
+    label: "Return Quality 接发质量",
+    score: 74,
+    note: "反手深区收益高，短球需要减少。",
+  },
+  {
+    id: "third-shot",
+    label: "Third Shot 第三拍处理",
+    score: 61,
+    note: "稳定但受压时偏浅，右侧半场是主要短板。",
+  },
+  {
+    id: "kitchen-control",
+    label: "Kitchen Control 网前控制",
+    score: 68,
+    note: "站位不错，长回合后手感波动。",
+  },
+  {
+    id: "defensive-reset",
+    label: "Defensive Reset 防守重置",
+    score: 73,
+    note: "过渡区处理有效，但回位路径偏长。",
+  },
+  {
+    id: "decision-making",
+    label: "Decision Making 决策选择",
+    score: 79,
+    note: "能识别变线机会，少数强攻时机偏早。",
+  },
+];
+
+export const drillRecommendations: DrillRecommendation[] = [
+  {
+    id: "drill-backhand-dink",
+    title: "Backhand Dink Consistency",
+    goal: "连续 30 次反手斜线 dink，把高度压在网带上方 30cm 内。",
+    duration: "18 min",
+    evidence: "网前第 6 拍后非受迫失误集中在反手斜线。",
+    difficulty: "Intermediate",
+    linkedReport: "diagnosis",
+  },
+  {
+    id: "drill-third-shot",
+    title: "Third Shot Drop Depth Control",
+    goal: "右侧半场第三拍吊球落入厨房后 1m 区域，完成 4 组。",
+    duration: "22 min",
+    evidence: "右侧第三拍成功率 43%，低于整体 61%。",
+    difficulty: "Advanced",
+    linkedReport: "rally",
+  },
+  {
+    id: "drill-return-depth",
+    title: "Return Deep to Backhand",
+    goal: "接发压向对手反手底线深区，命中率保持 70% 以上。",
+    duration: "15 min",
+    evidence: "该落点组合带来 72% 回合胜率。",
+    difficulty: "Foundation",
+    linkedReport: "landing",
+  },
+  {
+    id: "drill-transition-reset",
+    title: "Transition Zone Reset",
+    goal: "从中场低点重置到厨房区，减少强行 drive 的选择。",
+    duration: "20 min",
+    evidence: "过渡区高风险 drive 有 3 次直接失分。",
+    difficulty: "Intermediate",
+    linkedReport: "movement",
+  },
+];
+
+export const progressPoints: ProgressPoint[] = [
+  { match: "M1", performance: 67, errors: 23, thirdShot: 48, kitchen: 52 },
+  { match: "M2", performance: 71, errors: 20, thirdShot: 55, kitchen: 57 },
+  { match: "M3", performance: 73, errors: 19, thirdShot: 58, kitchen: 60 },
+  { match: "M4", performance: 78, errors: 16, thirdShot: 64, kitchen: 63 },
+  { match: "M5", performance: 82, errors: 14, thirdShot: 61, kitchen: 68 },
+];
+
+const reportMetricMap: Record<ReportDefinition["type"], DashboardMetric[]> = {
+  landing: dashboardMetrics.filter((metric) => ["return", "serve", "kitchen", "overall"].includes(metric.id)),
+  movement: dashboardMetrics.filter((metric) => ["overall", "kitchen", "rally-length", "errors"].includes(metric.id)),
+  rally: dashboardMetrics.filter((metric) => ["third", "dink", "rally-length", "overall"].includes(metric.id)),
+  diagnosis: dashboardMetrics.filter((metric) => ["errors", "third", "dink", "overall"].includes(metric.id)),
+};
+
+export const reportDefinitions: ReportDefinition[] = [
+  {
+    type: "landing",
+    title: "Landing & Placement Report",
+    eyebrow: "落点分析报告",
+    summary: "接发压向反手深区时优势最明显，但右侧边线尝试带来额外风险。",
+    heroMetric: "72%",
+    heroMetricLabel: "Backhand deep rally win rate",
+    visualization: "heat",
+    metrics: reportMetricMap.landing,
+    insights: [coachNotes[0], coachNotes[3]],
+    trainingLink: "Return Deep to Backhand",
+  },
+  {
+    type: "movement",
+    title: "Movement & Court Balance Report",
+    eyebrow: "步法移动报告",
+    summary: "覆盖平衡接近理想，但反手回球后的恢复路径多出 2 次绕行。",
+    heroMetric: "48 / 52",
+    heroMetricLabel: "Left / right coverage balance",
+    visualization: "movement",
+    metrics: reportMetricMap.movement,
+    insights: [
+      {
+        id: "movement-1",
+        tone: "risk",
+        title: "Recovery path is the hidden cost",
+        body: "反手回球后多绕行 0.6m，下一拍启动慢，容易被中路压迫。",
+      },
+      coachNotes[3],
+    ],
+    trainingLink: "Transition Zone Reset",
+  },
+  {
+    type: "rally",
+    title: "Rally Tactics Report",
+    eyebrow: "回合战术报告",
+    summary: "第三拍和网前相持决定多数回合走向，右侧半场吊球深度是核心突破点。",
+    heroMetric: "61%",
+    heroMetricLabel: "3rd shot drop success",
+    visualization: "rally",
+    metrics: reportMetricMap.rally,
+    insights: [coachNotes[1], coachNotes[2]],
+    trainingLink: "Third Shot Drop Depth Control",
+  },
+  {
+    type: "diagnosis",
+    title: "Motion Diagnosis Report",
+    eyebrow: "动作诊断报告",
+    summary: "主要问题来自反手准备节奏和长回合后的重心控制，训练要先稳定拍面和脚步。",
+    heroMetric: "3",
+    heroMetricLabel: "Priority issues detected",
+    visualization: "diagnosis",
+    metrics: reportMetricMap.diagnosis,
+    insights: [coachNotes[2], coachNotes[3]],
+    trainingLink: "Backhand Dink Consistency",
+  },
+];
