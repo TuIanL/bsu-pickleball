@@ -31,6 +31,11 @@ class AnalysisUploadMetadata(BaseModel):
     level: str
 
 
+class AnalysisPipelineOptions(BaseModel):
+    videoId: Optional[str] = None
+    calibrationId: Optional[str] = None
+
+
 class AnalysisStage(BaseModel):
     id: AnalysisStageId
     label: str
@@ -40,6 +45,8 @@ class AnalysisStage(BaseModel):
 
 class AnalysisJobCreate(BaseModel):
     metadata: AnalysisUploadMetadata
+    videoId: Optional[str] = None
+    calibrationId: Optional[str] = None
 
 
 class AnalysisJobSummary(BaseModel):
@@ -53,6 +60,8 @@ class AnalysisJobSummary(BaseModel):
     stages: list[AnalysisStage]
     reportId: Optional[str] = None
     errorMessage: Optional[str] = None
+    videoId: Optional[str] = None
+    calibrationId: Optional[str] = None
 
 
 class Metric(BaseModel):

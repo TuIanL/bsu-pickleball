@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -5,15 +7,19 @@ from uuid import uuid4
 from typing import Optional
 
 from app.schemas.analysis import (
+    AnalysisJobCreate,
     AnalysisJobSummary,
     AnalysisReport,
     AnalysisStage,
     AnalysisStageId,
     AnalysisUploadMetadata,
 )
+from app.schemas.pipeline import AnalysisPipelineResult
+from app.services.analysis_pipeline import AnalysisPipeline
 
 JOBS: dict[str, AnalysisJobSummary] = {}
 REPORTS: dict[str, AnalysisReport] = {}
+RESULTS: dict[str, AnalysisPipelineResult] = {}
 
 ORDERED_STAGES: list[AnalysisStageId] = [
     "upload",
@@ -59,25 +65,42 @@ def build_stages(active_stage: AnalysisStageId = "report") -> list[AnalysisStage
 
 
 def create_mock_job(metadata: AnalysisUploadMetadata) -> AnalysisJobSummary:
+    return create_analysis_job(AnalysisJobCreate(metadata=metadata))
+
+
+def create_analysis_job(payload: AnalysisJobCreate) -> AnalysisJobSummary:
     now = datetime.now(timezone.utc).isoformat()
     job_id = f"job-{uuid4().hex[:10]}"
     report_id = f"PV-{job_id.upper()}"
+    result: AnalysisPipelineResult | None = None
+    status = "completed"
+    error_message = None
+
+    if payload.videoId:
+        result = AnalysisPipeline().run(job_id=job_id, video_id=payload.videoId, calibration_id=payload.calibrationId)
+        status = result.status
+        error_message = None if result.status == "completed" else result.message
 
     job = AnalysisJobSummary(
         id=job_id,
-        status="completed",
+        status=status,
         stage="report",
-        progress=100,
+        progress=100 if status == "completed" else 0,
         createdAt=now,
-        updatedAt=now,
-        metadata=metadata,
-        stages=build_stages(),
+        updatedAt=datetime.now(timezone.utc).isoformat(),
+        metadata=payload.metadata,
+        stages=build_stages("report" if status == "completed" else "frame-sampling"),
         reportId=report_id,
+        errorMessage=error_message,
+        videoId=payload.videoId,
+        calibrationId=payload.calibrationId,
     )
-    report = build_mock_report(job, metadata, report_id, now)
+    report = build_mock_report(job, payload.metadata, report_id, now)
 
     JOBS[job_id] = job
     REPORTS[job_id] = report
+    if result is not None:
+        RESULTS[job_id] = result
 
     return job
 
@@ -88,6 +111,13 @@ def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:
 
 def get_mock_report(job_id: str) -> Optional[AnalysisReport]:
     return REPORTS.get(job_id)
+
+
+def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
+    cached = RESULTS.get(job_id)
+    if cached is not None:
+        return cached
+    return None
 
 
 def build_mock_report(

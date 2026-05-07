@@ -1,8 +1,5 @@
-# python-vision-backend-foundation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-analysis-workflow-backend-foundation. Update Purpose after archive.
-## Requirements
 ### Requirement: Python backend project foundation
 The system SHALL include a Python backend project area dedicated to video analysis APIs, MVP computer-vision algorithms, and future model-backed analysis.
 
@@ -45,17 +42,6 @@ The backend SHALL expose API boundaries for video upload, manual calibration, an
 - **WHEN** the frontend requests status, algorithm result, or report data for an unknown job identifier
 - **THEN** the backend returns a clear not-found response that the frontend can render as a stable error state
 
-### Requirement: Analysis report schema
-The backend SHALL define a structured analysis report schema that can feed the existing visual analysis workspace and report detail views.
-
-#### Scenario: Mock report is generated
-- **WHEN** the backend generates a mock report for a completed job
-- **THEN** the report includes match summary, metrics, landing points, routes, movement path, rallies, timeline markers, overlay labels, highlights, coach notes, diagnoses, and report actions where available
-
-#### Scenario: Frontend consumes report data
-- **WHEN** the frontend receives an analysis report payload from the backend
-- **THEN** the payload can be mapped into the same visual and report components used by the local demo data
-
 ### Requirement: Algorithm adapter boundaries
 The backend SHALL reserve replaceable adapter boundaries for detector, tracker, court calibration, projection, metrics, and future event analysis modules while providing MVP implementations for geometry, homography, footpoint projection, and movement metrics.
 
@@ -85,11 +71,3 @@ The backend SHALL document and use local storage conventions for uploaded videos
 #### Scenario: Large generated assets exist locally
 - **WHEN** uploaded videos, generated reports, temporary frames, model checkpoints, visualized videos, or training datasets are present in local storage
 - **THEN** those files are excluded from version control by documented ignore rules or storage guidance
-
-### Requirement: Lightweight backend smoke verification
-The backend SHALL support a lightweight verification path before real model dependencies are installed.
-
-#### Scenario: Developer runs backend verification
-- **WHEN** a developer runs the documented backend smoke check
-- **THEN** the backend imports or starts its API foundation without requiring YOLO11, RTMPose26, CUDA, model weights, or uploaded sample videos
-

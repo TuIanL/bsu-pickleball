@@ -9,6 +9,12 @@ backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/.pytest_cache/
+backend/data/uploads/*
+backend/data/outputs/*
+backend/data/calibrations/*
+backend/data/tmp/*
+!backend/data/**/.gitkeep
+!backend/data/README.md
 
 # Local analysis runtime files
 storage/uploads/*

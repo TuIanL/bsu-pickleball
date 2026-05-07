@@ -1,51 +1,146 @@
-# Python Vision Backend Foundation
+# Pickleball Vision Backend MVP
 
-This backend is the lightweight API boundary for the pickleball visual-analysis workflow. It intentionally starts with mock analysis results so the product flow can be built before YOLO11, RTMPose26, CUDA, model weights, or uploaded videos are required.
+This FastAPI backend is the MVP algorithm foundation for fixed-camera pickleball video analysis. It keeps the existing mock report contract for the frontend while adding video upload, manual court calibration, standard court geometry, footpoint projection, movement metrics, and a model-free `AnalysisPipeline`.
 
-## Run Locally
+## Tech Stack
+
+- Python 3.10+
+- FastAPI and Pydantic
+- NumPy, Pandas, OpenCV
+- Optional Ultralytics YOLO for later person detection
+- pytest for unit tests
+
+## Install
 
 ```bash
 cd backend
-python -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -r requirements.txt
+```
+
+For editable package installs:
+
+```bash
+pip install -e ".[dev]"
+```
+
+## Run
+
+```bash
 uvicorn app.main:app --reload
 ```
 
-The frontend can call this service with:
+The API is available at `http://localhost:8000`. The frontend can use:
 
 ```bash
 VITE_ANALYSIS_API_URL=http://localhost:8000 npm run dev
 ```
 
-If the backend is not running, the frontend falls back to a local mock job in browser storage.
-
 ## API Surface
 
 - `GET /health`
+- `POST /api/videos/upload`
+- `GET /api/videos/{video_id}`
+- `POST /api/calibrations`
+- `GET /api/calibrations/{calibration_id}`
+- `POST /api/calibrations/project`
 - `POST /api/analysis/jobs`
 - `GET /api/analysis/jobs/{job_id}`
+- `GET /api/analysis/jobs/{job_id}/result`
 - `GET /api/analysis/jobs/{job_id}/report`
 
-The current job service completes mock jobs immediately. Real processing can later replace `app/services/mock_analysis.py` with a worker-backed pipeline.
+## Example Requests
 
-## Storage Conventions
+Upload a video:
 
-- `storage/uploads/`: uploaded source videos
-- `storage/reports/`: generated analysis report JSON
-- `storage/tmp/`: extracted frames and temporary processing files
-- `models/`: local model weights and checkpoints
+```bash
+curl -F "file=@sample.mp4" http://localhost:8000/api/videos/upload
+```
 
-These folders are local runtime/storage locations. Large files, generated outputs, model checkpoints, videos, frames, and training datasets must not be committed.
+Create a manual calibration:
 
-## Future Vision Adapters
+```bash
+curl -X POST http://localhost:8000/api/calibrations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "video_id": "video-example",
+    "keypoints": [
+      {"name": "near_left", "image": {"x": 100, "y": 900}, "court": {"x": 0, "y": 0}},
+      {"name": "near_right", "image": {"x": 900, "y": 900}, "court": {"x": 20, "y": 0}},
+      {"name": "far_right", "image": {"x": 760, "y": 120}, "court": {"x": 20, "y": 44}},
+      {"name": "far_left", "image": {"x": 240, "y": 120}, "court": {"x": 0, "y": 44}}
+    ]
+  }'
+```
 
-Reserved adapter boundaries live under `app/vision/`:
+Create a metadata-only demo job:
 
-- `detectors/`: future YOLO11 object detector adapters
-- `pose/`: future RTMPose26 pose-estimation adapters
-- `tracking/`: player, ball, and paddle tracking
-- `court/`: court calibration and pixel-to-court mapping
-- `events/`: shot, landing, rally, and diagnosis event extraction
+```bash
+curl -X POST http://localhost:8000/api/analysis/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {
+      "fileName": "demo.mp4",
+      "fileSize": 1234,
+      "matchTitle": "MVP Test Match",
+      "venue": "Test Court",
+      "matchDate": "2026-05-07",
+      "matchFormat": "doubles",
+      "cameraAngle": "elevated",
+      "athleteLabel": "Player A",
+      "level": "MVP"
+    }
+  }'
+```
 
-YOLO11 output should be normalized to stable labels such as `player`, `ball`, `paddle`, and court-specific labels before report generation. RTMPose26 output should be normalized into named keypoints or pose-derived features before diagnosis logic consumes it.
+Create a pipeline-backed job by including `videoId` and optional `calibrationId`:
+
+```bash
+curl -X POST http://localhost:8000/api/analysis/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "videoId": "video-example",
+    "calibrationId": "calib-example",
+    "metadata": {
+      "fileName": "demo.mp4",
+      "fileSize": 1234,
+      "matchTitle": "Pipeline MVP Match",
+      "venue": "Test Court",
+      "matchDate": "2026-05-07",
+      "matchFormat": "doubles",
+      "cameraAngle": "elevated",
+      "athleteLabel": "Player A",
+      "level": "MVP"
+    }
+  }'
+```
+
+## Algorithm Modules
+
+- `app/vision/courtvision_calibration_engine/`: standard court geometry, homography, manual calibration, overlay boundary
+- `app/vision/player_tracking_engine/`: person detector interface, simple tracker, footpoint estimator, player projector
+- `app/vision/pickleball_performance_engine/`: distance, speed, kitchen dwell, doubles spacing, heatmap metrics
+- `app/services/analysis_pipeline.py`: MVP orchestration and JSON result generation
+
+The MVP intentionally avoids automatic ball detection, hit events, rally segmentation, and tactical semantics. YOLO and tracker integrations can replace the current interfaces later.
+
+## Storage
+
+Runtime artifacts live under `backend/data/`:
+
+- `uploads/`: uploaded videos
+- `outputs/`: JSON results and future visualized videos
+- `calibrations/`: manual calibration JSON files
+- `tmp/`: temporary frames and intermediate files
+
+These generated files are ignored by git. Model weights should live in the repo-level `models/` directory and are also ignored.
+
+## Test
+
+```bash
+cd backend
+pytest
+```
+
+The core tests cover standard court geometry, homography, footpoint projection, movement metrics, and API smoke behavior. They do not require YOLO weights, CUDA, uploaded sample videos, or OpenCV runtime usage.

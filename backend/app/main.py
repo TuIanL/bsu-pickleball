@@ -1,12 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.analysis import router as analysis_router
+from app.api.routes_analysis import router as analysis_router
+from app.api.routes_calibration import router as calibration_router
+from app.api.routes_video import router as video_router
+from app.core.config import get_settings
+from app.core.logging import configure_logging
+
+configure_logging()
+settings = get_settings()
 
 app = FastAPI(
-    title="Pre Pickleball Analysis API",
-    version="0.1.0",
-    description="Lightweight API foundation for future YOLO11 and RTMPose26 video analysis.",
+    title=settings.app_name,
+    version=settings.app_version,
+    description="MVP backend foundation for pickleball video upload, calibration, and movement analysis.",
 )
 
 app.add_middleware(
@@ -14,12 +21,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_headers=["*"],
     allow_methods=["*"],
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.cors_origins,
 )
 
+app.include_router(video_router)
+app.include_router(calibration_router)
 app.include_router(analysis_router)
 
 
