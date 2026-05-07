@@ -1,0 +1,3 @@
+{
+  "note": "Backend smoke tests use in-code mock data for now. Keep committed fixtures small."
+}

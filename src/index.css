@@ -47,7 +47,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -77,5 +78,14 @@ button {
 
   .quiet-button {
     @apply inline-flex items-center justify-center gap-2 rounded-full border border-[#D8E5D2] bg-white/85 px-5 py-3 text-sm font-semibold text-[#203127] transition hover:-translate-y-0.5 hover:border-[#22C55E]/45 hover:bg-[#F5FFF2] focus:outline-none focus:ring-2 focus:ring-[#22C55E]/55 focus:ring-offset-2 focus:ring-offset-[#F5F8F2];
+  }
+
+  .green-button:disabled,
+  .quiet-button:disabled {
+    @apply cursor-not-allowed opacity-50 hover:translate-y-0;
+  }
+
+  .field-input {
+    @apply w-full rounded-2xl border border-[#D8E5D2] bg-white/90 px-4 py-3 text-sm font-semibold text-[#203127] outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20;
   }
 }

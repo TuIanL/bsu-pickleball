@@ -3,3 +3,24 @@ dist
 .DS_Store
 *.local
 coverage
+
+# Python backend
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+
+# Local analysis runtime files
+storage/uploads/*
+storage/reports/*
+storage/tmp/*
+!storage/README.md
+
+# Local model weights and datasets
+models/*
+!models/README.md
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.engine

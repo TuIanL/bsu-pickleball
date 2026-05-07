@@ -12,13 +12,17 @@ interface AppShellProps {
   activePath: string;
   children: ReactNode;
   navigation: NavigationItem[];
-  onNavigate: (path: AppPath | "/reports/landing") => void;
+  onNavigate: (path: AppPath | "/reports/landing" | "/upload") => void;
 }
 
 export function AppShell({ activePath, children, navigation, onNavigate }: AppShellProps) {
   const isActive = (path: string) => {
     if (path === "/") {
       return activePath === "/";
+    }
+
+    if (path === "/analysis/new") {
+      return activePath === "/analysis/new";
     }
 
     if (path === "/reports/landing") {
@@ -72,7 +76,7 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
               <Camera size={16} aria-hidden="true" />
               查看演示
             </button>
-            <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/vision")} type="button">
+            <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
               <Upload size={16} aria-hidden="true" />
               上传比赛
             </button>
@@ -115,10 +119,10 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
           <span>拍动视析 · 北京体育大学体育工程学院创新训练项目展示原型</span>
           <button
             className="inline-flex w-fit items-center gap-1 font-semibold text-slate-700 transition hover:text-[#168A34]"
-            onClick={() => onNavigate("/vision")}
+            onClick={() => onNavigate("/analysis/new")}
             type="button"
           >
-            打开视频工作台
+            上传比赛视频
             <ChevronRight size={15} aria-hidden="true" />
           </button>
         </div>

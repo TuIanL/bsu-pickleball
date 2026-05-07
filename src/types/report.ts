@@ -4,9 +4,39 @@ export type CourtMode = "heat" | "routes" | "movement";
 
 export type ReportType = "landing" | "movement" | "rally" | "diagnosis";
 
+export type AnalysisJobStatus =
+  | "uploaded"
+  | "queued"
+  | "processing"
+  | "failed"
+  | "completed";
+
+export type AnalysisStageId =
+  | "upload"
+  | "queue"
+  | "frame-sampling"
+  | "detection"
+  | "pose"
+  | "tracking"
+  | "court-calibration"
+  | "event-analysis"
+  | "report";
+
+export type CameraAngle =
+  | "baseline"
+  | "sideline"
+  | "elevated"
+  | "unknown";
+
+export type MatchFormat = "singles" | "doubles";
+
 export type AppPath =
   | "/"
   | "/vision"
+  | "/analysis/new"
+  | `/analysis/${string}`
+  | `/analysis/${string}/vision`
+  | `/analysis/${string}/reports/${ReportType}`
   | "/training"
   | "/hardware"
   | `/reports/${ReportType}`;
@@ -146,6 +176,44 @@ export interface NavigationItem {
   path: AppPath | "/reports/landing";
 }
 
+export interface AnalysisUploadMetadata {
+  fileName: string;
+  fileSize?: number;
+  matchTitle: string;
+  venue: string;
+  matchDate: string;
+  matchFormat: MatchFormat;
+  cameraAngle: CameraAngle;
+  athleteLabel: string;
+  level: string;
+}
+
+export interface AnalysisStage {
+  id: AnalysisStageId;
+  label: string;
+  status: "pending" | "active" | "done" | "failed";
+  detail: string;
+}
+
+export interface AnalysisJobSummary {
+  id: string;
+  status: AnalysisJobStatus;
+  stage: AnalysisStageId;
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  metadata: AnalysisUploadMetadata;
+  stages: AnalysisStage[];
+  reportId?: string;
+  errorMessage?: string;
+}
+
+export interface AnalysisApiError {
+  code: string;
+  message: string;
+  detail?: string;
+}
+
 export interface MatchSummary {
   title: string;
   subtitle: string;
@@ -274,4 +342,30 @@ export interface ReportDefinition {
   metrics: DashboardMetric[];
   insights: CoachNote[];
   trainingLink: string;
+}
+
+export interface AnalysisReport {
+  version: "analysis-report-v1";
+  source: "demo" | "job";
+  jobId?: string;
+  reportId: string;
+  generatedAt: string;
+  metadata: AnalysisUploadMetadata;
+  match: MatchSummary;
+  session: ReportSession;
+  dashboardMetrics: DashboardMetric[];
+  reportDefinitions: ReportDefinition[];
+  reportActions: ReportAction[];
+  playerMarkers: PlayerMarker[];
+  shotTrajectories: ShotTrajectory[];
+  videoOverlayLabels: VideoOverlayLabel[];
+  timelineMarkers: TimelineMarker[];
+  highlights: Highlight[];
+  coachNotes: CoachNote[];
+  diagnoses: Diagnosis[];
+  trainingRecommendations: TrainingRecommendation[];
+  drillRecommendations: DrillRecommendation[];
+  shotRows: ShotRow[];
+  skillRatings: SkillRating[];
+  progressPoints: ProgressPoint[];
 }
