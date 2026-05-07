@@ -11,7 +11,7 @@ export function TrainingLoop({ diagnoses, recommendations }: TrainingLoopProps) 
     <section className="section-band training-band" id="training">
       <div className="section-inner training-layout">
         <div className="training-intro">
-          <span className="panel-kicker">Learn · Practice · Evaluate</span>
+          <span className="panel-kicker">学习 · 练习 · 复测</span>
           <h2>学-练-评教学闭环</h2>
           <p>报告问题被转成训练任务，下一次报告继续验证目标完成情况。</p>
           <div className="loop-icons" aria-label="闭环步骤">

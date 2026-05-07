@@ -34,20 +34,20 @@ export function MetricCard({ metric }: MetricCardProps) {
   });
 
   return (
-    <article className="sport-card group p-5 transition duration-300 hover:-translate-y-1 hover:border-[#54FE49]/35">
+    <article className="sport-card group p-5 transition duration-300 hover:-translate-y-1 hover:border-[#22C55E]/35">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{metric.label}</p>
-          <strong className="mt-3 block text-3xl font-black text-white sm:text-4xl">{metric.value}</strong>
+          <strong className="mt-3 block text-3xl font-black text-[#14241B] sm:text-4xl">{metric.value}</strong>
         </div>
-        <span className="grid size-10 place-items-center rounded-2xl border border-white/10 bg-white/[0.06] text-[#54FE49]">
+        <span className="grid size-10 place-items-center rounded-2xl border border-[#22C55E]/25 bg-[#22C55E]/12 text-[#168A34]">
           <Icon size={19} aria-hidden="true" />
         </span>
       </div>
-      <p className="mt-3 min-h-10 text-sm leading-6 text-slate-400">{metric.detail}</p>
-      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
+      <p className="mt-3 min-h-10 text-sm leading-6 text-slate-600">{metric.detail}</p>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-[#DFEADA]">
         <span
-          className="block h-full rounded-full bg-[#54FE49]"
+          className="block h-full rounded-full bg-[#22C55E]"
           style={{ width: `${metric.progress}%` }}
         />
       </div>
@@ -57,13 +57,13 @@ export function MetricCard({ metric }: MetricCardProps) {
             metric.direction === "down"
               ? "text-[#FF9500]"
               : metric.direction === "up"
-                ? "text-[#54FE49]"
-                : "text-slate-300"
+                ? "text-[#168A34]"
+                : "text-slate-500"
           }`}
         >
           {metric.trend}
         </span>
-        <svg className="h-10 w-24 text-[#54FE49]/80" viewBox="0 0 100 42" aria-hidden="true">
+        <svg className="h-10 w-24 text-[#168A34]/80" viewBox="0 0 100 42" aria-hidden="true">
           <polyline
             fill="none"
             points={sparkline.join(" ")}

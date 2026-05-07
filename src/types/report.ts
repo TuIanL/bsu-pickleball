@@ -14,22 +14,22 @@ export type AppPath =
 export type InsightTone = "advantage" | "risk" | "error" | "training";
 
 export type ShotType =
-  | "Serve"
-  | "Return"
-  | "3rd Shot"
-  | "Dink"
-  | "Drive"
-  | "Reset"
-  | "Volley"
-  | "Smash"
-  | "Error";
+  | "发球"
+  | "接发"
+  | "第三拍"
+  | "轻吊"
+  | "抽击"
+  | "重置"
+  | "截击"
+  | "扣杀"
+  | "失误";
 
 export type ShotResult =
-  | "Winner"
-  | "Forced Error"
-  | "Unforced Error"
-  | "Neutral"
-  | "Setup Advantage";
+  | "制胜分"
+  | "受迫失误"
+  | "非受迫失误"
+  | "中性"
+  | "建立优势";
 
 export type QualityBand = "high" | "medium" | "low";
 
@@ -243,7 +243,7 @@ export interface DrillRecommendation {
   goal: string;
   duration: string;
   evidence: string;
-  difficulty: "Foundation" | "Intermediate" | "Advanced";
+  difficulty: "基础" | "进阶" | "高级";
   linkedReport: ReportType;
 }
 

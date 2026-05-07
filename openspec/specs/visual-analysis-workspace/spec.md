@@ -55,9 +55,8 @@ The system SHALL present clear report actions from the visual analysis workspace
 - **THEN** the system navigates to the matching `/reports/:type` report detail page
 
 ### Requirement: Premium sports-tech visual style
-The system SHALL make the visual analysis workspace feel like a mature AI sports video analytics product.
+The system SHALL make the visual analysis workspace feel like a mature AI sports video analytics product with a bright sports-tech theme.
 
 #### Scenario: User views the visual analysis page
 - **WHEN** the visual analysis page renders
-- **THEN** the system uses a dark sports-tech theme, restrained bright green highlights, clean cards, subtle borders, hover states, and video-first hierarchy rather than a generic admin-table layout
-
+- **THEN** the system uses bright primary surfaces, restrained green highlights, preserved blue/orange/red status accents, clean cards, subtle borders, hover states, and video-first hierarchy rather than a heavy dark interface or a generic admin-table layout

@@ -34,12 +34,12 @@ export function HardwareFusionPreview({ preview }: HardwareFusionPreviewProps) {
         <div className="sweet-zone-panel">
           <div className="panel-heading compact">
             <div>
-              <span className="panel-kicker">TENG Array</span>
+              <span className="panel-kicker">TENG 阵列</span>
               <h3>3x3 甜区触点分布</h3>
             </div>
             <span className="simulated-chip">
               <ShieldCheck size={15} aria-hidden="true" />
-              Phase 2
+              二期预览
             </span>
           </div>
           <div className="paddle-face" aria-label="甜区九宫格">

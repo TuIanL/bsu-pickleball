@@ -27,7 +27,7 @@ export function CourtAnalysis({ session }: CourtAnalysisProps) {
     <section className="court-panel" aria-label="球场可视化">
       <div className="panel-heading">
         <div>
-          <span className="panel-kicker">Court Map</span>
+          <span className="panel-kicker">球场地图</span>
           <h2>球路、落点与步法轨迹</h2>
         </div>
         <div className="segmented-control" role="tablist" aria-label="球场视图">

@@ -10,7 +10,7 @@ export function RallyAnalysis({ rallies }: RallyAnalysisProps) {
     <section className="rally-panel" aria-label="回合分析">
       <div className="panel-heading compact">
         <div>
-          <span className="panel-kicker">Rally Review</span>
+          <span className="panel-kicker">回合复盘</span>
           <h2>关键回合分析</h2>
         </div>
       </div>

@@ -2,7 +2,7 @@ export const productCopy = {
   brand: "拍动视析",
   tagline: "基于视觉捕捉与 TENG-IMU 智能球拍的全维度分析平台",
   reportTitle: "赛后运动表现报告",
-  reportBadge: "视觉分析 Demo",
+  reportBadge: "视觉分析演示",
   sectionLabels: {
     report: "报告",
     diagnosis: "诊断",

@@ -12,7 +12,7 @@ export function DiagnosisSection({ diagnoses, recommendations }: DiagnosisSectio
       <div className="section-inner">
         <div className="section-title-row">
           <div>
-            <span className="panel-kicker">Motion Diagnosis</span>
+            <span className="panel-kicker">动作诊断</span>
             <h2>个性化动作诊断</h2>
           </div>
           <p>算法输出被整理为动作问题、证据和可执行训练方向。</p>
