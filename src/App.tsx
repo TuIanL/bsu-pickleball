@@ -1,3 +1,4 @@
+// 导入 Lucide 图标库
 import {
   ArrowRight,
   BadgeCheck,
@@ -17,6 +18,7 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
+// 导入 React 核心钩子和类型
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
@@ -51,16 +53,17 @@ import type {
 } from "./types/report";
 import { createAnalysisJob, demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport } from "./services/analysisClient";
 
+// 定义路由状态类型，用于管理应用内的页面导航
 type RouteState =
-  | { page: "overview"; path: "/" }
-  | { page: "new-analysis"; path: "/analysis/new" }
-  | { page: "analysis-job"; path: `/analysis/${string}`; jobId: string }
-  | { page: "vision"; path: "/vision" }
-  | { page: "vision"; path: `/analysis/${string}/vision`; jobId: string }
-  | { page: "report"; path: `/reports/${ReportType}`; reportType: ReportType }
-  | { page: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string }
-  | { page: "training"; path: "/training" }
-  | { page: "hardware"; path: "/hardware" };
+  | { page: "overview"; path: "/" } // 总览页
+  | { page: "new-analysis"; path: "/analysis/new" } // 新建分析任务页
+  | { page: "analysis-job"; path: `/analysis/${string}`; jobId: string } // 分析任务详情页
+  | { page: "vision"; path: "/vision" } // 视觉分析工作台
+  | { page: "vision"; path: `/analysis/${string}/vision`; jobId: string } // 特定任务的视觉分析
+  | { page: "report"; path: `/reports/${ReportType}`; reportType: ReportType } // 报告页
+  | { page: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string } // 特定任务的报告
+  | { page: "training"; path: "/training" } // 训练建议页
+  | { page: "hardware"; path: "/hardware" }; // 硬件融合预览页
 
 const supportedReportTypes: ReportType[] = ["landing", "movement", "rally", "diagnosis"];
 
@@ -151,8 +154,10 @@ function parsePath(pathname: string): RouteState {
 }
 
 function App() {
+  // 初始化路由状态
   const [route, setRoute] = useState<RouteState>(() => parsePath(window.location.pathname));
 
+  // 自定义导航函数，支持平滑滚动到顶部
   const navigate = (path: AppPath | "/reports/landing" | "/upload") => {
     const nextRoute = parsePath(path);
     window.history.pushState({}, "", nextRoute.path);
@@ -160,6 +165,7 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  // 监听浏览器前进/后退事件
   useEffect(() => {
     const handlePopState = () => setRoute(parsePath(window.location.pathname));
     window.addEventListener("popstate", handlePopState);
@@ -167,6 +173,7 @@ function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  // 根据当前路由渲染对应的页面内容
   const content = useMemo(() => {
     switch (route.page) {
       case "new-analysis":
@@ -204,6 +211,9 @@ function PageFrame({ children, compact = false }: { children: ReactNode; compact
 
 type NavigateFn = (path: AppPath | "/reports/landing" | "/upload") => void;
 
+/**
+ * 总览页组件
+ */
 function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
   return (
     <PageFrame>
@@ -281,6 +291,9 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
   );
 }
 
+/**
+ * 新建分析任务页组件
+ */
 function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const today = new Date().toISOString().slice(0, 10);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -481,6 +494,9 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
+/**
+ * 分析任务状态详情页
+ */
 function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
 
@@ -692,6 +708,9 @@ function useAnalysisReport(jobId?: string) {
   return { job: loadedResult.job, report: loadedResult.report };
 }
 
+/**
+ * 视觉分析工作台页组件
+ */
 function VisionPage({ jobId, onNavigate }: { jobId?: string; onNavigate: NavigateFn }) {
   const { job, report } = useAnalysisReport(jobId);
 
@@ -872,6 +891,9 @@ function HighlightsCard({
   );
 }
 
+/**
+ * 详细分析报告页组件
+ */
 function ReportPage({
   jobId,
   onNavigate,
@@ -1047,6 +1069,9 @@ function DrillGrid({
   );
 }
 
+/**
+ * 训练建议页组件
+ */
 function TrainingPage({ onNavigate }: { onNavigate: NavigateFn }) {
   return (
     <PageFrame>
@@ -1120,6 +1145,9 @@ function TrainingPage({ onNavigate }: { onNavigate: NavigateFn }) {
   );
 }
 
+/**
+ * 硬件融合预览页组件（二期规划）
+ */
 function HardwarePage({ onNavigate }: { onNavigate: NavigateFn }) {
   return (
     <PageFrame>
