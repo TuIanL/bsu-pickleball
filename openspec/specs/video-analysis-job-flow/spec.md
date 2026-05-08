@@ -63,6 +63,10 @@ The system SHALL provide a job-specific page that communicates analysis progress
 - **WHEN** the user navigates to an analysis job that completed successfully
 - **THEN** the system shows completion status and provides actions to open the visual analysis workspace and report pages for that job
 
+#### Scenario: Pipeline reports tracking progress
+- **WHEN** the backend processes a video with player tracking enabled
+- **THEN** the reported pipeline stages can include detection, tracking, projection, and progress details derived from processed frame counts
+
 ### Requirement: Analysis job result routing
 The system SHALL route users from a completed job to job-specific visual analysis and report views.
 
@@ -86,7 +90,7 @@ The system SHALL preserve a demo path when no backend job is available.
 - **THEN** the system shows a stable error or fallback state rather than rendering a broken visualization
 
 ### Requirement: Calibration-assisted analysis flow
-The system SHALL support manual or semi-manual court calibration data as part of a video analysis workflow.
+The system SHALL support manual or semi-manual court calibration data as part of a video analysis workflow and use available calibration to project tracked player footpoints into court coordinates.
 
 #### Scenario: User submits calibration before analysis
 - **WHEN** the user or developer submits court keypoint correspondences for an uploaded video before creating an analysis job
@@ -94,16 +98,24 @@ The system SHALL support manual or semi-manual court calibration data as part of
 
 #### Scenario: Analysis starts without calibration
 - **WHEN** an MVP analysis job starts without a calibration reference
-- **THEN** the backend still creates the job and returns a mock or calibration-pending result instead of crashing
+- **THEN** the backend still creates the job and returns a mock, empty-tracks, or calibration-pending result instead of crashing
+
+#### Scenario: Analysis starts with video and calibration
+- **WHEN** an analysis job starts with a readable uploaded video and a valid calibration homography
+- **THEN** the backend runs player detection, tracking, footpoint estimation, court projection, and metrics stages using the calibration-derived court coordinates
 
 ### Requirement: Algorithm result retrieval
-The system SHALL allow a completed pipeline-backed analysis job to expose its raw algorithm result separately from the frontend report payload.
+The system SHALL allow a completed pipeline-backed analysis job to expose its raw algorithm result separately from the frontend report payload, including tracking artifacts when real video tracking was executed.
 
 #### Scenario: Developer requests raw algorithm result
 - **WHEN** a developer requests the result for a completed pipeline-backed job
-- **THEN** the backend returns structured JSON containing video reference, calibration reference, projected tracks, movement metrics, heatmap data, and output artifact paths where available
+- **THEN** the backend returns structured JSON containing video reference, calibration reference, projected tracks, movement metrics, heatmap data, tracking metadata, and output artifact paths where available
 
 #### Scenario: Result is not ready
 - **WHEN** a client requests the raw algorithm result before the job is completed
 - **THEN** the backend returns the current job status or a clear not-ready response without pretending the result is final
+
+#### Scenario: Tracking artifact is available
+- **WHEN** a completed job processed video frames with a valid calibration
+- **THEN** the raw algorithm result includes or references a persisted `tracking_result.json` artifact containing frame timing metadata and player positions
 
