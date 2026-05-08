@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 导入各个模块的路由
 from app.api.routes_analysis import router as analysis_router
+from app.api.routes_calibration import manual_router as manual_calibration_router
 from app.api.routes_calibration import router as calibration_router
 from app.api.routes_video import router as video_router
 # 导入配置和日志设置
@@ -33,6 +34,7 @@ app.add_middleware(
 # 注册各个功能模块的路由
 app.include_router(video_router)
 app.include_router(calibration_router)
+app.include_router(manual_calibration_router)
 app.include_router(analysis_router)
 
 

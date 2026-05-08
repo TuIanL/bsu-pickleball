@@ -34,6 +34,7 @@ class AnalysisUploadMetadata(BaseModel):
 class AnalysisPipelineOptions(BaseModel):
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
+    frameStride: int = Field(default=1, ge=1)
 
 
 class AnalysisStage(BaseModel):
@@ -47,6 +48,7 @@ class AnalysisJobCreate(BaseModel):
     metadata: AnalysisUploadMetadata
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
+    frameStride: int = Field(default=1, ge=1)
 
 
 class AnalysisJobSummary(BaseModel):

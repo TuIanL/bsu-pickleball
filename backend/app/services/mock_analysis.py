@@ -77,7 +77,12 @@ def create_analysis_job(payload: AnalysisJobCreate) -> AnalysisJobSummary:
     error_message = None
 
     if payload.videoId:
-        result = AnalysisPipeline().run(job_id=job_id, video_id=payload.videoId, calibration_id=payload.calibrationId)
+        result = AnalysisPipeline(frame_stride=payload.frameStride).run(
+            job_id=job_id,
+            video_id=payload.videoId,
+            calibration_id=payload.calibrationId,
+            frame_stride=payload.frameStride,
+        )
         status = result.status
         error_message = None if result.status == "completed" else result.message
 
