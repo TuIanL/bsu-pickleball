@@ -1,10 +1,14 @@
 import { demoAnalysisReport } from "../data/demoData";
 import type {
   AnalysisJobSummary,
+  AnalysisPipelineResult,
   AnalysisReport,
   AnalysisStage,
   AnalysisStageId,
   AnalysisUploadMetadata,
+  CalibrationPoint,
+  ManualCalibrationResponse,
+  VideoUploadResponse,
 } from "../types/report";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
@@ -18,24 +22,30 @@ interface StoredJob {
 const stageLabels: Record<AnalysisStageId, string> = {
   upload: "视频上传",
   queue: "任务排队",
+  calibration: "场地标定",
+  "video-read": "读取视频",
   "frame-sampling": "抽帧采样",
   detection: "目标检测",
   pose: "人体姿态",
   tracking: "轨迹跟踪",
-  "court-calibration": "场地标定",
-  "event-analysis": "事件分析",
+  projection: "脚点投影",
+  metrics: "运动指标",
+  visualization: "可视化输出",
   report: "报告生成",
 };
 
 const orderedStages: AnalysisStageId[] = [
   "upload",
   "queue",
+  "calibration",
+  "video-read",
   "frame-sampling",
   "detection",
   "pose",
   "tracking",
-  "court-calibration",
-  "event-analysis",
+  "projection",
+  "metrics",
+  "visualization",
   "report",
 ];
 
@@ -59,7 +69,7 @@ function buildStages(activeStage: AnalysisStageId, failed = false): AnalysisStag
 
     return {
       id: stage,
-      label: stageLabels[stage],
+      label: stageLabels[stage] ?? stage,
       status,
       detail: getStageDetail(stage),
     };
@@ -70,16 +80,19 @@ function getStageDetail(stage: AnalysisStageId) {
   const details: Record<AnalysisStageId, string> = {
     upload: "保存视频和基础比赛信息",
     queue: "等待视觉分析任务执行",
+    calibration: "读取或跳过四角手工标定",
+    "video-read": "读取上传视频元数据和帧流",
     "frame-sampling": "按时间轴抽取关键帧",
     detection: "预留 YOLO11 检测球员、球、球拍和场地元素",
     pose: "预留 RTMPose26 识别人体关键点",
     tracking: "关联球员、球和击球轨迹",
-    "court-calibration": "映射画面坐标到匹克球场",
-    "event-analysis": "识别击球、落点、回合和风险模式",
+    projection: "映射画面坐标到匹克球场",
+    metrics: "计算移动距离、速度、厨房区停留和热力图",
+    visualization: "生成可供前端展示的结果引用",
     report: "生成报告 JSON 并交给前端展示",
   };
 
-  return details[stage];
+  return details[stage] ?? "等待后端返回该阶段详情";
 }
 
 function getStoredJobs(): Record<string, StoredJob> {
@@ -156,13 +169,68 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function createAnalysisJob(metadata: AnalysisUploadMetadata): Promise<AnalysisJobSummary> {
+async function requestForm<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    body,
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Analysis API returned ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+interface AnalysisJobRequest {
+  calibrationId?: string;
+  frameStride?: number;
+  metadata: AnalysisUploadMetadata;
+  useDemoFallback?: boolean;
+  videoId?: string;
+}
+
+export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
+  const body = new FormData();
+  body.append("file", file);
+  return requestForm<VideoUploadResponse>("/api/videos/upload", body);
+}
+
+export async function createManualCalibration(
+  videoId: string,
+  points: Record<"top_left" | "top_right" | "bottom_right" | "bottom_left", CalibrationPoint>
+): Promise<ManualCalibrationResponse> {
+  return requestJson<ManualCalibrationResponse>("/calibration/manual", {
+    body: JSON.stringify({
+      video_id: videoId,
+      image_points: {
+        top_left: [points.top_left.x, points.top_left.y],
+        top_right: [points.top_right.x, points.top_right.y],
+        bottom_right: [points.bottom_right.x, points.bottom_right.y],
+        bottom_left: [points.bottom_left.x, points.bottom_left.y],
+      },
+    }),
+    method: "POST",
+  });
+}
+
+export async function createAnalysisJob(request: AnalysisJobRequest): Promise<AnalysisJobSummary> {
   try {
     return await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
-      body: JSON.stringify({ metadata }),
+      body: JSON.stringify({
+        metadata: request.metadata,
+        videoId: request.videoId,
+        calibrationId: request.calibrationId,
+        frameStride: request.frameStride ?? 5,
+      }),
       method: "POST",
     });
-  } catch {
+  } catch (error) {
+    if (request.videoId || request.useDemoFallback === false) {
+      throw error;
+    }
+
+    const metadata = request.metadata;
     const job = buildMockJob(metadata);
     saveStoredJob(job);
     return job.summary;
@@ -184,6 +252,15 @@ export async function getAnalysisReport(jobId: string): Promise<AnalysisReport |
   } catch {
     const stored = getStoredJobs()[jobId];
     return stored?.report ?? null;
+  }
+}
+
+export async function getAnalysisResult(jobId: string): Promise<AnalysisPipelineResult | AnalysisJobSummary | null> {
+  try {
+    return await requestJson<AnalysisPipelineResult | AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/result`);
+  } catch {
+    const stored = getStoredJobs()[jobId];
+    return stored?.summary ?? null;
   }
 }
 

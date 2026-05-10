@@ -6,17 +6,8 @@ TrendDirection = Literal["up", "down", "steady"]
 ReportType = Literal["landing", "movement", "rally", "diagnosis"]
 InsightTone = Literal["advantage", "risk", "error", "training"]
 AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed"]
-AnalysisStageId = Literal[
-    "upload",
-    "queue",
-    "frame-sampling",
-    "detection",
-    "pose",
-    "tracking",
-    "court-calibration",
-    "event-analysis",
-    "report",
-]
+AnalysisMode = Literal["demo", "real", "limited"]
+AnalysisStageId = str
 
 
 class AnalysisUploadMetadata(BaseModel):
@@ -40,7 +31,7 @@ class AnalysisPipelineOptions(BaseModel):
 class AnalysisStage(BaseModel):
     id: AnalysisStageId
     label: str
-    status: Literal["pending", "active", "done", "failed"]
+    status: Literal["pending", "active", "done", "failed", "skipped"]
     detail: str
 
 
@@ -64,6 +55,7 @@ class AnalysisJobSummary(BaseModel):
     errorMessage: Optional[str] = None
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
+    analysisMode: AnalysisMode = "demo"
 
 
 class Metric(BaseModel):

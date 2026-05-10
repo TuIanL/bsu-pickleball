@@ -41,8 +41,17 @@ class StorageService:
     def output_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / f"{job_id}.json"
 
+    def job_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / "jobs" / f"{job_id}.json"
+
+    def report_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / "reports" / f"{job_id}.json"
+
     def tracking_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "tracking_result.json"
+
+    def video_metadata_path(self, video_id: str) -> Path:
+        return self.uploads_dir / f"{video_id}.json"
 
     def calibration_json_path(self, calibration_id: str) -> Path:
         return self.calibrations_dir / f"{calibration_id}.json"

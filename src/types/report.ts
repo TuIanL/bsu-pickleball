@@ -14,13 +14,17 @@ export type AnalysisJobStatus =
 export type AnalysisStageId =
   | "upload"
   | "queue"
+  | "calibration"
+  | "video-read"
   | "frame-sampling"
   | "detection"
   | "pose"
   | "tracking"
-  | "court-calibration"
-  | "event-analysis"
-  | "report";
+  | "projection"
+  | "metrics"
+  | "visualization"
+  | "report"
+  | string;
 
 export type CameraAngle =
   | "baseline"
@@ -191,7 +195,7 @@ export interface AnalysisUploadMetadata {
 export interface AnalysisStage {
   id: AnalysisStageId;
   label: string;
-  status: "pending" | "active" | "done" | "failed";
+  status: "pending" | "active" | "done" | "failed" | "skipped";
   detail: string;
 }
 
@@ -206,6 +210,102 @@ export interface AnalysisJobSummary {
   stages: AnalysisStage[];
   reportId?: string;
   errorMessage?: string;
+  videoId?: string;
+  calibrationId?: string;
+  analysisMode?: "demo" | "real" | "limited";
+}
+
+export interface VideoMetadata {
+  id: string;
+  original_filename: string;
+  content_type?: string;
+  size_bytes: number;
+  path: string;
+  uploaded_at: string;
+}
+
+export interface VideoUploadResponse {
+  video: VideoMetadata;
+}
+
+export interface CalibrationPoint {
+  x: number;
+  y: number;
+}
+
+export interface ManualCalibrationResponse {
+  calibration_id: string;
+  homography: number[][];
+  inverse_homography: number[][];
+  quality: {
+    reprojection_error: number;
+    status: "ok" | "warning";
+  };
+}
+
+export interface PipelineStageResult {
+  id: string;
+  label: string;
+  status: "pending" | "done" | "failed" | "skipped";
+  detail: string;
+}
+
+export interface PipelineTrackPoint {
+  frame_index: number;
+  timestamp_seconds: number;
+  track_id: string;
+  image_point: CalibrationPoint;
+  confidence: number;
+  side: "near" | "far" | "unknown";
+  court_point: CalibrationPoint;
+}
+
+export interface AnalysisPipelineResult {
+  job_id: string;
+  video_id?: string;
+  calibration_id?: string;
+  status: "completed" | "failed";
+  generated_at: string;
+  stages: PipelineStageResult[];
+  tracks: PipelineTrackPoint[];
+  metrics: {
+    distances: Array<{ track_id: string; distance_ft: number }>;
+    speeds: Array<{
+      track_id: string;
+      average_speed_ft_per_s: number;
+      max_speed_ft_per_s: number;
+      segments: Array<{
+        track_id: string;
+        start_time: number;
+        end_time: number;
+        speed_ft_per_s: number;
+      }>;
+    }>;
+    kitchen_dwell: Array<{ track_id: string; kitchen_frames: number; kitchen_seconds: number }>;
+    doubles_spacing: Array<{
+      pair: [string, string];
+      average_spacing_ft: number;
+      min_spacing_ft: number;
+      max_spacing_ft: number;
+      samples: Array<{
+        timestamp_seconds: number;
+        track_a: string;
+        track_b: string;
+        distance_ft: number;
+      }>;
+    }>;
+    heatmap: {
+      rows: number;
+      cols: number;
+      cells: Array<{ row: number; col: number; count: number }>;
+    };
+  };
+  artifacts: {
+    result_json_path?: string;
+    tracking_result_json_path?: string;
+    overlay_video_path?: string;
+  };
+  message: string;
 }
 
 export interface AnalysisApiError {

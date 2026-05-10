@@ -11,6 +11,7 @@ from app.schemas.tracking import Detection, PlayerFramePosition, ProjectedTrackP
 from app.services.calibration_service import CalibrationService
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
+from app.core.config import get_settings
 from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
@@ -19,7 +20,7 @@ from app.vision.pickleball_performance_engine.trajectory_metrics import total_di
 from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
-from app.vision.player_tracking_engine.person_detector import PersonDetector
+from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 
 
@@ -43,7 +44,12 @@ class AnalysisPipeline:
         self.video_service = video_service or VideoService()
         self.calibration_service = calibration_service or CalibrationService()
         self.storage = storage or StorageService()
-        self.detector = detector or PersonDetector()
+        settings = get_settings()
+        self.detector = detector or (
+            PersonDetector(model_path=settings.default_detector_model)
+            if settings.enable_model_inference
+            else EmptyPersonDetector()
+        )
         self.tracker = tracker
         self.footpoint_estimator = footpoint_estimator or FootpointEstimator()
         self.projector = projector or PlayerProjector(footpoint_estimator=self.footpoint_estimator)
@@ -122,6 +128,12 @@ class AnalysisPipeline:
             )
             tracks = self._positions_to_projected_tracks(tracking_result.positions)
             message = "Pipeline completed with Player Tracking Engine output."
+        elif video and not calibration:
+            stages.append(self._stage("detection", "人体检测", "skipped", "缺少场地标定，暂不运行真实检测"))
+            stages.append(self._stage("tracking", "多目标跟踪", "skipped", "需要有效标定后才能生成可用场地轨迹"))
+            stages.append(self._stage("projection", "脚点投影", "skipped", "未提供标定，无法投影到标准球场坐标"))
+            tracks = []
+            message = "Limited pipeline completed without court calibration; no court-projected tracks were generated."
         else:
             stages.append(self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"))
             stages.append(self._stage("tracking", "多目标跟踪", "done", "已生成 MVP 轨迹样本"))

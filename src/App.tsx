@@ -19,7 +19,7 @@ import {
   Zap,
 } from "lucide-react";
 // 导入 React 核心钩子和类型
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
 import { ProgressChart } from "./components/platform/ProgressChart";
@@ -51,7 +51,16 @@ import type {
   InsightTone,
   ReportType,
 } from "./types/report";
-import { createAnalysisJob, demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport } from "./services/analysisClient";
+import {
+  createAnalysisJob,
+  createManualCalibration,
+  demoAnalysisReport as demoReport,
+  getAnalysisJob,
+  getAnalysisResult,
+  getAnalysisReport,
+  uploadVideo,
+} from "./services/analysisClient";
+import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
 
 // 定义路由状态类型，用于管理应用内的页面导航
 type RouteState =
@@ -211,6 +220,22 @@ function PageFrame({ children, compact = false }: { children: ReactNode; compact
 
 type NavigateFn = (path: AppPath | "/reports/landing" | "/upload") => void;
 
+const calibrationPointOrder = [
+  { id: "top_left", label: "远端左角" },
+  { id: "top_right", label: "远端右角" },
+  { id: "bottom_right", label: "近端右角" },
+  { id: "bottom_left", label: "近端左角" },
+] as const;
+
+type CalibrationPointDraft = {
+  id: (typeof calibrationPointOrder)[number]["id"];
+  label: string;
+  viewX: number;
+  viewY: number;
+  x: number;
+  y: number;
+};
+
 /**
  * 总览页组件
  */
@@ -296,7 +321,10 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
  */
 function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const today = new Date().toISOString().slice(0, 10);
+  const calibrationVideoRef = useRef<HTMLVideoElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPointDraft[]>([]);
+  const [submitStep, setSubmitStep] = useState<"idle" | "uploading" | "calibrating" | "creating">("idle");
   const [metadata, setMetadata] = useState({
     matchTitle: "匹克球训练对局",
     venue: "北京体育大学匹克球训练场",
@@ -311,6 +339,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   const canSubmit = Boolean(
     selectedFile &&
+      calibrationPoints.length === calibrationPointOrder.length &&
       metadata.matchTitle.trim() &&
       metadata.venue.trim() &&
       metadata.matchDate &&
@@ -323,9 +352,63 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     setError(null);
   };
 
+  const videoPreviewUrl = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile]);
+
+  useEffect(() => {
+    return () => {
+      if (videoPreviewUrl) {
+        URL.revokeObjectURL(videoPreviewUrl);
+      }
+    };
+  }, [videoPreviewUrl]);
+
+  const calibrationComplete = calibrationPoints.length === calibrationPointOrder.length;
+
+  const handleCalibrationClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (calibrationPoints.length >= calibrationPointOrder.length) {
+      return;
+    }
+
+    const video = calibrationVideoRef.current;
+    if (!video) {
+      return;
+    }
+
+    video.pause();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const nextPoint = calibrationPointOrder[calibrationPoints.length];
+    const naturalWidth = video.videoWidth || rect.width;
+    const naturalHeight = video.videoHeight || rect.height;
+    const mediaAspect = naturalWidth / naturalHeight;
+    const viewAspect = rect.width / rect.height;
+    const renderedWidth = viewAspect > mediaAspect ? rect.height * mediaAspect : rect.width;
+    const renderedHeight = viewAspect > mediaAspect ? rect.height : rect.width / mediaAspect;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+    const xInMedia = Math.min(Math.max(event.clientX - rect.left - offsetX, 0), renderedWidth);
+    const yInMedia = Math.min(Math.max(event.clientY - rect.top - offsetY, 0), renderedHeight);
+    setCalibrationPoints((current) => [
+      ...current,
+      {
+        id: nextPoint.id,
+        label: nextPoint.label,
+        x: Math.round(xInMedia * (naturalWidth / renderedWidth)),
+        y: Math.round(yInMedia * (naturalHeight / renderedHeight)),
+        viewX: ((offsetX + xInMedia) / rect.width) * 100,
+        viewY: ((offsetY + yInMedia) / rect.height) * 100,
+      },
+    ]);
+    setError(null);
+  };
+
+  const resetCalibration = () => {
+    setCalibrationPoints([]);
+    setError(null);
+  };
+
   const handleSubmit = async () => {
     if (!selectedFile || !canSubmit) {
-      setError("请选择视频并补全比赛信息。");
+      setError("请选择视频、点选四个场地角点并补全比赛信息。");
       return;
     }
 
@@ -333,18 +416,47 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     setError(null);
 
     try {
+      setSubmitStep("uploading");
+      const upload = await uploadVideo(selectedFile);
+      const pointMap = calibrationPoints.reduce(
+        (acc, point) => {
+          acc[point.id] = { x: point.x, y: point.y };
+          return acc;
+        },
+        {} as Record<CalibrationPointDraft["id"], { x: number; y: number }>
+      );
+
+      setSubmitStep("calibrating");
+      const calibration = await createManualCalibration(upload.video.id, pointMap);
+
+      setSubmitStep("creating");
       const job = await createAnalysisJob({
-        ...metadata,
-        fileName: selectedFile.name,
-        fileSize: selectedFile.size,
+        metadata: {
+          ...metadata,
+          fileName: selectedFile.name,
+          fileSize: selectedFile.size,
+        },
+        videoId: upload.video.id,
+        calibrationId: calibration.calibration_id,
+        frameStride: 5,
+        useDemoFallback: false,
       });
       onNavigate(`/analysis/${job.id}`);
     } catch {
-      setError("创建分析任务失败，请稍后重试。");
+      setError("真实上传或分析任务创建失败。请确认后端已启动、视频格式受支持，并重新检查四角标定。");
     } finally {
       setIsSubmitting(false);
+      setSubmitStep("idle");
     }
   };
+
+  const nextCalibrationPoint = calibrationPointOrder[calibrationPoints.length];
+  const submitCopy = {
+    idle: "开始真实分析",
+    uploading: "上传视频中...",
+    calibrating: "提交标定中...",
+    creating: "创建任务中...",
+  }[submitStep];
 
   return (
     <PageFrame>
@@ -356,14 +468,14 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </p>
           <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">创建视觉分析任务</h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
-            先把上传、任务状态和结果页面跑通。当前会优先连接本地 Python API，后端未启动时使用同结构 mock 结果。
+            上传视频会进入本地 Python 后端，四角标定后启动 MVP pipeline，先输出移动、速度、热力图等真实可追溯反馈。
           </p>
 
           <div className="mt-6 grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/70 p-4">
             {[
               ["1", "上传视频", "保留原始文件和基础比赛信息"],
-              ["2", "视觉分析", "预留 YOLO11 检测与 RTMPose26 姿态识别"],
-              ["3", "生成报告", "输出前端可直接渲染的分析 JSON"],
+              ["2", "四角标定", "把画面坐标映射到标准匹克球场"],
+              ["3", "生成报告", "输出移动轨迹、速度、热力图和有限诊断"],
             ].map(([index, title, body]) => (
               <div className="flex gap-3 rounded-2xl bg-[#F5FAF1] p-3" key={index}>
                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#22C55E] text-sm font-black text-[#071008]">
@@ -387,6 +499,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 className="sr-only"
                 onChange={(event) => {
                   setSelectedFile(event.target.files?.[0] ?? null);
+                  setCalibrationPoints([]);
                   setError(null);
                 }}
                 type="file"
@@ -398,10 +511,73 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 {selectedFile ? selectedFile.name : "选择比赛视频"}
               </strong>
               <p className="mt-2 text-sm text-slate-500">
-                {selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(1)} MB · 本地 mock 不上传原文件` : "支持常见视频格式，真实上传由后端接管"}
+                {selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(1)} MB · 将上传到本地分析后端` : "支持常见视频格式，真实上传由后端接管"}
               </p>
             </label>
           </div>
+
+          {videoPreviewUrl ? (
+            <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">四角标定</p>
+                  <h2 className="mt-1 text-lg font-black text-[#14241B]">
+                    {nextCalibrationPoint ? `点击画面中的${nextCalibrationPoint.label}` : "四个角点已记录"}
+                  </h2>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    点选期间视频控件会隐藏，避免误触播放键或进度条。
+                  </p>
+                </div>
+                <button className="quiet-button px-3 py-2 text-xs" onClick={resetCalibration} type="button">
+                  重新点选
+                </button>
+              </div>
+              <div className="relative mt-4 overflow-hidden rounded-2xl bg-[#091016]">
+                <video
+                  className="block aspect-video w-full object-contain"
+                  controls={calibrationComplete}
+                  muted
+                  preload="metadata"
+                  ref={calibrationVideoRef}
+                  src={videoPreviewUrl}
+                />
+                {!calibrationComplete ? (
+                  <button
+                    aria-label={nextCalibrationPoint ? `点击${nextCalibrationPoint.label}` : "标定画面"}
+                    className="absolute inset-0 cursor-crosshair bg-black/10 text-left"
+                    onClick={handleCalibrationClick}
+                    type="button"
+                  >
+                    <span className="absolute left-3 top-3 rounded-full border border-white/15 bg-black/55 px-3 py-1 text-xs font-black text-white shadow-lg">
+                      {nextCalibrationPoint ? `标定中 · ${calibrationPoints.length + 1}/4 · ${nextCalibrationPoint.label}` : "标定完成"}
+                    </span>
+                  </button>
+                ) : null}
+                {calibrationPoints.map((point, index) => (
+                  <span
+                    className="pointer-events-none absolute grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#22C55E] text-xs font-black text-[#071008] shadow-lg"
+                    key={point.id}
+                    style={{ left: `${point.viewX}%`, top: `${point.viewY}%` }}
+                  >
+                    {index + 1}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                {calibrationPointOrder.map((point, index) => {
+                  const selected = calibrationPoints.find((item) => item.id === point.id);
+                  return (
+                    <div className="rounded-2xl bg-white/75 p-3 text-xs" key={point.id}>
+                      <strong className={selected ? "text-[#168A34]" : "text-slate-500"}>
+                        {index + 1}. {point.label}
+                      </strong>
+                      <p className="mt-1 text-slate-500">{selected ? `${selected.x}, ${selected.y}` : "等待点击"}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <Field label="比赛名称">
@@ -472,7 +648,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             <button className="green-button" disabled={!canSubmit || isSubmitting} onClick={handleSubmit} type="button">
-              {isSubmitting ? "创建中..." : "开始分析"}
+              {isSubmitting ? submitCopy : "开始真实分析"}
               <ArrowRight size={17} aria-hidden="true" />
             </button>
             <button className="quiet-button" onClick={() => onNavigate("/vision")} type="button">
@@ -502,14 +678,28 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
 
   useEffect(() => {
     let alive = true;
-    getAnalysisJob(jobId).then((nextJob) => {
-      if (alive) {
-        setJob(nextJob);
+    let timer: number | undefined;
+
+    const loadJob = async () => {
+      const nextJob = await getAnalysisJob(jobId);
+      if (!alive) {
+        return;
       }
-    });
+
+      setJob(nextJob);
+
+      if (nextJob && ["uploaded", "queued", "processing"].includes(nextJob.status)) {
+        timer = window.setTimeout(loadJob, 1600);
+      }
+    };
+
+    loadJob();
 
     return () => {
       alive = false;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
     };
   }, [jobId]);
 
@@ -563,6 +753,9 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
               ["拍摄角度", cameraAngleLabel(job.metadata.cameraAngle)],
               ["球员/队伍", job.metadata.athleteLabel],
               ["水平", job.metadata.level],
+              ["分析模式", job.analysisMode === "real" ? "真实视频分析" : job.analysisMode === "limited" ? "有限分析" : "样例任务"],
+              ["视频 ID", job.videoId ?? "无"],
+              ["标定 ID", job.calibrationId ?? "无"],
               ["创建时间", new Date(job.createdAt).toLocaleString()],
             ].map(([label, value]) => (
               <div className="flex justify-between gap-4 rounded-2xl bg-[#F5FAF1] p-3" key={label}>
@@ -583,10 +776,13 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
           <div className="mt-5 grid gap-3">
             {job.stages.map((stage) => (
               <div className="flex gap-3 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4" key={stage.id}>
-                <span className={`mt-1 size-3 shrink-0 rounded-full ${stage.status === "done" ? "bg-[#22C55E]" : stage.status === "failed" ? "bg-[#FF4D4F]" : stage.status === "active" ? "bg-[#FF9500]" : "bg-slate-300"}`} />
+                <span className={`mt-1 size-3 shrink-0 rounded-full ${stage.status === "done" ? "bg-[#22C55E]" : stage.status === "failed" ? "bg-[#FF4D4F]" : stage.status === "active" ? "bg-[#FF9500]" : stage.status === "skipped" ? "bg-slate-400" : "bg-slate-300"}`} />
                 <div>
                   <strong className="text-[#14241B]">{stage.label}</strong>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">{stage.detail}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    {stage.status === "skipped" ? "已跳过 · " : null}
+                    {stage.detail}
+                  </p>
                 </div>
               </div>
             ))}
@@ -686,9 +882,11 @@ function useAnalysisReport(jobId?: string) {
 
     let alive = true;
 
-    Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId)]).then(([nextJob, nextReport]) => {
+    Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]).then(([nextJob, nextReport, nextResult]) => {
       if (alive) {
-        setLoadedResult({ job: nextJob, jobId, report: nextReport });
+        const adaptedReport =
+          nextReport ?? (nextJob && isPipelineResult(nextResult) ? adaptPipelineResultToReport(nextJob, nextResult) : null);
+        setLoadedResult({ job: nextJob, jobId, report: adaptedReport });
       }
     });
 
@@ -733,7 +931,12 @@ function VisionPage({ jobId, onNavigate }: { jobId?: string; onNavigate: Navigat
   }
 
   const analysis = report ?? demoReport;
-  const sourceLabel = analysis.source === "demo" ? "样例数据" : `任务 ${analysis.jobId}`;
+  const sourceLabel =
+    analysis.source === "demo"
+      ? "样例数据"
+      : job?.analysisMode === "limited"
+        ? `有限真实分析 · 任务 ${analysis.jobId}`
+        : `真实上传视频 · 任务 ${analysis.jobId}`;
   const reportPath = (type: ReportType) =>
     (analysis.jobId ? `/analysis/${analysis.jobId}/reports/${type}` : `/reports/${type}`) as AppPath;
 
@@ -944,7 +1147,9 @@ function ReportPage({
             <h1 className="mt-3 max-w-4xl text-4xl font-black text-[#14241B] sm:text-5xl">{definition.title}</h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">{definition.summary}</p>
             <p className="mt-3 text-sm font-semibold text-slate-500">
-              {analysis.source === "demo" ? "样例报告" : `${analysis.metadata.matchTitle} · ${analysis.metadata.fileName} · ${analysis.reportId}`}
+              {analysis.source === "demo"
+                ? "样例报告"
+                : `${job?.analysisMode === "limited" ? "有限真实分析" : "真实上传视频"} · ${analysis.metadata.matchTitle} · ${analysis.metadata.fileName} · ${analysis.reportId}`}
             </p>
           </div>
           <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">

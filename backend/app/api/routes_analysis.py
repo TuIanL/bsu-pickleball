@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Union
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 # 导入分析相关的模式（Schemas）
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
@@ -15,11 +15,14 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
 @router.post("/jobs", response_model=AnalysisJobSummary)
-def create_analysis_job_route(payload: AnalysisJobCreate) -> AnalysisJobSummary:
+def create_analysis_job_route(
+    payload: AnalysisJobCreate,
+    background_tasks: BackgroundTasks,
+) -> AnalysisJobSummary:
     """
     创建分析任务
     """
-    return create_analysis_job(payload)
+    return create_analysis_job(payload, background_tasks=background_tasks)
 
 
 @router.get("/jobs/{job_id}", response_model=AnalysisJobSummary)

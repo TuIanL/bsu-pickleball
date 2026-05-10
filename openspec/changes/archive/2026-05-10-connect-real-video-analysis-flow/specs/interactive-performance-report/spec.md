@@ -1,21 +1,4 @@
-# interactive-performance-report Specification
-
-## Purpose
-TBD - created by archiving change build-digital-interaction-platform. Update Purpose after archive.
-## Requirements
-### Requirement: Report-first entry experience
-
-The system SHALL provide a product demo experience where users can enter a pickleball post-session analysis report through the layered overview, visual analysis workspace, and focused report detail pages rather than relying on one long report-first scrolling page.
-
-#### Scenario: User opens the site on desktop
-
-- **WHEN** the user loads the website on a desktop viewport
-- **THEN** the first viewport presents the platform name, product value, current demo match context, and clear entry points into visual analysis and report detail workflows
-
-#### Scenario: User opens the site on mobile
-
-- **WHEN** the user loads the website on a mobile viewport
-- **THEN** the overview, visual analysis entry, and report entry controls remain visible in a vertically stacked layout without text overlap or horizontal scrolling
+## MODIFIED Requirements
 
 ### Requirement: Core metric summary
 The system SHALL display a concise summary of pickleball performance metrics using structured analysis data, with demo routes using local demo data and completed real job routes using algorithm-derived MVP metrics where available.
@@ -47,23 +30,7 @@ The system SHALL visualize pickleball court analysis including landing heat poin
 - **WHEN** the user selects a supported court visualization mode or opens a report type focused on landing, routes, movement, or heatmap coverage
 - **THEN** the court panel updates to emphasize the selected view while preserving the same report context and source distinction
 
-### Requirement: Rally analysis
-
-The system SHALL present rally-level analysis that connects visible video or court events with readable performance interpretation.
-
-#### Scenario: User reviews rally details
-
-- **WHEN** the user selects or views a rally summary, highlight, timeline marker, or rally report
-- **THEN** the system displays rally duration, shot count, route pattern, result, and at least one tactical observation
-
-### Requirement: Responsive report layout
-
-The system SHALL keep report panels, controls, text, navigation, and visualizations legible across desktop and mobile viewport sizes.
-
-#### Scenario: Layout adapts to narrow screens
-
-- **WHEN** the viewport width is narrow
-- **THEN** report pages and visual analysis modules stack into stable blocks with constrained visualization aspect ratios and no incoherent overlap
+## ADDED Requirements
 
 ### Requirement: Algorithm-derived feedback copy
 The system SHALL translate available MVP algorithm metrics into concise coaching feedback for real uploaded-video jobs.
@@ -79,4 +46,3 @@ The system SHALL translate available MVP algorithm metrics into concise coaching
 #### Scenario: Report source is mixed during transition
 - **WHEN** a real job report temporarily combines algorithm-derived movement metrics with retained sample-only sections
 - **THEN** the system clearly distinguishes which sections are generated from the uploaded video and which sections are sample placeholders
-

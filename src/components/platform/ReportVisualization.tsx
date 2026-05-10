@@ -89,10 +89,14 @@ export function ReportVisualization({
                 <>
                   <polyline
                     fill="none"
-                    points={movementPolyline.split(" ").map((pair) => {
-                      const [x, y] = pair.split(",").map(Number);
-                      return `${x},${y * 0.64 + 6}`;
-                    }).join(" ")}
+                    points={
+                      movementPath.length
+                        ? movementPolyline.split(" ").map((pair) => {
+                            const [x, y] = pair.split(",").map(Number);
+                            return `${x},${y * 0.64 + 6}`;
+                          }).join(" ")
+                        : undefined
+                    }
                     stroke="#22C55E"
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -107,6 +111,11 @@ export function ReportVisualization({
                       r={index === movementPath.length - 1 ? 3 : 2}
                     />
                   ))}
+                  {!movementPath.length ? (
+                    <text fill="#64748B" fontSize="4" fontWeight="700" textAnchor="middle" x="50" y="37">
+                      暂无可用轨迹
+                    </text>
+                  ) : null}
                 </>
               ) : null}
 

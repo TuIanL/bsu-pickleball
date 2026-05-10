@@ -49,10 +49,24 @@ class VideoService:
             uploaded_at=datetime.now(timezone.utc),
         )
         VIDEOS[video_id] = metadata
+        self.storage.write_json(
+            self.storage.video_metadata_path(video_id),
+            metadata.model_dump(mode="json"),
+        )
         return metadata
 
     def get_video(self, video_id: str) -> VideoMetadata | None:
-        return VIDEOS.get(video_id)
+        cached = VIDEOS.get(video_id)
+        if cached is not None:
+            return cached
+
+        path = self.storage.video_metadata_path(video_id)
+        if not path.exists():
+            return None
+
+        metadata = VideoMetadata.model_validate(self.storage.read_json(path))
+        VIDEOS[video_id] = metadata
+        return metadata
 
 
 video_service = VideoService()
