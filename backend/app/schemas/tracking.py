@@ -52,6 +52,46 @@ class Track(BaseModel):
         return _validate_bbox(value)
 
 
+class SourceFrameSize(BaseModel):
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+
+class FrameDetection(BaseModel):
+    frame_index: int = Field(ge=0)
+    timestamp_seconds: float = Field(ge=0)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    confidence: float = Field(ge=0, le=1)
+    class_name: Literal["person"] = "person"
+    track_id: Optional[str] = None
+    source_width: int = Field(ge=1)
+    source_height: int = Field(ge=1)
+
+    @field_validator("bbox")
+    @classmethod
+    def validate_bbox(cls, value: list[float]) -> list[float]:
+        return _validate_bbox(value)
+
+
+class DetectionOverlayFrame(BaseModel):
+    frame_index: int = Field(ge=0)
+    timestamp_seconds: float = Field(ge=0)
+    detections: list[FrameDetection] = Field(default_factory=list)
+
+
+class TrackingOverlayArtifact(BaseModel):
+    job_id: str
+    video_id: Optional[str] = None
+    status: Literal["available", "no_detections", "unavailable"] = "unavailable"
+    detail: str
+    source: SourceFrameSize
+    fps: float = Field(default=0.0, ge=0)
+    frame_count: int = Field(default=0, ge=0)
+    processed_frame_count: int = Field(default=0, ge=0)
+    frame_stride: int = Field(default=1, ge=1)
+    frames: list[DetectionOverlayFrame] = Field(default_factory=list)
+
+
 class FootpointEstimate(BaseModel):
     image_footpoint: list[float] = Field(min_length=2, max_length=2)
     method: FootpointMethod = "bbox_bottom_center"
@@ -97,9 +137,12 @@ class TrackingResult(BaseModel):
     calibration_id: Optional[str] = None
     fps: float = Field(default=0.0, ge=0)
     frame_count: int = Field(default=0, ge=0)
+    frame_width: int = Field(default=0, ge=0)
+    frame_height: int = Field(default=0, ge=0)
     processed_frame_count: int = Field(default=0, ge=0)
     frame_stride: int = Field(default=1, ge=1)
     detections: list[Detection] = Field(default_factory=list)
+    overlay_frames: list[DetectionOverlayFrame] = Field(default_factory=list)
     tracks: list[Track] = Field(default_factory=list)
     positions: list[PlayerFramePosition] = Field(default_factory=list)
 

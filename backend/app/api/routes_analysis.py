@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from typing import Union
+from typing import Literal, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import JSONResponse
 
 # 导入分析相关的模式（Schemas）
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
 from app.schemas.pipeline import AnalysisPipelineResult
 # 导入模拟分析服务
 from app.services.mock_analysis import create_analysis_job, get_mock_job, get_mock_report, get_pipeline_result
+from app.services.storage_service import StorageService
 
 # 定义 API 路由，前缀为 /api/analysis，标签为 analysis
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+_STORAGE = StorageService()
 
 
 @router.post("/jobs", response_model=AnalysisJobSummary)
@@ -65,3 +68,25 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
         raise HTTPException(status_code=404, detail="Analysis report not found")
 
     return report
+
+
+@router.get("/jobs/{job_id}/artifacts/{artifact_name}")
+def read_analysis_artifact(
+    job_id: str,
+    artifact_name: Literal["tracking-overlay", "pose-overlay"],
+) -> JSONResponse:
+    """
+    读取浏览器可消费的分析 overlay artifact
+    """
+    job = get_mock_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+
+    path = (
+        _STORAGE.tracking_overlay_json_path(job_id)
+        if artifact_name == "tracking-overlay"
+        else _STORAGE.pose_overlay_json_path(job_id)
+    )
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Analysis artifact not found")
+    return JSONResponse(_STORAGE.read_json(path))

@@ -20,7 +20,16 @@ class Settings(BaseModel):
     tmp_dir: Path = Path("data/tmp")
     model_dir: Path = Path("../models")
     default_detector_model: str = "yolo11n.pt"
-    enable_model_inference: bool = False
+    detector_confidence: float = 0.25
+    detector_device: str | None = None
+    enable_model_inference: bool = True
+    enable_pose_inference: bool = False
+    rtmpose_config_path: str | None = None
+    rtmpose_checkpoint_path: str | None = None
+    rtmpose_device: str | None = None
+    pose_confidence: float = 0.3
+    pose_keypoint_schema: str = "rtmpose26"
+    overlay_frame_stride: int = 30
 
     def resolve_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -63,8 +72,18 @@ def get_settings() -> Settings:
         calibrations_dir=Path(os.getenv("PICKLEBALL_CALIBRATIONS_DIR", "data/calibrations")),
         tmp_dir=Path(os.getenv("PICKLEBALL_TMP_DIR", "data/tmp")),
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
-        enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "false").lower()
+        detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.25")),
+        detector_device=os.getenv("PICKLEBALL_DETECTOR_DEVICE") or None,
+        enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "true").lower()
         in {"1", "true", "yes"},
+        enable_pose_inference=os.getenv("PICKLEBALL_ENABLE_POSE_INFERENCE", "false").lower()
+        in {"1", "true", "yes"},
+        rtmpose_config_path=os.getenv("PICKLEBALL_RTMPOSE_CONFIG_PATH") or None,
+        rtmpose_checkpoint_path=os.getenv("PICKLEBALL_RTMPOSE_CHECKPOINT_PATH") or None,
+        rtmpose_device=os.getenv("PICKLEBALL_RTMPOSE_DEVICE") or None,
+        pose_confidence=float(os.getenv("PICKLEBALL_POSE_CONFIDENCE", "0.3")),
+        pose_keypoint_schema=os.getenv("PICKLEBALL_POSE_KEYPOINT_SCHEMA", "rtmpose26"),
+        overlay_frame_stride=max(1, int(os.getenv("PICKLEBALL_OVERLAY_FRAME_STRIDE", "30"))),
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins
         else Settings.model_fields["cors_origins"].default_factory(),

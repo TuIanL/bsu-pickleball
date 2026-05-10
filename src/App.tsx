@@ -44,20 +44,26 @@ import {
 } from "./data/demoData";
 import type {
   AnalysisJobSummary,
+  AnalysisPipelineResult,
   AnalysisReport,
   AnalysisUploadMetadata,
   AppPath,
   DrillRecommendation,
   InsightTone,
+  PoseOverlayArtifact,
   ReportType,
+  TrackingOverlayArtifact,
 } from "./types/report";
 import {
   createAnalysisJob,
   createManualCalibration,
   demoAnalysisReport as demoReport,
   getAnalysisJob,
+  getPoseOverlay,
   getAnalysisResult,
   getAnalysisReport,
+  getTrackingOverlay,
+  getVideoStreamUrl,
   uploadVideo,
 } from "./services/analysisClient";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
@@ -438,7 +444,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         },
         videoId: upload.video.id,
         calibrationId: calibration.calibration_id,
-        frameStride: 5,
+        frameStride: 30,
         useDemoFallback: false,
       });
       onNavigate(`/analysis/${job.id}`);
@@ -872,7 +878,11 @@ function useAnalysisReport(jobId?: string) {
   const [loadedResult, setLoadedResult] = useState<{
     job: AnalysisJobSummary | null;
     jobId: string;
+    poseOverlay: PoseOverlayArtifact | null;
     report: AnalysisReport | null;
+    result: AnalysisPipelineResult | null;
+    trackingOverlay: TrackingOverlayArtifact | null;
+    videoSrc?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -882,13 +892,35 @@ function useAnalysisReport(jobId?: string) {
 
     let alive = true;
 
-    Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]).then(([nextJob, nextReport, nextResult]) => {
+    const load = async () => {
+      const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
+      let trackingOverlay: TrackingOverlayArtifact | null = null;
+      let poseOverlay: PoseOverlayArtifact | null = null;
+      const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
+
+      if (pipelineResult) {
+        [trackingOverlay, poseOverlay] = await Promise.all([
+          getTrackingOverlay(pipelineResult).catch(() => null),
+          getPoseOverlay(pipelineResult).catch(() => null),
+        ]);
+      }
+
       if (alive) {
         const adaptedReport =
-          nextReport ?? (nextJob && isPipelineResult(nextResult) ? adaptPipelineResultToReport(nextJob, nextResult) : null);
-        setLoadedResult({ job: nextJob, jobId, report: adaptedReport });
+          nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
+        setLoadedResult({
+          job: nextJob,
+          jobId,
+          poseOverlay,
+          report: adaptedReport,
+          result: pipelineResult,
+          trackingOverlay,
+          videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
+        });
       }
-    });
+    };
+
+    load();
 
     return () => {
       alive = false;
@@ -896,21 +928,35 @@ function useAnalysisReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { job: null, report: demoReport };
+    return { job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
   }
 
   if (loadedResult?.jobId !== jobId) {
-    return { job: undefined, report: undefined };
+    return {
+      job: undefined,
+      poseOverlay: undefined,
+      report: undefined,
+      result: undefined,
+      trackingOverlay: undefined,
+      videoSrc: undefined,
+    };
   }
 
-  return { job: loadedResult.job, report: loadedResult.report };
+  return {
+    job: loadedResult.job,
+    poseOverlay: loadedResult.poseOverlay,
+    report: loadedResult.report,
+    result: loadedResult.result,
+    trackingOverlay: loadedResult.trackingOverlay,
+    videoSrc: loadedResult.videoSrc,
+  };
 }
 
 /**
  * 视觉分析工作台页组件
  */
 function VisionPage({ jobId, onNavigate }: { jobId?: string; onNavigate: NavigateFn }) {
-  const { job, report } = useAnalysisReport(jobId);
+  const { job, poseOverlay, report, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
@@ -972,8 +1018,11 @@ function VisionPage({ jobId, onNavigate }: { jobId?: string; onNavigate: Navigat
           labels={analysis.videoOverlayLabels}
           match={analysis.match}
           players={analysis.playerMarkers}
+          poseOverlay={poseOverlay ?? null}
           timeline={analysis.timelineMarkers}
+          trackingOverlay={trackingOverlay ?? null}
           trajectories={analysis.shotTrajectories}
+          videoSrc={analysis.source === "job" ? videoSrc : undefined}
         />
         <aside className="grid gap-5">
           <CoachNotesCard notes={analysis.coachNotes} />

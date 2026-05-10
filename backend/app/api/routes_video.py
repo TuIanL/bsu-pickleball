@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 # 导入视频相关的模式（Schemas）
 from app.schemas.video import VideoMetadata, VideoUploadResponse
@@ -31,3 +34,21 @@ def read_video(video_id: str) -> VideoMetadata:
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/{video_id}/stream")
+def stream_video(video_id: str) -> FileResponse:
+    """
+    浏览器可播放的源视频流
+    """
+    video = video_service.get_video(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    path = Path(video.path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    return FileResponse(
+        path,
+        media_type=video.content_type or "video/mp4",
+        filename=video.original_filename,
+    )

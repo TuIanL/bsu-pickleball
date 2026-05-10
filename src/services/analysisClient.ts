@@ -8,6 +8,8 @@ import type {
   AnalysisUploadMetadata,
   CalibrationPoint,
   ManualCalibrationResponse,
+  PoseOverlayArtifact,
+  TrackingOverlayArtifact,
   VideoUploadResponse,
 } from "../types/report";
 
@@ -153,8 +155,12 @@ function buildMockJob(metadata: AnalysisUploadMetadata): StoredJob {
   return { summary, report };
 }
 
+function toApiUrl(path: string): string {
+  return /^https?:\/\//.test(path) ? path : `${API_BASE_URL}${path}`;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(toApiUrl(path), {
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
@@ -170,7 +176,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestForm<T>(path: string, body: FormData): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(toApiUrl(path), {
     body,
     method: "POST",
   });
@@ -221,7 +227,7 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
         metadata: request.metadata,
         videoId: request.videoId,
         calibrationId: request.calibrationId,
-        frameStride: request.frameStride ?? 5,
+        frameStride: request.frameStride ?? 30,
       }),
       method: "POST",
     });
@@ -262,6 +268,24 @@ export async function getAnalysisResult(jobId: string): Promise<AnalysisPipeline
     const stored = getStoredJobs()[jobId];
     return stored?.summary ?? null;
   }
+}
+
+export function getVideoStreamUrl(videoId?: string): string | undefined {
+  return videoId ? toApiUrl(`/api/videos/${videoId}/stream`) : undefined;
+}
+
+export function resolveAnalysisAssetUrl(path?: string): string | undefined {
+  return path ? toApiUrl(path) : undefined;
+}
+
+export async function getTrackingOverlay(result: AnalysisPipelineResult): Promise<TrackingOverlayArtifact | null> {
+  const path = result.artifacts.tracking_overlay_url;
+  return path ? requestJson<TrackingOverlayArtifact>(path) : null;
+}
+
+export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<PoseOverlayArtifact | null> {
+  const path = result.artifacts.pose_overlay_url;
+  return path ? requestJson<PoseOverlayArtifact>(path) : null;
 }
 
 export { demoAnalysisReport };

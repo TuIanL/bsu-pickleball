@@ -260,6 +260,78 @@ export interface PipelineTrackPoint {
   court_point: CalibrationPoint;
 }
 
+export interface FrameSourceSize {
+  width: number;
+  height: number;
+}
+
+export interface DetectionOverlayBox {
+  frame_index: number;
+  timestamp_seconds: number;
+  bbox: [number, number, number, number] | number[];
+  confidence: number;
+  class_name: "person";
+  track_id?: string;
+  source_width: number;
+  source_height: number;
+}
+
+export interface DetectionOverlayFrame {
+  frame_index: number;
+  timestamp_seconds: number;
+  detections: DetectionOverlayBox[];
+}
+
+export interface TrackingOverlayArtifact {
+  job_id: string;
+  video_id?: string;
+  status: "available" | "no_detections" | "unavailable";
+  detail: string;
+  source: FrameSourceSize;
+  fps: number;
+  frame_count: number;
+  processed_frame_count: number;
+  frame_stride: number;
+  frames: DetectionOverlayFrame[];
+}
+
+export interface PoseKeypoint {
+  name: string;
+  x: number;
+  y: number;
+  confidence: number;
+  visible: boolean;
+}
+
+export interface SkeletonEdge {
+  from_keypoint: string;
+  to_keypoint: string;
+}
+
+export interface PoseSubject {
+  track_id: string;
+  bbox: [number, number, number, number] | number[];
+  confidence: number;
+  keypoints: PoseKeypoint[];
+}
+
+export interface PoseOverlayFrame {
+  frame_index: number;
+  timestamp_seconds: number;
+  subjects: PoseSubject[];
+}
+
+export interface PoseOverlayArtifact {
+  job_id: string;
+  video_id?: string;
+  status: "available" | "no_poses" | "unavailable";
+  detail: string;
+  keypoint_schema: string;
+  source: FrameSourceSize;
+  skeleton_edges: SkeletonEdge[];
+  frames: PoseOverlayFrame[];
+}
+
 export interface AnalysisPipelineResult {
   job_id: string;
   video_id?: string;
@@ -303,6 +375,15 @@ export interface AnalysisPipelineResult {
   artifacts: {
     result_json_path?: string;
     tracking_result_json_path?: string;
+    tracking_overlay_json_path?: string;
+    tracking_overlay_url?: string;
+    pose_overlay_json_path?: string;
+    pose_overlay_url?: string;
+    source_video_url?: string;
+    tracking_overlay_status?: string;
+    tracking_overlay_detail?: string;
+    pose_overlay_status?: string;
+    pose_overlay_detail?: string;
     overlay_video_path?: string;
   };
   message: string;

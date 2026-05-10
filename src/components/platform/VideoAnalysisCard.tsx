@@ -1,10 +1,14 @@
 import { CirclePause, Maximize2, Play, Volume2 } from "lucide-react";
-import type { CSSProperties } from "react";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
 import type {
+  DetectionOverlayFrame,
   MatchSummary,
   PlayerMarker,
+  PoseOverlayArtifact,
+  PoseOverlayFrame,
   ShotTrajectory,
   TimelineMarker,
+  TrackingOverlayArtifact,
   VideoOverlayLabel,
 } from "../../types/report";
 
@@ -13,8 +17,11 @@ interface VideoAnalysisCardProps {
   labels: VideoOverlayLabel[];
   match: MatchSummary;
   players: PlayerMarker[];
+  poseOverlay?: PoseOverlayArtifact | null;
   timeline: TimelineMarker[];
+  trackingOverlay?: TrackingOverlayArtifact | null;
   trajectories: ShotTrajectory[];
+  videoSrc?: string;
 }
 
 const toneClass = {
@@ -36,20 +43,35 @@ export function VideoAnalysisCard({
   labels,
   match,
   players,
+  poseOverlay,
   timeline,
+  trackingOverlay,
   trajectories,
+  videoSrc,
 }: VideoAnalysisCardProps) {
+  if (videoSrc) {
+    return (
+      <article className="sport-card overflow-hidden">
+        <VideoCardHeader match={match} />
+        <RealVideoOverlay
+          match={match}
+          poseOverlay={poseOverlay}
+          trackingOverlay={trackingOverlay}
+          videoSrc={videoSrc}
+        />
+        {!compact ? (
+          <RealVideoFooter
+            poseOverlay={poseOverlay}
+            trackingOverlay={trackingOverlay}
+          />
+        ) : null}
+      </article>
+    );
+  }
+
   return (
     <article className="sport-card overflow-hidden">
-      <div className="flex items-center justify-between border-b border-[#DDE9D6] px-4 py-3 sm:px-5">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">实时智能标注</p>
-          <h2 className="mt-1 text-lg font-black text-[#14241B] sm:text-xl">视频回放 · {match.currentRally}</h2>
-        </div>
-        <div className="rounded-full border border-[#DDE9D6] bg-[#17231D] px-3 py-1 text-sm font-black text-white">
-          {match.score}
-        </div>
-      </div>
+      <VideoCardHeader match={match} />
 
       <div className="relative aspect-video overflow-hidden bg-[#091016]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(34,197,94,0.1),transparent_35%),linear-gradient(135deg,rgba(47,128,237,0.22),transparent_42%),linear-gradient(180deg,#151A1F,#080C10)]" />
@@ -172,4 +194,217 @@ export function VideoAnalysisCard({
       ) : null}
     </article>
   );
+}
+
+function VideoCardHeader({ match }: { match: MatchSummary }) {
+  return (
+    <div className="flex items-center justify-between border-b border-[#DDE9D6] px-4 py-3 sm:px-5">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">实时智能标注</p>
+        <h2 className="mt-1 text-lg font-black text-[#14241B] sm:text-xl">视频回放 · {match.currentRally}</h2>
+      </div>
+      <div className="rounded-full border border-[#DDE9D6] bg-[#17231D] px-3 py-1 text-sm font-black text-white">
+        {match.score}
+      </div>
+    </div>
+  );
+}
+
+function RealVideoOverlay({
+  match,
+  poseOverlay,
+  trackingOverlay,
+  videoSrc,
+}: {
+  match: MatchSummary;
+  poseOverlay?: PoseOverlayArtifact | null;
+  trackingOverlay?: TrackingOverlayArtifact | null;
+  videoSrc: string;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 });
+  const [showBoxes, setShowBoxes] = useState(true);
+  const [showSkeleton, setShowSkeleton] = useState(true);
+
+  const source = trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
+  const detectionFrame = useMemo(
+    () => findNearestFrame(trackingOverlay?.frames ?? [], currentTime),
+    [currentTime, trackingOverlay]
+  );
+  const poseFrame = useMemo(
+    () => findNearestFrame(poseOverlay?.frames ?? [], currentTime),
+    [currentTime, poseOverlay]
+  );
+
+  const boxCount = detectionFrame?.detections.length ?? 0;
+  const skeletonCount = poseFrame?.subjects.length ?? 0;
+
+  return (
+    <div className="relative aspect-video overflow-hidden bg-[#091016]">
+      <video
+        className="absolute inset-0 h-full w-full bg-black object-contain"
+        controls
+        muted
+        onLoadedMetadata={() => {
+          const video = videoRef.current;
+          if (video?.videoWidth && video.videoHeight) {
+            setNaturalSize({ width: video.videoWidth, height: video.videoHeight });
+          }
+        }}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        playsInline
+        preload="metadata"
+        ref={videoRef}
+        src={videoSrc}
+      />
+
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        preserveAspectRatio="xMidYMid meet"
+        viewBox={`0 0 ${source.width} ${source.height}`}
+      >
+        {showBoxes && detectionFrame?.detections.map((detection) => {
+          const [x1, y1, x2, y2] = detection.bbox;
+          const width = Math.max(0, x2 - x1);
+          const height = Math.max(0, y2 - y1);
+          return (
+            <g key={`${detection.frame_index}-${detection.track_id ?? "person"}-${x1}-${y1}`}>
+              <rect
+                fill="rgba(34,197,94,0.08)"
+                height={height}
+                rx={Math.max(4, source.width * 0.003)}
+                stroke="#22C55E"
+                strokeWidth={Math.max(2, source.width * 0.0018)}
+                width={width}
+                x={x1}
+                y={y1}
+              />
+              <text
+                fill="#D9FF3F"
+                fontSize={Math.max(14, source.width * 0.014)}
+                fontWeight="800"
+                paintOrder="stroke"
+                stroke="rgba(0,0,0,0.75)"
+                strokeWidth={Math.max(3, source.width * 0.002)}
+                x={x1}
+                y={Math.max(18, y1 - 8)}
+              >
+                {detection.track_id ? `ID ${detection.track_id}` : "person"} · {Math.round(detection.confidence * 100)}%
+              </text>
+            </g>
+          );
+        })}
+
+        {showSkeleton && poseFrame?.subjects.map((subject) => (
+          <g key={`${poseFrame.frame_index}-${subject.track_id}`}>
+            {poseOverlay?.skeleton_edges.map((edge) => {
+              const from = subject.keypoints.find((keypoint) => keypoint.name === edge.from_keypoint && keypoint.visible);
+              const to = subject.keypoints.find((keypoint) => keypoint.name === edge.to_keypoint && keypoint.visible);
+              if (!from || !to) {
+                return null;
+              }
+              return (
+                <line
+                  key={`${subject.track_id}-${edge.from_keypoint}-${edge.to_keypoint}`}
+                  stroke="#6BB8FF"
+                  strokeLinecap="round"
+                  strokeWidth={Math.max(3, source.width * 0.0022)}
+                  x1={from.x}
+                  x2={to.x}
+                  y1={from.y}
+                  y2={to.y}
+                />
+              );
+            })}
+            {subject.keypoints.filter((keypoint) => keypoint.visible).map((keypoint) => (
+              <circle
+                cx={keypoint.x}
+                cy={keypoint.y}
+                fill="#D9FF3F"
+                key={`${subject.track_id}-${keypoint.name}`}
+                r={Math.max(4, source.width * 0.0032)}
+                stroke="#071008"
+                strokeWidth={Math.max(1.5, source.width * 0.0012)}
+              />
+            ))}
+          </g>
+        ))}
+      </svg>
+
+      <div className="absolute left-4 top-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur">
+        <p className="text-xs font-semibold text-slate-400">{match.teams}</p>
+        <strong className="text-sm text-white">{match.venue}</strong>
+      </div>
+
+      <div className="absolute right-4 top-4 flex gap-2">
+        <button
+          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showBoxes ? "border-[#22C55E]/45 bg-[#22C55E]/20 text-[#D9FF3F]" : "border-white/10 bg-black/45 text-white"}`}
+          onClick={() => setShowBoxes((value) => !value)}
+          type="button"
+        >
+          人框
+        </button>
+        <button
+          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showSkeleton ? "border-[#2F80ED]/45 bg-[#2F80ED]/25 text-[#BBD8FF]" : "border-white/10 bg-black/45 text-white"}`}
+          onClick={() => setShowSkeleton((value) => !value)}
+          type="button"
+        >
+          骨架
+        </button>
+      </div>
+
+      <div className="absolute bottom-4 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
+        <p className="text-xs font-semibold text-slate-400">
+          {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
+        </p>
+        <strong className="text-sm">{match.currentRally}</strong>
+      </div>
+    </div>
+  );
+}
+
+function RealVideoFooter({
+  poseOverlay,
+  trackingOverlay,
+}: {
+  poseOverlay?: PoseOverlayArtifact | null;
+  trackingOverlay?: TrackingOverlayArtifact | null;
+}) {
+  const trackingDetail = trackingOverlay?.detail ?? "人体框 overlay 暂不可用";
+  const poseDetail = poseOverlay?.detail ?? "骨架关节 overlay 暂不可用";
+  return (
+    <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
+      <div className="grid gap-3 text-sm md:grid-cols-2">
+        <div className="rounded-2xl bg-[#F5FAF1] p-3">
+          <strong className="text-[#168A34]">YOLO 人体框</strong>
+          <p className="mt-1 text-slate-600">{trackingDetail}</p>
+        </div>
+        <div className="rounded-2xl bg-[#F5FAF1] p-3">
+          <strong className="text-[#1E63B6]">RTMPose 骨架</strong>
+          <p className="mt-1 text-slate-600">{poseDetail}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function findNearestFrame<T extends DetectionOverlayFrame | PoseOverlayFrame>(
+  frames: T[],
+  currentTime: number
+): T | undefined {
+  if (!frames.length) {
+    return undefined;
+  }
+  return frames.reduce((nearest, frame) => (
+    Math.abs(frame.timestamp_seconds - currentTime) < Math.abs(nearest.timestamp_seconds - currentTime)
+      ? frame
+      : nearest
+  ));
+}
+
+function formatSeconds(value: number): string {
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.floor(value % 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }

@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from app.schemas.calibration import CourtPoint2D, ImagePoint
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
-from app.schemas.tracking import Detection, PlayerFramePosition, ProjectedTrackPoint, TrackingResult
+from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
+from app.schemas.tracking import (
+    Detection,
+    DetectionOverlayFrame,
+    FrameDetection,
+    PlayerFramePosition,
+    ProjectedTrackPoint,
+    SourceFrameSize,
+    TrackingOverlayArtifact,
+    TrackingResult,
+)
 from app.services.calibration_service import CalibrationService
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
@@ -22,9 +33,17 @@ from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstim
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
+from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _TrackingRunOutput:
+    tracking: TrackingResult
+    pose: PoseOverlayArtifact | None = None
+    pose_stage: PipelineStageResult | None = None
 
 
 class AnalysisPipeline:
@@ -39,21 +58,44 @@ class AnalysisPipeline:
         tracker: MultiObjectTracker | None = None,
         footpoint_estimator: FootpointEstimator | None = None,
         projector: PlayerProjector | None = None,
-        frame_stride: int = 1,
+        pose_estimator: Any | None = None,
+        frame_stride: int | None = None,
     ) -> None:
         self.video_service = video_service or VideoService()
         self.calibration_service = calibration_service or CalibrationService()
         self.storage = storage or StorageService()
-        settings = get_settings()
+        self.settings = get_settings()
+        detector_was_injected = detector is not None
         self.detector = detector or (
-            PersonDetector(model_path=settings.default_detector_model)
-            if settings.enable_model_inference
+            PersonDetector(
+                model_path=self.settings.default_detector_model,
+                conf_threshold=self.settings.detector_confidence,
+                device=self.settings.detector_device,
+            )
+            if self.settings.enable_model_inference
             else EmptyPersonDetector()
+        )
+        self.model_inference_enabled = (
+            not isinstance(self.detector, EmptyPersonDetector)
+            if detector_was_injected
+            else self.settings.enable_model_inference
         )
         self.tracker = tracker
         self.footpoint_estimator = footpoint_estimator or FootpointEstimator()
         self.projector = projector or PlayerProjector(footpoint_estimator=self.footpoint_estimator)
-        self.frame_stride = max(1, int(frame_stride))
+        self.pose_estimator = pose_estimator or (
+            RTMPose26Adapter(
+                config_path=self.settings.rtmpose_config_path,
+                checkpoint_path=self.settings.rtmpose_checkpoint_path,
+                device=self.settings.rtmpose_device,
+                conf_threshold=self.settings.pose_confidence,
+                keypoint_schema=self.settings.pose_keypoint_schema,
+            )
+            if self.settings.enable_pose_inference
+            else None
+        )
+        self.pose_inference_enabled = self.pose_estimator is not None
+        self.frame_stride = max(1, int(frame_stride or self.settings.overlay_frame_stride))
 
     def run(
         self,
@@ -82,10 +124,20 @@ class AnalysisPipeline:
             )
         )
 
+        source_video_url = f"/api/videos/{video_id}/stream" if video_id else None
         tracking_artifact_path: str | None = None
+        tracking_overlay_artifact_path: str | None = None
+        tracking_overlay_url: str | None = None
+        tracking_overlay_status: str | None = None
+        tracking_overlay_detail: str | None = None
+        pose_overlay_artifact_path: str | None = None
+        pose_overlay_url: str | None = None
+        pose_overlay_status: str | None = None
+        pose_overlay_detail: str | None = None
         if video and calibration:
             try:
-                tracking_result = self._run_tracking(
+                run_output = self._run_tracking(
+                    job_id=job_id,
                     video=video,
                     homography=calibration.homography.values,
                     video_id=video_id,
@@ -97,25 +149,62 @@ class AnalysisPipeline:
                 result = self._failed(job_id, video_id, calibration_id, str(exc), stages=stages)
                 self._write_result(result)
                 return result
+            tracking_result = run_output.tracking
 
             tracking_path = self.storage.tracking_json_path(job_id)
             self.storage.write_json(tracking_path, tracking_result.model_dump(mode="json"))
             tracking_artifact_path = str(tracking_path)
+            tracking_overlay = self._build_tracking_overlay(
+                job_id,
+                video_id,
+                tracking_result,
+                enabled=self.model_inference_enabled,
+            )
+            tracking_overlay_path = self.storage.tracking_overlay_json_path(job_id)
+            self.storage.write_json(tracking_overlay_path, tracking_overlay.model_dump(mode="json"))
+            tracking_overlay_artifact_path = str(tracking_overlay_path)
+            tracking_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/tracking-overlay"
+            tracking_overlay_status = tracking_overlay.status
+            tracking_overlay_detail = tracking_overlay.detail
+
+            if run_output.pose is not None:
+                pose_overlay_path = self.storage.pose_overlay_json_path(job_id)
+                self.storage.write_json(pose_overlay_path, run_output.pose.model_dump(mode="json"))
+                pose_overlay_artifact_path = str(pose_overlay_path)
+                pose_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/pose-overlay"
+                pose_overlay_status = run_output.pose.status
+                pose_overlay_detail = run_output.pose.detail
+            elif run_output.pose_stage is not None:
+                pose_overlay_status = "unavailable"
+                pose_overlay_detail = run_output.pose_stage.detail
 
             stages.append(
                 self._stage(
                     "detection",
                     "人体检测",
-                    "done",
-                    f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {len(tracking_result.detections)} 个人体框",
+                    "done" if self.model_inference_enabled else "skipped",
+                    self._detection_stage_detail(tracking_result, enabled=self.model_inference_enabled),
                 )
             )
             stages.append(
                 self._stage(
                     "tracking",
                     "多目标跟踪",
-                    "done",
-                    f"已输出 {len(tracking_result.tracks)} 个当前轨迹样本",
+                    "done" if self.model_inference_enabled else "skipped",
+                    (
+                        f"已输出 {len(tracking_result.tracks)} 个当前轨迹样本"
+                        if self.model_inference_enabled
+                        else "YOLO 人体检测未运行，未生成可跟踪人体框"
+                    ),
+                )
+            )
+            stages.append(
+                run_output.pose_stage
+                or self._stage(
+                    "pose",
+                    "人体姿态",
+                    "skipped",
+                    "RTMPose 姿态识别未启用，暂不生成骨架关节",
                 )
             )
             stages.append(
@@ -131,12 +220,14 @@ class AnalysisPipeline:
         elif video and not calibration:
             stages.append(self._stage("detection", "人体检测", "skipped", "缺少场地标定，暂不运行真实检测"))
             stages.append(self._stage("tracking", "多目标跟踪", "skipped", "需要有效标定后才能生成可用场地轨迹"))
+            stages.append(self._stage("pose", "人体姿态", "skipped", "需要检测和跟踪框后才能运行 RTMPose"))
             stages.append(self._stage("projection", "脚点投影", "skipped", "未提供标定，无法投影到标准球场坐标"))
             tracks = []
             message = "Limited pipeline completed without court calibration; no court-projected tracks were generated."
         else:
             stages.append(self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"))
             stages.append(self._stage("tracking", "多目标跟踪", "done", "已生成 MVP 轨迹样本"))
+            stages.append(self._stage("pose", "人体姿态", "skipped", "未提供真实视频，跳过骨架关节识别"))
             tracks = self._mock_projected_tracks()
             stages.append(self._stage("projection", "脚点投影", "done", "轨迹已位于标准球场坐标系"))
             message = "MVP pipeline completed with deterministic model-free tracking output."
@@ -157,6 +248,15 @@ class AnalysisPipeline:
             artifacts=AnalysisArtifacts(
                 result_json_path=str(self.storage.output_json_path(job_id)),
                 tracking_result_json_path=tracking_artifact_path,
+                tracking_overlay_json_path=tracking_overlay_artifact_path,
+                tracking_overlay_url=tracking_overlay_url,
+                pose_overlay_json_path=pose_overlay_artifact_path,
+                pose_overlay_url=pose_overlay_url,
+                source_video_url=source_video_url,
+                tracking_overlay_status=tracking_overlay_status,
+                tracking_overlay_detail=tracking_overlay_detail,
+                pose_overlay_status=pose_overlay_status,
+                pose_overlay_detail=pose_overlay_detail,
             ),
             message=message,
         )
@@ -165,12 +265,13 @@ class AnalysisPipeline:
 
     def _run_tracking(
         self,
+        job_id: str,
         video: VideoMetadata,
         homography: list[list[float]],
         video_id: str | None,
         calibration_id: str | None,
         frame_stride: int,
-    ) -> TrackingResult:
+    ) -> _TrackingRunOutput:
         try:
             import cv2  # type: ignore
         except ImportError as exc:
@@ -184,10 +285,20 @@ class AnalysisPipeline:
         raw_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
         fps = raw_fps if raw_fps > 0 else 0.0
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         processed_frame_count = 0
         all_detections: list[Detection] = []
+        overlay_frames: list[DetectionOverlayFrame] = []
         all_tracks = []
         positions: list[PlayerFramePosition] = []
+        pose_frames = []
+        pose_stage = (
+            self._stage("pose", "人体姿态", "skipped", "RTMPose 姿态识别未启用，暂不生成骨架关节")
+            if self.pose_estimator is None
+            else None
+        )
+        pose_error: str | None = None
         tracker = self.tracker or MultiObjectTracker()
 
         frame_index = 0
@@ -203,6 +314,13 @@ class AnalysisPipeline:
                 timestamp = frame_index / raw_fps if raw_fps > 0 else float(frame_index)
                 detections = self._detect_frame(frame, frame_index)
                 tracks = tracker.update(detections)
+                frame_detections = self._tracks_to_frame_detections(
+                    tracks=tracks,
+                    frame_index=frame_index,
+                    timestamp=timestamp,
+                    frame_width=frame_width,
+                    frame_height=frame_height,
+                )
                 footpoints = {track.track_id: self.footpoint_estimator.estimate(track) for track in tracks}
                 frame_positions = self.projector.project(
                     tracks=tracks,
@@ -213,8 +331,28 @@ class AnalysisPipeline:
                 )
 
                 all_detections.extend(detections)
+                overlay_frames.append(
+                    DetectionOverlayFrame(
+                        frame_index=frame_index,
+                        timestamp_seconds=timestamp,
+                        detections=frame_detections,
+                    )
+                )
                 all_tracks.extend(tracks)
                 positions.extend(frame_positions)
+                if self.pose_estimator is not None and frame_detections and pose_error is None:
+                    try:
+                        pose_frames.append(
+                            self.pose_estimator.estimate_frame(
+                                frame=frame,
+                                subjects=frame_detections,
+                                frame_index=frame_index,
+                                timestamp_seconds=timestamp,
+                            )
+                        )
+                    except Exception as exc:
+                        pose_error = str(exc)
+                        pose_frames = []
                 processed_frame_count += 1
 
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
@@ -234,22 +372,114 @@ class AnalysisPipeline:
             len(positions),
         )
 
-        return TrackingResult(
+        tracking_result = TrackingResult(
             video_id=video_id,
             calibration_id=calibration_id,
             fps=fps,
             frame_count=frame_count,
+            frame_width=frame_width,
+            frame_height=frame_height,
             processed_frame_count=processed_frame_count,
             frame_stride=stride,
             detections=all_detections,
+            overlay_frames=overlay_frames,
             tracks=all_tracks,
             positions=positions,
         )
+        if self.pose_estimator is not None:
+            if pose_error:
+                pose_stage = self._stage("pose", "人体姿态", "skipped", f"RTMPose 不可用：{pose_error}")
+            elif pose_frames:
+                pose_stage = self._stage("pose", "人体姿态", "done", f"已生成 {sum(len(frame.subjects) for frame in pose_frames)} 组骨架关节")
+            else:
+                pose_stage = self._stage("pose", "人体姿态", "skipped", "没有可用人体框，未生成骨架关节")
+        pose_artifact = None
+        if pose_frames:
+            pose_artifact = PoseOverlayArtifact(
+                job_id=job_id,
+                video_id=video_id,
+                status="available",
+                detail=f"已生成 {sum(len(frame.subjects) for frame in pose_frames)} 组骨架关节",
+                keypoint_schema=self.settings.pose_keypoint_schema,
+                source=SourceFrameSize(width=max(1, frame_width), height=max(1, frame_height)),
+                skeleton_edges=default_skeleton_edges(),
+                frames=pose_frames,
+            )
+        return _TrackingRunOutput(tracking=tracking_result, pose=pose_artifact, pose_stage=pose_stage)
 
     def _detect_frame(self, frame: object, frame_index: int) -> list[Detection]:
         if hasattr(self.detector, "detect_frame"):
             return self.detector.detect_frame(frame, frame_index)
         return self.detector.detect(frame)
+
+    @staticmethod
+    def _tracks_to_frame_detections(
+        tracks,
+        frame_index: int,
+        timestamp: float,
+        frame_width: int,
+        frame_height: int,
+    ) -> list[FrameDetection]:
+        source_width = max(1, int(frame_width))
+        source_height = max(1, int(frame_height))
+        return [
+            FrameDetection(
+                frame_index=frame_index,
+                timestamp_seconds=timestamp,
+                bbox=track.bbox,
+                confidence=track.confidence,
+                track_id=str(track.track_id),
+                source_width=source_width,
+                source_height=source_height,
+            )
+            for track in tracks
+            if not track.lost
+        ]
+
+    @staticmethod
+    def _detection_stage_detail(tracking_result: TrackingResult, enabled: bool = True) -> str:
+        if not enabled:
+            return "模型推理未启用，未运行 YOLO 人体检测；可设置 PICKLEBALL_ENABLE_MODEL_INFERENCE=true"
+        detection_count = len(tracking_result.detections)
+        if detection_count == 0:
+            return (
+                f"已处理 {tracking_result.processed_frame_count} 帧，没有检测到可用人体框；"
+                "请检查模型配置、拍摄角度、视频清晰度或标定范围"
+            )
+        return f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {detection_count} 个人体框"
+
+    def _build_tracking_overlay(
+        self,
+        job_id: str,
+        video_id: str | None,
+        tracking_result: TrackingResult,
+        enabled: bool = True,
+    ) -> TrackingOverlayArtifact:
+        detection_count = sum(len(frame.detections) for frame in tracking_result.overlay_frames)
+        if not enabled:
+            status = "unavailable"
+            detail = "YOLO 人体检测未启用，未运行模型推理；请启用后重新分析"
+        elif detection_count:
+            status = "available"
+            detail = f"已生成 {detection_count} 个可渲染人体框"
+        else:
+            status = "no_detections"
+            detail = "YOLO 已运行，但没有可渲染的人体框；请检查视频清晰度、拍摄角度、置信度或标定范围"
+        return TrackingOverlayArtifact(
+            job_id=job_id,
+            video_id=video_id,
+            status=status,
+            detail=detail,
+            source=SourceFrameSize(
+                width=max(1, tracking_result.frame_width),
+                height=max(1, tracking_result.frame_height),
+            ),
+            fps=tracking_result.fps,
+            frame_count=tracking_result.frame_count,
+            processed_frame_count=tracking_result.processed_frame_count,
+            frame_stride=tracking_result.frame_stride,
+            frames=tracking_result.overlay_frames,
+        )
 
     def _positions_to_projected_tracks(self, positions: list[PlayerFramePosition]) -> list[ProjectedTrackPoint]:
         projected: list[ProjectedTrackPoint] = []

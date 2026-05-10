@@ -2,8 +2,13 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.schemas.analysis import AnalysisJobCreate
+from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
+from app.schemas.tracking import Detection
+from app.services.analysis_pipeline import AnalysisPipeline
 from app.services.mock_analysis import JOBS, REPORTS, RESULTS, create_analysis_job
+from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
+from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
 
 
 client = TestClient(app)
@@ -102,6 +107,11 @@ def test_video_upload_persists_metadata_after_cache_miss():
     assert read_response.status_code == 200
     assert read_response.json()["id"] == video["id"]
 
+    stream_response = client.get(f"/api/videos/{video['id']}/stream")
+
+    assert stream_response.status_code == 200
+    assert stream_response.content == b"not-a-real-video"
+
 
 def test_pipeline_backed_job_lifecycle_and_raw_result():
     upload_response = client.post(
@@ -157,6 +167,137 @@ def test_pipeline_backed_job_lifecycle_and_raw_result():
     assert client.get(f"/api/analysis/jobs/{job.id}/result").json()["job_id"] == job.id
 
 
+def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("overlay.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        pose_estimator=StaticPoseEstimator(),
+        frame_stride=1,
+    ).run(
+        job_id="job-overlay-test",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.artifacts.source_video_url == f"/api/videos/{video_id}/stream"
+    assert result.artifacts.tracking_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/tracking-overlay"
+    assert result.artifacts.pose_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/pose-overlay"
+    assert result.artifacts.tracking_overlay_status == "available"
+    assert result.artifacts.pose_overlay_status == "available"
+    assert any(stage.id == "pose" and stage.status == "done" for stage in result.stages)
+
+    storage = StorageService()
+    tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-overlay-test"))
+    pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-overlay-test"))
+    assert tracking_overlay["frames"][0]["detections"][0]["track_id"] == "1"
+    assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
+
+
+def test_pipeline_reports_unavailable_overlay_when_yolo_is_disabled(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("disabled.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=EmptyPersonDetector(),
+        frame_stride=1,
+    ).run(
+        job_id="job-overlay-disabled",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.artifacts.tracking_overlay_status == "unavailable"
+    assert "YOLO 人体检测未启用" in (result.artifacts.tracking_overlay_detail or "")
+    assert any(stage.id == "detection" and stage.status == "skipped" for stage in result.stages)
+    assert any(stage.id == "tracking" and stage.status == "skipped" for stage in result.stages)
+
+    storage = StorageService()
+    tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-overlay-disabled"))
+    assert tracking_overlay["status"] == "unavailable"
+    assert "YOLO 人体检测未启用" in tracking_overlay["detail"]
+
+
+def test_analysis_artifact_endpoint_returns_browser_safe_json():
+    payload = AnalysisJobCreate(
+        metadata={
+            "fileName": "artifact.mp4",
+            "fileSize": 16,
+            "matchTitle": "Artifact Test",
+            "venue": "Test Court",
+            "matchDate": "2026-05-07",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Player A",
+            "level": "MVP",
+        },
+    )
+    job = create_analysis_job(payload)
+    storage = StorageService()
+    storage.write_json(
+        storage.tracking_overlay_json_path(job.id),
+        {
+            "job_id": job.id,
+            "video_id": "video-artifact",
+            "status": "no_detections",
+            "detail": "test artifact",
+            "source": {"width": 96, "height": 96},
+            "fps": 5,
+            "frame_count": 1,
+            "processed_frame_count": 1,
+            "frame_stride": 1,
+            "frames": [],
+        },
+    )
+
+    response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/tracking-overlay")
+
+    assert response.status_code == 200
+    assert response.json()["detail"] == "test artifact"
+
+
 def test_analysis_job_with_missing_video_fails_cleanly():
     payload = {
         "videoId": "video-does-not-exist",
@@ -191,3 +332,42 @@ class DeferredTasks:
     def run_all(self):
         for fn, args, kwargs in self.tasks:
             fn(*args, **kwargs)
+
+
+class StaticDetector:
+    def detect_frame(self, frame, frame_index):
+        return [Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91)]
+
+
+class StaticPoseEstimator:
+    def estimate_frame(self, frame, subjects, frame_index, timestamp_seconds):
+        return PoseOverlayFrame(
+            frame_index=frame_index,
+            timestamp_seconds=timestamp_seconds,
+            subjects=[
+                PoseSubject(
+                    track_id=subjects[0].track_id or "1",
+                    bbox=subjects[0].bbox,
+                    confidence=0.9,
+                    keypoints=[
+                        PoseKeypoint(name="nose", x=32, y=22, confidence=0.95),
+                        PoseKeypoint(name="left_shoulder", x=25, y=38, confidence=0.95),
+                        PoseKeypoint(name="right_shoulder", x=40, y=38, confidence=0.95),
+                    ],
+                )
+            ],
+        )
+
+
+def make_test_video_bytes(tmp_path):
+    import cv2  # type: ignore
+    import numpy as np
+
+    path = tmp_path / "overlay.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (96, 96))
+    for _ in range(3):
+        frame = np.zeros((96, 96, 3), dtype=np.uint8)
+        frame[16:82, 18:48] = (255, 255, 255)
+        writer.write(frame)
+    writer.release()
+    return path.read_bytes()

@@ -7,7 +7,7 @@ This FastAPI backend is the MVP algorithm foundation for fixed-camera pickleball
 - Python 3.10+
 - FastAPI and Pydantic
 - NumPy, Pandas, OpenCV
-- Optional Ultralytics YOLO for later person detection
+- Ultralytics YOLO for person-box overlays in real uploaded-video jobs
 - pytest for unit tests
 
 ## Install
@@ -35,6 +35,22 @@ The API is available at `http://localhost:8000`. The frontend can use:
 
 ```bash
 VITE_ANALYSIS_API_URL=http://localhost:8000 npm run dev
+```
+
+YOLO person detection is enabled by default for calibrated uploaded videos. To force the
+model-free degraded path, start the backend with:
+
+```bash
+PICKLEBALL_ENABLE_MODEL_INFERENCE=false uvicorn app.main:app --reload
+```
+
+RTMPose skeleton overlays remain optional until local MMPose/RTMPose assets are configured:
+
+```bash
+PICKLEBALL_ENABLE_POSE_INFERENCE=true \
+PICKLEBALL_RTMPOSE_CONFIG_PATH=/path/to/rtmpose_config.py \
+PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=/path/to/rtmpose_checkpoint.pth \
+uvicorn app.main:app --reload
 ```
 
 ## API Surface

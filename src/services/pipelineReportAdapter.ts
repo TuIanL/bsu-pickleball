@@ -54,6 +54,10 @@ export function adaptPipelineResultToReport(
   const kitchenSeconds = sum(result.metrics.kitchen_dwell.map((item) => item.kitchen_seconds));
   const limited = job.analysisMode === "limited" || !job.calibrationId;
   const noTracks = tracks.length === 0;
+  const trackingOverlayStatus = result.artifacts.tracking_overlay_status;
+  const poseOverlayStatus = result.artifacts.pose_overlay_status;
+  const hasTrackingOverlay = trackingOverlayStatus === "available";
+  const hasPoseOverlay = poseOverlayStatus === "available";
   const summary = noTracks
     ? limited
       ? "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。"
@@ -131,6 +135,13 @@ export function adaptPipelineResultToReport(
         x: 53,
         y: 42,
       },
+      {
+        id: "overlay-status",
+        label: hasPoseOverlay ? "骨架可视化" : hasTrackingOverlay ? "人体框可视化" : "视频 overlay 待生成",
+        tone: hasPoseOverlay || hasTrackingOverlay ? "advantage" : "risk",
+        x: 48,
+        y: 58,
+      },
     ],
     timelineMarkers: [
       {
@@ -165,6 +176,16 @@ export function adaptPipelineResultToReport(
         body: noTracks
           ? "当前没有可用球员轨迹，建议重新标定四角或确认模型推理配置。"
           : `累计移动 ${totalDistance.toFixed(1)} 英尺，平均速度 ${averageSpeed.toFixed(1)} 英尺/秒，最高速度 ${maxSpeed.toFixed(1)} 英尺/秒。`,
+      },
+      {
+        id: "video-overlay-evidence",
+        tone: hasPoseOverlay || hasTrackingOverlay ? "advantage" : "risk",
+        title: hasPoseOverlay ? "骨架关节 overlay 可用" : hasTrackingOverlay ? "人体框 overlay 可用" : "视频 overlay 暂不可用",
+        body: hasPoseOverlay
+          ? result.artifacts.pose_overlay_detail ?? "RTMPose 已生成骨架关节，可在视频工作台叠加查看。"
+          : hasTrackingOverlay
+            ? result.artifacts.tracking_overlay_detail ?? "YOLO 已生成可渲染人体框，可在视频工作台叠加查看。"
+            : result.artifacts.pose_overlay_detail ?? result.artifacts.tracking_overlay_detail ?? "当前任务没有可渲染的人体框或骨架 artifact。",
       },
     ],
     diagnoses: [

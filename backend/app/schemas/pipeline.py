@@ -22,6 +22,15 @@ class PipelineStageResult(BaseModel):
 class AnalysisArtifacts(BaseModel):
     result_json_path: Optional[str] = None
     tracking_result_json_path: Optional[str] = None
+    tracking_overlay_json_path: Optional[str] = None
+    tracking_overlay_url: Optional[str] = None
+    pose_overlay_json_path: Optional[str] = None
+    pose_overlay_url: Optional[str] = None
+    source_video_url: Optional[str] = None
+    tracking_overlay_status: Optional[str] = None
+    tracking_overlay_detail: Optional[str] = None
+    pose_overlay_status: Optional[str] = None
+    pose_overlay_detail: Optional[str] = None
     overlay_video_path: Optional[str] = None
 
 
