@@ -342,14 +342,15 @@ class AnalysisPipeline:
                 positions.extend(frame_positions)
                 if self.pose_estimator is not None and frame_detections and pose_error is None:
                     try:
-                        pose_frames.append(
-                            self.pose_estimator.estimate_frame(
-                                frame=frame,
-                                subjects=frame_detections,
-                                frame_index=frame_index,
-                                timestamp_seconds=timestamp,
-                            )
+                        pose_frame = self.pose_estimator.estimate_frame(
+                            frame=frame,
+                            subjects=frame_detections,
+                            frame_index=frame_index,
+                            timestamp_seconds=timestamp,
                         )
+                        pose_frame.subjects = [subject for subject in pose_frame.subjects if subject.keypoints]
+                        if pose_frame.subjects:
+                            pose_frames.append(pose_frame)
                     except Exception as exc:
                         pose_error = str(exc)
                         pose_frames = []
@@ -392,7 +393,7 @@ class AnalysisPipeline:
             elif pose_frames:
                 pose_stage = self._stage("pose", "人体姿态", "done", f"已生成 {sum(len(frame.subjects) for frame in pose_frames)} 组骨架关节")
             else:
-                pose_stage = self._stage("pose", "人体姿态", "skipped", "没有可用人体框，未生成骨架关节")
+                pose_stage = self._stage("pose", "人体姿态", "skipped", "没有可用人体框或骨架关键点，未生成骨架关节")
         pose_artifact = None
         if pose_frames:
             pose_artifact = PoseOverlayArtifact(

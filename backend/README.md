@@ -8,6 +8,7 @@ This FastAPI backend is the MVP algorithm foundation for fixed-camera pickleball
 - FastAPI and Pydantic
 - NumPy, Pandas, OpenCV
 - Ultralytics YOLO for person-box overlays in real uploaded-video jobs
+- Optional MMPose/RTMPose runtime for skeleton overlays
 - pytest for unit tests
 
 ## Install
@@ -23,6 +24,34 @@ For editable package installs:
 
 ```bash
 pip install -e ".[dev]"
+```
+
+For true RTMPose skeleton validation, use a Python 3.10+ environment and install
+the optional pose runtime after the base backend dependencies. Choose the
+PyTorch package that matches your machine first, then install MMCV with MIM so
+the wheel matches your PyTorch/CUDA platform:
+
+```bash
+cd backend
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev,vision,pose]"
+python -m pip install openmim
+python -m mim install "mmcv>=2.0.1"
+```
+
+On CPU-only machines set `PICKLEBALL_RTMPOSE_DEVICE=cpu`. On compatible
+NVIDIA/CUDA machines use a device such as `cuda:0` after confirming PyTorch can
+see CUDA:
+
+```bash
+python - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.cuda.is_available())
+print(torch.version.cuda)
+PY
 ```
 
 ## Run
@@ -48,9 +77,26 @@ RTMPose skeleton overlays remain optional until local MMPose/RTMPose assets are 
 
 ```bash
 PICKLEBALL_ENABLE_POSE_INFERENCE=true \
-PICKLEBALL_RTMPOSE_CONFIG_PATH=/path/to/rtmpose_config.py \
-PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=/path/to/rtmpose_checkpoint.pth \
+PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
+PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth \
+PICKLEBALL_RTMPOSE_DEVICE=cpu \
 uvicorn app.main:app --reload
+```
+
+The shorter `RTMPOSE_CONFIG_PATH`, `RTMPOSE_CHECKPOINT_PATH`, and
+`RTMPOSE_DEVICE` aliases are also accepted when the project-prefixed variables
+are not set.
+
+Validate the RTMPose runtime before running a full video job:
+
+```bash
+cd backend
+python scripts/validate_rtmpose.py --check-only
+python scripts/validate_rtmpose.py \
+  --config ../models/rtmpose/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
+  --checkpoint ../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth \
+  --device cpu \
+  --bbox 40,24,152,232
 ```
 
 ## API Surface

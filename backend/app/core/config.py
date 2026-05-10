@@ -78,9 +78,13 @@ def get_settings() -> Settings:
         in {"1", "true", "yes"},
         enable_pose_inference=os.getenv("PICKLEBALL_ENABLE_POSE_INFERENCE", "false").lower()
         in {"1", "true", "yes"},
-        rtmpose_config_path=os.getenv("PICKLEBALL_RTMPOSE_CONFIG_PATH") or None,
-        rtmpose_checkpoint_path=os.getenv("PICKLEBALL_RTMPOSE_CHECKPOINT_PATH") or None,
-        rtmpose_device=os.getenv("PICKLEBALL_RTMPOSE_DEVICE") or None,
+        rtmpose_config_path=os.getenv("PICKLEBALL_RTMPOSE_CONFIG_PATH")
+        or os.getenv("RTMPOSE_CONFIG_PATH")
+        or None,
+        rtmpose_checkpoint_path=os.getenv("PICKLEBALL_RTMPOSE_CHECKPOINT_PATH")
+        or os.getenv("RTMPOSE_CHECKPOINT_PATH")
+        or None,
+        rtmpose_device=os.getenv("PICKLEBALL_RTMPOSE_DEVICE") or os.getenv("RTMPOSE_DEVICE") or None,
         pose_confidence=float(os.getenv("PICKLEBALL_POSE_CONFIDENCE", "0.3")),
         pose_keypoint_schema=os.getenv("PICKLEBALL_POSE_KEYPOINT_SCHEMA", "rtmpose26"),
         overlay_frame_stride=max(1, int(os.getenv("PICKLEBALL_OVERLAY_FRAME_STRIDE", "30"))),

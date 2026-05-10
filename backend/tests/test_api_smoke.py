@@ -9,6 +9,7 @@ from app.services.mock_analysis import JOBS, REPORTS, RESULTS, create_analysis_j
 from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
+from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 
 client = TestClient(app)
@@ -216,6 +217,176 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
 
 
+def test_pipeline_does_not_advertise_empty_pose_keypoints(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("empty-pose.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        pose_estimator=EmptyPoseEstimator(),
+        frame_stride=1,
+    ).run(
+        job_id="job-empty-pose",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.artifacts.pose_overlay_url is None
+    assert result.artifacts.pose_overlay_status == "unavailable"
+    assert "未生成骨架关节" in (result.artifacts.pose_overlay_detail or "")
+    assert any(stage.id == "pose" and stage.status == "skipped" for stage in result.stages)
+
+
+def test_pipeline_reports_pose_failure_without_losing_tracking_overlay(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("failing-pose.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        pose_estimator=FailingPoseEstimator(),
+        frame_stride=1,
+    ).run(
+        job_id="job-failing-pose",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.artifacts.tracking_overlay_status == "available"
+    assert result.artifacts.pose_overlay_url is None
+    assert result.artifacts.pose_overlay_status == "unavailable"
+    assert "mmpose missing" in (result.artifacts.pose_overlay_detail or "")
+
+
+def test_pipeline_reports_missing_rtmpose_assets_without_losing_tracking_overlay(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("missing-assets.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        pose_estimator=RTMPose26Adapter(
+            config_path=str(tmp_path / "missing_config.py"),
+            checkpoint_path=str(tmp_path / "missing_checkpoint.pth"),
+        ),
+        frame_stride=1,
+    ).run(
+        job_id="job-missing-pose-assets",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.artifacts.tracking_overlay_status == "available"
+    assert result.artifacts.pose_overlay_url is None
+    assert result.artifacts.pose_overlay_status == "unavailable"
+    assert "RTMPose config not found" in (result.artifacts.pose_overlay_detail or "")
+
+
+def test_pipeline_reports_unsupported_pose_schema_without_losing_tracking_overlay(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("bad-schema.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        pose_estimator=RTMPose26Adapter(
+            config_path=None,
+            checkpoint_path=None,
+            keypoint_schema="coco17",
+        ),
+        frame_stride=1,
+    ).run(
+        job_id="job-bad-pose-schema",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.artifacts.tracking_overlay_status == "available"
+    assert result.artifacts.pose_overlay_url is None
+    assert result.artifacts.pose_overlay_status == "unavailable"
+    assert "Unsupported RTMPose keypoint schema" in (result.artifacts.pose_overlay_detail or "")
+
+
 def test_pipeline_reports_unavailable_overlay_when_yolo_is_disabled(tmp_path):
     video_bytes = make_test_video_bytes(tmp_path)
     upload_response = client.post(
@@ -357,6 +528,27 @@ class StaticPoseEstimator:
                 )
             ],
         )
+
+
+class EmptyPoseEstimator:
+    def estimate_frame(self, frame, subjects, frame_index, timestamp_seconds):
+        return PoseOverlayFrame(
+            frame_index=frame_index,
+            timestamp_seconds=timestamp_seconds,
+            subjects=[
+                PoseSubject(
+                    track_id=subjects[0].track_id or "1",
+                    bbox=subjects[0].bbox,
+                    confidence=0.9,
+                    keypoints=[],
+                )
+            ],
+        )
+
+
+class FailingPoseEstimator:
+    def estimate_frame(self, frame, subjects, frame_index, timestamp_seconds):
+        raise RuntimeError("mmpose missing")
 
 
 def make_test_video_bytes(tmp_path):
