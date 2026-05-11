@@ -1,6 +1,6 @@
 fastapi>=0.115.0
-numpy>=1.26.0
-opencv-python>=4.10.0
+numpy>=1.26.0,<2.0
+opencv-python>=4.10.0,<4.13.0
 pandas>=2.2.0
 pydantic>=2.8.0
 python-multipart>=0.0.9
@@ -18,5 +18,5 @@ ultralytics>=8.3.0
 # MMCV is intentionally installed via OpenMIM because wheels vary by platform,
 # PyTorch, and CUDA version:
 #   python -m pip install openmim
-#   python -m mim install "mmcv>=2.0.1"
-#   python -m pip install "mmpose>=1.3.0" "mmengine>=0.10.0" "torch>=2.1.0"
+#   python -m mim install "mmcv>=2.0.1,<2.2.0"
+#   python -m pip install "mmpose>=1.3.0" "mmdet>=3.0.0,<3.4.0" "mmengine>=0.10.0" "torch>=2.1.0"

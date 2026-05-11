@@ -17,23 +17,23 @@
 - [x] 3.1 Add a local validation command or script that checks dependency imports, model asset paths, device selection, `init_model`, and `inference_topdown`.
 - [x] 3.2 Make the validation path accept or create a frame plus one or more `xyxy` person boxes and print/save normalized `PoseOverlayFrame` JSON.
 - [x] 3.3 Ensure validation failures identify the failing prerequisite or inference step instead of returning a generic stack trace.
-- [ ] 3.4 Run the single-frame validation with configured RTMPose assets and record the command/result in the change notes or task evidence.
+- [x] 3.4 Run the single-frame validation with configured RTMPose assets and record the command/result in the change notes or task evidence.
 
 ## 4. Pipeline And Artifact Verification
 
-- [ ] 4.1 Run a calibrated short-video analysis with YOLO/tracking and RTMPose enabled using the supported model assets.
-- [ ] 4.2 Confirm the completed result reports a done pose stage, `pose_overlay_status=available`, and a retrievable `pose_overlay_url`.
-- [ ] 4.3 Inspect the persisted `pose_overlay.json` for frame indices, timestamps, subject track IDs, bboxes, Halpe26 keypoint names, confidence values, visible flags, and skeleton edges.
+- [x] 4.1 Run a calibrated short-video analysis with YOLO/tracking and RTMPose enabled using the supported model assets.
+- [x] 4.2 Confirm the completed result reports a done pose stage, `pose_overlay_status=available`, and a retrievable `pose_overlay_url`.
+- [x] 4.3 Inspect the persisted `pose_overlay.json` for frame indices, timestamps, subject track IDs, bboxes, Halpe26 keypoint names, confidence values, visible flags, and skeleton edges.
 - [x] 4.4 Verify missing dependency, missing asset, no-player-box, and pose inference failure paths produce clear unavailable/skipped states without failing detection-only analysis.
 
 ## 5. Frontend Verification
 
-- [ ] 5.1 Open the completed real-job visual workspace and verify source video playback renders synchronized RTMPose joints and skeleton edges.
-- [ ] 5.2 Verify skeleton overlay toggling hides/shows joints without breaking video playback or YOLO box overlays.
-- [ ] 5.3 Verify completed detection-only or pose-unavailable jobs keep person boxes visible and communicate the skeleton unavailable reason.
+- [x] 5.1 Open the completed real-job visual workspace and verify source video playback renders synchronized RTMPose joints and skeleton edges.
+- [x] 5.2 Verify skeleton overlay toggling hides/shows joints without breaking video playback or YOLO box overlays.
+- [x] 5.3 Verify completed detection-only or pose-unavailable jobs keep person boxes visible and communicate the skeleton unavailable reason.
 
 ## 6. Regression Checks
 
 - [x] 6.1 Run backend unit/API tests that do not require RTMPose assets and confirm lightweight imports still pass.
 - [x] 6.2 Run frontend type/build checks for the visual workspace and overlay data types.
-- [ ] 6.3 Reconcile task 7.4 in `add-yolo-rtmpose-video-overlays` after true-model skeleton rendering is verified.
+- [x] 6.3 Reconcile task 7.4 in `add-yolo-rtmpose-video-overlays` after true-model skeleton rendering is verified.

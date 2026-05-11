@@ -233,6 +233,27 @@ const calibrationPointOrder = [
   { id: "bottom_left", label: "近端左角" },
 ] as const;
 
+const isProbablyBlankFrame = (context: CanvasRenderingContext2D, width: number, height: number) => {
+  const data = context.getImageData(0, 0, width, height).data;
+  const pixelCount = width * height;
+  const sampleStep = Math.max(1, Math.floor(pixelCount / 1800));
+  let samples = 0;
+  let darkSamples = 0;
+  let luminanceSum = 0;
+
+  for (let pixel = 0; pixel < pixelCount; pixel += sampleStep) {
+    const offset = pixel * 4;
+    const luminance = data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+    luminanceSum += luminance;
+    samples += 1;
+    if (luminance < 16) {
+      darkSamples += 1;
+    }
+  }
+
+  return samples > 0 && luminanceSum / samples < 14 && darkSamples / samples > 0.94;
+};
+
 type CalibrationPointDraft = {
   id: (typeof calibrationPointOrder)[number]["id"];
   label: string;
@@ -328,8 +349,14 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
 function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const today = new Date().toISOString().slice(0, 10);
   const calibrationVideoRef = useRef<HTMLVideoElement | null>(null);
+  const calibrationCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const calibrationAutoSeekAttemptsRef = useRef(0);
+  const calibrationAutoSeekEnabledRef = useRef(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPointDraft[]>([]);
+  const [calibrationFrameStatus, setCalibrationFrameStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [calibrationFrameError, setCalibrationFrameError] = useState<string | null>(null);
+  const [calibrationFramePreviewUrl, setCalibrationFramePreviewUrl] = useState<string | null>(null);
   const [submitStep, setSubmitStep] = useState<"idle" | "uploading" | "calibrating" | "creating">("idle");
   const [metadata, setMetadata] = useState({
     matchTitle: "匹克球训练对局",
@@ -361,6 +388,11 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const videoPreviewUrl = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile]);
 
   useEffect(() => {
+    setCalibrationFrameStatus(videoPreviewUrl ? "loading" : "idle");
+    setCalibrationFrameError(null);
+    setCalibrationFramePreviewUrl(null);
+    calibrationAutoSeekAttemptsRef.current = 0;
+    calibrationAutoSeekEnabledRef.current = Boolean(videoPreviewUrl);
     return () => {
       if (videoPreviewUrl) {
         URL.revokeObjectURL(videoPreviewUrl);
@@ -369,9 +401,102 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   }, [videoPreviewUrl]);
 
   const calibrationComplete = calibrationPoints.length === calibrationPointOrder.length;
+  const calibrationFrameReady = calibrationFrameStatus === "ready";
+
+  const captureCalibrationFrame = () => {
+    const video = calibrationVideoRef.current;
+    if (!video || video.readyState < 2) {
+      return;
+    }
+
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) {
+      setCalibrationFrameStatus("ready");
+      return;
+    }
+
+    try {
+      const canvas = calibrationCanvasRef.current ?? document.createElement("canvas");
+      calibrationCanvasRef.current = canvas;
+      const scale = Math.min(1, 1280 / width);
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+
+      const context = canvas.getContext("2d");
+      if (!context) {
+        setCalibrationFrameStatus("ready");
+        return;
+      }
+
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (
+        calibrationAutoSeekEnabledRef.current &&
+        calibrationAutoSeekAttemptsRef.current < 6 &&
+        Number.isFinite(video.duration) &&
+        video.currentTime < video.duration - 0.75 &&
+        isProbablyBlankFrame(context, canvas.width, canvas.height)
+      ) {
+        calibrationAutoSeekAttemptsRef.current += 1;
+        seekCalibrationVideo(video.currentTime + Math.min(Math.max(video.duration * 0.05, 0.75), 2), {
+          autoSkipDark: true,
+        });
+        return;
+      }
+
+      calibrationAutoSeekEnabledRef.current = false;
+      setCalibrationFramePreviewUrl(canvas.toDataURL("image/jpeg", 0.88));
+      setCalibrationFrameStatus("ready");
+    } catch {
+      setCalibrationFrameStatus("ready");
+    }
+  };
+
+  const seekCalibrationVideo = (targetSeconds?: number, options: { autoSkipDark?: boolean } = {}) => {
+    const video = calibrationVideoRef.current;
+    if (!video) {
+      return;
+    }
+
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (duration <= 0) {
+      if (video.readyState >= 2) {
+        captureCalibrationFrame();
+      } else {
+        setCalibrationFrameStatus("loading");
+      }
+      return;
+    }
+
+    calibrationAutoSeekEnabledRef.current = Boolean(options.autoSkipDark);
+    const defaultTarget = Math.min(Math.max(duration * 0.1, 0.15), Math.max(duration - 0.05, 0));
+    const nextTime = Math.min(Math.max(targetSeconds ?? defaultTarget, 0), Math.max(duration - 0.05, 0));
+    setCalibrationFrameStatus("loading");
+    setCalibrationFrameError(null);
+    setCalibrationFramePreviewUrl(null);
+    video.pause();
+    if (Math.abs(video.currentTime - nextTime) < 0.03 && video.readyState >= 2) {
+      captureCalibrationFrame();
+      return;
+    }
+    video.currentTime = nextTime;
+  };
+
+  const shiftCalibrationFrame = (seconds: number) => {
+    const video = calibrationVideoRef.current;
+    if (!video || calibrationPoints.length > 0) {
+      return;
+    }
+    calibrationAutoSeekAttemptsRef.current = 0;
+    seekCalibrationVideo(video.currentTime + seconds, { autoSkipDark: false });
+  };
 
   const handleCalibrationClick = (event: MouseEvent<HTMLButtonElement>) => {
     if (calibrationPoints.length >= calibrationPointOrder.length) {
+      return;
+    }
+    if (!calibrationFrameReady) {
+      setError("标定帧还没有加载完成，请等画面出现后再点选四角。");
       return;
     }
 
@@ -538,26 +663,86 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   重新点选
                 </button>
               </div>
+              {!calibrationComplete && calibrationPoints.length === 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="quiet-button px-3 py-2 text-xs"
+                    disabled={!videoPreviewUrl || calibrationFrameStatus === "error"}
+                    onClick={() => shiftCalibrationFrame(-1)}
+                    type="button"
+                  >
+                    前一秒
+                  </button>
+                  <button
+                    className="quiet-button px-3 py-2 text-xs"
+                    disabled={!videoPreviewUrl || calibrationFrameStatus === "error"}
+                    onClick={() => shiftCalibrationFrame(1)}
+                    type="button"
+                  >
+                    后一秒
+                  </button>
+                  <span className="self-center text-xs font-semibold text-slate-500">
+                    如果开头是黑场，可以先切换标定帧。
+                  </span>
+                </div>
+              ) : null}
               <div className="relative mt-4 overflow-hidden rounded-2xl bg-[#091016]">
                 <video
                   className="block aspect-video w-full object-contain"
                   controls={calibrationComplete}
                   muted
-                  preload="metadata"
+                  onError={() => {
+                    setCalibrationFrameStatus("error");
+                    setCalibrationFramePreviewUrl(null);
+                    setCalibrationFrameError("浏览器无法预览这个视频编码。请换用 H.264 MP4，或先转码后再标定。");
+                  }}
+                  onLoadedData={() => {
+                    if (!Number.isFinite(calibrationVideoRef.current?.duration ?? Number.NaN)) {
+                      captureCalibrationFrame();
+                    }
+                  }}
+                  onLoadedMetadata={() => seekCalibrationVideo(undefined, { autoSkipDark: true })}
+                  onSeeked={() => captureCalibrationFrame()}
+                  playsInline
+                  preload="auto"
                   ref={calibrationVideoRef}
                   src={videoPreviewUrl}
                 />
+                {!calibrationComplete && calibrationFramePreviewUrl ? (
+                  <img
+                    alt=""
+                    className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                    src={calibrationFramePreviewUrl}
+                  />
+                ) : null}
                 {!calibrationComplete ? (
                   <button
                     aria-label={nextCalibrationPoint ? `点击${nextCalibrationPoint.label}` : "标定画面"}
-                    className="absolute inset-0 cursor-crosshair bg-black/10 text-left"
+                    className={`absolute inset-0 text-left ${
+                      calibrationFrameReady ? "cursor-crosshair bg-black/5" : "cursor-not-allowed bg-black/35"
+                    }`}
+                    disabled={!calibrationFrameReady}
                     onClick={handleCalibrationClick}
                     type="button"
                   >
                     <span className="absolute left-3 top-3 rounded-full border border-white/15 bg-black/55 px-3 py-1 text-xs font-black text-white shadow-lg">
-                      {nextCalibrationPoint ? `标定中 · ${calibrationPoints.length + 1}/4 · ${nextCalibrationPoint.label}` : "标定完成"}
+                      {calibrationFrameReady && nextCalibrationPoint
+                        ? `标定中 · ${calibrationPoints.length + 1}/4 · ${nextCalibrationPoint.label}`
+                        : "正在准备标定画面"}
                     </span>
                   </button>
+                ) : null}
+                {!calibrationComplete && calibrationFrameStatus !== "ready" ? (
+                  <div className="pointer-events-none absolute inset-0 grid place-items-center px-5 text-center text-white">
+                    <div className="max-w-sm rounded-2xl border border-white/15 bg-black/65 px-4 py-3 shadow-xl">
+                      <strong className="text-sm">
+                        {calibrationFrameStatus === "error" ? "视频预览失败" : "正在读取可标定画面"}
+                      </strong>
+                      <p className="mt-1 text-xs leading-5 text-white/80">
+                        {calibrationFrameError ?? "系统会自动跳过开头黑场，等画面出现后再点选四个场地角。"}
+                      </p>
+                    </div>
+                  </div>
                 ) : null}
                 {calibrationPoints.map((point, index) => (
                   <span

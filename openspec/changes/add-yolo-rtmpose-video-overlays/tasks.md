@@ -45,5 +45,5 @@
 - [x] 7.1 Run backend unit/API tests for schema, artifact, and retrieval behavior.
 - [x] 7.2 Run frontend type/build checks for the updated overlay types and workspace components.
 - [x] 7.3 Manually verify a short uploaded video can complete analysis, open the job workspace, play the source video, and display person boxes.
-- [ ] 7.4 Manually verify RTMPose-enabled runs display skeleton joints when model assets are configured.
+- [x] 7.4 Manually verify RTMPose-enabled runs display skeleton joints when model assets are configured.
 - [ ] 7.5 Manually verify demo `/vision` still renders the simulated workspace and model-unavailable real jobs show degraded states.

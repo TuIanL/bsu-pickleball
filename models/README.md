@@ -11,8 +11,11 @@ keypoints. Put the config and checkpoint under:
 
 ```text
 models/rtmpose/
-  rtmpose-m_8xb512-700e_body8-halpe26-256x192.py
   rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth
+  configs/
+    _base_/default_runtime.py
+    _base_/datasets/halpe26.py
+    body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py
 ```
 
 Download sources:
@@ -24,9 +27,10 @@ Run the backend with:
 
 ```bash
 PICKLEBALL_ENABLE_POSE_INFERENCE=true
-PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py
+PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py
 PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth
 PICKLEBALL_RTMPOSE_DEVICE=cpu
+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 ```
 
 Use `PICKLEBALL_RTMPOSE_DEVICE=cuda:0` only after `torch.cuda.is_available()`

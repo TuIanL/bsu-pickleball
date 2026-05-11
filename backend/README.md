@@ -38,7 +38,7 @@ source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[dev,vision,pose]"
 python -m pip install openmim
-python -m mim install "mmcv>=2.0.1"
+python -m mim install "mmcv>=2.0.1,<2.2.0"
 ```
 
 On CPU-only machines set `PICKLEBALL_RTMPOSE_DEVICE=cpu`. On compatible
@@ -77,9 +77,10 @@ RTMPose skeleton overlays remain optional until local MMPose/RTMPose assets are 
 
 ```bash
 PICKLEBALL_ENABLE_POSE_INFERENCE=true \
-PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
+PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
 PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth \
 PICKLEBALL_RTMPOSE_DEVICE=cpu \
+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
 uvicorn app.main:app --reload
 ```
 
@@ -93,11 +94,15 @@ Validate the RTMPose runtime before running a full video job:
 cd backend
 python scripts/validate_rtmpose.py --check-only
 python scripts/validate_rtmpose.py \
-  --config ../models/rtmpose/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
+  --config ../models/rtmpose/configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
   --checkpoint ../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth \
   --device cpu \
   --bbox 40,24,152,232
 ```
+
+With PyTorch 2.6+ and trusted OpenMMLab checkpoints, set
+`TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` when validating or running pose inference
+so the older checkpoint format can load.
 
 ## API Surface
 
