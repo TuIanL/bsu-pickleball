@@ -45,7 +45,7 @@ The system SHALL create a real analysis job by uploading the selected video to t
 - **THEN** the backend may return a demo-compatible job response that is distinguishable from a real uploaded-video analysis
 
 ### Requirement: Analysis job status page
-The system SHALL provide a job-specific page that communicates analysis progress, MVP pipeline stage, and next actions.
+The system SHALL provide a job-specific page that communicates analysis progress, MVP pipeline stage, model-backed detection and pose stages, and next actions.
 
 #### Scenario: User opens a queued job
 - **WHEN** the user navigates to an analysis job that is queued
@@ -57,7 +57,7 @@ The system SHALL provide a job-specific page that communicates analysis progress
 
 #### Scenario: User opens a pipeline-backed processing job
 - **WHEN** the user navigates to an analysis job currently running the MVP backend pipeline
-- **THEN** the system displays stages for upload, calibration, video read, detection, tracking, projection, metrics, visualization, and report generation when those stages are reported by the backend
+- **THEN** the system displays stages for upload, calibration, video read, detection, tracking, pose estimation, projection, metrics, visualization, and report generation when those stages are reported by the backend
 
 #### Scenario: User opens a failed job
 - **WHEN** the user navigates to an analysis job that failed
@@ -69,7 +69,11 @@ The system SHALL provide a job-specific page that communicates analysis progress
 
 #### Scenario: Pipeline reports tracking progress
 - **WHEN** the backend processes a video with player tracking enabled
-- **THEN** the reported pipeline stages include progress details derived from upload state, calibration state, processed frame counts, detection counts, projected track counts, and generated result artifacts when available
+- **THEN** the reported pipeline stages include progress details derived from upload state, calibration state, processed frame counts, detection counts, projected track counts, generated overlay artifacts, and generated result artifacts when available
+
+#### Scenario: Pipeline reports pose progress
+- **WHEN** the backend processes a video with pose inference enabled
+- **THEN** the reported pipeline stages include pose-estimation status, processed subject counts, skeleton artifact availability, or a clear skipped/failed reason
 
 ### Requirement: Analysis job result routing
 The system SHALL route users from a completed job to job-specific visual analysis and report views.
@@ -167,4 +171,30 @@ The system SHALL distinguish true RTMPose model output from unavailable, skipped
 #### Scenario: Detection exists without usable pose
 - **WHEN** a completed real analysis job produces player boxes but RTMPose returns no usable skeleton keypoints
 - **THEN** the raw pipeline result keeps tracking artifacts available and labels the pose overlay as no-pose or unavailable without failing the entire analysis
+
+### Requirement: Video and overlay artifact retrieval
+The system SHALL allow completed real jobs to expose browser-loadable source video and overlay artifact references for visual playback.
+
+#### Scenario: Source video is available
+- **WHEN** a completed real job references an uploaded `videoId`
+- **THEN** the backend exposes a browser-loadable source video URL or stream endpoint for that video
+
+#### Scenario: Overlay artifacts are available
+- **WHEN** a completed real job produced detection, tracking, or pose overlay artifacts
+- **THEN** the raw pipeline result references those artifacts with browser-loadable URLs or API paths
+
+#### Scenario: Overlay artifacts are unavailable
+- **WHEN** model inference was disabled, failed, or produced no overlay artifacts
+- **THEN** the job result distinguishes no-overlay availability from demo data and keeps report navigation stable
+
+### Requirement: Pose-aware raw pipeline result
+The system SHALL include pose overlay availability in completed real analysis results.
+
+#### Scenario: Pose artifact exists
+- **WHEN** the frontend requests raw output for a completed job with RTMPose results
+- **THEN** the result includes pose artifact metadata, stage status, and enough source video metadata to align keypoints to the video frame
+
+#### Scenario: Detection exists without pose
+- **WHEN** a completed job has YOLO detections but no RTMPose skeletons
+- **THEN** the result allows the frontend to render person boxes and label skeleton overlay as unavailable
 
