@@ -73,6 +73,12 @@ model-free degraded path, start the backend with:
 PICKLEBALL_ENABLE_MODEL_INFERENCE=false uvicorn app.main:app --reload
 ```
 
+Real-video overlay sampling defaults to `PICKLEBALL_OVERLAY_FRAME_STRIDE=2`, which
+produces 30 overlay samples per second for 60fps footage. This is the recommended
+presentation setting for smooth person boxes and skeletons. For slower machines,
+use `PICKLEBALL_OVERLAY_FRAME_STRIDE=3` or `5`; for maximum fidelity use `1` and
+expect substantially higher YOLO/RTMPose processing cost.
+
 RTMPose skeleton overlays remain optional until local MMPose/RTMPose assets are configured:
 
 ```bash

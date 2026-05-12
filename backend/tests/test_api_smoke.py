@@ -217,6 +217,68 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
 
 
+def test_pipeline_filters_out_of_bounds_people_from_overlay_and_pose_inputs(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("filtered-overlay.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+    pose_estimator = RecordingPoseEstimator()
+
+    result = AnalysisPipeline(
+        detector=PlayerAndSpectatorDetector(),
+        pose_estimator=pose_estimator,
+        frame_stride=1,
+    ).run(
+        job_id="job-filtered-overlay",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert len(result.tracks) == 3
+    assert len(result.stages) > 0
+
+    storage = StorageService()
+    tracking_result = storage.read_json(storage.tracking_json_path("job-filtered-overlay"))
+    tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-filtered-overlay"))
+    pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-filtered-overlay"))
+    overlay_track_ids = {
+        detection["track_id"]
+        for frame in tracking_overlay["frames"]
+        for detection in frame["detections"]
+    }
+    pose_track_ids = {
+        subject["track_id"]
+        for frame in pose_overlay["frames"]
+        for subject in frame["subjects"]
+    }
+
+    assert len(tracking_result["detections"]) == 6
+    assert {track["track_id"] for track in tracking_result["tracks"]} == {1, 2}
+    assert overlay_track_ids == {"1"}
+    assert pose_track_ids == {"1"}
+    assert pose_estimator.subject_track_ids == [["1"], ["1"], ["1"]]
+    assert "场地过滤" in (result.artifacts.tracking_overlay_detail or "")
+
+
 def test_pipeline_does_not_advertise_empty_pose_keypoints(tmp_path):
     video_bytes = make_test_video_bytes(tmp_path)
     upload_response = client.post(
@@ -510,6 +572,14 @@ class StaticDetector:
         return [Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91)]
 
 
+class PlayerAndSpectatorDetector:
+    def detect_frame(self, frame, frame_index):
+        return [
+            Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91),
+            Detection(bbox=[100.0, 16.0, 130.0, 82.0], confidence=0.88),
+        ]
+
+
 class StaticPoseEstimator:
     def estimate_frame(self, frame, subjects, frame_index, timestamp_seconds):
         return PoseOverlayFrame(
@@ -526,6 +596,27 @@ class StaticPoseEstimator:
                         PoseKeypoint(name="right_shoulder", x=40, y=38, confidence=0.95),
                     ],
                 )
+            ],
+        )
+
+
+class RecordingPoseEstimator:
+    def __init__(self):
+        self.subject_track_ids = []
+
+    def estimate_frame(self, frame, subjects, frame_index, timestamp_seconds):
+        self.subject_track_ids.append([subject.track_id for subject in subjects])
+        return PoseOverlayFrame(
+            frame_index=frame_index,
+            timestamp_seconds=timestamp_seconds,
+            subjects=[
+                PoseSubject(
+                    track_id=subject.track_id or "unknown",
+                    bbox=subject.bbox,
+                    confidence=0.9,
+                    keypoints=[PoseKeypoint(name="nose", x=32, y=22, confidence=0.95)],
+                )
+                for subject in subjects
             ],
         )
 

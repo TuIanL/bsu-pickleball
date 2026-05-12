@@ -1,16 +1,15 @@
-import { CirclePause, Maximize2, Play, Volume2 } from "lucide-react";
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import { CirclePause, Maximize2, Minimize2, Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
-  DetectionOverlayFrame,
   MatchSummary,
   PlayerMarker,
   PoseOverlayArtifact,
-  PoseOverlayFrame,
   ShotTrajectory,
   TimelineMarker,
   TrackingOverlayArtifact,
   VideoOverlayLabel,
 } from "../../types/report";
+import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 
 interface VideoAnalysisCardProps {
   compact?: boolean;
@@ -221,38 +220,174 @@ function RealVideoOverlay({
   trackingOverlay?: TrackingOverlayArtifact | null;
   videoSrc: string;
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 });
   const [showBoxes, setShowBoxes] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
 
   const source = trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
-  const detectionFrame = useMemo(
-    () => findNearestFrame(trackingOverlay?.frames ?? [], currentTime),
+  const detectionRenderFrame = useMemo(
+    () => resolveDetectionFrame(trackingOverlay?.frames ?? [], currentTime),
     [currentTime, trackingOverlay]
   );
-  const poseFrame = useMemo(
-    () => findNearestFrame(poseOverlay?.frames ?? [], currentTime),
+  const poseRenderFrame = useMemo(
+    () => resolvePoseFrame(poseOverlay?.frames ?? [], currentTime),
     [currentTime, poseOverlay]
   );
 
-  const boxCount = detectionFrame?.detections.length ?? 0;
-  const skeletonCount = poseFrame?.subjects.length ?? 0;
+  const boxCount = detectionRenderFrame?.detections.length ?? 0;
+  const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
+  const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    let animationId = 0;
+    let videoFrameCallbackId = 0;
+    const withVideoFrameCallback = "requestVideoFrameCallback" in HTMLVideoElement.prototype;
+
+    const syncTime = () => setCurrentTime(video.currentTime);
+    const schedule = () => {
+      if (video.paused || video.ended) {
+        return;
+      }
+
+      if (withVideoFrameCallback) {
+        videoFrameCallbackId = video.requestVideoFrameCallback(() => {
+          syncTime();
+          schedule();
+        });
+      } else {
+        animationId = window.requestAnimationFrame(() => {
+          syncTime();
+          schedule();
+        });
+      }
+    };
+
+    const handlePlay = () => {
+      setIsPlaying(true);
+      syncTime();
+      schedule();
+    };
+    const handlePause = () => {
+      setIsPlaying(false);
+      syncTime();
+    };
+    const handleLoadedMetadata = () => {
+      setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+      if (video.videoWidth && video.videoHeight) {
+        setNaturalSize({ width: video.videoWidth, height: video.videoHeight });
+      }
+      syncTime();
+    };
+    const handleDurationChange = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    const handleVolumeChange = () => setIsMuted(video.muted);
+
+    video.addEventListener("play", handlePlay);
+    video.addEventListener("pause", handlePause);
+    video.addEventListener("ended", handlePause);
+    video.addEventListener("seeked", syncTime);
+    video.addEventListener("seeking", syncTime);
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("durationchange", handleDurationChange);
+    video.addEventListener("volumechange", handleVolumeChange);
+
+    handleLoadedMetadata();
+    setIsMuted(video.muted);
+    if (!video.paused) {
+      handlePlay();
+    }
+
+    return () => {
+      video.removeEventListener("play", handlePlay);
+      video.removeEventListener("pause", handlePause);
+      video.removeEventListener("ended", handlePause);
+      video.removeEventListener("seeked", syncTime);
+      video.removeEventListener("seeking", syncTime);
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("durationchange", handleDurationChange);
+      video.removeEventListener("volumechange", handleVolumeChange);
+      if (withVideoFrameCallback && videoFrameCallbackId) {
+        video.cancelVideoFrameCallback(videoFrameCallbackId);
+      }
+      if (animationId) {
+        window.cancelAnimationFrame(animationId);
+      }
+    };
+  }, [videoSrc]);
+
+  const togglePlayback = () => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    if (video.paused) {
+      void video.play();
+    } else {
+      video.pause();
+    }
+  };
+
+  const toggleMuted = () => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  };
+
+  const toggleFullscreen = async () => {
+    const container = containerRef.current;
+    if (!container || !fullscreenSupported) {
+      return;
+    }
+    if (document.fullscreenElement === container) {
+      await document.exitFullscreen();
+    } else {
+      await container.requestFullscreen();
+    }
+  };
+
+  const handleProgressChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const video = videoRef.current;
+    if (!video || duration <= 0) {
+      return;
+    }
+    const nextTime = (Number(event.target.value) / 100) * duration;
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
 
   return (
-    <div className="relative aspect-video overflow-hidden bg-[#091016]">
+    <div
+      className="relative aspect-video overflow-hidden bg-[#091016] data-[fullscreen=true]:aspect-auto data-[fullscreen=true]:h-screen data-[fullscreen=true]:w-screen"
+      data-fullscreen={isFullscreen}
+      ref={containerRef}
+    >
       <video
         className="absolute inset-0 h-full w-full bg-black object-contain"
-        controls
-        muted
-        onLoadedMetadata={() => {
-          const video = videoRef.current;
-          if (video?.videoWidth && video.videoHeight) {
-            setNaturalSize({ width: video.videoWidth, height: video.videoHeight });
-          }
-        }}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        muted={isMuted}
         playsInline
         preload="metadata"
         ref={videoRef}
@@ -264,12 +399,12 @@ function RealVideoOverlay({
         preserveAspectRatio="xMidYMid meet"
         viewBox={`0 0 ${source.width} ${source.height}`}
       >
-        {showBoxes && detectionFrame?.detections.map((detection) => {
+        {showBoxes && detectionRenderFrame?.detections.map((detection) => {
           const [x1, y1, x2, y2] = detection.bbox;
           const width = Math.max(0, x2 - x1);
           const height = Math.max(0, y2 - y1);
           return (
-            <g key={`${detection.frame_index}-${detection.track_id ?? "person"}-${x1}-${y1}`}>
+            <g key={`${detection.track_id ?? "person"}-${x1}-${y1}`}>
               <rect
                 fill="rgba(34,197,94,0.08)"
                 height={height}
@@ -296,8 +431,8 @@ function RealVideoOverlay({
           );
         })}
 
-        {showSkeleton && poseFrame?.subjects.map((subject) => (
-          <g key={`${poseFrame.frame_index}-${subject.track_id}`}>
+        {showSkeleton && poseRenderFrame?.subjects.map((subject) => (
+          <g key={`${subject.track_id}-${subject.bbox.join("-")}`}>
             {poseOverlay?.skeleton_edges.map((edge) => {
               const from = subject.keypoints.find((keypoint) => keypoint.name === edge.from_keypoint && keypoint.visible);
               const to = subject.keypoints.find((keypoint) => keypoint.name === edge.to_keypoint && keypoint.visible);
@@ -354,11 +489,59 @@ function RealVideoOverlay({
         </button>
       </div>
 
-      <div className="absolute bottom-4 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
+      <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">
           {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
         </p>
         <strong className="text-sm">{match.currentRally}</strong>
+      </div>
+
+      <div className="absolute inset-x-4 bottom-4 flex flex-col gap-3 sm:left-auto sm:right-4 sm:w-[min(30rem,calc(100%-2rem))]">
+        <div className="rounded-2xl border border-white/10 bg-black/50 p-3 text-white backdrop-blur">
+          <div className="flex items-center gap-3">
+            <button
+              aria-label={isPlaying ? "暂停视频" : "播放视频"}
+              className="grid size-9 place-items-center rounded-full border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
+              onClick={togglePlayback}
+              type="button"
+            >
+              {isPlaying ? <Pause size={17} fill="currentColor" aria-hidden="true" /> : <Play size={17} fill="currentColor" aria-hidden="true" />}
+            </button>
+            <button
+              aria-label={isMuted ? "打开声音" : "静音视频"}
+              className="grid size-9 place-items-center rounded-full border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
+              onClick={toggleMuted}
+              type="button"
+            >
+              {isMuted ? <VolumeX size={17} aria-hidden="true" /> : <Volume2 size={17} aria-hidden="true" />}
+            </button>
+            <span className="w-24 text-xs font-bold text-slate-200">
+              {formatSeconds(currentTime)} / {formatSeconds(duration)}
+            </span>
+            <input
+              aria-label="视频播放进度"
+              className="h-2 flex-1 accent-[#22C55E]"
+              max="100"
+              min="0"
+              onChange={handleProgressChange}
+              step="0.1"
+              type="range"
+              value={progress}
+            />
+            <button
+              aria-label={isFullscreen ? "退出全屏" : "全屏播放"}
+              className="grid size-9 place-items-center rounded-full border border-white/15 bg-white/10 text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!fullscreenSupported}
+              onClick={toggleFullscreen}
+              type="button"
+            >
+              {isFullscreen ? <Minimize2 size={17} aria-hidden="true" /> : <Maximize2 size={17} aria-hidden="true" />}
+            </button>
+          </div>
+          <div className="mt-2 h-1 rounded-full bg-white/15">
+            <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -387,20 +570,6 @@ function RealVideoFooter({
       </div>
     </div>
   );
-}
-
-function findNearestFrame<T extends DetectionOverlayFrame | PoseOverlayFrame>(
-  frames: T[],
-  currentTime: number
-): T | undefined {
-  if (!frames.length) {
-    return undefined;
-  }
-  return frames.reduce((nearest, frame) => (
-    Math.abs(frame.timestamp_seconds - currentTime) < Math.abs(nearest.timestamp_seconds - currentTime)
-      ? frame
-      : nearest
-  ));
 }
 
 function formatSeconds(value: number): string {

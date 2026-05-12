@@ -15,6 +15,8 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
+const RECENT_JOB_KEY = "pre-pickleball-recent-analysis-job";
+export const RECENT_ANALYSIS_JOB_EVENT = "pre-pickleball-recent-analysis-job-change";
 
 interface StoredJob {
   report: AnalysisReport;
@@ -109,6 +111,32 @@ function saveStoredJob(job: StoredJob) {
   const jobs = getStoredJobs();
   jobs[job.summary.id] = job;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+}
+
+export function getRecentAnalysisJob(): AnalysisJobSummary | null {
+  try {
+    const payload = window.localStorage.getItem(RECENT_JOB_KEY);
+    if (!payload) {
+      return null;
+    }
+    const job = JSON.parse(payload) as AnalysisJobSummary;
+    return job?.id ? job : null;
+  } catch {
+    return null;
+  }
+}
+
+export function rememberAnalysisJob(job?: AnalysisJobSummary | null) {
+  if (!job) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(RECENT_JOB_KEY, JSON.stringify(job));
+    window.dispatchEvent(new CustomEvent(RECENT_ANALYSIS_JOB_EVENT, { detail: job }));
+  } catch {
+    // localStorage can be unavailable in private browsing; navigation still works for the current route.
+  }
 }
 
 function buildMockJob(metadata: AnalysisUploadMetadata): StoredJob {
@@ -222,15 +250,17 @@ export async function createManualCalibration(
 
 export async function createAnalysisJob(request: AnalysisJobRequest): Promise<AnalysisJobSummary> {
   try {
-    return await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
+    const job = await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
       body: JSON.stringify({
         metadata: request.metadata,
         videoId: request.videoId,
         calibrationId: request.calibrationId,
-        frameStride: request.frameStride ?? 30,
+        frameStride: request.frameStride ?? 2,
       }),
       method: "POST",
     });
+    rememberAnalysisJob(job);
+    return job;
   } catch (error) {
     if (request.videoId || request.useDemoFallback === false) {
       throw error;
@@ -239,15 +269,21 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
     const metadata = request.metadata;
     const job = buildMockJob(metadata);
     saveStoredJob(job);
+    rememberAnalysisJob(job.summary);
     return job.summary;
   }
 }
 
 export async function getAnalysisJob(jobId: string): Promise<AnalysisJobSummary | null> {
   try {
-    return await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}`);
+    const job = await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}`);
+    rememberAnalysisJob(job);
+    return job;
   } catch {
     const stored = getStoredJobs()[jobId];
+    if (stored?.summary) {
+      rememberAnalysisJob(stored.summary);
+    }
     return stored?.summary ?? null;
   }
 }

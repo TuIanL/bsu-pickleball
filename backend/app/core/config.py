@@ -29,7 +29,7 @@ class Settings(BaseModel):
     rtmpose_device: str | None = None
     pose_confidence: float = 0.3
     pose_keypoint_schema: str = "rtmpose26"
-    overlay_frame_stride: int = 30
+    overlay_frame_stride: int = 2
 
     def resolve_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -87,7 +87,7 @@ def get_settings() -> Settings:
         rtmpose_device=os.getenv("PICKLEBALL_RTMPOSE_DEVICE") or os.getenv("RTMPOSE_DEVICE") or None,
         pose_confidence=float(os.getenv("PICKLEBALL_POSE_CONFIDENCE", "0.3")),
         pose_keypoint_schema=os.getenv("PICKLEBALL_POSE_KEYPOINT_SCHEMA", "rtmpose26"),
-        overlay_frame_stride=max(1, int(os.getenv("PICKLEBALL_OVERLAY_FRAME_STRIDE", "30"))),
+        overlay_frame_stride=max(1, int(os.getenv("PICKLEBALL_OVERLAY_FRAME_STRIDE", "2"))),
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins
         else Settings.model_fields["cors_origins"].default_factory(),

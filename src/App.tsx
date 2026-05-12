@@ -19,7 +19,7 @@ import {
   Zap,
 } from "lucide-react";
 // 导入 React 核心钩子和类型
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
 import { ProgressChart } from "./components/platform/ProgressChart";
@@ -62,8 +62,11 @@ import {
   getPoseOverlay,
   getAnalysisResult,
   getAnalysisReport,
+  getRecentAnalysisJob,
   getTrackingOverlay,
   getVideoStreamUrl,
+  RECENT_ANALYSIS_JOB_EVENT,
+  rememberAnalysisJob,
   uploadVideo,
 } from "./services/analysisClient";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
@@ -171,14 +174,17 @@ function parsePath(pathname: string): RouteState {
 function App() {
   // 初始化路由状态
   const [route, setRoute] = useState<RouteState>(() => parsePath(window.location.pathname));
+  const [recentJob, setRecentJob] = useState<AnalysisJobSummary | null>(() => getRecentAnalysisJob());
+  const recentAnalysisPath = recentJob ? (`/analysis/${recentJob.id}/vision` as AppPath) : undefined;
 
   // 自定义导航函数，支持平滑滚动到顶部
-  const navigate = (path: AppPath | "/reports/landing" | "/upload") => {
-    const nextRoute = parsePath(path);
+  const navigate = useCallback((path: AppPath | "/reports/landing" | "/upload") => {
+    const targetPath = path === "/vision" && recentAnalysisPath ? recentAnalysisPath : path;
+    const nextRoute = parsePath(targetPath);
     window.history.pushState({}, "", nextRoute.path);
     setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  };
+  }, [recentAnalysisPath]);
 
   // 监听浏览器前进/后退事件
   useEffect(() => {
@@ -186,6 +192,17 @@ function App() {
     window.addEventListener("popstate", handlePopState);
 
     return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const handleRecentJobChange = () => setRecentJob(getRecentAnalysisJob());
+    window.addEventListener(RECENT_ANALYSIS_JOB_EVENT, handleRecentJobChange);
+    window.addEventListener("storage", handleRecentJobChange);
+
+    return () => {
+      window.removeEventListener(RECENT_ANALYSIS_JOB_EVENT, handleRecentJobChange);
+      window.removeEventListener("storage", handleRecentJobChange);
+    };
   }, []);
 
   // 根据当前路由渲染对应的页面内容
@@ -196,7 +213,7 @@ function App() {
       case "analysis-job":
         return <AnalysisJobPage jobId={route.jobId} onNavigate={navigate} />;
       case "vision":
-        return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={navigate} />;
+        return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={navigate} recentJob={recentJob} />;
       case "report":
         return <ReportPage jobId={"jobId" in route ? route.jobId : undefined} reportType={route.reportType} onNavigate={navigate} />;
       case "training":
@@ -207,10 +224,10 @@ function App() {
       default:
         return <OverviewPage onNavigate={navigate} />;
     }
-  }, [route]);
+  }, [navigate, route, recentJob]);
 
   return (
-    <AppShell activePath={route.path} navigation={platformNavigation} onNavigate={navigate}>
+    <AppShell activePath={route.path} navigation={platformNavigation} onNavigate={navigate} recentAnalysisPath={recentAnalysisPath}>
       {content}
     </AppShell>
   );
@@ -569,9 +586,10 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         },
         videoId: upload.video.id,
         calibrationId: calibration.calibration_id,
-        frameStride: 30,
+        frameStride: 2,
         useDemoFallback: false,
       });
+      rememberAnalysisJob(job);
       onNavigate(`/analysis/${job.id}`);
     } catch {
       setError("真实上传或分析任务创建失败。请确认后端已启动、视频格式受支持，并重新检查四角标定。");
@@ -878,6 +896,7 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
       }
 
       setJob(nextJob);
+      rememberAnalysisJob(nextJob);
 
       if (nextJob && ["uploaded", "queued", "processing"].includes(nextJob.status)) {
         timer = window.setTimeout(loadJob, 1600);
@@ -1140,7 +1159,7 @@ function useAnalysisReport(jobId?: string) {
 /**
  * 视觉分析工作台页组件
  */
-function VisionPage({ jobId, onNavigate }: { jobId?: string; onNavigate: NavigateFn }) {
+function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
   const { job, poseOverlay, report, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
@@ -1183,6 +1202,20 @@ function VisionPage({ jobId, onNavigate }: { jobId?: string; onNavigate: Navigat
           <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
             视频回放是入口，报告和训练建议是下一步。当前数据来源：{sourceLabel}。
           </p>
+          {!jobId && recentJob ? (
+            <div className="mt-5 inline-flex flex-wrap items-center gap-3 rounded-2xl border border-[#22C55E]/25 bg-white/85 px-4 py-3 shadow-sm">
+              <span className="text-sm font-semibold text-slate-600">
+                最近分析：{recentJob.metadata.matchTitle} · {recentJob.metadata.fileName}
+              </span>
+              <button
+                className="green-button px-4 py-2 text-xs"
+                onClick={() => onNavigate(`/analysis/${recentJob.id}/vision`)}
+                type="button"
+              >
+                回到刚刚的结果
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-3">
           {analysis.reportActions.map((action) => (

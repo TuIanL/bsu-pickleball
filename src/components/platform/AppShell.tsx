@@ -12,10 +12,12 @@ interface AppShellProps {
   activePath: string;
   children: ReactNode;
   navigation: NavigationItem[];
+  recentAnalysisPath?: AppPath;
   onNavigate: (path: AppPath | "/reports/landing" | "/upload") => void;
 }
 
-export function AppShell({ activePath, children, navigation, onNavigate }: AppShellProps) {
+export function AppShell({ activePath, children, navigation, recentAnalysisPath, onNavigate }: AppShellProps) {
+  const visionPath = recentAnalysisPath ?? "/vision";
   const isActive = (path: string) => {
     if (path === "/") {
       return activePath === "/";
@@ -23,6 +25,10 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
 
     if (path === "/analysis/new") {
       return activePath === "/analysis/new";
+    }
+
+    if (path === "/vision") {
+      return activePath === "/vision" || /^\/analysis\/[^/]+\/vision$/.test(activePath);
     }
 
     if (path === "/reports/landing") {
@@ -72,9 +78,9 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
           </nav>
 
           <div className="ml-auto hidden items-center gap-2 md:flex">
-            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/vision")} type="button">
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(visionPath)} type="button">
               <Camera size={16} aria-hidden="true" />
-              查看演示
+              {recentAnalysisPath ? "继续分析" : "查看演示"}
             </button>
             <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
               <Upload size={16} aria-hidden="true" />

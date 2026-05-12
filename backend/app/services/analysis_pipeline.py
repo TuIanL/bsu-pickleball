@@ -314,13 +314,6 @@ class AnalysisPipeline:
                 timestamp = frame_index / raw_fps if raw_fps > 0 else float(frame_index)
                 detections = self._detect_frame(frame, frame_index)
                 tracks = tracker.update(detections)
-                frame_detections = self._tracks_to_frame_detections(
-                    tracks=tracks,
-                    frame_index=frame_index,
-                    timestamp=timestamp,
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                )
                 footpoints = {track.track_id: self.footpoint_estimator.estimate(track) for track in tracks}
                 frame_positions = self.projector.project(
                     tracks=tracks,
@@ -328,6 +321,15 @@ class AnalysisPipeline:
                     frame_index=frame_index,
                     timestamp=timestamp,
                     footpoints=footpoints,
+                )
+                court_relevant_track_ids = self._court_relevant_track_ids(frame_positions)
+                frame_detections = self._tracks_to_frame_detections(
+                    tracks=tracks,
+                    frame_index=frame_index,
+                    timestamp=timestamp,
+                    frame_width=frame_width,
+                    frame_height=frame_height,
+                    eligible_track_ids=court_relevant_track_ids,
                 )
 
                 all_detections.extend(detections)
@@ -420,6 +422,7 @@ class AnalysisPipeline:
         timestamp: float,
         frame_width: int,
         frame_height: int,
+        eligible_track_ids: set[int] | None = None,
     ) -> list[FrameDetection]:
         source_width = max(1, int(frame_width))
         source_height = max(1, int(frame_height))
@@ -434,20 +437,37 @@ class AnalysisPipeline:
                 source_height=source_height,
             )
             for track in tracks
-            if not track.lost
+            if not track.lost and (eligible_track_ids is None or track.track_id in eligible_track_ids)
         ]
+
+    @staticmethod
+    def _court_relevant_track_ids(positions: list[PlayerFramePosition]) -> set[int]:
+        return {
+            position.track_id
+            for position in positions
+            if position.valid and position.court_position is not None
+        }
 
     @staticmethod
     def _detection_stage_detail(tracking_result: TrackingResult, enabled: bool = True) -> str:
         if not enabled:
             return "模型推理未启用，未运行 YOLO 人体检测；可设置 PICKLEBALL_ENABLE_MODEL_INFERENCE=true"
         detection_count = len(tracking_result.detections)
+        overlay_count = sum(len(frame.detections) for frame in tracking_result.overlay_frames)
         if detection_count == 0:
             return (
                 f"已处理 {tracking_result.processed_frame_count} 帧，没有检测到可用人体框；"
                 "请检查模型配置、拍摄角度、视频清晰度或标定范围"
             )
-        return f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {detection_count} 个人体框"
+        if overlay_count == 0:
+            return (
+                f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {detection_count} 个人体框，"
+                "但没有通过场地过滤的可渲染比赛球员框"
+            )
+        return (
+            f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {detection_count} 个人体框，"
+            f"其中 {overlay_count} 个通过场地过滤并用于视频叠加"
+        )
 
     def _build_tracking_overlay(
         self,
@@ -462,10 +482,10 @@ class AnalysisPipeline:
             detail = "YOLO 人体检测未启用，未运行模型推理；请启用后重新分析"
         elif detection_count:
             status = "available"
-            detail = f"已生成 {detection_count} 个可渲染人体框"
+            detail = f"已生成 {detection_count} 个通过场地过滤的可渲染比赛球员框"
         else:
             status = "no_detections"
-            detail = "YOLO 已运行，但没有可渲染的人体框；请检查视频清晰度、拍摄角度、置信度或标定范围"
+            detail = "YOLO 已运行，但没有通过场地过滤的可渲染比赛球员框；请检查视频清晰度、拍摄角度、置信度或标定范围"
         return TrackingOverlayArtifact(
             job_id=job_id,
             video_id=video_id,
