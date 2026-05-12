@@ -79,10 +79,13 @@ presentation setting for smooth person boxes and skeletons. For slower machines,
 use `PICKLEBALL_OVERLAY_FRAME_STRIDE=3` or `5`; for maximum fidelity use `1` and
 expect substantially higher YOLO/RTMPose processing cost.
 
-RTMPose skeleton overlays remain optional until local MMPose/RTMPose assets are configured:
+RTMPose skeleton overlays are enabled for real calibrated jobs when local
+MMPose/RTMPose runtime dependencies and model assets are configured. The backend
+auto-discovers the repository-local asset layout from `../models/rtmpose/`; set
+`PICKLEBALL_ENABLE_POSE_INFERENCE=false` to force tracking-only analysis on
+slower machines.
 
 ```bash
-PICKLEBALL_ENABLE_POSE_INFERENCE=true \
 PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
 PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth \
 PICKLEBALL_RTMPOSE_DEVICE=cpu \
@@ -109,6 +112,16 @@ python scripts/validate_rtmpose.py \
 With PyTorch 2.6+ and trusted OpenMMLab checkpoints, set
 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` when validating or running pose inference
 so the older checkpoint format can load.
+
+Renderable video overlays use primary-player filtering rather than strict
+court-line filtering, so athletes remain visible when they step outside the
+baseline or sideline. Tune these values when a scene has extra people:
+
+```bash
+PICKLEBALL_PRIMARY_PLAYER_MIN_CONFIDENCE=0.65
+PICKLEBALL_PRIMARY_PLAYER_MAX_SUBJECTS=4
+PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT=12
+```
 
 ## API Surface
 

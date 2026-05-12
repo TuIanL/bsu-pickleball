@@ -184,7 +184,10 @@ export function adaptPipelineResultToReport(
         body: hasPoseOverlay
           ? result.artifacts.pose_overlay_detail ?? "RTMPose 已生成骨架关节，可在视频工作台叠加查看。"
           : hasTrackingOverlay
-            ? result.artifacts.tracking_overlay_detail ?? "YOLO 已生成可渲染人体框，可在视频工作台叠加查看。"
+            ? [
+                result.artifacts.tracking_overlay_detail ?? "YOLO 已生成可渲染人体框，可在视频工作台叠加查看。",
+                result.artifacts.pose_overlay_detail ? `骨架状态：${result.artifacts.pose_overlay_detail}` : undefined,
+              ].filter(Boolean).join(" ")
             : result.artifacts.pose_overlay_detail ?? result.artifacts.tracking_overlay_detail ?? "当前任务没有可渲染的人体框或骨架 artifact。",
       },
     ],

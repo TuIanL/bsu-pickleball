@@ -217,7 +217,7 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
 
 
-def test_pipeline_filters_out_of_bounds_people_from_overlay_and_pose_inputs(tmp_path):
+def test_pipeline_filters_low_confidence_people_from_overlay_and_pose_inputs(tmp_path):
     video_bytes = make_test_video_bytes(tmp_path)
     upload_response = client.post(
         "/api/videos/upload",
@@ -242,7 +242,7 @@ def test_pipeline_filters_out_of_bounds_people_from_overlay_and_pose_inputs(tmp_
     pose_estimator = RecordingPoseEstimator()
 
     result = AnalysisPipeline(
-        detector=PlayerAndSpectatorDetector(),
+        detector=PlayerAndLowConfidenceSpectatorDetector(),
         pose_estimator=pose_estimator,
         frame_stride=1,
     ).run(
@@ -276,7 +276,68 @@ def test_pipeline_filters_out_of_bounds_people_from_overlay_and_pose_inputs(tmp_
     assert overlay_track_ids == {"1"}
     assert pose_track_ids == {"1"}
     assert pose_estimator.subject_track_ids == [["1"], ["1"], ["1"]]
-    assert "场地过滤" in (result.artifacts.tracking_overlay_detail or "")
+    assert "主要球员" in (result.artifacts.tracking_overlay_detail or "")
+
+
+def test_pipeline_keeps_high_confidence_line_out_players_for_overlay_and_pose(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("line-out-overlay.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+    pose_estimator = RecordingPoseEstimator()
+
+    result = AnalysisPipeline(
+        detector=HighConfidenceLineOutDetector(),
+        pose_estimator=pose_estimator,
+        frame_stride=1,
+    ).run(
+        job_id="job-line-out-overlay",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.tracks == []
+
+    storage = StorageService()
+    tracking_result = storage.read_json(storage.tracking_json_path("job-line-out-overlay"))
+    tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-line-out-overlay"))
+    pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-line-out-overlay"))
+    overlay_track_ids = {
+        detection["track_id"]
+        for frame in tracking_overlay["frames"]
+        for detection in frame["detections"]
+    }
+    pose_track_ids = {
+        subject["track_id"]
+        for frame in pose_overlay["frames"]
+        for subject in frame["subjects"]
+    }
+
+    assert len(tracking_result["detections"]) == 3
+    assert len(tracking_result["positions"]) == 3
+    assert all(position["valid"] is False for position in tracking_result["positions"])
+    assert overlay_track_ids == {"1"}
+    assert pose_track_ids == {"1"}
+    assert pose_estimator.subject_track_ids == [["1"], ["1"], ["1"]]
 
 
 def test_pipeline_does_not_advertise_empty_pose_keypoints(tmp_path):
@@ -572,12 +633,17 @@ class StaticDetector:
         return [Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91)]
 
 
-class PlayerAndSpectatorDetector:
+class PlayerAndLowConfidenceSpectatorDetector:
     def detect_frame(self, frame, frame_index):
         return [
             Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91),
-            Detection(bbox=[100.0, 16.0, 130.0, 82.0], confidence=0.88),
+            Detection(bbox=[100.0, 16.0, 130.0, 82.0], confidence=0.42),
         ]
+
+
+class HighConfidenceLineOutDetector:
+    def detect_frame(self, frame, frame_index):
+        return [Detection(bbox=[100.0, 16.0, 130.0, 82.0], confidence=0.88)]
 
 
 class StaticPoseEstimator:

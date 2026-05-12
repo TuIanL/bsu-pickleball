@@ -1160,7 +1160,7 @@ function useAnalysisReport(jobId?: string) {
  * 视觉分析工作台页组件
  */
 function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
-  const { job, poseOverlay, report, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
+  const { job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
@@ -1236,8 +1236,12 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
           labels={analysis.videoOverlayLabels}
           match={analysis.match}
           players={analysis.playerMarkers}
+          poseOverlayDetail={result?.artifacts.pose_overlay_detail}
+          poseOverlayStatus={result?.artifacts.pose_overlay_status}
           poseOverlay={poseOverlay ?? null}
           timeline={analysis.timelineMarkers}
+          trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
+          trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
           trackingOverlay={trackingOverlay ?? null}
           trajectories={analysis.shotTrajectories}
           videoSrc={analysis.source === "job" ? videoSrc : undefined}

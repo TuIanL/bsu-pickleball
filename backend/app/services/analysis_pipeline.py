@@ -33,6 +33,7 @@ from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstim
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
+from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 
@@ -58,6 +59,7 @@ class AnalysisPipeline:
         tracker: MultiObjectTracker | None = None,
         footpoint_estimator: FootpointEstimator | None = None,
         projector: PlayerProjector | None = None,
+        primary_player_selector: PrimaryPlayerSelector | None = None,
         pose_estimator: Any | None = None,
         frame_stride: int | None = None,
     ) -> None:
@@ -82,7 +84,17 @@ class AnalysisPipeline:
         )
         self.tracker = tracker
         self.footpoint_estimator = footpoint_estimator or FootpointEstimator()
-        self.projector = projector or PlayerProjector(footpoint_estimator=self.footpoint_estimator)
+        self.projector = projector or PlayerProjector(
+            footpoint_estimator=self.footpoint_estimator,
+            include_invalid=True,
+        )
+        self.primary_player_selector = primary_player_selector or PrimaryPlayerSelector(
+            min_confidence=self.settings.primary_player_min_confidence,
+            max_subjects=self.settings.primary_player_max_subjects,
+            min_box_area_ratio=self.settings.primary_player_min_box_area_ratio,
+            max_box_area_ratio=self.settings.primary_player_max_box_area_ratio,
+            court_margin_ft=self.settings.primary_player_court_margin_ft,
+        )
         self.pose_estimator = pose_estimator or (
             RTMPose26Adapter(
                 config_path=self.settings.rtmpose_config_path,
@@ -212,7 +224,7 @@ class AnalysisPipeline:
                     "projection",
                     "脚点投影",
                     "done",
-                    f"已生成 {len(tracking_result.positions)} 个场地坐标球员位置",
+                    self._projection_stage_detail(tracking_result.positions),
                 )
             )
             tracks = self._positions_to_projected_tracks(tracking_result.positions)
@@ -322,14 +334,22 @@ class AnalysisPipeline:
                     timestamp=timestamp,
                     footpoints=footpoints,
                 )
-                court_relevant_track_ids = self._court_relevant_track_ids(frame_positions)
+                primary_player_track_ids = {
+                    selection.track_id
+                    for selection in self.primary_player_selector.select(
+                        tracks=tracks,
+                        positions=frame_positions,
+                        frame_width=frame_width,
+                        frame_height=frame_height,
+                    )
+                }
                 frame_detections = self._tracks_to_frame_detections(
                     tracks=tracks,
                     frame_index=frame_index,
                     timestamp=timestamp,
                     frame_width=frame_width,
                     frame_height=frame_height,
-                    eligible_track_ids=court_relevant_track_ids,
+                    eligible_track_ids=primary_player_track_ids,
                 )
 
                 all_detections.extend(detections)
@@ -370,7 +390,7 @@ class AnalysisPipeline:
             capture.release()
 
         logger.info(
-            "Player tracking completed: processed %s frames, %s positions",
+            "Player tracking completed: processed %s frames, %s projected position samples",
             processed_frame_count,
             len(positions),
         )
@@ -441,19 +461,12 @@ class AnalysisPipeline:
         ]
 
     @staticmethod
-    def _court_relevant_track_ids(positions: list[PlayerFramePosition]) -> set[int]:
-        return {
-            position.track_id
-            for position in positions
-            if position.valid and position.court_position is not None
-        }
-
-    @staticmethod
     def _detection_stage_detail(tracking_result: TrackingResult, enabled: bool = True) -> str:
         if not enabled:
             return "模型推理未启用，未运行 YOLO 人体检测；可设置 PICKLEBALL_ENABLE_MODEL_INFERENCE=true"
         detection_count = len(tracking_result.detections)
         overlay_count = sum(len(frame.detections) for frame in tracking_result.overlay_frames)
+        dropped_count = max(0, detection_count - overlay_count)
         if detection_count == 0:
             return (
                 f"已处理 {tracking_result.processed_frame_count} 帧，没有检测到可用人体框；"
@@ -462,11 +475,11 @@ class AnalysisPipeline:
         if overlay_count == 0:
             return (
                 f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {detection_count} 个人体框，"
-                "但没有通过场地过滤的可渲染比赛球员框"
+                "但没有通过主要球员置信度筛选的可渲染比赛球员框"
             )
         return (
             f"已处理 {tracking_result.processed_frame_count} 帧，检测到 {detection_count} 个人体框，"
-            f"其中 {overlay_count} 个通过场地过滤并用于视频叠加"
+            f"其中 {overlay_count} 个通过主要球员筛选并用于视频叠加，过滤 {dropped_count} 个低置信度或非主体人物框"
         )
 
     def _build_tracking_overlay(
@@ -482,10 +495,18 @@ class AnalysisPipeline:
             detail = "YOLO 人体检测未启用，未运行模型推理；请启用后重新分析"
         elif detection_count:
             status = "available"
-            detail = f"已生成 {detection_count} 个通过场地过滤的可渲染比赛球员框"
+            raw_count = len(tracking_result.detections)
+            dropped_count = max(0, raw_count - detection_count)
+            detail = (
+                f"已生成 {detection_count} 个通过主要球员置信度筛选的可渲染比赛球员框；"
+                f"原始检测 {raw_count} 个，过滤 {dropped_count} 个低置信度或非主体人物框"
+            )
         else:
             status = "no_detections"
-            detail = "YOLO 已运行，但没有通过场地过滤的可渲染比赛球员框；请检查视频清晰度、拍摄角度、置信度或标定范围"
+            detail = (
+                f"YOLO 已运行并检测到 {len(tracking_result.detections)} 个人体框，"
+                "但没有通过主要球员置信度筛选的可渲染比赛球员框；请检查阈值、球员人数、拍摄角度、视频清晰度或模型配置"
+            )
         return TrackingOverlayArtifact(
             job_id=job_id,
             video_id=video_id,
@@ -523,6 +544,14 @@ class AnalysisPipeline:
                 )
             )
         return projected
+
+    @staticmethod
+    def _projection_stage_detail(positions: list[PlayerFramePosition]) -> str:
+        valid_count = sum(1 for position in positions if position.valid and position.court_position is not None)
+        invalid_count = len(positions) - valid_count
+        if invalid_count:
+            return f"已生成 {valid_count} 个有效场地坐标球员位置，并保留 {invalid_count} 个越界投影诊断样本"
+        return f"已生成 {valid_count} 个有效场地坐标球员位置"
 
     def _compute_metrics(self, tracks: list[ProjectedTrackPoint]) -> PerformanceMetrics:
         return PerformanceMetrics(

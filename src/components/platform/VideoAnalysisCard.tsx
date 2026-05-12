@@ -16,8 +16,12 @@ interface VideoAnalysisCardProps {
   labels: VideoOverlayLabel[];
   match: MatchSummary;
   players: PlayerMarker[];
+  poseOverlayDetail?: string;
+  poseOverlayStatus?: string;
   poseOverlay?: PoseOverlayArtifact | null;
   timeline: TimelineMarker[];
+  trackingOverlayDetail?: string;
+  trackingOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
   trajectories: ShotTrajectory[];
   videoSrc?: string;
@@ -42,8 +46,12 @@ export function VideoAnalysisCard({
   labels,
   match,
   players,
+  poseOverlayDetail,
+  poseOverlayStatus,
   poseOverlay,
   timeline,
+  trackingOverlayDetail,
+  trackingOverlayStatus,
   trackingOverlay,
   trajectories,
   videoSrc,
@@ -55,12 +63,20 @@ export function VideoAnalysisCard({
         <RealVideoOverlay
           match={match}
           poseOverlay={poseOverlay}
+          poseOverlayDetail={poseOverlayDetail}
+          poseOverlayStatus={poseOverlayStatus}
           trackingOverlay={trackingOverlay}
+          trackingOverlayDetail={trackingOverlayDetail}
+          trackingOverlayStatus={trackingOverlayStatus}
           videoSrc={videoSrc}
         />
         {!compact ? (
           <RealVideoFooter
+            poseOverlayDetail={poseOverlayDetail}
+            poseOverlayStatus={poseOverlayStatus}
             poseOverlay={poseOverlay}
+            trackingOverlayDetail={trackingOverlayDetail}
+            trackingOverlayStatus={trackingOverlayStatus}
             trackingOverlay={trackingOverlay}
           />
         ) : null}
@@ -212,12 +228,20 @@ function VideoCardHeader({ match }: { match: MatchSummary }) {
 function RealVideoOverlay({
   match,
   poseOverlay,
+  poseOverlayDetail,
+  poseOverlayStatus,
   trackingOverlay,
+  trackingOverlayDetail,
+  trackingOverlayStatus,
   videoSrc,
 }: {
   match: MatchSummary;
   poseOverlay?: PoseOverlayArtifact | null;
+  poseOverlayDetail?: string;
+  poseOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
+  trackingOverlayDetail?: string;
+  trackingOverlayStatus?: string;
   videoSrc: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -243,6 +267,11 @@ function RealVideoOverlay({
 
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
   const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
+  const skeletonAvailable = Boolean(poseOverlay?.frames.length);
+  const trackingStatusLabel = trackingOverlay?.status ?? trackingOverlayStatus ?? "unavailable";
+  const poseStatusLabel = poseOverlay?.status ?? poseOverlayStatus ?? "unavailable";
+  const trackingDetail = trackingOverlay?.detail ?? trackingOverlayDetail ?? "人体框 overlay 暂不可用";
+  const poseDetail = poseOverlay?.detail ?? poseOverlayDetail ?? "RTMPose 骨架 overlay 暂不可用";
   const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
@@ -482,6 +511,7 @@ function RealVideoOverlay({
         </button>
         <button
           className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showSkeleton ? "border-[#2F80ED]/45 bg-[#2F80ED]/25 text-[#BBD8FF]" : "border-white/10 bg-black/45 text-white"}`}
+          title={skeletonAvailable ? "显示或隐藏 RTMPose 骨架" : poseDetail}
           onClick={() => setShowSkeleton((value) => !value)}
           type="button"
         >
@@ -494,6 +524,11 @@ function RealVideoOverlay({
           {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
         </p>
         <strong className="text-sm">{match.currentRally}</strong>
+        {boxCount === 0 || skeletonCount === 0 ? (
+          <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">
+            {boxCount === 0 ? statusCopy(trackingStatusLabel, trackingDetail) : statusCopy(poseStatusLabel, poseDetail)}
+          </p>
+        ) : null}
       </div>
 
       <div className="absolute inset-x-4 bottom-4 flex flex-col gap-3 sm:left-auto sm:right-4 sm:w-[min(30rem,calc(100%-2rem))]">
@@ -548,28 +583,60 @@ function RealVideoOverlay({
 }
 
 function RealVideoFooter({
+  poseOverlayDetail,
+  poseOverlayStatus,
   poseOverlay,
+  trackingOverlayDetail,
+  trackingOverlayStatus,
   trackingOverlay,
 }: {
   poseOverlay?: PoseOverlayArtifact | null;
+  poseOverlayDetail?: string;
+  poseOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
+  trackingOverlayDetail?: string;
+  trackingOverlayStatus?: string;
 }) {
-  const trackingDetail = trackingOverlay?.detail ?? "人体框 overlay 暂不可用";
-  const poseDetail = poseOverlay?.detail ?? "骨架关节 overlay 暂不可用";
+  const trackingDetail = trackingOverlay?.detail ?? trackingOverlayDetail ?? "人体框 overlay 暂不可用";
+  const poseDetail = poseOverlay?.detail ?? poseOverlayDetail ?? "骨架关节 overlay 暂不可用";
+  const trackingStatus = trackingOverlay?.status ?? trackingOverlayStatus;
+  const poseStatus = poseOverlay?.status ?? poseOverlayStatus;
   return (
     <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
       <div className="grid gap-3 text-sm md:grid-cols-2">
         <div className="rounded-2xl bg-[#F5FAF1] p-3">
           <strong className="text-[#168A34]">YOLO 人体框</strong>
+          {trackingStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(trackingStatus)}</span> : null}
           <p className="mt-1 text-slate-600">{trackingDetail}</p>
         </div>
         <div className="rounded-2xl bg-[#F5FAF1] p-3">
           <strong className="text-[#1E63B6]">RTMPose 骨架</strong>
+          {poseStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(poseStatus)}</span> : null}
           <p className="mt-1 text-slate-600">{poseDetail}</p>
         </div>
       </div>
     </div>
   );
+}
+
+function statusLabel(status: string): string {
+  if (status === "available") {
+    return "可用";
+  }
+  if (status === "no_detections" || status === "no_poses") {
+    return "无主体";
+  }
+  return "不可用";
+}
+
+function statusCopy(status: string, detail: string): string {
+  if (status === "available") {
+    return detail;
+  }
+  if (status === "no_detections" || status === "no_poses") {
+    return detail;
+  }
+  return detail;
 }
 
 function formatSeconds(value: number): string {
