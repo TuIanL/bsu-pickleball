@@ -3,6 +3,7 @@ dist
 .DS_Store
 *.local
 coverage
+.runtime/
 
 # Python backend
 backend/.venv/

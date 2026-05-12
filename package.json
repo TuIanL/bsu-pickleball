@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "app:start": "bash scripts/start-local-runtime.sh",
+    "app:stop": "bash scripts/stop-local-runtime.sh",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "lint": "eslint .",

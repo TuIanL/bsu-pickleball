@@ -56,11 +56,35 @@ PY
 
 ## Run
 
+For daily local development, start both the RTMPose-enabled backend and the
+frontend with one command from the repository root:
+
+```bash
+npm run app:start
+```
+
+This starts the API at `http://localhost:8000`, the frontend at
+`http://localhost:5173`, writes logs to `.runtime/logs/`, and records process
+IDs under `.runtime/pids/` so the matching stop command can shut them down:
+
+```bash
+npm run app:stop
+```
+
+On macOS, you can also double-click `start-pickleball.command` and
+`stop-pickleball.command` in the repository root.
+
+The startup command enables pose inference by default and sets
+`TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` for the trusted OpenMMLab RTMPose
+checkpoint stored under `models/rtmpose/`.
+
+For manual backend-only debugging, run:
+
 ```bash
 uvicorn app.main:app --reload
 ```
 
-The API is available at `http://localhost:8000`. The frontend can use:
+The frontend can use:
 
 ```bash
 VITE_ANALYSIS_API_URL=http://localhost:8000 npm run dev
