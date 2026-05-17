@@ -6,6 +6,7 @@ import type {
   AnalysisStage,
   AnalysisStageId,
   AnalysisUploadMetadata,
+  BallOverlayArtifact,
   AutomaticCalibrationResponse,
   CalibrationPoint,
   ManualCalibrationResponse,
@@ -352,6 +353,11 @@ export async function getTrackingOverlay(result: AnalysisPipelineResult): Promis
 export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<PoseOverlayArtifact | null> {
   const path = result.artifacts.pose_overlay_url;
   return path ? requestJson<PoseOverlayArtifact>(path) : null;
+}
+
+export async function getBallOverlay(result: AnalysisPipelineResult): Promise<BallOverlayArtifact | null> {
+  const path = result.artifacts.ball_overlay_url;
+  return path ? requestJson<BallOverlayArtifact>(path) : null;
 }
 
 export { demoAnalysisReport };

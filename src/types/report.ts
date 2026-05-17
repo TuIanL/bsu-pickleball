@@ -333,6 +333,57 @@ export interface TrackingOverlayArtifact {
   frames: DetectionOverlayFrame[];
 }
 
+export type BallPointSource = "observed" | "predicted" | "repaired";
+export type BallOverlayStatus = "available" | "partial" | "no_detections" | "unavailable" | "skipped" | "failed";
+
+export interface BallTrajectoryPoint {
+  frame_index: number;
+  timestamp_seconds: number;
+  image_point: [number, number] | number[];
+  confidence: number;
+  source: BallPointSource;
+  segment_id: number;
+  bbox?: [number, number, number, number] | number[];
+}
+
+export interface BallDetectionRecord {
+  frame_index: number;
+  timestamp_seconds: number;
+  class_name: "ball";
+  bbox: [number, number, number, number] | number[];
+  confidence: number;
+  source_width: number;
+  source_height: number;
+}
+
+export interface BallDetectionFrame {
+  frame_index: number;
+  timestamp_seconds: number;
+  detections: BallDetectionRecord[];
+}
+
+export interface BallOverlayFrame {
+  frame_index: number;
+  timestamp_seconds: number;
+  points: BallTrajectoryPoint[];
+}
+
+export interface BallOverlayArtifact {
+  job_id: string;
+  video_id?: string;
+  status: BallOverlayStatus;
+  detail: string;
+  source: FrameSourceSize;
+  fps: number;
+  frame_count: number;
+  processed_frame_count: number;
+  frame_stride: number;
+  detector_status: BallOverlayStatus;
+  frames: BallOverlayFrame[];
+  detections: BallDetectionFrame[];
+  diagnostic_counts: Record<string, number>;
+}
+
 export interface PoseKeypoint {
   name: string;
   x: number;
@@ -415,11 +466,15 @@ export interface AnalysisPipelineResult {
     tracking_result_json_path?: string;
     tracking_overlay_json_path?: string;
     tracking_overlay_url?: string;
+    ball_overlay_json_path?: string;
+    ball_overlay_url?: string;
     pose_overlay_json_path?: string;
     pose_overlay_url?: string;
     source_video_url?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
+    ball_overlay_status?: BallOverlayStatus | string;
+    ball_overlay_detail?: string;
     pose_overlay_status?: string;
     pose_overlay_detail?: string;
     overlay_video_path?: string;

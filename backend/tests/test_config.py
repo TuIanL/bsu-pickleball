@@ -77,3 +77,22 @@ def test_primary_player_filter_configuration(monkeypatch):
         assert settings.primary_player_court_margin_ft == 18
     finally:
         config.get_settings.cache_clear()
+
+
+def test_multitarget_ball_configuration(monkeypatch):
+    monkeypatch.setenv("PICKLEBALL_ENABLE_MULTITARGET_INFERENCE", "true")
+    monkeypatch.setenv("PICKLEBALL_BALL_CONFIDENCE", "0.44")
+    monkeypatch.setenv("PICKLEBALL_PADDLE_CONFIDENCE", "0.55")
+    monkeypatch.setenv("PICKLEBALL_BALL_MAX_REPAIR_GAP_FRAMES", "7")
+    monkeypatch.setenv("PICKLEBALL_BALL_MAX_SPEED_PX_PER_FRAME", "210")
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.enable_multitarget_inference is True
+        assert settings.ball_confidence == 0.44
+        assert settings.paddle_confidence == 0.55
+        assert settings.ball_max_repair_gap_frames == 7
+        assert settings.ball_max_speed_px_per_frame == 210
+    finally:
+        config.get_settings.cache_clear()

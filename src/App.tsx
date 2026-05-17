@@ -51,6 +51,7 @@ import type {
   AutomaticCalibrationResponse,
   DrillRecommendation,
   InsightTone,
+  BallOverlayArtifact,
   PoseOverlayArtifact,
   ReportType,
   TrackingOverlayArtifact,
@@ -61,6 +62,7 @@ import {
   createManualCalibration,
   demoAnalysisReport as demoReport,
   getAnalysisJob,
+  getBallOverlay,
   getPoseOverlay,
   getAnalysisResult,
   getAnalysisReport,
@@ -1211,6 +1213,7 @@ function useAnalysisReport(jobId?: string) {
   const [loadedResult, setLoadedResult] = useState<{
     job: AnalysisJobSummary | null;
     jobId: string;
+    ballOverlay: BallOverlayArtifact | null;
     poseOverlay: PoseOverlayArtifact | null;
     report: AnalysisReport | null;
     result: AnalysisPipelineResult | null;
@@ -1229,12 +1232,14 @@ function useAnalysisReport(jobId?: string) {
       const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
       let trackingOverlay: TrackingOverlayArtifact | null = null;
       let poseOverlay: PoseOverlayArtifact | null = null;
+      let ballOverlay: BallOverlayArtifact | null = null;
       const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
 
       if (pipelineResult) {
-        [trackingOverlay, poseOverlay] = await Promise.all([
+        [trackingOverlay, poseOverlay, ballOverlay] = await Promise.all([
           getTrackingOverlay(pipelineResult).catch(() => null),
           getPoseOverlay(pipelineResult).catch(() => null),
+          getBallOverlay(pipelineResult).catch(() => null),
         ]);
       }
 
@@ -1244,6 +1249,7 @@ function useAnalysisReport(jobId?: string) {
         setLoadedResult({
           job: nextJob,
           jobId,
+          ballOverlay,
           poseOverlay,
           report: adaptedReport,
           result: pipelineResult,
@@ -1261,11 +1267,12 @@ function useAnalysisReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
+    return { ballOverlay: null, job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
   }
 
   if (loadedResult?.jobId !== jobId) {
     return {
+      ballOverlay: undefined as BallOverlayArtifact | null | undefined,
       job: undefined,
       poseOverlay: undefined,
       report: undefined,
@@ -1276,6 +1283,7 @@ function useAnalysisReport(jobId?: string) {
   }
 
   return {
+    ballOverlay: loadedResult.ballOverlay,
     job: loadedResult.job,
     poseOverlay: loadedResult.poseOverlay,
     report: loadedResult.report,
@@ -1289,7 +1297,7 @@ function useAnalysisReport(jobId?: string) {
  * 视觉分析工作台页组件
  */
 function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
-  const { job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
+  const { ballOverlay, job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
@@ -1363,6 +1371,9 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
         <VideoAnalysisCard
           labels={analysis.videoOverlayLabels}
+          ballOverlayDetail={result?.artifacts.ball_overlay_detail}
+          ballOverlayStatus={result?.artifacts.ball_overlay_status}
+          ballOverlay={ballOverlay ?? null}
           match={analysis.match}
           players={analysis.playerMarkers}
           poseOverlayDetail={result?.artifacts.pose_overlay_detail}

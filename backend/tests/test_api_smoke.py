@@ -10,6 +10,7 @@ from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
+from app.vision.detectors.multitarget import FixtureMultiTargetDetector
 
 
 client = TestClient(app)
@@ -255,6 +256,101 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-overlay-test"))
     assert tracking_overlay["frames"][0]["detections"][0]["track_id"] == "1"
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
+
+
+def test_pipeline_generates_ball_overlay_artifact_with_fixture_detector(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("ball-overlay.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        multitarget_detector=FixtureMultiTargetDetector(
+            {
+                0: [{"class_name": "ball", "bbox": [18, 18, 22, 22], "confidence": 0.91}],
+                2: [{"class_name": "ball", "bbox": [28, 24, 32, 28], "confidence": 0.87}],
+            }
+        ),
+        frame_stride=1,
+    ).run(
+        job_id="job-ball-overlay-test",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.artifacts.ball_overlay_status == "available"
+    assert result.artifacts.ball_overlay_url == "/api/analysis/jobs/job-ball-overlay-test/artifacts/ball-overlay"
+    assert any(stage.id == "ball-tracking" and stage.status == "done" for stage in result.stages)
+
+    storage = StorageService()
+    ball_overlay = storage.read_json(storage.ball_overlay_json_path("job-ball-overlay-test"))
+    points = [point for frame in ball_overlay["frames"] for point in frame["points"]]
+    assert [point["source"] for point in points] == ["observed", "repaired", "observed"]
+
+
+def test_pipeline_reports_no_ball_detections_without_losing_player_overlay(tmp_path):
+    video_bytes = make_test_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("no-ball-overlay.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    assert calibration_response.status_code == 200
+    calibration_id = calibration_response.json()["calibration_id"]
+
+    result = AnalysisPipeline(
+        detector=StaticDetector(),
+        multitarget_detector=FixtureMultiTargetDetector({}),
+        frame_stride=1,
+    ).run(
+        job_id="job-no-ball-overlay",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    assert result.status == "completed"
+    assert result.artifacts.tracking_overlay_status == "available"
+    assert result.artifacts.ball_overlay_status == "no_detections"
+    assert any(stage.id == "ball-tracking" and stage.status == "skipped" for stage in result.stages)
+
+    storage = StorageService()
+    ball_overlay = storage.read_json(storage.ball_overlay_json_path("job-no-ball-overlay"))
+    assert ball_overlay["status"] == "no_detections"
+    assert ball_overlay["frames"] == []
 
 
 def test_pipeline_filters_low_confidence_people_from_overlay_and_pose_inputs(tmp_path):
@@ -630,6 +726,47 @@ def test_analysis_artifact_endpoint_returns_browser_safe_json():
 
     assert response.status_code == 200
     assert response.json()["detail"] == "test artifact"
+
+
+def test_analysis_artifact_endpoint_returns_ball_overlay_json():
+    payload = AnalysisJobCreate(
+        metadata={
+            "fileName": "ball-artifact.mp4",
+            "fileSize": 16,
+            "matchTitle": "Ball Artifact Test",
+            "venue": "Test Court",
+            "matchDate": "2026-05-07",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Player A",
+            "level": "MVP",
+        },
+    )
+    job = create_analysis_job(payload)
+    storage = StorageService()
+    storage.write_json(
+        storage.ball_overlay_json_path(job.id),
+        {
+            "job_id": job.id,
+            "video_id": "video-ball-artifact",
+            "status": "unavailable",
+            "detail": "ball artifact test",
+            "source": {"width": 96, "height": 96},
+            "fps": 5,
+            "frame_count": 1,
+            "processed_frame_count": 1,
+            "frame_stride": 1,
+            "detector_status": "skipped",
+            "frames": [],
+            "detections": [],
+            "diagnostic_counts": {"raw_ball_detections": 0},
+        },
+    )
+
+    response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-overlay")
+
+    assert response.status_code == 200
+    assert response.json()["detail"] == "ball artifact test"
 
 
 def test_analysis_job_with_missing_video_fails_cleanly():

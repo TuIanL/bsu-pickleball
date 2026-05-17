@@ -4,6 +4,22 @@ Place local YOLO11, RTMPose26, or future model checkpoints here during developme
 
 Model weights are intentionally ignored by git because they are large, machine-specific, and may have separate license constraints.
 
+## Pickleball Multi-target Models
+
+Future ball/paddle detectors should live under a dedicated subdirectory such as:
+
+```text
+models/pickleball-multitarget/
+  model.pt
+  classes.json
+```
+
+The backend expects future adapters to normalize detector output into
+`player`, `ball`, and `paddle` classes. Until a real pickleball-specific model
+is configured, keep `PICKLEBALL_ENABLE_MULTITARGET_INFERENCE=false`; the
+pipeline will still expose a clear unavailable ball-tracking state instead of
+claiming missing ball trajectories are real detections.
+
 ## RTMPose26 Validation Assets
 
 The first supported skeleton model is OpenMMLab RTMPose Body8-Halpe26 with 26
