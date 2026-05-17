@@ -6,6 +6,7 @@ import type {
   AnalysisStage,
   AnalysisStageId,
   AnalysisUploadMetadata,
+  AutomaticCalibrationResponse,
   CalibrationPoint,
   ManualCalibrationResponse,
   PoseOverlayArtifact,
@@ -237,6 +238,35 @@ export async function createManualCalibration(
   return requestJson<ManualCalibrationResponse>("/calibration/manual", {
     body: JSON.stringify({
       video_id: videoId,
+      image_points: {
+        top_left: [points.top_left.x, points.top_left.y],
+        top_right: [points.top_right.x, points.top_right.y],
+        bottom_right: [points.bottom_right.x, points.bottom_right.y],
+        bottom_left: [points.bottom_left.x, points.bottom_left.y],
+      },
+    }),
+    method: "POST",
+  });
+}
+
+export async function requestAutomaticCalibration(videoId: string): Promise<AutomaticCalibrationResponse> {
+  return requestJson<AutomaticCalibrationResponse>("/calibration/automatic", {
+    body: JSON.stringify({
+      video_id: videoId,
+    }),
+    method: "POST",
+  });
+}
+
+export async function acceptAutomaticCalibration(
+  videoId: string,
+  points: Record<"top_left" | "top_right" | "bottom_right" | "bottom_left", CalibrationPoint>,
+  source: "automatic" | "corrected" = "automatic"
+): Promise<AutomaticCalibrationResponse> {
+  return requestJson<AutomaticCalibrationResponse>("/calibration/automatic/accept", {
+    body: JSON.stringify({
+      video_id: videoId,
+      source,
       image_points: {
         top_left: [points.top_left.x, points.top_left.y],
         top_right: [points.top_right.x, points.top_right.y],

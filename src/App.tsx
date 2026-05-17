@@ -48,6 +48,7 @@ import type {
   AnalysisReport,
   AnalysisUploadMetadata,
   AppPath,
+  AutomaticCalibrationResponse,
   DrillRecommendation,
   InsightTone,
   PoseOverlayArtifact,
@@ -55,6 +56,7 @@ import type {
   TrackingOverlayArtifact,
 } from "./types/report";
 import {
+  acceptAutomaticCalibration,
   createAnalysisJob,
   createManualCalibration,
   demoAnalysisReport as demoReport,
@@ -67,6 +69,8 @@ import {
   getVideoStreamUrl,
   RECENT_ANALYSIS_JOB_EVENT,
   rememberAnalysisJob,
+  requestAutomaticCalibration,
+  resolveAnalysisAssetUrl,
   uploadVideo,
 } from "./services/analysisClient";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
@@ -374,6 +378,9 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [calibrationFrameStatus, setCalibrationFrameStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [calibrationFrameError, setCalibrationFrameError] = useState<string | null>(null);
   const [calibrationFramePreviewUrl, setCalibrationFramePreviewUrl] = useState<string | null>(null);
+  const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null);
+  const [automaticCalibration, setAutomaticCalibration] = useState<AutomaticCalibrationResponse | null>(null);
+  const [automaticCalibrationStatus, setAutomaticCalibrationStatus] = useState<"idle" | "uploading" | "detecting" | "ready" | "unavailable" | "rejected" | "error">("idle");
   const [submitStep, setSubmitStep] = useState<"idle" | "uploading" | "calibrating" | "creating">("idle");
   const [metadata, setMetadata] = useState({
     matchTitle: "匹克球训练对局",
@@ -396,6 +403,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
       metadata.athleteLabel.trim() &&
       metadata.level.trim()
   );
+  const canRequestAutomaticCalibration = Boolean(selectedFile && !isSubmitting && automaticCalibrationStatus !== "uploading" && automaticCalibrationStatus !== "detecting");
 
   const updateMetadata = <K extends keyof typeof metadata>(key: K, value: (typeof metadata)[K]) => {
     setMetadata((current) => ({ ...current, [key]: value }));
@@ -405,9 +413,6 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const videoPreviewUrl = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile]);
 
   useEffect(() => {
-    setCalibrationFrameStatus(videoPreviewUrl ? "loading" : "idle");
-    setCalibrationFrameError(null);
-    setCalibrationFramePreviewUrl(null);
     calibrationAutoSeekAttemptsRef.current = 0;
     calibrationAutoSeekEnabledRef.current = Boolean(videoPreviewUrl);
     return () => {
@@ -419,6 +424,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   const calibrationComplete = calibrationPoints.length === calibrationPointOrder.length;
   const calibrationFrameReady = calibrationFrameStatus === "ready";
+  const automaticPreviewUrl = resolveAnalysisAssetUrl(automaticCalibration?.preview_image_url);
 
   const captureCalibrationFrame = () => {
     const video = calibrationVideoRef.current;
@@ -551,7 +557,80 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   const resetCalibration = () => {
     setCalibrationPoints([]);
+    setAutomaticCalibration(null);
+    setAutomaticCalibrationStatus("idle");
     setError(null);
+  };
+
+  const ensureUploadedVideo = async () => {
+    if (uploadedVideoId) {
+      return uploadedVideoId;
+    }
+    if (!selectedFile) {
+      throw new Error("No selected file");
+    }
+    const upload = await uploadVideo(selectedFile);
+    setUploadedVideoId(upload.video.id);
+    return upload.video.id;
+  };
+
+  const pointMapFromDraft = () =>
+    calibrationPoints.reduce(
+      (acc, point) => {
+        acc[point.id] = { x: point.x, y: point.y };
+        return acc;
+      },
+      {} as Record<CalibrationPointDraft["id"], { x: number; y: number }>
+    );
+
+  const applyAutomaticKeypoints = (response: AutomaticCalibrationResponse) => {
+    if (!response.keypoints || !response.selected_frame?.width || !response.selected_frame.height) {
+      return;
+    }
+    const width = response.selected_frame.width;
+    const height = response.selected_frame.height;
+    setCalibrationPoints(
+      calibrationPointOrder.map((point) => {
+        const detected = response.keypoints?.[point.id];
+        const x = detected?.x ?? 0;
+        const y = detected?.y ?? 0;
+        return {
+          id: point.id,
+          label: point.label,
+          x: Math.round(x),
+          y: Math.round(y),
+          viewX: Math.min(100, Math.max(0, (x / width) * 100)),
+          viewY: Math.min(100, Math.max(0, (y / height) * 100)),
+        };
+      })
+    );
+  };
+
+  const handleAutomaticCalibration = async () => {
+    if (!selectedFile || !canRequestAutomaticCalibration) {
+      return;
+    }
+
+    setError(null);
+    setAutomaticCalibration(null);
+    try {
+      setAutomaticCalibrationStatus(uploadedVideoId ? "detecting" : "uploading");
+      const videoId = await ensureUploadedVideo();
+      setAutomaticCalibrationStatus("detecting");
+      const response = await requestAutomaticCalibration(videoId);
+      setAutomaticCalibration(response);
+      if (response.status === "available" && response.keypoints) {
+        applyAutomaticKeypoints(response);
+        setAutomaticCalibrationStatus("ready");
+      } else if (response.status === "rejected") {
+        setAutomaticCalibrationStatus("rejected");
+      } else {
+        setAutomaticCalibrationStatus("unavailable");
+      }
+    } catch {
+      setAutomaticCalibrationStatus("error");
+      setError("自动识别边线失败。可以继续手动点选四个角点。");
+    }
   };
 
   const handleSubmit = async () => {
@@ -564,18 +643,19 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     setError(null);
 
     try {
-      setSubmitStep("uploading");
-      const upload = await uploadVideo(selectedFile);
-      const pointMap = calibrationPoints.reduce(
-        (acc, point) => {
-          acc[point.id] = { x: point.x, y: point.y };
-          return acc;
-        },
-        {} as Record<CalibrationPointDraft["id"], { x: number; y: number }>
-      );
+      setSubmitStep(uploadedVideoId ? "calibrating" : "uploading");
+      const videoId = await ensureUploadedVideo();
+      const pointMap = pointMapFromDraft();
 
       setSubmitStep("calibrating");
-      const calibration = await createManualCalibration(upload.video.id, pointMap);
+      const source = automaticCalibration?.status === "available" ? "automatic" : "corrected";
+      const automaticAccepted =
+        automaticCalibration?.status === "available"
+          ? await acceptAutomaticCalibration(videoId, pointMap, source)
+          : null;
+      const calibrationId =
+        automaticAccepted?.calibration_id ??
+        (await createManualCalibration(videoId, pointMap)).calibration_id;
 
       setSubmitStep("creating");
       const job = await createAnalysisJob({
@@ -584,8 +664,8 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           fileName: selectedFile.name,
           fileSize: selectedFile.size,
         },
-        videoId: upload.video.id,
-        calibrationId: calibration.calibration_id,
+        videoId,
+        calibrationId,
         frameStride: 2,
         useDemoFallback: false,
       });
@@ -647,8 +727,15 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 accept="video/*"
                 className="sr-only"
                 onChange={(event) => {
-                  setSelectedFile(event.target.files?.[0] ?? null);
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setSelectedFile(nextFile);
                   setCalibrationPoints([]);
+                  setCalibrationFrameStatus(nextFile ? "loading" : "idle");
+                  setCalibrationFrameError(null);
+                  setCalibrationFramePreviewUrl(null);
+                  setUploadedVideoId(null);
+                  setAutomaticCalibration(null);
+                  setAutomaticCalibrationStatus("idle");
                   setError(null);
                 }}
                 type="file"
@@ -680,6 +767,48 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 <button className="quiet-button px-3 py-2 text-xs" onClick={resetCalibration} type="button">
                   重新点选
                 </button>
+              </div>
+              <div className="mt-3 grid gap-3 rounded-2xl border border-[#22C55E]/20 bg-white/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <strong className="text-sm text-[#14241B]">自动识别球场边线</strong>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      先上传视频并请求后端模型建议，识别结果会填入四角点，仍可手动修正。
+                    </p>
+                  </div>
+                  <button
+                    className="quiet-button px-3 py-2 text-xs"
+                    disabled={!canRequestAutomaticCalibration}
+                    onClick={handleAutomaticCalibration}
+                    type="button"
+                  >
+                    {automaticCalibrationStatus === "uploading"
+                      ? "上传中..."
+                      : automaticCalibrationStatus === "detecting"
+                        ? "识别中..."
+                        : "自动识别"}
+                  </button>
+                </div>
+                {automaticCalibrationStatus !== "idle" ? (
+                  <p className="text-xs font-semibold text-slate-600">
+                    {automaticCalibrationStatus === "ready"
+                      ? `已填入自动角点${automaticCalibration?.confidence ? ` · 置信度 ${(automaticCalibration.confidence * 100).toFixed(0)}%` : ""}`
+                      : automaticCalibrationStatus === "unavailable"
+                        ? "自动模型暂不可用，请继续手动点选四角。"
+                        : automaticCalibrationStatus === "rejected"
+                          ? "检测结果未通过几何校验，请手动点选或换一帧。"
+                          : automaticCalibrationStatus === "error"
+                            ? "自动识别失败，请手动点选四角。"
+                            : "正在准备自动标定建议。"}
+                  </p>
+                ) : null}
+                {automaticPreviewUrl ? (
+                  <img
+                    alt=""
+                    className="max-h-56 w-full rounded-xl border border-[#DDE9D6] object-contain"
+                    src={automaticPreviewUrl}
+                  />
+                ) : null}
               </div>
               {!calibrationComplete && calibrationPoints.length === 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">

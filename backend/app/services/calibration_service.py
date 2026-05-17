@@ -80,6 +80,28 @@ class CalibrationService:
             )
         )
 
+    def create_semi_automatic_calibration(self, payload: ManualKeypointCalibrationRequest) -> CalibrationResult:
+        standard_keypoints = self.court.standard_keypoints
+        keypoints: list[CalibrationKeypoint] = []
+
+        for name, image_point in payload.image_points.as_named_points().items():
+            court_point = standard_keypoints[name]
+            keypoints.append(
+                CalibrationKeypoint(
+                    name=name,
+                    image=ImagePoint(x=image_point[0], y=image_point[1]),
+                    court=CourtPoint2D(x=court_point.x, y=court_point.y),
+                )
+            )
+
+        return self.create_calibration(
+            CalibrationCreate(
+                video_id=payload.video_id,
+                keypoints=keypoints,
+                method="semi-automatic",
+            )
+        )
+
     def get_calibration(self, calibration_id: str) -> CalibrationResult | None:
         cached = CALIBRATIONS.get(calibration_id)
         if cached is not None:

@@ -64,3 +64,6 @@ class StorageService:
 
     def preview_image_path(self, calibration_id: str) -> Path:
         return self.outputs_dir / f"{calibration_id}-preview.png"
+
+    def automatic_calibration_preview_path(self, suggestion_id: str) -> Path:
+        return self.outputs_dir / "calibration-previews" / f"{suggestion_id}.png"
