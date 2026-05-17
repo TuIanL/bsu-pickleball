@@ -4,12 +4,17 @@ dist
 *.local
 coverage
 .runtime/
+runs/
+datasets/
+data/
+!datasets/README.md
 
 # Python backend
 backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/.pytest_cache/
+backend/runs/
 backend/data/uploads/*
 backend/data/outputs/*
 backend/data/calibrations/*

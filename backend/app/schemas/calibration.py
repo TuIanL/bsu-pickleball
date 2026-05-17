@@ -100,6 +100,66 @@ class CalibrationPreviewResponse(BaseModel):
     preview_image_path: str
 
 
+AutomaticCalibrationStatus = Literal["available", "accepted", "rejected", "unavailable", "error"]
+
+
+class AutomaticCalibrationRequest(BaseModel):
+    video_id: str
+    frame_index: Optional[int] = Field(default=None, ge=0)
+    timestamp_seconds: Optional[float] = Field(default=None, ge=0.0)
+
+
+class AutomaticCalibrationFrame(BaseModel):
+    video_id: str
+    frame_index: int
+    timestamp_seconds: float
+    width: int = Field(ge=0)
+    height: int = Field(ge=0)
+
+
+class AutomaticCalibrationMaskDiagnostics(BaseModel):
+    model_configured: bool = False
+    model_path: Optional[str] = None
+    confidence: Optional[float] = None
+    mask_area_ratio: Optional[float] = None
+    line_count: int = 0
+    detail: str
+
+
+class AutomaticCalibrationKeypoints(BaseModel):
+    top_left: ImagePoint
+    top_right: ImagePoint
+    bottom_right: ImagePoint
+    bottom_left: ImagePoint
+
+    def as_named_points(self) -> dict[str, ImagePoint]:
+        return {
+            "top_left": self.top_left,
+            "top_right": self.top_right,
+            "bottom_right": self.bottom_right,
+            "bottom_left": self.bottom_left,
+        }
+
+
+class AutomaticCalibrationResponse(BaseModel):
+    status: AutomaticCalibrationStatus
+    detail: str
+    suggestion_id: Optional[str] = None
+    selected_frame: Optional[AutomaticCalibrationFrame] = None
+    keypoints: Optional[AutomaticCalibrationKeypoints] = None
+    confidence: Optional[float] = None
+    quality: Optional[CalibrationQuality] = None
+    mask: AutomaticCalibrationMaskDiagnostics
+    preview_image_url: Optional[str] = None
+    calibration_id: Optional[str] = None
+
+
+class SemiAutomaticCalibrationAcceptRequest(BaseModel):
+    video_id: Optional[str] = None
+    image_points: ManualImageKeypoints
+    source: Literal["automatic", "corrected"] = "automatic"
+
+
 class ProjectionRequest(BaseModel):
     calibration_id: str
     image_point: ImagePoint

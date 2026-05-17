@@ -243,6 +243,44 @@ export interface ManualCalibrationResponse {
   };
 }
 
+export type AutomaticCalibrationStatus = "available" | "accepted" | "rejected" | "unavailable" | "error";
+
+export interface AutomaticCalibrationKeypoints {
+  top_left: CalibrationPoint;
+  top_right: CalibrationPoint;
+  bottom_right: CalibrationPoint;
+  bottom_left: CalibrationPoint;
+}
+
+export interface AutomaticCalibrationResponse {
+  status: AutomaticCalibrationStatus;
+  detail: string;
+  suggestion_id?: string;
+  selected_frame?: {
+    video_id: string;
+    frame_index: number;
+    timestamp_seconds: number;
+    width: number;
+    height: number;
+  };
+  keypoints?: AutomaticCalibrationKeypoints;
+  confidence?: number;
+  quality?: {
+    reprojection_error: number;
+    status: "ok" | "warning";
+  };
+  mask: {
+    model_configured: boolean;
+    model_path?: string;
+    confidence?: number;
+    mask_area_ratio?: number;
+    line_count: number;
+    detail: string;
+  };
+  preview_image_url?: string;
+  calibration_id?: string;
+}
+
 export interface PipelineStageResult {
   id: string;
   label: string;

@@ -91,6 +91,46 @@ def test_manual_calibration_endpoint_rejects_bad_geometry():
     assert response.status_code == 400
 
 
+def test_automatic_calibration_endpoint_degrades_when_model_is_unavailable():
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("auto-unavailable.mp4", b"not-a-real-video", "video/mp4")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+
+    response = client.post("/calibration/automatic", json={"video_id": video_id})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unavailable"
+    assert body["mask"]["model_configured"] is False
+
+
+def test_automatic_calibration_accept_endpoint_stores_semi_automatic_result():
+    payload = {
+        "video_id": "video-api-auto-test",
+        "source": "corrected",
+        "image_points": {
+            "top_left": [0, 0],
+            "top_right": [100, 0],
+            "bottom_right": [100, 200],
+            "bottom_left": [0, 200],
+        },
+    }
+
+    response = client.post("/calibration/automatic/accept", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["calibration_id"].startswith("calib-")
+
+    read_response = client.get(f"/api/calibrations/{body['calibration_id']}")
+    assert read_response.status_code == 200
+    assert read_response.json()["method"] == "semi-automatic"
+
+
 def test_video_upload_persists_metadata_after_cache_miss():
     response = client.post(
         "/api/videos/upload",

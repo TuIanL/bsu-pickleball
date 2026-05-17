@@ -42,6 +42,11 @@ class Settings(BaseModel):
     primary_player_min_box_area_ratio: float = 0.0005
     primary_player_max_box_area_ratio: float = 0.85
     primary_player_court_margin_ft: float = 12.0
+    court_line_model_path: str | None = None
+    court_line_device: str | None = None
+    court_line_confidence: float = 0.35
+    court_line_geometry_min_area_ratio: float = 0.03
+    court_line_frame_ratio: float = 0.1
 
     def resolve_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -132,6 +137,12 @@ def get_settings() -> Settings:
         primary_player_min_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MIN_BOX_AREA_RATIO", "0.0005")),
         primary_player_max_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MAX_BOX_AREA_RATIO", "0.85")),
         primary_player_court_margin_ft=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT", "12.0")),
+        court_line_model_path=os.getenv("PICKLEBALL_COURT_LINE_MODEL_PATH")
+        or _first_existing_path(model_dir, ["court-line/best.pt", "court-line/court-line-seg.pt"]),
+        court_line_device=os.getenv("PICKLEBALL_COURT_LINE_DEVICE") or None,
+        court_line_confidence=float(os.getenv("PICKLEBALL_COURT_LINE_CONFIDENCE", "0.35")),
+        court_line_geometry_min_area_ratio=float(os.getenv("PICKLEBALL_COURT_LINE_GEOMETRY_MIN_AREA_RATIO", "0.03")),
+        court_line_frame_ratio=_clamp_float(os.getenv("PICKLEBALL_COURT_LINE_FRAME_RATIO", "0.1"), 0.0, 0.95),
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins
         else Settings.model_fields["cors_origins"].default_factory(),
@@ -142,6 +153,10 @@ def get_settings() -> Settings:
 
 def _env_bool(value: str | None) -> bool:
     return (value or "").lower() in {"1", "true", "yes"}
+
+
+def _clamp_float(value: str, minimum: float, maximum: float) -> float:
+    return min(max(float(value), minimum), maximum)
 
 
 def _first_existing_path(base: Path, relative_paths: list[str]) -> str | None:
