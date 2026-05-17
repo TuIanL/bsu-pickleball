@@ -61,7 +61,8 @@ python scripts/train_court_line_segmentation.py \
   --converted-output ../datasets/court-line-yolo \
   --model yolo11n-seg.pt \
   --imgsz 1280 \
-  --epochs 100
+  --epochs 100 \
+  --batch -1
 ```
 
 Thin painted lines are easy to lose at small input sizes, so start with

@@ -23,7 +23,11 @@ def main() -> int:
     parser.add_argument("--model", default="yolo11n-seg.pt", help="Ultralytics segmentation model or checkpoint.")
     parser.add_argument("--imgsz", type=int, default=1280, help="Training image size. Use 960 or 1280 for thin lines.")
     parser.add_argument("--epochs", type=int, default=100, help="Training epochs.")
-    parser.add_argument("--batch", default="auto", help="Ultralytics batch setting.")
+    parser.add_argument(
+        "--batch",
+        default="-1",
+        help="Ultralytics batch setting. Use -1 for automatic batch sizing, or a number such as 4/8.",
+    )
     parser.add_argument("--device", default=None, help="Ultralytics device, e.g. cpu, mps, cuda:0.")
     parser.add_argument("--project", default="../runs/court-line", help="Training run output directory.")
     parser.add_argument("--name", default="court-line-seg", help="Training run name.")
@@ -56,12 +60,20 @@ def main() -> int:
         data=prepared["dataset_yaml"],
         imgsz=args.imgsz,
         epochs=args.epochs,
-        batch=args.batch,
+        batch=_parse_batch(args.batch),
         device=args.device,
         project=args.project,
         name=args.name,
     )
     return 0
+
+
+def _parse_batch(value: str) -> int | float:
+    try:
+        integer_value = int(value)
+    except ValueError:
+        return float(value)
+    return integer_value
 
 
 if __name__ == "__main__":
