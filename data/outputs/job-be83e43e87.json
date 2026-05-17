@@ -1,0 +1,94 @@
+{
+  "job_id": "job-be83e43e87",
+  "video_id": "video-b8ca908145",
+  "calibration_id": null,
+  "status": "completed",
+  "generated_at": "2026-05-17T12:22:37.101132Z",
+  "stages": [
+    {
+      "id": "video-read",
+      "label": "读取视频",
+      "status": "done",
+      "detail": "视频元数据已加载"
+    },
+    {
+      "id": "calibration",
+      "label": "场地标定",
+      "status": "skipped",
+      "detail": "未提供标定，使用标准场地 mock 轨迹"
+    },
+    {
+      "id": "detection",
+      "label": "人体检测",
+      "status": "skipped",
+      "detail": "缺少场地标定，暂不运行真实检测"
+    },
+    {
+      "id": "tracking",
+      "label": "多目标跟踪",
+      "status": "skipped",
+      "detail": "需要有效标定后才能生成可用场地轨迹"
+    },
+    {
+      "id": "pose",
+      "label": "人体姿态",
+      "status": "skipped",
+      "detail": "需要检测和跟踪框后才能运行 RTMPose"
+    },
+    {
+      "id": "ball-tracking",
+      "label": "球轨迹",
+      "status": "skipped",
+      "detail": "需要有效标定和多目标检测配置后才能生成球轨迹"
+    },
+    {
+      "id": "projection",
+      "label": "脚点投影",
+      "status": "skipped",
+      "detail": "未提供标定，无法投影到标准球场坐标"
+    },
+    {
+      "id": "metrics",
+      "label": "运动指标",
+      "status": "done",
+      "detail": "已计算距离、速度、厨房区、双打间距和热力图"
+    },
+    {
+      "id": "visualization",
+      "label": "可视化视频",
+      "status": "skipped",
+      "detail": "MVP 暂不生成叠加视频文件"
+    }
+  ],
+  "tracks": [],
+  "metrics": {
+    "distances": [],
+    "speeds": [],
+    "kitchen_dwell": [],
+    "doubles_spacing": [],
+    "heatmap": {
+      "rows": 11,
+      "cols": 5,
+      "cells": []
+    }
+  },
+  "artifacts": {
+    "result_json_path": "/Users/tuian/.codex/worktrees/5352/pre-pickleball/data/outputs/job-be83e43e87.json",
+    "tracking_result_json_path": null,
+    "tracking_overlay_json_path": null,
+    "tracking_overlay_url": null,
+    "ball_overlay_json_path": null,
+    "ball_overlay_url": null,
+    "pose_overlay_json_path": null,
+    "pose_overlay_url": null,
+    "source_video_url": "/api/videos/video-b8ca908145/stream",
+    "tracking_overlay_status": null,
+    "tracking_overlay_detail": null,
+    "ball_overlay_status": null,
+    "ball_overlay_detail": null,
+    "pose_overlay_status": null,
+    "pose_overlay_detail": null,
+    "overlay_video_path": null
+  },
+  "message": "Limited pipeline completed without court calibration; no court-projected tracks were generated."
+}

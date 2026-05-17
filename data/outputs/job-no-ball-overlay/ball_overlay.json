@@ -1,0 +1,41 @@
+{
+  "job_id": "job-no-ball-overlay",
+  "video_id": "video-57992bb6af",
+  "status": "no_detections",
+  "detail": "球检测已运行但未检测到可用球框；请检查模型配置、视频清晰度、拍摄角度或阈值",
+  "source": {
+    "width": 96,
+    "height": 96
+  },
+  "fps": 5.0,
+  "frame_count": 3,
+  "processed_frame_count": 3,
+  "frame_stride": 1,
+  "detector_status": "no_detections",
+  "frames": [],
+  "detections": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "detections": []
+    },
+    {
+      "frame_index": 1,
+      "timestamp_seconds": 0.2,
+      "detections": []
+    },
+    {
+      "frame_index": 2,
+      "timestamp_seconds": 0.4,
+      "detections": []
+    }
+  ],
+  "diagnostic_counts": {
+    "raw_ball_detections": 0,
+    "observed_points": 0,
+    "repaired_points": 0,
+    "segments": 0,
+    "unresolved_gaps": 0,
+    "implausible_candidates": 0
+  }
+}

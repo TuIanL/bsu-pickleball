@@ -1,0 +1,436 @@
+{
+  "version": "analysis-report-v1",
+  "source": "job",
+  "jobId": "job-e08aace98e",
+  "reportId": "PV-JOB-E08AACE98E",
+  "generatedAt": "2026-05-17T12:24:55.165135+00:00",
+  "metadata": {
+    "fileName": "limited.mp4",
+    "fileSize": 16,
+    "matchTitle": "Lifecycle Test",
+    "venue": "Test Court",
+    "matchDate": "2026-05-07",
+    "matchFormat": "doubles",
+    "cameraAngle": "elevated",
+    "athleteLabel": "Player A",
+    "level": "MVP"
+  },
+  "match": {
+    "title": "Lifecycle Test",
+    "subtitle": "真实上传视频 · 未标定有限分析",
+    "date": "2026-05-07",
+    "venue": "Test Court",
+    "teams": "Player A",
+    "score": "MVP",
+    "currentRally": "未生成可用轨迹",
+    "currentTime": "完成",
+    "duration": "pipeline"
+  },
+  "session": {
+    "athlete": "Player A",
+    "venue": "Test Court",
+    "date": "2026-05-07",
+    "level": "MVP",
+    "reportId": "PV-JOB-E08AACE98E",
+    "summary": "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。",
+    "metrics": [],
+    "landingPoints": [],
+    "routes": [],
+    "movementPath": [],
+    "rallies": [
+      {
+        "id": "mvp-movement",
+        "title": "MVP 移动分析",
+        "duration": "已完成",
+        "shots": 0,
+        "pattern": "当前版本暂不识别击球与回合",
+        "result": "轨迹不可用",
+        "observation": "报告只展示上传视频可支持的移动、速度、站位和热力图指标，不编造球路或战术事件。"
+      }
+    ]
+  },
+  "dashboardMetrics": [
+    {
+      "id": "distance",
+      "icon": "activity",
+      "label": "累计移动距离",
+      "value": "0.0 ft",
+      "detail": "来自场地投影轨迹的累计距离",
+      "trend": "真实视频",
+      "direction": "steady",
+      "progress": 0,
+      "sparkline": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "avg-speed",
+      "icon": "timer",
+      "label": "平均移动速度",
+      "value": "0.0 ft/s",
+      "detail": "最高速度 0.0 ft/s",
+      "trend": "pipeline",
+      "direction": "steady",
+      "progress": 0,
+      "sparkline": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "kitchen",
+      "icon": "waves",
+      "label": "厨房区停留",
+      "value": "0.0s",
+      "detail": "按投影点统计的非截击区停留时间",
+      "trend": "真实视频",
+      "direction": "steady",
+      "progress": 0,
+      "sparkline": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "tracks",
+      "icon": "radar",
+      "label": "可用轨迹点",
+      "value": "0",
+      "detail": "用于生成可视化和热力图的点数量",
+      "trend": "算法输出",
+      "direction": "steady",
+      "progress": 0,
+      "sparkline": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "reportDefinitions": [
+    {
+      "type": "landing",
+      "title": "落点分析暂不可用",
+      "eyebrow": "落点分析报告",
+      "summary": "当前 MVP 未生成该类战术/击球/动作数据。",
+      "heroMetric": "N/A",
+      "heroMetricLabel": "球/落点检测",
+      "visualization": "heat",
+      "metrics": [
+        {
+          "id": "landing-na",
+          "icon": "alert",
+          "label": "落点检测",
+          "value": "未接入",
+          "detail": "当前 MVP 未生成该类战术/击球/动作数据。",
+          "trend": "MVP 限制",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "landing-note",
+          "tone": "risk",
+          "title": "不编造落点",
+          "body": "当前只展示移动与站位指标，落点需要后续球检测能力。"
+        }
+      ],
+      "trainingLink": "先查看移动覆盖报告"
+    },
+    {
+      "type": "movement",
+      "title": "移动与场地覆盖报告",
+      "eyebrow": "移动分析报告",
+      "summary": "未提供有效标定，移动报告处于有限模式。",
+      "heroMetric": "0.0 ft",
+      "heroMetricLabel": "累计移动距离",
+      "visualization": "movement",
+      "metrics": [
+        {
+          "id": "distance",
+          "icon": "activity",
+          "label": "累计移动距离",
+          "value": "0.0 ft",
+          "detail": "来自场地投影轨迹的累计距离",
+          "trend": "真实视频",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "id": "avg-speed",
+          "icon": "timer",
+          "label": "平均移动速度",
+          "value": "0.0 ft/s",
+          "detail": "最高速度 0.0 ft/s",
+          "trend": "pipeline",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "id": "kitchen",
+          "icon": "waves",
+          "label": "厨房区停留",
+          "value": "0.0s",
+          "detail": "按投影点统计的非截击区停留时间",
+          "trend": "真实视频",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "id": "tracks",
+          "icon": "radar",
+          "label": "可用轨迹点",
+          "value": "0",
+          "detail": "用于生成可视化和热力图的点数量",
+          "trend": "算法输出",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "movement-source",
+          "tone": "training",
+          "title": "真实 pipeline 输出",
+          "body": "未提供有效标定，移动报告处于有限模式。"
+        },
+        {
+          "id": "movement-speed",
+          "tone": "risk",
+          "title": "速度与覆盖",
+          "body": "平均速度 0.0 ft/s，最高速度 0.0 ft/s。"
+        }
+      ],
+      "trainingLink": "基于移动路径安排回位训练"
+    },
+    {
+      "type": "rally",
+      "title": "回合战术暂不可用",
+      "eyebrow": "回合战术报告",
+      "summary": "当前 MVP 未生成该类战术/击球/动作数据。",
+      "heroMetric": "N/A",
+      "heroMetricLabel": "回合切分",
+      "visualization": "rally",
+      "metrics": [
+        {
+          "id": "rally-na",
+          "icon": "alert",
+          "label": "回合识别",
+          "value": "未接入",
+          "detail": "当前 MVP 未生成该类战术/击球/动作数据。",
+          "trend": "MVP 限制",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "rally-note",
+          "tone": "risk",
+          "title": "不编造战术",
+          "body": "回合、击球类型和战术模式需要球轨迹与击球事件识别。"
+        }
+      ],
+      "trainingLink": "先完成移动覆盖训练"
+    },
+    {
+      "type": "diagnosis",
+      "title": "动作诊断暂不可用",
+      "eyebrow": "动作诊断报告",
+      "summary": "当前 MVP 未生成该类战术/击球/动作数据。",
+      "heroMetric": "N/A",
+      "heroMetricLabel": "姿态诊断",
+      "visualization": "diagnosis",
+      "metrics": [
+        {
+          "id": "diagnosis-na",
+          "icon": "alert",
+          "label": "动作诊断",
+          "value": "未接入",
+          "detail": "当前 MVP 未生成该类战术/击球/动作数据。",
+          "trend": "MVP 限制",
+          "direction": "steady",
+          "progress": 0,
+          "sparkline": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "diagnosis-note",
+          "tone": "training",
+          "title": "需要姿态模型",
+          "body": "RTMPose 或同等姿态模型接入后才能输出动作证据。"
+        }
+      ],
+      "trainingLink": "先依据移动指标训练"
+    }
+  ],
+  "reportActions": [
+    {
+      "type": "landing",
+      "title": "落点分析报告",
+      "description": "查看深区命中、边线风险与热力分布。",
+      "path": "/reports/landing"
+    },
+    {
+      "type": "movement",
+      "title": "步法移动报告",
+      "description": "拆解回位路径、覆盖平衡和启动延迟。",
+      "path": "/reports/movement"
+    },
+    {
+      "type": "rally",
+      "title": "回合战术报告",
+      "description": "追踪发接发、第三拍和网前模式。",
+      "path": "/reports/rally"
+    },
+    {
+      "type": "diagnosis",
+      "title": "动作诊断报告",
+      "description": "把动作问题转成证据和纠正方向。",
+      "path": "/reports/diagnosis"
+    }
+  ],
+  "playerMarkers": [],
+  "shotTrajectories": [],
+  "videoOverlayLabels": [
+    {
+      "id": "source-real",
+      "label": "真实上传视频",
+      "tone": "training",
+      "x": 50.0,
+      "y": 18.0
+    },
+    {
+      "id": "limited",
+      "label": "缺少标定",
+      "tone": "risk",
+      "x": 53.0,
+      "y": 42.0
+    }
+  ],
+  "timelineMarkers": [
+    {
+      "id": "pipeline",
+      "time": "完成",
+      "position": 88.0,
+      "label": "Limited pipeline completed without court calibration; no court-projected tracks were generated.",
+      "tone": "risk"
+    }
+  ],
+  "highlights": [
+    {
+      "id": "movement-summary",
+      "title": "移动轨迹摘要",
+      "time": "MVP",
+      "result": "算法输出",
+      "tone": "risk",
+      "description": "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。"
+    }
+  ],
+  "coachNotes": [
+    {
+      "id": "real-source",
+      "tone": "training",
+      "title": "数据来源已切换为上传视频",
+      "body": "本页优先展示后端 pipeline 产出的移动和轨迹指标，样例击球与战术内容不再混作真实结论。"
+    },
+    {
+      "id": "movement-evidence",
+      "tone": "risk",
+      "title": "轨迹暂不可用",
+      "body": "当前没有可用球员轨迹，建议重新标定四角或确认模型推理配置。"
+    }
+  ],
+  "diagnoses": [
+    {
+      "id": "mvp-limited-diagnosis",
+      "issue": "动作诊断暂不可用",
+      "severity": "低",
+      "evidence": "当前 MVP 未接入姿态动作诊断模型。",
+      "suggestion": "先使用移动距离、速度和热力图作为训练反馈依据。",
+      "expectedOutcome": "避免把样例动作诊断误认为上传视频结论。",
+      "priority": "说明"
+    }
+  ],
+  "trainingRecommendations": [],
+  "drillRecommendations": [
+    {
+      "id": "drill-court-coverage",
+      "title": "场地覆盖与回位节奏",
+      "goal": "围绕热区和移动路径做 5 组回位练习。",
+      "duration": "18 分钟",
+      "evidence": "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。",
+      "difficulty": "进阶",
+      "linkedReport": "movement"
+    }
+  ],
+  "shotRows": [],
+  "skillRatings": [
+    {
+      "id": "movement-coverage",
+      "label": "移动数据完整度",
+      "score": 0,
+      "note": "分数来自可用轨迹点数量，不代表技术评分。"
+    }
+  ],
+  "progressPoints": [
+    {
+      "match": "本次上传",
+      "performance": 0,
+      "errors": 0,
+      "thirdShot": 0,
+      "kitchen": 0
+    }
+  ]
+}

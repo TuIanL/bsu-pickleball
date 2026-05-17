@@ -1,0 +1,79 @@
+{
+  "job_id": "job-no-ball-overlay",
+  "video_id": "video-57992bb6af",
+  "status": "available",
+  "detail": "已生成 3 个通过主要球员置信度筛选的可渲染比赛球员框；原始检测 3 个，过滤 0 个低置信度或非主体人物框",
+  "source": {
+    "width": 96,
+    "height": 96
+  },
+  "fps": 5.0,
+  "frame_count": 3,
+  "processed_frame_count": 3,
+  "frame_stride": 1,
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "detections": [
+        {
+          "frame_index": 0,
+          "timestamp_seconds": 0.0,
+          "bbox": [
+            18.0,
+            16.0,
+            48.0,
+            82.0
+          ],
+          "confidence": 0.91,
+          "class_name": "person",
+          "track_id": "1",
+          "source_width": 96,
+          "source_height": 96
+        }
+      ]
+    },
+    {
+      "frame_index": 1,
+      "timestamp_seconds": 0.2,
+      "detections": [
+        {
+          "frame_index": 1,
+          "timestamp_seconds": 0.2,
+          "bbox": [
+            18.0,
+            16.0,
+            48.0,
+            82.0
+          ],
+          "confidence": 0.91,
+          "class_name": "person",
+          "track_id": "1",
+          "source_width": 96,
+          "source_height": 96
+        }
+      ]
+    },
+    {
+      "frame_index": 2,
+      "timestamp_seconds": 0.4,
+      "detections": [
+        {
+          "frame_index": 2,
+          "timestamp_seconds": 0.4,
+          "bbox": [
+            18.0,
+            16.0,
+            48.0,
+            82.0
+          ],
+          "confidence": 0.91,
+          "class_name": "person",
+          "track_id": "1",
+          "source_width": 96,
+          "source_height": 96
+        }
+      ]
+    }
+  ]
+}

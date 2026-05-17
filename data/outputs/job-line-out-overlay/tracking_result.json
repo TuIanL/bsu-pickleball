@@ -1,0 +1,213 @@
+{
+  "video_id": "video-2027155054",
+  "calibration_id": "calib-b8f9d62783",
+  "fps": 5.0,
+  "frame_count": 3,
+  "frame_width": 96,
+  "frame_height": 96,
+  "processed_frame_count": 3,
+  "frame_stride": 1,
+  "detections": [
+    {
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "confidence": 0.88,
+      "class_name": "person"
+    },
+    {
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "confidence": 0.88,
+      "class_name": "person"
+    },
+    {
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "confidence": 0.88,
+      "class_name": "person"
+    }
+  ],
+  "overlay_frames": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "detections": [
+        {
+          "frame_index": 0,
+          "timestamp_seconds": 0.0,
+          "bbox": [
+            100.0,
+            16.0,
+            130.0,
+            82.0
+          ],
+          "confidence": 0.88,
+          "class_name": "person",
+          "track_id": "1",
+          "source_width": 96,
+          "source_height": 96
+        }
+      ]
+    },
+    {
+      "frame_index": 1,
+      "timestamp_seconds": 0.2,
+      "detections": [
+        {
+          "frame_index": 1,
+          "timestamp_seconds": 0.2,
+          "bbox": [
+            100.0,
+            16.0,
+            130.0,
+            82.0
+          ],
+          "confidence": 0.88,
+          "class_name": "person",
+          "track_id": "1",
+          "source_width": 96,
+          "source_height": 96
+        }
+      ]
+    },
+    {
+      "frame_index": 2,
+      "timestamp_seconds": 0.4,
+      "detections": [
+        {
+          "frame_index": 2,
+          "timestamp_seconds": 0.4,
+          "bbox": [
+            100.0,
+            16.0,
+            130.0,
+            82.0
+          ],
+          "confidence": 0.88,
+          "class_name": "person",
+          "track_id": "1",
+          "source_width": 96,
+          "source_height": 96
+        }
+      ]
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": 1,
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "confidence": 0.88,
+      "lost": false
+    },
+    {
+      "track_id": 1,
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "confidence": 0.88,
+      "lost": false
+    },
+    {
+      "track_id": 1,
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "confidence": 0.88,
+      "lost": false
+    }
+  ],
+  "positions": [
+    {
+      "frame_index": 0,
+      "timestamp": 0.0,
+      "track_id": 1,
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "image_footpoint": [
+        115.0,
+        82.0
+      ],
+      "court_position": [
+        23.958333333333332,
+        37.583333333333336
+      ],
+      "confidence": 0.88,
+      "valid": false,
+      "validity": "invalid",
+      "footpoint_method": "bbox_bottom_center"
+    },
+    {
+      "frame_index": 1,
+      "timestamp": 0.2,
+      "track_id": 1,
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "image_footpoint": [
+        115.0,
+        82.0
+      ],
+      "court_position": [
+        23.958333333333332,
+        37.583333333333336
+      ],
+      "confidence": 0.88,
+      "valid": false,
+      "validity": "invalid",
+      "footpoint_method": "bbox_bottom_center"
+    },
+    {
+      "frame_index": 2,
+      "timestamp": 0.4,
+      "track_id": 1,
+      "bbox": [
+        100.0,
+        16.0,
+        130.0,
+        82.0
+      ],
+      "image_footpoint": [
+        115.0,
+        82.0
+      ],
+      "court_position": [
+        23.958333333333332,
+        37.583333333333336
+      ],
+      "confidence": 0.88,
+      "valid": false,
+      "validity": "invalid",
+      "footpoint_method": "bbox_bottom_center"
+    }
+  ]
+}

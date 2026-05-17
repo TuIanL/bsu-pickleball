@@ -1,0 +1,104 @@
+{
+  "id": "job-e08aace98e",
+  "status": "completed",
+  "stage": "report",
+  "progress": 100,
+  "createdAt": "2026-05-17T12:24:55.162933+00:00",
+  "updatedAt": "2026-05-17T12:24:55.165012+00:00",
+  "metadata": {
+    "fileName": "limited.mp4",
+    "fileSize": 16,
+    "matchTitle": "Lifecycle Test",
+    "venue": "Test Court",
+    "matchDate": "2026-05-07",
+    "matchFormat": "doubles",
+    "cameraAngle": "elevated",
+    "athleteLabel": "Player A",
+    "level": "MVP"
+  },
+  "stages": [
+    {
+      "id": "upload",
+      "label": "视频上传",
+      "status": "done",
+      "detail": "上传视频已保存"
+    },
+    {
+      "id": "queue",
+      "label": "任务排队",
+      "status": "done",
+      "detail": "任务已进入后端分析流程"
+    },
+    {
+      "id": "video-read",
+      "label": "读取视频",
+      "status": "done",
+      "detail": "视频元数据已加载"
+    },
+    {
+      "id": "frame-sampling",
+      "label": "抽帧采样",
+      "status": "done",
+      "detail": "已按配置帧间隔读取视频帧"
+    },
+    {
+      "id": "calibration",
+      "label": "场地标定",
+      "status": "skipped",
+      "detail": "未提供标定，使用标准场地 mock 轨迹"
+    },
+    {
+      "id": "detection",
+      "label": "人体检测",
+      "status": "skipped",
+      "detail": "缺少场地标定，暂不运行真实检测"
+    },
+    {
+      "id": "tracking",
+      "label": "多目标跟踪",
+      "status": "skipped",
+      "detail": "需要有效标定后才能生成可用场地轨迹"
+    },
+    {
+      "id": "pose",
+      "label": "人体姿态",
+      "status": "skipped",
+      "detail": "需要检测和跟踪框后才能运行 RTMPose"
+    },
+    {
+      "id": "ball-tracking",
+      "label": "球轨迹",
+      "status": "skipped",
+      "detail": "需要有效标定和多目标检测配置后才能生成球轨迹"
+    },
+    {
+      "id": "projection",
+      "label": "脚点投影",
+      "status": "skipped",
+      "detail": "未提供标定，无法投影到标准球场坐标"
+    },
+    {
+      "id": "metrics",
+      "label": "运动指标",
+      "status": "done",
+      "detail": "已计算距离、速度、厨房区、双打间距和热力图"
+    },
+    {
+      "id": "visualization",
+      "label": "可视化视频",
+      "status": "skipped",
+      "detail": "MVP 暂不生成叠加视频文件"
+    },
+    {
+      "id": "report",
+      "label": "报告生成",
+      "status": "done",
+      "detail": "已生成前端报告 JSON"
+    }
+  ],
+  "reportId": "PV-JOB-E08AACE98E",
+  "errorMessage": null,
+  "videoId": "video-a916e0da1f",
+  "calibrationId": null,
+  "analysisMode": "limited"
+}

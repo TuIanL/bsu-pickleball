@@ -55,8 +55,10 @@ export function adaptPipelineResultToReport(
   const limited = job.analysisMode === "limited" || !job.calibrationId;
   const noTracks = tracks.length === 0;
   const trackingOverlayStatus = result.artifacts.tracking_overlay_status;
+  const ballOverlayStatus = result.artifacts.ball_overlay_status;
   const poseOverlayStatus = result.artifacts.pose_overlay_status;
   const hasTrackingOverlay = trackingOverlayStatus === "available";
+  const hasBallOverlay = ballOverlayStatus === "available" || ballOverlayStatus === "partial";
   const hasPoseOverlay = poseOverlayStatus === "available";
   const summary = noTracks
     ? limited
@@ -137,8 +139,8 @@ export function adaptPipelineResultToReport(
       },
       {
         id: "overlay-status",
-        label: hasPoseOverlay ? "骨架可视化" : hasTrackingOverlay ? "人体框可视化" : "视频 overlay 待生成",
-        tone: hasPoseOverlay || hasTrackingOverlay ? "advantage" : "risk",
+        label: hasBallOverlay ? "球轨迹可视化" : hasPoseOverlay ? "骨架可视化" : hasTrackingOverlay ? "人体框可视化" : "视频 overlay 待生成",
+        tone: hasBallOverlay || hasPoseOverlay || hasTrackingOverlay ? "advantage" : "risk",
         x: 48,
         y: 58,
       },
@@ -176,6 +178,12 @@ export function adaptPipelineResultToReport(
         body: noTracks
           ? "当前没有可用球员轨迹，建议重新标定四角或确认模型推理配置。"
           : `累计移动 ${totalDistance.toFixed(1)} 英尺，平均速度 ${averageSpeed.toFixed(1)} 英尺/秒，最高速度 ${maxSpeed.toFixed(1)} 英尺/秒。`,
+      },
+      {
+        id: "ball-overlay-evidence",
+        tone: hasBallOverlay ? "advantage" : "risk",
+        title: hasBallOverlay ? "球轨迹 overlay 可用" : "球轨迹暂不可用",
+        body: result.artifacts.ball_overlay_detail ?? "当前任务没有可渲染的球轨迹 artifact；回合、击球类型和战术结论仍保持不可用。",
       },
       {
         id: "video-overlay-evidence",

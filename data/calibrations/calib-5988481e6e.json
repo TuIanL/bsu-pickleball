@@ -1,0 +1,99 @@
+{
+  "id": "calib-5988481e6e",
+  "video_id": "video-871c14f31c",
+  "keypoints": [
+    {
+      "name": "top_left",
+      "image": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "court": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    {
+      "name": "top_right",
+      "image": {
+        "x": 96.0,
+        "y": 0.0
+      },
+      "court": {
+        "x": 20.0,
+        "y": 0.0
+      }
+    },
+    {
+      "name": "bottom_right",
+      "image": {
+        "x": 96.0,
+        "y": 96.0
+      },
+      "court": {
+        "x": 20.0,
+        "y": 44.0
+      }
+    },
+    {
+      "name": "bottom_left",
+      "image": {
+        "x": 0.0,
+        "y": 96.0
+      },
+      "court": {
+        "x": 0.0,
+        "y": 44.0
+      }
+    }
+  ],
+  "homography": {
+    "values": [
+      [
+        0.20833333333333331,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.4583333333333335,
+        -9.230220894641107e-15
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "inverse_homography": {
+    "values": [
+      [
+        4.800000000000001,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        2.181818181818181,
+        2.0138663770126046e-14
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "court_coordinate_system": {
+    "unit": "feet",
+    "width": 20.0,
+    "length": 44.0
+  },
+  "quality": {
+    "reprojection_error": 8.167824126121054e-15,
+    "status": "ok"
+  },
+  "method": "manual",
+  "created_at": "2026-05-17T12:24:55.196533Z"
+}

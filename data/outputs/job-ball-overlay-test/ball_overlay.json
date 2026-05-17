@@ -1,0 +1,138 @@
+{
+  "job_id": "job-ball-overlay-test",
+  "video_id": "video-871c14f31c",
+  "status": "available",
+  "detail": "已生成 3 个球轨迹点，其中 1 个为短时遮挡修复点",
+  "source": {
+    "width": 96,
+    "height": 96
+  },
+  "fps": 5.0,
+  "frame_count": 3,
+  "processed_frame_count": 3,
+  "frame_stride": 1,
+  "detector_status": "available",
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "points": [
+        {
+          "frame_index": 0,
+          "timestamp_seconds": 0.0,
+          "image_point": [
+            20.0,
+            20.0
+          ],
+          "confidence": 0.91,
+          "source": "observed",
+          "segment_id": 1,
+          "bbox": [
+            18.0,
+            18.0,
+            22.0,
+            22.0
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 1,
+      "timestamp_seconds": 0.2,
+      "points": [
+        {
+          "frame_index": 1,
+          "timestamp_seconds": 0.2,
+          "image_point": [
+            25.0,
+            23.0
+          ],
+          "confidence": 0.7656,
+          "source": "repaired",
+          "segment_id": 1,
+          "bbox": null
+        }
+      ]
+    },
+    {
+      "frame_index": 2,
+      "timestamp_seconds": 0.4,
+      "points": [
+        {
+          "frame_index": 2,
+          "timestamp_seconds": 0.4,
+          "image_point": [
+            30.0,
+            26.0
+          ],
+          "confidence": 0.87,
+          "source": "observed",
+          "segment_id": 1,
+          "bbox": [
+            28.0,
+            24.0,
+            32.0,
+            28.0
+          ]
+        }
+      ]
+    }
+  ],
+  "detections": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "detections": [
+        {
+          "frame_index": 0,
+          "timestamp_seconds": 0.0,
+          "class_name": "ball",
+          "bbox": [
+            18.0,
+            18.0,
+            22.0,
+            22.0
+          ],
+          "confidence": 0.91,
+          "source_width": 96,
+          "source_height": 96,
+          "track_id": null
+        }
+      ]
+    },
+    {
+      "frame_index": 1,
+      "timestamp_seconds": 0.2,
+      "detections": []
+    },
+    {
+      "frame_index": 2,
+      "timestamp_seconds": 0.4,
+      "detections": [
+        {
+          "frame_index": 2,
+          "timestamp_seconds": 0.4,
+          "class_name": "ball",
+          "bbox": [
+            28.0,
+            24.0,
+            32.0,
+            28.0
+          ],
+          "confidence": 0.87,
+          "source_width": 96,
+          "source_height": 96,
+          "track_id": null
+        }
+      ]
+    }
+  ],
+  "diagnostic_counts": {
+    "raw_ball_detections": 2,
+    "observed_points": 2,
+    "repaired_points": 1,
+    "segments": 1,
+    "unresolved_gaps": 0,
+    "implausible_candidates": 0
+  }
+}

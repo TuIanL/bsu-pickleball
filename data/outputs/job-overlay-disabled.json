@@ -1,0 +1,94 @@
+{
+  "job_id": "job-overlay-disabled",
+  "video_id": "video-ee8976168f",
+  "calibration_id": "calib-2291ce2622",
+  "status": "completed",
+  "generated_at": "2026-05-17T12:24:55.237562Z",
+  "stages": [
+    {
+      "id": "video-read",
+      "label": "读取视频",
+      "status": "done",
+      "detail": "视频元数据已加载"
+    },
+    {
+      "id": "calibration",
+      "label": "场地标定",
+      "status": "done",
+      "detail": "已加载手工标定"
+    },
+    {
+      "id": "detection",
+      "label": "人体检测",
+      "status": "skipped",
+      "detail": "模型推理未启用，未运行 YOLO 人体检测；可设置 PICKLEBALL_ENABLE_MODEL_INFERENCE=true"
+    },
+    {
+      "id": "tracking",
+      "label": "多目标跟踪",
+      "status": "skipped",
+      "detail": "YOLO 人体检测未运行，未生成可跟踪人体框"
+    },
+    {
+      "id": "pose",
+      "label": "人体姿态",
+      "status": "skipped",
+      "detail": "RTMPose 姿态识别未启用，暂不生成骨架关节"
+    },
+    {
+      "id": "ball-tracking",
+      "label": "球轨迹",
+      "status": "skipped",
+      "detail": "多目标球检测未启用，暂不生成球轨迹"
+    },
+    {
+      "id": "projection",
+      "label": "脚点投影",
+      "status": "done",
+      "detail": "已生成 0 个有效场地坐标球员位置"
+    },
+    {
+      "id": "metrics",
+      "label": "运动指标",
+      "status": "done",
+      "detail": "已计算距离、速度、厨房区、双打间距和热力图"
+    },
+    {
+      "id": "visualization",
+      "label": "可视化视频",
+      "status": "skipped",
+      "detail": "MVP 暂不生成叠加视频文件"
+    }
+  ],
+  "tracks": [],
+  "metrics": {
+    "distances": [],
+    "speeds": [],
+    "kitchen_dwell": [],
+    "doubles_spacing": [],
+    "heatmap": {
+      "rows": 11,
+      "cols": 5,
+      "cells": []
+    }
+  },
+  "artifacts": {
+    "result_json_path": "/Users/tuian/.codex/worktrees/5352/pre-pickleball/data/outputs/job-overlay-disabled.json",
+    "tracking_result_json_path": "/Users/tuian/.codex/worktrees/5352/pre-pickleball/data/outputs/job-overlay-disabled/tracking_result.json",
+    "tracking_overlay_json_path": "/Users/tuian/.codex/worktrees/5352/pre-pickleball/data/outputs/job-overlay-disabled/tracking_overlay.json",
+    "tracking_overlay_url": "/api/analysis/jobs/job-overlay-disabled/artifacts/tracking-overlay",
+    "ball_overlay_json_path": "/Users/tuian/.codex/worktrees/5352/pre-pickleball/data/outputs/job-overlay-disabled/ball_overlay.json",
+    "ball_overlay_url": "/api/analysis/jobs/job-overlay-disabled/artifacts/ball-overlay",
+    "pose_overlay_json_path": null,
+    "pose_overlay_url": null,
+    "source_video_url": "/api/videos/video-ee8976168f/stream",
+    "tracking_overlay_status": "unavailable",
+    "tracking_overlay_detail": "YOLO 人体检测未启用，未运行模型推理；请启用后重新分析",
+    "ball_overlay_status": "unavailable",
+    "ball_overlay_detail": "多目标球检测未启用，未运行球轨迹分析",
+    "pose_overlay_status": "unavailable",
+    "pose_overlay_detail": "RTMPose 姿态识别未启用，暂不生成骨架关节",
+    "overlay_video_path": null
+  },
+  "message": "Pipeline completed with Player Tracking Engine output."
+}

@@ -53,6 +53,9 @@ class StorageService:
     def tracking_overlay_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "tracking_overlay.json"
 
+    def ball_overlay_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "ball_overlay.json"
+
     def pose_overlay_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "pose_overlay.json"
 

@@ -1,0 +1,609 @@
+{
+  "version": "analysis-report-v1",
+  "source": "job",
+  "jobId": "job-55566ecaa5",
+  "reportId": "PV-JOB-55566ECAA5",
+  "generatedAt": "2026-05-17T12:22:37.179500+00:00",
+  "metadata": {
+    "fileName": "artifact.mp4",
+    "fileSize": 16,
+    "matchTitle": "Artifact Test",
+    "venue": "Test Court",
+    "matchDate": "2026-05-07",
+    "matchFormat": "doubles",
+    "cameraAngle": "elevated",
+    "athleteLabel": "Player A",
+    "level": "MVP"
+  },
+  "match": {
+    "title": "Artifact Test",
+    "subtitle": "双打训练样本 · MVP",
+    "date": "2026-05-07",
+    "venue": "Test Court",
+    "teams": "荧光队 对阵 蓝队",
+    "score": "11 - 8",
+    "currentRally": "第 24 回合 · 18 拍",
+    "currentTime": "08:42",
+    "duration": "12:16"
+  },
+  "session": {
+    "athlete": "Player A",
+    "venue": "Test Court",
+    "date": "2026-05-07",
+    "level": "MVP",
+    "reportId": "PV-JOB-55566ECAA5",
+    "summary": "本次训练以底线相持和中场上网衔接为主，落点控制稳定，但反手回球后的回位速度仍影响下一拍质量。",
+    "metrics": [],
+    "landingPoints": [
+      {
+        "id": "p1",
+        "x": 71.0,
+        "y": 26.0,
+        "intensity": 0.88,
+        "label": "右侧底线深区"
+      },
+      {
+        "id": "p2",
+        "x": 68.0,
+        "y": 42.0,
+        "intensity": 0.64,
+        "label": "右侧中场"
+      },
+      {
+        "id": "p3",
+        "x": 41.0,
+        "y": 32.0,
+        "intensity": 0.72,
+        "label": "反手斜线压制"
+      },
+      {
+        "id": "p4",
+        "x": 29.0,
+        "y": 67.0,
+        "intensity": 0.45,
+        "label": "网前小球"
+      }
+    ],
+    "routes": [
+      {
+        "id": "r1",
+        "from_": {
+          "id": "r1-from",
+          "x": 24.0,
+          "y": 76.0,
+          "intensity": 0.4,
+          "label": "左后场"
+        },
+        "to": {
+          "id": "r1-to",
+          "x": 72.0,
+          "y": 27.0,
+          "intensity": 0.9,
+          "label": "右后场"
+        },
+        "label": "反手斜线压底",
+        "result": "受迫回球"
+      },
+      {
+        "id": "r2",
+        "from_": {
+          "id": "r2-from",
+          "x": 58.0,
+          "y": 80.0,
+          "intensity": 0.5,
+          "label": "中后场"
+        },
+        "to": {
+          "id": "r2-to",
+          "x": 30.0,
+          "y": 38.0,
+          "intensity": 0.7,
+          "label": "左中场"
+        },
+        "label": "正手变线",
+        "result": "得分"
+      }
+    ],
+    "movementPath": [
+      {
+        "x": 50.0,
+        "y": 83.0
+      },
+      {
+        "x": 38.0,
+        "y": 74.0
+      },
+      {
+        "x": 31.0,
+        "y": 66.0
+      },
+      {
+        "x": 44.0,
+        "y": 58.0
+      },
+      {
+        "x": 63.0,
+        "y": 64.0
+      },
+      {
+        "x": 54.0,
+        "y": 81.0
+      }
+    ],
+    "rallies": [
+      {
+        "id": "ra1",
+        "title": "第 3 回合",
+        "duration": "18.6 秒",
+        "shots": 12,
+        "pattern": "反手斜线压制 → 正手变线",
+        "result": "主动得分",
+        "observation": "连续三拍压向对手反手后，正手变线质量高，是本场最佳进攻回合。"
+      }
+    ]
+  },
+  "dashboardMetrics": [
+    {
+      "id": "overall",
+      "icon": "activity",
+      "label": "综合表现评分",
+      "value": "82",
+      "detail": "深区接发抵消了后段网前失误",
+      "trend": "较上场 +8%",
+      "direction": "up",
+      "progress": 82,
+      "sparkline": [
+        62.0,
+        66.0,
+        70.0,
+        68.0,
+        74.0,
+        82.0
+      ]
+    },
+    {
+      "id": "third",
+      "icon": "waves",
+      "label": "第三拍吊球成功率",
+      "value": "61%",
+      "detail": "右侧受压时吊球仍偏短",
+      "trend": "-3%",
+      "direction": "down",
+      "progress": 61,
+      "sparkline": [
+        66.0,
+        68.0,
+        64.0,
+        65.0,
+        63.0,
+        61.0
+      ]
+    }
+  ],
+  "reportDefinitions": [
+    {
+      "type": "landing",
+      "title": "落点与线路报告",
+      "eyebrow": "落点分析报告",
+      "summary": "接发压向反手深区时优势最明显。",
+      "heroMetric": "72%",
+      "heroMetricLabel": "反手深区回合胜率",
+      "visualization": "heat",
+      "metrics": [
+        {
+          "id": "overall",
+          "icon": "activity",
+          "label": "综合表现评分",
+          "value": "82",
+          "detail": "深区接发抵消了后段网前失误",
+          "trend": "较上场 +8%",
+          "direction": "up",
+          "progress": 82,
+          "sparkline": [
+            62.0,
+            66.0,
+            70.0,
+            68.0,
+            74.0,
+            82.0
+          ]
+        },
+        {
+          "id": "third",
+          "icon": "waves",
+          "label": "第三拍吊球成功率",
+          "value": "61%",
+          "detail": "右侧受压时吊球仍偏短",
+          "trend": "-3%",
+          "direction": "down",
+          "progress": 61,
+          "sparkline": [
+            66.0,
+            68.0,
+            64.0,
+            65.0,
+            63.0,
+            61.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "note-advantage",
+          "tone": "advantage",
+          "title": "接发深度带来主动权",
+          "body": "当接发落在对手反手深区时，你方赢下 72% 的回合。"
+        },
+        {
+          "id": "note-risk",
+          "tone": "risk",
+          "title": "右侧第三拍吊球容易变短",
+          "body": "第三拍吊球总成功率为 61%，但右侧半场下降到 43%。"
+        }
+      ],
+      "trainingLink": "接发压向反手深区"
+    },
+    {
+      "type": "movement",
+      "title": "移动与覆盖平衡报告",
+      "eyebrow": "步法移动报告",
+      "summary": "反手回球后的恢复路径仍有绕行。",
+      "heroMetric": "48 / 52",
+      "heroMetricLabel": "左右覆盖平衡",
+      "visualization": "movement",
+      "metrics": [
+        {
+          "id": "overall",
+          "icon": "activity",
+          "label": "综合表现评分",
+          "value": "82",
+          "detail": "深区接发抵消了后段网前失误",
+          "trend": "较上场 +8%",
+          "direction": "up",
+          "progress": 82,
+          "sparkline": [
+            62.0,
+            66.0,
+            70.0,
+            68.0,
+            74.0,
+            82.0
+          ]
+        },
+        {
+          "id": "third",
+          "icon": "waves",
+          "label": "第三拍吊球成功率",
+          "value": "61%",
+          "detail": "右侧受压时吊球仍偏短",
+          "trend": "-3%",
+          "direction": "down",
+          "progress": 61,
+          "sparkline": [
+            66.0,
+            68.0,
+            64.0,
+            65.0,
+            63.0,
+            61.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "note-advantage",
+          "tone": "advantage",
+          "title": "接发深度带来主动权",
+          "body": "当接发落在对手反手深区时，你方赢下 72% 的回合。"
+        },
+        {
+          "id": "note-risk",
+          "tone": "risk",
+          "title": "右侧第三拍吊球容易变短",
+          "body": "第三拍吊球总成功率为 61%，但右侧半场下降到 43%。"
+        }
+      ],
+      "trainingLink": "过渡区重置"
+    },
+    {
+      "type": "rally",
+      "title": "回合战术报告",
+      "eyebrow": "回合战术报告",
+      "summary": "第三拍和网前相持决定多数回合走向。",
+      "heroMetric": "61%",
+      "heroMetricLabel": "第三拍吊球成功率",
+      "visualization": "rally",
+      "metrics": [
+        {
+          "id": "overall",
+          "icon": "activity",
+          "label": "综合表现评分",
+          "value": "82",
+          "detail": "深区接发抵消了后段网前失误",
+          "trend": "较上场 +8%",
+          "direction": "up",
+          "progress": 82,
+          "sparkline": [
+            62.0,
+            66.0,
+            70.0,
+            68.0,
+            74.0,
+            82.0
+          ]
+        },
+        {
+          "id": "third",
+          "icon": "waves",
+          "label": "第三拍吊球成功率",
+          "value": "61%",
+          "detail": "右侧受压时吊球仍偏短",
+          "trend": "-3%",
+          "direction": "down",
+          "progress": 61,
+          "sparkline": [
+            66.0,
+            68.0,
+            64.0,
+            65.0,
+            63.0,
+            61.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "note-advantage",
+          "tone": "advantage",
+          "title": "接发深度带来主动权",
+          "body": "当接发落在对手反手深区时，你方赢下 72% 的回合。"
+        },
+        {
+          "id": "note-risk",
+          "tone": "risk",
+          "title": "右侧第三拍吊球容易变短",
+          "body": "第三拍吊球总成功率为 61%，但右侧半场下降到 43%。"
+        }
+      ],
+      "trainingLink": "第三拍吊球深度控制"
+    },
+    {
+      "type": "diagnosis",
+      "title": "动作诊断报告",
+      "eyebrow": "动作诊断报告",
+      "summary": "主要问题来自反手准备节奏和长回合后的重心控制。",
+      "heroMetric": "1",
+      "heroMetricLabel": "已识别优先问题",
+      "visualization": "diagnosis",
+      "metrics": [
+        {
+          "id": "overall",
+          "icon": "activity",
+          "label": "综合表现评分",
+          "value": "82",
+          "detail": "深区接发抵消了后段网前失误",
+          "trend": "较上场 +8%",
+          "direction": "up",
+          "progress": 82,
+          "sparkline": [
+            62.0,
+            66.0,
+            70.0,
+            68.0,
+            74.0,
+            82.0
+          ]
+        },
+        {
+          "id": "third",
+          "icon": "waves",
+          "label": "第三拍吊球成功率",
+          "value": "61%",
+          "detail": "右侧受压时吊球仍偏短",
+          "trend": "-3%",
+          "direction": "down",
+          "progress": 61,
+          "sparkline": [
+            66.0,
+            68.0,
+            64.0,
+            65.0,
+            63.0,
+            61.0
+          ]
+        }
+      ],
+      "insights": [
+        {
+          "id": "note-advantage",
+          "tone": "advantage",
+          "title": "接发深度带来主动权",
+          "body": "当接发落在对手反手深区时，你方赢下 72% 的回合。"
+        },
+        {
+          "id": "note-risk",
+          "tone": "risk",
+          "title": "右侧第三拍吊球容易变短",
+          "body": "第三拍吊球总成功率为 61%，但右侧半场下降到 43%。"
+        }
+      ],
+      "trainingLink": "反手轻吊稳定性"
+    }
+  ],
+  "reportActions": [
+    {
+      "type": "landing",
+      "title": "落点分析报告",
+      "description": "查看深区命中、边线风险与热力分布。",
+      "path": "/reports/landing"
+    },
+    {
+      "type": "movement",
+      "title": "步法移动报告",
+      "description": "拆解回位路径、覆盖平衡和启动延迟。",
+      "path": "/reports/movement"
+    },
+    {
+      "type": "rally",
+      "title": "回合战术报告",
+      "description": "追踪发接发、第三拍和网前模式。",
+      "path": "/reports/rally"
+    },
+    {
+      "type": "diagnosis",
+      "title": "动作诊断报告",
+      "description": "把动作问题转成证据和纠正方向。",
+      "path": "/reports/diagnosis"
+    }
+  ],
+  "playerMarkers": [
+    {
+      "id": "a",
+      "label": "A",
+      "team": "near",
+      "x": 28.0,
+      "y": 72.0,
+      "color": "#22C55E"
+    },
+    {
+      "id": "b",
+      "label": "B",
+      "team": "near",
+      "x": 68.0,
+      "y": 76.0,
+      "color": "#D9FF3F"
+    },
+    {
+      "id": "c",
+      "label": "C",
+      "team": "far",
+      "x": 34.0,
+      "y": 23.0,
+      "color": "#2F80ED"
+    },
+    {
+      "id": "d",
+      "label": "D",
+      "team": "far",
+      "x": 75.0,
+      "y": 28.0,
+      "color": "#FF9500"
+    }
+  ],
+  "shotTrajectories": [
+    {
+      "id": "third-drop",
+      "path": "M28 72 C42 48, 52 43, 66 31",
+      "color": "#22C55E",
+      "label": "第三拍吊球"
+    }
+  ],
+  "videoOverlayLabels": [
+    {
+      "id": "drop",
+      "label": "第三拍吊球",
+      "tone": "training",
+      "x": 54.0,
+      "y": 42.0
+    },
+    {
+      "id": "risk",
+      "label": "高风险抽击",
+      "tone": "risk",
+      "x": 39.0,
+      "y": 31.0
+    }
+  ],
+  "timelineMarkers": [
+    {
+      "id": "serve",
+      "time": "00:12",
+      "position": 9.0,
+      "label": "深区发球形成压迫",
+      "tone": "advantage"
+    },
+    {
+      "id": "winner",
+      "time": "08:42",
+      "position": 76.0,
+      "label": "反手深区铺垫制胜分",
+      "tone": "advantage"
+    }
+  ],
+  "highlights": [
+    {
+      "id": "h1",
+      "title": "长回合 #24",
+      "time": "08:42",
+      "result": "得分模式",
+      "tone": "advantage",
+      "description": "反手深区接发后，第六拍获得正手变线窗口。"
+    }
+  ],
+  "coachNotes": [
+    {
+      "id": "note-advantage",
+      "tone": "advantage",
+      "title": "接发深度带来主动权",
+      "body": "当接发落在对手反手深区时，你方赢下 72% 的回合。"
+    },
+    {
+      "id": "note-risk",
+      "tone": "risk",
+      "title": "右侧第三拍吊球容易变短",
+      "body": "第三拍吊球总成功率为 61%，但右侧半场下降到 43%。"
+    }
+  ],
+  "diagnoses": [
+    {
+      "id": "backswing",
+      "issue": "引拍滞后",
+      "severity": "中",
+      "evidence": "反手位来球中，击球前 280ms 肘部展开不足。",
+      "suggestion": "在反手准备阶段提前完成肩髋转向。",
+      "expectedOutcome": "提升反手迎前击球比例。",
+      "priority": "优先级 1"
+    }
+  ],
+  "trainingRecommendations": [],
+  "drillRecommendations": [
+    {
+      "id": "drill-third-shot",
+      "title": "第三拍吊球深度控制",
+      "goal": "右侧半场第三拍吊球落入厨房后 1m 区域。",
+      "duration": "22 分钟",
+      "evidence": "右侧第三拍成功率 43%，低于整体 61%。",
+      "difficulty": "高级",
+      "linkedReport": "rally"
+    }
+  ],
+  "shotRows": [
+    {
+      "id": "s1",
+      "time": "00:12",
+      "type": "发球",
+      "player": "A",
+      "placement": "中路深区",
+      "qualityScore": 88,
+      "qualityBand": "high",
+      "result": "建立优势"
+    }
+  ],
+  "skillRatings": [
+    {
+      "id": "third-shot",
+      "label": "第三拍处理",
+      "score": 61,
+      "note": "稳定但受压时偏浅。"
+    }
+  ],
+  "progressPoints": [
+    {
+      "match": "第1场",
+      "performance": 67,
+      "errors": 23,
+      "thirdShot": 48,
+      "kitchen": 52
+    }
+  ]
+}

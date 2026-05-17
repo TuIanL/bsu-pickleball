@@ -30,6 +30,13 @@ class Settings(BaseModel):
     pose_confidence: float = 0.3
     pose_keypoint_schema: str = "rtmpose26"
     overlay_frame_stride: int = 2
+    enable_multitarget_inference: bool = False
+    ball_confidence: float = 0.25
+    paddle_confidence: float = 0.25
+    ball_min_box_area_ratio: float = 0.000001
+    ball_max_box_area_ratio: float = 0.02
+    ball_max_repair_gap_frames: int = 5
+    ball_max_speed_px_per_frame: float = 180.0
     primary_player_min_confidence: float = 0.65
     primary_player_max_subjects: int = 4
     primary_player_min_box_area_ratio: float = 0.0005
@@ -112,6 +119,14 @@ def get_settings() -> Settings:
         pose_confidence=float(os.getenv("PICKLEBALL_POSE_CONFIDENCE", "0.3")),
         pose_keypoint_schema=os.getenv("PICKLEBALL_POSE_KEYPOINT_SCHEMA", "rtmpose26"),
         overlay_frame_stride=max(1, int(os.getenv("PICKLEBALL_OVERLAY_FRAME_STRIDE", "2"))),
+        enable_multitarget_inference=os.getenv("PICKLEBALL_ENABLE_MULTITARGET_INFERENCE", "false").lower()
+        in {"1", "true", "yes"},
+        ball_confidence=float(os.getenv("PICKLEBALL_BALL_CONFIDENCE", "0.25")),
+        paddle_confidence=float(os.getenv("PICKLEBALL_PADDLE_CONFIDENCE", "0.25")),
+        ball_min_box_area_ratio=float(os.getenv("PICKLEBALL_BALL_MIN_BOX_AREA_RATIO", "0.000001")),
+        ball_max_box_area_ratio=float(os.getenv("PICKLEBALL_BALL_MAX_BOX_AREA_RATIO", "0.02")),
+        ball_max_repair_gap_frames=max(0, int(os.getenv("PICKLEBALL_BALL_MAX_REPAIR_GAP_FRAMES", "5"))),
+        ball_max_speed_px_per_frame=float(os.getenv("PICKLEBALL_BALL_MAX_SPEED_PX_PER_FRAME", "180")),
         primary_player_min_confidence=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MIN_CONFIDENCE", "0.65")),
         primary_player_max_subjects=max(1, int(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MAX_SUBJECTS", "4"))),
         primary_player_min_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MIN_BOX_AREA_RATIO", "0.0005")),

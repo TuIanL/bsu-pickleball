@@ -8,6 +8,7 @@ This FastAPI backend is the MVP algorithm foundation for fixed-camera pickleball
 - FastAPI and Pydantic
 - NumPy, Pandas, OpenCV
 - Ultralytics YOLO for person-box overlays in real uploaded-video jobs
+- Optional multi-target detector boundary for future pickleball ball/paddle models
 - Optional MMPose/RTMPose runtime for skeleton overlays
 - pytest for unit tests
 
@@ -147,6 +148,36 @@ PICKLEBALL_PRIMARY_PLAYER_MAX_SUBJECTS=4
 PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT=12
 ```
 
+Ball tracking is now represented as a separate optional artifact. The default
+runtime keeps multi-target inference disabled because no repository-local
+pickleball ball/paddle checkpoint is bundled. Fixture-backed tests can inject a
+multi-target detector; production detector adapters should emit normalized
+`player`, `ball`, and `paddle` records before the pipeline builds the ball
+overlay artifact.
+
+```bash
+PICKLEBALL_ENABLE_MULTITARGET_INFERENCE=false
+PICKLEBALL_BALL_CONFIDENCE=0.25
+PICKLEBALL_PADDLE_CONFIDENCE=0.25
+PICKLEBALL_BALL_MIN_BOX_AREA_RATIO=0.000001
+PICKLEBALL_BALL_MAX_BOX_AREA_RATIO=0.02
+PICKLEBALL_BALL_MAX_REPAIR_GAP_FRAMES=5
+PICKLEBALL_BALL_MAX_SPEED_PX_PER_FRAME=180
+```
+
+Ball overlay artifacts are exposed at
+`/api/analysis/jobs/{job_id}/artifacts/ball-overlay` when a completed job has
+persisted ball status. Point `source` values mean:
+
+- `observed`: direct detector output.
+- `repaired`: short-gap trajectory repair between plausible surrounding detections.
+- `predicted`: reserved for future predictive points.
+
+Artifact `status` values are source-aware: `available` has a continuous
+trajectory, `partial` has usable points but known gaps, `no_detections` means
+the detector ran without usable ball candidates, and `unavailable`/`skipped`
+means the ball detector path was not configured.
+
 ## API Surface
 
 - `GET /health`
@@ -159,6 +190,9 @@ PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT=12
 - `GET /api/analysis/jobs/{job_id}`
 - `GET /api/analysis/jobs/{job_id}/result`
 - `GET /api/analysis/jobs/{job_id}/report`
+- `GET /api/analysis/jobs/{job_id}/artifacts/tracking-overlay`
+- `GET /api/analysis/jobs/{job_id}/artifacts/pose-overlay`
+- `GET /api/analysis/jobs/{job_id}/artifacts/ball-overlay`
 
 ## Example Requests
 
@@ -229,11 +263,16 @@ curl -X POST http://localhost:8000/api/analysis/jobs \
 ## Algorithm Modules
 
 - `app/vision/courtvision_calibration_engine/`: standard court geometry, homography, manual calibration, overlay boundary
+- `app/vision/detectors/`: lightweight detector adapter boundaries, including normalized multi-target fixtures
 - `app/vision/player_tracking_engine/`: person detector interface, simple tracker, footpoint estimator, player projector
+- `app/vision/tracking/ball_trajectory.py`: image-space ball trajectory continuity and short-gap repair
 - `app/vision/pickleball_performance_engine/`: distance, speed, kitchen dwell, doubles spacing, heatmap metrics
 - `app/services/analysis_pipeline.py`: MVP orchestration and JSON result generation
 
-The MVP intentionally avoids automatic ball detection, hit events, rally segmentation, and tactical semantics. YOLO and tracker integrations can replace the current interfaces later.
+The MVP now has the artifact contract for optional ball tracking, but still
+intentionally avoids hit events, rally segmentation, shot classification, and
+tactical semantics. YOLO and tracker integrations can replace the current
+interfaces later.
 
 ## Storage
 
@@ -253,4 +292,7 @@ cd backend
 pytest
 ```
 
-The core tests cover standard court geometry, homography, footpoint projection, movement metrics, and API smoke behavior. They do not require YOLO weights, CUDA, uploaded sample videos, or OpenCV runtime usage.
+The core tests cover standard court geometry, homography, footpoint projection,
+movement metrics, multi-target schemas, ball trajectory continuity, and API
+smoke behavior. They do not require YOLO weights, CUDA, uploaded sample videos,
+or OpenCV runtime usage.

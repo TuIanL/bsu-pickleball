@@ -1,0 +1,55 @@
+{
+  "job_id": "job-ball-fixture",
+  "video_id": "video-ball-fixture",
+  "status": "partial",
+  "detail": "检测到球候选框，但存在未修复轨迹断点",
+  "source": {
+    "width": 96,
+    "height": 96
+  },
+  "fps": 5,
+  "frame_count": 12,
+  "processed_frame_count": 4,
+  "frame_stride": 1,
+  "detector_status": "available",
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0,
+      "points": [
+        {
+          "frame_index": 0,
+          "timestamp_seconds": 0,
+          "image_point": [20, 20],
+          "confidence": 0.91,
+          "source": "observed",
+          "segment_id": 1,
+          "bbox": [18, 18, 22, 22]
+        }
+      ]
+    },
+    {
+      "frame_index": 10,
+      "timestamp_seconds": 2,
+      "points": [
+        {
+          "frame_index": 10,
+          "timestamp_seconds": 2,
+          "image_point": [74, 54],
+          "confidence": 0.82,
+          "source": "observed",
+          "segment_id": 2,
+          "bbox": [72, 52, 76, 56]
+        }
+      ]
+    }
+  ],
+  "detections": [],
+  "diagnostic_counts": {
+    "raw_ball_detections": 2,
+    "observed_points": 2,
+    "repaired_points": 0,
+    "segments": 2,
+    "unresolved_gaps": 1
+  }
+}

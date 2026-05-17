@@ -1,0 +1,198 @@
+{
+  "job_id": "job-filtered-overlay",
+  "video_id": "video-a423c20895",
+  "status": "available",
+  "detail": "已生成 3 组骨架关节",
+  "keypoint_schema": "rtmpose26",
+  "source": {
+    "width": 96,
+    "height": 96
+  },
+  "skeleton_edges": [
+    {
+      "from_keypoint": "left_ankle",
+      "to_keypoint": "left_knee"
+    },
+    {
+      "from_keypoint": "left_knee",
+      "to_keypoint": "left_hip"
+    },
+    {
+      "from_keypoint": "left_hip",
+      "to_keypoint": "hip"
+    },
+    {
+      "from_keypoint": "right_ankle",
+      "to_keypoint": "right_knee"
+    },
+    {
+      "from_keypoint": "right_knee",
+      "to_keypoint": "right_hip"
+    },
+    {
+      "from_keypoint": "right_hip",
+      "to_keypoint": "hip"
+    },
+    {
+      "from_keypoint": "head",
+      "to_keypoint": "neck"
+    },
+    {
+      "from_keypoint": "neck",
+      "to_keypoint": "hip"
+    },
+    {
+      "from_keypoint": "neck",
+      "to_keypoint": "left_shoulder"
+    },
+    {
+      "from_keypoint": "left_shoulder",
+      "to_keypoint": "left_elbow"
+    },
+    {
+      "from_keypoint": "left_elbow",
+      "to_keypoint": "left_wrist"
+    },
+    {
+      "from_keypoint": "neck",
+      "to_keypoint": "right_shoulder"
+    },
+    {
+      "from_keypoint": "right_shoulder",
+      "to_keypoint": "right_elbow"
+    },
+    {
+      "from_keypoint": "right_elbow",
+      "to_keypoint": "right_wrist"
+    },
+    {
+      "from_keypoint": "left_eye",
+      "to_keypoint": "right_eye"
+    },
+    {
+      "from_keypoint": "nose",
+      "to_keypoint": "left_eye"
+    },
+    {
+      "from_keypoint": "nose",
+      "to_keypoint": "right_eye"
+    },
+    {
+      "from_keypoint": "left_eye",
+      "to_keypoint": "left_ear"
+    },
+    {
+      "from_keypoint": "right_eye",
+      "to_keypoint": "right_ear"
+    },
+    {
+      "from_keypoint": "left_ear",
+      "to_keypoint": "left_shoulder"
+    },
+    {
+      "from_keypoint": "right_ear",
+      "to_keypoint": "right_shoulder"
+    },
+    {
+      "from_keypoint": "left_ankle",
+      "to_keypoint": "left_big_toe"
+    },
+    {
+      "from_keypoint": "left_ankle",
+      "to_keypoint": "left_small_toe"
+    },
+    {
+      "from_keypoint": "left_ankle",
+      "to_keypoint": "left_heel"
+    },
+    {
+      "from_keypoint": "right_ankle",
+      "to_keypoint": "right_big_toe"
+    },
+    {
+      "from_keypoint": "right_ankle",
+      "to_keypoint": "right_small_toe"
+    },
+    {
+      "from_keypoint": "right_ankle",
+      "to_keypoint": "right_heel"
+    }
+  ],
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "subjects": [
+        {
+          "track_id": "1",
+          "bbox": [
+            18.0,
+            16.0,
+            48.0,
+            82.0
+          ],
+          "confidence": 0.9,
+          "keypoints": [
+            {
+              "name": "nose",
+              "x": 32.0,
+              "y": 22.0,
+              "confidence": 0.95,
+              "visible": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 1,
+      "timestamp_seconds": 0.2,
+      "subjects": [
+        {
+          "track_id": "1",
+          "bbox": [
+            18.0,
+            16.0,
+            48.0,
+            82.0
+          ],
+          "confidence": 0.9,
+          "keypoints": [
+            {
+              "name": "nose",
+              "x": 32.0,
+              "y": 22.0,
+              "confidence": 0.95,
+              "visible": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 2,
+      "timestamp_seconds": 0.4,
+      "subjects": [
+        {
+          "track_id": "1",
+          "bbox": [
+            18.0,
+            16.0,
+            48.0,
+            82.0
+          ],
+          "confidence": 0.9,
+          "keypoints": [
+            {
+              "name": "nose",
+              "x": 32.0,
+              "y": 22.0,
+              "confidence": 0.95,
+              "visible": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "job_id": "job-21bf555976",
+  "video_id": "video-ball-artifact",
+  "status": "unavailable",
+  "detail": "ball artifact test",
+  "source": {
+    "width": 96,
+    "height": 96
+  },
+  "fps": 5,
+  "frame_count": 1,
+  "processed_frame_count": 1,
+  "frame_stride": 1,
+  "detector_status": "skipped",
+  "frames": [],
+  "detections": [],
+  "diagnostic_counts": {
+    "raw_ball_detections": 0
+  }
+}

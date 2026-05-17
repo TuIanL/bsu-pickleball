@@ -73,7 +73,7 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
 @router.get("/jobs/{job_id}/artifacts/{artifact_name}")
 def read_analysis_artifact(
     job_id: str,
-    artifact_name: Literal["tracking-overlay", "pose-overlay"],
+    artifact_name: Literal["tracking-overlay", "pose-overlay", "ball-overlay"],
 ) -> JSONResponse:
     """
     读取浏览器可消费的分析 overlay artifact
@@ -82,11 +82,12 @@ def read_analysis_artifact(
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
 
-    path = (
-        _STORAGE.tracking_overlay_json_path(job_id)
-        if artifact_name == "tracking-overlay"
-        else _STORAGE.pose_overlay_json_path(job_id)
-    )
+    if artifact_name == "tracking-overlay":
+        path = _STORAGE.tracking_overlay_json_path(job_id)
+    elif artifact_name == "pose-overlay":
+        path = _STORAGE.pose_overlay_json_path(job_id)
+    else:
+        path = _STORAGE.ball_overlay_json_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Analysis artifact not found")
     return JSONResponse(_STORAGE.read_json(path))
