@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 
 DEFAULT_SPLITS = ("train", "val", "test")
@@ -33,6 +34,10 @@ def validate_coco_segmentation_dataset(
     splits: Sequence[str] | None = None,
     required_splits: Sequence[str] = REQUIRED_SPLITS,
     raise_on_error: bool = True,
+    target_category: str | None = None,
+    target_strategy: str | None = None,
+    evidence_output: str | Path | None = None,
+    preview_samples_per_split: int = 0,
 ) -> dict[str, Any]:
     """Validate a local COCO segmentation dataset for court-line training."""
 
@@ -63,23 +68,60 @@ def validate_coco_segmentation_dataset(
         "missing_images": sum(item["missing_image_count"] for item in split_reports),
     }
     categories = sorted({name for item in split_reports for name in item["categories"]})
+    category_usage = {name: 0 for name in categories}
+    for item in split_reports:
+        for category, count in item["category_usage"].items():
+            category_usage[category] = category_usage.get(category, 0) + int(count)
+    category_usage = dict(sorted(category_usage.items()))
+    annotated_categories = sorted(category for category, count in category_usage.items() if count > 0)
+    unused_categories = sorted(category for category, count in category_usage.items() if count == 0)
     segmentation_types = Counter()
     for item in split_reports:
         segmentation_types.update(item["segmentation_types"])
+    structural_ready = not errors
+    target_readiness = _evaluate_target_readiness(
+        category_usage=category_usage,
+        target_category=target_category,
+        target_strategy=target_strategy,
+    )
+    leakage_report = _detect_split_leakage(split_reports)
+    warnings = list(target_readiness["warnings"])
+    if leakage_report["risk"]:
+        warnings.append(
+            f"{leakage_report['token_count']} likely source token(s) appear in multiple dataset splits"
+        )
 
+    public_splits = [_public_split_report(item) for item in split_reports]
     report = {
         "dataset_root": str(root),
-        "ready": not errors,
+        "ready": structural_ready and target_readiness["ready"] is not False,
+        "structural_ready": structural_ready,
+        "target_ready": target_readiness["ready"],
+        "target_readiness": target_readiness,
         "required_splits": list(required_splits),
         "available_splits": sorted(available_splits),
         "categories": categories,
+        "annotated_categories": annotated_categories,
+        "unused_categories": unused_categories,
+        "category_usage": category_usage,
         "segmentation_types": dict(segmentation_types),
+        "split_leakage": leakage_report,
         "totals": totals,
-        "splits": split_reports,
+        "splits": public_splits,
         "errors": errors,
+        "target_errors": target_readiness["errors"],
+        "warnings": warnings,
     }
 
-    if errors and raise_on_error:
+    if evidence_output is not None:
+        report["acceptance"] = _write_acceptance_evidence(
+            root=root,
+            report=report,
+            output_root=Path(evidence_output).expanduser(),
+            preview_samples_per_split=preview_samples_per_split,
+        )
+
+    if not report["ready"] and raise_on_error:
         raise COCODatasetValidationError("COCO segmentation dataset is not ready", report=report)
 
     return report
@@ -169,6 +211,212 @@ def prepare_yolo_segmentation_dataset(
     }
 
 
+def _evaluate_target_readiness(
+    category_usage: dict[str, int],
+    target_category: str | None,
+    target_strategy: str | None,
+) -> dict[str, Any]:
+    strategy = (target_strategy or ("category" if target_category else "unspecified")).strip().lower()
+    errors: list[str] = []
+    warnings: list[str] = []
+    annotated_categories = sorted(category for category, count in category_usage.items() if count > 0)
+    unused_categories = sorted(category for category, count in category_usage.items() if count == 0)
+
+    if strategy in {"merge", "one-class", "one_class", "all"}:
+        if not annotated_categories:
+            errors.append("target strategy merges all categories, but no annotated categories are present")
+        elif unused_categories:
+            warnings.append(
+                "target strategy merges annotated categories; unused categories are ignored: "
+                + ", ".join(unused_categories)
+            )
+        return {
+            "ready": not errors,
+            "strategy": "merge",
+            "target_category": target_category,
+            "annotated_categories": annotated_categories,
+            "unused_categories": unused_categories,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    if strategy not in {"unspecified", "category"}:
+        errors.append(f"unsupported target strategy: {target_strategy}")
+
+    if strategy == "unspecified":
+        warnings.append("target category or strategy is not specified; target readiness is pending")
+        return {
+            "ready": None,
+            "strategy": "unspecified",
+            "target_category": None,
+            "annotated_categories": annotated_categories,
+            "unused_categories": unused_categories,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    if not target_category:
+        errors.append("target strategy 'category' requires a target category")
+    elif target_category not in category_usage:
+        errors.append(f"target category '{target_category}' is not present in COCO categories")
+    elif category_usage[target_category] == 0:
+        errors.append(f"target category '{target_category}' has zero annotations")
+    elif any(category != target_category for category in annotated_categories):
+        errors.append(
+            f"annotations are present outside target category '{target_category}': "
+            + ", ".join(category for category in annotated_categories if category != target_category)
+        )
+
+    if target_category and target_category in unused_categories:
+        warnings.append(f"target category '{target_category}' is listed but unused")
+    if unused_categories:
+        warnings.append("unused categories: " + ", ".join(unused_categories))
+
+    return {
+        "ready": not errors,
+        "strategy": "category",
+        "target_category": target_category,
+        "annotated_categories": annotated_categories,
+        "unused_categories": unused_categories,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def _detect_split_leakage(split_reports: Sequence[dict[str, Any]], max_examples: int = 20) -> dict[str, Any]:
+    splits_by_token: dict[str, dict[str, list[str]]] = defaultdict(dict)
+    for split_report in split_reports:
+        split = str(split_report["split"])
+        for token, examples in split_report.get("_source_tokens", {}).items():
+            splits_by_token[token][split] = examples
+
+    risky_tokens = {
+        token: split_examples
+        for token, split_examples in splits_by_token.items()
+        if len(split_examples) > 1
+    }
+    examples = [
+        {
+            "source_token": token,
+            "splits": sorted(split_examples),
+            "examples": {
+                split: values[:2]
+                for split, values in sorted(split_examples.items())
+            },
+        }
+        for token, split_examples in sorted(risky_tokens.items())
+    ][:max_examples]
+
+    return {
+        "risk": bool(risky_tokens),
+        "token_count": len(risky_tokens),
+        "examples": examples,
+    }
+
+
+def _write_acceptance_evidence(
+    root: Path,
+    report: dict[str, Any],
+    output_root: Path,
+    preview_samples_per_split: int,
+) -> dict[str, Any]:
+    output_root.mkdir(parents=True, exist_ok=True)
+    summary_path = output_root / "summary.json"
+    preview_dir = output_root / "previews"
+    previews: list[dict[str, str]] = []
+
+    if preview_samples_per_split > 0:
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        previews = _write_annotation_previews(
+            root=root,
+            split_reports=report["splits"],
+            output_root=preview_dir,
+            samples_per_split=preview_samples_per_split,
+        )
+
+    acceptance = {
+        "summary_path": str(summary_path),
+        "preview_dir": str(preview_dir) if previews else None,
+        "previews": previews,
+    }
+    summary_payload = dict(report)
+    summary_payload["acceptance"] = acceptance
+    summary_path.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return acceptance
+
+
+def _write_annotation_previews(
+    root: Path,
+    split_reports: Sequence[dict[str, Any]],
+    output_root: Path,
+    samples_per_split: int,
+) -> list[dict[str, str]]:
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+    except ImportError:
+        return []
+
+    previews: list[dict[str, str]] = []
+    for split_report in split_reports:
+        split = str(split_report["split"])
+        annotation_path = Path(str(split_report["annotation_path"]))
+        payload = _read_json(annotation_path)
+        images = [image for image in payload.get("images", []) if isinstance(image, dict)]
+        annotations_by_image: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for annotation in payload.get("annotations", []):
+            if isinstance(annotation, dict) and annotation.get("image_id") is not None:
+                annotations_by_image[int(annotation["image_id"])].append(annotation)
+
+        written = 0
+        for image in images:
+            if written >= samples_per_split:
+                break
+            image_id = image.get("id")
+            if image_id is None:
+                continue
+            source_path = _resolve_image_path(root, split, str(image.get("file_name", "")))
+            if source_path is None:
+                continue
+            frame = cv2.imread(str(source_path))
+            if frame is None:
+                continue
+            overlay = frame.copy()
+            for annotation in annotations_by_image.get(int(image_id), []):
+                _draw_annotation(overlay, annotation, cv2=cv2, np=np)
+            output = cv2.addWeighted(overlay, 0.55, frame, 0.45, 0)
+            output_path = output_root / f"{split}-{written + 1:02d}-{Path(str(image.get('file_name'))).stem}.jpg"
+            if cv2.imwrite(str(output_path), output):
+                previews.append(
+                    {
+                        "split": split,
+                        "image_id": str(image_id),
+                        "source": str(source_path),
+                        "preview": str(output_path),
+                    }
+                )
+                written += 1
+    return previews
+
+
+def _draw_annotation(frame: Any, annotation: dict[str, Any], cv2: Any, np: Any) -> None:
+    segmentation = annotation.get("segmentation")
+    color = (30, 220, 255)
+    if not isinstance(segmentation, list):
+        return
+    for polygon in segmentation:
+        values = _coerce_numeric_list(polygon)
+        if values is None or len(values) < 6 or len(values) % 2 != 0:
+            continue
+        points = np.asarray(values, dtype=np.float32).reshape((-1, 2)).round().astype(np.int32)
+        cv2.fillPoly(frame, [points], color)
+        cv2.polylines(frame, [points], isClosed=True, color=(20, 120, 255), thickness=2)
+
+
+def _public_split_report(split_report: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in split_report.items() if not key.startswith("_")}
+
+
 def _find_annotation_path(root: Path, split: str) -> Path | None:
     candidates = []
     for alias in _split_aliases(split):
@@ -230,6 +478,12 @@ def _validate_split(root: Path, split: str, annotation_path: Path) -> dict[str, 
 
     segmentation_types: Counter[str] = Counter()
     annotations_by_category: Counter[str] = Counter()
+    source_tokens: dict[str, list[str]] = defaultdict(list)
+    for image in images_by_id.values():
+        file_name = str(image.get("file_name", ""))
+        token = _source_token_for_image(file_name)
+        if token and len(source_tokens[token]) < 3:
+            source_tokens[token].append(file_name)
     for annotation in annotations_payload:
         if not isinstance(annotation, dict):
             errors.append("annotation entry must be an object")
@@ -258,11 +512,16 @@ def _validate_split(root: Path, split: str, annotation_path: Path) -> dict[str, 
         "annotation_count": len(annotations_payload),
         "category_count": len(categories),
         "categories": sorted(categories.values()),
+        "category_usage": {name: annotations_by_category.get(name, 0) for name in sorted(categories.values())},
+        "unused_categories": [
+            name for name in sorted(categories.values()) if annotations_by_category.get(name, 0) == 0
+        ],
         "annotations_by_category": dict(annotations_by_category),
         "segmentation_types": dict(segmentation_types),
         "missing_image_count": len(missing_files),
         "missing_images": missing_files[:20],
         "errors": errors,
+        "_source_tokens": dict(source_tokens),
     }
 
 
@@ -307,6 +566,16 @@ def _coerce_numeric_list(values: Any) -> list[float] | None:
         return [float(value) for value in values]
     except (TypeError, ValueError):
         return None
+
+
+def _source_token_for_image(file_name: str) -> str:
+    stem = Path(file_name).stem.lower()
+    stem = re.sub(r"\.rf\.[0-9a-f]{8,}$", "", stem)
+    stem = re.sub(r"_jpg$", "", stem)
+    stem = re.sub(r"[-_](jpg|jpeg|png)$", "", stem)
+    stem = re.sub(r"[-_](?:copy|aug|flip|rotate|rot|scale|crop|blur|bright|dark)\d*$", "", stem)
+    stem = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
+    return stem or Path(file_name).stem.lower()
 
 
 def _resolve_image_path(root: Path, split: str, file_name: str) -> Path | None:

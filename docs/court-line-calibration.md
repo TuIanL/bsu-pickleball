@@ -32,13 +32,70 @@ ignored by Git.
 
 ```bash
 cd backend
-python scripts/validate_coco_segmentation.py \
+python3 scripts/validate_coco_segmentation.py \
   --dataset-root ../datasets/court-line-coco
 ```
 
 The validator checks image references, category IDs, polygon/RLE segmentation
-records, missing files, and train/validation/test readiness. Use it before
-training so broken annotation paths are caught early.
+records, missing files, category usage, unused categories, split leakage risk,
+and train/validation/test readiness. Use it before training so broken annotation
+paths and ambiguous target labels are caught early.
+
+The report separates two readiness layers:
+
+- `structural_ready`: the COCO files, images, annotations, and required splits
+  are readable.
+- `target_ready`: the observed annotations match the declared model target.
+
+For a strict category target:
+
+```bash
+cd backend
+python3 scripts/validate_coco_segmentation.py \
+  --dataset-root ../datasets/court-line-coco \
+  --target-category Court-Line
+```
+
+For one-class MVP training that intentionally merges all annotated categories
+into a single mask:
+
+```bash
+cd backend
+python3 scripts/validate_coco_segmentation.py \
+  --dataset-root ../datasets/court-line-coco \
+  --target-strategy merge
+```
+
+If a category such as `Court-Line` exists in the COCO category list but has zero
+annotations, the report marks that category as unused instead of silently
+treating it as the training target. This is important when deciding whether the
+first model should learn court lines, the whole court region, or a merged
+single-class mask.
+
+### Dataset Acceptance Evidence
+
+Write project-review evidence to an ignored local folder:
+
+```bash
+cd backend
+python3 scripts/validate_coco_segmentation.py \
+  --dataset-root ../datasets/court-line-coco \
+  --target-strategy merge \
+  --evidence-output ../datasets/court-line-coco/acceptance \
+  --preview-samples-per-split 3
+```
+
+The evidence folder contains:
+
+- `summary.json`: structural readiness, target readiness, split/category
+  statistics, unused categories, warnings, and split-leakage examples.
+- `previews/`: representative annotation overlays for train, validation, and
+  test samples when OpenCV can read the source images.
+
+Split leakage warnings are diagnostic, not automatic failures. They usually mean
+that normalized image names or source metadata suggest related frames appear in
+multiple splits. Review those examples before treating validation or test
+metrics as final acceptance numbers.
 
 ## Prepare and Train
 
@@ -46,7 +103,7 @@ For a dry run that validates the dataset and writes a YOLO segmentation dataset:
 
 ```bash
 cd backend
-python scripts/train_court_line_segmentation.py \
+python3 scripts/train_court_line_segmentation.py \
   --dataset-root ../datasets/court-line-coco \
   --converted-output ../datasets/court-line-yolo \
   --prepare-only
@@ -56,7 +113,7 @@ To train with Ultralytics:
 
 ```bash
 cd backend
-python scripts/train_court_line_segmentation.py \
+python3 scripts/train_court_line_segmentation.py \
   --dataset-root ../datasets/court-line-coco \
   --converted-output ../datasets/court-line-yolo \
   --model yolo11n-seg.pt \
