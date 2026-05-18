@@ -9,7 +9,7 @@ from app.schemas.metrics import PerformanceMetrics
 from app.schemas.tracking import ProjectedTrackPoint
 
 
-PipelineStageStatus = Literal["pending", "done", "failed", "skipped"]
+PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped"]
 
 
 class PipelineStageResult(BaseModel):

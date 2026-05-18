@@ -5,7 +5,7 @@ from app.schemas.analysis import AnalysisJobCreate
 from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
 from app.schemas.tracking import Detection
 from app.services.analysis_pipeline import AnalysisPipeline
-from app.services.mock_analysis import JOBS, REPORTS, RESULTS, create_analysis_job
+from app.services.mock_analysis import JOBS, REPORTS, RESULTS, create_analysis_job, get_mock_job, run_analysis_job
 from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
@@ -207,6 +207,105 @@ def test_pipeline_backed_job_lifecycle_and_raw_result():
     assert client.get(f"/api/analysis/jobs/{job.id}").json()["id"] == job.id
     assert client.get(f"/api/analysis/jobs/{job.id}/report").json()["jobId"] == job.id
     assert client.get(f"/api/analysis/jobs/{job.id}/result").json()["job_id"] == job.id
+
+
+def test_pipeline_job_persists_intermediate_stage_progress():
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("limited-progress.mp4", b"not-a-real-video", "video/mp4")},
+    )
+    video_id = upload_response.json()["video"]["id"]
+    deferred = DeferredTasks()
+    payload = AnalysisJobCreate(
+        videoId=video_id,
+        metadata={
+            "fileName": "limited-progress.mp4",
+            "fileSize": 16,
+            "matchTitle": "Progress Test",
+            "venue": "Test Court",
+            "matchDate": "2026-05-07",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Player A",
+            "level": "MVP",
+        },
+        frameStride=5,
+    )
+
+    job = create_analysis_job(payload, background_tasks=deferred)
+    deferred.run_all()
+    completed = get_mock_job(job.id)
+
+    assert completed is not None
+    assert completed.status == "completed"
+    assert completed.progress == 100
+    stage_ids = [stage.id for stage in completed.stages]
+    assert "frame-sampling" in stage_ids
+    assert len(stage_ids) == len(set(stage_ids))
+    assert all(stage.status != "active" for stage in completed.stages)
+
+
+def test_pipeline_job_records_failed_stage(monkeypatch):
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("failed-progress.mp4", b"not-a-real-video", "video/mp4")},
+    )
+    video_id = upload_response.json()["video"]["id"]
+    payload = AnalysisJobCreate(
+        videoId=video_id,
+        metadata={
+            "fileName": "failed-progress.mp4",
+            "fileSize": 16,
+            "matchTitle": "Failed Progress Test",
+            "venue": "Test Court",
+            "matchDate": "2026-05-07",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Player A",
+            "level": "MVP",
+        },
+        frameStride=5,
+    )
+    job = create_analysis_job(payload, background_tasks=DeferredTasks())
+
+    class FailingPipeline:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, job_id, video_id, calibration_id=None, frame_stride=None, progress_callback=None):
+            from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
+            from datetime import datetime, timezone
+
+            failed_stage = PipelineStageResult(
+                id="video-read",
+                label="读取视频",
+                status="failed",
+                detail="Could not read uploaded video",
+            )
+            if progress_callback:
+                progress_callback(failed_stage)
+            return AnalysisPipelineResult(
+                job_id=job_id,
+                video_id=video_id,
+                calibration_id=calibration_id,
+                status="failed",
+                generated_at=datetime.now(timezone.utc),
+                stages=[failed_stage],
+                tracks=[],
+                metrics=AnalysisPipeline(detector=EmptyPersonDetector())._compute_metrics([]),
+                artifacts=AnalysisArtifacts(),
+                message="Could not read uploaded video",
+            )
+
+    monkeypatch.setattr("app.services.mock_analysis.AnalysisPipeline", FailingPipeline)
+    run_analysis_job(job.id, payload, "PV-FAILED")
+    failed = get_mock_job(job.id)
+
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.stage == "video-read"
+    assert failed.errorMessage == "Could not read uploaded video"
+    assert any(stage.id == "video-read" and stage.status == "failed" for stage in failed.stages)
 
 
 def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):

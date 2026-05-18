@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
-from typing import Any
+from typing import Any, Callable
 
 from app.schemas.ball import BallDetectionFrame, BallOverlayArtifact
 from app.schemas.calibration import CourtPoint2D, ImagePoint
@@ -43,6 +43,7 @@ from app.vision.tracking.ball_trajectory import BallTrajectoryBuilder
 
 
 logger = logging.getLogger(__name__)
+ProgressCallback = Callable[[PipelineStageResult], None]
 
 
 @dataclass
@@ -130,6 +131,7 @@ class AnalysisPipeline:
         video_id: str | None,
         calibration_id: str | None = None,
         frame_stride: int | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> AnalysisPipelineResult:
         stages: list[PipelineStageResult] = []
         video = self.video_service.get_video(video_id) if video_id else None
@@ -139,17 +141,19 @@ class AnalysisPipeline:
             self._write_result(result)
             return result
 
-        stages.append(self._stage("video-read", "读取视频", "done", "视频元数据已加载" if video else "未提供视频，使用 MVP mock 轨迹"))
+        video_stage = self._stage("video-read", "读取视频", "done", "视频元数据已加载" if video else "未提供视频，使用 MVP mock 轨迹")
+        stages.append(video_stage)
+        self._notify_progress(progress_callback, video_stage)
 
         calibration = self.calibration_service.get_calibration(calibration_id) if calibration_id else None
-        stages.append(
-            self._stage(
-                "calibration",
-                "场地标定",
-                "done" if calibration else "skipped",
-                "已加载手工标定" if calibration else "未提供标定，使用标准场地 mock 轨迹",
-            )
+        calibration_stage = self._stage(
+            "calibration",
+            "场地标定",
+            "done" if calibration else "skipped",
+            "已加载手工标定" if calibration else "未提供标定，使用标准场地 mock 轨迹",
         )
+        stages.append(calibration_stage)
+        self._notify_progress(progress_callback, calibration_stage)
 
         source_video_url = f"/api/videos/{video_id}/stream" if video_id else None
         tracking_artifact_path: str | None = None
@@ -167,6 +171,10 @@ class AnalysisPipeline:
         ball_overlay_detail: str | None = None
         if video and calibration:
             try:
+                self._notify_progress(
+                    progress_callback,
+                    self._stage("frame-sampling", "抽帧采样", "active", "正在读取视频帧并按配置抽样"),
+                )
                 run_output = self._run_tracking(
                     job_id=job_id,
                     video=video,
@@ -176,11 +184,21 @@ class AnalysisPipeline:
                     frame_stride=frame_stride or self.frame_stride,
                 )
             except Exception as exc:
-                stages.append(self._stage("tracking", "多目标跟踪", "failed", str(exc)))
+                failed_stage = self._stage("tracking", "多目标跟踪", "failed", str(exc))
+                stages.append(failed_stage)
+                self._notify_progress(progress_callback, failed_stage)
                 result = self._failed(job_id, video_id, calibration_id, str(exc), stages=stages)
                 self._write_result(result)
                 return result
             tracking_result = run_output.tracking
+            sampling_stage = self._stage(
+                "frame-sampling",
+                "抽帧采样",
+                "done",
+                f"已按配置帧间隔读取 {tracking_result.processed_frame_count} 帧",
+            )
+            stages.append(sampling_stage)
+            self._notify_progress(progress_callback, sampling_stage)
 
             tracking_path = self.storage.tracking_json_path(job_id)
             self.storage.write_json(tracking_path, tracking_result.model_dump(mode="json"))
@@ -220,27 +238,27 @@ class AnalysisPipeline:
                 ball_overlay_status = "unavailable"
                 ball_overlay_detail = run_output.ball_stage.detail
 
-            stages.append(
-                self._stage(
-                    "detection",
-                    "人体检测",
-                    "done" if self.model_inference_enabled else "skipped",
-                    self._detection_stage_detail(tracking_result, enabled=self.model_inference_enabled),
-                )
+            detection_stage = self._stage(
+                "detection",
+                "人体检测",
+                "done" if self.model_inference_enabled else "skipped",
+                self._detection_stage_detail(tracking_result, enabled=self.model_inference_enabled),
             )
-            stages.append(
-                self._stage(
-                    "tracking",
-                    "多目标跟踪",
-                    "done" if self.model_inference_enabled else "skipped",
-                    (
-                        f"已输出 {len(tracking_result.tracks)} 个当前轨迹样本"
-                        if self.model_inference_enabled
-                        else "YOLO 人体检测未运行，未生成可跟踪人体框"
-                    ),
-                )
+            stages.append(detection_stage)
+            self._notify_progress(progress_callback, detection_stage)
+            tracking_stage = self._stage(
+                "tracking",
+                "多目标跟踪",
+                "done" if self.model_inference_enabled else "skipped",
+                (
+                    f"已输出 {len(tracking_result.tracks)} 个当前轨迹样本"
+                    if self.model_inference_enabled
+                    else "YOLO 人体检测未运行，未生成可跟踪人体框"
+                ),
             )
-            stages.append(
+            stages.append(tracking_stage)
+            self._notify_progress(progress_callback, tracking_stage)
+            pose_stage = (
                 run_output.pose_stage
                 or self._stage(
                     "pose",
@@ -249,7 +267,9 @@ class AnalysisPipeline:
                     "RTMPose 姿态识别未启用，暂不生成骨架关节",
                 )
             )
-            stages.append(
+            stages.append(pose_stage)
+            self._notify_progress(progress_callback, pose_stage)
+            ball_stage = (
                 run_output.ball_stage
                 or self._stage(
                     "ball-tracking",
@@ -258,36 +278,56 @@ class AnalysisPipeline:
                     "多目标球检测未启用，暂不生成球轨迹",
                 )
             )
-            stages.append(
-                self._stage(
-                    "projection",
-                    "脚点投影",
-                    "done",
-                    self._projection_stage_detail(tracking_result.positions),
-                )
+            stages.append(ball_stage)
+            self._notify_progress(progress_callback, ball_stage)
+            projection_stage = self._stage(
+                "projection",
+                "脚点投影",
+                "done",
+                self._projection_stage_detail(tracking_result.positions),
             )
+            stages.append(projection_stage)
+            self._notify_progress(progress_callback, projection_stage)
             tracks = self._positions_to_projected_tracks(tracking_result.positions)
             message = "Pipeline completed with Player Tracking Engine output."
         elif video and not calibration:
-            stages.append(self._stage("detection", "人体检测", "skipped", "缺少场地标定，暂不运行真实检测"))
-            stages.append(self._stage("tracking", "多目标跟踪", "skipped", "需要有效标定后才能生成可用场地轨迹"))
-            stages.append(self._stage("pose", "人体姿态", "skipped", "需要检测和跟踪框后才能运行 RTMPose"))
-            stages.append(self._stage("ball-tracking", "球轨迹", "skipped", "需要有效标定和多目标检测配置后才能生成球轨迹"))
-            stages.append(self._stage("projection", "脚点投影", "skipped", "未提供标定，无法投影到标准球场坐标"))
+            limited_stages = [
+                self._stage("frame-sampling", "抽帧采样", "skipped", "未提供标定，跳过真实抽帧分析"),
+                self._stage("detection", "人体检测", "skipped", "缺少场地标定，暂不运行真实检测"),
+                self._stage("tracking", "多目标跟踪", "skipped", "需要有效标定后才能生成可用场地轨迹"),
+                self._stage("pose", "人体姿态", "skipped", "需要检测和跟踪框后才能运行 RTMPose"),
+                self._stage("ball-tracking", "球轨迹", "skipped", "需要有效标定和多目标检测配置后才能生成球轨迹"),
+                self._stage("projection", "脚点投影", "skipped", "未提供标定，无法投影到标准球场坐标"),
+            ]
+            for stage in limited_stages:
+                stages.append(stage)
+                self._notify_progress(progress_callback, stage)
             tracks = []
             message = "Limited pipeline completed without court calibration; no court-projected tracks were generated."
         else:
-            stages.append(self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"))
-            stages.append(self._stage("tracking", "多目标跟踪", "done", "已生成 MVP 轨迹样本"))
-            stages.append(self._stage("pose", "人体姿态", "skipped", "未提供真实视频，跳过骨架关节识别"))
-            stages.append(self._stage("ball-tracking", "球轨迹", "skipped", "未提供真实视频，跳过球检测和球轨迹"))
+            mock_stages = [
+                self._stage("frame-sampling", "抽帧采样", "skipped", "未提供真实视频，跳过抽帧"),
+                self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"),
+                self._stage("tracking", "多目标跟踪", "done", "已生成 MVP 轨迹样本"),
+                self._stage("pose", "人体姿态", "skipped", "未提供真实视频，跳过骨架关节识别"),
+                self._stage("ball-tracking", "球轨迹", "skipped", "未提供真实视频，跳过球检测和球轨迹"),
+            ]
+            for stage in mock_stages:
+                stages.append(stage)
+                self._notify_progress(progress_callback, stage)
             tracks = self._mock_projected_tracks()
-            stages.append(self._stage("projection", "脚点投影", "done", "轨迹已位于标准球场坐标系"))
+            projection_stage = self._stage("projection", "脚点投影", "done", "轨迹已位于标准球场坐标系")
+            stages.append(projection_stage)
+            self._notify_progress(progress_callback, projection_stage)
             message = "MVP pipeline completed with deterministic model-free tracking output."
 
         metrics = self._compute_metrics(tracks)
-        stages.append(self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图"))
-        stages.append(self._stage("visualization", "可视化视频", "skipped", "MVP 暂不生成叠加视频文件"))
+        metrics_stage = self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图")
+        stages.append(metrics_stage)
+        self._notify_progress(progress_callback, metrics_stage)
+        visualization_stage = self._stage("visualization", "可视化视频", "skipped", "MVP 暂不生成叠加视频文件")
+        stages.append(visualization_stage)
+        self._notify_progress(progress_callback, visualization_stage)
 
         result = AnalysisPipelineResult(
             job_id=job_id,
@@ -815,6 +855,11 @@ class AnalysisPipeline:
     @staticmethod
     def _stage(stage_id: str, label: str, status: str, detail: str) -> PipelineStageResult:
         return PipelineStageResult(id=stage_id, label=label, status=status, detail=detail)
+
+    @staticmethod
+    def _notify_progress(progress_callback: ProgressCallback | None, stage: PipelineStageResult) -> None:
+        if progress_callback is not None:
+            progress_callback(stage)
 
     @staticmethod
     def _mock_projected_tracks() -> list[ProjectedTrackPoint]:

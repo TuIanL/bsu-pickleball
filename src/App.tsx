@@ -57,6 +57,7 @@ import type {
   TrackingOverlayArtifact,
 } from "./types/report";
 import {
+  type AnalysisApiError,
   acceptAutomaticCalibration,
   createAnalysisJob,
   createManualCalibration,
@@ -69,12 +70,18 @@ import {
   getRecentAnalysisJob,
   getTrackingOverlay,
   getVideoStreamUrl,
+  isAnalysisApiError,
   RECENT_ANALYSIS_JOB_EVENT,
   rememberAnalysisJob,
   requestAutomaticCalibration,
   resolveAnalysisAssetUrl,
   uploadVideo,
 } from "./services/analysisClient";
+import {
+  type DiagnosticNotice,
+  automaticCalibrationNotice,
+  errorToNotice as buildErrorNotice,
+} from "./services/analysisDiagnostics";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
 
 // 定义路由状态类型，用于管理应用内的页面导航
@@ -117,6 +124,10 @@ const toneStyles: Record<InsightTone, { dot: string; text: string; border: strin
     bg: "bg-[#2F80ED]/12",
   },
 };
+
+function errorToNotice(title: string, fallbackBody: string, error: unknown): DiagnosticNotice {
+  return buildErrorNotice(title, fallbackBody, error, isAnalysisApiError);
+}
 
 function parsePath(pathname: string): RouteState {
   if (pathname === "/analysis/new" || pathname === "/upload") {
@@ -383,6 +394,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null);
   const [automaticCalibration, setAutomaticCalibration] = useState<AutomaticCalibrationResponse | null>(null);
   const [automaticCalibrationStatus, setAutomaticCalibrationStatus] = useState<"idle" | "uploading" | "detecting" | "ready" | "unavailable" | "rejected" | "error">("idle");
+  const [automaticCalibrationError, setAutomaticCalibrationError] = useState<AnalysisApiError | null>(null);
   const [submitStep, setSubmitStep] = useState<"idle" | "uploading" | "calibrating" | "creating">("idle");
   const [metadata, setMetadata] = useState({
     matchTitle: "匹克球训练对局",
@@ -394,7 +406,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     level: "大众进阶",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DiagnosticNotice | null>(null);
 
   const canSubmit = Boolean(
     selectedFile &&
@@ -521,7 +533,10 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
       return;
     }
     if (!calibrationFrameReady) {
-      setError("标定帧还没有加载完成，请等画面出现后再点选四角。");
+      setError({
+        title: "标定画面未就绪",
+        body: "标定帧还没有加载完成，请等画面出现后再点选四角。",
+      });
       return;
     }
 
@@ -560,6 +575,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const resetCalibration = () => {
     setCalibrationPoints([]);
     setAutomaticCalibration(null);
+    setAutomaticCalibrationError(null);
     setAutomaticCalibrationStatus("idle");
     setError(null);
   };
@@ -615,6 +631,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
     setError(null);
     setAutomaticCalibration(null);
+    setAutomaticCalibrationError(null);
     try {
       setAutomaticCalibrationStatus(uploadedVideoId ? "detecting" : "uploading");
       const videoId = await ensureUploadedVideo();
@@ -629,15 +646,19 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
       } else {
         setAutomaticCalibrationStatus("unavailable");
       }
-    } catch {
+    } catch (error) {
       setAutomaticCalibrationStatus("error");
-      setError("自动识别边线失败。可以继续手动点选四个角点。");
+      setAutomaticCalibrationError(isAnalysisApiError(error) ? error : null);
+      setError(errorToNotice("自动识别边线失败", "可以继续手动点选四个角点，已保留当前视频和比赛信息。", error));
     }
   };
 
   const handleSubmit = async () => {
     if (!selectedFile || !canSubmit) {
-      setError("请选择视频、点选四个场地角点并补全比赛信息。");
+      setError({
+        title: "分析信息不完整",
+        body: "请选择视频、点选四个场地角点并补全比赛信息。",
+      });
       return;
     }
 
@@ -673,8 +694,14 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
       });
       rememberAnalysisJob(job);
       onNavigate(`/analysis/${job.id}`);
-    } catch {
-      setError("真实上传或分析任务创建失败。请确认后端已启动、视频格式受支持，并重新检查四角标定。");
+    } catch (error) {
+      setError(
+        errorToNotice(
+          "真实上传或分析任务创建失败",
+          "请确认后端已启动、视频格式受支持，并重新检查四角标定。",
+          error
+        )
+      );
     } finally {
       setIsSubmitting(false);
       setSubmitStep("idle");
@@ -688,6 +715,11 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     calibrating: "提交标定中...",
     creating: "创建任务中...",
   }[submitStep];
+  const automaticCalibrationDiagnostic = automaticCalibrationNotice(
+    automaticCalibration,
+    automaticCalibrationStatus,
+    automaticCalibrationError
+  );
 
   return (
     <PageFrame>
@@ -737,6 +769,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   setCalibrationFramePreviewUrl(null);
                   setUploadedVideoId(null);
                   setAutomaticCalibration(null);
+                  setAutomaticCalibrationError(null);
                   setAutomaticCalibrationStatus("idle");
                   setError(null);
                 }}
@@ -791,18 +824,11 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                         : "自动识别"}
                   </button>
                 </div>
-                {automaticCalibrationStatus !== "idle" ? (
-                  <p className="text-xs font-semibold text-slate-600">
-                    {automaticCalibrationStatus === "ready"
-                      ? `已填入自动角点${automaticCalibration?.confidence ? ` · 置信度 ${(automaticCalibration.confidence * 100).toFixed(0)}%` : ""}`
-                      : automaticCalibrationStatus === "unavailable"
-                        ? "自动模型暂不可用，请继续手动点选四角。"
-                        : automaticCalibrationStatus === "rejected"
-                          ? "检测结果未通过几何校验，请手动点选或换一帧。"
-                          : automaticCalibrationStatus === "error"
-                            ? "自动识别失败，请手动点选四角。"
-                            : "正在准备自动标定建议。"}
-                  </p>
+                {automaticCalibrationDiagnostic ? (
+                  <DiagnosticNoticeCard
+                    notice={automaticCalibrationDiagnostic}
+                    tone={automaticCalibrationStatus === "ready" || automaticCalibrationStatus === "detecting" || automaticCalibrationStatus === "uploading" ? "info" : "error"}
+                  />
                 ) : null}
                 {automaticPreviewUrl ? (
                   <img
@@ -981,9 +1007,9 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </div>
 
           {error ? (
-            <p className="mt-4 rounded-2xl border border-[#FF4D4F]/30 bg-[#FF4D4F]/10 p-3 text-sm font-semibold text-[#C92A2A]">
-              {error}
-            </p>
+            <div className="mt-4">
+              <DiagnosticNoticeCard notice={error} />
+            </div>
           ) : null}
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -1010,27 +1036,64 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
+function DiagnosticNoticeCard({ notice, tone = "error" }: { notice: DiagnosticNotice; tone?: "error" | "info" }) {
+  const visibleDetails = (notice.detailItems ?? []).filter(
+    (item): item is [string, string | number] => item[1] !== undefined && item[1] !== null && `${item[1]}`.trim() !== ""
+  );
+  const toneClass =
+    tone === "error"
+      ? "border-[#FF4D4F]/30 bg-[#FF4D4F]/10 text-[#C92A2A]"
+      : "border-[#2F80ED]/25 bg-[#2F80ED]/10 text-[#1E63B6]";
+
+  return (
+    <div className={`rounded-2xl border p-3 text-sm ${toneClass}`}>
+      <strong className="font-black">{notice.title}</strong>
+      <p className="mt-1 font-semibold leading-6">{notice.body}</p>
+      {visibleDetails.length ? (
+        <dl className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-2">
+          {visibleDetails.map(([label, value]) => (
+            <div className="rounded-xl bg-white/65 p-2" key={label}>
+              <dt className="font-black text-slate-500">{label}</dt>
+              <dd className="mt-1 break-words font-semibold text-[#14241B]">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * 分析任务状态详情页
  */
 function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
+  const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
 
   useEffect(() => {
     let alive = true;
     let timer: number | undefined;
 
     const loadJob = async () => {
-      const nextJob = await getAnalysisJob(jobId);
-      if (!alive) {
-        return;
-      }
+      try {
+        const nextJob = await getAnalysisJob(jobId);
+        if (!alive) {
+          return;
+        }
 
-      setJob(nextJob);
-      rememberAnalysisJob(nextJob);
+        setLoadError(null);
+        setJob(nextJob);
+        rememberAnalysisJob(nextJob);
 
-      if (nextJob && ["uploaded", "queued", "processing"].includes(nextJob.status)) {
-        timer = window.setTimeout(loadJob, 1600);
+        if (nextJob && ["uploaded", "queued", "processing"].includes(nextJob.status)) {
+          timer = window.setTimeout(loadJob, 1600);
+        }
+      } catch (error) {
+        if (!alive) {
+          return;
+        }
+        setJob(null);
+        setLoadError(errorToNotice("读取分析任务失败", "无法读取该任务的最新状态，请检查后端服务和任务 ID。", error));
       }
     };
 
@@ -1048,6 +1111,10 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
     return <StatusState title="正在读取分析任务" body="正在连接后端或本地 mock 任务记录。" onNavigate={onNavigate} />;
   }
 
+  if (loadError) {
+    return <StatusState title={loadError.title} body={loadError.body} notice={loadError} onNavigate={onNavigate} />;
+  }
+
   if (!job) {
     return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能是本地记录已清空。`} onNavigate={onNavigate} />;
   }
@@ -1062,6 +1129,9 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
 
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
+  const activeStage = job.stages.find((stage) => stage.status === "active") ?? job.stages.find((stage) => stage.id === job.stage);
+  const failedStage = job.stages.find((stage) => stage.status === "failed");
+  const currentStage = failedStage ?? activeStage ?? [...job.stages].reverse().find((stage) => stage.status === "done" || stage.status === "skipped");
 
   return (
     <PageFrame>
@@ -1074,6 +1144,11 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
               {job.metadata.matchTitle} · {job.metadata.fileName} · {job.metadata.venue}
             </p>
             <p className="mt-2 text-sm font-semibold text-slate-500">任务 ID：{job.id}</p>
+            {currentStage ? (
+              <p className="mt-3 inline-flex rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-sm font-bold text-[#14241B]">
+                当前阶段：{currentStage.label} · {currentStage.status === "failed" ? "失败" : currentStage.status === "active" ? "处理中" : currentStage.status === "skipped" ? "已跳过" : "已完成"}
+              </p>
+            ) : null}
           </div>
           <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
             <span className="text-sm font-bold text-[#168A34]">当前进度</span>
@@ -1106,9 +1181,19 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
             ))}
           </div>
           {isFailed ? (
-            <p className="mt-4 rounded-2xl border border-[#FF4D4F]/30 bg-[#FF4D4F]/10 p-3 text-sm font-semibold text-[#C92A2A]">
-              {job.errorMessage ?? "分析任务失败，请重新上传或检查后端日志。"}
-            </p>
+            <div className="mt-4">
+              <DiagnosticNoticeCard
+                notice={{
+                  title: "分析任务失败",
+                  body: job.errorMessage ?? "请重新上传或检查后端日志。",
+                  detailItems: [
+                    ["失败阶段", failedStage?.label ?? job.stage],
+                    ["阶段详情", failedStage?.detail],
+                    ["任务 ID", job.id],
+                  ],
+                }}
+              />
+            </div>
           ) : null}
         </article>
 
@@ -1172,10 +1257,12 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
 
 function StatusState({
   body,
+  notice,
   onNavigate,
   title,
 }: {
   body: string;
+  notice?: DiagnosticNotice | null;
   onNavigate: NavigateFn;
   title: string;
 }) {
@@ -1185,6 +1272,11 @@ function StatusState({
         <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">分析任务</p>
         <h1 className="mt-3 text-4xl font-black text-[#14241B]">{title}</h1>
         <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-600">{body}</p>
+        {notice ? (
+          <div className="mx-auto mt-5 max-w-3xl text-left">
+            <DiagnosticNoticeCard notice={notice} />
+          </div>
+        ) : null}
         <div className="mt-6 flex justify-center gap-3">
           <button className="green-button" onClick={() => onNavigate("/analysis/new")} type="button">
             上传新视频
@@ -1211,6 +1303,7 @@ function cameraAngleLabel(angle: AnalysisUploadMetadata["cameraAngle"]) {
 
 function useAnalysisReport(jobId?: string) {
   const [loadedResult, setLoadedResult] = useState<{
+    error: DiagnosticNotice | null;
     job: AnalysisJobSummary | null;
     jobId: string;
     ballOverlay: BallOverlayArtifact | null;
@@ -1229,33 +1322,49 @@ function useAnalysisReport(jobId?: string) {
     let alive = true;
 
     const load = async () => {
-      const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
-      let trackingOverlay: TrackingOverlayArtifact | null = null;
-      let poseOverlay: PoseOverlayArtifact | null = null;
-      let ballOverlay: BallOverlayArtifact | null = null;
-      const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
+      try {
+        const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
+        let trackingOverlay: TrackingOverlayArtifact | null = null;
+        let poseOverlay: PoseOverlayArtifact | null = null;
+        let ballOverlay: BallOverlayArtifact | null = null;
+        const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
 
-      if (pipelineResult) {
-        [trackingOverlay, poseOverlay, ballOverlay] = await Promise.all([
-          getTrackingOverlay(pipelineResult).catch(() => null),
-          getPoseOverlay(pipelineResult).catch(() => null),
-          getBallOverlay(pipelineResult).catch(() => null),
-        ]);
-      }
+        if (pipelineResult) {
+          [trackingOverlay, poseOverlay, ballOverlay] = await Promise.all([
+            getTrackingOverlay(pipelineResult).catch(() => null),
+            getPoseOverlay(pipelineResult).catch(() => null),
+            getBallOverlay(pipelineResult).catch(() => null),
+          ]);
+        }
 
-      if (alive) {
-        const adaptedReport =
-          nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
-        setLoadedResult({
-          job: nextJob,
-          jobId,
-          ballOverlay,
-          poseOverlay,
-          report: adaptedReport,
-          result: pipelineResult,
-          trackingOverlay,
-          videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
-        });
+        if (alive) {
+          const adaptedReport =
+            nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
+          setLoadedResult({
+            error: null,
+            job: nextJob,
+            jobId,
+            ballOverlay,
+            poseOverlay,
+            report: adaptedReport,
+            result: pipelineResult,
+            trackingOverlay,
+            videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
+          });
+        }
+      } catch (error) {
+        if (alive) {
+          setLoadedResult({
+            error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
+            job: null,
+            jobId,
+            ballOverlay: null,
+            poseOverlay: null,
+            report: null,
+            result: null,
+            trackingOverlay: null,
+          });
+        }
       }
     };
 
@@ -1267,12 +1376,13 @@ function useAnalysisReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { ballOverlay: null, job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
+    return { ballOverlay: null, error: null, job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
   }
 
   if (loadedResult?.jobId !== jobId) {
     return {
       ballOverlay: undefined as BallOverlayArtifact | null | undefined,
+      error: null,
       job: undefined,
       poseOverlay: undefined,
       report: undefined,
@@ -1284,6 +1394,7 @@ function useAnalysisReport(jobId?: string) {
 
   return {
     ballOverlay: loadedResult.ballOverlay,
+    error: loadedResult.error,
     job: loadedResult.job,
     poseOverlay: loadedResult.poseOverlay,
     report: loadedResult.report,
@@ -1297,10 +1408,14 @@ function useAnalysisReport(jobId?: string) {
  * 视觉分析工作台页组件
  */
 function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
-  const { ballOverlay, job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
+  const { ballOverlay, error, job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
+  }
+
+  if (jobId && error) {
+    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} />;
   }
 
   if (jobId && !job) {
@@ -1312,6 +1427,18 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       <StatusState
         title={job.status === "failed" ? "分析任务失败" : "视觉分析尚未生成"}
         body={job.status === "failed" ? job.errorMessage ?? "请重新上传或检查后端日志。" : "任务还在排队或处理中，完成后会开放视频分析工作台。"}
+        notice={
+          job.status === "failed"
+            ? {
+                title: "失败位置",
+                body: job.errorMessage ?? "请重新上传或检查后端日志。",
+                detailItems: [
+                  ["失败阶段", job.stages.find((stage) => stage.status === "failed")?.label ?? job.stage],
+                  ["阶段详情", job.stages.find((stage) => stage.status === "failed")?.detail],
+                ],
+              }
+            : null
+        }
         onNavigate={onNavigate}
       />
     );
@@ -1517,10 +1644,14 @@ function ReportPage({
   onNavigate: NavigateFn;
   reportType: ReportType;
 }) {
-  const { job, report } = useAnalysisReport(jobId);
+  const { error, job, report } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载分析报告" body="正在读取该任务生成的报告数据。" onNavigate={onNavigate} />;
+  }
+
+  if (jobId && error) {
+    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} />;
   }
 
   if (jobId && !job) {
@@ -1532,6 +1663,18 @@ function ReportPage({
       <StatusState
         title={job.status === "failed" ? "分析任务失败" : "报告尚未生成"}
         body={job.status === "failed" ? job.errorMessage ?? "请重新上传或检查后端日志。" : "任务还在排队或处理中，完成后会开放报告页面。"}
+        notice={
+          job.status === "failed"
+            ? {
+                title: "失败位置",
+                body: job.errorMessage ?? "请重新上传或检查后端日志。",
+                detailItems: [
+                  ["失败阶段", job.stages.find((stage) => stage.status === "failed")?.label ?? job.stage],
+                  ["阶段详情", job.stages.find((stage) => stage.status === "failed")?.detail],
+                ],
+              }
+            : null
+        }
         onNavigate={onNavigate}
       />
     );

@@ -40,6 +40,7 @@ ORDERED_STAGES: list[AnalysisStageId] = [
     "frame-sampling",
     "detection",
     "pose",
+    "ball-tracking",
     "tracking",
     "projection",
     "metrics",
@@ -55,6 +56,7 @@ STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
     "frame-sampling": ("抽帧采样", "按时间轴抽取关键帧"),
     "detection": ("目标检测", "预留 YOLO11 检测球员、球、球拍和场地元素"),
     "pose": ("人体姿态", "预留 RTMPose26 识别人体关键点"),
+    "ball-tracking": ("球轨迹", "检测球并生成球轨迹叠加数据"),
     "tracking": ("轨迹跟踪", "关联球员、球和击球轨迹"),
     "projection": ("脚点投影", "映射画面坐标到匹克球场"),
     "metrics": ("运动指标", "计算移动距离、速度、厨房区停留和热力图"),
@@ -161,19 +163,26 @@ def run_analysis_job(job_id: str, payload: AnalysisJobCreate, report_id: str) ->
         logger.warning("Analysis job %s disappeared before processing", job_id)
         return
 
-    _update_job(
-        job,
-        status="processing",
-        stage="video-read",
-        progress=25,
-        stages=build_stages("video-read"),
-    )
+    latest_job = _persist_stage_progress(job, AnalysisStage(id="video-read", label="读取视频", status="active", detail="正在读取上传视频元数据和帧流"))
+
+    def on_pipeline_progress(stage_result) -> None:
+        nonlocal latest_job
+        latest_job = _persist_stage_progress(
+            latest_job,
+            AnalysisStage(
+                id=stage_result.id,
+                label=stage_result.label,
+                status=stage_result.status,
+                detail=stage_result.detail,
+            ),
+        )
 
     result = AnalysisPipeline(frame_stride=payload.frameStride).run(
         job_id=job_id,
         video_id=payload.videoId,
         calibration_id=payload.calibrationId,
         frame_stride=payload.frameStride,
+        progress_callback=on_pipeline_progress,
     )
 
     with _LOCK:
@@ -186,7 +195,7 @@ def run_analysis_job(job_id: str, payload: AnalysisJobCreate, report_id: str) ->
     stage = "report" if status == "completed" else _first_failed_stage(stages)
 
     _update_job(
-        job,
+        latest_job,
         status=status,
         stage=stage,
         progress=progress,
@@ -211,6 +220,53 @@ def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummar
     payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
     updated = AnalysisJobSummary.model_validate(payload)
     return _save_job(updated)
+
+
+def _persist_stage_progress(job: AnalysisJobSummary, stage: AnalysisStage) -> AnalysisJobSummary:
+    stages = _merge_progress_stage(job.stages, stage)
+    progress = max(job.progress, _progress_from_stages(stages))
+    current_stage = _current_stage_from_stages(stages, fallback=stage.id)
+    status = "failed" if stage.status == "failed" else "processing"
+    updates: dict[str, object] = {
+        "status": status,
+        "stage": current_stage,
+        "progress": min(progress, 99),
+        "stages": stages,
+    }
+    if stage.status == "failed":
+        updates["errorMessage"] = stage.detail
+    return _update_job(job, **updates)
+
+
+def _merge_progress_stage(stages: list[AnalysisStage], stage: AnalysisStage) -> list[AnalysisStage]:
+    existing: dict[str, AnalysisStage] = {item.id: item for item in stages}
+    existing[stage.id] = stage
+
+    if stage.status in {"done", "skipped", "failed"} and stage.id in ORDERED_STAGES:
+        stage_index = ORDERED_STAGES.index(stage.id)
+        for prior_stage_id in ORDERED_STAGES[:stage_index]:
+            prior = existing.get(prior_stage_id)
+            if prior and prior.status == "active":
+                existing[prior_stage_id] = AnalysisStage(
+                    id=prior.id,
+                    label=prior.label,
+                    status="done",
+                    detail=prior.detail,
+                )
+
+    if stage.status == "active":
+        for item in list(existing.values()):
+            if item.id != stage.id and item.status == "active":
+                existing[item.id] = AnalysisStage(
+                    id=item.id,
+                    label=item.label,
+                    status="done",
+                    detail=item.detail,
+                )
+
+    ordered_ids = [stage_id for stage_id in ORDERED_STAGES if stage_id in existing]
+    extra_ids = [stage_id for stage_id in existing if stage_id not in ORDERED_STAGES]
+    return [existing[stage_id] for stage_id in ordered_ids + extra_ids]
 
 
 def _save_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
@@ -278,8 +334,11 @@ def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[Analy
         AnalysisStage(id="queue", label="任务排队", status="done", detail="任务已进入后端分析流程"),
     ]
 
-    inserted_sampling = False
+    seen_ids = {"upload", "queue"}
     for stage in result.stages:
+        if stage.id in seen_ids:
+            continue
+        seen_ids.add(stage.id)
         stages.append(
             AnalysisStage(
                 id=stage.id,
@@ -288,25 +347,16 @@ def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[Analy
                 detail=stage.detail,
             )
         )
-        if stage.id == "video-read":
-            inserted_sampling = True
-            stages.append(
-                AnalysisStage(
-                    id="frame-sampling",
-                    label="抽帧采样",
-                    status="done" if result.video_id else "skipped",
-                    detail="已按配置帧间隔读取视频帧" if result.video_id else "未提供视频，跳过真实抽帧",
-                )
-            )
 
-    if not inserted_sampling:
+    if "frame-sampling" not in seen_ids:
+        insert_at = min(4, len(stages))
         stages.insert(
-            2,
+            insert_at,
             AnalysisStage(
                 id="frame-sampling",
                 label="抽帧采样",
-                status="skipped",
-                detail="pipeline 未返回视频读取阶段",
+                status="done" if result.video_id else "skipped",
+                detail="已按配置帧间隔读取视频帧" if result.video_id else "未提供视频，跳过真实抽帧",
             ),
         )
 
@@ -324,8 +374,23 @@ def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[Analy
 def _progress_from_stages(stages: list[AnalysisStage]) -> int:
     if not stages:
         return 0
+    total = len(stages)
     finished = sum(1 for stage in stages if stage.status in {"done", "skipped"})
-    return int((finished / len(stages)) * 100)
+    active_credit = 0.45 if any(stage.status == "active" for stage in stages) else 0.0
+    return int(((finished + active_credit) / total) * 100)
+
+
+def _current_stage_from_stages(stages: list[AnalysisStage], fallback: str = "frame-sampling") -> str:
+    for stage in stages:
+        if stage.status == "failed":
+            return stage.id
+    for stage in stages:
+        if stage.status == "active":
+            return stage.id
+    for stage in reversed(stages):
+        if stage.status in {"done", "skipped"}:
+            return stage.id
+    return fallback
 
 
 def _first_failed_stage(stages: list[AnalysisStage]) -> str:

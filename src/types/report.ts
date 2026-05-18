@@ -19,6 +19,7 @@ export type AnalysisStageId =
   | "frame-sampling"
   | "detection"
   | "pose"
+  | "ball-tracking"
   | "tracking"
   | "projection"
   | "metrics"

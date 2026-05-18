@@ -20,6 +20,43 @@ const STORAGE_KEY = "pre-pickleball-analysis-jobs";
 const RECENT_JOB_KEY = "pre-pickleball-recent-analysis-job";
 export const RECENT_ANALYSIS_JOB_EVENT = "pre-pickleball-recent-analysis-job-change";
 
+export interface AnalysisApiErrorInfo {
+  backendDetail?: string;
+  causeMessage?: string;
+  isNetworkError: boolean;
+  message: string;
+  path: string;
+  status?: number;
+  statusText?: string;
+  url: string;
+}
+
+export class AnalysisApiError extends Error {
+  readonly backendDetail?: string;
+  readonly causeMessage?: string;
+  readonly isNetworkError: boolean;
+  readonly path: string;
+  readonly status?: number;
+  readonly statusText?: string;
+  readonly url: string;
+
+  constructor(info: AnalysisApiErrorInfo) {
+    super(info.message);
+    this.name = "AnalysisApiError";
+    this.backendDetail = info.backendDetail;
+    this.causeMessage = info.causeMessage;
+    this.isNetworkError = info.isNetworkError;
+    this.path = info.path;
+    this.status = info.status;
+    this.statusText = info.statusText;
+    this.url = info.url;
+  }
+}
+
+export function isAnalysisApiError(error: unknown): error is AnalysisApiError {
+  return error instanceof AnalysisApiError;
+}
+
 interface StoredJob {
   report: AnalysisReport;
   summary: AnalysisJobSummary;
@@ -33,6 +70,7 @@ const stageLabels: Record<AnalysisStageId, string> = {
   "frame-sampling": "抽帧采样",
   detection: "目标检测",
   pose: "人体姿态",
+  "ball-tracking": "球轨迹",
   tracking: "轨迹跟踪",
   projection: "脚点投影",
   metrics: "运动指标",
@@ -48,6 +86,7 @@ const orderedStages: AnalysisStageId[] = [
   "frame-sampling",
   "detection",
   "pose",
+  "ball-tracking",
   "tracking",
   "projection",
   "metrics",
@@ -91,6 +130,7 @@ function getStageDetail(stage: AnalysisStageId) {
     "frame-sampling": "按时间轴抽取关键帧",
     detection: "预留 YOLO11 检测球员、球、球拍和场地元素",
     pose: "预留 RTMPose26 识别人体关键点",
+    "ball-tracking": "检测球并生成球轨迹叠加数据",
     tracking: "关联球员、球和击球轨迹",
     projection: "映射画面坐标到匹克球场",
     metrics: "计算移动距离、速度、厨房区停留和热力图",
@@ -189,30 +229,121 @@ function toApiUrl(path: string): string {
   return /^https?:\/\//.test(path) ? path : `${API_BASE_URL}${path}`;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(toApiUrl(path), {
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-    ...init,
+function stringifyBackendDetail(detail: unknown): string | undefined {
+  if (detail == null) {
+    return undefined;
+  }
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object" && "msg" in item && typeof item.msg === "string") {
+          return item.msg;
+        }
+        return JSON.stringify(item);
+      })
+      .join("；");
+  }
+  if (typeof detail === "object") {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return String(detail);
+    }
+  }
+  return String(detail);
+}
+
+async function parseErrorBody(response: Response): Promise<string | undefined> {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  try {
+    if (contentType.includes("application/json")) {
+      const payload = (await response.json()) as { detail?: unknown; message?: unknown; error?: unknown };
+      return (
+        stringifyBackendDetail(payload.detail) ??
+        stringifyBackendDetail(payload.message) ??
+        stringifyBackendDetail(payload.error) ??
+        stringifyBackendDetail(payload)
+      );
+    }
+
+    const text = await response.text();
+    return text.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function throwResponseError(path: string, url: string, response: Response): Promise<never> {
+  const backendDetail = await parseErrorBody(response);
+  throw new AnalysisApiError({
+    backendDetail,
+    isNetworkError: false,
+    message: backendDetail
+      ? `Analysis API ${response.status} ${response.statusText}: ${backendDetail}`
+      : `Analysis API returned ${response.status} ${response.statusText}`.trim(),
+    path,
+    status: response.status,
+    statusText: response.statusText,
+    url,
   });
+}
+
+function toNetworkError(path: string, url: string, error: unknown): AnalysisApiError {
+  const causeMessage = error instanceof Error ? error.message : String(error);
+  return new AnalysisApiError({
+    causeMessage,
+    isNetworkError: true,
+    message: `Analysis API request failed: ${causeMessage}`,
+    path,
+    url,
+  });
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const url = toApiUrl(path);
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...init?.headers,
+      },
+      ...init,
+    });
+  } catch (error) {
+    throw toNetworkError(path, url, error);
+  }
 
   if (!response.ok) {
-    throw new Error(`Analysis API returned ${response.status}`);
+    await throwResponseError(path, url, response);
   }
 
   return response.json() as Promise<T>;
 }
 
 async function requestForm<T>(path: string, body: FormData): Promise<T> {
-  const response = await fetch(toApiUrl(path), {
-    body,
-    method: "POST",
-  });
+  const url = toApiUrl(path);
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      body,
+      method: "POST",
+    });
+  } catch (error) {
+    throw toNetworkError(path, url, error);
+  }
 
   if (!response.ok) {
-    throw new Error(`Analysis API returned ${response.status}`);
+    await throwResponseError(path, url, response);
   }
 
   return response.json() as Promise<T>;
@@ -310,30 +441,46 @@ export async function getAnalysisJob(jobId: string): Promise<AnalysisJobSummary 
     const job = await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}`);
     rememberAnalysisJob(job);
     return job;
-  } catch {
+  } catch (error) {
     const stored = getStoredJobs()[jobId];
     if (stored?.summary) {
       rememberAnalysisJob(stored.summary);
+      return stored.summary;
     }
-    return stored?.summary ?? null;
+    if (isAnalysisApiError(error) && error.status === 404) {
+      return null;
+    }
+    throw error;
   }
 }
 
 export async function getAnalysisReport(jobId: string): Promise<AnalysisReport | null> {
   try {
     return await requestJson<AnalysisReport>(`/api/analysis/jobs/${jobId}/report`);
-  } catch {
+  } catch (error) {
     const stored = getStoredJobs()[jobId];
-    return stored?.report ?? null;
+    if (stored?.report) {
+      return stored.report;
+    }
+    if (isAnalysisApiError(error) && error.status === 404) {
+      return null;
+    }
+    throw error;
   }
 }
 
 export async function getAnalysisResult(jobId: string): Promise<AnalysisPipelineResult | AnalysisJobSummary | null> {
   try {
     return await requestJson<AnalysisPipelineResult | AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/result`);
-  } catch {
+  } catch (error) {
     const stored = getStoredJobs()[jobId];
-    return stored?.summary ?? null;
+    if (stored?.summary) {
+      return stored.summary;
+    }
+    if (isAnalysisApiError(error) && error.status === 404) {
+      return null;
+    }
+    throw error;
   }
 }
 
