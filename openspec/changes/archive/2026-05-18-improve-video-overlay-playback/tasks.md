@@ -31,4 +31,4 @@
 - [x] 5.1 Add backend regression tests showing out-of-bounds spectators are excluded from tracking overlay artifacts and pose inputs.
 - [x] 5.2 Add frontend tests or focused component checks for fullscreen container behavior and overlay frame smoothing helpers.
 - [x] 5.3 Run the relevant backend and frontend test suites.
-- [ ] 5.4 Manually verify a 60fps real-video job in normal and fullscreen playback, confirming overlays remain visible, spectators are hidden, and motion is visibly smoother.
+- [x] 5.4 Manually verify a 60fps real-video job in normal and fullscreen playback, confirming overlays remain visible, spectators are hidden, and motion is visibly smoother.

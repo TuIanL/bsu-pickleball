@@ -23,18 +23,18 @@ The backend SHALL provide a pose estimation engine that can load a configured RT
 - **THEN** the backend reports that RTMPose is disabled and does not present the missing skeleton layer as a detection or filtering failure
 
 ### Requirement: Frame-level pose estimation
-The backend SHALL run RTMPose on selected primary-player tracked boxes from processed video frames and emit normalized frame-level pose results.
+The backend SHALL run RTMPose on court-relevant tracked player boxes from processed video frames and emit normalized frame-level pose results.
 
-#### Scenario: Primary-player boxes are available
-- **WHEN** a processed video frame has one or more tracked player boxes selected by primary-player filtering
-- **THEN** the pose engine estimates keypoints for each selected subject and associates each pose result with `frame_index`, `timestamp_seconds`, and `track_id`
+#### Scenario: Tracked player boxes are available
+- **WHEN** a processed video frame has one or more tracked player boxes that remain eligible after court-relevance filtering
+- **THEN** the pose engine estimates keypoints for each eligible tracked subject and associates each pose result with `frame_index`, `timestamp_seconds`, and `track_id`
 
-#### Scenario: Tracked player is outside court lines
-- **WHEN** a tracked match player is selected as a primary-player subject while their projected footpoint is outside the standard court lines
-- **THEN** the pose engine still receives that player box and may generate a renderable skeleton for the subject
+#### Scenario: Tracked person is outside match bounds
+- **WHEN** a processed video frame has a tracked person whose projected footpoint is outside the configured match-relevant court bounds
+- **THEN** the pose engine does not run or persist a renderable pose subject for that person
 
-#### Scenario: No primary-player boxes are available
-- **WHEN** a processed video frame has no usable primary-player boxes
+#### Scenario: No player boxes are available
+- **WHEN** a processed video frame has no usable court-relevant player boxes
 - **THEN** the pose engine skips that frame without fabricating skeleton keypoints
 
 #### Scenario: Low-confidence keypoints are returned
@@ -42,11 +42,11 @@ The backend SHALL run RTMPose on selected primary-player tracked boxes from proc
 - **THEN** those keypoints are either marked low-confidence or excluded according to the normalized pose schema
 
 ### Requirement: Pose result serialization
-The backend SHALL persist pose results as JSON that the frontend can render as skeleton overlays over the source video, and persisted renderable pose subjects SHALL match the selected primary-player subject set used by detection overlays.
+The backend SHALL persist pose results as JSON that the frontend can render as skeleton overlays over the source video, and persisted renderable pose subjects SHALL match the court-relevant subject set used by detection overlays.
 
 #### Scenario: Pose results are persisted
 - **WHEN** pose estimation completes for a real analysis job
-- **THEN** the backend writes a pose artifact containing job/video identifiers, source frame dimensions, processed frame metadata, normalized keypoints, subject identifiers, keypoint schema, and skeleton connection metadata for selected primary-player subjects
+- **THEN** the backend writes a pose artifact containing job/video identifiers, source frame dimensions, processed frame metadata, normalized keypoints, subject identifiers, keypoint schema, and skeleton connection metadata for court-relevant subjects
 
 #### Scenario: Frontend requests pose overlay data
 - **WHEN** a completed job has a persisted pose artifact
