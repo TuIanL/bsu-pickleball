@@ -40,6 +40,11 @@ read_pid_file() {
   tr -d '[:space:]' < "$pid_file"
 }
 
+listener_pids() {
+  local port="$1"
+  lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sort -u || true
+}
+
 wait_until_stopped() {
   local pid="$1"
 
@@ -58,11 +63,21 @@ child_pids() {
   pgrep -P "$pid" 2>/dev/null || true
 }
 
+descendant_pids() {
+  local pid="$1"
+  local child
+
+  for child in $(child_pids "$pid"); do
+    descendant_pids "$child"
+    printf '%s\n' "$child"
+  done
+}
+
 stop_recorded_process() {
   local name="$1"
   local pid_file="$2"
   local pid
-  local children
+  local descendants
 
   if [[ ! -f "$pid_file" ]]; then
     say "$name: no recorded process."
@@ -77,17 +92,17 @@ stop_recorded_process() {
   fi
 
   say "$name: stopping pid $pid..."
-  children="$(child_pids "$pid")"
+  descendants="$(descendant_pids "$pid")"
   send_signal TERM "$pid" || true
-  for child in $children; do
-    send_signal TERM "$child" || true
+  for child_pid in $descendants; do
+    send_signal TERM "$child_pid" || true
   done
 
   if ! wait_until_stopped "$pid"; then
     say "$name: pid $pid did not stop cleanly; forcing shutdown."
     send_signal KILL "$pid" || true
-    for child in $children; do
-      send_signal KILL "$child" || true
+    for child_pid in $descendants; do
+      send_signal KILL "$child_pid" || true
     done
   fi
 
@@ -97,6 +112,34 @@ stop_recorded_process() {
   fi
 
   rm -f "$pid_file"
+}
+
+stop_port_listeners() {
+  local name="$1"
+  local port="$2"
+  local pid
+  local pids
+
+  if ! command -v lsof >/dev/null 2>&1; then
+    return
+  fi
+
+  pids="$(listener_pids "$port")"
+  [[ -n "$pids" ]] || return
+
+  say "$name: stopping remaining listener(s) on port $port..."
+  for pid in $pids; do
+    send_signal TERM "$pid" || true
+  done
+
+  sleep 0.5
+  pids="$(listener_pids "$port")"
+  [[ -n "$pids" ]] || return
+
+  say "$name: forcing remaining listener(s) on port $port..."
+  for pid in $pids; do
+    send_signal KILL "$pid" || true
+  done
 }
 
 report_remaining_listener() {
@@ -112,6 +155,9 @@ report_remaining_listener() {
 say "Stopping Pickleball local runtime..."
 stop_recorded_process "Frontend" "$PID_DIR/frontend.pid"
 stop_recorded_process "Backend" "$PID_DIR/backend.pid"
+
+stop_port_listeners "Frontend" "$FRONTEND_PORT"
+stop_port_listeners "Backend" "$BACKEND_PORT"
 
 report_remaining_listener "Frontend" "$FRONTEND_PORT"
 report_remaining_listener "Backend" "$BACKEND_PORT"
