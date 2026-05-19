@@ -28,6 +28,83 @@ You can also keep the dataset outside the repo and pass an absolute path to the
 scripts. Dataset folders, converted labels, training runs, and model weights are
 ignored by Git.
 
+## Real Video Frame Pool
+
+When most available images come from online match footage, first build a local
+frame pool from real videos captured on the target courts. These frames are
+pending annotation assets, not a train-ready COCO dataset.
+
+Use a local ignored folder for source videos, for example:
+
+```text
+datasets/real-court-videos/
+  phone-court-01.mp4
+  tripod-court-02.mov
+```
+
+Extract annotation candidates into an ignored frame pool:
+
+```bash
+cd backend
+python3 scripts/extract_real_video_frames.py \
+  ../datasets/real-court-videos \
+  --output-root ../datasets/real-court-frame-pool \
+  --interval-seconds 2.0 \
+  --max-frames-per-video 200
+```
+
+The extractor accepts either one video file or a directory of supported videos.
+Useful controls:
+
+- `--interval-seconds 1.0` samples more densely when rallies are short.
+- `--max-frames-per-video 100` keeps one long recording from dominating the
+  frame pool.
+- `--start-seconds 30 --end-seconds 180` skips setup, warmup, or irrelevant
+  footage.
+- `--jpeg-quality 95` controls output image quality.
+- `--overwrite` replaces previously extracted frames with the same generated
+  names.
+
+Outputs are grouped by source video and include `manifest.json`:
+
+```text
+datasets/real-court-frame-pool/
+  manifest.json
+  phone-court-01/
+    phone-court-01_f000000_t00000.00s.jpg
+    phone-court-01_f000060_t00002.00s.jpg
+```
+
+Each frame filename includes the source video stem, source frame index, and
+timestamp. The manifest records source paths, output paths, FPS, frame
+dimensions, sampling settings, and any per-video errors. Keep this manifest when
+uploading frames to an annotation tool so source-video grouping can be reviewed
+later.
+
+For the first real-scene adaptation pass, manually label the visible pickleball
+court region as `Court`. This matches the currently used local dataset more
+closely than strict thin-line `Court-Line` annotation and is faster to label for
+phone or tripod footage. After annotation, export COCO segmentation and place it
+under a normal dataset root such as:
+
+```text
+datasets/court-line-coco-real/
+  train/
+    *.jpg
+    _annotations.coco.json
+  valid/
+    *.jpg
+    _annotations.coco.json
+  test/
+    *.jpg
+    _annotations.coco.json
+```
+
+Split by source video, not by random frame. Reserve at least one real captured
+video for validation or test before fine-tuning, and do not place frames from
+that same source video into train. This prevents near-duplicate frames from
+making validation results look better than real deployment quality.
+
 ## Validate COCO Segmentation
 
 ```bash
@@ -52,8 +129,8 @@ For a strict category target:
 ```bash
 cd backend
 python3 scripts/validate_coco_segmentation.py \
-  --dataset-root ../datasets/court-line-coco \
-  --target-category Court-Line
+  --dataset-root ../datasets/court-line-coco-real \
+  --target-category Court
 ```
 
 For one-class MVP training that intentionally merges all annotated categories
@@ -108,6 +185,10 @@ python3 scripts/train_court_line_segmentation.py \
   --converted-output ../datasets/court-line-yolo \
   --prepare-only
 ```
+
+For real-scene `Court` annotations exported from the frame pool, point
+`--dataset-root` at that export, such as `../datasets/court-line-coco-real`, or
+at a source-aware merged dataset that keeps held-out real videos out of train.
 
 To train with Ultralytics:
 
