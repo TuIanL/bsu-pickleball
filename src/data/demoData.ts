@@ -263,11 +263,8 @@ export const hardwarePreview: HardwarePreview = {
 
 export const platformNavigation: NavigationItem[] = [
   { id: "dashboard", label: "总览", shortLabel: "首页", path: "/" },
-  { id: "matches", label: "视频分析", shortLabel: "视频", path: "/vision" },
-  { id: "shots", label: "分层报告", shortLabel: "报告", path: "/reports/landing" },
-  { id: "progress", label: "进展追踪", shortLabel: "进展", path: "/training" },
-  { id: "drills", label: "训练任务", shortLabel: "训练", path: "/training" },
-  { id: "coach", label: "硬件融合", shortLabel: "硬件", path: "/hardware" },
+  { id: "analysis", label: "视频分析", shortLabel: "视频", path: "/analysis/tasks" },
+  { id: "training", label: "训练", shortLabel: "训练", path: "/training" },
 ];
 
 export const matchSummary: MatchSummary = {
@@ -285,17 +282,17 @@ export const matchSummary: MatchSummary = {
 export const overviewCards: OverviewCard[] = [
   {
     id: "vision",
-    title: "智能视频回放",
-    body: "从回合片段里直接看到球路轨迹、站位变化和关键失误原因。",
-    path: "/vision",
-    metric: "已索引 24 个回合",
+    title: "上传比赛分析",
+    body: "从视频上传、场地标定到任务生成，按真实分析流程启动一场复盘。",
+    path: "/analysis/new",
+    metric: "创建新任务",
   },
   {
-    id: "reports",
-    title: "分层数据报告",
-    body: "落点、步法、战术和动作诊断拆成独立报告，适合讲解和复盘。",
-    path: "/reports/landing",
-    metric: "4 类报告视图",
+    id: "tasks",
+    title: "分析任务管理",
+    body: "查看所有历史和正在运行的分析任务，完成后进入纯净视频结果页。",
+    path: "/analysis/tasks",
+    metric: "任务状态追踪",
   },
   {
     id: "training",
@@ -305,11 +302,11 @@ export const overviewCards: OverviewCard[] = [
     metric: "4 项训练待练",
   },
   {
-    id: "hardware",
-    title: "二期硬件融合",
-    body: "用模拟 TENG-IMU 数据说明未来智能球拍如何接入视觉分析。",
-    path: "/hardware",
-    metric: "二期能力预览",
+    id: "demo",
+    title: "演示工作台",
+    body: "保留样例视频分析，用于无后端或演示场景快速展示视觉效果。",
+    path: "/vision",
+    metric: "样例数据",
   },
 ];
 

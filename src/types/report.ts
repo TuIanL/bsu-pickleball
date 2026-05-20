@@ -39,6 +39,7 @@ export type AppPath =
   | "/"
   | "/vision"
   | "/analysis/new"
+  | "/analysis/tasks"
   | `/analysis/${string}`
   | `/analysis/${string}/vision`
   | `/analysis/${string}/reports/${ReportType}`

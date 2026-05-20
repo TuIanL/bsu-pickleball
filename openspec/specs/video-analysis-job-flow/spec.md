@@ -8,11 +8,11 @@ The system SHALL provide a user-facing entry point for starting a new pickleball
 
 #### Scenario: User opens the new analysis page
 - **WHEN** the user navigates to the new analysis or upload route
-- **THEN** the system displays a video upload workflow with match metadata fields and a clear action to start analysis
+- **THEN** the system displays a video upload workflow with match metadata fields, calibration guidance, a clear action to start analysis, and access to analysis task history
 
 #### Scenario: User accesses upload from primary navigation
-- **WHEN** the user selects the primary analysis or upload action from the app shell
-- **THEN** the system opens the new analysis workflow instead of only showing a static demo report
+- **WHEN** the user selects the video analysis action from the app shell
+- **THEN** the system opens the new analysis workflow instead of showing the completed-result workspace or a static demo report
 
 ### Requirement: Video upload form states
 The system SHALL guide users through valid video selection and required match context before creating an analysis job.
@@ -30,7 +30,7 @@ The system SHALL create a real analysis job by uploading the selected video to t
 
 #### Scenario: User submits a valid real upload request
 - **WHEN** the user starts analysis with a selected video and required metadata
-- **THEN** the frontend uploads the video file to the backend video upload API, creates an analysis job with the returned `videoId`, and routes the user to the job status page
+- **THEN** the frontend uploads the video file to the backend video upload API, creates an analysis job with the returned `videoId`, and routes the user to the analysis task management page with the new task visible
 
 #### Scenario: User submits a calibrated backend video reference
 - **WHEN** the user starts analysis with a valid backend video identifier, calibration identifier, and required metadata
@@ -45,11 +45,11 @@ The system SHALL create a real analysis job by uploading the selected video to t
 - **THEN** the backend may return a demo-compatible job response that is distinguishable from a real uploaded-video analysis
 
 ### Requirement: Analysis job status page
-The system SHALL provide a job-specific page that communicates analysis progress, MVP pipeline stage, model-backed detection and pose stages, and next actions.
+The system SHALL provide a job-specific page that communicates analysis progress, MVP pipeline stage, model-backed detection and pose stages, and next actions within the task-centered workflow.
 
 #### Scenario: User opens a queued job
 - **WHEN** the user navigates to an analysis job that is queued
-- **THEN** the system shows a queued status, job metadata, and a message that processing has not started yet
+- **THEN** the system shows a queued status, job metadata, a message that processing has not started yet, and a way back to task management
 
 #### Scenario: User opens a processing job
 - **WHEN** the user navigates to an analysis job that is processing
@@ -61,11 +61,11 @@ The system SHALL provide a job-specific page that communicates analysis progress
 
 #### Scenario: User opens a failed job
 - **WHEN** the user navigates to an analysis job that failed
-- **THEN** the system shows the failure reason if available and offers a retry or return-to-upload action
+- **THEN** the system shows the failure reason if available and offers a retry, return-to-upload, or return-to-task-management action
 
 #### Scenario: User opens a completed job
 - **WHEN** the user navigates to an analysis job that completed successfully
-- **THEN** the system shows completion status and provides actions to open the visual analysis workspace and report pages for that job
+- **THEN** the system shows completion status and provides actions to open the visual analysis workspace, report pages for that job, and the task management page
 
 #### Scenario: Pipeline reports tracking progress
 - **WHEN** the backend processes a video with player tracking enabled
@@ -76,10 +76,10 @@ The system SHALL provide a job-specific page that communicates analysis progress
 - **THEN** the reported pipeline stages include pose-estimation status, processed subject counts, skeleton artifact availability, or a clear skipped/failed reason
 
 ### Requirement: Analysis job result routing
-The system SHALL route users from a completed job to job-specific visual analysis and report views.
+The system SHALL route users from completed tasks and completed job details to job-specific visual analysis and report views.
 
 #### Scenario: User opens completed visual analysis
-- **WHEN** the user selects the visual analysis action for a completed job
+- **WHEN** the user selects the visual analysis action for a completed job from task management or the job status detail
 - **THEN** the system opens a visual analysis route associated with that job identifier
 
 #### Scenario: User opens completed report type

@@ -3,7 +3,6 @@ import {
   Camera,
   ChevronRight,
   Upload,
-  UserRound,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AppPath, NavigationItem } from "../../types/report";
@@ -12,19 +11,17 @@ interface AppShellProps {
   activePath: string;
   children: ReactNode;
   navigation: NavigationItem[];
-  recentAnalysisPath?: AppPath;
   onNavigate: (path: AppPath | "/reports/landing" | "/upload") => void;
 }
 
-export function AppShell({ activePath, children, navigation, recentAnalysisPath, onNavigate }: AppShellProps) {
-  const visionPath = recentAnalysisPath ?? "/vision";
+export function AppShell({ activePath, children, navigation, onNavigate }: AppShellProps) {
   const isActive = (path: string) => {
     if (path === "/") {
       return activePath === "/";
     }
 
-    if (path === "/analysis/new") {
-      return activePath === "/analysis/new";
+    if (path === "/analysis/tasks") {
+      return activePath.startsWith("/analysis") || activePath === "/vision";
     }
 
     if (path === "/vision") {
@@ -78,26 +75,15 @@ export function AppShell({ activePath, children, navigation, recentAnalysisPath,
           </nav>
 
           <div className="ml-auto hidden items-center gap-2 md:flex">
-            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(visionPath)} type="button">
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
               <Camera size={16} aria-hidden="true" />
-              {recentAnalysisPath ? "继续分析" : "查看演示"}
+              任务管理
             </button>
             <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
               <Upload size={16} aria-hidden="true" />
               上传比赛
             </button>
           </div>
-
-          <button
-            className="hidden items-center gap-2 rounded-full border border-[#DDE9D6] bg-white/85 py-1.5 pl-1.5 pr-3 text-sm font-semibold text-slate-700 transition hover:border-[#22C55E]/35 hover:bg-[#F5FFF2] sm:flex"
-            onClick={() => onNavigate("/training")}
-            type="button"
-          >
-            <span className="grid size-8 place-items-center rounded-full bg-[#D9FF3F] text-[#071008]">
-              <UserRound size={15} aria-hidden="true" />
-            </span>
-            荧光队
-          </button>
         </div>
 
         <div className="mx-auto flex max-w-[1480px] gap-2 overflow-x-auto px-4 pb-3 sm:px-6 lg:hidden">

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 import logging
 from threading import Lock
 from uuid import uuid4
@@ -281,6 +282,39 @@ def _save_report(job_id: str, report: AnalysisReport) -> AnalysisReport:
         REPORTS[job_id] = report
     _STORAGE.write_json(_STORAGE.report_json_path(job_id), report.model_dump(mode="json"))
     return report
+
+
+def list_analysis_jobs(storage: StorageService | None = None) -> list[AnalysisJobSummary]:
+    storage = storage or _STORAGE
+    jobs: dict[str, AnalysisJobSummary] = {}
+
+    jobs_dir = storage.outputs_dir / "jobs"
+    if jobs_dir.exists():
+        for path in sorted(jobs_dir.glob("*.json")):
+            job = _load_job_from_path(path, storage)
+            if job is not None:
+                jobs[job.id] = job
+
+    with _LOCK:
+        jobs.update(JOBS)
+
+    return sorted(
+        jobs.values(),
+        key=lambda job: _job_sort_key(job),
+        reverse=True,
+    )
+
+
+def _load_job_from_path(path: Path, storage: StorageService) -> AnalysisJobSummary | None:
+    try:
+        return AnalysisJobSummary.model_validate(storage.read_json(path))
+    except Exception as exc:  # noqa: BLE001 - corrupted persisted jobs should not break the task list.
+        logger.warning("Skipping unreadable analysis job summary %s: %s", path, exc)
+        return None
+
+
+def _job_sort_key(job: AnalysisJobSummary) -> tuple[str, str]:
+    return (job.updatedAt or job.createdAt, job.createdAt)
 
 
 def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:

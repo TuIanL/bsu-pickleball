@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
 from app.schemas.pipeline import AnalysisPipelineResult
 # 导入模拟分析服务
-from app.services.mock_analysis import create_analysis_job, get_mock_job, get_mock_report, get_pipeline_result
+from app.services.mock_analysis import create_analysis_job, get_mock_job, get_mock_report, get_pipeline_result, list_analysis_jobs
 from app.services.storage_service import StorageService
 
 # 定义 API 路由，前缀为 /api/analysis，标签为 analysis
@@ -26,6 +26,14 @@ def create_analysis_job_route(
     创建分析任务
     """
     return create_analysis_job(payload, background_tasks=background_tasks)
+
+
+@router.get("/jobs", response_model=list[AnalysisJobSummary])
+def list_analysis_jobs_route() -> list[AnalysisJobSummary]:
+    """
+    读取所有已知分析任务，用于前端任务管理页
+    """
+    return list_analysis_jobs()
 
 
 @router.get("/jobs/{job_id}", response_model=AnalysisJobSummary)

@@ -1,11 +1,13 @@
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.main import app
 from app.schemas.analysis import AnalysisJobCreate
+from app.schemas.analysis import AnalysisJobSummary as AnalysisJobSummarySchema
 from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
 from app.schemas.tracking import Detection
 from app.services.analysis_pipeline import AnalysisPipeline
-from app.services.mock_analysis import JOBS, REPORTS, RESULTS, create_analysis_job, get_mock_job, run_analysis_job
+from app.services.mock_analysis import JOBS, REPORTS, RESULTS, build_stages, create_analysis_job, get_mock_job, list_analysis_jobs, run_analysis_job
 from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
@@ -44,6 +46,81 @@ def test_metadata_only_analysis_job_still_completes():
     body = response.json()
     assert body["status"] == "completed"
     assert body["metadata"]["matchTitle"] == "MVP Test Match"
+
+
+def test_analysis_job_list_returns_empty_for_no_jobs(tmp_path):
+    storage = make_temp_storage(tmp_path)
+    snapshot = JOBS.copy()
+    JOBS.clear()
+
+    try:
+        assert list_analysis_jobs(storage) == []
+    finally:
+        JOBS.clear()
+        JOBS.update(snapshot)
+
+
+def test_analysis_job_list_merges_persisted_active_and_skips_malformed(tmp_path):
+    storage = make_temp_storage(tmp_path)
+    snapshot = JOBS.copy()
+    JOBS.clear()
+
+    persisted = make_job_summary(
+        "job-persisted-list",
+        status="completed",
+        match_title="Persisted Match",
+        created_at="2026-05-19T10:00:00+00:00",
+        updated_at="2026-05-19T10:10:00+00:00",
+    )
+    active = make_job_summary(
+        "job-active-list",
+        status="processing",
+        match_title="Active Match",
+        progress=44,
+        created_at="2026-05-20T10:00:00+00:00",
+        updated_at="2026-05-20T10:02:00+00:00",
+    )
+    storage.write_json(storage.job_json_path(persisted.id), persisted.model_dump(mode="json"))
+    storage.job_json_path("job-broken-list").write_text("{not-json", encoding="utf-8")
+    JOBS[active.id] = active
+
+    try:
+        jobs = list_analysis_jobs(storage)
+    finally:
+        JOBS.clear()
+        JOBS.update(snapshot)
+
+    assert [job.id for job in jobs] == ["job-active-list", "job-persisted-list"]
+    assert jobs[0].status == "processing"
+    assert jobs[0].progress == 44
+    assert jobs[1].metadata.matchTitle == "Persisted Match"
+
+
+def test_analysis_jobs_endpoint_lists_created_jobs():
+    payload = {
+        "metadata": {
+            "fileName": "list-route.mp4",
+            "fileSize": 4321,
+            "matchTitle": "List Route Match",
+            "venue": "Task Court",
+            "matchDate": "2026-05-20",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Route Player",
+            "level": "MVP",
+        }
+    }
+    create_response = client.post("/api/analysis/jobs", json=payload)
+    assert create_response.status_code == 200
+    job_id = create_response.json()["id"]
+
+    list_response = client.get("/api/analysis/jobs")
+
+    assert list_response.status_code == 200
+    jobs = list_response.json()
+    listed = next(job for job in jobs if job["id"] == job_id)
+    assert listed["metadata"]["matchTitle"] == "List Route Match"
+    assert listed["status"] == "completed"
 
 
 def test_manual_calibration_endpoint_creates_and_reads_result():
@@ -890,6 +967,50 @@ def test_analysis_job_with_missing_video_fails_cleanly():
     body = response.json()
     assert body["status"] == "failed"
     assert body["errorMessage"] == "Uploaded video not found"
+
+
+def make_temp_storage(tmp_path):
+    settings = Settings(
+        uploads_dir=tmp_path / "uploads",
+        outputs_dir=tmp_path / "outputs",
+        calibrations_dir=tmp_path / "calibrations",
+        tmp_dir=tmp_path / "tmp",
+    )
+    return StorageService(settings)
+
+
+def make_job_summary(
+    job_id,
+    *,
+    status="completed",
+    match_title="Task Match",
+    progress=100,
+    created_at="2026-05-20T09:00:00+00:00",
+    updated_at="2026-05-20T09:00:00+00:00",
+):
+    stage = "report" if status == "completed" else "queue"
+    return AnalysisJobSummarySchema(
+        id=job_id,
+        status=status,
+        stage=stage,
+        progress=progress,
+        createdAt=created_at,
+        updatedAt=updated_at,
+        metadata={
+            "fileName": f"{job_id}.mp4",
+            "fileSize": 100,
+            "matchTitle": match_title,
+            "venue": "Task Test Court",
+            "matchDate": "2026-05-20",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Task Player",
+            "level": "MVP",
+        },
+        stages=build_stages(stage),
+        reportId=f"PV-{job_id.upper()}",
+        analysisMode="real",
+    )
 
 
 class DeferredTasks:

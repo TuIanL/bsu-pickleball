@@ -1,8 +1,5 @@
-# layered-product-navigation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change build-layered-visual-analysis-platform. Update Purpose after archive.
-## Requirements
 ### Requirement: Layered page architecture
 The system SHALL provide a simplified layered product structure with a main page, a video-analysis task flow, job-specific visual results, subordinate report detail pages, and training recommendations.
 
@@ -36,24 +33,6 @@ The system SHALL allow completed analysis results to route users into focused re
 - **WHEN** the current route or selected report type does not match a supported report definition
 - **THEN** the system provides a stable fallback to the overview, task management, or default report page instead of rendering a broken state
 
-### Requirement: Independent product identity
-The system SHALL use original product naming, icons, copy, mock visuals, and interaction labels.
-
-#### Scenario: User views brand and visual assets
-- **WHEN** the application renders navigation, hero content, video mockups, cards, icons, and CTAs
-- **THEN** the system does not display PB Vision or SwingVision logos, brand names, original imagery, original icons, or original marketing copy
-
-### Requirement: Presentation-ready responsive layout
-The system SHALL keep the layered product pages polished and legible across common desktop and mobile viewports.
-
-#### Scenario: User captures a desktop screenshot
-- **WHEN** the application is viewed on a desktop viewport
-- **THEN** the page presents a premium AI sports analytics layout with clear hierarchy, stable spacing, no incoherent overlap, and a strong first-screen visual signal
-
-#### Scenario: User views the product on mobile
-- **WHEN** the application is viewed on a mobile viewport
-- **THEN** page sections stack or condense into stable layouts while preserving readable text, accessible controls, and constrained visualization dimensions
-
 ### Requirement: Analysis workflow navigation
 The system SHALL expose the real-analysis workflow from the main product navigation and overview entry points.
 
@@ -68,19 +47,3 @@ The system SHALL expose the real-analysis workflow from the main product navigat
 #### Scenario: User opens task history
 - **WHEN** the user selects an analysis task history action from navigation or the upload workflow
 - **THEN** the system opens the analysis task management page
-
-### Requirement: Job-specific route support
-The system SHALL support route states for analysis jobs and job-specific result pages.
-
-#### Scenario: User opens job status route
-- **WHEN** the user navigates to a route representing an analysis job identifier
-- **THEN** the app shell preserves navigation context and renders the analysis job status page
-
-#### Scenario: User opens job-specific visual route
-- **WHEN** the user navigates to a route representing visual analysis for a specific job identifier
-- **THEN** the app shell renders the visual analysis workspace with that job context
-
-#### Scenario: User opens job-specific report route
-- **WHEN** the user navigates to a route representing a report type for a specific job identifier
-- **THEN** the app shell renders the matching report detail page with that job context
-

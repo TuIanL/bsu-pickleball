@@ -12,6 +12,7 @@ import {
   LineChart,
   Play,
   Radar,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Timer,
@@ -71,6 +72,7 @@ import {
   getTrackingOverlay,
   getVideoStreamUrl,
   isAnalysisApiError,
+  listAnalysisJobs,
   RECENT_ANALYSIS_JOB_EVENT,
   rememberAnalysisJob,
   requestAutomaticCalibration,
@@ -88,6 +90,7 @@ import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipeli
 type RouteState =
   | { page: "overview"; path: "/" } // 总览页
   | { page: "new-analysis"; path: "/analysis/new" } // 新建分析任务页
+  | { page: "analysis-tasks"; path: "/analysis/tasks" } // 分析任务管理页
   | { page: "analysis-job"; path: `/analysis/${string}`; jobId: string } // 分析任务详情页
   | { page: "vision"; path: "/vision" } // 视觉分析工作台
   | { page: "vision"; path: `/analysis/${string}/vision`; jobId: string } // 特定任务的视觉分析
@@ -134,6 +137,10 @@ function parsePath(pathname: string): RouteState {
     return { page: "new-analysis", path: "/analysis/new" };
   }
 
+  if (pathname === "/analysis/tasks") {
+    return { page: "analysis-tasks", path: "/analysis/tasks" };
+  }
+
   const analysisReportMatch = pathname.match(/^\/analysis\/([^/]+)\/reports\/([^/]+)$/);
 
   if (analysisReportMatch) {
@@ -162,6 +169,9 @@ function parsePath(pathname: string): RouteState {
 
   if (analysisJobMatch) {
     const [, jobId] = analysisJobMatch;
+    if (jobId === "tasks") {
+      return { page: "analysis-tasks", path: "/analysis/tasks" };
+    }
     return { page: "analysis-job", path: `/analysis/${jobId}`, jobId };
   }
 
@@ -192,16 +202,14 @@ function App() {
   // 初始化路由状态
   const [route, setRoute] = useState<RouteState>(() => parsePath(window.location.pathname));
   const [recentJob, setRecentJob] = useState<AnalysisJobSummary | null>(() => getRecentAnalysisJob());
-  const recentAnalysisPath = recentJob ? (`/analysis/${recentJob.id}/vision` as AppPath) : undefined;
 
   // 自定义导航函数，支持平滑滚动到顶部
   const navigate = useCallback((path: AppPath | "/reports/landing" | "/upload") => {
-    const targetPath = path === "/vision" && recentAnalysisPath ? recentAnalysisPath : path;
-    const nextRoute = parsePath(targetPath);
+    const nextRoute = parsePath(path);
     window.history.pushState({}, "", nextRoute.path);
     setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [recentAnalysisPath]);
+  }, []);
 
   // 监听浏览器前进/后退事件
   useEffect(() => {
@@ -227,6 +235,8 @@ function App() {
     switch (route.page) {
       case "new-analysis":
         return <NewAnalysisPage onNavigate={navigate} />;
+      case "analysis-tasks":
+        return <AnalysisTasksPage onNavigate={navigate} recentJob={recentJob} />;
       case "analysis-job":
         return <AnalysisJobPage jobId={route.jobId} onNavigate={navigate} />;
       case "vision":
@@ -244,7 +254,7 @@ function App() {
   }, [navigate, route, recentJob]);
 
   return (
-    <AppShell activePath={route.path} navigation={platformNavigation} onNavigate={navigate} recentAnalysisPath={recentAnalysisPath}>
+    <AppShell activePath={route.path} navigation={platformNavigation} onNavigate={navigate}>
       {content}
     </AppShell>
   );
@@ -320,8 +330,8 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
               <Play size={18} fill="currentColor" aria-hidden="true" />
               分析新比赛
             </button>
-            <button className="quiet-button" onClick={() => onNavigate("/reports/landing")} type="button">
-              查看样例报告
+            <button className="quiet-button" onClick={() => onNavigate("/analysis/tasks")} type="button">
+              查看分析任务
               <ArrowRight size={17} aria-hidden="true" />
             </button>
           </div>
@@ -375,6 +385,274 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
       </section>
     </PageFrame>
   );
+}
+
+function AnalysisTasksPage({
+  onNavigate,
+  recentJob,
+}: {
+  onNavigate: NavigateFn;
+  recentJob?: AnalysisJobSummary | null;
+}) {
+  const [jobs, setJobs] = useState<AnalysisJobSummary[] | null>(null);
+  const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const loadJobs = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent) {
+      setIsRefreshing(true);
+    }
+    try {
+      const nextJobs = await listAnalysisJobs();
+      setJobs(nextJobs);
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(errorToNotice("读取分析任务失败", "无法读取任务列表，请检查后端服务或稍后重试。", error));
+      setJobs([]);
+    } finally {
+      if (!silent) {
+        setIsRefreshing(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let timer: number | undefined;
+
+    const tick = async () => {
+      if (!alive) {
+        return;
+      }
+      try {
+        const nextJobs = await listAnalysisJobs();
+        if (!alive) {
+          return;
+        }
+        setJobs(nextJobs);
+        setLoadError(null);
+        if (nextJobs.some(isActiveAnalysisJob)) {
+          timer = window.setTimeout(tick, 2200);
+        }
+      } catch (error) {
+        if (!alive) {
+          return;
+        }
+        setLoadError(errorToNotice("读取分析任务失败", "无法读取任务列表，请检查后端服务或稍后重试。", error));
+        setJobs([]);
+      }
+    };
+
+    tick();
+
+    return () => {
+      alive = false;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
+
+  const visibleJobs = jobs ?? [];
+  const activeCount = visibleJobs.filter(isActiveAnalysisJob).length;
+  const completedCount = visibleJobs.filter((job) => job.status === "completed").length;
+  const failedCount = visibleJobs.filter((job) => job.status === "failed").length;
+
+  return (
+    <PageFrame>
+      <section className="grid gap-6 lg:grid-cols-[1fr_0.38fr] lg:items-stretch">
+        <div className="sport-card p-6 sm:p-8">
+          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+            <Camera size={16} aria-hidden="true" />
+            视频分析
+          </p>
+          <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">分析任务管理</h1>
+          <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
+            这里汇总从上传到完成的所有视觉分析任务。分析完成后进入纯净的视频结果页，详细数据再进入下级报告。
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
+              <Upload size={16} aria-hidden="true" />
+              上传比赛
+            </button>
+            <button className="quiet-button px-4 py-2.5" onClick={() => loadJobs()} disabled={isRefreshing} type="button">
+              <RefreshCw size={16} aria-hidden="true" />
+              {isRefreshing ? "刷新中" : "刷新任务"}
+            </button>
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/vision")} type="button">
+              查看演示
+            </button>
+          </div>
+        </div>
+        <div className="grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-5 shadow-sm">
+          {[
+            ["全部任务", visibleJobs.length],
+            ["分析中", activeCount],
+            ["已完成", completedCount],
+            ["失败", failedCount],
+          ].map(([label, value]) => (
+            <div className="flex items-center justify-between rounded-2xl bg-[#F5FAF1] px-4 py-3" key={label}>
+              <span className="text-sm font-bold text-slate-500">{label}</span>
+              <strong className="text-2xl font-black text-[#14241B]">{value}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {loadError ? (
+        <div className="mt-6">
+          <DiagnosticNoticeCard notice={loadError} />
+        </div>
+      ) : null}
+
+      {jobs === null ? (
+        <section className="mt-6 sport-card p-8 text-center">
+          <p className="text-sm font-bold text-[#168A34]">正在读取任务列表</p>
+          <p className="mt-2 text-sm text-slate-500">正在连接后端并同步历史分析任务。</p>
+        </section>
+      ) : visibleJobs.length === 0 ? (
+        <section className="mt-6 sport-card p-8 text-center">
+          <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">暂无分析任务</p>
+          <h2 className="mt-3 text-3xl font-black text-[#14241B]">先上传一场比赛</h2>
+          <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+            上传视频并完成四角标定后，任务会出现在这里，状态会从排队、分析中更新到分析完成。
+          </p>
+          <button className="green-button mx-auto mt-5" onClick={() => onNavigate("/analysis/new")} type="button">
+            上传比赛
+          </button>
+        </section>
+      ) : (
+        <section className="mt-6 grid gap-4">
+          {visibleJobs.map((job) => (
+            <AnalysisTaskCard job={job} key={job.id} onNavigate={onNavigate} recent={recentJob?.id === job.id} />
+          ))}
+        </section>
+      )}
+    </PageFrame>
+  );
+}
+
+function AnalysisTaskCard({
+  job,
+  onNavigate,
+  recent,
+}: {
+  job: AnalysisJobSummary;
+  onNavigate: NavigateFn;
+  recent?: boolean;
+}) {
+  const status = analysisStatusMeta(job.status);
+  const currentStage = job.stages.find((stage) => stage.id === job.stage) ?? job.stages.find((stage) => stage.status === "active");
+  const updatedAt = formatDateTime(job.updatedAt || job.createdAt);
+
+  return (
+    <article className={`sport-card p-5 sm:p-6 ${recent ? "border-[#22C55E]/50" : ""}`}>
+      <div className="grid gap-5 lg:grid-cols-[1fr_0.38fr] lg:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
+            <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+              {analysisModeLabel(job.analysisMode)}
+            </span>
+            {recent ? (
+              <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/12 px-3 py-1 text-xs font-black text-[#168A34]">
+                最近任务
+              </span>
+            ) : null}
+          </div>
+          <h2 className="mt-4 text-2xl font-black text-[#14241B]">{job.metadata.matchTitle}</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            {job.metadata.fileName} · {job.metadata.venue} · {job.metadata.athleteLabel}
+          </p>
+          <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
+            <TaskMeta label="更新时间" value={updatedAt} />
+            <TaskMeta label="当前阶段" value={currentStage?.label ?? job.stage} />
+            <TaskMeta label="任务 ID" value={job.id} />
+          </div>
+          {job.status === "failed" ? (
+            <p className="mt-3 rounded-2xl border border-[#FF4D4F]/20 bg-[#FF4D4F]/10 p-3 text-sm font-semibold leading-6 text-[#C92A2A]">
+              {job.errorMessage ?? currentStage?.detail ?? "分析失败，请检查后端日志或重新上传。"}
+            </p>
+          ) : null}
+        </div>
+        <div>
+          <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+            <div className="flex items-end justify-between">
+              <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">进度</span>
+              <strong className="text-3xl font-black text-[#168A34]">{job.progress}%</strong>
+            </div>
+            <div className="mt-3 h-2 rounded-full bg-[#DFEADA]">
+              <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {job.status === "completed" ? (
+              <>
+                <button className="green-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/vision`)} type="button">
+                  查看分析结果
+                </button>
+                <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/reports/landing`)} type="button">
+                  落点报告
+                </button>
+              </>
+            ) : (
+              <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}`)} type="button">
+                查看任务详情
+              </button>
+            )}
+            {job.status === "failed" ? (
+              <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
+                重新上传
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function TaskMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-[#F5FAF1] p-3">
+      <span className="block text-xs font-black uppercase tracking-[0.12em] text-slate-500">{label}</span>
+      <strong className="mt-1 block break-words text-[#14241B]">{value}</strong>
+    </div>
+  );
+}
+
+function isActiveAnalysisJob(job: AnalysisJobSummary) {
+  return ["uploaded", "queued", "processing"].includes(job.status);
+}
+
+function analysisStatusMeta(status: AnalysisJobSummary["status"]) {
+  const styles = {
+    uploaded: { label: "视频已接收", className: "bg-[#2F80ED]/12 text-[#1E63B6]" },
+    queued: { label: "排队中", className: "bg-[#2F80ED]/12 text-[#1E63B6]" },
+    processing: { label: "正在分析", className: "bg-[#FF9500]/14 text-[#A45A00]" },
+    completed: { label: "分析完成", className: "bg-[#22C55E]/14 text-[#168A34]" },
+    failed: { label: "分析失败", className: "bg-[#FF4D4F]/12 text-[#C92A2A]" },
+  } satisfies Record<AnalysisJobSummary["status"], { label: string; className: string }>;
+
+  return styles[status];
+}
+
+function analysisModeLabel(mode?: AnalysisJobSummary["analysisMode"]) {
+  if (mode === "real") {
+    return "真实视频分析";
+  }
+  if (mode === "limited") {
+    return "有限分析";
+  }
+  return "样例任务";
+}
+
+function formatDateTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+  return new Date(timestamp).toLocaleString();
 }
 
 /**
@@ -693,7 +971,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         useDemoFallback: false,
       });
       rememberAnalysisJob(job);
-      onNavigate(`/analysis/${job.id}`);
+      onNavigate("/analysis/tasks");
     } catch (error) {
       setError(
         errorToNotice(
@@ -1020,6 +1298,9 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
             <button className="quiet-button" onClick={() => onNavigate("/vision")} type="button">
               查看演示工作台
             </button>
+            <button className="quiet-button" onClick={() => onNavigate("/analysis/tasks")} type="button">
+              查看任务管理
+            </button>
           </div>
         </section>
       </section>
@@ -1248,6 +1529,9 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
             <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
               重新上传
             </button>
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
+              返回任务管理
+            </button>
           </div>
         </div>
       </section>
@@ -1280,6 +1564,9 @@ function StatusState({
         <div className="mt-6 flex justify-center gap-3">
           <button className="green-button" onClick={() => onNavigate("/analysis/new")} type="button">
             上传新视频
+          </button>
+          <button className="quiet-button" onClick={() => onNavigate("/analysis/tasks")} type="button">
+            返回任务管理
           </button>
           <button className="quiet-button" onClick={() => onNavigate("/vision")} type="button">
             查看演示
@@ -1454,6 +1741,63 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
   const reportPath = (type: ReportType) =>
     (analysis.jobId ? `/analysis/${analysis.jobId}/reports/${type}` : `/reports/${type}`) as AppPath;
 
+  if (jobId) {
+    return (
+      <PageFrame>
+        <section className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <button
+              className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+              onClick={() => onNavigate("/analysis/tasks")}
+              type="button"
+            >
+              <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
+              返回任务管理
+            </button>
+            <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+              <Camera size={16} aria-hidden="true" />
+              智能视频分析
+            </p>
+            <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">视频分析结果</h1>
+            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
+              当前数据来源：{sourceLabel}。详细报告已收纳到右侧下级标签中，主画面只保留视频和状态。
+            </p>
+          </div>
+        </section>
+
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
+          <VideoAnalysisCard
+            labels={analysis.videoOverlayLabels}
+            ballOverlayDetail={result?.artifacts.ball_overlay_detail}
+            ballOverlayStatus={result?.artifacts.ball_overlay_status}
+            ballOverlay={ballOverlay ?? null}
+            match={analysis.match}
+            players={analysis.playerMarkers}
+            poseOverlayDetail={result?.artifacts.pose_overlay_detail}
+            poseOverlayStatus={result?.artifacts.pose_overlay_status}
+            poseOverlay={poseOverlay ?? null}
+            timeline={analysis.timelineMarkers}
+            trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
+            trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
+            trackingOverlay={trackingOverlay ?? null}
+            trajectories={analysis.shotTrajectories}
+            videoSrc={analysis.source === "job" ? videoSrc : undefined}
+          />
+          <AnalysisStatusRail
+            analysis={analysis}
+            ballOverlay={ballOverlay ?? null}
+            job={job}
+            onNavigate={onNavigate}
+            poseOverlay={poseOverlay ?? null}
+            reportPath={reportPath}
+            result={result}
+            trackingOverlay={trackingOverlay ?? null}
+          />
+        </section>
+      </PageFrame>
+    );
+  }
+
   return (
     <PageFrame>
       <section className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -1554,6 +1898,141 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       </div>
     </PageFrame>
   );
+}
+
+function AnalysisStatusRail({
+  analysis,
+  ballOverlay,
+  job,
+  onNavigate,
+  poseOverlay,
+  reportPath,
+  result,
+  trackingOverlay,
+}: {
+  analysis: AnalysisReport;
+  ballOverlay: BallOverlayArtifact | null;
+  job?: AnalysisJobSummary | null;
+  onNavigate: NavigateFn;
+  poseOverlay: PoseOverlayArtifact | null;
+  reportPath: (type: ReportType) => AppPath;
+  result?: AnalysisPipelineResult | null;
+  trackingOverlay: TrackingOverlayArtifact | null;
+}) {
+  const overlayRows = [
+    {
+      label: "人物框",
+      status: result?.artifacts.tracking_overlay_status ?? trackingOverlay?.status ?? "unavailable",
+      detail: result?.artifacts.tracking_overlay_detail ?? trackingOverlay?.detail,
+    },
+    {
+      label: "骨架姿态",
+      status: result?.artifacts.pose_overlay_status ?? poseOverlay?.status ?? "unavailable",
+      detail: result?.artifacts.pose_overlay_detail ?? poseOverlay?.detail,
+    },
+    {
+      label: "球轨迹",
+      status: result?.artifacts.ball_overlay_status ?? ballOverlay?.status ?? "unavailable",
+      detail: result?.artifacts.ball_overlay_detail ?? ballOverlay?.detail,
+    },
+  ];
+  const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
+
+  return (
+    <aside className="grid gap-4">
+      <section className="sport-card p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务状态</p>
+            <h2 className="mt-2 text-xl font-black text-[#14241B]">{job ? analysisStatusMeta(job.status).label : "样例分析"}</h2>
+          </div>
+          <span className="grid size-10 place-items-center rounded-2xl bg-[#22C55E]/12 text-[#168A34]">
+            <BadgeCheck size={19} aria-hidden="true" />
+          </span>
+        </div>
+        {job ? (
+          <>
+            <div className="mt-4 h-2 rounded-full bg-[#DFEADA]">
+              <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+            </div>
+            <dl className="mt-4 grid gap-2 text-sm">
+              <RailMeta label="比赛" value={job.metadata.matchTitle} />
+              <RailMeta label="视频" value={job.metadata.fileName} />
+              <RailMeta label="分析模式" value={analysisModeLabel(job.analysisMode)} />
+              <RailMeta label="当前阶段" value={activeStage?.label ?? job.stage} />
+              <RailMeta label="更新时间" value={formatDateTime(job.updatedAt || job.createdAt)} />
+            </dl>
+          </>
+        ) : null}
+      </section>
+
+      <section className="sport-card p-5">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">视觉层状态</p>
+        <div className="mt-4 grid gap-3">
+          {overlayRows.map((row) => {
+            const meta = overlayStatusMeta(row.status);
+            return (
+              <div className="rounded-2xl border border-[#DDE9D6] bg-white/70 p-3" key={row.label}>
+                <div className="flex items-center justify-between gap-3">
+                  <strong className="text-sm text-[#14241B]">{row.label}</strong>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-black ${meta.className}`}>{meta.label}</span>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-slate-500">{row.detail ?? meta.detail}</p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="sport-card p-5">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">下级报告</p>
+        <div className="mt-4 grid gap-2">
+          {analysis.reportActions.map((action) => (
+            <button
+              className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
+              key={action.type}
+              onClick={() => onNavigate(reportPath(action.type))}
+              type="button"
+            >
+              {action.title}
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+        <button className="quiet-button mt-4 w-full px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
+          返回任务管理
+        </button>
+      </section>
+    </aside>
+  );
+}
+
+function RailMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-[#F5FAF1] p-3">
+      <dt className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{label}</dt>
+      <dd className="mt-1 break-words font-semibold text-[#14241B]">{value}</dd>
+    </div>
+  );
+}
+
+function overlayStatusMeta(status?: string) {
+  if (status === "available") {
+    return { label: "可用", className: "bg-[#22C55E]/14 text-[#168A34]", detail: "该视觉层来自上传视频分析结果。" };
+  }
+  if (status === "partial") {
+    return { label: "部分可用", className: "bg-[#FF9500]/14 text-[#A45A00]", detail: "该视觉层只有部分帧或片段可用。" };
+  }
+  if (status === "failed") {
+    return { label: "失败", className: "bg-[#FF4D4F]/12 text-[#C92A2A]", detail: "该视觉层生成失败，可查看后端诊断。" };
+  }
+  if (status === "skipped") {
+    return { label: "已跳过", className: "bg-slate-100 text-slate-600", detail: "该视觉层在本次分析中未启用。" };
+  }
+  if (status === "no_detections" || status === "no_poses") {
+    return { label: "无结果", className: "bg-[#FF9500]/14 text-[#A45A00]", detail: "模型已运行，但没有产生可用目标。" };
+  }
+  return { label: "不可用", className: "bg-slate-100 text-slate-600", detail: "本次任务没有可用的真实视觉层数据。" };
 }
 
 function CoachNotesCard({ notes }: { notes: AnalysisReport["coachNotes"] }) {

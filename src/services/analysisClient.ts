@@ -149,6 +149,13 @@ function getStoredJobs(): Record<string, StoredJob> {
   }
 }
 
+function getStoredJobSummaries(): AnalysisJobSummary[] {
+  return Object.values(getStoredJobs())
+    .map((job) => job.summary)
+    .filter((summary): summary is AnalysisJobSummary => Boolean(summary?.id))
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
+}
+
 function saveStoredJob(job: StoredJob) {
   const jobs = getStoredJobs();
   jobs[job.summary.id] = job;
@@ -433,6 +440,28 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
     saveStoredJob(job);
     rememberAnalysisJob(job.summary);
     return job.summary;
+  }
+}
+
+export async function listAnalysisJobs(): Promise<AnalysisJobSummary[]> {
+  try {
+    const jobs = await requestJson<AnalysisJobSummary[]>("/api/analysis/jobs");
+    if (jobs.length) {
+      rememberAnalysisJob(jobs[0]);
+      return jobs;
+    }
+    const storedJobs = getStoredJobSummaries();
+    if (storedJobs.length) {
+      rememberAnalysisJob(storedJobs[0]);
+    }
+    return storedJobs;
+  } catch (error) {
+    const storedJobs = getStoredJobSummaries();
+    if (storedJobs.length) {
+      rememberAnalysisJob(storedJobs[0]);
+      return storedJobs;
+    }
+    throw error;
   }
 }
 
