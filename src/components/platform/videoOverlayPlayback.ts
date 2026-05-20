@@ -1,6 +1,4 @@
 import type {
-  BallOverlayFrame,
-  BallTrajectoryPoint,
   DetectionOverlayBox,
   DetectionOverlayFrame,
   PoseKeypoint,
@@ -8,7 +6,7 @@ import type {
   PoseSubject,
 } from "../../types/report";
 
-type OverlayFrame = DetectionOverlayFrame | PoseOverlayFrame | BallOverlayFrame;
+type OverlayFrame = DetectionOverlayFrame | PoseOverlayFrame;
 
 type FrameWindow<T extends OverlayFrame> = {
   current?: T;
@@ -115,24 +113,6 @@ export function resolvePoseFrame(frames: PoseOverlayFrame[], currentTime: number
   };
 }
 
-export function resolveBallFrame(frames: BallOverlayFrame[], currentTime: number): BallOverlayFrame | undefined {
-  const nearest = findNearestFrame(frames, currentTime);
-  if (!nearest) {
-    return undefined;
-  }
-  const currentSegmentId = nearest.points[0]?.segment_id;
-  const visiblePoints = frames
-    .flatMap((frame) => frame.points)
-    .filter((point) => point.segment_id === currentSegmentId && point.timestamp_seconds <= currentTime)
-    .slice(-24);
-
-  return {
-    ...nearest,
-    timestamp_seconds: currentTime,
-    points: visiblePoints.length ? visiblePoints : nearest.points,
-  };
-}
-
 function interpolateDetection(
   current: DetectionOverlayBox,
   next: DetectionOverlayBox,
@@ -168,10 +148,6 @@ function interpolateKeypoint(current: PoseKeypoint, next: PoseKeypoint, ratio: n
     confidence: lerp(current.confidence, next.confidence, ratio),
     visible: current.visible && next.visible,
   };
-}
-
-export function ballPointKey(point: BallTrajectoryPoint): string {
-  return `${point.segment_id}-${point.frame_index}-${point.source}`;
 }
 
 function lerp(start: number, end: number, ratio: number): number {

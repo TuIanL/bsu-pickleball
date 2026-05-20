@@ -11,7 +11,7 @@ interface AppShellProps {
   activePath: string;
   children: ReactNode;
   navigation: NavigationItem[];
-  onNavigate: (path: AppPath | "/reports/landing" | "/upload") => void;
+  onNavigate: (path: AppPath | "/upload") => void;
 }
 
 export function AppShell({ activePath, children, navigation, onNavigate }: AppShellProps) {
@@ -26,10 +26,6 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
 
     if (path === "/vision") {
       return activePath === "/vision" || /^\/analysis\/[^/]+\/vision$/.test(activePath);
-    }
-
-    if (path === "/reports/landing") {
-      return activePath.startsWith("/reports");
     }
 
     return activePath === path;

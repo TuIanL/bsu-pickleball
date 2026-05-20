@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,20 @@ class StorageService:
 
     def read_json(self, path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def delete_path(path: Path) -> bool:
+        if not path.exists():
+            return False
+        if path.is_dir():
+            shutil.rmtree(path)
+            return True
+        path.unlink()
+        return True
+
+    @staticmethod
+    def delete_path_tree(path: Path) -> bool:
+        return StorageService.delete_path(path)
 
     def output_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / f"{job_id}.json"

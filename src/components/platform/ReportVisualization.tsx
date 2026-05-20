@@ -1,36 +1,25 @@
-import { AlertTriangle, Footprints, Route, Target } from "lucide-react";
+import { AlertTriangle, Footprints } from "lucide-react";
 import type {
-  CourtPoint,
-  CourtRoute,
   Diagnosis,
   MovementPoint,
-  Rally,
   ReportDefinition,
 } from "../../types/report";
 
 interface ReportVisualizationProps {
   definition: ReportDefinition;
   diagnoses: Diagnosis[];
-  landingPoints: CourtPoint[];
   movementPath: MovementPoint[];
-  rallies: Rally[];
-  routes: CourtRoute[];
 }
 
 const iconMap = {
-  heat: Target,
   movement: Footprints,
-  rally: Route,
   diagnosis: AlertTriangle,
 };
 
 export function ReportVisualization({
   definition,
   diagnoses,
-  landingPoints,
   movementPath,
-  rallies,
-  routes,
 }: ReportVisualizationProps) {
   const Icon = iconMap[definition.visualization];
   const movementPolyline = movementPath.map((point) => `${point.x},${point.y}`).join(" ");
@@ -76,15 +65,6 @@ export function ReportVisualization({
               <line x1="12" x2="88" y1="28" y2="28" stroke="rgba(34,197,94,0.62)" strokeWidth="0.55" />
               <line x1="12" x2="88" y1="44" y2="44" stroke="rgba(34,197,94,0.62)" strokeWidth="0.55" />
 
-              {definition.visualization === "heat"
-                ? landingPoints.map((point) => (
-                    <g key={point.id}>
-                      <circle cx={point.x} cy={point.y * 0.64 + 6} fill="rgba(34,197,94,0.16)" r={6 + point.intensity * 7} />
-                      <circle cx={point.x} cy={point.y * 0.64 + 6} fill="#22C55E" r={2.4 + point.intensity * 2} />
-                    </g>
-                  ))
-                : null}
-
               {definition.visualization === "movement" ? (
                 <>
                   <polyline
@@ -119,45 +99,17 @@ export function ReportVisualization({
                 </>
               ) : null}
 
-              {definition.visualization === "rally"
-                ? routes.map((route) => (
-                    <g key={route.id}>
-                      <line
-                        x1={route.from.x}
-                        x2={route.to.x}
-                        y1={route.from.y * 0.64 + 6}
-                        y2={route.to.y * 0.64 + 6}
-                        stroke="#D9FF3F"
-                        strokeLinecap="round"
-                        strokeWidth="1.4"
-                      />
-                      <circle cx={route.from.x} cy={route.from.y * 0.64 + 6} fill="#2F80ED" r="2.5" />
-                      <circle cx={route.to.x} cy={route.to.y * 0.64 + 6} fill="#22C55E" r="3" />
-                    </g>
-                  ))
-                : null}
             </svg>
           )}
         </div>
 
         <div className="grid gap-3">
-          {definition.visualization === "rally"
-            ? rallies.map((rally) => (
-                <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={rally.id}>
-                  <div className="flex items-center justify-between gap-3">
-                    <strong className="text-[#14241B]">{rally.title}</strong>
-                    <span className="text-xs font-bold text-[#168A34]">{rally.duration}</span>
-                  </div>
-                  <p className="mt-2 text-sm font-semibold text-slate-700">{rally.pattern}</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{rally.observation}</p>
-                </article>
-              ))
-            : definition.insights.map((insight) => (
-                <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={insight.id}>
-                  <strong className="text-[#14241B]">{insight.title}</strong>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{insight.body}</p>
-                </article>
-              ))}
+          {definition.insights.map((insight) => (
+            <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={insight.id}>
+              <strong className="text-[#14241B]">{insight.title}</strong>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{insight.body}</p>
+            </article>
+          ))}
         </div>
       </div>
     </section>

@@ -10,8 +10,6 @@ export const productCopy = {
     hardware: "球拍预览",
   },
   courtModes: {
-    heat: "落点",
-    routes: "线路",
     movement: "步法",
   },
   hardware: {

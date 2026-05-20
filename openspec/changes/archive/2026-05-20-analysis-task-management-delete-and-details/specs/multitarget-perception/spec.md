@@ -1,9 +1,5 @@
-# multitarget-perception Specification
+## MODIFIED Requirements
 
-## Purpose
-Define the player-focused perception contract while ball and paddle capture are out of scope for the active product flow.
-
-## Requirements
 ### Requirement: Normalized multi-target detections
 The backend SHALL define JSON-serializable frame-level detection records for pickleball perception targets including `player` while treating ball and paddle targets as out of scope for the active product flow.
 

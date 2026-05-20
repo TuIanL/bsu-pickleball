@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks
 
 from app.schemas.analysis import (
     AnalysisJobCreate,
+    AnalysisDeleteResult,
     AnalysisJobSummary,
     AnalysisReport,
     AnalysisStage,
@@ -41,7 +42,6 @@ ORDERED_STAGES: list[AnalysisStageId] = [
     "frame-sampling",
     "detection",
     "pose",
-    "ball-tracking",
     "tracking",
     "projection",
     "metrics",
@@ -55,10 +55,9 @@ STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
     "calibration": ("场地标定", "读取或跳过四角手工标定"),
     "video-read": ("读取视频", "读取上传视频元数据和帧流"),
     "frame-sampling": ("抽帧采样", "按时间轴抽取关键帧"),
-    "detection": ("目标检测", "预留 YOLO11 检测球员、球、球拍和场地元素"),
+    "detection": ("目标检测", "预留 YOLO11 检测球员和场地元素"),
     "pose": ("人体姿态", "预留 RTMPose26 识别人体关键点"),
-    "ball-tracking": ("球轨迹", "检测球并生成球轨迹叠加数据"),
-    "tracking": ("轨迹跟踪", "关联球员、球和击球轨迹"),
+    "tracking": ("轨迹跟踪", "关联球员移动轨迹"),
     "projection": ("脚点投影", "映射画面坐标到匹克球场"),
     "metrics": ("运动指标", "计算移动距离、速度、厨房区停留和热力图"),
     "visualization": ("可视化输出", "生成可供前端展示的结果引用"),
@@ -362,6 +361,127 @@ def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
     return result
 
 
+def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
+    job = get_mock_job(job_id)
+    if job is None:
+        return AnalysisDeleteResult(job_id=job_id, status="not_found", detail="Analysis job not found")
+
+    if job.status in {"uploaded", "queued", "processing"}:
+        return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="Active analysis jobs cannot be deleted")
+
+    with _LOCK:
+        JOBS.pop(job_id, None)
+        REPORTS.pop(job_id, None)
+        RESULTS.pop(job_id, None)
+
+    deleted_paths = []
+    for path in [
+        _STORAGE.job_json_path(job_id),
+        _STORAGE.report_json_path(job_id),
+        _STORAGE.output_json_path(job_id),
+        _STORAGE.tracking_json_path(job_id),
+        _STORAGE.tracking_overlay_json_path(job_id),
+        _STORAGE.ball_overlay_json_path(job_id),
+        _STORAGE.pose_overlay_json_path(job_id),
+    ]:
+        if path.exists():
+            _STORAGE.delete_path(path)
+            deleted_paths.append(str(path))
+
+    job_output_dir = _STORAGE.outputs_dir / job_id
+    if job_output_dir.exists():
+        _STORAGE.delete_path_tree(job_output_dir)
+
+    _cleanup_shared_video_artifacts(job.videoId, excluded_job_id=job_id)
+    _cleanup_shared_calibration_artifacts(job.calibrationId, excluded_job_id=job_id)
+
+    return AnalysisDeleteResult(
+        job_id=job_id,
+        status="deleted",
+        detail=f"Deleted analysis job and {len(deleted_paths)} persisted artifact file(s)",
+    )
+
+
+def batch_delete_analysis_jobs(job_ids: list[str]) -> list[AnalysisDeleteResult]:
+    return [delete_analysis_job(job_id) for job_id in job_ids]
+
+
+def _remaining_jobs(excluded_job_id: str | None = None) -> list[AnalysisJobSummary]:
+    by_id: dict[str, AnalysisJobSummary] = {}
+    with _LOCK:
+        for job in JOBS.values():
+            if job.id != excluded_job_id:
+                by_id[job.id] = job
+
+    jobs_dir = _STORAGE.outputs_dir / "jobs"
+    if jobs_dir.exists():
+        for path in sorted(jobs_dir.glob("*.json")):
+            try:
+                job = AnalysisJobSummary.model_validate(_STORAGE.read_json(path))
+            except Exception:  # noqa: BLE001 - unreadable legacy jobs should be ignored here.
+                continue
+            if job.id != excluded_job_id:
+                by_id.setdefault(job.id, job)
+    return list(by_id.values())
+
+
+def _cleanup_shared_video_artifacts(video_id: str | None, *, excluded_job_id: str | None = None) -> None:
+    if not video_id:
+        return
+    if any(job.videoId == video_id for job in _remaining_jobs(excluded_job_id)):
+        return
+
+    metadata_path = _STORAGE.video_metadata_path(video_id)
+    if metadata_path.exists():
+        try:
+            metadata = _STORAGE.read_json(metadata_path)
+            raw_video_path = Path(str(metadata.get("path", "")))
+            if raw_video_path.exists():
+                raw_video_path.unlink()
+        except Exception:  # noqa: BLE001 - fallback to cached video metadata below.
+            pass
+
+    video = video_service.get_video(video_id)
+    if video is not None:
+        video_path = Path(video.path)
+        if video_path.exists():
+            video_path.unlink()
+
+    if metadata_path.exists():
+        metadata_path.unlink()
+
+    with _LOCK:
+        try:
+            from app.services.video_service import VIDEOS
+
+            VIDEOS.pop(video_id, None)
+        except Exception:  # noqa: BLE001 - cache cleanup should not fail deletion.
+            pass
+
+
+def _cleanup_shared_calibration_artifacts(calibration_id: str | None, *, excluded_job_id: str | None = None) -> None:
+    if not calibration_id:
+        return
+    if any(job.calibrationId == calibration_id for job in _remaining_jobs(excluded_job_id)):
+        return
+
+    calibration_path = _STORAGE.calibration_json_path(calibration_id)
+    if calibration_path.exists():
+        calibration_path.unlink()
+
+    preview_path = _STORAGE.preview_image_path(calibration_id)
+    if preview_path.exists():
+        preview_path.unlink()
+
+    try:
+        from app.services.calibration_service import CALIBRATIONS
+
+        with _LOCK:
+            CALIBRATIONS.pop(calibration_id, None)
+    except Exception:  # noqa: BLE001 - cache cleanup should not fail deletion.
+        pass
+
+
 def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[AnalysisStage]:
     stages: list[AnalysisStage] = [
         AnalysisStage(id="upload", label="视频上传", status="done", detail="上传视频已保存"),
@@ -496,20 +616,10 @@ def _apply_pipeline_feedback(
             else "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。"
         )
     )
-    payload["session"]["landingPoints"] = _heatmap_to_points(metrics.heatmap if metrics else None)
+    payload["session"]["landingPoints"] = []
     payload["session"]["routes"] = []
     payload["session"]["movementPath"] = _tracks_to_movement_path(tracks)
-    payload["session"]["rallies"] = [
-        {
-            "id": "mvp-movement",
-            "title": "MVP 移动分析",
-            "duration": "已完成" if result and result.status == "completed" else "未完成",
-            "shots": 0,
-            "pattern": "当前版本暂不识别击球与回合",
-            "result": "移动指标可用" if not no_tracks else "轨迹不可用",
-            "observation": "报告只展示上传视频可支持的移动、速度、站位和热力图指标，不编造球路或战术事件。",
-        }
-    ]
+    payload["session"]["rallies"] = []
 
     payload["dashboardMetrics"] = _pipeline_dashboard_metrics(
         total_distance=total_distance,
@@ -569,7 +679,7 @@ def _apply_pipeline_feedback(
             "id": "real-source",
             "tone": "training",
             "title": "数据来源已切换为上传视频",
-            "body": "本页优先展示后端 pipeline 产出的移动和轨迹指标，样例击球与战术内容不再混作真实结论。",
+            "body": "本页优先展示后端 pipeline 产出的人员移动、速度和轨迹指标。",
         },
         {
             "id": "movement-evidence",
@@ -651,7 +761,7 @@ def _pipeline_report_definitions(
     limited: bool,
     no_tracks: bool,
 ) -> list[dict]:
-    unavailable = "当前 MVP 未生成该类战术/击球/动作数据。"
+    unavailable = "当前 MVP 未生成该类动作诊断数据。"
     source_note = "未提供有效标定，移动报告处于有限模式。" if limited else "来自上传视频的 pipeline 结果。"
     if no_tracks and not limited:
         source_note = "pipeline 已完成，但没有检测到可用球员轨迹。"
@@ -664,18 +774,6 @@ def _pipeline_report_definitions(
         point_count=point_count,
     )
     return [
-        {
-            "type": "landing",
-            "title": "落点分析暂不可用",
-            "eyebrow": "落点分析报告",
-            "summary": unavailable,
-            "heroMetric": "N/A",
-            "heroMetricLabel": "球/落点检测",
-            "visualization": "heat",
-            "metrics": [_metric("landing-na", "alert", "落点检测", "未接入", unavailable, "MVP 限制", 0)],
-            "insights": [_note("landing-note", "risk", "不编造落点", "当前只展示移动与站位指标，落点需要后续球检测能力。")],
-            "trainingLink": "先查看移动覆盖报告",
-        },
         {
             "type": "movement",
             "title": "移动与场地覆盖报告",
@@ -690,18 +788,6 @@ def _pipeline_report_definitions(
                 _note("movement-speed", "advantage" if point_count else "risk", "速度与覆盖", f"平均速度 {avg_speed:.1f} ft/s，最高速度 {max_speed:.1f} ft/s。"),
             ],
             "trainingLink": "基于移动路径安排回位训练",
-        },
-        {
-            "type": "rally",
-            "title": "回合战术暂不可用",
-            "eyebrow": "回合战术报告",
-            "summary": unavailable,
-            "heroMetric": "N/A",
-            "heroMetricLabel": "回合切分",
-            "visualization": "rally",
-            "metrics": [_metric("rally-na", "alert", "回合识别", "未接入", unavailable, "MVP 限制", 0)],
-            "insights": [_note("rally-note", "risk", "不编造战术", "回合、击球类型和战术模式需要球轨迹与击球事件识别。")],
-            "trainingLink": "先完成移动覆盖训练",
         },
         {
             "type": "diagnosis",
@@ -823,7 +909,7 @@ DEMO_REPORT = {
         "venue": "北京体育大学匹克球训练场",
         "teams": "荧光队 对阵 蓝队",
         "score": "11 - 8",
-        "currentRally": "第 24 回合 · 18 拍",
+        "currentRally": "移动轨迹样本",
         "currentTime": "08:42",
         "duration": "12:16",
     },
@@ -833,30 +919,10 @@ DEMO_REPORT = {
         "date": "2026-05-04",
         "level": "大众进阶",
         "reportId": "PV-20260504-018",
-        "summary": "本次训练以底线相持和中场上网衔接为主，落点控制稳定，但反手回球后的回位速度仍影响下一拍质量。",
+        "summary": "本次样例聚焦人员移动、站位覆盖和回位节奏，用于展示当前保留的视觉分析工作流。",
         "metrics": [],
-        "landingPoints": [
-            {"id": "p1", "x": 71, "y": 26, "intensity": 0.88, "label": "右侧底线深区"},
-            {"id": "p2", "x": 68, "y": 42, "intensity": 0.64, "label": "右侧中场"},
-            {"id": "p3", "x": 41, "y": 32, "intensity": 0.72, "label": "反手斜线压制"},
-            {"id": "p4", "x": 29, "y": 67, "intensity": 0.45, "label": "网前小球"},
-        ],
-        "routes": [
-            {
-                "id": "r1",
-                "from": {"id": "r1-from", "x": 24, "y": 76, "intensity": 0.4, "label": "左后场"},
-                "to": {"id": "r1-to", "x": 72, "y": 27, "intensity": 0.9, "label": "右后场"},
-                "label": "反手斜线压底",
-                "result": "受迫回球",
-            },
-            {
-                "id": "r2",
-                "from": {"id": "r2-from", "x": 58, "y": 80, "intensity": 0.5, "label": "中后场"},
-                "to": {"id": "r2-to", "x": 30, "y": 38, "intensity": 0.7, "label": "左中场"},
-                "label": "正手变线",
-                "result": "得分",
-            },
-        ],
+        "landingPoints": [],
+        "routes": [],
         "movementPath": [
             {"x": 50, "y": 83},
             {"x": 38, "y": 74},
@@ -865,17 +931,7 @@ DEMO_REPORT = {
             {"x": 63, "y": 64},
             {"x": 54, "y": 81},
         ],
-        "rallies": [
-            {
-                "id": "ra1",
-                "title": "第 3 回合",
-                "duration": "18.6 秒",
-                "shots": 12,
-                "pattern": "反手斜线压制 → 正手变线",
-                "result": "主动得分",
-                "observation": "连续三拍压向对手反手后，正手变线质量高，是本场最佳进攻回合。",
-            }
-        ],
+        "rallies": [],
     },
     "dashboardMetrics": [
         {
@@ -883,7 +939,7 @@ DEMO_REPORT = {
             "icon": "activity",
             "label": "综合表现评分",
             "value": "82",
-            "detail": "深区接发抵消了后段网前失误",
+            "detail": "移动覆盖抵消了后段网前站位波动",
             "trend": "较上场 +8%",
             "direction": "up",
             "progress": 82,
@@ -892,9 +948,9 @@ DEMO_REPORT = {
         {
             "id": "third",
             "icon": "waves",
-            "label": "第三拍吊球成功率",
+            "label": "回位效率",
             "value": "61%",
-            "detail": "右侧受压时吊球仍偏短",
+            "detail": "右侧覆盖后的回位仍偏慢",
             "trend": "-3%",
             "direction": "down",
             "progress": 61,
@@ -902,14 +958,12 @@ DEMO_REPORT = {
         },
     ],
     "reportActions": [
-        {"type": "landing", "title": "落点分析报告", "description": "查看深区命中、边线风险与热力分布。", "path": "/reports/landing"},
         {"type": "movement", "title": "步法移动报告", "description": "拆解回位路径、覆盖平衡和启动延迟。", "path": "/reports/movement"},
-        {"type": "rally", "title": "回合战术报告", "description": "追踪发接发、第三拍和网前模式。", "path": "/reports/rally"},
         {"type": "diagnosis", "title": "动作诊断报告", "description": "把动作问题转成证据和纠正方向。", "path": "/reports/diagnosis"},
     ],
     "coachNotes": [
-        {"id": "note-advantage", "tone": "advantage", "title": "接发深度带来主动权", "body": "当接发落在对手反手深区时，你方赢下 72% 的回合。"},
-        {"id": "note-risk", "tone": "risk", "title": "右侧第三拍吊球容易变短", "body": "第三拍吊球总成功率为 61%，但右侧半场下降到 43%。"},
+        {"id": "note-advantage", "tone": "advantage", "title": "覆盖平衡接近理想", "body": "样例移动路径显示左右覆盖较均衡，可作为后续人员位移投影的展示基线。"},
+        {"id": "note-risk", "tone": "risk", "title": "右侧回位仍有延迟", "body": "右侧覆盖后的恢复路径偏长，适合用移动轨迹和速度指标继续验证。"},
     ],
     "reportDefinitions": [],
     "playerMarkers": [
@@ -918,63 +972,47 @@ DEMO_REPORT = {
         {"id": "c", "label": "C", "team": "far", "x": 34, "y": 23, "color": "#2F80ED"},
         {"id": "d", "label": "D", "team": "far", "x": 75, "y": 28, "color": "#FF9500"},
     ],
-    "shotTrajectories": [
-        {"id": "third-drop", "path": "M28 72 C42 48, 52 43, 66 31", "color": "#22C55E", "label": "第三拍吊球"}
-    ],
+    "shotTrajectories": [],
     "videoOverlayLabels": [
-        {"id": "drop", "label": "第三拍吊球", "tone": "training", "x": 54, "y": 42},
-        {"id": "risk", "label": "高风险抽击", "tone": "risk", "x": 39, "y": 31},
+        {"id": "movement", "label": "人员移动轨迹", "tone": "training", "x": 54, "y": 42},
+        {"id": "coverage", "label": "右侧覆盖偏慢", "tone": "risk", "x": 39, "y": 31},
     ],
     "timelineMarkers": [
-        {"id": "serve", "time": "00:12", "position": 9, "label": "深区发球形成压迫", "tone": "advantage"},
-        {"id": "winner", "time": "08:42", "position": 76, "label": "反手深区铺垫制胜分", "tone": "advantage"},
+        {"id": "calibration", "time": "00:12", "position": 9, "label": "场地标定完成", "tone": "advantage"},
+        {"id": "movement", "time": "08:42", "position": 76, "label": "移动覆盖摘要", "tone": "advantage"},
     ],
     "highlights": [
-        {"id": "h1", "title": "长回合 #24", "time": "08:42", "result": "得分模式", "tone": "advantage", "description": "反手深区接发后，第六拍获得正手变线窗口。"}
+        {"id": "h1", "title": "移动覆盖摘要", "time": "08:42", "result": "轨迹样例", "tone": "advantage", "description": "人员轨迹集中在中后场，适合作为后续标准球场投影的演示入口。"}
     ],
     "diagnoses": [
         {
             "id": "backswing",
             "issue": "引拍滞后",
             "severity": "中",
-            "evidence": "反手位来球中，击球前 280ms 肘部展开不足。",
+            "evidence": "当前样例仅保留姿态诊断占位，真实任务需等待姿态模型输出。",
             "suggestion": "在反手准备阶段提前完成肩髋转向。",
-            "expectedOutcome": "提升反手迎前击球比例。",
+            "expectedOutcome": "后续用姿态关键点替换样例说明。",
             "priority": "优先级 1",
         }
     ],
     "trainingRecommendations": [],
     "drillRecommendations": [
         {
-            "id": "drill-third-shot",
-            "title": "第三拍吊球深度控制",
-            "goal": "右侧半场第三拍吊球落入厨房后 1m 区域。",
+            "id": "drill-recovery",
+            "title": "右侧覆盖后回位节奏",
+            "goal": "围绕右侧覆盖后的第一步恢复做 5 组移动练习。",
             "duration": "22 分钟",
-            "evidence": "右侧第三拍成功率 43%，低于整体 61%。",
-            "difficulty": "高级",
-            "linkedReport": "rally",
+            "evidence": "样例移动路径显示右侧覆盖后的恢复路径偏长。",
+            "difficulty": "进阶",
+            "linkedReport": "movement",
         }
     ],
-    "shotRows": [
-        {"id": "s1", "time": "00:12", "type": "发球", "player": "A", "placement": "中路深区", "qualityScore": 88, "qualityBand": "high", "result": "建立优势"}
-    ],
-    "skillRatings": [{"id": "third-shot", "label": "第三拍处理", "score": 61, "note": "稳定但受压时偏浅。"}],
+    "shotRows": [],
+    "skillRatings": [{"id": "movement-coverage", "label": "移动覆盖", "score": 61, "note": "右侧覆盖后的回位仍可优化。"}],
     "progressPoints": [{"match": "第1场", "performance": 67, "errors": 23, "thirdShot": 48, "kitchen": 52}],
 }
 
 DEMO_REPORT["reportDefinitions"] = [
-    {
-        "type": "landing",
-        "title": "落点与线路报告",
-        "eyebrow": "落点分析报告",
-        "summary": "接发压向反手深区时优势最明显。",
-        "heroMetric": "72%",
-        "heroMetricLabel": "反手深区回合胜率",
-        "visualization": "heat",
-        "metrics": DEMO_REPORT["dashboardMetrics"],
-        "insights": DEMO_REPORT["coachNotes"],
-        "trainingLink": "接发压向反手深区",
-    },
     {
         "type": "movement",
         "title": "移动与覆盖平衡报告",
@@ -988,27 +1026,15 @@ DEMO_REPORT["reportDefinitions"] = [
         "trainingLink": "过渡区重置",
     },
     {
-        "type": "rally",
-        "title": "回合战术报告",
-        "eyebrow": "回合战术报告",
-        "summary": "第三拍和网前相持决定多数回合走向。",
-        "heroMetric": "61%",
-        "heroMetricLabel": "第三拍吊球成功率",
-        "visualization": "rally",
-        "metrics": DEMO_REPORT["dashboardMetrics"],
-        "insights": DEMO_REPORT["coachNotes"],
-        "trainingLink": "第三拍吊球深度控制",
-    },
-    {
         "type": "diagnosis",
         "title": "动作诊断报告",
         "eyebrow": "动作诊断报告",
-        "summary": "主要问题来自反手准备节奏和长回合后的重心控制。",
+        "summary": "主要问题来自反手准备节奏和连续移动后的重心控制。",
         "heroMetric": "1",
         "heroMetricLabel": "已识别优先问题",
         "visualization": "diagnosis",
         "metrics": DEMO_REPORT["dashboardMetrics"],
         "insights": DEMO_REPORT["coachNotes"],
-        "trainingLink": "反手轻吊稳定性",
+        "trainingLink": "反手侧移动稳定性",
     },
 ]

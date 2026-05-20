@@ -3,10 +3,10 @@ import type {
   AnalysisJobSummary,
   AnalysisPipelineResult,
   AnalysisReport,
+  AnalysisDeleteResult,
   AnalysisStage,
   AnalysisStageId,
   AnalysisUploadMetadata,
-  BallOverlayArtifact,
   AutomaticCalibrationResponse,
   CalibrationPoint,
   ManualCalibrationResponse,
@@ -70,7 +70,6 @@ const stageLabels: Record<AnalysisStageId, string> = {
   "frame-sampling": "抽帧采样",
   detection: "目标检测",
   pose: "人体姿态",
-  "ball-tracking": "球轨迹",
   tracking: "轨迹跟踪",
   projection: "脚点投影",
   metrics: "运动指标",
@@ -86,7 +85,6 @@ const orderedStages: AnalysisStageId[] = [
   "frame-sampling",
   "detection",
   "pose",
-  "ball-tracking",
   "tracking",
   "projection",
   "metrics",
@@ -128,10 +126,9 @@ function getStageDetail(stage: AnalysisStageId) {
     calibration: "读取或跳过四角手工标定",
     "video-read": "读取上传视频元数据和帧流",
     "frame-sampling": "按时间轴抽取关键帧",
-    detection: "预留 YOLO11 检测球员、球、球拍和场地元素",
+    detection: "预留 YOLO11 检测球员和场地元素",
     pose: "预留 RTMPose26 识别人体关键点",
-    "ball-tracking": "检测球并生成球轨迹叠加数据",
-    tracking: "关联球员、球和击球轨迹",
+    tracking: "关联球员移动轨迹",
     projection: "映射画面坐标到匹克球场",
     metrics: "计算移动距离、速度、厨房区停留和热力图",
     visualization: "生成可供前端展示的结果引用",
@@ -160,6 +157,19 @@ function saveStoredJob(job: StoredJob) {
   const jobs = getStoredJobs();
   jobs[job.summary.id] = job;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+}
+
+function deleteStoredJobs(jobIds: string[]): AnalysisDeleteResult[] {
+  const jobs = getStoredJobs();
+  const results = jobIds.map((jobId) => {
+    if (!jobs[jobId]) {
+      return { job_id: jobId, status: "not_found", detail: "Local demo job not found" } satisfies AnalysisDeleteResult;
+    }
+    delete jobs[jobId];
+    return { job_id: jobId, status: "deleted", detail: "Deleted local demo job" } satisfies AnalysisDeleteResult;
+  });
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+  return results;
 }
 
 export function getRecentAnalysisJob(): AnalysisJobSummary | null {
@@ -465,6 +475,45 @@ export async function listAnalysisJobs(): Promise<AnalysisJobSummary[]> {
   }
 }
 
+export async function deleteAnalysisJob(jobId: string): Promise<AnalysisDeleteResult> {
+  try {
+    const result = await requestJson<AnalysisDeleteResult>(`/api/analysis/jobs/${jobId}`, {
+      method: "DELETE",
+    });
+    if (result.status === "deleted") {
+      deleteStoredJobs([jobId]);
+    }
+    return result;
+  } catch (error) {
+    const stored = getStoredJobs()[jobId];
+    if (stored?.summary) {
+      return deleteStoredJobs([jobId])[0];
+    }
+    throw error;
+  }
+}
+
+export async function deleteAnalysisJobs(jobIds: string[]): Promise<AnalysisDeleteResult[]> {
+  try {
+    const results = await requestJson<AnalysisDeleteResult[]>("/api/analysis/jobs/delete", {
+      body: JSON.stringify({ job_ids: jobIds }),
+      method: "POST",
+    });
+    const deletedJobIds = results.filter((result) => result.status === "deleted").map((result) => result.job_id);
+    if (deletedJobIds.length) {
+      deleteStoredJobs(deletedJobIds);
+    }
+    return results;
+  } catch (error) {
+    const storedJobs = getStoredJobs();
+    const hasAnyStored = jobIds.some((jobId) => storedJobs[jobId]);
+    if (hasAnyStored) {
+      return deleteStoredJobs(jobIds);
+    }
+    throw error;
+  }
+}
+
 export async function getAnalysisJob(jobId: string): Promise<AnalysisJobSummary | null> {
   try {
     const job = await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}`);
@@ -529,11 +578,6 @@ export async function getTrackingOverlay(result: AnalysisPipelineResult): Promis
 export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<PoseOverlayArtifact | null> {
   const path = result.artifacts.pose_overlay_url;
   return path ? requestJson<PoseOverlayArtifact>(path) : null;
-}
-
-export async function getBallOverlay(result: AnalysisPipelineResult): Promise<BallOverlayArtifact | null> {
-  const path = result.artifacts.ball_overlay_url;
-  return path ? requestJson<BallOverlayArtifact>(path) : null;
 }
 
 export { demoAnalysisReport };

@@ -20,7 +20,7 @@ class MultiTargetDetector(Protocol):
 
 
 class EmptyMultiTargetDetector:
-    detail = "多目标检测未配置，跳过球和球拍检测"
+    detail = "多目标检测未配置，跳过可选球员检测"
 
     def detect_frame(
         self,

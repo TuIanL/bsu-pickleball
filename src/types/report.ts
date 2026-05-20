@@ -1,8 +1,8 @@
 export type TrendDirection = "up" | "down" | "steady";
 
-export type CourtMode = "heat" | "routes" | "movement";
+export type CourtMode = "movement";
 
-export type ReportType = "landing" | "movement" | "rally" | "diagnosis";
+export type ReportType = "movement" | "diagnosis";
 
 export type AnalysisJobStatus =
   | "uploaded"
@@ -19,7 +19,6 @@ export type AnalysisStageId =
   | "frame-sampling"
   | "detection"
   | "pose"
-  | "ball-tracking"
   | "tracking"
   | "projection"
   | "metrics"
@@ -41,6 +40,7 @@ export type AppPath =
   | "/analysis/new"
   | "/analysis/tasks"
   | `/analysis/${string}`
+  | `/analysis/${string}/details`
   | `/analysis/${string}/vision`
   | `/analysis/${string}/reports/${ReportType}`
   | "/training"
@@ -179,7 +179,7 @@ export interface NavigationItem {
   id: string;
   label: string;
   shortLabel: string;
-  path: AppPath | "/reports/landing";
+  path: AppPath;
 }
 
 export interface AnalysisUploadMetadata {
@@ -215,6 +215,14 @@ export interface AnalysisJobSummary {
   videoId?: string;
   calibrationId?: string;
   analysisMode?: "demo" | "real" | "limited";
+}
+
+export type AnalysisDeleteStatus = "deleted" | "blocked" | "not_found" | "failed";
+
+export interface AnalysisDeleteResult {
+  job_id: string;
+  status: AnalysisDeleteStatus;
+  detail: string;
 }
 
 export interface VideoMetadata {
@@ -335,57 +343,6 @@ export interface TrackingOverlayArtifact {
   frames: DetectionOverlayFrame[];
 }
 
-export type BallPointSource = "observed" | "predicted" | "repaired";
-export type BallOverlayStatus = "available" | "partial" | "no_detections" | "unavailable" | "skipped" | "failed";
-
-export interface BallTrajectoryPoint {
-  frame_index: number;
-  timestamp_seconds: number;
-  image_point: [number, number] | number[];
-  confidence: number;
-  source: BallPointSource;
-  segment_id: number;
-  bbox?: [number, number, number, number] | number[];
-}
-
-export interface BallDetectionRecord {
-  frame_index: number;
-  timestamp_seconds: number;
-  class_name: "ball";
-  bbox: [number, number, number, number] | number[];
-  confidence: number;
-  source_width: number;
-  source_height: number;
-}
-
-export interface BallDetectionFrame {
-  frame_index: number;
-  timestamp_seconds: number;
-  detections: BallDetectionRecord[];
-}
-
-export interface BallOverlayFrame {
-  frame_index: number;
-  timestamp_seconds: number;
-  points: BallTrajectoryPoint[];
-}
-
-export interface BallOverlayArtifact {
-  job_id: string;
-  video_id?: string;
-  status: BallOverlayStatus;
-  detail: string;
-  source: FrameSourceSize;
-  fps: number;
-  frame_count: number;
-  processed_frame_count: number;
-  frame_stride: number;
-  detector_status: BallOverlayStatus;
-  frames: BallOverlayFrame[];
-  detections: BallDetectionFrame[];
-  diagnostic_counts: Record<string, number>;
-}
-
 export interface PoseKeypoint {
   name: string;
   x: number;
@@ -468,15 +425,11 @@ export interface AnalysisPipelineResult {
     tracking_result_json_path?: string;
     tracking_overlay_json_path?: string;
     tracking_overlay_url?: string;
-    ball_overlay_json_path?: string;
-    ball_overlay_url?: string;
     pose_overlay_json_path?: string;
     pose_overlay_url?: string;
     source_video_url?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
-    ball_overlay_status?: BallOverlayStatus | string;
-    ball_overlay_detail?: string;
     pose_overlay_status?: string;
     pose_overlay_detail?: string;
     overlay_video_path?: string;
@@ -603,7 +556,7 @@ export interface OverviewCard {
   id: string;
   title: string;
   body: string;
-  path: AppPath | "/reports/landing";
+  path: AppPath;
   metric: string;
 }
 
@@ -614,7 +567,7 @@ export interface ReportDefinition {
   summary: string;
   heroMetric: string;
   heroMetricLabel: string;
-  visualization: "heat" | "movement" | "rally" | "diagnosis";
+  visualization: "movement" | "diagnosis";
   metrics: DashboardMetric[];
   insights: CoachNote[];
   trainingLink: string;

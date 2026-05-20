@@ -2,8 +2,6 @@
 
 Expected normalization:
 - person/player boxes use label `player`
-- pickleball boxes use label `ball`
-- paddle boxes use label `paddle`
 - court-line or court-region detections use court-specific labels
 - all boxes are pixel coordinates in the original frame before court mapping
 

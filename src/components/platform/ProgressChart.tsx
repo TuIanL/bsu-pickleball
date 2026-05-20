@@ -15,7 +15,7 @@ export function ProgressChart({ points }: ProgressChartProps) {
           <h2 className="mt-2 text-2xl font-black text-[#14241B]">最近 5 场表现趋势</h2>
         </div>
         <p className="max-w-xl text-sm leading-6 text-slate-600">
-          最大进步来自接发深度，主要弱项仍是压力下的反手轻吊稳定性。
+          当前趋势聚焦移动覆盖、回位效率和网前站位控制。
         </p>
       </div>
 
@@ -33,7 +33,7 @@ export function ProgressChart({ points }: ProgressChartProps) {
                   <span
                     className="w-2.5 rounded-full bg-[#2F80ED]"
                     style={{ height: `${point.thirdShot}%` }}
-                    title={`第三拍 ${point.thirdShot}`}
+                    title={`回位效率 ${point.thirdShot}`}
                   />
                   <span
                     className="w-2.5 rounded-full bg-[#D9FF3F]"
@@ -50,7 +50,7 @@ export function ProgressChart({ points }: ProgressChartProps) {
               <i className="size-2 rounded-full bg-[#22C55E]" /> 综合表现
             </span>
             <span className="inline-flex items-center gap-2">
-              <i className="size-2 rounded-full bg-[#2F80ED]" /> 第三拍
+              <i className="size-2 rounded-full bg-[#2F80ED]" /> 回位效率
             </span>
             <span className="inline-flex items-center gap-2">
               <i className="size-2 rounded-full bg-[#D9FF3F]" /> 网前控制
@@ -69,7 +69,7 @@ export function ProgressChart({ points }: ProgressChartProps) {
                 <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${point.performance}%` }} />
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                失误 {point.errors}/{maxError} · 第三拍 {point.thirdShot}% · 网前 {point.kitchen}%
+                失误 {point.errors}/{maxError} · 回位 {point.thirdShot}% · 网前 {point.kitchen}%
               </p>
             </div>
           ))}

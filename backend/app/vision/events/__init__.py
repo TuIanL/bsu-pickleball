@@ -1,1 +1,1 @@
-"""Event-analysis modules for shots, landings, rallies, and diagnosis."""
+"""Event-analysis modules are paused for the current movement-focused MVP."""

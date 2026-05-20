@@ -1,1 +1,1 @@
-"""Tracking modules for players, ball, paddle, and rally continuity."""
+"""Tracking modules for player movement continuity."""

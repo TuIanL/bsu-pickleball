@@ -3,12 +3,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from math import isfinite
 from typing import Any, Callable
 
-from app.schemas.ball import BallDetectionFrame, BallOverlayArtifact
 from app.schemas.calibration import CourtPoint2D, ImagePoint
-from app.schemas.multitarget import MultiTargetDetection, MultiTargetStatus
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
@@ -38,8 +35,6 @@ from app.vision.player_tracking_engine.person_detector import EmptyPersonDetecto
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
-from app.vision.detectors.multitarget import EmptyMultiTargetDetector
-from app.vision.tracking.ball_trajectory import BallTrajectoryBuilder
 
 
 logger = logging.getLogger(__name__)
@@ -51,8 +46,6 @@ class _TrackingRunOutput:
     tracking: TrackingResult
     pose: PoseOverlayArtifact | None = None
     pose_stage: PipelineStageResult | None = None
-    ball: BallOverlayArtifact | None = None
-    ball_stage: PipelineStageResult | None = None
 
 
 class AnalysisPipeline:
@@ -69,8 +62,6 @@ class AnalysisPipeline:
         projector: PlayerProjector | None = None,
         primary_player_selector: PrimaryPlayerSelector | None = None,
         pose_estimator: Any | None = None,
-        multitarget_detector: Any | None = None,
-        ball_trajectory_builder: BallTrajectoryBuilder | None = None,
         frame_stride: int | None = None,
     ) -> None:
         self.video_service = video_service or VideoService()
@@ -117,12 +108,6 @@ class AnalysisPipeline:
             else None
         )
         self.pose_inference_enabled = self.pose_estimator is not None
-        self.multitarget_detector = multitarget_detector or EmptyMultiTargetDetector()
-        self.multitarget_inference_enabled = multitarget_detector is not None or self.settings.enable_multitarget_inference
-        self.ball_trajectory_builder = ball_trajectory_builder or BallTrajectoryBuilder(
-            max_gap_frames=self.settings.ball_max_repair_gap_frames,
-            max_speed_px_per_frame=self.settings.ball_max_speed_px_per_frame,
-        )
         self.frame_stride = max(1, int(frame_stride or self.settings.overlay_frame_stride))
 
     def run(
@@ -165,10 +150,6 @@ class AnalysisPipeline:
         pose_overlay_url: str | None = None
         pose_overlay_status: str | None = None
         pose_overlay_detail: str | None = None
-        ball_overlay_artifact_path: str | None = None
-        ball_overlay_url: str | None = None
-        ball_overlay_status: str | None = None
-        ball_overlay_detail: str | None = None
         if video and calibration:
             try:
                 self._notify_progress(
@@ -227,17 +208,6 @@ class AnalysisPipeline:
                 pose_overlay_status = "unavailable"
                 pose_overlay_detail = run_output.pose_stage.detail
 
-            if run_output.ball is not None:
-                ball_overlay_path = self.storage.ball_overlay_json_path(job_id)
-                self.storage.write_json(ball_overlay_path, run_output.ball.model_dump(mode="json"))
-                ball_overlay_artifact_path = str(ball_overlay_path)
-                ball_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/ball-overlay"
-                ball_overlay_status = run_output.ball.status
-                ball_overlay_detail = run_output.ball.detail
-            elif run_output.ball_stage is not None:
-                ball_overlay_status = "unavailable"
-                ball_overlay_detail = run_output.ball_stage.detail
-
             detection_stage = self._stage(
                 "detection",
                 "人体检测",
@@ -269,17 +239,6 @@ class AnalysisPipeline:
             )
             stages.append(pose_stage)
             self._notify_progress(progress_callback, pose_stage)
-            ball_stage = (
-                run_output.ball_stage
-                or self._stage(
-                    "ball-tracking",
-                    "球轨迹",
-                    "skipped",
-                    "多目标球检测未启用，暂不生成球轨迹",
-                )
-            )
-            stages.append(ball_stage)
-            self._notify_progress(progress_callback, ball_stage)
             projection_stage = self._stage(
                 "projection",
                 "脚点投影",
@@ -296,7 +255,6 @@ class AnalysisPipeline:
                 self._stage("detection", "人体检测", "skipped", "缺少场地标定，暂不运行真实检测"),
                 self._stage("tracking", "多目标跟踪", "skipped", "需要有效标定后才能生成可用场地轨迹"),
                 self._stage("pose", "人体姿态", "skipped", "需要检测和跟踪框后才能运行 RTMPose"),
-                self._stage("ball-tracking", "球轨迹", "skipped", "需要有效标定和多目标检测配置后才能生成球轨迹"),
                 self._stage("projection", "脚点投影", "skipped", "未提供标定，无法投影到标准球场坐标"),
             ]
             for stage in limited_stages:
@@ -310,7 +268,6 @@ class AnalysisPipeline:
                 self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"),
                 self._stage("tracking", "多目标跟踪", "done", "已生成 MVP 轨迹样本"),
                 self._stage("pose", "人体姿态", "skipped", "未提供真实视频，跳过骨架关节识别"),
-                self._stage("ball-tracking", "球轨迹", "skipped", "未提供真实视频，跳过球检测和球轨迹"),
             ]
             for stage in mock_stages:
                 stages.append(stage)
@@ -343,15 +300,11 @@ class AnalysisPipeline:
                 tracking_result_json_path=tracking_artifact_path,
                 tracking_overlay_json_path=tracking_overlay_artifact_path,
                 tracking_overlay_url=tracking_overlay_url,
-                ball_overlay_json_path=ball_overlay_artifact_path,
-                ball_overlay_url=ball_overlay_url,
                 pose_overlay_json_path=pose_overlay_artifact_path,
                 pose_overlay_url=pose_overlay_url,
                 source_video_url=source_video_url,
                 tracking_overlay_status=tracking_overlay_status,
                 tracking_overlay_detail=tracking_overlay_detail,
-                ball_overlay_status=ball_overlay_status,
-                ball_overlay_detail=ball_overlay_detail,
                 pose_overlay_status=pose_overlay_status,
                 pose_overlay_detail=pose_overlay_detail,
             ),
@@ -390,14 +343,6 @@ class AnalysisPipeline:
         all_tracks = []
         positions: list[PlayerFramePosition] = []
         pose_frames = []
-        ball_detections: list[MultiTargetDetection] = []
-        ball_detection_frames: list[BallDetectionFrame] = []
-        ball_stage = (
-            None
-            if self.multitarget_inference_enabled
-            else self._stage("ball-tracking", "球轨迹", "skipped", "多目标球检测未启用，暂不生成球轨迹")
-        )
-        ball_error: str | None = None
         pose_stage = (
             self._stage("pose", "人体姿态", "skipped", "RTMPose 姿态识别未启用，暂不生成骨架关节")
             if self.pose_estimator is None
@@ -418,24 +363,6 @@ class AnalysisPipeline:
 
                 timestamp = frame_index / raw_fps if raw_fps > 0 else float(frame_index)
                 detections = self._detect_frame(frame, frame_index)
-                frame_ball_detections: list[MultiTargetDetection] = []
-                if self.multitarget_inference_enabled and ball_error is None:
-                    try:
-                        multitarget_detections = self._detect_multitarget_frame(
-                            frame=frame,
-                            frame_index=frame_index,
-                            timestamp=timestamp,
-                            frame_width=frame_width,
-                            frame_height=frame_height,
-                        )
-                        frame_ball_detections = self._filter_ball_detections(
-                            multitarget_detections,
-                            frame_width=frame_width,
-                            frame_height=frame_height,
-                        )
-                    except Exception as exc:
-                        ball_error = str(exc)
-                        frame_ball_detections = []
                 tracks = tracker.update(detections)
                 footpoints = {track.track_id: self.footpoint_estimator.estimate(track) for track in tracks}
                 frame_positions = self.projector.project(
@@ -464,14 +391,6 @@ class AnalysisPipeline:
                 )
 
                 all_detections.extend(detections)
-                ball_detections.extend(frame_ball_detections)
-                ball_detection_frames.append(
-                    BallDetectionFrame(
-                        frame_index=frame_index,
-                        timestamp_seconds=timestamp,
-                        detections=frame_ball_detections,
-                    )
-                )
                 overlay_frames.append(
                     DetectionOverlayFrame(
                         frame_index=frame_index,
@@ -547,159 +466,16 @@ class AnalysisPipeline:
                 skeleton_edges=default_skeleton_edges(),
                 frames=pose_frames,
             )
-        ball_artifact = self._build_ball_overlay(
-            job_id=job_id,
-            video_id=video_id,
-            fps=fps,
-            frame_count=frame_count,
-            frame_width=frame_width,
-            frame_height=frame_height,
-            processed_frame_count=processed_frame_count,
-            frame_stride=stride,
-            detection_frames=ball_detection_frames,
-            detections=ball_detections,
-            error=ball_error,
-        )
-        if self.multitarget_inference_enabled:
-            if ball_error:
-                ball_stage = self._stage("ball-tracking", "球轨迹", "failed", f"球检测或轨迹生成失败：{ball_error}")
-            elif ball_artifact.status in {"available", "partial"}:
-                point_count = sum(len(frame.points) for frame in ball_artifact.frames)
-                ball_stage = self._stage("ball-tracking", "球轨迹", "done", f"已生成 {point_count} 个球轨迹点")
-            elif ball_artifact.status == "no_detections":
-                ball_stage = self._stage("ball-tracking", "球轨迹", "skipped", ball_artifact.detail)
-            else:
-                ball_stage = self._stage("ball-tracking", "球轨迹", "skipped", ball_artifact.detail)
         return _TrackingRunOutput(
             tracking=tracking_result,
             pose=pose_artifact,
             pose_stage=pose_stage,
-            ball=ball_artifact,
-            ball_stage=ball_stage,
         )
 
     def _detect_frame(self, frame: object, frame_index: int) -> list[Detection]:
         if hasattr(self.detector, "detect_frame"):
             return self.detector.detect_frame(frame, frame_index)
         return self.detector.detect(frame)
-
-    def _detect_multitarget_frame(
-        self,
-        frame: object,
-        frame_index: int,
-        timestamp: float,
-        frame_width: int,
-        frame_height: int,
-    ) -> list[MultiTargetDetection]:
-        if hasattr(self.multitarget_detector, "detect_frame"):
-            return self.multitarget_detector.detect_frame(
-                frame=frame,
-                frame_index=frame_index,
-                timestamp_seconds=timestamp,
-                frame_width=frame_width,
-                frame_height=frame_height,
-            )
-        return []
-
-    def _filter_ball_detections(
-        self,
-        detections: list[MultiTargetDetection],
-        frame_width: int,
-        frame_height: int,
-    ) -> list[MultiTargetDetection]:
-        source_area = max(1.0, float(frame_width) * float(frame_height))
-        filtered: list[MultiTargetDetection] = []
-        for detection in detections:
-            if detection.class_name != "ball":
-                continue
-            if detection.confidence < self.settings.ball_confidence:
-                continue
-            x1, y1, x2, y2 = detection.bbox
-            if not all(isfinite(value) for value in (x1, y1, x2, y2)):
-                continue
-            if x2 <= x1 or y2 <= y1:
-                continue
-            if x2 < 0 or y2 < 0 or x1 > frame_width or y1 > frame_height:
-                continue
-            area_ratio = ((x2 - x1) * (y2 - y1)) / source_area
-            if not (self.settings.ball_min_box_area_ratio <= area_ratio <= self.settings.ball_max_box_area_ratio):
-                continue
-            filtered.append(detection)
-        return filtered
-
-    def _build_ball_overlay(
-        self,
-        *,
-        job_id: str,
-        video_id: str | None,
-        fps: float,
-        frame_count: int,
-        frame_width: int,
-        frame_height: int,
-        processed_frame_count: int,
-        frame_stride: int,
-        detection_frames: list[BallDetectionFrame],
-        detections: list[MultiTargetDetection],
-        error: str | None,
-    ) -> BallOverlayArtifact:
-        source = SourceFrameSize(width=max(1, frame_width), height=max(1, frame_height))
-        if not self.multitarget_inference_enabled:
-            return BallOverlayArtifact(
-                job_id=job_id,
-                video_id=video_id,
-                status="unavailable",
-                detail="多目标球检测未启用，未运行球轨迹分析",
-                source=source,
-                fps=fps,
-                frame_count=frame_count,
-                processed_frame_count=processed_frame_count,
-                frame_stride=frame_stride,
-                detector_status="skipped",
-                detections=detection_frames,
-                diagnostic_counts={"raw_ball_detections": 0},
-            )
-        if error:
-            return BallOverlayArtifact(
-                job_id=job_id,
-                video_id=video_id,
-                status="failed",
-                detail=f"球检测或轨迹生成失败：{error}",
-                source=source,
-                fps=fps,
-                frame_count=frame_count,
-                processed_frame_count=processed_frame_count,
-                frame_stride=frame_stride,
-                detector_status="failed",
-                detections=detection_frames,
-                diagnostic_counts={"raw_ball_detections": len(detections)},
-            )
-        frames, diagnostics = self.ball_trajectory_builder.build(detections)
-        point_count = sum(len(frame.points) for frame in frames)
-        if point_count:
-            repaired_count = diagnostics.get("repaired_points", 0)
-            status: MultiTargetStatus = "partial" if diagnostics.get("unresolved_gaps", 0) else "available"
-            detail = f"已生成 {point_count} 个球轨迹点，其中 {repaired_count} 个为短时遮挡修复点"
-        elif detections:
-            status = "partial"
-            detail = "检测到球候选框，但没有形成可连续渲染的球轨迹"
-        else:
-            status = "no_detections"
-            detail = "球检测已运行但未检测到可用球框；请检查模型配置、视频清晰度、拍摄角度或阈值"
-        return BallOverlayArtifact(
-            job_id=job_id,
-            video_id=video_id,
-            status=status,
-            detail=detail,
-            source=source,
-            fps=fps,
-            frame_count=frame_count,
-            processed_frame_count=processed_frame_count,
-            frame_stride=frame_stride,
-            detector_status="available" if detections else "no_detections",
-            frames=frames,
-            detections=detection_frames,
-            diagnostic_counts=diagnostics,
-        )
 
     @staticmethod
     def _tracks_to_frame_detections(

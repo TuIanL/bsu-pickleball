@@ -1,8 +1,5 @@
-# report-detail-pages Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change build-layered-visual-analysis-platform. Update Purpose after archive.
-## Requirements
 ### Requirement: Typed report detail pages
 The system SHALL provide focused report pages for supported analysis types.
 
@@ -88,7 +85,7 @@ Report detail pages SHALL behave as lower-level destinations reached from comple
 
 #### Scenario: User opens a report from completed result
 - **WHEN** the user selects movement or diagnosis from a completed job's status rail, report tabs, or task card
-- **THEN** the system opens the matching job-specific report detail route with the completed task context preserved
+- **THEN** the system opens the matching job-specific report detail page with the completed task context preserved
 
 #### Scenario: User returns from report to video result
 - **WHEN** the user activates the report page's return action

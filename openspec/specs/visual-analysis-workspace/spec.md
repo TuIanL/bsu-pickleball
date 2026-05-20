@@ -48,14 +48,18 @@ The system SHALL keep video timeline review close to the video player while movi
 - **THEN** the selected chip visibly changes state and the displayed shot list or shot summary reflects that local selection
 
 ### Requirement: Video workspace report actions
-The system SHALL present compact lower-level report actions from the visual analysis workspace.
+The system SHALL present compact lower-level result actions from the visual analysis workspace without exposing removed landing or ball-capture analysis as current real-job reports.
 
 #### Scenario: User views report actions
 - **WHEN** the user reviews a completed job-specific video analysis workspace
-- **THEN** the status rail or adjacent secondary navigation shows tab-like actions for landing analysis report, movement analysis report, rally tactics report, and motion diagnosis report
+- **THEN** the status rail or adjacent secondary navigation shows actions for analysis details and currently supported movement or diagnosis views rather than a landing report action
 
-#### Scenario: User selects a report action
-- **WHEN** the user clicks one of the report actions from a completed job-specific result
+#### Scenario: User selects a result action
+- **WHEN** the user clicks analysis details from a completed job-specific result
+- **THEN** the system navigates to `/analysis/:jobId/details`
+
+#### Scenario: User selects a supported report action
+- **WHEN** the user clicks a currently supported report action from a completed job-specific result
 - **THEN** the system navigates to the matching job-specific `/analysis/:jobId/reports/:type` report detail page or equivalent lower-level tab state
 
 ### Requirement: Premium sports-tech visual style
@@ -66,19 +70,19 @@ The system SHALL make the visual analysis workspace feel like a mature AI sports
 - **THEN** the system uses bright primary surfaces, restrained green highlights, preserved blue/orange/red status accents, clean cards, subtle borders, hover states, and video-first hierarchy rather than a heavy dark interface or a generic admin-table layout
 
 ### Requirement: Job-specific visual analysis data
-The system SHALL allow the visual analysis workspace to render completed analysis job video and status data from backend report payloads, available MVP pipeline algorithm results, and video overlay artifacts in addition to the existing demo data.
+The system SHALL allow the visual analysis workspace to render completed analysis job video and status data from backend report payloads, available MVP pipeline algorithm results, and person/pose overlay artifacts in addition to the existing demo data.
 
 #### Scenario: User opens visual analysis for a completed real job
 - **WHEN** the user navigates to a visual analysis route associated with a completed uploaded-video analysis job
-- **THEN** the video analysis card, source video, overlay statuses, timeline markers, and status rail render from that job's report payload, algorithm-derived fields, and available detection, pose, or ball overlays
+- **THEN** the video analysis card, source video, person detection overlay status, pose overlay status, timeline markers, and status rail render from that job's report payload, algorithm-derived fields, and available detection or pose overlays
 
 #### Scenario: Completed real job only has limited algorithm output
 - **WHEN** the completed job lacks calibration, projected tracks, supported MVP metrics, detection boxes, or pose keypoints
-- **THEN** the workspace shows limited or unavailable states in the status rail and lower-level analysis views instead of filling modules with unrelated demo shot or tactical labels
+- **THEN** the workspace shows limited or unavailable states in the status rail and lower-level analysis views instead of filling modules with unrelated demo shot, landing, ball, or tactical labels
 
 #### Scenario: User opens visual analysis without job context
 - **WHEN** the user navigates to the existing demo visual analysis route without a job identifier
-- **THEN** the workspace continues to render the local demo analysis data
+- **THEN** the workspace continues to render the local demo analysis data with clear sample context
 
 ### Requirement: Job-aware visual analysis states
 The system SHALL communicate when a job-specific visual analysis result is not ready or cannot be loaded.
@@ -185,43 +189,6 @@ The visual analysis workspace SHALL distinguish real video overlays from demo ov
 - **WHEN** model inference runs but no tracked people satisfy primary-player selection for overlay or pose rendering
 - **THEN** the workspace shows a completed-but-no-primary-players state with guidance to check confidence thresholds, player count configuration, camera angle, video quality, or filtering settings
 
-### Requirement: Synchronized ball overlay playback
-The visual analysis workspace SHALL render backend-generated ball points and ball trajectories over uploaded source video for completed real jobs when ball overlay data is available.
-
-#### Scenario: Ball overlay data is available
-- **WHEN** the user plays or scrubs a completed real-job video with frame-indexed ball overlay data
-- **THEN** the workspace draws the matching playback frame's ball point or trajectory segment aligned to the rendered video frame
-
-#### Scenario: Ball trajectory includes repaired points
-- **WHEN** the ball overlay artifact includes observed and repaired or predicted trajectory points
-- **THEN** the workspace renders the point sources with distinguishable visual treatment or labels so repaired motion is not presented as direct detection
-
-#### Scenario: Video is resized or letterboxed
-- **WHEN** the video display size differs from the source frame dimensions
-- **THEN** ball overlay coordinates are transformed into rendered video coordinates without drifting into letterbox areas
-
-### Requirement: Ball overlay source clarity
-The visual analysis workspace SHALL distinguish real ball overlays from demo shot trajectories and unavailable ball-tracking output.
-
-#### Scenario: Real ball overlay is unavailable
-- **WHEN** a completed real job has no available ball overlay artifact
-- **THEN** the workspace does not render demo shot trajectories as real ball data and shows a clear unavailable or skipped state for ball tracking
-
-#### Scenario: Real ball overlay is partial
-- **WHEN** a completed real job has partial ball trajectory data
-- **THEN** the workspace can render available points while communicating the partial status from the backend artifact detail
-
-#### Scenario: Demo analysis is shown
-- **WHEN** the visual analysis workspace is rendering local demo data without a real job context
-- **THEN** existing simulated shot paths may remain visible as demo visuals and are not labeled as uploaded-video ball tracking
-
-### Requirement: Ball overlay controls
-The visual analysis workspace SHALL provide user controls for showing or hiding real ball overlays independently from player boxes and skeleton overlays when ball data is available.
-
-#### Scenario: User toggles ball overlay
-- **WHEN** real ball overlay data is loaded and the user changes the ball overlay control
-- **THEN** the workspace hides or shows ball points and trajectory segments without changing video playback, player boxes, skeletons, or loaded artifact state
-
 ### Requirement: Fullscreen real-video overlay playback
 The visual analysis workspace SHALL provide fullscreen playback for real uploaded-video jobs without losing visible person boxes, skeleton joints, overlay toggles, or overlay status labels.
 
@@ -262,4 +229,3 @@ The visual analysis workspace SHALL provide a vertical status rail beside the pr
 #### Scenario: Overlay data is partially available
 - **WHEN** a completed job has only some overlay artifacts available
 - **THEN** the status rail labels available, unavailable, skipped, or failed video layers without presenting unavailable model output as real analysis
-

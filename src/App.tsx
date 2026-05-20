@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Sparkles,
   Timer,
+  Trash2,
   Upload,
   Zap,
 } from "lucide-react";
@@ -25,7 +26,6 @@ import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
 import { ProgressChart } from "./components/platform/ProgressChart";
 import { ReportVisualization } from "./components/platform/ReportVisualization";
-import { ShotExplorer } from "./components/platform/ShotExplorer";
 import { SkillRatings } from "./components/platform/SkillRatings";
 import { VideoAnalysisCard } from "./components/platform/VideoAnalysisCard";
 import {
@@ -37,8 +37,6 @@ import {
   playerMarkers,
   progressPoints,
   reportActions,
-  shotFilters,
-  shotTrajectories,
   timelineMarkers,
   trainingRecommendations,
   videoOverlayLabels,
@@ -52,7 +50,6 @@ import type {
   AutomaticCalibrationResponse,
   DrillRecommendation,
   InsightTone,
-  BallOverlayArtifact,
   PoseOverlayArtifact,
   ReportType,
   TrackingOverlayArtifact,
@@ -64,12 +61,13 @@ import {
   createManualCalibration,
   demoAnalysisReport as demoReport,
   getAnalysisJob,
-  getBallOverlay,
   getPoseOverlay,
   getAnalysisResult,
   getAnalysisReport,
   getRecentAnalysisJob,
   getTrackingOverlay,
+  deleteAnalysisJob,
+  deleteAnalysisJobs,
   getVideoStreamUrl,
   isAnalysisApiError,
   listAnalysisJobs,
@@ -92,6 +90,7 @@ type RouteState =
   | { page: "new-analysis"; path: "/analysis/new" } // 新建分析任务页
   | { page: "analysis-tasks"; path: "/analysis/tasks" } // 分析任务管理页
   | { page: "analysis-job"; path: `/analysis/${string}`; jobId: string } // 分析任务详情页
+  | { page: "analysis-details"; path: `/analysis/${string}/details`; jobId: string } // 分析详情页
   | { page: "vision"; path: "/vision" } // 视觉分析工作台
   | { page: "vision"; path: `/analysis/${string}/vision`; jobId: string } // 特定任务的视觉分析
   | { page: "report"; path: `/reports/${ReportType}`; reportType: ReportType } // 报告页
@@ -99,7 +98,7 @@ type RouteState =
   | { page: "training"; path: "/training" } // 训练建议页
   | { page: "hardware"; path: "/hardware" }; // 硬件融合预览页
 
-const supportedReportTypes: ReportType[] = ["landing", "movement", "rally", "diagnosis"];
+const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
 
 const toneStyles: Record<InsightTone, { dot: string; text: string; border: string; bg: string }> = {
   advantage: {
@@ -141,6 +140,13 @@ function parsePath(pathname: string): RouteState {
     return { page: "analysis-tasks", path: "/analysis/tasks" };
   }
 
+  const analysisDetailsMatch = pathname.match(/^\/analysis\/([^/]+)\/details$/);
+
+  if (analysisDetailsMatch) {
+    const [, jobId] = analysisDetailsMatch;
+    return { page: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
+  }
+
   const analysisReportMatch = pathname.match(/^\/analysis\/([^/]+)\/reports\/([^/]+)$/);
 
   if (analysisReportMatch) {
@@ -155,7 +161,7 @@ function parsePath(pathname: string): RouteState {
       };
     }
 
-    return { page: "analysis-job", path: `/analysis/${jobId}`, jobId };
+    return { page: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
   }
 
   const analysisVisionMatch = pathname.match(/^\/analysis\/([^/]+)\/vision$/);
@@ -193,6 +199,8 @@ function parsePath(pathname: string): RouteState {
     if (supportedReportTypes.includes(reportType)) {
       return { page: "report", path: `/reports/${reportType}`, reportType };
     }
+
+    return { page: "report", path: "/reports/movement", reportType: "movement" };
   }
 
   return { page: "overview", path: "/" };
@@ -204,7 +212,7 @@ function App() {
   const [recentJob, setRecentJob] = useState<AnalysisJobSummary | null>(() => getRecentAnalysisJob());
 
   // 自定义导航函数，支持平滑滚动到顶部
-  const navigate = useCallback((path: AppPath | "/reports/landing" | "/upload") => {
+  const navigate = useCallback((path: AppPath | "/upload") => {
     const nextRoute = parsePath(path);
     window.history.pushState({}, "", nextRoute.path);
     setRoute(nextRoute);
@@ -239,6 +247,8 @@ function App() {
         return <AnalysisTasksPage onNavigate={navigate} recentJob={recentJob} />;
       case "analysis-job":
         return <AnalysisJobPage jobId={route.jobId} onNavigate={navigate} />;
+      case "analysis-details":
+        return <AnalysisDetailsPage jobId={route.jobId} onNavigate={navigate} />;
       case "vision":
         return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={navigate} recentJob={recentJob} />;
       case "report":
@@ -268,7 +278,7 @@ function PageFrame({ children, compact = false }: { children: ReactNode; compact
   );
 }
 
-type NavigateFn = (path: AppPath | "/reports/landing" | "/upload") => void;
+type NavigateFn = (path: AppPath | "/upload") => void;
 
 const calibrationPointOrder = [
   { id: "top_left", label: "远端左角" },
@@ -323,7 +333,7 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
             把每一场匹克球比赛，转化为可执行的训练洞察
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-            自动拆解发球、接发、第三拍、网前对抗、失误原因与站位趋势，让赛后复盘像教练陪你看视频一样清楚。
+            当前聚焦视频上传、人员检测、姿态叠加、移动轨迹和标准球场投影底图，让赛后复盘先建立可靠的数据基础。
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <button className="green-button" onClick={() => onNavigate("/analysis/new")} type="button">
@@ -338,9 +348,9 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
           <div className="mt-10 grid max-w-2xl grid-cols-3 gap-3">
             {[
-              ["24", "已索引回合"],
+              ["20x44", "标准球场"],
               ["82", "表现评分"],
-              ["4", "报告层级"],
+              ["2", "当前报告"],
             ].map(([value, label]) => (
               <div className="rounded-2xl border border-[#DDE9D6] bg-white/80 p-4 shadow-sm" key={label}>
                 <strong className="block text-3xl font-black text-[#168A34]">{value}</strong>
@@ -359,7 +369,6 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
               match={matchSummary}
               players={playerMarkers}
               timeline={timelineMarkers}
-              trajectories={shotTrajectories}
             />
           </div>
         </div>
@@ -397,6 +406,9 @@ function AnalysisTasksPage({
   const [jobs, setJobs] = useState<AnalysisJobSummary[] | null>(null);
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
+  const [deleteNotice, setDeleteNotice] = useState<DiagnosticNotice | null>(null);
+  const [deletingJobIds, setDeletingJobIds] = useState<string[]>([]);
 
   const loadJobs = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) {
@@ -457,6 +469,94 @@ function AnalysisTasksPage({
   const activeCount = visibleJobs.filter(isActiveAnalysisJob).length;
   const completedCount = visibleJobs.filter((job) => job.status === "completed").length;
   const failedCount = visibleJobs.filter((job) => job.status === "failed").length;
+  const eligibleJobs = visibleJobs.filter((job) => !isActiveAnalysisJob(job));
+  const eligibleJobIds = eligibleJobs.map((job) => job.id);
+  const eligibleJobKey = eligibleJobIds.join("|");
+  const selectedEligibleIds = selectedJobIds.filter((jobId) => eligibleJobIds.includes(jobId));
+  const allEligibleSelected = eligibleJobIds.length > 0 && eligibleJobIds.every((jobId) => selectedJobIds.includes(jobId));
+  const isDeleting = deletingJobIds.length > 0;
+
+  useEffect(() => {
+    setSelectedJobIds((current) => current.filter((jobId) => eligibleJobIds.includes(jobId)));
+  }, [eligibleJobKey]);
+
+  const summarizeDeleteResults = (results: Awaited<ReturnType<typeof deleteAnalysisJobs>>) => {
+    const deleted = results.filter((result) => result.status === "deleted");
+    const blocked = results.filter((result) => result.status === "blocked");
+    const missing = results.filter((result) => result.status === "not_found");
+    const failed = results.filter((result) => result.status === "failed");
+    const attention = [...blocked, ...missing, ...failed];
+
+    setDeleteNotice({
+      title: attention.length ? "删除完成，部分任务需要处理" : "删除完成",
+      body: attention.length
+        ? `已删除 ${deleted.length} 个任务，${attention.length} 个任务未删除。运行中任务会被后端保护，缺失任务会在刷新后消失。`
+        : `已删除 ${deleted.length} 个任务，并同步清理本地产物。`,
+      detailItems: [
+        ["已删除", deleted.length],
+        ["受保护", blocked.length],
+        ["未找到", missing.length],
+        ["失败", failed.length],
+      ],
+    });
+  };
+
+  const toggleSelection = (jobId: string) => {
+    setDeleteNotice(null);
+    setSelectedJobIds((current) => (
+      current.includes(jobId) ? current.filter((item) => item !== jobId) : [...current, jobId]
+    ));
+  };
+
+  const toggleSelectAll = () => {
+    setDeleteNotice(null);
+    setSelectedJobIds(allEligibleSelected ? [] : eligibleJobIds);
+  };
+
+  const handleSingleDelete = async (job: AnalysisJobSummary) => {
+    if (isActiveAnalysisJob(job) || isDeleting) {
+      return;
+    }
+    const confirmed = window.confirm(`确定删除「${job.metadata.matchTitle}」吗？后端会同步删除该任务的本地产物，无法恢复。`);
+    if (!confirmed) {
+      return;
+    }
+    setDeletingJobIds([job.id]);
+    setDeleteNotice(null);
+    try {
+      const result = await deleteAnalysisJob(job.id);
+      summarizeDeleteResults([result]);
+      setSelectedJobIds((current) => current.filter((jobId) => jobId !== job.id));
+      await loadJobs({ silent: true });
+    } catch (error) {
+      setDeleteNotice(errorToNotice("删除任务失败", "没有删除任何任务，请检查后端服务后重试。", error));
+    } finally {
+      setDeletingJobIds([]);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (!selectedEligibleIds.length || isDeleting) {
+      return;
+    }
+    const confirmed = window.confirm(`确定批量删除 ${selectedEligibleIds.length} 个历史分析任务吗？本地任务产物会被同步删除，无法恢复。`);
+    if (!confirmed) {
+      return;
+    }
+    setDeletingJobIds(selectedEligibleIds);
+    setDeleteNotice(null);
+    try {
+      const results = await deleteAnalysisJobs(selectedEligibleIds);
+      summarizeDeleteResults(results);
+      const deletedIds = results.filter((result) => result.status === "deleted" || result.status === "not_found").map((result) => result.job_id);
+      setSelectedJobIds((current) => current.filter((jobId) => !deletedIds.includes(jobId)));
+      await loadJobs({ silent: true });
+    } catch (error) {
+      setDeleteNotice(errorToNotice("批量删除失败", "没有删除任何任务，请检查后端服务后重试。", error));
+    } finally {
+      setDeletingJobIds([]);
+    }
+  };
 
   return (
     <PageFrame>
@@ -505,6 +605,12 @@ function AnalysisTasksPage({
         </div>
       ) : null}
 
+      {deleteNotice ? (
+        <div className="mt-6">
+          <DiagnosticNoticeCard notice={deleteNotice} tone={deleteNotice.title.includes("失败") ? "error" : "info"} />
+        </div>
+      ) : null}
+
       {jobs === null ? (
         <section className="mt-6 sport-card p-8 text-center">
           <p className="text-sm font-bold text-[#168A34]">正在读取任务列表</p>
@@ -523,8 +629,39 @@ function AnalysisTasksPage({
         </section>
       ) : (
         <section className="mt-6 grid gap-4">
+          <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <label className="inline-flex items-center gap-3 text-sm font-bold text-[#14241B]">
+              <input
+                checked={allEligibleSelected}
+                className="size-4 accent-[#22C55E]"
+                disabled={!eligibleJobIds.length || isDeleting}
+                onChange={toggleSelectAll}
+                type="checkbox"
+              />
+              已选 {selectedEligibleIds.length} / {eligibleJobIds.length} 个可删除历史任务
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button className="quiet-button px-4 py-2.5" disabled={!selectedEligibleIds.length || isDeleting} onClick={() => setSelectedJobIds([])} type="button">
+                清空选择
+              </button>
+              <button className="green-button px-4 py-2.5" disabled={!selectedEligibleIds.length || isDeleting} onClick={handleBatchDelete} type="button">
+                <Trash2 size={16} aria-hidden="true" />
+                {isDeleting ? "删除中" : "批量删除"}
+              </button>
+            </div>
+          </div>
           {visibleJobs.map((job) => (
-            <AnalysisTaskCard job={job} key={job.id} onNavigate={onNavigate} recent={recentJob?.id === job.id} />
+            <AnalysisTaskCard
+              deleting={deletingJobIds.includes(job.id)}
+              job={job}
+              key={job.id}
+              onDelete={handleSingleDelete}
+              onNavigate={onNavigate}
+              onToggleSelected={toggleSelection}
+              recent={recentJob?.id === job.id}
+              selectable={!isActiveAnalysisJob(job)}
+              selected={selectedJobIds.includes(job.id)}
+            />
           ))}
         </section>
       )}
@@ -534,12 +671,22 @@ function AnalysisTasksPage({
 
 function AnalysisTaskCard({
   job,
+  deleting = false,
+  onDelete,
   onNavigate,
+  onToggleSelected,
   recent,
+  selectable = false,
+  selected = false,
 }: {
+  deleting?: boolean;
   job: AnalysisJobSummary;
+  onDelete: (job: AnalysisJobSummary) => void;
   onNavigate: NavigateFn;
+  onToggleSelected: (jobId: string) => void;
   recent?: boolean;
+  selectable?: boolean;
+  selected?: boolean;
 }) {
   const status = analysisStatusMeta(job.status);
   const currentStage = job.stages.find((stage) => stage.id === job.stage) ?? job.stages.find((stage) => stage.status === "active");
@@ -549,15 +696,29 @@ function AnalysisTaskCard({
     <article className={`sport-card p-5 sm:p-6 ${recent ? "border-[#22C55E]/50" : ""}`}>
       <div className="grid gap-5 lg:grid-cols-[1fr_0.38fr] lg:items-center">
         <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
-            <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
-              {analysisModeLabel(job.analysisMode)}
-            </span>
-            {recent ? (
-              <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/12 px-3 py-1 text-xs font-black text-[#168A34]">
-                最近任务
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
+              <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+                {analysisModeLabel(job.analysisMode)}
               </span>
+              {recent ? (
+                <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/12 px-3 py-1 text-xs font-black text-[#168A34]">
+                  最近任务
+                </span>
+              ) : null}
+            </div>
+            {selectable ? (
+              <label className="inline-flex items-center gap-2 text-xs font-black text-slate-500">
+                <input
+                  checked={selected}
+                  className="size-4 accent-[#22C55E]"
+                  disabled={deleting}
+                  onChange={() => onToggleSelected(job.id)}
+                  type="checkbox"
+                />
+                选择
+              </label>
             ) : null}
           </div>
           <h2 className="mt-4 text-2xl font-black text-[#14241B]">{job.metadata.matchTitle}</h2>
@@ -591,8 +752,8 @@ function AnalysisTaskCard({
                 <button className="green-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/vision`)} type="button">
                   查看分析结果
                 </button>
-                <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/reports/landing`)} type="button">
-                  落点报告
+                <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/details`)} type="button">
+                  分析详情
                 </button>
               </>
             ) : (
@@ -603,6 +764,12 @@ function AnalysisTaskCard({
             {job.status === "failed" ? (
               <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
                 重新上传
+              </button>
+            ) : null}
+            {selectable ? (
+              <button className="quiet-button px-4 py-2.5 text-[#C92A2A]" disabled={deleting} onClick={() => onDelete(job)} type="button">
+                <Trash2 size={15} aria-hidden="true" />
+                {deleting ? "删除中" : "删除"}
               </button>
             ) : null}
           </div>
@@ -1515,7 +1682,15 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
               打开视频分析
               <ArrowRight size={16} aria-hidden="true" />
             </button>
-            {reportActions.map((action) => (
+            <button
+              className="quiet-button px-4 py-2.5"
+              disabled={!isCompleted}
+              onClick={() => onNavigate(`/analysis/${job.id}/details`)}
+              type="button"
+            >
+              分析详情
+            </button>
+            {reportActions.filter((action) => supportedReportTypes.includes(action.type)).map((action) => (
               <button
                 className="quiet-button px-4 py-2.5"
                 disabled={!isCompleted}
@@ -1577,6 +1752,201 @@ function StatusState({
   );
 }
 
+function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
+  const { error, job, report, result } = useAnalysisReport(jobId);
+
+  if (job === undefined || report === undefined) {
+    return <StatusState title="正在加载分析详情" body="正在读取任务元数据、报告和算法结果。" onNavigate={onNavigate} />;
+  }
+
+  if (error) {
+    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} />;
+  }
+
+  if (!job) {
+    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能已经被删除。`} onNavigate={onNavigate} />;
+  }
+
+  if (isActiveAnalysisJob(job)) {
+    return <AnalysisJobPage jobId={jobId} onNavigate={onNavigate} />;
+  }
+
+  if (job.status === "failed") {
+    return (
+      <StatusState
+        title="分析任务失败"
+        body={job.errorMessage ?? "该任务没有生成可用分析详情，请返回任务管理或重新上传。"}
+        notice={{
+          title: "失败位置",
+          body: job.errorMessage ?? "请重新上传或检查后端日志。",
+          detailItems: [
+            ["任务 ID", job.id],
+            ["失败阶段", job.stages.find((stage) => stage.status === "failed")?.label ?? job.stage],
+          ],
+        }}
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
+  const analysis = report ?? demoReport;
+  const stageSummary = job.stages.filter((stage) => stage.status === "done").length;
+  const trackCount = result?.tracks.length ?? 0;
+  const trackIds = new Set(result?.tracks.map((track) => track.track_id) ?? []);
+  const hasProjection = trackCount > 0;
+
+  return (
+    <PageFrame>
+      <section className="sport-card overflow-hidden">
+        <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.42fr] lg:p-8">
+          <div>
+            <button
+              className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+              onClick={() => onNavigate("/analysis/tasks")}
+              type="button"
+            >
+              <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
+              返回任务管理
+            </button>
+            <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+              <LineChart size={16} aria-hidden="true" />
+              分析详情
+            </p>
+            <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{job.metadata.matchTitle}</h1>
+            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
+              当前页面保留任务元数据、算法状态和标准匹克球场二维平面图。坐标转换和人员位移捕捉完成后，会在同一张 20 x 44 ft 球场上投影可视化。
+            </p>
+          </div>
+          <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
+            <span className="text-sm font-bold text-[#168A34]">状态摘要</span>
+            <strong className="mt-4 block text-4xl font-black text-[#13A12C]">{analysisStatusMeta(job.status).label}</strong>
+            <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
+              {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
+            </p>
+            <button className="mt-5 green-button w-full" onClick={() => onNavigate(`/analysis/${job.id}/vision`)} type="button">
+              打开视频分析
+              <ArrowRight size={16} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_380px]">
+        <StandardCourtPlan tracks={result?.tracks ?? []} />
+        <aside className="grid gap-5">
+          <article className="sport-card p-5">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务元数据</p>
+            <dl className="mt-4 grid gap-2 text-sm">
+              <RailMeta label="视频文件" value={job.metadata.fileName} />
+              <RailMeta label="比赛日期" value={job.metadata.matchDate} />
+              <RailMeta label="场地" value={job.metadata.venue} />
+              <RailMeta label="球员/队伍" value={job.metadata.athleteLabel} />
+              <RailMeta label="比赛形式" value={job.metadata.matchFormat === "doubles" ? "双打" : "单打"} />
+              <RailMeta label="拍摄角度" value={cameraAngleLabel(job.metadata.cameraAngle)} />
+              <RailMeta label="分析模式" value={analysisModeLabel(job.analysisMode)} />
+              <RailMeta label="报告 ID" value={analysis.reportId} />
+            </dl>
+          </article>
+
+          <article className="sport-card p-5">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">投影准备</p>
+            <div className="mt-4 grid gap-3">
+              <ProjectionReadiness label="四角标定" ready={Boolean(job.calibrationId)} body={job.calibrationId ?? "缺少标定时无法进行真实坐标投影"} />
+              <ProjectionReadiness label="球员轨迹" ready={hasProjection} body={hasProjection ? `${trackCount} 个标准球场坐标点` : "尚未生成可用人员位移轨迹"} />
+              <ProjectionReadiness label="可视化状态" ready={false} body="热力图、位移轨迹和人员分布后续接入" />
+            </div>
+          </article>
+        </aside>
+      </section>
+    </PageFrame>
+  );
+}
+
+function ProjectionReadiness({ body, label, ready }: { body: string; label: string; ready: boolean }) {
+  return (
+    <div className="rounded-2xl border border-[#DDE9D6] bg-white/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <strong className="text-sm text-[#14241B]">{label}</strong>
+        <span className={`rounded-full px-2.5 py-1 text-xs font-black ${ready ? "bg-[#22C55E]/14 text-[#168A34]" : "bg-slate-100 text-slate-600"}`}>
+          {ready ? "就绪" : "待接入"}
+        </span>
+      </div>
+      <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">{body}</p>
+    </div>
+  );
+}
+
+function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["tracks"] }) {
+  const firstTrackId = tracks[0]?.track_id;
+  const projectedPath = tracks
+    .filter((track) => track.track_id === firstTrackId)
+    .slice(0, 80)
+    .map((track) => `${track.court_point.x},${track.court_point.y}`)
+    .join(" ");
+
+  return (
+    <article className="sport-card p-5 sm:p-6">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">标准球场二维平面图</p>
+          <h2 className="mt-2 text-2xl font-black text-[#14241B]">20 ft x 44 ft 投影底图</h2>
+        </div>
+        <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-black text-slate-500">
+          坐标系：x 0-20 · y 0-44
+        </span>
+      </div>
+
+      <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+        <svg className="mx-auto block aspect-[20/44] max-h-[760px] w-full max-w-[420px]" viewBox="-2 -2 24 48" role="img" aria-label="标准匹克球球场二维平面图">
+          <rect x="0" y="0" width="20" height="44" rx="0.2" fill="#DDEFE2" stroke="#173321" strokeWidth="0.24" />
+          <rect x="0" y="15" width="20" height="14" fill="#C7E7D5" opacity="0.85" />
+          <line x1="0" x2="20" y1="22" y2="22" stroke="#173321" strokeWidth="0.32" />
+          <line x1="0" x2="20" y1="15" y2="15" stroke="#173321" strokeWidth="0.22" />
+          <line x1="0" x2="20" y1="29" y2="29" stroke="#173321" strokeWidth="0.22" />
+          <line x1="10" x2="10" y1="0" y2="15" stroke="#173321" strokeWidth="0.18" />
+          <line x1="10" x2="10" y1="29" y2="44" stroke="#173321" strokeWidth="0.18" />
+
+          <text x="10" y="-0.75" textAnchor="middle" fontSize="1.1" fontWeight="800" fill="#173321">远端底线</text>
+          <text x="10" y="22.95" textAnchor="middle" fontSize="1.05" fontWeight="800" fill="#173321">Net</text>
+          <text x="10" y="45.4" textAnchor="middle" fontSize="1.1" fontWeight="800" fill="#173321">近端底线</text>
+          <text x="10" y="18.3" textAnchor="middle" fontSize="1" fontWeight="800" fill="#168A34">非截击区 7 ft</text>
+          <text x="5" y="8" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">远端左发球区</text>
+          <text x="15" y="8" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">远端右发球区</text>
+          <text x="5" y="37" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">近端左发球区</text>
+          <text x="15" y="37" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">近端右发球区</text>
+
+          {projectedPath ? (
+            <>
+              <polyline fill="none" points={projectedPath} stroke="#2F80ED" strokeLinecap="round" strokeLinejoin="round" strokeWidth="0.28" />
+              {tracks.slice(0, 48).map((track, index) => (
+                <circle
+                  cx={track.court_point.x}
+                  cy={track.court_point.y}
+                  fill={index === 0 ? "#D9FF3F" : "#2F80ED"}
+                  key={`${track.track_id}-${track.frame_index}-${index}`}
+                  r={index === 0 ? 0.34 : 0.22}
+                  stroke="#071008"
+                  strokeWidth="0.06"
+                />
+              ))}
+            </>
+          ) : (
+            <g>
+              <rect x="2.3" y="20" width="15.4" height="4" rx="0.6" fill="white" opacity="0.84" />
+              <text x="10" y="21.65" textAnchor="middle" fontSize="0.86" fontWeight="800" fill="#64748B">
+                暂无人员位移投影
+              </text>
+              <text x="10" y="23" textAnchor="middle" fontSize="0.72" fontWeight="700" fill="#64748B">
+                等待坐标转换和轨迹数据接入
+              </text>
+            </g>
+          )}
+        </svg>
+      </div>
+    </article>
+  );
+}
+
 function cameraAngleLabel(angle: AnalysisUploadMetadata["cameraAngle"]) {
   const labels: Record<AnalysisUploadMetadata["cameraAngle"], string> = {
     baseline: "底线视角",
@@ -1593,7 +1963,6 @@ function useAnalysisReport(jobId?: string) {
     error: DiagnosticNotice | null;
     job: AnalysisJobSummary | null;
     jobId: string;
-    ballOverlay: BallOverlayArtifact | null;
     poseOverlay: PoseOverlayArtifact | null;
     report: AnalysisReport | null;
     result: AnalysisPipelineResult | null;
@@ -1613,14 +1982,12 @@ function useAnalysisReport(jobId?: string) {
         const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
         let trackingOverlay: TrackingOverlayArtifact | null = null;
         let poseOverlay: PoseOverlayArtifact | null = null;
-        let ballOverlay: BallOverlayArtifact | null = null;
         const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
 
         if (pipelineResult) {
-          [trackingOverlay, poseOverlay, ballOverlay] = await Promise.all([
+          [trackingOverlay, poseOverlay] = await Promise.all([
             getTrackingOverlay(pipelineResult).catch(() => null),
             getPoseOverlay(pipelineResult).catch(() => null),
-            getBallOverlay(pipelineResult).catch(() => null),
           ]);
         }
 
@@ -1631,7 +1998,6 @@ function useAnalysisReport(jobId?: string) {
             error: null,
             job: nextJob,
             jobId,
-            ballOverlay,
             poseOverlay,
             report: adaptedReport,
             result: pipelineResult,
@@ -1645,7 +2011,6 @@ function useAnalysisReport(jobId?: string) {
             error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
             job: null,
             jobId,
-            ballOverlay: null,
             poseOverlay: null,
             report: null,
             result: null,
@@ -1663,12 +2028,11 @@ function useAnalysisReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { ballOverlay: null, error: null, job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
+    return { error: null, job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
   }
 
   if (loadedResult?.jobId !== jobId) {
     return {
-      ballOverlay: undefined as BallOverlayArtifact | null | undefined,
       error: null,
       job: undefined,
       poseOverlay: undefined,
@@ -1680,7 +2044,6 @@ function useAnalysisReport(jobId?: string) {
   }
 
   return {
-    ballOverlay: loadedResult.ballOverlay,
     error: loadedResult.error,
     job: loadedResult.job,
     poseOverlay: loadedResult.poseOverlay,
@@ -1695,7 +2058,7 @@ function useAnalysisReport(jobId?: string) {
  * 视觉分析工作台页组件
  */
 function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
-  const { ballOverlay, error, job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
+  const { error, job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
@@ -1740,6 +2103,7 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
         : `真实上传视频 · 任务 ${analysis.jobId}`;
   const reportPath = (type: ReportType) =>
     (analysis.jobId ? `/analysis/${analysis.jobId}/reports/${type}` : `/reports/${type}`) as AppPath;
+  const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
 
   if (jobId) {
     return (
@@ -1768,9 +2132,6 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
           <VideoAnalysisCard
             labels={analysis.videoOverlayLabels}
-            ballOverlayDetail={result?.artifacts.ball_overlay_detail}
-            ballOverlayStatus={result?.artifacts.ball_overlay_status}
-            ballOverlay={ballOverlay ?? null}
             match={analysis.match}
             players={analysis.playerMarkers}
             poseOverlayDetail={result?.artifacts.pose_overlay_detail}
@@ -1780,12 +2141,10 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
             trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
             trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
             trackingOverlay={trackingOverlay ?? null}
-            trajectories={analysis.shotTrajectories}
             videoSrc={analysis.source === "job" ? videoSrc : undefined}
           />
           <AnalysisStatusRail
             analysis={analysis}
-            ballOverlay={ballOverlay ?? null}
             job={job}
             onNavigate={onNavigate}
             poseOverlay={poseOverlay ?? null}
@@ -1826,7 +2185,7 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
           ) : null}
         </div>
         <div className="flex flex-wrap gap-3">
-          {analysis.reportActions.map((action) => (
+          {supportedActions.map((action) => (
             <button
               className="quiet-button px-4 py-2.5"
               key={action.type}
@@ -1842,9 +2201,6 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
         <VideoAnalysisCard
           labels={analysis.videoOverlayLabels}
-          ballOverlayDetail={result?.artifacts.ball_overlay_detail}
-          ballOverlayStatus={result?.artifacts.ball_overlay_status}
-          ballOverlay={ballOverlay ?? null}
           match={analysis.match}
           players={analysis.playerMarkers}
           poseOverlayDetail={result?.artifacts.pose_overlay_detail}
@@ -1854,7 +2210,6 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
           trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
           trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
           trackingOverlay={trackingOverlay ?? null}
-          trajectories={analysis.shotTrajectories}
           videoSrc={analysis.source === "job" ? videoSrc : undefined}
         />
         <aside className="grid gap-5">
@@ -1864,7 +2219,7 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       </section>
 
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {analysis.reportActions.map((action) => (
+        {supportedActions.map((action) => (
           <button
             className="sport-card group p-5 text-left transition hover:-translate-y-1 hover:border-[#22C55E]/35"
             key={action.type}
@@ -1891,7 +2246,6 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       </section>
 
       <div className="mt-6 grid gap-6">
-        <ShotExplorer filters={shotFilters} landingPoints={analysis.session.landingPoints} shots={analysis.shotRows} />
         <SkillRatings ratings={analysis.skillRatings} />
         <RecommendedDrills drills={analysis.drillRecommendations} onNavigate={onNavigate} />
         <ProgressChart points={analysis.progressPoints} />
@@ -1902,7 +2256,6 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
 
 function AnalysisStatusRail({
   analysis,
-  ballOverlay,
   job,
   onNavigate,
   poseOverlay,
@@ -1911,7 +2264,6 @@ function AnalysisStatusRail({
   trackingOverlay,
 }: {
   analysis: AnalysisReport;
-  ballOverlay: BallOverlayArtifact | null;
   job?: AnalysisJobSummary | null;
   onNavigate: NavigateFn;
   poseOverlay: PoseOverlayArtifact | null;
@@ -1930,13 +2282,9 @@ function AnalysisStatusRail({
       status: result?.artifacts.pose_overlay_status ?? poseOverlay?.status ?? "unavailable",
       detail: result?.artifacts.pose_overlay_detail ?? poseOverlay?.detail,
     },
-    {
-      label: "球轨迹",
-      status: result?.artifacts.ball_overlay_status ?? ballOverlay?.status ?? "unavailable",
-      detail: result?.artifacts.ball_overlay_detail ?? ballOverlay?.detail,
-    },
   ];
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
+  const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
 
   return (
     <aside className="grid gap-4">
@@ -1987,7 +2335,17 @@ function AnalysisStatusRail({
       <section className="sport-card p-5">
         <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">下级报告</p>
         <div className="mt-4 grid gap-2">
-          {analysis.reportActions.map((action) => (
+          {job?.id ? (
+            <button
+              className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
+              onClick={() => onNavigate(`/analysis/${job.id}/details`)}
+              type="button"
+            >
+              分析详情
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+          {supportedActions.map((action) => (
             <button
               className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
               key={action.type}
@@ -2092,7 +2450,7 @@ function HighlightsCard({
             <button
               className="rounded-2xl border border-[#DDE9D6] bg-white/70 p-4 text-left transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
               key={highlight.id}
-              onClick={() => onNavigate(highlight.tone === "training" ? "/training" : reportPath("rally"))}
+              onClick={() => onNavigate(highlight.tone === "training" ? "/training" : reportPath("movement"))}
               type="button"
             >
               <div className="flex items-center justify-between gap-3">
@@ -2160,7 +2518,11 @@ function ReportPage({
   }
 
   const analysis = report ?? demoReport;
-  const definition = analysis.reportDefinitions.find((item) => item.type === reportType) ?? analysis.reportDefinitions[0];
+  const supportedDefinitions = analysis.reportDefinitions.filter((item) => supportedReportTypes.includes(item.type));
+  const definition =
+    supportedDefinitions.find((item) => item.type === reportType) ??
+    supportedDefinitions[0] ??
+    analysis.reportDefinitions[0];
   const backPath = (analysis.jobId ? `/analysis/${analysis.jobId}/vision` : "/vision") as AppPath;
 
   return (
@@ -2206,10 +2568,7 @@ function ReportPage({
         <ReportVisualization
           definition={definition}
           diagnoses={analysis.diagnoses}
-          landingPoints={analysis.session.landingPoints}
           movementPath={analysis.session.movementPath}
-          rallies={analysis.session.rallies}
-          routes={analysis.session.routes}
         />
       </div>
 
@@ -2295,7 +2654,7 @@ function DrillGrid({
             </button>
             <button
               className="quiet-button px-3 py-2 text-xs"
-              onClick={() => onNavigate(`/reports/${drill.linkedReport}`)}
+              onClick={() => onNavigate(`/reports/${supportedReportTypes.includes(drill.linkedReport) ? drill.linkedReport : "movement"}`)}
               type="button"
             >
               查看依据

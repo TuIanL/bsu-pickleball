@@ -1,23 +1,17 @@
 import { CirclePause, Maximize2, Minimize2, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
-  BallOverlayArtifact,
-  BallTrajectoryPoint,
   MatchSummary,
   PlayerMarker,
   PoseOverlayArtifact,
-  ShotTrajectory,
   TimelineMarker,
   TrackingOverlayArtifact,
   VideoOverlayLabel,
 } from "../../types/report";
-import { ballPointKey, resolveBallFrame, resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
+import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 
 interface VideoAnalysisCardProps {
   compact?: boolean;
-  ballOverlayDetail?: string;
-  ballOverlayStatus?: string;
-  ballOverlay?: BallOverlayArtifact | null;
   labels: VideoOverlayLabel[];
   match: MatchSummary;
   players: PlayerMarker[];
@@ -28,7 +22,6 @@ interface VideoAnalysisCardProps {
   trackingOverlayDetail?: string;
   trackingOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
-  trajectories: ShotTrajectory[];
   videoSrc?: string;
 }
 
@@ -49,9 +42,6 @@ const markerClass = {
 export function VideoAnalysisCard({
   compact = false,
   labels,
-  ballOverlayDetail,
-  ballOverlayStatus,
-  ballOverlay,
   match,
   players,
   poseOverlayDetail,
@@ -61,7 +51,6 @@ export function VideoAnalysisCard({
   trackingOverlayDetail,
   trackingOverlayStatus,
   trackingOverlay,
-  trajectories,
   videoSrc,
 }: VideoAnalysisCardProps) {
   if (videoSrc) {
@@ -70,9 +59,6 @@ export function VideoAnalysisCard({
         <VideoCardHeader match={match} />
         <RealVideoOverlay
           match={match}
-          ballOverlay={ballOverlay}
-          ballOverlayDetail={ballOverlayDetail}
-          ballOverlayStatus={ballOverlayStatus}
           poseOverlay={poseOverlay}
           poseOverlayDetail={poseOverlayDetail}
           poseOverlayStatus={poseOverlayStatus}
@@ -86,9 +72,6 @@ export function VideoAnalysisCard({
             poseOverlayDetail={poseOverlayDetail}
             poseOverlayStatus={poseOverlayStatus}
             poseOverlay={poseOverlay}
-            ballOverlayDetail={ballOverlayDetail}
-            ballOverlayStatus={ballOverlayStatus}
-            ballOverlay={ballOverlay}
             trackingOverlayDetail={trackingOverlayDetail}
             trackingOverlayStatus={trackingOverlayStatus}
             trackingOverlay={trackingOverlay}
@@ -110,7 +93,7 @@ export function VideoAnalysisCard({
           className="absolute inset-0 h-full w-full"
           viewBox="0 0 100 56"
           role="img"
-          aria-label="模拟匹克球视频分析，包含场地线、球路和击球路径"
+          aria-label="模拟匹克球视频分析，包含场地线和人员移动位置"
         >
           <defs>
             <filter id="glow">
@@ -131,21 +114,19 @@ export function VideoAnalysisCard({
           <line x1="12" x2="88" y1="49" y2="49" stroke="rgba(255,255,255,0.55)" strokeWidth="0.45" />
           <rect x="12" y="21.5" width="76" height="13" fill="rgba(34,197,94,0.045)" />
 
-          {trajectories.map((trajectory) => (
-            <path
-              d={trajectory.path}
-              fill="none"
-              filter="url(#glow)"
-              key={trajectory.id}
-              stroke={trajectory.color}
-              strokeDasharray={trajectory.id === "dink" ? "2 2" : undefined}
-              strokeLinecap="round"
-              strokeWidth="1.2"
-            />
-          ))}
-
-          <circle cx="66" cy="31" r="5.6" fill="rgba(34,197,94,0.12)" />
-          <circle cx="35" cy="25" r="4.8" fill="rgba(255,149,0,0.1)" />
+          <polyline
+            fill="none"
+            filter="url(#glow)"
+            points="28,42 36,39 45,34 57,36 65,41 54,46 48,45"
+            stroke="#22C55E"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.1"
+          />
+          <circle cx="28" cy="42" r="2.1" fill="#D9FF3F" stroke="#071008" strokeWidth="0.35" />
+          <circle cx="54" cy="46" r="2.1" fill="#2F80ED" stroke="#071008" strokeWidth="0.35" />
+          <circle cx="66" cy="41" r="5.6" fill="rgba(34,197,94,0.12)" />
+          <circle cx="35" cy="39" r="4.8" fill="rgba(255,149,0,0.1)" />
           <circle cx="63" cy="38" r="4.2" fill="rgba(255,77,79,0.1)" />
         </svg>
 
@@ -240,9 +221,6 @@ function VideoCardHeader({ match }: { match: MatchSummary }) {
 }
 
 function RealVideoOverlay({
-  ballOverlay,
-  ballOverlayDetail,
-  ballOverlayStatus,
   match,
   poseOverlay,
   poseOverlayDetail,
@@ -252,9 +230,6 @@ function RealVideoOverlay({
   trackingOverlayStatus,
   videoSrc,
 }: {
-  ballOverlay?: BallOverlayArtifact | null;
-  ballOverlayDetail?: string;
-  ballOverlayStatus?: string;
   match: MatchSummary;
   poseOverlay?: PoseOverlayArtifact | null;
   poseOverlayDetail?: string;
@@ -274,9 +249,8 @@ function RealVideoOverlay({
   const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 });
   const [showBoxes, setShowBoxes] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
-  const [showBall, setShowBall] = useState(true);
 
-  const source = trackingOverlay?.source ?? poseOverlay?.source ?? ballOverlay?.source ?? naturalSize;
+  const source = trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
   const detectionRenderFrame = useMemo(
     () => resolveDetectionFrame(trackingOverlay?.frames ?? [], currentTime),
     [currentTime, trackingOverlay]
@@ -285,22 +259,14 @@ function RealVideoOverlay({
     () => resolvePoseFrame(poseOverlay?.frames ?? [], currentTime),
     [currentTime, poseOverlay]
   );
-  const ballRenderFrame = useMemo(
-    () => resolveBallFrame(ballOverlay?.frames ?? [], currentTime),
-    [ballOverlay, currentTime]
-  );
 
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
   const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
-  const ballPointCount = ballRenderFrame?.points.length ?? 0;
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
-  const ballAvailable = Boolean(ballOverlay?.frames.length);
   const trackingStatusLabel = trackingOverlay?.status ?? trackingOverlayStatus ?? "unavailable";
   const poseStatusLabel = poseOverlay?.status ?? poseOverlayStatus ?? "unavailable";
-  const ballStatusLabel = ballOverlay?.status ?? ballOverlayStatus ?? "unavailable";
   const trackingDetail = trackingOverlay?.detail ?? trackingOverlayDetail ?? "人体框 overlay 暂不可用";
   const poseDetail = poseOverlay?.detail ?? poseOverlayDetail ?? "RTMPose 骨架 overlay 暂不可用";
-  const ballDetail = ballOverlay?.detail ?? ballOverlayDetail ?? "球轨迹 overlay 暂不可用";
   const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
@@ -524,7 +490,6 @@ function RealVideoOverlay({
           </g>
         ))}
 
-        {showBall && ballRenderFrame ? <BallOverlayLayer points={ballRenderFrame.points} sourceWidth={source.width} /> : null}
       </svg>
 
       <div className="absolute left-4 top-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur">
@@ -548,28 +513,18 @@ function RealVideoOverlay({
         >
           骨架
         </button>
-        <button
-          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showBall ? "border-[#D9FF3F]/45 bg-[#D9FF3F]/20 text-[#F6FF9A]" : "border-white/10 bg-black/45 text-white"}`}
-          title={ballAvailable ? "显示或隐藏真实球轨迹" : ballDetail}
-          onClick={() => setShowBall((value) => !value)}
-          type="button"
-        >
-          球
-        </button>
       </div>
 
       <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">
-          {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架 · {ballPointCount} 个球点
+          {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
         </p>
         <strong className="text-sm">{match.currentRally}</strong>
-        {boxCount === 0 || skeletonCount === 0 || ballPointCount === 0 ? (
+        {boxCount === 0 || skeletonCount === 0 ? (
           <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">
             {boxCount === 0
               ? statusCopy(trackingStatusLabel, trackingDetail)
-              : skeletonCount === 0
-                ? statusCopy(poseStatusLabel, poseDetail)
-                : statusCopy(ballStatusLabel, ballDetail)}
+              : statusCopy(poseStatusLabel, poseDetail)}
           </p>
         ) : null}
       </div>
@@ -626,9 +581,6 @@ function RealVideoOverlay({
 }
 
 function RealVideoFooter({
-  ballOverlayDetail,
-  ballOverlayStatus,
-  ballOverlay,
   poseOverlayDetail,
   poseOverlayStatus,
   poseOverlay,
@@ -636,9 +588,6 @@ function RealVideoFooter({
   trackingOverlayStatus,
   trackingOverlay,
 }: {
-  ballOverlay?: BallOverlayArtifact | null;
-  ballOverlayDetail?: string;
-  ballOverlayStatus?: string;
   poseOverlay?: PoseOverlayArtifact | null;
   poseOverlayDetail?: string;
   poseOverlayStatus?: string;
@@ -648,13 +597,11 @@ function RealVideoFooter({
 }) {
   const trackingDetail = trackingOverlay?.detail ?? trackingOverlayDetail ?? "人体框 overlay 暂不可用";
   const poseDetail = poseOverlay?.detail ?? poseOverlayDetail ?? "骨架关节 overlay 暂不可用";
-  const ballDetail = ballOverlay?.detail ?? ballOverlayDetail ?? "球轨迹 overlay 暂不可用";
   const trackingStatus = trackingOverlay?.status ?? trackingOverlayStatus;
   const poseStatus = poseOverlay?.status ?? poseOverlayStatus;
-  const ballStatus = ballOverlay?.status ?? ballOverlayStatus;
   return (
     <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
-      <div className="grid gap-3 text-sm md:grid-cols-3">
+      <div className="grid gap-3 text-sm md:grid-cols-2">
         <div className="rounded-2xl bg-[#F5FAF1] p-3">
           <strong className="text-[#168A34]">YOLO 人体框</strong>
           {trackingStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(trackingStatus)}</span> : null}
@@ -664,11 +611,6 @@ function RealVideoFooter({
           <strong className="text-[#1E63B6]">RTMPose 骨架</strong>
           {poseStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(poseStatus)}</span> : null}
           <p className="mt-1 text-slate-600">{poseDetail}</p>
-        </div>
-        <div className="rounded-2xl bg-[#F5FAF1] p-3">
-          <strong className="text-[#8A7A00]">球轨迹</strong>
-          {ballStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(ballStatus)}</span> : null}
-          <p className="mt-1 text-slate-600">{ballDetail}</p>
         </div>
       </div>
     </div>
@@ -686,46 +628,6 @@ function statusLabel(status: string): string {
     return "无主体";
   }
   return "不可用";
-}
-
-function BallOverlayLayer({ points, sourceWidth }: { points: BallTrajectoryPoint[]; sourceWidth: number }) {
-  if (!points.length) {
-    return null;
-  }
-
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.image_point[0]} ${point.image_point[1]}`).join(" ");
-
-  return (
-    <g>
-      {points.length > 1 ? (
-        <path
-          d={path}
-          fill="none"
-          stroke="#D9FF3F"
-          strokeLinecap="round"
-          strokeWidth={Math.max(2, sourceWidth * 0.0018)}
-          strokeDasharray={points.some((point) => point.source !== "observed") ? "8 7" : undefined}
-          opacity="0.82"
-        />
-      ) : null}
-      {points.map((point) => {
-        const isObserved = point.source === "observed";
-        return (
-          <g key={ballPointKey(point)}>
-            <circle
-              cx={point.image_point[0]}
-              cy={point.image_point[1]}
-              fill={isObserved ? "#D9FF3F" : "rgba(217,255,63,0.42)"}
-              r={Math.max(isObserved ? 5 : 4, sourceWidth * (isObserved ? 0.0042 : 0.0035))}
-              stroke={isObserved ? "#071008" : "#D9FF3F"}
-              strokeDasharray={isObserved ? undefined : "3 3"}
-              strokeWidth={Math.max(1.5, sourceWidth * 0.0012)}
-            />
-          </g>
-        );
-      })}
-    </g>
-  );
 }
 
 function statusCopy(status: string, detail: string): string {

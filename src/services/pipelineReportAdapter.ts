@@ -3,7 +3,6 @@ import type {
   AnalysisJobSummary,
   AnalysisPipelineResult,
   AnalysisReport,
-  CourtPoint,
   DashboardMetric,
   MovementPoint,
   PlayerMarker,
@@ -55,10 +54,8 @@ export function adaptPipelineResultToReport(
   const limited = job.analysisMode === "limited" || !job.calibrationId;
   const noTracks = tracks.length === 0;
   const trackingOverlayStatus = result.artifacts.tracking_overlay_status;
-  const ballOverlayStatus = result.artifacts.ball_overlay_status;
   const poseOverlayStatus = result.artifacts.pose_overlay_status;
   const hasTrackingOverlay = trackingOverlayStatus === "available";
-  const hasBallOverlay = ballOverlayStatus === "available" || ballOverlayStatus === "partial";
   const hasPoseOverlay = poseOverlayStatus === "available";
   const summary = noTracks
     ? limited
@@ -103,20 +100,10 @@ export function adaptPipelineResultToReport(
       level: job.metadata.level,
       reportId: job.reportId ?? `PV-${job.id.toUpperCase()}`,
       summary,
-      landingPoints: heatmapToCourtPoints(result),
+      landingPoints: [],
       routes: [],
       movementPath: tracksToMovementPath(result),
-      rallies: [
-        {
-          id: "mvp-movement",
-          title: "MVP 移动分析",
-          duration: "已完成",
-          shots: 0,
-          pattern: "当前版本暂不识别击球与回合",
-          result: noTracks ? "轨迹不可用" : "移动指标可用",
-          observation: "报告只展示上传视频可支持的移动、速度、站位和热力图指标，不编造球路或战术事件。",
-        },
-      ],
+      rallies: [],
     },
     dashboardMetrics,
     reportDefinitions,
@@ -139,8 +126,8 @@ export function adaptPipelineResultToReport(
       },
       {
         id: "overlay-status",
-        label: hasBallOverlay ? "球轨迹可视化" : hasPoseOverlay ? "骨架可视化" : hasTrackingOverlay ? "人体框可视化" : "视频 overlay 待生成",
-        tone: hasBallOverlay || hasPoseOverlay || hasTrackingOverlay ? "advantage" : "risk",
+        label: hasPoseOverlay ? "骨架可视化" : hasTrackingOverlay ? "人体框可视化" : "视频 overlay 待生成",
+        tone: hasPoseOverlay || hasTrackingOverlay ? "advantage" : "risk",
         x: 48,
         y: 58,
       },
@@ -169,7 +156,7 @@ export function adaptPipelineResultToReport(
         id: "real-source",
         tone: "training",
         title: "数据来源已切换为上传视频",
-        body: "本页优先展示后端 pipeline 产出的移动和轨迹指标，样例击球与战术内容不再混作真实结论。",
+        body: "本页优先展示后端 pipeline 产出的人员移动、速度和轨迹指标。",
       },
       {
         id: "movement-evidence",
@@ -178,12 +165,6 @@ export function adaptPipelineResultToReport(
         body: noTracks
           ? "当前没有可用球员轨迹，建议重新标定四角或确认模型推理配置。"
           : `累计移动 ${totalDistance.toFixed(1)} 英尺，平均速度 ${averageSpeed.toFixed(1)} 英尺/秒，最高速度 ${maxSpeed.toFixed(1)} 英尺/秒。`,
-      },
-      {
-        id: "ball-overlay-evidence",
-        tone: hasBallOverlay ? "advantage" : "risk",
-        title: hasBallOverlay ? "球轨迹 overlay 可用" : "球轨迹暂不可用",
-        body: result.artifacts.ball_overlay_detail ?? "当前任务没有可渲染的球轨迹 artifact；回合、击球类型和战术结论仍保持不可用。",
       },
       {
         id: "video-overlay-evidence",
@@ -269,7 +250,7 @@ function createReportDefinitions(
     totalDistance: number;
   }
 ): ReportDefinition[] {
-  const unavailable = "当前 MVP 未生成该类战术/击球/动作数据。";
+  const unavailable = "当前 MVP 未生成该类动作诊断数据。";
   const sourceNote = context.limited
     ? "未提供有效标定，移动报告处于有限模式。"
     : context.noTracks
@@ -277,18 +258,6 @@ function createReportDefinitions(
       : "来自上传视频的 pipeline 结果。";
 
   return [
-    {
-      type: "landing",
-      title: "落点分析暂不可用",
-      eyebrow: "落点分析报告",
-      summary: unavailable,
-      heroMetric: "N/A",
-      heroMetricLabel: "球/落点检测",
-      visualization: "heat",
-      metrics: [metric("landing-na", "alert", "落点检测", "未接入", unavailable, "MVP 限制", 0)],
-      insights: [note("landing-note", "risk", "不编造落点", "当前只展示移动与站位指标，落点需要后续球检测能力。")],
-      trainingLink: "先查看移动覆盖报告",
-    },
     {
       type: "movement",
       title: "移动与场地覆盖报告",
@@ -305,18 +274,6 @@ function createReportDefinitions(
       trainingLink: "基于移动路径安排回位训练",
     },
     {
-      type: "rally",
-      title: "回合战术暂不可用",
-      eyebrow: "回合战术报告",
-      summary: unavailable,
-      heroMetric: "N/A",
-      heroMetricLabel: "回合切分",
-      visualization: "rally",
-      metrics: [metric("rally-na", "alert", "回合识别", "未接入", unavailable, "MVP 限制", 0)],
-      insights: [note("rally-note", "risk", "不编造战术", "回合、击球类型和战术模式需要球轨迹与击球事件识别。")],
-      trainingLink: "先完成移动覆盖训练",
-    },
-    {
       type: "diagnosis",
       title: "动作诊断暂不可用",
       eyebrow: "动作诊断报告",
@@ -329,18 +286,6 @@ function createReportDefinitions(
       trainingLink: "先依据移动指标训练",
     },
   ];
-}
-
-function heatmapToCourtPoints(result: AnalysisPipelineResult): CourtPoint[] {
-  const cells = result.metrics.heatmap.cells;
-  const maxCount = Math.max(1, ...cells.map((cell) => cell.count));
-  return cells.map((cell, index) => ({
-    id: `heat-${index}`,
-    x: ((cell.col + 0.5) / result.metrics.heatmap.cols) * 100,
-    y: ((cell.row + 0.5) / result.metrics.heatmap.rows) * 100,
-    intensity: Math.min(1, cell.count / maxCount),
-    label: `热区 ${cell.row + 1}-${cell.col + 1}`,
-  }));
 }
 
 function tracksToMovementPath(result: AnalysisPipelineResult): MovementPoint[] {

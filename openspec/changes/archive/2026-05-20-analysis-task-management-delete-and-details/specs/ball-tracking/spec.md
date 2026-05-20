@@ -1,9 +1,5 @@
-# ball-tracking Specification
+## MODIFIED Requirements
 
-## Purpose
-Define the inactive state for ball detection, trajectory, overlay, and event-analysis artifacts while the active product flow focuses on player movement and pose analysis.
-
-## Requirements
 ### Requirement: Ball detection artifact
 The backend SHALL NOT create or expose ball detection artifacts for current real-analysis jobs while ball capture is out of scope.
 

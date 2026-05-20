@@ -6,10 +6,18 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 
 # 导入分析相关的模式（Schemas）
-from app.schemas.analysis import AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
+from app.schemas.analysis import AnalysisDeleteRequest, AnalysisDeleteResult, AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
 from app.schemas.pipeline import AnalysisPipelineResult
 # 导入模拟分析服务
-from app.services.mock_analysis import create_analysis_job, get_mock_job, get_mock_report, get_pipeline_result, list_analysis_jobs
+from app.services.mock_analysis import (
+    batch_delete_analysis_jobs,
+    create_analysis_job,
+    delete_analysis_job,
+    get_mock_job,
+    get_mock_report,
+    get_pipeline_result,
+    list_analysis_jobs,
+)
 from app.services.storage_service import StorageService
 
 # 定义 API 路由，前缀为 /api/analysis，标签为 analysis
@@ -34,6 +42,22 @@ def list_analysis_jobs_route() -> list[AnalysisJobSummary]:
     读取所有已知分析任务，用于前端任务管理页
     """
     return list_analysis_jobs()
+
+
+@router.delete("/jobs/{job_id}", response_model=AnalysisDeleteResult)
+def delete_analysis_job_route(job_id: str) -> AnalysisDeleteResult:
+    """
+    删除单个分析任务及其本地产物
+    """
+    return delete_analysis_job(job_id)
+
+
+@router.post("/jobs/delete", response_model=list[AnalysisDeleteResult])
+def delete_analysis_jobs_route(payload: AnalysisDeleteRequest) -> list[AnalysisDeleteResult]:
+    """
+    批量删除分析任务及其本地产物
+    """
+    return batch_delete_analysis_jobs(payload.job_ids)
 
 
 @router.get("/jobs/{job_id}", response_model=AnalysisJobSummary)
@@ -81,7 +105,7 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
 @router.get("/jobs/{job_id}/artifacts/{artifact_name}")
 def read_analysis_artifact(
     job_id: str,
-    artifact_name: Literal["tracking-overlay", "pose-overlay", "ball-overlay"],
+    artifact_name: Literal["tracking-overlay", "pose-overlay"],
 ) -> JSONResponse:
     """
     读取浏览器可消费的分析 overlay artifact
@@ -92,10 +116,8 @@ def read_analysis_artifact(
 
     if artifact_name == "tracking-overlay":
         path = _STORAGE.tracking_overlay_json_path(job_id)
-    elif artifact_name == "pose-overlay":
-        path = _STORAGE.pose_overlay_json_path(job_id)
     else:
-        path = _STORAGE.ball_overlay_json_path(job_id)
+        path = _STORAGE.pose_overlay_json_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Analysis artifact not found")
     return JSONResponse(_STORAGE.read_json(path))

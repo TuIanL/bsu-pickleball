@@ -65,25 +65,29 @@ The system SHALL provide a job-specific page that communicates analysis progress
 
 #### Scenario: User opens a completed job
 - **WHEN** the user navigates to an analysis job that completed successfully
-- **THEN** the system shows completion status and provides actions to open the visual analysis workspace, report pages for that job, and the task management page
+- **THEN** the system shows completion status and provides actions to open the visual analysis workspace, analysis details page, and task management page
 
 #### Scenario: Pipeline reports tracking progress
 - **WHEN** the backend processes a video with player tracking enabled
-- **THEN** the reported pipeline stages include progress details derived from upload state, calibration state, processed frame counts, detection counts, projected track counts, generated overlay artifacts, and generated result artifacts when available
+- **THEN** the reported pipeline stages include progress details derived from upload state, calibration state, processed frame counts, detection counts, projected track counts, generated person or pose overlay artifacts, and generated result artifacts when available
 
 #### Scenario: Pipeline reports pose progress
 - **WHEN** the backend processes a video with pose inference enabled
 - **THEN** the reported pipeline stages include pose-estimation status, processed subject counts, skeleton artifact availability, or a clear skipped/failed reason
 
 ### Requirement: Analysis job result routing
-The system SHALL route users from completed tasks and completed job details to job-specific visual analysis and report views.
+The system SHALL route users from completed tasks and completed job details to job-specific visual analysis, analysis details, and currently supported report views.
 
 #### Scenario: User opens completed visual analysis
 - **WHEN** the user selects the visual analysis action for a completed job from task management or the job status detail
 - **THEN** the system opens a visual analysis route associated with that job identifier
 
-#### Scenario: User opens completed report type
-- **WHEN** the user selects landing, movement, rally, or diagnosis report actions for a completed job
+#### Scenario: User opens completed analysis details
+- **WHEN** the user selects the analysis details action for a completed job from task management, job status detail, or visual analysis
+- **THEN** the system opens `/analysis/:jobId/details` for that job identifier
+
+#### Scenario: User opens supported completed report type
+- **WHEN** the user selects a currently supported report action for a completed job
 - **THEN** the system opens the matching report detail route associated with that job identifier and report type
 
 ### Requirement: Demo fallback for analysis flow
@@ -143,11 +147,11 @@ The system SHALL provide a lightweight calibration handoff for real uploaded vid
 - **THEN** the resulting job is labeled as limited analysis and MUST NOT present court-projected movement metrics as if calibration was available
 
 ### Requirement: Raw pipeline result consumption
-The system SHALL make completed real analysis jobs expose raw MVP pipeline results that the frontend can use to generate user-facing feedback.
+The system SHALL make completed real analysis jobs expose raw MVP pipeline results that the frontend can use to generate user-facing movement, status, and standard-court feedback.
 
 #### Scenario: Frontend requests a completed pipeline result
 - **WHEN** the frontend requests the raw result for a completed real analysis job
-- **THEN** the backend returns structured JSON containing video reference, calibration reference, stage results, projected tracks, movement metrics, heatmap data, artifact paths, and a completion message where available
+- **THEN** the backend returns structured JSON containing video reference, calibration reference, stage results, projected tracks, movement metrics, heatmap data, person/pose artifact paths, and a completion message where available
 
 #### Scenario: Frontend requests a result before completion
 - **WHEN** the frontend requests raw algorithm output for a queued or processing job
@@ -184,7 +188,7 @@ The system SHALL allow completed real jobs to expose browser-loadable source vid
 - **THEN** the raw pipeline result references those artifacts with browser-loadable URLs or API paths
 
 #### Scenario: Overlay artifacts are unavailable
-- **WHEN** model inference was disabled, failed, or produced no overlay artifacts
+- **WHEN** model inference was disabled, failed, or produced no supported overlay artifacts
 - **THEN** the job result distinguishes no-overlay availability from demo data and keeps report navigation stable
 
 ### Requirement: Pose-aware raw pipeline result
@@ -197,32 +201,6 @@ The system SHALL include pose overlay availability in completed real analysis re
 #### Scenario: Detection exists without pose
 - **WHEN** a completed job has YOLO detections but no RTMPose skeletons
 - **THEN** the result allows the frontend to render person boxes and label skeleton overlay as unavailable
-
-### Requirement: Ball tracking pipeline reporting
-The system SHALL report ball detection and ball trajectory processing status in real analysis jobs without blocking existing player tracking and pose stages.
-
-#### Scenario: Ball tracking runs successfully
-- **WHEN** a completed real job produces ball detection or trajectory artifacts
-- **THEN** the job result includes ball-tracking stage status, artifact availability, detail text, and browser-loadable artifact references where available
-
-#### Scenario: Ball tracking is skipped
-- **WHEN** a real job completes while ball tracking is disabled or lacks required model configuration
-- **THEN** the job result marks the ball-tracking stage as skipped or unavailable without treating the overall analysis as failed
-
-#### Scenario: Ball tracking fails after player tracking succeeds
-- **WHEN** player tracking completes but ball detection or trajectory processing fails
-- **THEN** the job preserves available player, pose, projection, and metric outputs while surfacing a clear ball-specific failure detail
-
-### Requirement: Raw pipeline result includes ball artifact metadata
-The system SHALL include ball overlay metadata in completed real analysis results when ball tracking has been attempted.
-
-#### Scenario: Frontend requests completed raw result
-- **WHEN** the frontend requests raw output for a completed real job with ball tracking metadata
-- **THEN** the result exposes ball overlay status, detail, JSON artifact path when persisted, and URL when browser-loadable
-
-#### Scenario: Ball metadata is absent in older results
-- **WHEN** the frontend opens a completed result generated before ball artifact metadata existed
-- **THEN** the result remains readable and the frontend treats ball overlays as unavailable rather than broken
 
 ### Requirement: Automatic calibration suggestion handoff
 The system SHALL allow the video upload calibration step to request and review an automatic court calibration suggestion before creating a real analysis job.
@@ -276,4 +254,3 @@ The system SHALL persist and display real intermediate progress for pipeline-bac
 #### Scenario: Pipeline fails during an intermediate stage
 - **WHEN** a real analysis job fails before report generation
 - **THEN** the backend records the first failed stage and the frontend displays that stage as failed with the diagnostic detail
-

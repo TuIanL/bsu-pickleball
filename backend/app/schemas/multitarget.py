@@ -6,7 +6,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-TargetClassName = Literal["player", "ball", "paddle"]
+TargetClassName = Literal["player"]
 MultiTargetStatus = Literal["available", "partial", "no_detections", "unavailable", "skipped", "failed"]
 
 

@@ -3,7 +3,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 TrendDirection = Literal["up", "down", "steady"]
-ReportType = Literal["landing", "movement", "rally", "diagnosis"]
+ReportType = Literal["movement", "diagnosis"]
 InsightTone = Literal["advantage", "risk", "error", "training"]
 AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed"]
 AnalysisMode = Literal["demo", "real", "limited"]
@@ -56,6 +56,19 @@ class AnalysisJobSummary(BaseModel):
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     analysisMode: AnalysisMode = "demo"
+
+
+AnalysisDeleteStatus = Literal["deleted", "blocked", "not_found", "failed"]
+
+
+class AnalysisDeleteResult(BaseModel):
+    job_id: str
+    status: AnalysisDeleteStatus
+    detail: str
+
+
+class AnalysisDeleteRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1)
 
 
 class Metric(BaseModel):
@@ -199,7 +212,7 @@ class ReportDefinition(BaseModel):
     summary: str
     heroMetric: str
     heroMetricLabel: str
-    visualization: Literal["heat", "movement", "rally", "diagnosis"]
+    visualization: Literal["movement", "diagnosis"]
     metrics: list[Metric]
     insights: list[CoachNote]
     trainingLink: str

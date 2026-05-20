@@ -7,12 +7,21 @@ from app.schemas.analysis import AnalysisJobSummary as AnalysisJobSummarySchema
 from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
 from app.schemas.tracking import Detection
 from app.services.analysis_pipeline import AnalysisPipeline
-from app.services.mock_analysis import JOBS, REPORTS, RESULTS, build_stages, create_analysis_job, get_mock_job, list_analysis_jobs, run_analysis_job
+from app.services.mock_analysis import (
+    JOBS,
+    REPORTS,
+    RESULTS,
+    build_stages,
+    create_analysis_job,
+    delete_analysis_job,
+    get_mock_job,
+    list_analysis_jobs,
+    run_analysis_job,
+)
 from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
-from app.vision.detectors.multitarget import FixtureMultiTargetDetector
 
 
 client = TestClient(app)
@@ -121,6 +130,132 @@ def test_analysis_jobs_endpoint_lists_created_jobs():
     listed = next(job for job in jobs if job["id"] == job_id)
     assert listed["metadata"]["matchTitle"] == "List Route Match"
     assert listed["status"] == "completed"
+
+
+def test_delete_completed_analysis_job_removes_persisted_artifacts(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.services.mock_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-delete-completed", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(storage.job_json_path(job.id), job.model_dump(mode="json"))
+    storage.write_json(storage.report_json_path(job.id), {"jobId": job.id})
+    storage.write_json(storage.output_json_path(job.id), {"job_id": job.id})
+    storage.write_json(storage.tracking_overlay_json_path(job.id), {"job_id": job.id})
+
+    try:
+        result = delete_analysis_job(job.id)
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert result.status == "deleted"
+    assert not storage.job_json_path(job.id).exists()
+    assert not storage.report_json_path(job.id).exists()
+    assert not storage.output_json_path(job.id).exists()
+    assert not (storage.outputs_dir / job.id).exists()
+
+
+def test_delete_active_analysis_job_is_blocked(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.services.mock_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-delete-active", status="processing", progress=42)
+    JOBS[job.id] = job
+    storage.write_json(storage.job_json_path(job.id), job.model_dump(mode="json"))
+
+    try:
+        result = delete_analysis_job(job.id)
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert result.status == "blocked"
+    assert storage.job_json_path(job.id).exists()
+
+
+def test_batch_delete_endpoint_returns_partial_results(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.services.mock_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    completed = make_job_summary("job-batch-completed", status="completed")
+    active = make_job_summary("job-batch-active", status="queued", progress=12)
+    for job in [completed, active]:
+        JOBS[job.id] = job
+        storage.write_json(storage.job_json_path(job.id), job.model_dump(mode="json"))
+
+    try:
+        response = client.post(
+            "/api/analysis/jobs/delete",
+            json={"job_ids": [completed.id, active.id, "job-batch-missing"]},
+        )
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    results = {item["job_id"]: item["status"] for item in response.json()}
+    assert results == {
+        completed.id: "deleted",
+        active.id: "blocked",
+        "job-batch-missing": "not_found",
+    }
+    assert not storage.job_json_path(completed.id).exists()
+    assert storage.job_json_path(active.id).exists()
+
+
+def test_delete_job_cleans_unreferenced_video_and_preserves_shared_calibration(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.services.mock_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    video_path = storage.uploads_dir / "video-delete-source.mp4"
+    video_path.write_bytes(b"video")
+    storage.write_json(
+        storage.video_metadata_path("video-delete-source"),
+        {
+            "id": "video-delete-source",
+            "original_filename": "source.mp4",
+            "content_type": "video/mp4",
+            "size_bytes": 5,
+            "path": str(video_path),
+            "uploaded_at": "2026-05-20T00:00:00Z",
+        },
+    )
+    storage.write_json(storage.calibration_json_path("calib-shared"), {"id": "calib-shared"})
+    storage.preview_image_path("calib-shared").write_bytes(b"preview")
+
+    deleted = make_job_summary("job-delete-video", status="completed")
+    deleted.videoId = "video-delete-source"
+    deleted.calibrationId = "calib-shared"
+    shared = make_job_summary("job-keep-calib", status="completed")
+    shared.calibrationId = "calib-shared"
+    for job in [deleted, shared]:
+        JOBS[job.id] = job
+        storage.write_json(storage.job_json_path(job.id), job.model_dump(mode="json"))
+
+    try:
+        result = delete_analysis_job(deleted.id)
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert result.status == "deleted"
+    assert not video_path.exists()
+    assert not storage.video_metadata_path("video-delete-source").exists()
+    assert storage.calibration_json_path("calib-shared").exists()
+    assert storage.preview_image_path("calib-shared").exists()
 
 
 def test_manual_calibration_endpoint_creates_and_reads_result():
@@ -434,11 +569,11 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
 
 
-def test_pipeline_generates_ball_overlay_artifact_with_fixture_detector(tmp_path):
+def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
     video_bytes = make_test_video_bytes(tmp_path)
     upload_response = client.post(
         "/api/videos/upload",
-        files={"file": ("ball-overlay.avi", video_bytes, "video/avi")},
+        files={"file": ("player-only-overlay.avi", video_bytes, "video/avi")},
     )
     assert upload_response.status_code == 200
     video_id = upload_response.json()["video"]["id"]
@@ -459,60 +594,9 @@ def test_pipeline_generates_ball_overlay_artifact_with_fixture_detector(tmp_path
 
     result = AnalysisPipeline(
         detector=StaticDetector(),
-        multitarget_detector=FixtureMultiTargetDetector(
-            {
-                0: [{"class_name": "ball", "bbox": [18, 18, 22, 22], "confidence": 0.91}],
-                2: [{"class_name": "ball", "bbox": [28, 24, 32, 28], "confidence": 0.87}],
-            }
-        ),
         frame_stride=1,
     ).run(
-        job_id="job-ball-overlay-test",
-        video_id=video_id,
-        calibration_id=calibration_id,
-        frame_stride=1,
-    )
-
-    assert result.status == "completed"
-    assert result.artifacts.ball_overlay_status == "available"
-    assert result.artifacts.ball_overlay_url == "/api/analysis/jobs/job-ball-overlay-test/artifacts/ball-overlay"
-    assert any(stage.id == "ball-tracking" and stage.status == "done" for stage in result.stages)
-
-    storage = StorageService()
-    ball_overlay = storage.read_json(storage.ball_overlay_json_path("job-ball-overlay-test"))
-    points = [point for frame in ball_overlay["frames"] for point in frame["points"]]
-    assert [point["source"] for point in points] == ["observed", "repaired", "observed"]
-
-
-def test_pipeline_reports_no_ball_detections_without_losing_player_overlay(tmp_path):
-    video_bytes = make_test_video_bytes(tmp_path)
-    upload_response = client.post(
-        "/api/videos/upload",
-        files={"file": ("no-ball-overlay.avi", video_bytes, "video/avi")},
-    )
-    assert upload_response.status_code == 200
-    video_id = upload_response.json()["video"]["id"]
-    calibration_response = client.post(
-        "/calibration/manual",
-        json={
-            "video_id": video_id,
-            "image_points": {
-                "top_left": [0, 0],
-                "top_right": [96, 0],
-                "bottom_right": [96, 96],
-                "bottom_left": [0, 96],
-            },
-        },
-    )
-    assert calibration_response.status_code == 200
-    calibration_id = calibration_response.json()["calibration_id"]
-
-    result = AnalysisPipeline(
-        detector=StaticDetector(),
-        multitarget_detector=FixtureMultiTargetDetector({}),
-        frame_stride=1,
-    ).run(
-        job_id="job-no-ball-overlay",
+        job_id="job-player-only-overlay",
         video_id=video_id,
         calibration_id=calibration_id,
         frame_stride=1,
@@ -520,13 +604,13 @@ def test_pipeline_reports_no_ball_detections_without_losing_player_overlay(tmp_p
 
     assert result.status == "completed"
     assert result.artifacts.tracking_overlay_status == "available"
-    assert result.artifacts.ball_overlay_status == "no_detections"
-    assert any(stage.id == "ball-tracking" and stage.status == "skipped" for stage in result.stages)
+    assert not hasattr(result.artifacts, "ball_overlay_status")
+    assert not hasattr(result.artifacts, "ball_overlay_url")
+    assert all(stage.id != "ball-tracking" for stage in result.stages)
 
     storage = StorageService()
-    ball_overlay = storage.read_json(storage.ball_overlay_json_path("job-no-ball-overlay"))
-    assert ball_overlay["status"] == "no_detections"
-    assert ball_overlay["frames"] == []
+    assert storage.tracking_overlay_json_path("job-player-only-overlay").exists()
+    assert not storage.ball_overlay_json_path("job-player-only-overlay").exists()
 
 
 def test_pipeline_filters_low_confidence_people_from_overlay_and_pose_inputs(tmp_path):
@@ -904,12 +988,12 @@ def test_analysis_artifact_endpoint_returns_browser_safe_json():
     assert response.json()["detail"] == "test artifact"
 
 
-def test_analysis_artifact_endpoint_returns_ball_overlay_json():
+def test_analysis_artifact_endpoint_rejects_removed_ball_overlay():
     payload = AnalysisJobCreate(
         metadata={
-            "fileName": "ball-artifact.mp4",
+            "fileName": "removed-ball-artifact.mp4",
             "fileSize": 16,
-            "matchTitle": "Ball Artifact Test",
+            "matchTitle": "Removed Ball Artifact Test",
             "venue": "Test Court",
             "matchDate": "2026-05-07",
             "matchFormat": "doubles",
@@ -919,30 +1003,10 @@ def test_analysis_artifact_endpoint_returns_ball_overlay_json():
         },
     )
     job = create_analysis_job(payload)
-    storage = StorageService()
-    storage.write_json(
-        storage.ball_overlay_json_path(job.id),
-        {
-            "job_id": job.id,
-            "video_id": "video-ball-artifact",
-            "status": "unavailable",
-            "detail": "ball artifact test",
-            "source": {"width": 96, "height": 96},
-            "fps": 5,
-            "frame_count": 1,
-            "processed_frame_count": 1,
-            "frame_stride": 1,
-            "detector_status": "skipped",
-            "frames": [],
-            "detections": [],
-            "diagnostic_counts": {"raw_ball_detections": 0},
-        },
-    )
 
     response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-overlay")
 
-    assert response.status_code == 200
-    assert response.json()["detail"] == "ball artifact test"
+    assert response.status_code == 422
 
 
 def test_analysis_job_with_missing_video_fails_cleanly():
@@ -977,6 +1041,20 @@ def make_temp_storage(tmp_path):
         tmp_dir=tmp_path / "tmp",
     )
     return StorageService(settings)
+
+
+def snapshot_analysis_state():
+    return JOBS.copy(), REPORTS.copy(), RESULTS.copy()
+
+
+def restore_analysis_state(snapshot):
+    jobs, reports, results = snapshot
+    JOBS.clear()
+    JOBS.update(jobs)
+    REPORTS.clear()
+    REPORTS.update(reports)
+    RESULTS.clear()
+    RESULTS.update(results)
 
 
 def make_job_summary(
