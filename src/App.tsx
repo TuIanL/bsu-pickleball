@@ -82,7 +82,10 @@ import {
   type DiagnosticNotice,
   automaticCalibrationNotice,
   errorToNotice as buildErrorNotice,
+  formatPercent,
+  formatSeconds,
 } from "./services/analysisDiagnostics";
+import { buildCourtTrackSummaries, type CourtTrackSummary } from "./services/courtProjectionTracks";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
 
 // 定义路由状态类型，用于管理应用内的页面导航
@@ -1889,7 +1892,7 @@ function StatusState({
 }
 
 function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
-  const { error, job, report, result } = useAnalysisReport(jobId);
+  const { error, job, report, result } = useAnalysisResultReport(jobId);
 
   if (job === undefined || report === undefined) {
     return <StatusState title="正在加载分析详情" body="正在读取任务元数据、报告和算法结果。" onNavigate={onNavigate} />;
@@ -2032,12 +2035,34 @@ function ProjectionReadiness({ body, label, ready }: { body: string; label: stri
 }
 
 function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["tracks"] }) {
-  const firstTrackId = tracks[0]?.track_id;
-  const projectedPath = tracks
-    .filter((track) => track.track_id === firstTrackId)
-    .slice(0, 80)
-    .map((track) => `${track.court_point.x},${track.court_point.y}`)
-    .join(" ");
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [showFragments, setShowFragments] = useState(false);
+  const [inspectedPointKey, setInspectedPointKey] = useState<string | null>(null);
+  const trackSummaries = useMemo(() => buildCourtTrackSummaries(tracks), [tracks]);
+  const selectedTrack = trackSummaries.find((track) => track.trackId === selectedTrackId);
+  const visibleTracks = useMemo(() => {
+    const baseTracks = showFragments ? trackSummaries : trackSummaries.filter((track) => !track.isShortFragment);
+    const fallbackTracks = baseTracks.length > 0 ? baseTracks : trackSummaries.slice(0, Math.min(trackSummaries.length, 6));
+    return fallbackTracks.slice(0, 6);
+  }, [showFragments, trackSummaries]);
+  const inspectedPoint = useMemo(() => {
+    if (!inspectedPointKey) {
+      return null;
+    }
+
+    for (const summary of trackSummaries) {
+      const point = summary.sampledPoints.find((item) => courtPointKey(summary.trackId, item) === inspectedPointKey);
+      if (point) {
+        return { point, summary };
+      }
+    }
+
+    return null;
+  }, [inspectedPointKey, trackSummaries]);
+  const highlightedTracks = selectedTrack ? [selectedTrack, ...visibleTracks.filter((track) => track.trackId !== selectedTrack.trackId)] : visibleTracks;
+  const hiddenFragmentCount = trackSummaries.filter((track) => track.isShortFragment).length;
+  const renderedPointCount = highlightedTracks.reduce((total, track) => total + track.sampledPoints.length, 0);
+  const hasProjectedTracks = trackSummaries.length > 0;
 
   return (
     <article className="sport-card p-5 sm:p-6">
@@ -2051,55 +2076,225 @@ function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["tracks"
         </span>
       </div>
 
-      <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
-        <svg className="mx-auto block aspect-[20/44] max-h-[760px] w-full max-w-[420px]" viewBox="-2 -2 24 48" role="img" aria-label="标准匹克球球场二维平面图">
-          <rect x="0" y="0" width="20" height="44" rx="0.2" fill="#DDEFE2" stroke="#173321" strokeWidth="0.24" />
-          <rect x="0" y="15" width="20" height="14" fill="#C7E7D5" opacity="0.85" />
-          <line x1="0" x2="20" y1="22" y2="22" stroke="#173321" strokeWidth="0.32" />
-          <line x1="0" x2="20" y1="15" y2="15" stroke="#173321" strokeWidth="0.22" />
-          <line x1="0" x2="20" y1="29" y2="29" stroke="#173321" strokeWidth="0.22" />
-          <line x1="10" x2="10" y1="0" y2="15" stroke="#173321" strokeWidth="0.18" />
-          <line x1="10" x2="10" y1="29" y2="44" stroke="#173321" strokeWidth="0.18" />
+      <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+        <p className="text-sm font-semibold leading-6 text-slate-600">
+          圆点表示算法估计的球员脚点，经过标定投影到标准场地坐标；它们不是球的落点、击球点或人工标注事件。
+          轨迹编号来自视觉跟踪器，代表一段检测到的移动轨迹，不等同于确认的球员姓名。
+        </p>
+      </div>
 
-          <text x="10" y="-0.75" textAnchor="middle" fontSize="1.1" fontWeight="800" fill="#173321">远端底线</text>
-          <text x="10" y="22.95" textAnchor="middle" fontSize="1.05" fontWeight="800" fill="#173321">Net</text>
-          <text x="10" y="45.4" textAnchor="middle" fontSize="1.1" fontWeight="800" fill="#173321">近端底线</text>
-          <text x="10" y="18.3" textAnchor="middle" fontSize="1" fontWeight="800" fill="#168A34">非截击区 7 ft</text>
-          <text x="5" y="8" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">远端左发球区</text>
-          <text x="15" y="8" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">远端右发球区</text>
-          <text x="5" y="37" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">近端左发球区</text>
-          <text x="15" y="37" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">近端右发球区</text>
+      <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(260px,420px)_minmax(0,1fr)]">
+        <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+          <svg className="mx-auto block aspect-[20/44] max-h-[760px] w-full max-w-[420px]" viewBox="-2 -2 24 48" role="img" aria-label="标准匹克球球场二维平面图">
+            <rect x="0" y="0" width="20" height="44" rx="0.2" fill="#DDEFE2" stroke="#173321" strokeWidth="0.24" />
+            <rect x="0" y="15" width="20" height="14" fill="#C7E7D5" opacity="0.85" />
+            <line x1="0" x2="20" y1="22" y2="22" stroke="#173321" strokeWidth="0.32" />
+            <line x1="0" x2="20" y1="15" y2="15" stroke="#173321" strokeWidth="0.22" />
+            <line x1="0" x2="20" y1="29" y2="29" stroke="#173321" strokeWidth="0.22" />
+            <line x1="10" x2="10" y1="0" y2="15" stroke="#173321" strokeWidth="0.18" />
+            <line x1="10" x2="10" y1="29" y2="44" stroke="#173321" strokeWidth="0.18" />
 
-          {projectedPath ? (
-            <>
-              <polyline fill="none" points={projectedPath} stroke="#2F80ED" strokeLinecap="round" strokeLinejoin="round" strokeWidth="0.28" />
-              {tracks.slice(0, 48).map((track, index) => (
-                <circle
-                  cx={track.court_point.x}
-                  cy={track.court_point.y}
-                  fill={index === 0 ? "#D9FF3F" : "#2F80ED"}
-                  key={`${track.track_id}-${track.frame_index}-${index}`}
-                  r={index === 0 ? 0.34 : 0.22}
-                  stroke="#071008"
-                  strokeWidth="0.06"
+            <text x="10" y="-0.75" textAnchor="middle" fontSize="1.1" fontWeight="800" fill="#173321">远端底线</text>
+            <text x="10" y="22.95" textAnchor="middle" fontSize="1.05" fontWeight="800" fill="#173321">Net</text>
+            <text x="10" y="45.4" textAnchor="middle" fontSize="1.1" fontWeight="800" fill="#173321">近端底线</text>
+            <text x="10" y="18.3" textAnchor="middle" fontSize="1" fontWeight="800" fill="#168A34">非截击区 7 ft</text>
+            <text x="5" y="8" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">远端左发球区</text>
+            <text x="15" y="8" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">远端右发球区</text>
+            <text x="5" y="37" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">近端左发球区</text>
+            <text x="15" y="37" textAnchor="middle" fontSize="0.9" fontWeight="700" fill="#315640">近端右发球区</text>
+
+            {hasProjectedTracks ? (
+              highlightedTracks.map((summary) => (
+                <CourtTrackSvgLayer
+                  dimmed={Boolean(selectedTrack && selectedTrack.trackId !== summary.trackId)}
+                  inspectedPointKey={inspectedPointKey}
+                  key={summary.trackId}
+                  onInspectPoint={setInspectedPointKey}
+                  selected={selectedTrack?.trackId === summary.trackId}
+                  summary={summary}
                 />
+              ))
+            ) : (
+              <g>
+                <rect x="2.3" y="19.6" width="15.4" height="4.8" rx="0.6" fill="white" opacity="0.88" />
+                <text x="10" y="21.35" textAnchor="middle" fontSize="0.86" fontWeight="800" fill="#64748B">
+                  暂无人员位移投影
+                </text>
+                <text x="10" y="22.75" textAnchor="middle" fontSize="0.68" fontWeight="700" fill="#64748B">
+                  需要完成标定和球员脚点投影
+                </text>
+              </g>
+            )}
+          </svg>
+          <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs font-black text-slate-500">
+            <span className="rounded-2xl bg-white/80 px-2 py-2">起点：空心圆</span>
+            <span className="rounded-2xl bg-white/80 px-2 py-2">最新：实心圆</span>
+            <span className="rounded-2xl bg-white/80 px-2 py-2">中间：小点</span>
+          </div>
+        </div>
+
+        <div className="grid content-start gap-4">
+          <div className="grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/78 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">轨迹图例</p>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  {trackSummaries.length} 条轨迹 · {tracks.length} 个原始投影点 · 当前绘制 {renderedPointCount} 个采样点
+                </p>
+              </div>
+              <button className="quiet-button px-3 py-2 text-xs" onClick={() => setSelectedTrackId(null)} type="button">
+                显示全部
+              </button>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600">
+              <input checked={showFragments} className="size-4 accent-[#168A34]" onChange={(event) => setShowFragments(event.target.checked)} type="checkbox" />
+              显示短片段
+              {hiddenFragmentCount > 0 ? <span className="text-xs text-slate-400">({hiddenFragmentCount} 条)</span> : null}
+            </label>
+            <p className="text-xs font-semibold leading-5 text-slate-500">
+              默认优先显示持续时间更长、点数更多的主要轨迹；短片段可能来自遮挡、漏检或重新分配 ID。
+            </p>
+          </div>
+
+          {hasProjectedTracks ? (
+            <div className="grid max-h-[430px] gap-3 overflow-y-auto pr-1">
+              {trackSummaries.map((summary) => (
+                <button
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    selectedTrackId === summary.trackId
+                      ? "border-[#168A34] bg-[#22C55E]/12 shadow-sm"
+                      : "border-[#DDE9D6] bg-white/80 hover:border-[#22C55E]/60"
+                  }`}
+                  key={summary.trackId}
+                  onClick={() => setSelectedTrackId(selectedTrackId === summary.trackId ? null : summary.trackId)}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="inline-flex items-center gap-2 text-base font-black text-[#14241B]">
+                        <span className="size-3 rounded-full" style={{ backgroundColor: summary.color }} />
+                        {summary.label}
+                      </span>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">原始 ID：{summary.trackId}</p>
+                    </div>
+                    {summary.isShortFragment ? (
+                      <span className="shrink-0 rounded-full bg-[#FF9500]/12 px-2.5 py-1 text-xs font-black text-[#A45A00]">短片段</span>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-[#22C55E]/14 px-2.5 py-1 text-xs font-black text-[#168A34]">主要</span>
+                    )}
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-600">
+                    <span>点数 {summary.pointCount}</span>
+                    <span>采样 {summary.sampledPoints.length}</span>
+                    <span>{formatTrackTimeRange(summary)}</span>
+                    <span>置信度 {formatPercent(summary.averageConfidence) ?? "未知"}</span>
+                  </div>
+                </button>
               ))}
-            </>
+            </div>
           ) : (
-            <g>
-              <rect x="2.3" y="20" width="15.4" height="4" rx="0.6" fill="white" opacity="0.84" />
-              <text x="10" y="21.65" textAnchor="middle" fontSize="0.86" fontWeight="800" fill="#64748B">
-                暂无人员位移投影
-              </text>
-              <text x="10" y="23" textAnchor="middle" fontSize="0.72" fontWeight="700" fill="#64748B">
-                等待坐标转换和轨迹数据接入
-              </text>
-            </g>
+            <div className="rounded-3xl border border-dashed border-[#DDE9D6] bg-white/72 p-5">
+              <p className="text-sm font-black text-[#14241B]">没有可解释的轨迹点</p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                当前任务可能缺少标定、未检测到球员脚点，或后端没有生成标准场地坐标。
+              </p>
+            </div>
           )}
-        </svg>
+
+          <div className="rounded-3xl border border-[#DDE9D6] bg-white/78 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">点位检查</p>
+            {inspectedPoint ? (
+              <dl className="mt-3 grid gap-2 text-sm">
+                <RailMeta label="轨迹" value={`${inspectedPoint.summary.label} · ID ${inspectedPoint.summary.trackId}`} />
+                <RailMeta label="时间" value={formatSeconds(inspectedPoint.point.timestamp_seconds) ?? "未知"} />
+                <RailMeta label="帧号" value={`#${inspectedPoint.point.frame_index}`} />
+                <RailMeta label="场地坐标" value={`x ${inspectedPoint.point.court_point.x.toFixed(2)} ft · y ${inspectedPoint.point.court_point.y.toFixed(2)} ft`} />
+                <RailMeta label="置信度" value={formatPercent(inspectedPoint.point.confidence) ?? "未知"} />
+              </dl>
+            ) : (
+              <p className="mt-3 text-sm font-semibold leading-6 text-slate-500">点击场地图上的任意轨迹点，可查看它来自哪条轨迹、哪个时间和哪个标准场地坐标。</p>
+            )}
+          </div>
+        </div>
       </div>
     </article>
   );
+}
+
+function CourtTrackSvgLayer({
+  dimmed,
+  inspectedPointKey,
+  onInspectPoint,
+  selected,
+  summary,
+}: {
+  dimmed: boolean;
+  inspectedPointKey: string | null;
+  onInspectPoint: (key: string) => void;
+  selected: boolean;
+  summary: CourtTrackSummary;
+}) {
+  const pathPoints = summary.sampledPoints.map((point) => `${point.court_point.x},${point.court_point.y}`).join(" ");
+  const opacity = dimmed ? 0.24 : 0.9;
+
+  return (
+    <g opacity={opacity}>
+      {pathPoints ? (
+        <polyline
+          fill="none"
+          points={pathPoints}
+          stroke={summary.color}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={selected ? 0.42 : 0.28}
+        />
+      ) : null}
+      {summary.sampledPoints.map((point) => {
+        const key = courtPointKey(summary.trackId, point);
+        const inspected = inspectedPointKey === key;
+        return (
+          <circle
+            aria-label={`${summary.label} ${formatSeconds(point.timestamp_seconds) ?? `#${point.frame_index}`}`}
+            cx={point.court_point.x}
+            cy={point.court_point.y}
+            fill={inspected ? "#D9FF3F" : summary.color}
+            key={key}
+            onClick={() => onInspectPoint(key)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onInspectPoint(key);
+              }
+            }}
+            r={inspected ? 0.36 : selected ? 0.24 : 0.2}
+            role="button"
+            stroke="#071008"
+            strokeWidth={inspected ? 0.1 : 0.06}
+            tabIndex={0}
+          />
+        );
+      })}
+      <circle cx={summary.startPoint.court_point.x} cy={summary.startPoint.court_point.y} fill="#F5FAF1" r="0.38" stroke={summary.color} strokeWidth="0.16" />
+      <circle cx={summary.latestPoint.court_point.x} cy={summary.latestPoint.court_point.y} fill={summary.color} r="0.42" stroke="#071008" strokeWidth="0.08" />
+    </g>
+  );
+}
+
+function courtPointKey(trackId: string, point: AnalysisPipelineResult["tracks"][number]) {
+  return `${trackId}-${point.frame_index}-${point.timestamp_seconds}`;
+}
+
+function formatTrackTimeRange(summary: CourtTrackSummary) {
+  const start = formatSeconds(summary.startTimeSeconds);
+  const end = formatSeconds(summary.endTimeSeconds);
+
+  if (start && end) {
+    return `${start} - ${end}`;
+  }
+  if (start) {
+    return `${start} 起`;
+  }
+  return "时间未知";
 }
 
 function cameraAngleLabel(angle: AnalysisUploadMetadata["cameraAngle"]) {
@@ -2113,16 +2308,14 @@ function cameraAngleLabel(angle: AnalysisUploadMetadata["cameraAngle"]) {
   return labels[angle];
 }
 
-function useAnalysisReport(jobId?: string) {
-  const [loadedResult, setLoadedResult] = useState<{
+type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
+
+function useJobReport(jobId?: string) {
+  const [loadedReport, setLoadedReport] = useState<{
     error: DiagnosticNotice | null;
     job: AnalysisJobSummary | null;
     jobId: string;
-    poseOverlay: PoseOverlayArtifact | null;
     report: AnalysisReport | null;
-    result: AnalysisPipelineResult | null;
-    trackingOverlay: TrackingOverlayArtifact | null;
-    videoSrc?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -2134,42 +2327,23 @@ function useAnalysisReport(jobId?: string) {
 
     const load = async () => {
       try {
-        const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
-        let trackingOverlay: TrackingOverlayArtifact | null = null;
-        let poseOverlay: PoseOverlayArtifact | null = null;
-        const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
-
-        if (pipelineResult) {
-          [trackingOverlay, poseOverlay] = await Promise.all([
-            getTrackingOverlay(pipelineResult).catch(() => null),
-            getPoseOverlay(pipelineResult).catch(() => null),
-          ]);
-        }
+        const [nextJob, nextReport] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId)]);
 
         if (alive) {
-          const adaptedReport =
-            nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
-          setLoadedResult({
+          setLoadedReport({
             error: null,
             job: nextJob,
             jobId,
-            poseOverlay,
-            report: adaptedReport,
-            result: pipelineResult,
-            trackingOverlay,
-            videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
+            report: nextReport,
           });
         }
       } catch (error) {
         if (alive) {
-          setLoadedResult({
-            error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
+          setLoadedReport({
+            error: errorToNotice("读取分析报告失败", "无法读取该任务生成的报告数据，请检查后端服务和任务产物。", error),
             job: null,
             jobId,
-            poseOverlay: null,
             report: null,
-            result: null,
-            trackingOverlay: null,
           });
         }
       }
@@ -2183,7 +2357,227 @@ function useAnalysisReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { error: null, job: null, poseOverlay: null, report: demoReport, result: null, trackingOverlay: null, videoSrc: undefined };
+    return { error: null, job: null, report: demoReport };
+  }
+
+  if (loadedReport?.jobId !== jobId) {
+    return {
+      error: null,
+      job: undefined,
+      report: undefined,
+    };
+  }
+
+  return {
+    error: loadedReport.error,
+    job: loadedReport.job,
+    report: loadedReport.report,
+  };
+}
+
+function useAnalysisResultReport(jobId?: string) {
+  const [loadedResult, setLoadedResult] = useState<{
+    error: DiagnosticNotice | null;
+    job: AnalysisJobSummary | null;
+    jobId: string;
+    report: AnalysisReport | null;
+    result: AnalysisPipelineResult | null;
+    videoSrc?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!jobId) {
+      return;
+    }
+
+    let alive = true;
+
+    const load = async () => {
+      try {
+        const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
+        const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
+        const adaptedReport = nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
+
+        if (alive) {
+          setLoadedResult({
+            error: null,
+            job: nextJob,
+            jobId,
+            report: adaptedReport,
+            result: pipelineResult,
+            videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
+          });
+        }
+      } catch (error) {
+        if (alive) {
+          setLoadedResult({
+            error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
+            job: null,
+            jobId,
+            report: null,
+            result: null,
+          });
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      alive = false;
+    };
+  }, [jobId]);
+
+  if (!jobId) {
+    return { error: null, job: null, report: demoReport, result: null, videoSrc: undefined };
+  }
+
+  if (loadedResult?.jobId !== jobId) {
+    return {
+      error: null,
+      job: undefined,
+      report: undefined,
+      result: undefined,
+      videoSrc: undefined,
+    };
+  }
+
+  return {
+    error: loadedResult.error,
+    job: loadedResult.job,
+    report: loadedResult.report,
+    result: loadedResult.result,
+    videoSrc: loadedResult.videoSrc,
+  };
+}
+
+function useVisualAnalysisReport(jobId?: string) {
+  const [loadedResult, setLoadedResult] = useState<{
+    error: DiagnosticNotice | null;
+    job: AnalysisJobSummary | null;
+    jobId: string;
+    poseOverlay: PoseOverlayArtifact | null;
+    poseOverlayLoadState: OverlayLoadState;
+    report: AnalysisReport | null;
+    result: AnalysisPipelineResult | null;
+    trackingOverlay: TrackingOverlayArtifact | null;
+    trackingOverlayLoadState: OverlayLoadState;
+    videoSrc?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!jobId) {
+      return;
+    }
+
+    let alive = true;
+
+    const setOverlayState = (
+      updates: Partial<{
+        poseOverlay: PoseOverlayArtifact | null;
+        poseOverlayLoadState: OverlayLoadState;
+        trackingOverlay: TrackingOverlayArtifact | null;
+        trackingOverlayLoadState: OverlayLoadState;
+      }>
+    ) => {
+      if (!alive) {
+        return;
+      }
+      setLoadedResult((current) => (current?.jobId === jobId ? { ...current, ...updates } : current));
+    };
+
+    const load = async () => {
+      try {
+        const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
+        const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
+        const adaptedReport = nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
+        const shouldLoadTracking = Boolean(pipelineResult?.artifacts.tracking_overlay_url);
+        const shouldLoadPose = Boolean(pipelineResult?.artifacts.pose_overlay_url);
+
+        if (!alive) {
+          return;
+        }
+
+        setLoadedResult({
+          error: null,
+          job: nextJob,
+          jobId,
+          poseOverlay: null,
+          poseOverlayLoadState: shouldLoadPose ? "loading" : "unavailable",
+          report: adaptedReport,
+          result: pipelineResult,
+          trackingOverlay: null,
+          trackingOverlayLoadState: shouldLoadTracking ? "loading" : "unavailable",
+          videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
+        });
+
+        if (pipelineResult && shouldLoadTracking) {
+          getTrackingOverlay(pipelineResult)
+            .then((overlay) => {
+              setOverlayState({
+                trackingOverlay: overlay,
+                trackingOverlayLoadState: overlay ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                trackingOverlay: null,
+                trackingOverlayLoadState: "failed",
+              });
+            });
+        }
+
+        if (pipelineResult && shouldLoadPose) {
+          getPoseOverlay(pipelineResult)
+            .then((overlay) => {
+              setOverlayState({
+                poseOverlay: overlay,
+                poseOverlayLoadState: overlay ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                poseOverlay: null,
+                poseOverlayLoadState: "failed",
+              });
+            });
+        }
+      } catch (error) {
+        if (alive) {
+          setLoadedResult({
+            error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
+            job: null,
+            jobId,
+            poseOverlay: null,
+            poseOverlayLoadState: "unavailable",
+            report: null,
+            result: null,
+            trackingOverlay: null,
+            trackingOverlayLoadState: "unavailable",
+          });
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      alive = false;
+    };
+  }, [jobId]);
+
+  if (!jobId) {
+    return {
+      error: null,
+      job: null,
+      poseOverlay: null,
+      poseOverlayLoadState: "idle" as OverlayLoadState,
+      report: demoReport,
+      result: null,
+      trackingOverlay: null,
+      trackingOverlayLoadState: "idle" as OverlayLoadState,
+      videoSrc: undefined,
+    };
   }
 
   if (loadedResult?.jobId !== jobId) {
@@ -2191,9 +2585,11 @@ function useAnalysisReport(jobId?: string) {
       error: null,
       job: undefined,
       poseOverlay: undefined,
+      poseOverlayLoadState: "idle" as OverlayLoadState,
       report: undefined,
       result: undefined,
       trackingOverlay: undefined,
+      trackingOverlayLoadState: "idle" as OverlayLoadState,
       videoSrc: undefined,
     };
   }
@@ -2202,9 +2598,11 @@ function useAnalysisReport(jobId?: string) {
     error: loadedResult.error,
     job: loadedResult.job,
     poseOverlay: loadedResult.poseOverlay,
+    poseOverlayLoadState: loadedResult.poseOverlayLoadState,
     report: loadedResult.report,
     result: loadedResult.result,
     trackingOverlay: loadedResult.trackingOverlay,
+    trackingOverlayLoadState: loadedResult.trackingOverlayLoadState,
     videoSrc: loadedResult.videoSrc,
   };
 }
@@ -2213,7 +2611,17 @@ function useAnalysisReport(jobId?: string) {
  * 视觉分析工作台页组件
  */
 function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
-  const { error, job, poseOverlay, report, result, trackingOverlay, videoSrc } = useAnalysisReport(jobId);
+  const {
+    error,
+    job,
+    poseOverlay,
+    poseOverlayLoadState,
+    report,
+    result,
+    trackingOverlay,
+    trackingOverlayLoadState,
+    videoSrc,
+  } = useVisualAnalysisReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
@@ -2263,6 +2671,16 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
     );
   }
 
+  if (jobId && !report) {
+    return (
+      <StatusState
+        title="报告尚未生成"
+        body="该任务记录已读取，但还没有可用的轻量报告数据。请返回任务管理查看任务状态或稍后重试。"
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
   const analysis = report ?? demoReport;
   const sourceLabel =
     analysis.source === "demo"
@@ -2304,10 +2722,12 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
             match={analysis.match}
             players={analysis.playerMarkers}
             poseOverlayDetail={result?.artifacts.pose_overlay_detail}
+            poseOverlayLoadState={poseOverlayLoadState}
             poseOverlayStatus={result?.artifacts.pose_overlay_status}
             poseOverlay={poseOverlay ?? null}
             timeline={analysis.timelineMarkers}
             trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
+            trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
             trackingOverlay={trackingOverlay ?? null}
             videoSrc={analysis.source === "job" ? videoSrc : undefined}
@@ -2317,9 +2737,11 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
             job={job}
             onNavigate={onNavigate}
             poseOverlay={poseOverlay ?? null}
+            poseOverlayLoadState={poseOverlayLoadState}
             reportPath={reportPath}
             result={result}
             trackingOverlay={trackingOverlay ?? null}
+            trackingOverlayLoadState={trackingOverlayLoadState}
           />
         </section>
       </PageFrame>
@@ -2373,10 +2795,12 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
           match={analysis.match}
           players={analysis.playerMarkers}
           poseOverlayDetail={result?.artifacts.pose_overlay_detail}
+          poseOverlayLoadState={poseOverlayLoadState}
           poseOverlayStatus={result?.artifacts.pose_overlay_status}
           poseOverlay={poseOverlay ?? null}
           timeline={analysis.timelineMarkers}
           trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
+          trackingOverlayLoadState={trackingOverlayLoadState}
           trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
           trackingOverlay={trackingOverlay ?? null}
           videoSrc={analysis.source === "job" ? videoSrc : undefined}
@@ -2428,27 +2852,31 @@ function AnalysisStatusRail({
   job,
   onNavigate,
   poseOverlay,
+  poseOverlayLoadState,
   reportPath,
   result,
   trackingOverlay,
+  trackingOverlayLoadState,
 }: {
   analysis: AnalysisReport;
   job?: AnalysisJobSummary | null;
   onNavigate: NavigateFn;
   poseOverlay: PoseOverlayArtifact | null;
+  poseOverlayLoadState: OverlayLoadState;
   reportPath: (type: ReportType) => AppPath;
   result?: AnalysisPipelineResult | null;
   trackingOverlay: TrackingOverlayArtifact | null;
+  trackingOverlayLoadState: OverlayLoadState;
 }) {
   const overlayRows = [
     {
       label: "人物框",
-      status: result?.artifacts.tracking_overlay_status ?? trackingOverlay?.status ?? "unavailable",
+      status: overlayLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? result?.artifacts.tracking_overlay_status),
       detail: result?.artifacts.tracking_overlay_detail ?? trackingOverlay?.detail,
     },
     {
       label: "骨架姿态",
-      status: result?.artifacts.pose_overlay_status ?? poseOverlay?.status ?? "unavailable",
+      status: overlayLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? result?.artifacts.pose_overlay_status),
       detail: result?.artifacts.pose_overlay_detail ?? poseOverlay?.detail,
     },
   ];
@@ -2543,7 +2971,23 @@ function RailMeta({ label, value }: { label: string; value: string }) {
   );
 }
 
+function overlayLayerStatus(loadState: OverlayLoadState, artifactStatus?: string) {
+  if (loadState === "loading") {
+    return "loading";
+  }
+  if (loadState === "failed") {
+    return "failed";
+  }
+  if (loadState === "available") {
+    return artifactStatus ?? "available";
+  }
+  return artifactStatus ?? "unavailable";
+}
+
 function overlayStatusMeta(status?: string) {
+  if (status === "loading") {
+    return { label: "加载中", className: "bg-[#2F80ED]/14 text-[#1E63B6]", detail: "该视觉层正在按需读取，视频和报告可先使用。" };
+  }
   if (status === "available") {
     return { label: "可用", className: "bg-[#22C55E]/14 text-[#168A34]", detail: "该视觉层来自上传视频分析结果。" };
   }
@@ -2650,10 +3094,10 @@ function ReportPage({
   onNavigate: NavigateFn;
   reportType: ReportType;
 }) {
-  const { error, job, report } = useAnalysisReport(jobId);
+  const { error, job, report } = useJobReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
-    return <StatusState title="正在加载分析报告" body="正在读取该任务生成的报告数据。" onNavigate={onNavigate} />;
+    return <StatusState title="正在加载分析报告" body="正在读取该任务生成的轻量报告数据。" onNavigate={onNavigate} />;
   }
 
   if (jobId && error) {
@@ -2695,6 +3139,16 @@ function ReportPage({
                 }
             : null
         }
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
+  if (jobId && !report) {
+    return (
+      <StatusState
+        title="报告尚未生成"
+        body="该任务记录已读取，但还没有可用的轻量报告数据。请返回任务管理查看任务状态或稍后重试。"
         onNavigate={onNavigate}
       />
     );

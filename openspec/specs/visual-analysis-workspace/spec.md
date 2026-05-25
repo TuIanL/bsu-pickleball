@@ -70,11 +70,11 @@ The system SHALL make the visual analysis workspace feel like a mature AI sports
 - **THEN** the system uses bright primary surfaces, restrained green highlights, preserved blue/orange/red status accents, clean cards, subtle borders, hover states, and video-first hierarchy rather than a heavy dark interface or a generic admin-table layout
 
 ### Requirement: Job-specific visual analysis data
-The system SHALL allow the visual analysis workspace to render completed analysis job video and status data from backend report payloads, available MVP pipeline algorithm results, and person/pose overlay artifacts in addition to the existing demo data.
+The system SHALL allow the visual analysis workspace to render completed analysis job video and status data from backend report payloads, available MVP pipeline algorithm results, and person/pose overlay artifacts in addition to the existing demo data, with heavyweight overlays loaded independently from the initial completed-job shell.
 
 #### Scenario: User opens visual analysis for a completed real job
 - **WHEN** the user navigates to a visual analysis route associated with a completed uploaded-video analysis job
-- **THEN** the video analysis card, source video, person detection overlay status, pose overlay status, timeline markers, and status rail render from that job's report payload, algorithm-derived fields, and available detection or pose overlays
+- **THEN** the video analysis card, source video, report-derived timeline markers, and status rail render from that job's report payload and available algorithm-derived fields while detection or pose overlays may load as independent layers
 
 #### Scenario: Completed real job only has limited algorithm output
 - **WHEN** the completed job lacks calibration, projected tracks, supported MVP metrics, detection boxes, or pose keypoints
@@ -83,6 +83,25 @@ The system SHALL allow the visual analysis workspace to render completed analysi
 #### Scenario: User opens visual analysis without job context
 - **WHEN** the user navigates to the existing demo visual analysis route without a job identifier
 - **THEN** the workspace continues to render the local demo analysis data with clear sample context
+
+### Requirement: Independent real-overlay artifact loading
+The visual analysis workspace SHALL load heavyweight tracking and pose overlay artifacts as independent visual layers so the completed-job video shell, status rail, and report navigation remain usable while those artifacts are loading or unavailable.
+
+#### Scenario: Completed job shell loads before overlays
+- **WHEN** the user opens a completed real-job visual analysis route and the job summary, report payload, and source video reference are available
+- **THEN** the workspace renders the source video area, job metadata, status rail, and report actions even if tracking or pose overlay artifacts are still downloading
+
+#### Scenario: Tracking overlay loads before pose overlay
+- **WHEN** tracking overlay data becomes available before pose overlay data
+- **THEN** the workspace can render person boxes and mark the skeleton layer as loading, unavailable, or failed without blocking playback
+
+#### Scenario: Pose overlay is slow or large
+- **WHEN** a completed real job references a large pose overlay artifact that takes noticeably longer to download or parse
+- **THEN** the workspace keeps the source video, person-box layer state, status rail, and report navigation interactive while the pose layer remains in a loading state
+
+#### Scenario: Overlay artifact request fails
+- **WHEN** a tracking or pose overlay artifact request fails after the completed job shell has loaded
+- **THEN** the workspace marks only that overlay layer as failed or unavailable and does not replace the whole page with a report-loading or analysis-loading state
 
 ### Requirement: Job-aware visual analysis states
 The system SHALL communicate when a job-specific visual analysis result is not ready or cannot be loaded.
@@ -145,7 +164,7 @@ The visual analysis workspace SHALL render skeleton joints and edges from true R
 - **THEN** the workspace hides or shows skeleton joints without changing video playback, person boxes, or loaded artifact state
 
 ### Requirement: Synchronized person-box overlay playback
-The visual analysis workspace SHALL render court-relevant YOLO person boxes over the uploaded source video for completed real jobs when detection overlay data is available.
+The visual analysis workspace SHALL render court-relevant YOLO person boxes over the uploaded source video for completed real jobs when detection overlay data is available, without preventing the base video workspace from rendering while the detection artifact loads.
 
 #### Scenario: Detection overlay data is available
 - **WHEN** the user plays or scrubs a completed real-job video with frame-indexed detection overlay data
@@ -155,12 +174,16 @@ The visual analysis workspace SHALL render court-relevant YOLO person boxes over
 - **WHEN** the video is displayed with object-fit sizing that differs from the source frame dimensions
 - **THEN** the overlay transforms source pixel coordinates into rendered video coordinates without drifting into the letterbox area
 
+#### Scenario: Detection overlay data is still loading
+- **WHEN** a completed real-job video is ready but the detection overlay artifact is still loading
+- **THEN** the workspace keeps the source video playable and labels the person-box layer as loading
+
 #### Scenario: Detection overlay data is unavailable
 - **WHEN** the job has no detection overlay artifact
 - **THEN** the workspace plays the source video and shows a clear no-detection-overlay state instead of displaying simulated player markers as real detections
 
 ### Requirement: Synchronized skeleton overlay playback
-The visual analysis workspace SHALL render court-relevant RTMPose skeleton keypoints and joint connections over the uploaded source video for completed real jobs when pose overlay data is available.
+The visual analysis workspace SHALL render court-relevant RTMPose skeleton keypoints and joint connections over the uploaded source video for completed real jobs when pose overlay data is available, without preventing the base video workspace from rendering while the pose artifact loads.
 
 #### Scenario: Pose overlay data is available
 - **WHEN** the user plays or scrubs a completed real-job video with frame-indexed pose overlay data
@@ -169,6 +192,10 @@ The visual analysis workspace SHALL render court-relevant RTMPose skeleton keypo
 #### Scenario: Pose overlay is disabled by the user
 - **WHEN** the user turns off the skeleton overlay control
 - **THEN** the workspace hides skeleton keypoints while keeping the source video and other enabled overlays visible
+
+#### Scenario: Pose overlay data is still loading
+- **WHEN** a completed real-job video is ready but the pose overlay artifact is still downloading or parsing
+- **THEN** the workspace keeps playback and other available layers usable while labeling the skeleton layer as loading
 
 #### Scenario: Pose overlay data is unavailable
 - **WHEN** YOLO boxes are available but RTMPose keypoints are not

@@ -16,14 +16,18 @@ interface VideoAnalysisCardProps {
   match: MatchSummary;
   players: PlayerMarker[];
   poseOverlayDetail?: string;
+  poseOverlayLoadState?: OverlayLoadState;
   poseOverlayStatus?: string;
   poseOverlay?: PoseOverlayArtifact | null;
   timeline: TimelineMarker[];
   trackingOverlayDetail?: string;
+  trackingOverlayLoadState?: OverlayLoadState;
   trackingOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
   videoSrc?: string;
 }
+
+type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
 const toneClass = {
   advantage: "border-[#22C55E]/40 bg-[#22C55E]/15 text-[#DCFCE7]",
@@ -45,10 +49,12 @@ export function VideoAnalysisCard({
   match,
   players,
   poseOverlayDetail,
+  poseOverlayLoadState = "idle",
   poseOverlayStatus,
   poseOverlay,
   timeline,
   trackingOverlayDetail,
+  trackingOverlayLoadState = "idle",
   trackingOverlayStatus,
   trackingOverlay,
   videoSrc,
@@ -61,18 +67,22 @@ export function VideoAnalysisCard({
           match={match}
           poseOverlay={poseOverlay}
           poseOverlayDetail={poseOverlayDetail}
+          poseOverlayLoadState={poseOverlayLoadState}
           poseOverlayStatus={poseOverlayStatus}
           trackingOverlay={trackingOverlay}
           trackingOverlayDetail={trackingOverlayDetail}
+          trackingOverlayLoadState={trackingOverlayLoadState}
           trackingOverlayStatus={trackingOverlayStatus}
           videoSrc={videoSrc}
         />
         {!compact ? (
           <RealVideoFooter
             poseOverlayDetail={poseOverlayDetail}
+            poseOverlayLoadState={poseOverlayLoadState}
             poseOverlayStatus={poseOverlayStatus}
             poseOverlay={poseOverlay}
             trackingOverlayDetail={trackingOverlayDetail}
+            trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={trackingOverlayStatus}
             trackingOverlay={trackingOverlay}
           />
@@ -224,18 +234,22 @@ function RealVideoOverlay({
   match,
   poseOverlay,
   poseOverlayDetail,
+  poseOverlayLoadState = "idle",
   poseOverlayStatus,
   trackingOverlay,
   trackingOverlayDetail,
+  trackingOverlayLoadState = "idle",
   trackingOverlayStatus,
   videoSrc,
 }: {
   match: MatchSummary;
   poseOverlay?: PoseOverlayArtifact | null;
   poseOverlayDetail?: string;
+  poseOverlayLoadState?: OverlayLoadState;
   poseOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
   trackingOverlayDetail?: string;
+  trackingOverlayLoadState?: OverlayLoadState;
   trackingOverlayStatus?: string;
   videoSrc: string;
 }) {
@@ -263,10 +277,10 @@ function RealVideoOverlay({
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
   const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
-  const trackingStatusLabel = trackingOverlay?.status ?? trackingOverlayStatus ?? "unavailable";
-  const poseStatusLabel = poseOverlay?.status ?? poseOverlayStatus ?? "unavailable";
-  const trackingDetail = trackingOverlay?.detail ?? trackingOverlayDetail ?? "人体框 overlay 暂不可用";
-  const poseDetail = poseOverlay?.detail ?? poseOverlayDetail ?? "RTMPose 骨架 overlay 暂不可用";
+  const trackingStatusLabel = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
+  const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
+  const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
+  const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
   const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
@@ -582,23 +596,27 @@ function RealVideoOverlay({
 
 function RealVideoFooter({
   poseOverlayDetail,
+  poseOverlayLoadState = "idle",
   poseOverlayStatus,
   poseOverlay,
   trackingOverlayDetail,
+  trackingOverlayLoadState = "idle",
   trackingOverlayStatus,
   trackingOverlay,
 }: {
   poseOverlay?: PoseOverlayArtifact | null;
   poseOverlayDetail?: string;
+  poseOverlayLoadState?: OverlayLoadState;
   poseOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
   trackingOverlayDetail?: string;
+  trackingOverlayLoadState?: OverlayLoadState;
   trackingOverlayStatus?: string;
 }) {
-  const trackingDetail = trackingOverlay?.detail ?? trackingOverlayDetail ?? "人体框 overlay 暂不可用";
-  const poseDetail = poseOverlay?.detail ?? poseOverlayDetail ?? "骨架关节 overlay 暂不可用";
-  const trackingStatus = trackingOverlay?.status ?? trackingOverlayStatus;
-  const poseStatus = poseOverlay?.status ?? poseOverlayStatus;
+  const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
+  const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "骨架关节 overlay");
+  const trackingStatus = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
+  const poseStatus = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
   return (
     <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
       <div className="grid gap-3 text-sm md:grid-cols-2">
@@ -618,11 +636,20 @@ function RealVideoFooter({
 }
 
 function statusLabel(status: string): string {
+  if (status === "loading") {
+    return "加载中";
+  }
   if (status === "available") {
     return "可用";
   }
   if (status === "partial") {
     return "部分";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  if (status === "skipped") {
+    return "跳过";
   }
   if (status === "no_detections" || status === "no_poses") {
     return "无主体";
@@ -630,7 +657,33 @@ function statusLabel(status: string): string {
   return "不可用";
 }
 
+function resolveLayerStatus(loadState: OverlayLoadState, artifactStatus?: string): string {
+  if (loadState === "loading") {
+    return "loading";
+  }
+  if (loadState === "failed") {
+    return "failed";
+  }
+  if (loadState === "available") {
+    return artifactStatus ?? "available";
+  }
+  return artifactStatus ?? "unavailable";
+}
+
+function layerDetail(loadState: OverlayLoadState, detail: string | undefined, label: string): string {
+  if (loadState === "loading") {
+    return `${label} 正在按需读取，视频可先播放。`;
+  }
+  if (loadState === "failed") {
+    return `${label} 读取失败，其他视频层仍可使用。`;
+  }
+  return detail ?? `${label} 暂不可用`;
+}
+
 function statusCopy(status: string, detail: string): string {
+  if (status === "loading") {
+    return detail;
+  }
   if (status === "available") {
     return detail;
   }
