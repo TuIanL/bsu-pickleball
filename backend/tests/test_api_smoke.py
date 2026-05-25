@@ -12,6 +12,7 @@ from app.services.mock_analysis import (
     REPORTS,
     RESULTS,
     build_stages,
+    cancel_analysis_job,
     create_analysis_job,
     delete_analysis_job,
     get_mock_job,
@@ -421,6 +422,73 @@ def test_pipeline_backed_job_lifecycle_and_raw_result():
     assert client.get(f"/api/analysis/jobs/{job.id}/result").json()["job_id"] == job.id
 
 
+def test_duplicate_pipeline_submission_reuses_active_job():
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("duplicate.mp4", b"not-a-real-video", "video/mp4")},
+    )
+    video_id = upload_response.json()["video"]["id"]
+    payload = AnalysisJobCreate(
+        videoId=video_id,
+        metadata={
+            "fileName": "duplicate.mp4",
+            "fileSize": 16,
+            "matchTitle": "Duplicate Test",
+            "venue": "Test Court",
+            "matchDate": "2026-05-07",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Player A",
+            "level": "MVP",
+        },
+        frameStride=5,
+    )
+
+    first = create_analysis_job(payload, background_tasks=DeferredTasks())
+    second = create_analysis_job(payload, background_tasks=DeferredTasks())
+    rerun_payload = payload.model_copy(update={"requestNewVersion": True})
+    rerun = create_analysis_job(rerun_payload, background_tasks=DeferredTasks())
+
+    assert second.id == first.id
+    assert rerun.id != first.id
+    assert first.inputSignature == second.inputSignature
+    assert first.configSignature == second.configSignature
+
+
+def test_cancel_queued_job_marks_terminal_state():
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("cancel.mp4", b"not-a-real-video", "video/mp4")},
+    )
+    video_id = upload_response.json()["video"]["id"]
+    payload = AnalysisJobCreate(
+        videoId=video_id,
+        metadata={
+            "fileName": "cancel.mp4",
+            "fileSize": 16,
+            "matchTitle": "Cancel Test",
+            "venue": "Test Court",
+            "matchDate": "2026-05-07",
+            "matchFormat": "doubles",
+            "cameraAngle": "elevated",
+            "athleteLabel": "Player A",
+            "level": "MVP",
+        },
+        frameStride=5,
+    )
+    job = create_analysis_job(payload, background_tasks=DeferredTasks())
+
+    canceled = cancel_analysis_job(job.id)
+    route_response = client.post(f"/api/analysis/jobs/{job.id}/cancel")
+
+    assert canceled is not None
+    assert canceled.status == "canceled"
+    assert canceled.canonicalStatus == "canceled"
+    assert canceled.cancelRequestedAt is not None
+    assert route_response.status_code == 200
+    assert route_response.json()["status"] == "canceled"
+
+
 def test_pipeline_job_persists_intermediate_stage_progress():
     upload_response = client.post(
         "/api/videos/upload",
@@ -455,6 +523,10 @@ def test_pipeline_job_persists_intermediate_stage_progress():
     assert "frame-sampling" in stage_ids
     assert len(stage_ids) == len(set(stage_ids))
     assert all(stage.status != "active" for stage in completed.stages)
+    assert completed.canonicalStatus == "succeeded"
+    assert completed.inputSignature
+    assert completed.configSignature
+    assert any(stage.endedAt for stage in completed.stages if stage.status in {"done", "skipped"})
 
 
 def test_pipeline_job_records_failed_stage(monkeypatch):

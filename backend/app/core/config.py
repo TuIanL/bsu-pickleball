@@ -40,6 +40,12 @@ class Settings(BaseModel):
     court_line_confidence: float = 0.35
     court_line_geometry_min_area_ratio: float = 0.03
     court_line_frame_ratio: float = 0.1
+    enable_job_worker: bool = True
+    max_cpu_jobs: int = 1
+    max_gpu_jobs: int = 1
+    enable_gpu_jobs: bool = False
+    job_stage_timeout_seconds: int = 0
+    job_max_retries: int = 1
 
     def resolve_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -128,6 +134,12 @@ def get_settings() -> Settings:
         court_line_confidence=float(os.getenv("PICKLEBALL_COURT_LINE_CONFIDENCE", "0.35")),
         court_line_geometry_min_area_ratio=float(os.getenv("PICKLEBALL_COURT_LINE_GEOMETRY_MIN_AREA_RATIO", "0.03")),
         court_line_frame_ratio=_clamp_float(os.getenv("PICKLEBALL_COURT_LINE_FRAME_RATIO", "0.1"), 0.0, 0.95),
+        enable_job_worker=os.getenv("PICKLEBALL_ENABLE_JOB_WORKER", "true").lower() in {"1", "true", "yes"},
+        max_cpu_jobs=max(1, int(os.getenv("PICKLEBALL_MAX_CPU_JOBS", "1"))),
+        max_gpu_jobs=max(1, int(os.getenv("PICKLEBALL_MAX_GPU_JOBS", "1"))),
+        enable_gpu_jobs=os.getenv("PICKLEBALL_ENABLE_GPU_JOBS", "false").lower() in {"1", "true", "yes"},
+        job_stage_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_STAGE_TIMEOUT_SECONDS", "0"))),
+        job_max_retries=max(0, int(os.getenv("PICKLEBALL_JOB_MAX_RETRIES", "1"))),
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins
         else Settings.model_fields["cors_origins"].default_factory(),

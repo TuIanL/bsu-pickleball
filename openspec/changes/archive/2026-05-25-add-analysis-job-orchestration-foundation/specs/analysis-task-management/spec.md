@@ -1,8 +1,5 @@
-# analysis-task-management Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change rework-video-analysis-task-flow. Update Purpose after archive.
-## Requirements
 ### Requirement: Analysis task list retrieval
 The system SHALL provide a way to retrieve all known durable analysis job summaries from current and previous analysis sessions.
 
@@ -106,39 +103,7 @@ The system SHALL allow users to delete eligible historical analysis tasks and th
 - **WHEN** a deleted task references an uploaded video or calibration that no remaining job references
 - **THEN** the backend removes the linked source video, video metadata, calibration JSON, and generated calibration preview files when those files exist
 
-### Requirement: Batch analysis task deletion
-The system SHALL support deleting multiple eligible analysis tasks from task management in one user action.
-
-#### Scenario: User selects multiple tasks
-- **WHEN** the task management page contains historical tasks
-- **THEN** the user can select individual tasks, select all eligible visible tasks, and see the number of selected tasks before deleting
-
-#### Scenario: Batch delete succeeds
-- **WHEN** the user confirms batch deletion for selected completed or failed tasks
-- **THEN** the backend deletes each eligible task's persisted local artifacts and the frontend removes the deleted tasks from the visible list
-
-#### Scenario: Batch delete has partial failures
-- **WHEN** a batch delete includes missing, blocked, or failed items
-- **THEN** the backend returns per-job deletion results and the frontend reports which tasks were deleted and which require attention
-
-#### Scenario: User cancels batch deletion
-- **WHEN** the user opens the batch delete confirmation and cancels it
-- **THEN** no backend deletion request is made and task selection remains unchanged or is safely dismissed without deleting files
-
-### Requirement: Delete feedback and refresh
-The system SHALL provide clear feedback for deletion actions and keep task management state current after deletion.
-
-#### Scenario: Delete request is in progress
-- **WHEN** a single or batch deletion is running
-- **THEN** the affected delete controls show a pending state and prevent duplicate deletion requests for the same selected tasks
-
-#### Scenario: Delete request cannot reach backend
-- **WHEN** a delete request fails because the backend cannot be reached
-- **THEN** the frontend shows a recoverable error state and does not remove tasks from the list as if deletion had succeeded
-
-#### Scenario: Delete completes
-- **WHEN** a single or batch deletion finishes
-- **THEN** the frontend refreshes task summaries, clears deleted task selections, and preserves access to upload and manual refresh actions
+## ADDED Requirements
 
 ### Requirement: Task cancellation feedback
 The system SHALL provide clear feedback for cancellation actions from task management and job status surfaces.
@@ -154,4 +119,3 @@ The system SHALL provide clear feedback for cancellation actions from task manag
 #### Scenario: Cancellation request fails
 - **WHEN** a cancellation request cannot be accepted or cannot reach the backend
 - **THEN** the frontend shows a recoverable error and does not pretend the job has been canceled
-

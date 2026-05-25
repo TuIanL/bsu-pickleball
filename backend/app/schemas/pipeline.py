@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +9,7 @@ from app.schemas.metrics import PerformanceMetrics
 from app.schemas.tracking import ProjectedTrackPoint
 
 
-PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped"]
+PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped", "canceled"]
 
 
 class PipelineStageResult(BaseModel):
@@ -17,6 +17,15 @@ class PipelineStageResult(BaseModel):
     label: str
     status: PipelineStageStatus
     detail: str
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+    progress: int = Field(default=0, ge=0, le=100)
+    error_code: Optional[str] = None
+    public_message: Optional[str] = None
+    internal_message: Optional[str] = None
+    retry_count: int = Field(default=0, ge=0)
+    counters: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalysisArtifacts(BaseModel):

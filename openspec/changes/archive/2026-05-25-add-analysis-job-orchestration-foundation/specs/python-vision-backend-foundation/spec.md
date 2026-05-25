@@ -1,8 +1,5 @@
-# python-vision-backend-foundation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-analysis-workflow-backend-foundation. Update Purpose after archive.
-## Requirements
 ### Requirement: Python backend project foundation
 The system SHALL include a Python backend project area dedicated to real product video analysis APIs, durable job orchestration, MVP computer-vision algorithms, research-grade execution records, and future model-backed analysis.
 
@@ -53,36 +50,6 @@ The backend SHALL expose API boundaries for video upload, manual calibration, an
 - **WHEN** the frontend requests status, cancellation, algorithm result, or report data for an unknown job identifier
 - **THEN** the backend returns a clear not-found response that the frontend can render as a stable error state
 
-### Requirement: Analysis report schema
-The backend SHALL define a structured analysis report schema that can feed the existing visual analysis workspace and report detail views.
-
-#### Scenario: Mock report is generated
-- **WHEN** the backend generates a mock report for a completed job
-- **THEN** the report includes match summary, metrics, landing points, routes, movement path, rallies, timeline markers, overlay labels, highlights, coach notes, diagnoses, and report actions where available
-
-#### Scenario: Frontend consumes report data
-- **WHEN** the frontend receives an analysis report payload from the backend
-- **THEN** the payload can be mapped into the same visual and report components used by the local demo data
-
-### Requirement: Algorithm adapter boundaries
-The backend SHALL reserve replaceable adapter boundaries for detector, tracker, court calibration, projection, metrics, and future event analysis modules while providing MVP implementations for geometry, homography, footpoint projection, and movement metrics.
-
-#### Scenario: Developer inspects vision modules
-- **WHEN** a developer opens the backend vision module structure
-- **THEN** the system provides separate areas or interfaces for detection, tracking, footpoint estimation, court calibration, court projection, movement metrics, zone metrics, doubles spacing, heatmaps, and future event analysis
-
-#### Scenario: Future YOLO adapter is added
-- **WHEN** a YOLOv8n or YOLO11n style detector is integrated later
-- **THEN** it can produce normalized person detections without changing frontend routes, analysis job schemas, or report rendering components
-
-#### Scenario: Future tracker adapter is added
-- **WHEN** a ByteTrack or BoT-SORT tracker is integrated later
-- **THEN** it can produce normalized track points without changing metric computation or analysis API response schemas
-
-#### Scenario: Future pose adapter is added
-- **WHEN** an RTMPose26-style pose estimator is integrated later
-- **THEN** it can produce normalized pose keypoints or pose-derived features without changing frontend routes or report rendering components
-
 ### Requirement: Local storage conventions
 The backend SHALL document and use local storage conventions for uploaded videos, calibration files, durable job records, stage telemetry, generated JSON results, visualized output videos, temporary processing files, research artifacts, and model weights.
 
@@ -98,12 +65,7 @@ The backend SHALL document and use local storage conventions for uploaded videos
 - **WHEN** a real analysis job completes
 - **THEN** its stored job metadata, stage telemetry, model/runtime context, and result artifacts can be used for product display and later research inspection without changing the storage contract
 
-### Requirement: Lightweight backend smoke verification
-The backend SHALL support a lightweight verification path before real model dependencies are installed.
-
-#### Scenario: Developer runs backend verification
-- **WHEN** a developer runs the documented backend smoke check
-- **THEN** the backend imports or starts its API foundation without requiring YOLO11, RTMPose26, CUDA, model weights, or uploaded sample videos
+## ADDED Requirements
 
 ### Requirement: Local worker runtime
 The backend SHALL provide a local worker runtime boundary for executing queued analysis jobs outside request handlers.
@@ -134,4 +96,3 @@ The system SHALL describe the project as a real product and research platform in
 #### Scenario: Research maturity is described
 - **WHEN** documentation describes research output
 - **THEN** it states that datasets, experiments, model validation, calibration methods, and analysis records support research output without claiming unavailable publications or unsupported algorithm results
-

@@ -9,7 +9,15 @@ export type AnalysisJobStatus =
   | "queued"
   | "processing"
   | "failed"
-  | "completed";
+  | "completed"
+  | "canceled";
+
+export type AnalysisCanonicalStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled";
 
 export type AnalysisStageId =
   | "upload"
@@ -197,21 +205,48 @@ export interface AnalysisUploadMetadata {
 export interface AnalysisStage {
   id: AnalysisStageId;
   label: string;
-  status: "pending" | "active" | "done" | "failed" | "skipped";
+  status: "pending" | "active" | "done" | "failed" | "skipped" | "canceled";
   detail: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  progress?: number;
+  errorCode?: string;
+  publicMessage?: string;
+  internalMessage?: string;
+  retryCount?: number;
+  counters?: Record<string, unknown>;
 }
 
 export interface AnalysisJobSummary {
   id: string;
   status: AnalysisJobStatus;
+  canonicalStatus?: AnalysisCanonicalStatus;
+  displayStatus?: AnalysisJobStatus;
   stage: AnalysisStageId;
   progress: number;
   createdAt: string;
   updatedAt: string;
+  queuedAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  cancelRequestedAt?: string;
+  canceledAt?: string;
+  workerId?: string;
+  priority?: number;
+  attempt?: number;
+  inputSignature?: string;
+  configSignature?: string;
+  analysisVersion?: number;
+  previousJobId?: string;
+  frameStride?: number;
   metadata: AnalysisUploadMetadata;
   stages: AnalysisStage[];
   reportId?: string;
   errorMessage?: string;
+  errorCode?: string;
+  publicErrorMessage?: string;
+  internalErrorMessage?: string;
   videoId?: string;
   calibrationId?: string;
   analysisMode?: "demo" | "real" | "limited";
@@ -294,8 +329,17 @@ export interface AutomaticCalibrationResponse {
 export interface PipelineStageResult {
   id: string;
   label: string;
-  status: "pending" | "done" | "failed" | "skipped";
+  status: "pending" | "active" | "done" | "failed" | "skipped" | "canceled";
   detail: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
+  progress?: number;
+  error_code?: string;
+  public_message?: string;
+  internal_message?: string;
+  retry_count?: number;
+  counters?: Record<string, unknown>;
 }
 
 export interface PipelineTrackPoint {

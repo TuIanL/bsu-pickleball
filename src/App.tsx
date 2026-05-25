@@ -57,6 +57,7 @@ import type {
 import {
   type AnalysisApiError,
   acceptAutomaticCalibration,
+  cancelAnalysisJob,
   createAnalysisJob,
   createManualCalibration,
   demoAnalysisReport as demoReport,
@@ -327,13 +328,13 @@ function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-[#22C55E]/35 bg-[#22C55E]/15 px-4 py-2 text-sm font-bold text-[#168A34]">
             <Sparkles size={16} aria-hidden="true" />
-            智能比赛分析 · 视频优先产品原型
+            智能比赛分析 · 真实产品与科研平台
           </div>
           <h1 className="mt-7 max-w-4xl text-5xl font-black leading-[0.98] text-[#14241B] sm:text-6xl xl:text-7xl">
             把每一场匹克球比赛，转化为可执行的训练洞察
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-            当前聚焦视频上传、人员检测、姿态叠加、移动轨迹和标准球场投影底图，让赛后复盘先建立可靠的数据基础。
+            当前聚焦真实视频上传、人员检测、姿态叠加、移动轨迹和标准球场投影底图；每次分析都会保留可追踪的执行记录，支撑产品复盘和后续科研产出。
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <button className="green-button" onClick={() => onNavigate("/analysis/new")} type="button">
@@ -409,6 +410,7 @@ function AnalysisTasksPage({
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
   const [deleteNotice, setDeleteNotice] = useState<DiagnosticNotice | null>(null);
   const [deletingJobIds, setDeletingJobIds] = useState<string[]>([]);
+  const [cancelingJobIds, setCancelingJobIds] = useState<string[]>([]);
 
   const loadJobs = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) {
@@ -469,6 +471,7 @@ function AnalysisTasksPage({
   const activeCount = visibleJobs.filter(isActiveAnalysisJob).length;
   const completedCount = visibleJobs.filter((job) => job.status === "completed").length;
   const failedCount = visibleJobs.filter((job) => job.status === "failed").length;
+  const canceledCount = visibleJobs.filter((job) => job.status === "canceled").length;
   const eligibleJobs = visibleJobs.filter((job) => !isActiveAnalysisJob(job));
   const eligibleJobIds = eligibleJobs.map((job) => job.id);
   const eligibleJobKey = eligibleJobIds.join("|");
@@ -535,6 +538,35 @@ function AnalysisTasksPage({
     }
   };
 
+  const handleCancelJob = async (job: AnalysisJobSummary) => {
+    if (!isCancelableAnalysisJob(job) || cancelingJobIds.includes(job.id)) {
+      return;
+    }
+    const confirmed = window.confirm(`确定取消「${job.metadata.matchTitle}」吗？运行中的任务会在安全检查点停止。`);
+    if (!confirmed) {
+      return;
+    }
+    setCancelingJobIds((current) => [...current, job.id]);
+    setDeleteNotice(null);
+    try {
+      const nextJob = await cancelAnalysisJob(job.id);
+      setJobs((current) => current?.map((item) => (item.id === nextJob.id ? nextJob : item)) ?? [nextJob]);
+      rememberAnalysisJob(nextJob);
+      setDeleteNotice({
+        title: nextJob.status === "canceled" ? "任务已取消" : "已请求取消任务",
+        body:
+          nextJob.status === "canceled"
+            ? "任务已停止，生成的临时产物会由后端清理。"
+            : "运行中的分析会在下一处安全检查点停止，任务列表会继续刷新。",
+      });
+      await loadJobs({ silent: true });
+    } catch (error) {
+      setDeleteNotice(errorToNotice("取消任务失败", "无法取消该分析任务，请刷新后重试。", error));
+    } finally {
+      setCancelingJobIds((current) => current.filter((jobId) => jobId !== job.id));
+    }
+  };
+
   const handleBatchDelete = async () => {
     if (!selectedEligibleIds.length || isDeleting) {
       return;
@@ -568,7 +600,7 @@ function AnalysisTasksPage({
           </p>
           <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">分析任务管理</h1>
           <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-            这里汇总从上传到完成的所有视觉分析任务。分析完成后进入纯净的视频结果页，详细数据再进入下级报告。
+            这里汇总从上传到完成的所有视觉分析任务。任务由后端队列和 worker 执行，阶段耗时、错误码和结果产物会被保留，方便产品调试和科研复现。
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
@@ -590,6 +622,7 @@ function AnalysisTasksPage({
             ["分析中", activeCount],
             ["已完成", completedCount],
             ["失败", failedCount],
+            ["已取消", canceledCount],
           ].map(([label, value]) => (
             <div className="flex items-center justify-between rounded-2xl bg-[#F5FAF1] px-4 py-3" key={label}>
               <span className="text-sm font-bold text-slate-500">{label}</span>
@@ -652,9 +685,11 @@ function AnalysisTasksPage({
           </div>
           {visibleJobs.map((job) => (
             <AnalysisTaskCard
+              canceling={cancelingJobIds.includes(job.id)}
               deleting={deletingJobIds.includes(job.id)}
               job={job}
               key={job.id}
+              onCancel={handleCancelJob}
               onDelete={handleSingleDelete}
               onNavigate={onNavigate}
               onToggleSelected={toggleSelection}
@@ -671,7 +706,9 @@ function AnalysisTasksPage({
 
 function AnalysisTaskCard({
   job,
+  canceling = false,
   deleting = false,
+  onCancel,
   onDelete,
   onNavigate,
   onToggleSelected,
@@ -679,8 +716,10 @@ function AnalysisTaskCard({
   selectable = false,
   selected = false,
 }: {
+  canceling?: boolean;
   deleting?: boolean;
   job: AnalysisJobSummary;
+  onCancel: (job: AnalysisJobSummary) => void;
   onDelete: (job: AnalysisJobSummary) => void;
   onNavigate: NavigateFn;
   onToggleSelected: (jobId: string) => void;
@@ -691,6 +730,7 @@ function AnalysisTaskCard({
   const status = analysisStatusMeta(job.status);
   const currentStage = job.stages.find((stage) => stage.id === job.stage) ?? job.stages.find((stage) => stage.status === "active");
   const updatedAt = formatDateTime(job.updatedAt || job.createdAt);
+  const canCancel = isCancelableAnalysisJob(job);
 
   return (
     <article className={`sport-card p-5 sm:p-6 ${recent ? "border-[#22C55E]/50" : ""}`}>
@@ -732,7 +772,13 @@ function AnalysisTaskCard({
           </div>
           {job.status === "failed" ? (
             <p className="mt-3 rounded-2xl border border-[#FF4D4F]/20 bg-[#FF4D4F]/10 p-3 text-sm font-semibold leading-6 text-[#C92A2A]">
-              {job.errorMessage ?? currentStage?.detail ?? "分析失败，请检查后端日志或重新上传。"}
+              {job.publicErrorMessage ?? job.errorMessage ?? currentStage?.detail ?? "分析失败，请检查后端日志或重新上传。"}
+              {job.errorCode ? <span className="mt-1 block text-xs font-black uppercase">错误码：{job.errorCode}</span> : null}
+            </p>
+          ) : null}
+          {job.status === "canceled" ? (
+            <p className="mt-3 rounded-2xl border border-slate-300 bg-slate-100 p-3 text-sm font-semibold leading-6 text-slate-600">
+              任务已取消{job.canceledAt ? ` · ${formatDateTime(job.canceledAt)}` : ""}。
             </p>
           ) : null}
         </div>
@@ -766,6 +812,16 @@ function AnalysisTaskCard({
                 重新上传
               </button>
             ) : null}
+            {job.status === "canceled" ? (
+              <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
+                新建分析
+              </button>
+            ) : null}
+            {canCancel ? (
+              <button className="quiet-button px-4 py-2.5 text-[#A45A00]" disabled={canceling} onClick={() => onCancel(job)} type="button">
+                {canceling ? "取消中" : "取消任务"}
+              </button>
+            ) : null}
             {selectable ? (
               <button className="quiet-button px-4 py-2.5 text-[#C92A2A]" disabled={deleting} onClick={() => onDelete(job)} type="button">
                 <Trash2 size={15} aria-hidden="true" />
@@ -792,6 +848,10 @@ function isActiveAnalysisJob(job: AnalysisJobSummary) {
   return ["uploaded", "queued", "processing"].includes(job.status);
 }
 
+function isCancelableAnalysisJob(job: AnalysisJobSummary) {
+  return ["uploaded", "queued", "processing"].includes(job.status);
+}
+
 function analysisStatusMeta(status: AnalysisJobSummary["status"]) {
   const styles = {
     uploaded: { label: "视频已接收", className: "bg-[#2F80ED]/12 text-[#1E63B6]" },
@@ -799,6 +859,7 @@ function analysisStatusMeta(status: AnalysisJobSummary["status"]) {
     processing: { label: "正在分析", className: "bg-[#FF9500]/14 text-[#A45A00]" },
     completed: { label: "分析完成", className: "bg-[#22C55E]/14 text-[#168A34]" },
     failed: { label: "分析失败", className: "bg-[#FF4D4F]/12 text-[#C92A2A]" },
+    canceled: { label: "已取消", className: "bg-slate-200 text-slate-700" },
   } satisfies Record<AnalysisJobSummary["status"], { label: string; className: string }>;
 
   return styles[status];
@@ -820,6 +881,16 @@ function formatDateTime(value: string) {
     return value;
   }
   return new Date(timestamp).toLocaleString();
+}
+
+function formatDurationMs(value: number) {
+  if (value < 1000) {
+    return `${value}ms`;
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+  return `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1000)}s`;
 }
 
 /**
@@ -1176,7 +1247,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </p>
           <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">创建视觉分析任务</h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
-            上传视频会进入本地 Python 后端，四角标定后启动 MVP pipeline，先输出移动、速度、热力图等真实可追溯反馈。
+            上传视频会进入本地 Python 后端，四角标定后创建持久化任务，由 worker 执行视觉分析，先输出移动、速度、热力图等真实可追溯反馈。
           </p>
 
           <div className="mt-6 grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/70 p-4">
@@ -1517,6 +1588,8 @@ function DiagnosticNoticeCard({ notice, tone = "error" }: { notice: DiagnosticNo
 function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<DiagnosticNotice | null>(null);
+  const [isCanceling, setIsCanceling] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -1573,13 +1646,44 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
     processing: "分析中",
     failed: "分析失败",
     completed: "分析完成",
+    canceled: "任务已取消",
   } satisfies Record<AnalysisJobSummary["status"], string>;
 
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
+  const isCanceled = job.status === "canceled";
+  const canCancel = isCancelableAnalysisJob(job);
   const activeStage = job.stages.find((stage) => stage.status === "active") ?? job.stages.find((stage) => stage.id === job.stage);
   const failedStage = job.stages.find((stage) => stage.status === "failed");
   const currentStage = failedStage ?? activeStage ?? [...job.stages].reverse().find((stage) => stage.status === "done" || stage.status === "skipped");
+
+  const handleCancel = async () => {
+    if (!canCancel || isCanceling) {
+      return;
+    }
+    const confirmed = window.confirm(`确定取消「${job.metadata.matchTitle}」吗？运行中的任务会在安全检查点停止。`);
+    if (!confirmed) {
+      return;
+    }
+    setIsCanceling(true);
+    setCancelNotice(null);
+    try {
+      const nextJob = await cancelAnalysisJob(job.id);
+      setJob(nextJob);
+      rememberAnalysisJob(nextJob);
+      setCancelNotice({
+        title: nextJob.status === "canceled" ? "任务已取消" : "已请求取消任务",
+        body:
+          nextJob.status === "canceled"
+            ? "任务已停止，后续可以删除该历史任务或重新上传。"
+            : "运行中的分析会在下一处安全检查点停止，本页会继续刷新状态。",
+      });
+    } catch (error) {
+      setCancelNotice(errorToNotice("取消任务失败", "无法取消该分析任务，请刷新后重试。", error));
+    } finally {
+      setIsCanceling(false);
+    }
+  };
 
   return (
     <PageFrame>
@@ -1633,14 +1737,35 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
               <DiagnosticNoticeCard
                 notice={{
                   title: "分析任务失败",
-                  body: job.errorMessage ?? "请重新上传或检查后端日志。",
+                  body: job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。",
                   detailItems: [
+                    ["错误码", job.errorCode],
                     ["失败阶段", failedStage?.label ?? job.stage],
                     ["阶段详情", failedStage?.detail],
                     ["任务 ID", job.id],
                   ],
                 }}
               />
+            </div>
+          ) : null}
+          {isCanceled ? (
+            <div className="mt-4">
+              <DiagnosticNoticeCard
+                notice={{
+                  title: "任务已取消",
+                  body: "该分析任务已停止，保留任务记录供追踪和复盘。",
+                  detailItems: [
+                    ["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined],
+                    ["任务 ID", job.id],
+                  ],
+                }}
+                tone="info"
+              />
+            </div>
+          ) : null}
+          {cancelNotice ? (
+            <div className="mt-4">
+              <DiagnosticNoticeCard notice={cancelNotice} tone={cancelNotice.title.includes("失败") ? "error" : "info"} />
             </div>
           ) : null}
         </article>
@@ -1650,13 +1775,19 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
           <div className="mt-5 grid gap-3">
             {job.stages.map((stage) => (
               <div className="flex gap-3 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4" key={stage.id}>
-                <span className={`mt-1 size-3 shrink-0 rounded-full ${stage.status === "done" ? "bg-[#22C55E]" : stage.status === "failed" ? "bg-[#FF4D4F]" : stage.status === "active" ? "bg-[#FF9500]" : stage.status === "skipped" ? "bg-slate-400" : "bg-slate-300"}`} />
+                <span className={`mt-1 size-3 shrink-0 rounded-full ${stage.status === "done" ? "bg-[#22C55E]" : stage.status === "failed" ? "bg-[#FF4D4F]" : stage.status === "active" ? "bg-[#FF9500]" : stage.status === "canceled" ? "bg-slate-500" : stage.status === "skipped" ? "bg-slate-400" : "bg-slate-300"}`} />
                 <div>
                   <strong className="text-[#14241B]">{stage.label}</strong>
                   <p className="mt-1 text-sm leading-6 text-slate-600">
                     {stage.status === "skipped" ? "已跳过 · " : null}
-                    {stage.detail}
+                    {stage.status === "canceled" ? "已取消 · " : null}
+                    {stage.publicMessage ?? stage.detail}
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold text-slate-500">
+                    {stage.durationMs != null ? <span>耗时 {formatDurationMs(stage.durationMs)}</span> : null}
+                    {stage.errorCode ? <span>错误码 {stage.errorCode}</span> : null}
+                    {stage.retryCount ? <span>重试 {stage.retryCount} 次</span> : null}
+                  </div>
                 </div>
               </div>
             ))}
@@ -1701,8 +1832,13 @@ function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: Nav
                 {action.title}
               </button>
             ))}
+            {canCancel ? (
+              <button className="quiet-button px-4 py-2.5 text-[#A45A00]" disabled={isCanceling} onClick={handleCancel} type="button">
+                {isCanceling ? "取消中" : "取消任务"}
+              </button>
+            ) : null}
             <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
-              重新上传
+              {isCanceled ? "新建分析" : "重新上传"}
             </button>
             <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
               返回任务管理
@@ -1775,13 +1911,32 @@ function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNavigate:
     return (
       <StatusState
         title="分析任务失败"
-        body={job.errorMessage ?? "该任务没有生成可用分析详情，请返回任务管理或重新上传。"}
+        body={job.publicErrorMessage ?? job.errorMessage ?? "该任务没有生成可用分析详情，请返回任务管理或重新上传。"}
         notice={{
           title: "失败位置",
-          body: job.errorMessage ?? "请重新上传或检查后端日志。",
+          body: job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。",
           detailItems: [
+            ["错误码", job.errorCode],
             ["任务 ID", job.id],
             ["失败阶段", job.stages.find((stage) => stage.status === "failed")?.label ?? job.stage],
+          ],
+        }}
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
+  if (job.status === "canceled") {
+    return (
+      <StatusState
+        title="分析任务已取消"
+        body="该任务没有生成分析详情。可以返回任务管理删除记录，或重新上传创建新任务。"
+        notice={{
+          title: "取消记录",
+          body: "任务在完成前被取消，保留记录用于追踪执行过程。",
+          detailItems: [
+            ["任务 ID", job.id],
+            ["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined],
           ],
         }}
         onNavigate={onNavigate}
@@ -2073,20 +2228,34 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
   }
 
   if (job && job.status !== "completed") {
+    const canceled = job.status === "canceled";
     return (
       <StatusState
-        title={job.status === "failed" ? "分析任务失败" : "视觉分析尚未生成"}
-        body={job.status === "failed" ? job.errorMessage ?? "请重新上传或检查后端日志。" : "任务还在排队或处理中，完成后会开放视频分析工作台。"}
+        title={job.status === "failed" ? "分析任务失败" : canceled ? "分析任务已取消" : "视觉分析尚未生成"}
+        body={
+          job.status === "failed"
+            ? job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。"
+            : canceled
+              ? "任务在完成前被取消，因此不会开放视频分析工作台。"
+              : "任务还在排队或处理中，完成后会开放视频分析工作台。"
+        }
         notice={
           job.status === "failed"
             ? {
                 title: "失败位置",
-                body: job.errorMessage ?? "请重新上传或检查后端日志。",
+                body: job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。",
                 detailItems: [
+                  ["错误码", job.errorCode],
                   ["失败阶段", job.stages.find((stage) => stage.status === "failed")?.label ?? job.stage],
                   ["阶段详情", job.stages.find((stage) => stage.status === "failed")?.detail],
                 ],
               }
+            : canceled
+              ? {
+                  title: "取消记录",
+                  body: "任务取消后保留执行记录，但不会生成可播放分析结果。",
+                  detailItems: [["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined]],
+                }
             : null
         }
         onNavigate={onNavigate}
@@ -2496,20 +2665,34 @@ function ReportPage({
   }
 
   if (job && job.status !== "completed") {
+    const canceled = job.status === "canceled";
     return (
       <StatusState
-        title={job.status === "failed" ? "分析任务失败" : "报告尚未生成"}
-        body={job.status === "failed" ? job.errorMessage ?? "请重新上传或检查后端日志。" : "任务还在排队或处理中，完成后会开放报告页面。"}
+        title={job.status === "failed" ? "分析任务失败" : canceled ? "分析任务已取消" : "报告尚未生成"}
+        body={
+          job.status === "failed"
+            ? job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。"
+            : canceled
+              ? "任务在完成前被取消，因此不会生成报告页面。"
+              : "任务还在排队或处理中，完成后会开放报告页面。"
+        }
         notice={
           job.status === "failed"
             ? {
                 title: "失败位置",
-                body: job.errorMessage ?? "请重新上传或检查后端日志。",
+                body: job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。",
                 detailItems: [
+                  ["错误码", job.errorCode],
                   ["失败阶段", job.stages.find((stage) => stage.status === "failed")?.label ?? job.stage],
                   ["阶段详情", job.stages.find((stage) => stage.status === "failed")?.detail],
                 ],
               }
+            : canceled
+              ? {
+                  title: "取消记录",
+                  body: "任务取消后保留执行记录，但不会生成报告。",
+                  detailItems: [["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined]],
+                }
             : null
         }
         onNavigate={onNavigate}

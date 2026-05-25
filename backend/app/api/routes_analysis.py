@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Union
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 # 导入分析相关的模式（Schemas）
@@ -11,6 +11,7 @@ from app.schemas.pipeline import AnalysisPipelineResult
 # 导入模拟分析服务
 from app.services.mock_analysis import (
     batch_delete_analysis_jobs,
+    cancel_analysis_job,
     create_analysis_job,
     delete_analysis_job,
     get_mock_job,
@@ -28,12 +29,11 @@ _STORAGE = StorageService()
 @router.post("/jobs", response_model=AnalysisJobSummary)
 def create_analysis_job_route(
     payload: AnalysisJobCreate,
-    background_tasks: BackgroundTasks,
 ) -> AnalysisJobSummary:
     """
     创建分析任务
     """
-    return create_analysis_job(payload, background_tasks=background_tasks)
+    return create_analysis_job(payload)
 
 
 @router.get("/jobs", response_model=list[AnalysisJobSummary])
@@ -66,6 +66,19 @@ def read_analysis_job(job_id: str) -> AnalysisJobSummary:
     读取分析任务详情
     """
     job = get_mock_job(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+
+    return job
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=AnalysisJobSummary)
+def cancel_analysis_job_route(job_id: str) -> AnalysisJobSummary:
+    """
+    请求取消排队中或运行中的分析任务
+    """
+    job = cancel_analysis_job(job_id)
 
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")

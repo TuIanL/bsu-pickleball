@@ -9,6 +9,7 @@ from app.api.routes_video import router as video_router
 # 导入配置和日志设置
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.services.mock_analysis import start_analysis_worker, stop_analysis_worker
 
 # 配置日志系统
 configure_logging()
@@ -36,6 +37,16 @@ app.include_router(video_router)
 app.include_router(calibration_router)
 app.include_router(manual_calibration_router)
 app.include_router(analysis_router)
+
+
+@app.on_event("startup")
+def startup_workers() -> None:
+    start_analysis_worker()
+
+
+@app.on_event("shutdown")
+def shutdown_workers() -> None:
+    stop_analysis_worker()
 
 
 @app.get("/health")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from app.schemas.calibration import CourtPoint2D, ImagePoint
 from app.schemas.metrics import PerformanceMetrics
@@ -39,6 +39,11 @@ from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[PipelineStageResult], None]
+
+
+class CancellationToken(Protocol):
+    def raise_if_cancelled(self) -> None:
+        ...
 
 
 @dataclass
@@ -117,8 +122,10 @@ class AnalysisPipeline:
         calibration_id: str | None = None,
         frame_stride: int | None = None,
         progress_callback: ProgressCallback | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> AnalysisPipelineResult:
         stages: list[PipelineStageResult] = []
+        self._check_cancelled(cancellation_token)
         video = self.video_service.get_video(video_id) if video_id else None
 
         if video_id and video is None:
@@ -129,6 +136,7 @@ class AnalysisPipeline:
         video_stage = self._stage("video-read", "读取视频", "done", "视频元数据已加载" if video else "未提供视频，使用 MVP mock 轨迹")
         stages.append(video_stage)
         self._notify_progress(progress_callback, video_stage)
+        self._check_cancelled(cancellation_token)
 
         calibration = self.calibration_service.get_calibration(calibration_id) if calibration_id else None
         calibration_stage = self._stage(
@@ -139,6 +147,7 @@ class AnalysisPipeline:
         )
         stages.append(calibration_stage)
         self._notify_progress(progress_callback, calibration_stage)
+        self._check_cancelled(cancellation_token)
 
         source_video_url = f"/api/videos/{video_id}/stream" if video_id else None
         tracking_artifact_path: str | None = None
@@ -163,6 +172,7 @@ class AnalysisPipeline:
                     video_id=video_id,
                     calibration_id=calibration_id,
                     frame_stride=frame_stride or self.frame_stride,
+                    cancellation_token=cancellation_token,
                 )
             except Exception as exc:
                 failed_stage = self._stage("tracking", "多目标跟踪", "failed", str(exc))
@@ -180,6 +190,7 @@ class AnalysisPipeline:
             )
             stages.append(sampling_stage)
             self._notify_progress(progress_callback, sampling_stage)
+            self._check_cancelled(cancellation_token)
 
             tracking_path = self.storage.tracking_json_path(job_id)
             self.storage.write_json(tracking_path, tracking_result.model_dump(mode="json"))
@@ -216,6 +227,7 @@ class AnalysisPipeline:
             )
             stages.append(detection_stage)
             self._notify_progress(progress_callback, detection_stage)
+            self._check_cancelled(cancellation_token)
             tracking_stage = self._stage(
                 "tracking",
                 "多目标跟踪",
@@ -228,6 +240,7 @@ class AnalysisPipeline:
             )
             stages.append(tracking_stage)
             self._notify_progress(progress_callback, tracking_stage)
+            self._check_cancelled(cancellation_token)
             pose_stage = (
                 run_output.pose_stage
                 or self._stage(
@@ -239,6 +252,7 @@ class AnalysisPipeline:
             )
             stages.append(pose_stage)
             self._notify_progress(progress_callback, pose_stage)
+            self._check_cancelled(cancellation_token)
             projection_stage = self._stage(
                 "projection",
                 "脚点投影",
@@ -247,6 +261,7 @@ class AnalysisPipeline:
             )
             stages.append(projection_stage)
             self._notify_progress(progress_callback, projection_stage)
+            self._check_cancelled(cancellation_token)
             tracks = self._positions_to_projected_tracks(tracking_result.positions)
             message = "Pipeline completed with Player Tracking Engine output."
         elif video and not calibration:
@@ -260,6 +275,7 @@ class AnalysisPipeline:
             for stage in limited_stages:
                 stages.append(stage)
                 self._notify_progress(progress_callback, stage)
+                self._check_cancelled(cancellation_token)
             tracks = []
             message = "Limited pipeline completed without court calibration; no court-projected tracks were generated."
         else:
@@ -272,19 +288,23 @@ class AnalysisPipeline:
             for stage in mock_stages:
                 stages.append(stage)
                 self._notify_progress(progress_callback, stage)
+                self._check_cancelled(cancellation_token)
             tracks = self._mock_projected_tracks()
             projection_stage = self._stage("projection", "脚点投影", "done", "轨迹已位于标准球场坐标系")
             stages.append(projection_stage)
             self._notify_progress(progress_callback, projection_stage)
+            self._check_cancelled(cancellation_token)
             message = "MVP pipeline completed with deterministic model-free tracking output."
 
         metrics = self._compute_metrics(tracks)
         metrics_stage = self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图")
         stages.append(metrics_stage)
         self._notify_progress(progress_callback, metrics_stage)
+        self._check_cancelled(cancellation_token)
         visualization_stage = self._stage("visualization", "可视化视频", "skipped", "MVP 暂不生成叠加视频文件")
         stages.append(visualization_stage)
         self._notify_progress(progress_callback, visualization_stage)
+        self._check_cancelled(cancellation_token)
 
         result = AnalysisPipelineResult(
             job_id=job_id,
@@ -321,6 +341,7 @@ class AnalysisPipeline:
         video_id: str | None,
         calibration_id: str | None,
         frame_stride: int,
+        cancellation_token: CancellationToken | None = None,
     ) -> _TrackingRunOutput:
         try:
             import cv2  # type: ignore
@@ -354,6 +375,7 @@ class AnalysisPipeline:
         frame_index = 0
         try:
             while True:
+                self._check_cancelled(cancellation_token)
                 ok, frame = capture.read()
                 if not ok:
                     break
@@ -415,6 +437,7 @@ class AnalysisPipeline:
                         pose_error = str(exc)
                         pose_frames = []
                 processed_frame_count += 1
+                self._check_cancelled(cancellation_token)
 
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
                     logger.info(
@@ -636,6 +659,11 @@ class AnalysisPipeline:
     def _notify_progress(progress_callback: ProgressCallback | None, stage: PipelineStageResult) -> None:
         if progress_callback is not None:
             progress_callback(stage)
+
+    @staticmethod
+    def _check_cancelled(cancellation_token: CancellationToken | None) -> None:
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled()
 
     @staticmethod
     def _mock_projected_tracks() -> list[ProjectedTrackPoint]:

@@ -1,13 +1,51 @@
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 TrendDirection = Literal["up", "down", "steady"]
 ReportType = Literal["movement", "diagnosis"]
 InsightTone = Literal["advantage", "risk", "error", "training"]
-AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed"]
+AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed", "canceled"]
+AnalysisCanonicalStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 AnalysisMode = Literal["demo", "real", "limited"]
-AnalysisStageId = str
+AnalysisStageId = Literal[
+    "upload",
+    "queue",
+    "calibration",
+    "video-read",
+    "frame-sampling",
+    "detection",
+    "pose",
+    "tracking",
+    "projection",
+    "metrics",
+    "visualization",
+    "report",
+] | str
+AnalysisStageStatus = Literal["pending", "active", "done", "failed", "skipped", "canceled"]
+
+STABLE_ANALYSIS_STAGE_IDS: tuple[str, ...] = (
+    "upload",
+    "queue",
+    "calibration",
+    "video-read",
+    "frame-sampling",
+    "detection",
+    "pose",
+    "tracking",
+    "projection",
+    "metrics",
+    "visualization",
+    "report",
+)
+
+ANALYSIS_ERROR_CODES: dict[str, str] = {
+    "video_not_found": "ANALYSIS_VIDEO_NOT_FOUND",
+    "stage_failed": "ANALYSIS_STAGE_FAILED",
+    "job_canceled": "ANALYSIS_JOB_CANCELED",
+    "stage_timeout": "ANALYSIS_STAGE_TIMEOUT",
+    "internal_error": "ANALYSIS_INTERNAL_ERROR",
+}
 
 
 class AnalysisUploadMetadata(BaseModel):
@@ -31,8 +69,17 @@ class AnalysisPipelineOptions(BaseModel):
 class AnalysisStage(BaseModel):
     id: AnalysisStageId
     label: str
-    status: Literal["pending", "active", "done", "failed", "skipped"]
+    status: AnalysisStageStatus
     detail: str
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    durationMs: Optional[int] = None
+    progress: int = Field(default=0, ge=0, le=100)
+    errorCode: Optional[str] = None
+    publicMessage: Optional[str] = None
+    internalMessage: Optional[str] = None
+    retryCount: int = Field(default=0, ge=0)
+    counters: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalysisJobCreate(BaseModel):
@@ -40,19 +87,39 @@ class AnalysisJobCreate(BaseModel):
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)
+    priority: int = Field(default=0, ge=0, le=100)
+    requestNewVersion: bool = False
 
 
 class AnalysisJobSummary(BaseModel):
     id: str
     status: AnalysisJobStatus
+    canonicalStatus: AnalysisCanonicalStatus = "queued"
+    displayStatus: Optional[AnalysisJobStatus] = None
     stage: AnalysisStageId
     progress: int = Field(ge=0, le=100)
     createdAt: str
     updatedAt: str
+    queuedAt: Optional[str] = None
+    startedAt: Optional[str] = None
+    finishedAt: Optional[str] = None
+    cancelRequestedAt: Optional[str] = None
+    canceledAt: Optional[str] = None
+    workerId: Optional[str] = None
+    priority: int = Field(default=0, ge=0, le=100)
+    attempt: int = Field(default=0, ge=0)
+    inputSignature: Optional[str] = None
+    configSignature: Optional[str] = None
+    analysisVersion: int = Field(default=1, ge=1)
+    previousJobId: Optional[str] = None
+    frameStride: int = Field(default=1, ge=1)
     metadata: AnalysisUploadMetadata
     stages: list[AnalysisStage]
     reportId: Optional[str] = None
     errorMessage: Optional[str] = None
+    errorCode: Optional[str] = None
+    publicErrorMessage: Optional[str] = None
+    internalErrorMessage: Optional[str] = None
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     analysisMode: AnalysisMode = "demo"

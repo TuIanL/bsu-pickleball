@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,13 @@ class StorageService:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
+    def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, path)
+        return path
+
     def read_json(self, path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
 
@@ -58,6 +66,9 @@ class StorageService:
 
     def job_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / "jobs" / f"{job_id}.json"
+
+    def jobs_dir(self) -> Path:
+        return self.outputs_dir / "jobs"
 
     def report_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / "reports" / f"{job_id}.json"

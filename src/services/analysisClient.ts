@@ -370,6 +370,8 @@ interface AnalysisJobRequest {
   calibrationId?: string;
   frameStride?: number;
   metadata: AnalysisUploadMetadata;
+  priority?: number;
+  requestNewVersion?: boolean;
   useDemoFallback?: boolean;
   videoId?: string;
 }
@@ -435,6 +437,8 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
         videoId: request.videoId,
         calibrationId: request.calibrationId,
         frameStride: request.frameStride ?? 2,
+        priority: request.priority ?? 0,
+        requestNewVersion: request.requestNewVersion ?? false,
       }),
       method: "POST",
     });
@@ -512,6 +516,14 @@ export async function deleteAnalysisJobs(jobIds: string[]): Promise<AnalysisDele
     }
     throw error;
   }
+}
+
+export async function cancelAnalysisJob(jobId: string): Promise<AnalysisJobSummary> {
+  const job = await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+  rememberAnalysisJob(job);
+  return job;
 }
 
 export async function getAnalysisJob(jobId: string): Promise<AnalysisJobSummary | null> {

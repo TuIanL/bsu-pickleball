@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import BackgroundTasks
 
 from app.schemas.analysis import (
+    ANALYSIS_ERROR_CODES,
     AnalysisJobCreate,
     AnalysisDeleteResult,
     AnalysisJobSummary,
@@ -22,6 +23,21 @@ from app.schemas.analysis import (
 )
 from app.schemas.pipeline import AnalysisPipelineResult
 from app.services.analysis_pipeline import AnalysisPipeline
+from app.services.job_orchestration import (
+    ACTIVE_COMPAT_STATUSES,
+    AnalysisWorkerRuntime,
+    JobStore,
+    analysis_signature,
+    analysis_stages_from_pipeline,
+    build_stages,
+    compute_progress_from_stages,
+    current_stage_from_stages,
+    first_failed_stage,
+    merge_stage_progress,
+    normalize_job,
+    stage_from_pipeline,
+    utc_now,
+)
 from app.services.storage_service import StorageService
 from app.services.video_service import video_service
 
@@ -33,6 +49,52 @@ REPORTS: dict[str, AnalysisReport] = {}
 RESULTS: dict[str, AnalysisPipelineResult] = {}
 _LOCK = Lock()
 _STORAGE = StorageService()
+_JOB_STORE = JobStore(_STORAGE)
+
+
+def _pipeline_factory() -> AnalysisPipeline:
+    return AnalysisPipeline()
+
+
+def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
+    with _LOCK:
+        RESULTS[job.id] = result
+    if result.status == "completed":
+        report = build_mock_report(
+            job=job,
+            metadata=job.metadata,
+            report_id=job.reportId or f"PV-{job.id.upper()}",
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            result=result,
+        )
+        _save_report(job.id, report)
+
+
+_WORKER = AnalysisWorkerRuntime(
+    _JOB_STORE,
+    pipeline_factory=_pipeline_factory,
+    on_completed=_on_worker_completed,
+)
+_WORKER_STARTED = False
+
+
+def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
+    global _JOB_STORE, _WORKER, _WORKER_STARTED
+    target = storage or _STORAGE
+    if _JOB_STORE.storage is target:
+        return
+    was_started = _WORKER_STARTED
+    if was_started:
+        _WORKER.stop()
+    _JOB_STORE = JobStore(target)
+    _WORKER = AnalysisWorkerRuntime(
+        _JOB_STORE,
+        pipeline_factory=_pipeline_factory,
+        on_completed=_on_worker_completed,
+    )
+    _WORKER_STARTED = False
+    if was_started:
+        start_analysis_worker()
 
 ORDERED_STAGES: list[AnalysisStageId] = [
     "upload",
@@ -65,27 +127,6 @@ STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
 }
 
 
-def build_stages(active_stage: AnalysisStageId = "report", failed: bool = False) -> list[AnalysisStage]:
-    if active_stage not in ORDERED_STAGES:
-        active_stage = "queue"
-
-    active_index = ORDERED_STAGES.index(active_stage)
-    stages: list[AnalysisStage] = []
-
-    for index, stage_id in enumerate(ORDERED_STAGES):
-        label, detail = STAGE_DETAILS[stage_id]
-        status = "pending"
-
-        if index < active_index or (active_stage == "report" and not failed):
-            status = "done"
-        elif index == active_index:
-            status = "failed" if failed else "active"
-
-        stages.append(AnalysisStage(id=stage_id, label=label, status=status, detail=detail))
-
-    return stages
-
-
 def create_mock_job(metadata: AnalysisUploadMetadata) -> AnalysisJobSummary:
     return create_analysis_job(AnalysisJobCreate(metadata=metadata))
 
@@ -94,62 +135,77 @@ def create_analysis_job(
     payload: AnalysisJobCreate,
     background_tasks: BackgroundTasks | None = None,
 ) -> AnalysisJobSummary:
-    now = datetime.now(timezone.utc).isoformat()
-    job_id = f"job-{uuid4().hex[:10]}"
-    report_id = f"PV-{job_id.upper()}"
+    _sync_orchestration_storage()
+    now = utc_now()
 
     if payload.videoId:
         if video_service.get_video(payload.videoId) is None:
+            job_id = f"job-{uuid4().hex[:10]}"
+            report_id = f"PV-{job_id.upper()}"
             job = AnalysisJobSummary(
                 id=job_id,
                 status="failed",
+                canonicalStatus="failed",
+                displayStatus="failed",
                 stage="video-read",
                 progress=0,
                 createdAt=now,
                 updatedAt=now,
+                finishedAt=now,
                 metadata=payload.metadata,
                 stages=build_stages("video-read", failed=True),
                 reportId=report_id,
                 errorMessage="Uploaded video not found",
+                errorCode=ANALYSIS_ERROR_CODES["video_not_found"],
+                publicErrorMessage="Uploaded video not found",
+                internalErrorMessage=f"Unknown videoId: {payload.videoId}",
                 videoId=payload.videoId,
                 calibrationId=payload.calibrationId,
                 analysisMode="real" if payload.calibrationId else "limited",
+                frameStride=payload.frameStride,
             )
             return _save_job(job)
 
-        job = AnalysisJobSummary(
-            id=job_id,
-            status="queued",
-            stage="queue",
-            progress=10,
-            createdAt=now,
-            updatedAt=now,
-            metadata=payload.metadata,
-            stages=build_stages("queue"),
-            reportId=report_id,
-            videoId=payload.videoId,
-            calibrationId=payload.calibrationId,
-            analysisMode="real" if payload.calibrationId else "limited",
-        )
-        _save_job(job)
+        input_signature, config_signature = analysis_signature(payload)
+        if not payload.requestNewVersion:
+            existing = _JOB_STORE.find_by_signature(input_signature, config_signature)
+            if existing is not None:
+                return existing
 
         if background_tasks is not None:
-            background_tasks.add_task(run_analysis_job, job_id, payload, report_id)
+            job = _JOB_STORE.create_job(payload)
+            with _LOCK:
+                JOBS[job.id] = job
+            background_tasks.add_task(run_analysis_job, job.id, payload, job.reportId or f"PV-{job.id.upper()}")
         else:
-            run_analysis_job(job_id, payload, report_id)
+            job = _JOB_STORE.create_job(payload)
+            with _LOCK:
+                JOBS[job.id] = job
+            _WORKER.notify()
+            from app.core.config import get_settings
+
+            if not get_settings().enable_job_worker:
+                _WORKER.run_one()
         return job
 
+    job_id = f"job-{uuid4().hex[:10]}"
+    report_id = f"PV-{job_id.upper()}"
     job = AnalysisJobSummary(
         id=job_id,
         status="completed",
+        canonicalStatus="succeeded",
+        displayStatus="completed",
         stage="report",
         progress=100,
         createdAt=now,
         updatedAt=now,
+        startedAt=now,
+        finishedAt=now,
         metadata=payload.metadata,
         stages=build_stages("report"),
         reportId=report_id,
         analysisMode="demo",
+        frameStride=payload.frameStride,
     )
     report = build_mock_report(job, payload.metadata, report_id, now)
     _save_job(job)
@@ -158,60 +214,8 @@ def create_analysis_job(
 
 
 def run_analysis_job(job_id: str, payload: AnalysisJobCreate, report_id: str) -> None:
-    job = get_mock_job(job_id)
-    if job is None:
-        logger.warning("Analysis job %s disappeared before processing", job_id)
-        return
-
-    latest_job = _persist_stage_progress(job, AnalysisStage(id="video-read", label="读取视频", status="active", detail="正在读取上传视频元数据和帧流"))
-
-    def on_pipeline_progress(stage_result) -> None:
-        nonlocal latest_job
-        latest_job = _persist_stage_progress(
-            latest_job,
-            AnalysisStage(
-                id=stage_result.id,
-                label=stage_result.label,
-                status=stage_result.status,
-                detail=stage_result.detail,
-            ),
-        )
-
-    result = AnalysisPipeline(frame_stride=payload.frameStride).run(
-        job_id=job_id,
-        video_id=payload.videoId,
-        calibration_id=payload.calibrationId,
-        frame_stride=payload.frameStride,
-        progress_callback=on_pipeline_progress,
-    )
-
-    with _LOCK:
-        RESULTS[job_id] = result
-
-    stages = _analysis_stages_from_pipeline(result)
-    status = result.status
-    error_message = None if status == "completed" else result.message
-    progress = 100 if status == "completed" else _progress_from_stages(stages)
-    stage = "report" if status == "completed" else _first_failed_stage(stages)
-
-    _update_job(
-        latest_job,
-        status=status,
-        stage=stage,
-        progress=progress,
-        stages=stages,
-        errorMessage=error_message,
-    )
-
-    if status == "completed":
-        report = build_mock_report(
-            job=job,
-            metadata=payload.metadata,
-            report_id=report_id,
-            generated_at=datetime.now(timezone.utc).isoformat(),
-            result=result,
-        )
-        _save_report(job_id, report)
+    _sync_orchestration_storage()
+    _WORKER.run_job(job_id)
 
 
 def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummary:
@@ -223,9 +227,9 @@ def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummar
 
 
 def _persist_stage_progress(job: AnalysisJobSummary, stage: AnalysisStage) -> AnalysisJobSummary:
-    stages = _merge_progress_stage(job.stages, stage)
-    progress = max(job.progress, _progress_from_stages(stages))
-    current_stage = _current_stage_from_stages(stages, fallback=stage.id)
+    stages = merge_stage_progress(job.stages, stage)
+    progress = max(job.progress, compute_progress_from_stages(stages))
+    current_stage = current_stage_from_stages(stages, fallback=stage.id)
     status = "failed" if stage.status == "failed" else "processing"
     updates: dict[str, object] = {
         "status": status,
@@ -239,69 +243,30 @@ def _persist_stage_progress(job: AnalysisJobSummary, stage: AnalysisStage) -> An
 
 
 def _merge_progress_stage(stages: list[AnalysisStage], stage: AnalysisStage) -> list[AnalysisStage]:
-    existing: dict[str, AnalysisStage] = {item.id: item for item in stages}
-    existing[stage.id] = stage
-
-    if stage.status in {"done", "skipped", "failed"} and stage.id in ORDERED_STAGES:
-        stage_index = ORDERED_STAGES.index(stage.id)
-        for prior_stage_id in ORDERED_STAGES[:stage_index]:
-            prior = existing.get(prior_stage_id)
-            if prior and prior.status == "active":
-                existing[prior_stage_id] = AnalysisStage(
-                    id=prior.id,
-                    label=prior.label,
-                    status="done",
-                    detail=prior.detail,
-                )
-
-    if stage.status == "active":
-        for item in list(existing.values()):
-            if item.id != stage.id and item.status == "active":
-                existing[item.id] = AnalysisStage(
-                    id=item.id,
-                    label=item.label,
-                    status="done",
-                    detail=item.detail,
-                )
-
-    ordered_ids = [stage_id for stage_id in ORDERED_STAGES if stage_id in existing]
-    extra_ids = [stage_id for stage_id in existing if stage_id not in ORDERED_STAGES]
-    return [existing[stage_id] for stage_id in ordered_ids + extra_ids]
+    return merge_stage_progress(stages, stage)
 
 
 def _save_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
+    _sync_orchestration_storage()
+    saved = _JOB_STORE.save(job)
     with _LOCK:
-        JOBS[job.id] = job
-    _STORAGE.write_json(_STORAGE.job_json_path(job.id), job.model_dump(mode="json"))
-    return job
+        JOBS[saved.id] = saved
+    return saved
 
 
 def _save_report(job_id: str, report: AnalysisReport) -> AnalysisReport:
     with _LOCK:
         REPORTS[job_id] = report
-    _STORAGE.write_json(_STORAGE.report_json_path(job_id), report.model_dump(mode="json"))
+    _STORAGE.write_json_atomic(_STORAGE.report_json_path(job_id), report.model_dump(mode="json"))
     return report
 
 
 def list_analysis_jobs(storage: StorageService | None = None) -> list[AnalysisJobSummary]:
-    storage = storage or _STORAGE
-    jobs: dict[str, AnalysisJobSummary] = {}
-
-    jobs_dir = storage.outputs_dir / "jobs"
-    if jobs_dir.exists():
-        for path in sorted(jobs_dir.glob("*.json")):
-            job = _load_job_from_path(path, storage)
-            if job is not None:
-                jobs[job.id] = job
-
+    _sync_orchestration_storage(storage)
+    jobs: dict[str, AnalysisJobSummary] = {job.id: job for job in _JOB_STORE.list()}
     with _LOCK:
-        jobs.update(JOBS)
-
-    return sorted(
-        jobs.values(),
-        key=lambda job: _job_sort_key(job),
-        reverse=True,
-    )
+        jobs.update({job_id: normalize_job(job) for job_id, job in JOBS.items()})
+    return sorted(jobs.values(), key=lambda job: _job_sort_key(job), reverse=True)
 
 
 def _load_job_from_path(path: Path, storage: StorageService) -> AnalysisJobSummary | None:
@@ -317,15 +282,13 @@ def _job_sort_key(job: AnalysisJobSummary) -> tuple[str, str]:
 
 
 def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:
-    cached = JOBS.get(job_id)
-    if cached is not None:
-        return cached
-
-    path = _STORAGE.job_json_path(job_id)
-    if not path.exists():
-        return None
-
-    job = AnalysisJobSummary.model_validate(_STORAGE.read_json(path))
+    _sync_orchestration_storage()
+    job = _JOB_STORE.get(job_id)
+    if job is None:
+        cached = JOBS.get(job_id)
+        if cached is None:
+            return None
+        job = normalize_job(cached)
     with _LOCK:
         JOBS[job_id] = job
     return job
@@ -362,11 +325,12 @@ def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
 
 
 def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
+    _sync_orchestration_storage()
     job = get_mock_job(job_id)
     if job is None:
         return AnalysisDeleteResult(job_id=job_id, status="not_found", detail="Analysis job not found")
 
-    if job.status in {"uploaded", "queued", "processing"}:
+    if job.status in ACTIVE_COMPAT_STATUSES:
         return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="Active analysis jobs cannot be deleted")
 
     with _LOCK:
@@ -402,6 +366,32 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
     )
 
 
+def cancel_analysis_job(job_id: str) -> AnalysisJobSummary | None:
+    _sync_orchestration_storage()
+    job, _state = _JOB_STORE.cancel(job_id)
+    if job is not None:
+        with _LOCK:
+            JOBS[job.id] = job
+        _WORKER.notify()
+    return job
+
+
+def start_analysis_worker() -> None:
+    global _WORKER_STARTED
+    _sync_orchestration_storage()
+    from app.core.config import get_settings
+
+    if get_settings().enable_job_worker:
+        _WORKER.start()
+        _WORKER_STARTED = True
+
+
+def stop_analysis_worker() -> None:
+    global _WORKER_STARTED
+    _WORKER.stop()
+    _WORKER_STARTED = False
+
+
 def batch_delete_analysis_jobs(job_ids: list[str]) -> list[AnalysisDeleteResult]:
     return [delete_analysis_job(job_id) for job_id in job_ids]
 
@@ -421,7 +411,7 @@ def _remaining_jobs(excluded_job_id: str | None = None) -> list[AnalysisJobSumma
             except Exception:  # noqa: BLE001 - unreadable legacy jobs should be ignored here.
                 continue
             if job.id != excluded_job_id:
-                by_id.setdefault(job.id, job)
+                by_id.setdefault(job.id, normalize_job(job))
     return list(by_id.values())
 
 
@@ -483,75 +473,29 @@ def _cleanup_shared_calibration_artifacts(calibration_id: str | None, *, exclude
 
 
 def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[AnalysisStage]:
-    stages: list[AnalysisStage] = [
-        AnalysisStage(id="upload", label="视频上传", status="done", detail="上传视频已保存"),
-        AnalysisStage(id="queue", label="任务排队", status="done", detail="任务已进入后端分析流程"),
-    ]
-
-    seen_ids = {"upload", "queue"}
-    for stage in result.stages:
-        if stage.id in seen_ids:
-            continue
-        seen_ids.add(stage.id)
-        stages.append(
-            AnalysisStage(
-                id=stage.id,
-                label=stage.label,
-                status=stage.status,
-                detail=stage.detail,
-            )
-        )
-
-    if "frame-sampling" not in seen_ids:
-        insert_at = min(4, len(stages))
-        stages.insert(
-            insert_at,
-            AnalysisStage(
-                id="frame-sampling",
-                label="抽帧采样",
-                status="done" if result.video_id else "skipped",
-                detail="已按配置帧间隔读取视频帧" if result.video_id else "未提供视频，跳过真实抽帧",
-            ),
-        )
-
+    stages = analysis_stages_from_pipeline(result)
     stages.append(
         AnalysisStage(
             id="report",
             label="报告生成",
             status="done" if result.status == "completed" else "pending",
             detail="已生成前端报告 JSON" if result.status == "completed" else "pipeline 失败，报告未生成",
+            progress=100 if result.status == "completed" else 0,
         )
     )
     return stages
 
 
 def _progress_from_stages(stages: list[AnalysisStage]) -> int:
-    if not stages:
-        return 0
-    total = len(stages)
-    finished = sum(1 for stage in stages if stage.status in {"done", "skipped"})
-    active_credit = 0.45 if any(stage.status == "active" for stage in stages) else 0.0
-    return int(((finished + active_credit) / total) * 100)
+    return compute_progress_from_stages(stages)
 
 
 def _current_stage_from_stages(stages: list[AnalysisStage], fallback: str = "frame-sampling") -> str:
-    for stage in stages:
-        if stage.status == "failed":
-            return stage.id
-    for stage in stages:
-        if stage.status == "active":
-            return stage.id
-    for stage in reversed(stages):
-        if stage.status in {"done", "skipped"}:
-            return stage.id
-    return fallback
+    return current_stage_from_stages(stages, fallback=fallback)
 
 
 def _first_failed_stage(stages: list[AnalysisStage]) -> str:
-    for stage in stages:
-        if stage.status == "failed":
-            return stage.id
-    return "frame-sampling"
+    return first_failed_stage(stages)
 
 
 def build_mock_report(
