@@ -13,6 +13,7 @@ from app.schemas.calibration import ImagePoint
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
+from app.schemas.events import ServeEventsArtifact
 from app.schemas.tracking import (
     Detection,
     DetectionOverlayFrame,
@@ -43,6 +44,7 @@ from app.vision.player_tracking_engine.player_identity import PlayerIdentityConf
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
+from app.vision.events.serve_start_detector import ServeStartDetector
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,7 @@ class _TrackingRunOutput:
     player_metric_tracks: list[ProjectedTrackPoint] | None = None
     pose: PoseOverlayArtifact | None = None
     pose_stage: PipelineStageResult | None = None
+    pose_frames: list[Any] | None = None
 
 
 class AnalysisPipeline:
@@ -77,6 +80,7 @@ class AnalysisPipeline:
         projector: PlayerProjector | None = None,
         primary_player_selector: PrimaryPlayerSelector | None = None,
         pose_estimator: Any | None = None,
+        serve_start_detector: ServeStartDetector | None = None,
         frame_stride: int | None = None,
     ) -> None:
         self.video_service = video_service or VideoService()
@@ -122,6 +126,7 @@ class AnalysisPipeline:
             if self.settings.enable_pose_inference
             else None
         )
+        self.serve_start_detector = serve_start_detector or ServeStartDetector()
         self.pose_inference_enabled = self.pose_estimator is not None
         self.frame_stride = max(1, int(frame_stride or self.settings.overlay_frame_stride))
 
@@ -169,6 +174,10 @@ class AnalysisPipeline:
         pose_overlay_url: str | None = None
         pose_overlay_status: str | None = None
         pose_overlay_detail: str | None = None
+        serve_events_artifact_path: str | None = None
+        serve_events_url: str | None = None
+        serve_events_status: str | None = None
+        serve_events_detail: str | None = None
         player_trajectory_json_path: str | None = None
         player_trajectory_csv_path: str | None = None
         player_trajectory_url: str | None = None
@@ -247,6 +256,27 @@ class AnalysisPipeline:
                 player_trajectory_status = "available" if sample_count else "no_detections"
                 player_trajectory_detail = f"已生成 {player_count} 名球员的 {sample_count} 个公制轨迹样本"
 
+            try:
+                serve_events = self.serve_start_detector.detect(
+                    job_id=job_id,
+                    video_id=video_id,
+                    tracking=tracking_result,
+                    player_trajectories=run_output.player_trajectories,
+                    pose_frames=run_output.pose_frames,
+                )
+            except Exception as exc:
+                serve_events = self.serve_start_detector.unavailable(
+                    job_id=job_id,
+                    video_id=video_id,
+                    detail=f"发球开始检测不可用：{exc}",
+                )
+            serve_events_path = self.storage.serve_events_json_path(job_id)
+            self.storage.write_json(serve_events_path, serve_events.model_dump(mode="json"))
+            serve_events_artifact_path = str(serve_events_path)
+            serve_events_url = f"/api/analysis/jobs/{job_id}/artifacts/serve-events"
+            serve_events_status = serve_events.status
+            serve_events_detail = serve_events.detail
+
             detection_stage = self._stage(
                 "detection",
                 "人体检测",
@@ -290,6 +320,21 @@ class AnalysisPipeline:
             stages.append(projection_stage)
             self._notify_progress(progress_callback, projection_stage)
             self._check_cancelled(cancellation_token)
+            serve_stage = self._stage(
+                "serve-start-detection",
+                "发球开始检测",
+                "done" if serve_events.status in {"available", "partial", "no_candidates"} else "skipped",
+                f"{serve_events.detail}（候选 {len(serve_events.events)} 个）",
+            )
+            serve_stage.counters = {
+                "candidate_count": len(serve_events.events),
+                "status": serve_events.status,
+                "has_tracking": bool(tracking_result.overlay_frames),
+                "has_pose": bool(run_output.pose_frames),
+            }
+            stages.append(serve_stage)
+            self._notify_progress(progress_callback, serve_stage)
+            self._check_cancelled(cancellation_token)
             tracks = run_output.player_metric_tracks or self._positions_to_projected_tracks(tracking_result.positions)
             message = "Pipeline completed with Player Tracking Engine output."
         elif video and not calibration:
@@ -299,12 +344,15 @@ class AnalysisPipeline:
                 self._stage("tracking", "多目标跟踪", "skipped", "需要有效标定后才能生成可用场地轨迹"),
                 self._stage("pose", "人体姿态", "skipped", "需要检测和跟踪框后才能运行 RTMPose"),
                 self._stage("projection", "脚点投影", "skipped", "未提供标定，无法投影到标准球场坐标"),
+                self._stage("serve-start-detection", "发球开始检测", "skipped", "缺少场地标定和可用球员轨迹，暂不识别发球开始候选点"),
             ]
             for stage in limited_stages:
                 stages.append(stage)
                 self._notify_progress(progress_callback, stage)
                 self._check_cancelled(cancellation_token)
             tracks = []
+            serve_events_status = "unavailable"
+            serve_events_detail = "缺少场地标定和可用球员轨迹，暂不识别发球开始候选点"
             message = "Limited pipeline completed without court calibration; no court-projected tracks were generated."
         else:
             mock_stages = [
@@ -312,12 +360,15 @@ class AnalysisPipeline:
                 self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"),
                 self._stage("tracking", "多目标跟踪", "done", "已生成 MVP 轨迹样本"),
                 self._stage("pose", "人体姿态", "skipped", "未提供真实视频，跳过骨架关节识别"),
+                self._stage("serve-start-detection", "发球开始检测", "skipped", "未提供真实视频，跳过发球开始候选检测"),
             ]
             for stage in mock_stages:
                 stages.append(stage)
                 self._notify_progress(progress_callback, stage)
                 self._check_cancelled(cancellation_token)
             tracks = self._mock_projected_tracks()
+            serve_events_status = "unavailable"
+            serve_events_detail = "未提供真实视频，跳过发球开始候选检测"
             projection_stage = self._stage("projection", "脚点投影", "done", "轨迹已位于标准球场坐标系")
             stages.append(projection_stage)
             self._notify_progress(progress_callback, projection_stage)
@@ -350,6 +401,8 @@ class AnalysisPipeline:
                 tracking_overlay_url=tracking_overlay_url,
                 pose_overlay_json_path=pose_overlay_artifact_path,
                 pose_overlay_url=pose_overlay_url,
+                serve_events_json_path=serve_events_artifact_path,
+                serve_events_url=serve_events_url,
                 player_trajectory_json_path=player_trajectory_json_path,
                 player_trajectory_csv_path=player_trajectory_csv_path,
                 player_trajectory_url=player_trajectory_url,
@@ -358,6 +411,8 @@ class AnalysisPipeline:
                 tracking_overlay_detail=tracking_overlay_detail,
                 pose_overlay_status=pose_overlay_status,
                 pose_overlay_detail=pose_overlay_detail,
+                serve_events_status=serve_events_status,
+                serve_events_detail=serve_events_detail,
                 player_trajectory_status=player_trajectory_status,
                 player_trajectory_detail=player_trajectory_detail,
             ),
@@ -569,6 +624,7 @@ class AnalysisPipeline:
             player_metric_tracks=player_metric_tracks,
             pose=pose_artifact,
             pose_stage=pose_stage,
+            pose_frames=pose_frames,
         )
 
     def _detect_frame(self, frame: object, frame_index: int) -> list[Detection]:

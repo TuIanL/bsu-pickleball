@@ -349,6 +349,7 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
         _STORAGE.tracking_overlay_json_path(job_id),
         _STORAGE.ball_overlay_json_path(job_id),
         _STORAGE.pose_overlay_json_path(job_id),
+        _STORAGE.serve_events_json_path(job_id),
     ]:
         if path.exists():
             _STORAGE.delete_path(path)

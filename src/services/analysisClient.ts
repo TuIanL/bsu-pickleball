@@ -11,6 +11,7 @@ import type {
   CalibrationPoint,
   ManualCalibrationResponse,
   PoseOverlayArtifact,
+  ServeEventsArtifact,
   TrackingOverlayArtifact,
   VideoUploadResponse,
 } from "../types/report";
@@ -590,6 +591,11 @@ export async function getTrackingOverlay(result: AnalysisPipelineResult): Promis
 export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<PoseOverlayArtifact | null> {
   const path = result.artifacts.pose_overlay_url;
   return path ? requestJson<PoseOverlayArtifact>(path) : null;
+}
+
+export async function getServeEvents(result: AnalysisPipelineResult): Promise<ServeEventsArtifact | null> {
+  const path = result.artifacts.serve_events_url;
+  return path ? requestJson<ServeEventsArtifact>(path) : null;
 }
 
 export { demoAnalysisReport };

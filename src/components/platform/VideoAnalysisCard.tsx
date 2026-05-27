@@ -4,6 +4,7 @@ import type {
   MatchSummary,
   PlayerMarker,
   PoseOverlayArtifact,
+  ServeEventsArtifact,
   TimelineMarker,
   TrackingOverlayArtifact,
   VideoOverlayLabel,
@@ -19,6 +20,10 @@ interface VideoAnalysisCardProps {
   poseOverlayLoadState?: OverlayLoadState;
   poseOverlayStatus?: string;
   poseOverlay?: PoseOverlayArtifact | null;
+  serveEvents?: ServeEventsArtifact | null;
+  serveEventsDetail?: string;
+  serveEventsLoadState?: OverlayLoadState;
+  serveEventsStatus?: string;
   timeline: TimelineMarker[];
   trackingOverlayDetail?: string;
   trackingOverlayLoadState?: OverlayLoadState;
@@ -52,6 +57,10 @@ export function VideoAnalysisCard({
   poseOverlayLoadState = "idle",
   poseOverlayStatus,
   poseOverlay,
+  serveEvents,
+  serveEventsDetail,
+  serveEventsLoadState = "idle",
+  serveEventsStatus,
   timeline,
   trackingOverlayDetail,
   trackingOverlayLoadState = "idle",
@@ -69,6 +78,10 @@ export function VideoAnalysisCard({
           poseOverlayDetail={poseOverlayDetail}
           poseOverlayLoadState={poseOverlayLoadState}
           poseOverlayStatus={poseOverlayStatus}
+          serveEvents={serveEvents}
+          serveEventsDetail={serveEventsDetail}
+          serveEventsLoadState={serveEventsLoadState}
+          serveEventsStatus={serveEventsStatus}
           trackingOverlay={trackingOverlay}
           trackingOverlayDetail={trackingOverlayDetail}
           trackingOverlayLoadState={trackingOverlayLoadState}
@@ -236,6 +249,10 @@ function RealVideoOverlay({
   poseOverlayDetail,
   poseOverlayLoadState = "idle",
   poseOverlayStatus,
+  serveEvents,
+  serveEventsDetail,
+  serveEventsLoadState = "idle",
+  serveEventsStatus,
   trackingOverlay,
   trackingOverlayDetail,
   trackingOverlayLoadState = "idle",
@@ -247,6 +264,10 @@ function RealVideoOverlay({
   poseOverlayDetail?: string;
   poseOverlayLoadState?: OverlayLoadState;
   poseOverlayStatus?: string;
+  serveEvents?: ServeEventsArtifact | null;
+  serveEventsDetail?: string;
+  serveEventsLoadState?: OverlayLoadState;
+  serveEventsStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
   trackingOverlayDetail?: string;
   trackingOverlayLoadState?: OverlayLoadState;
@@ -281,8 +302,11 @@ function RealVideoOverlay({
   const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
   const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
+  const serveDetail = layerDetail(serveEventsLoadState, serveEvents?.detail ?? serveEventsDetail, "发球候选 marker");
+  const serveStatus = resolveLayerStatus(serveEventsLoadState, serveEvents?.status ?? serveEventsStatus);
   const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const serveMarkers = useMemo(() => resolveServeMarkers(serveEvents, duration), [duration, serveEvents]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -415,6 +439,15 @@ function RealVideoOverlay({
     const nextTime = (Number(event.target.value) / 100) * duration;
     video.currentTime = nextTime;
     setCurrentTime(nextTime);
+  };
+
+  const seekToServeMarker = (seekTime: number) => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    video.currentTime = seekTime;
+    setCurrentTime(seekTime);
   };
 
   return (
@@ -565,16 +598,34 @@ function RealVideoOverlay({
             <span className="w-24 text-xs font-bold text-slate-200">
               {formatSeconds(currentTime)} / {formatSeconds(duration)}
             </span>
-            <input
-              aria-label="视频播放进度"
-              className="h-2 flex-1 accent-[#22C55E]"
-              max="100"
-              min="0"
-              onChange={handleProgressChange}
-              step="0.1"
-              type="range"
-              value={progress}
-            />
+            <div className="relative flex-1">
+              <input
+                aria-label="视频播放进度"
+                className="relative z-10 h-2 w-full accent-[#22C55E]"
+                max="100"
+                min="0"
+                onChange={handleProgressChange}
+                step="0.1"
+                type="range"
+                value={progress}
+              />
+              {serveMarkers.map((marker) => (
+                <button
+                  aria-label={`跳转到发球候选 ${formatSeconds(marker.timestamp_seconds)}`}
+                  className="group absolute top-1/2 z-20 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-black bg-[#D9FF3F] shadow-[0_0_18px_rgba(217,255,63,0.45)] transition hover:scale-125"
+                  key={marker.id}
+                  onClick={() => seekToServeMarker(marker.seekTime)}
+                  style={{ left: `${marker.position}%` }}
+                  type="button"
+                >
+                  <span className="pointer-events-none absolute bottom-6 left-1/2 z-30 w-56 -translate-x-1/2 rounded-xl border border-white/10 bg-[#111318] px-3 py-2 text-left text-xs font-semibold text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100">
+                    发球候选 · {formatSeconds(marker.timestamp_seconds)}
+                    <br />
+                    置信度 {Math.round(marker.confidence * 100)}% · {marker.reason}
+                  </span>
+                </button>
+              ))}
+            </div>
             <button
               aria-label={isFullscreen ? "退出全屏" : "全屏播放"}
               className="grid size-9 place-items-center rounded-full border border-white/15 bg-white/10 text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45"
@@ -588,6 +639,11 @@ function RealVideoOverlay({
           <div className="mt-2 h-1 rounded-full bg-white/15">
             <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${progress}%` }} />
           </div>
+          {serveEventsLoadState !== "idle" ? (
+            <p className="mt-2 text-[0.68rem] font-semibold text-slate-300">
+              发球候选：{serveMarkers.length ? `${serveMarkers.length} 个 marker` : statusCopy(serveStatus, serveDetail)}
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
@@ -697,4 +753,15 @@ function formatSeconds(value: number): string {
   const minutes = Math.floor(value / 60);
   const seconds = Math.floor(value % 60);
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+export function resolveServeMarkers(serveEvents: ServeEventsArtifact | null | undefined, duration: number) {
+  if (!serveEvents?.events.length || duration <= 0) {
+    return [];
+  }
+  return serveEvents.events.map((event) => ({
+    ...event,
+    position: Math.min(100, Math.max(0, (event.timestamp_seconds / duration) * 100)),
+    seekTime: Math.min(duration, Math.max(0, event.seek_time_seconds)),
+  }));
 }

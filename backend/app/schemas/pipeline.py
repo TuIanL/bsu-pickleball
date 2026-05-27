@@ -38,6 +38,8 @@ class AnalysisArtifacts(BaseModel):
     tracking_overlay_url: Optional[str] = None
     pose_overlay_json_path: Optional[str] = None
     pose_overlay_url: Optional[str] = None
+    serve_events_json_path: Optional[str] = None
+    serve_events_url: Optional[str] = None
     player_trajectory_json_path: Optional[str] = None
     player_trajectory_csv_path: Optional[str] = None
     player_trajectory_url: Optional[str] = None
@@ -46,6 +48,8 @@ class AnalysisArtifacts(BaseModel):
     tracking_overlay_detail: Optional[str] = None
     pose_overlay_status: Optional[str] = None
     pose_overlay_detail: Optional[str] = None
+    serve_events_status: Optional[str] = None
+    serve_events_detail: Optional[str] = None
     player_trajectory_status: Optional[str] = None
     player_trajectory_detail: Optional[str] = None
     overlay_video_path: Optional[str] = None

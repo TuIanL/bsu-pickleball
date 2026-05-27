@@ -203,6 +203,36 @@ pose overlays, projected player tracks, and movement metrics only. Historical
 ball overlay files may still be removed by task deletion, but new jobs do not
 generate or expose ball overlay artifacts.
 
+## Action Classification Dataset Export
+
+For machine-learning action classification experiments, use the offline exporter
+to turn uploaded or local match videos into target-player crop clips. This path
+is separate from the product analysis job flow and is intended for dataset
+building and visual QA.
+
+Recommended first pass:
+
+```bash
+cd backend
+python scripts/export_action_classification_dataset.py ../data/uploads/video.mp4 \
+  --output-root ../datasets/action-classification-processed \
+  --label forehand \
+  --target-fps 20 \
+  --roi 0.02,0.30,0.98,0.98 \
+  --detector-confidence 0.5 \
+  --selection-strategy largest \
+  --bbox-expand-scale 1.4 \
+  --clip-length 16 \
+  --clip-stride 16
+```
+
+The exporter writes JPEG frames under
+`<output-root>/<label>/<video-stem>_clipNNNN/` and a root `manifest.json` with
+source frame numbers, timestamps, ROI coordinates, selected person boxes, crop
+boxes, preprocessing settings, and error diagnostics. CLAHE light enhancement is
+enabled by default; add `--disable-clahe` for an unenhanced baseline, or
+`--denoise` for a light `3x3` GaussianBlur experiment.
+
 ## API Surface
 
 - `GET /health`

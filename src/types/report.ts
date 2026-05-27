@@ -424,6 +424,32 @@ export interface PoseOverlayArtifact {
   frames: PoseOverlayFrame[];
 }
 
+export interface ServeEventCandidate {
+  id: string;
+  timestamp_seconds: number;
+  frame_index: number;
+  confidence: number;
+  seek_time_seconds: number;
+  reason: string;
+  source_signals: Array<"tracking" | "pose" | "trajectory">;
+  track_id?: string;
+  player_id?: string;
+}
+
+export interface ServeEventsArtifact {
+  job_id: string;
+  video_id?: string;
+  status: "available" | "no_candidates" | "partial" | "unavailable";
+  detail: string;
+  detector_version: string;
+  duration_seconds?: number;
+  fps: number;
+  frame_count: number;
+  processed_frame_count: number;
+  frame_stride: number;
+  events: ServeEventCandidate[];
+}
+
 export interface AnalysisPipelineResult {
   job_id: string;
   video_id?: string;
@@ -471,11 +497,15 @@ export interface AnalysisPipelineResult {
     tracking_overlay_url?: string;
     pose_overlay_json_path?: string;
     pose_overlay_url?: string;
+    serve_events_json_path?: string;
+    serve_events_url?: string;
     source_video_url?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
     pose_overlay_status?: string;
     pose_overlay_detail?: string;
+    serve_events_status?: string;
+    serve_events_detail?: string;
     overlay_video_path?: string;
   };
   message: string;

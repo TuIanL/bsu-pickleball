@@ -87,6 +87,9 @@ class StorageService:
     def pose_overlay_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "pose_overlay.json"
 
+    def serve_events_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "serve_events.json"
+
     def player_trajectory_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "players_trajectory.json"
 

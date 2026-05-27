@@ -52,6 +52,7 @@ import type {
   InsightTone,
   PoseOverlayArtifact,
   ReportType,
+  ServeEventsArtifact,
   TrackingOverlayArtifact,
 } from "./types/report";
 import {
@@ -63,6 +64,7 @@ import {
   demoAnalysisReport as demoReport,
   getAnalysisJob,
   getPoseOverlay,
+  getServeEvents,
   getAnalysisResult,
   getAnalysisReport,
   getRecentAnalysisJob,
@@ -2460,6 +2462,8 @@ function useVisualAnalysisReport(jobId?: string) {
     poseOverlayLoadState: OverlayLoadState;
     report: AnalysisReport | null;
     result: AnalysisPipelineResult | null;
+    serveEvents: ServeEventsArtifact | null;
+    serveEventsLoadState: OverlayLoadState;
     trackingOverlay: TrackingOverlayArtifact | null;
     trackingOverlayLoadState: OverlayLoadState;
     videoSrc?: string;
@@ -2476,6 +2480,8 @@ function useVisualAnalysisReport(jobId?: string) {
       updates: Partial<{
         poseOverlay: PoseOverlayArtifact | null;
         poseOverlayLoadState: OverlayLoadState;
+        serveEvents: ServeEventsArtifact | null;
+        serveEventsLoadState: OverlayLoadState;
         trackingOverlay: TrackingOverlayArtifact | null;
         trackingOverlayLoadState: OverlayLoadState;
       }>
@@ -2493,6 +2499,7 @@ function useVisualAnalysisReport(jobId?: string) {
         const adaptedReport = nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
         const shouldLoadTracking = Boolean(pipelineResult?.artifacts.tracking_overlay_url);
         const shouldLoadPose = Boolean(pipelineResult?.artifacts.pose_overlay_url);
+        const shouldLoadServeEvents = Boolean(pipelineResult?.artifacts.serve_events_url);
 
         if (!alive) {
           return;
@@ -2506,6 +2513,8 @@ function useVisualAnalysisReport(jobId?: string) {
           poseOverlayLoadState: shouldLoadPose ? "loading" : "unavailable",
           report: adaptedReport,
           result: pipelineResult,
+          serveEvents: null,
+          serveEventsLoadState: shouldLoadServeEvents ? "loading" : "unavailable",
           trackingOverlay: null,
           trackingOverlayLoadState: shouldLoadTracking ? "loading" : "unavailable",
           videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
@@ -2542,6 +2551,22 @@ function useVisualAnalysisReport(jobId?: string) {
               });
             });
         }
+
+        if (pipelineResult && shouldLoadServeEvents) {
+          getServeEvents(pipelineResult)
+            .then((artifact) => {
+              setOverlayState({
+                serveEvents: artifact,
+                serveEventsLoadState: artifact ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                serveEvents: null,
+                serveEventsLoadState: "failed",
+              });
+            });
+        }
       } catch (error) {
         if (alive) {
           setLoadedResult({
@@ -2552,6 +2577,8 @@ function useVisualAnalysisReport(jobId?: string) {
             poseOverlayLoadState: "unavailable",
             report: null,
             result: null,
+            serveEvents: null,
+            serveEventsLoadState: "unavailable",
             trackingOverlay: null,
             trackingOverlayLoadState: "unavailable",
           });
@@ -2574,6 +2601,8 @@ function useVisualAnalysisReport(jobId?: string) {
       poseOverlayLoadState: "idle" as OverlayLoadState,
       report: demoReport,
       result: null,
+      serveEvents: null,
+      serveEventsLoadState: "idle" as OverlayLoadState,
       trackingOverlay: null,
       trackingOverlayLoadState: "idle" as OverlayLoadState,
       videoSrc: undefined,
@@ -2588,6 +2617,8 @@ function useVisualAnalysisReport(jobId?: string) {
       poseOverlayLoadState: "idle" as OverlayLoadState,
       report: undefined,
       result: undefined,
+      serveEvents: undefined,
+      serveEventsLoadState: "idle" as OverlayLoadState,
       trackingOverlay: undefined,
       trackingOverlayLoadState: "idle" as OverlayLoadState,
       videoSrc: undefined,
@@ -2601,6 +2632,8 @@ function useVisualAnalysisReport(jobId?: string) {
     poseOverlayLoadState: loadedResult.poseOverlayLoadState,
     report: loadedResult.report,
     result: loadedResult.result,
+    serveEvents: loadedResult.serveEvents,
+    serveEventsLoadState: loadedResult.serveEventsLoadState,
     trackingOverlay: loadedResult.trackingOverlay,
     trackingOverlayLoadState: loadedResult.trackingOverlayLoadState,
     videoSrc: loadedResult.videoSrc,
@@ -2618,6 +2651,8 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
     poseOverlayLoadState,
     report,
     result,
+    serveEvents,
+    serveEventsLoadState,
     trackingOverlay,
     trackingOverlayLoadState,
     videoSrc,
@@ -2725,6 +2760,10 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
             poseOverlayLoadState={poseOverlayLoadState}
             poseOverlayStatus={result?.artifacts.pose_overlay_status}
             poseOverlay={poseOverlay ?? null}
+            serveEvents={serveEvents ?? null}
+            serveEventsDetail={result?.artifacts.serve_events_detail}
+            serveEventsLoadState={serveEventsLoadState}
+            serveEventsStatus={result?.artifacts.serve_events_status}
             timeline={analysis.timelineMarkers}
             trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
             trackingOverlayLoadState={trackingOverlayLoadState}
@@ -2740,6 +2779,8 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
             poseOverlayLoadState={poseOverlayLoadState}
             reportPath={reportPath}
             result={result}
+            serveEvents={serveEvents ?? null}
+            serveEventsLoadState={serveEventsLoadState}
             trackingOverlay={trackingOverlay ?? null}
             trackingOverlayLoadState={trackingOverlayLoadState}
           />
@@ -2798,6 +2839,10 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
           poseOverlayLoadState={poseOverlayLoadState}
           poseOverlayStatus={result?.artifacts.pose_overlay_status}
           poseOverlay={poseOverlay ?? null}
+          serveEvents={serveEvents ?? null}
+          serveEventsDetail={result?.artifacts.serve_events_detail}
+          serveEventsLoadState={serveEventsLoadState}
+          serveEventsStatus={result?.artifacts.serve_events_status}
           timeline={analysis.timelineMarkers}
           trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
           trackingOverlayLoadState={trackingOverlayLoadState}
@@ -2855,6 +2900,8 @@ function AnalysisStatusRail({
   poseOverlayLoadState,
   reportPath,
   result,
+  serveEvents,
+  serveEventsLoadState,
   trackingOverlay,
   trackingOverlayLoadState,
 }: {
@@ -2865,6 +2912,8 @@ function AnalysisStatusRail({
   poseOverlayLoadState: OverlayLoadState;
   reportPath: (type: ReportType) => AppPath;
   result?: AnalysisPipelineResult | null;
+  serveEvents: ServeEventsArtifact | null;
+  serveEventsLoadState: OverlayLoadState;
   trackingOverlay: TrackingOverlayArtifact | null;
   trackingOverlayLoadState: OverlayLoadState;
 }) {
@@ -2878,6 +2927,11 @@ function AnalysisStatusRail({
       label: "骨架姿态",
       status: overlayLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? result?.artifacts.pose_overlay_status),
       detail: result?.artifacts.pose_overlay_detail ?? poseOverlay?.detail,
+    },
+    {
+      label: "发球候选",
+      status: overlayLayerStatus(serveEventsLoadState, serveEvents?.status ?? result?.artifacts.serve_events_status),
+      detail: result?.artifacts.serve_events_detail ?? serveEvents?.detail,
     },
   ];
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
@@ -3000,7 +3054,7 @@ function overlayStatusMeta(status?: string) {
   if (status === "skipped") {
     return { label: "已跳过", className: "bg-slate-100 text-slate-600", detail: "该视觉层在本次分析中未启用。" };
   }
-  if (status === "no_detections" || status === "no_poses") {
+  if (status === "no_detections" || status === "no_poses" || status === "no_candidates") {
     return { label: "无结果", className: "bg-[#FF9500]/14 text-[#A45A00]", detail: "模型已运行，但没有产生可用目标。" };
   }
   return { label: "不可用", className: "bg-slate-100 text-slate-600", detail: "本次任务没有可用的真实视觉层数据。" };
