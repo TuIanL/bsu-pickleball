@@ -1,3 +1,5 @@
+"""运动表现指标相关的 Pydantic 数据模型 —— 距离、速度、区域停留、间距、热力图等。"""
+
 from __future__ import annotations
 
 from typing import List, Tuple
@@ -6,6 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class DistanceMetric(BaseModel):
+    """单个轨迹的累计移动距离（英尺）。"""
     track_id: str
     distance_ft: float = Field(ge=0)
 

@@ -1,3 +1,5 @@
+"""视频上传服务 —— 保存上传视频文件并在内存中维护 MVP 元数据。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

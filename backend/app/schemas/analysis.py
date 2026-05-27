@@ -1,7 +1,10 @@
+"""分析任务相关的 Pydantic 数据模型 —— 任务创建、状态追踪、报告结构等。"""
+
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+# 趋势方向：上升 / 下降 / 持平
 TrendDirection = Literal["up", "down", "steady"]
 ReportType = Literal["movement", "diagnosis"]
 InsightTone = Literal["advantage", "risk", "error", "training"]

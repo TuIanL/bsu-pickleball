@@ -1,3 +1,5 @@
+"""多目标检测器 —— 支持球员、场地元素等多类别目标的统一检测与归一化。"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

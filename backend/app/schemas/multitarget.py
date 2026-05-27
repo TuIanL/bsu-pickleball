@@ -1,3 +1,5 @@
+"""多目标检测（球员/场地元素）相关的 Pydantic 数据模型。"""
+
 from __future__ import annotations
 
 from math import isfinite
@@ -5,7 +7,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
+# 目标类别名称（当前仅支持 player）
 TargetClassName = Literal["player"]
 MultiTargetStatus = Literal["available", "partial", "no_detections", "unavailable", "skipped", "failed"]
 

@@ -1,3 +1,5 @@
+"""模拟分析服务 —— 提供 MVP 阶段的任务 CRUD、后台 Worker 调度和演示报告生成。"""
+
 from __future__ import annotations
 
 from copy import deepcopy

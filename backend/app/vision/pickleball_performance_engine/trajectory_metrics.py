@@ -1,3 +1,5 @@
+"""轨迹指标计算 —— 按球员分组轨迹点并计算累计移动距离。"""
+
 from __future__ import annotations
 
 from collections import defaultdict

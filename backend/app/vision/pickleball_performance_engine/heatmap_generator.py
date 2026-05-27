@@ -1,3 +1,5 @@
+"""热力图生成 —— 将球场坐标点映射为网格热力图单元。"""
+
 from __future__ import annotations
 
 from app.schemas.metrics import Heatmap, HeatmapCell

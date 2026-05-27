@@ -1,3 +1,5 @@
+"""速度指标计算 —— 基于相邻帧坐标差和时间间隔计算球员移动速度。"""
+
 from __future__ import annotations
 
 from math import hypot

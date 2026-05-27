@@ -1,3 +1,5 @@
+"""人体姿态估计相关的 Pydantic 数据模型 —— RTMPose26 关键点、骨架边、姿态叠加帧等。"""
+
 from __future__ import annotations
 
 from typing import Literal, Optional
@@ -6,10 +8,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.tracking import SourceFrameSize
 
-
+# 姿态产物状态：可用 / 无姿态 / 不可用
 PoseArtifactStatus = Literal["available", "no_poses", "unavailable"]
 
-
+# RTMPose26 模型的 26 个关键点名称
 RTMPOSE26_KEYPOINT_NAMES = [
     "nose",
     "left_eye",

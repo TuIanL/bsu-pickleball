@@ -1,1 +1,1 @@
-"""Core backend configuration helpers."""
+"""后端核心模块 —— 配置管理与日志设置。"""

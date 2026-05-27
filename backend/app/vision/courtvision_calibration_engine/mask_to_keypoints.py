@@ -1,3 +1,5 @@
+"""掩码→关键点转换 —— 从球场线分割掩码中提取四个角点用于标定。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

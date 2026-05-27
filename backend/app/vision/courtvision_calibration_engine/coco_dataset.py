@@ -1,3 +1,5 @@
+"""COCO 数据集工具 —— 验证和转换 COCO 分割数据集以用于球场线 YOLO 训练。"""
+
 from __future__ import annotations
 
 import json

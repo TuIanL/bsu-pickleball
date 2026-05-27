@@ -1,3 +1,5 @@
+"""球场叠加绘制 —— 将标准匹克球场线投影回原始视频帧上。"""
+
 from __future__ import annotations
 
 from typing import Any

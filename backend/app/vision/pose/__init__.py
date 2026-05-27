@@ -1,1 +1,1 @@
-"""Pose-estimation adapters such as future RTMPose26 integrations."""
+"""姿态估计适配器 —— RTMPose26 等人体姿态模型集成。"""

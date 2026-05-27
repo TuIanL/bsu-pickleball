@@ -1,3 +1,5 @@
+"""双打间距指标 —— 计算同一侧两名球员之间的站位间距变化。"""
+
 from __future__ import annotations
 
 from collections import defaultdict

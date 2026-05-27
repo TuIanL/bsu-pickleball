@@ -1,1 +1,1 @@
-"""Tracking modules for player movement continuity."""
+"""球员跟踪模块 —— 多目标跟踪以维持球员运动连续性。"""

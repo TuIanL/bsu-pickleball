@@ -1,4 +1,4 @@
-"""CourtVision Calibration Engine for standard court modeling and homography."""
+"""CourtVision 标定引擎 —— 标准球场建模与单应性矩阵计算。"""
 
 from app.vision.courtvision_calibration_engine.court_geometry import (
     PickleballCourtGeometry,

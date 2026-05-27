@@ -214,6 +214,27 @@ def test_batch_delete_endpoint_returns_partial_results(monkeypatch, tmp_path):
     assert storage.job_json_path(active.id).exists()
 
 
+def test_player_trajectory_artifact_route_returns_json(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-player-trajectory-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(storage.player_trajectory_json_path(job.id), {"job_id": job.id, "court": {"court_unit": "m"}})
+
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/player-trajectories")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    assert response.json()["court"]["court_unit"] == "m"
+
+
 def test_delete_job_cleans_unreferenced_video_and_preserves_shared_calibration(monkeypatch, tmp_path):
     storage = make_temp_storage(tmp_path)
     monkeypatch.setattr("app.services.mock_analysis._STORAGE", storage)
@@ -630,14 +651,22 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert result.artifacts.source_video_url == f"/api/videos/{video_id}/stream"
     assert result.artifacts.tracking_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/tracking-overlay"
     assert result.artifacts.pose_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/pose-overlay"
+    assert result.artifacts.player_trajectory_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-trajectories"
     assert result.artifacts.tracking_overlay_status == "available"
     assert result.artifacts.pose_overlay_status == "available"
+    assert result.artifacts.player_trajectory_status == "available"
     assert any(stage.id == "pose" and stage.status == "done" for stage in result.stages)
 
     storage = StorageService()
     tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-overlay-test"))
+    player_trajectories = storage.read_json(storage.player_trajectory_json_path("job-overlay-test"))
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-overlay-test"))
     assert tracking_overlay["frames"][0]["detections"][0]["track_id"] == "1"
+    assert tracking_overlay["frames"][0]["detections"][0]["player_id"] == "Player_1"
+    assert tracking_overlay["frames"][0]["detections"][0]["label"] == "P1 / T1"
+    assert player_trajectories["court"]["court_unit"] == "m"
+    assert player_trajectories["players"]["Player_1"][0]["court_unit"] == "m"
+    assert storage.player_trajectory_csv_path("job-overlay-test").exists()
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
 
 
@@ -676,12 +705,14 @@ def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
 
     assert result.status == "completed"
     assert result.artifacts.tracking_overlay_status == "available"
+    assert result.artifacts.player_trajectory_status == "available"
     assert not hasattr(result.artifacts, "ball_overlay_status")
     assert not hasattr(result.artifacts, "ball_overlay_url")
     assert all(stage.id != "ball-tracking" for stage in result.stages)
 
     storage = StorageService()
     assert storage.tracking_overlay_json_path("job-player-only-overlay").exists()
+    assert storage.player_trajectory_json_path("job-player-only-overlay").exists()
     assert not storage.ball_overlay_json_path("job-player-only-overlay").exists()
 
 

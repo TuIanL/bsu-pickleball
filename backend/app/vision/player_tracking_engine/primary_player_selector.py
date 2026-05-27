@@ -1,3 +1,5 @@
+"""主要球员选择器 —— 基于置信度、框大小合理性和持久性选择用于展示的球员。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,3 +1,5 @@
+"""任务编排引擎 —— 管理分析任务的生命周期（排队、调度、状态追踪、取消和重试）。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

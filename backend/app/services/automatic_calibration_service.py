@@ -1,3 +1,5 @@
+"""自动标定服务 —— 基于场地边线分割模型生成半自动标定建议。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

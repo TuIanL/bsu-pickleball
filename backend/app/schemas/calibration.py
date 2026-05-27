@@ -1,3 +1,5 @@
+"""场地标定相关的 Pydantic 数据模型 —— 图像/球场坐标点、单应性矩阵、标定结果等。"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,6 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class ImagePoint(BaseModel):
+    """图像坐标系中的二维点（像素坐标）。"""
     x: float
     y: float
 

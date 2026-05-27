@@ -1,3 +1,5 @@
+"""球员投影器 —— 将跟踪球员的脚点从图像像素坐标投影到球场英尺坐标。"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

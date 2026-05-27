@@ -1,3 +1,5 @@
+"""匹克球场几何模型 —— 标准 20×44 英尺球场，含各区域（厨房区、发球区、边线等）定义。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

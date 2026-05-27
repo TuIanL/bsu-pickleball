@@ -1,3 +1,5 @@
+"""本地文件存储服务 —— 管理上传视频、JSON 产物、标定文件和临时文件的读写。"""
+
 from __future__ import annotations
 
 import json
@@ -84,6 +86,12 @@ class StorageService:
 
     def pose_overlay_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "pose_overlay.json"
+
+    def player_trajectory_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "players_trajectory.json"
+
+    def player_trajectory_csv_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "players_trajectory.csv"
 
     def video_metadata_path(self, video_id: str) -> Path:
         return self.uploads_dir / f"{video_id}.json"

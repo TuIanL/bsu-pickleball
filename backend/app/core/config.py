@@ -1,3 +1,5 @@
+"""应用配置管理 —— 通过环境变量和默认值管理所有后端运行参数。"""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -8,6 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class Settings(BaseModel):
+    """后端全局配置，所有字段可通过 PICKLEBALL_ 前缀的环境变量覆盖。"""
     app_name: str = "Pre Pickleball Vision API"
     app_version: str = "0.2.0"
     cors_origins: list[str] = Field(
@@ -35,6 +38,15 @@ class Settings(BaseModel):
     primary_player_min_box_area_ratio: float = 0.0005
     primary_player_max_box_area_ratio: float = 0.85
     primary_player_court_margin_ft: float = 12.0
+    player_identity_max_players: int = 4
+    player_identity_lost_buffer_frames: int = 90
+    player_identity_inactive_buffer_frames: int = 180
+    player_identity_interpolation_buffer_frames: int = 90
+    player_identity_match_threshold: float = 0.55
+    player_identity_max_reconnect_distance_m: float = 2.5
+    player_identity_max_speed_mps: float = 7.0
+    player_identity_court_buffer_m: float = 0.75
+    player_identity_smoothing_window: int = 5
     court_line_model_path: str | None = None
     court_line_device: str | None = None
     court_line_confidence: float = 0.35
@@ -128,6 +140,30 @@ def get_settings() -> Settings:
         primary_player_min_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MIN_BOX_AREA_RATIO", "0.0005")),
         primary_player_max_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MAX_BOX_AREA_RATIO", "0.85")),
         primary_player_court_margin_ft=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT", "12.0")),
+        player_identity_max_players=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_PLAYERS", "4"))),
+        player_identity_lost_buffer_frames=max(
+            1,
+            int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_LOST_BUFFER_FRAMES", "90")),
+        ),
+        player_identity_inactive_buffer_frames=max(
+            1,
+            int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_INACTIVE_BUFFER_FRAMES", "180")),
+        ),
+        player_identity_interpolation_buffer_frames=max(
+            1,
+            int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_INTERPOLATION_BUFFER_FRAMES", "90")),
+        ),
+        player_identity_match_threshold=_clamp_float(
+            os.getenv("PICKLEBALL_PLAYER_IDENTITY_MATCH_THRESHOLD", "0.55"),
+            0.0,
+            1.0,
+        ),
+        player_identity_max_reconnect_distance_m=float(
+            os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_RECONNECT_DISTANCE_M", "2.5")
+        ),
+        player_identity_max_speed_mps=float(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_SPEED_MPS", "7.0")),
+        player_identity_court_buffer_m=float(os.getenv("PICKLEBALL_PLAYER_IDENTITY_COURT_BUFFER_M", "0.75")),
+        player_identity_smoothing_window=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_SMOOTHING_WINDOW", "5"))),
         court_line_model_path=os.getenv("PICKLEBALL_COURT_LINE_MODEL_PATH")
         or _first_existing_path(model_dir, ["court-line/best.pt", "court-line/court-line-seg.pt"]),
         court_line_device=os.getenv("PICKLEBALL_COURT_LINE_DEVICE") or None,

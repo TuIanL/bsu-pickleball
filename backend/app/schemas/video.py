@@ -1,3 +1,5 @@
+"""视频上传与元数据管理的 Pydantic 数据模型。"""
+
 from __future__ import annotations
 
 from datetime import datetime

@@ -1,3 +1,5 @@
+"""球场线分割 —— 使用 Ultralytics YOLO 分割模型生成球场边线掩码。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

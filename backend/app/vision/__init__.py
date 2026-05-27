@@ -1,5 +1,1 @@
-"""Vision pipeline adapter boundaries.
-
-Real model integrations should normalize detections, pose keypoints, tracks,
-and court coordinates before they reach report generation.
-"""
+"""视觉分析流水线适配层 —— 真实模型集成应在此层完成检测、姿态、跟踪和球场坐标的归一化。"""

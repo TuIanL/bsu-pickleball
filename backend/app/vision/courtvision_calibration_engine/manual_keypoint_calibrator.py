@@ -1,3 +1,5 @@
+"""手工关键点标定器 —— 封装手工四角标定流程的引擎入口。"""
+
 from __future__ import annotations
 
 from app.schemas.calibration import CalibrationCreate, CalibrationResult, ManualKeypointCalibrationRequest

@@ -1,4 +1,4 @@
-"""Player Tracking Engine interfaces and lightweight MVP implementations."""
+"""球员跟踪引擎 —— 人体检测、多目标跟踪、脚点估计、身份管理和投影。"""
 
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator, estimate_footpoint
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker

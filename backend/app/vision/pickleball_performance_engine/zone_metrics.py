@@ -1,3 +1,5 @@
+"""区域指标计算 —— 统计球员在厨房区（非截击区）的停留帧数和时间。"""
+
 from __future__ import annotations
 
 from app.schemas.metrics import ZoneDwellMetric

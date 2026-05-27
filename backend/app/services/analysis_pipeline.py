@@ -1,8 +1,12 @@
+"""分析流水线 —— MVP 版本的端到端视频分析流程（检测→跟踪→投影→指标计算→可视化）。"""
+
 from __future__ import annotations
 
 import logging
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from app.schemas.calibration import CourtPoint2D, ImagePoint
@@ -14,6 +18,7 @@ from app.schemas.tracking import (
     DetectionOverlayFrame,
     FrameDetection,
     PlayerFramePosition,
+    PlayerTrajectoryArtifact,
     ProjectedTrackPoint,
     SourceFrameSize,
     TrackingOverlayArtifact,
@@ -32,6 +37,7 @@ from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
+from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
@@ -49,6 +55,8 @@ class CancellationToken(Protocol):
 @dataclass
 class _TrackingRunOutput:
     tracking: TrackingResult
+    player_trajectories: PlayerTrajectoryArtifact | None = None
+    player_metric_tracks: list[ProjectedTrackPoint] | None = None
     pose: PoseOverlayArtifact | None = None
     pose_stage: PipelineStageResult | None = None
 
@@ -159,6 +167,11 @@ class AnalysisPipeline:
         pose_overlay_url: str | None = None
         pose_overlay_status: str | None = None
         pose_overlay_detail: str | None = None
+        player_trajectory_json_path: str | None = None
+        player_trajectory_csv_path: str | None = None
+        player_trajectory_url: str | None = None
+        player_trajectory_status: str | None = None
+        player_trajectory_detail: str | None = None
         if video and calibration:
             try:
                 self._notify_progress(
@@ -219,6 +232,19 @@ class AnalysisPipeline:
                 pose_overlay_status = "unavailable"
                 pose_overlay_detail = run_output.pose_stage.detail
 
+            if run_output.player_trajectories is not None:
+                player_trajectory_json = self.storage.player_trajectory_json_path(job_id)
+                player_trajectory_csv = self.storage.player_trajectory_csv_path(job_id)
+                self.storage.write_json(player_trajectory_json, run_output.player_trajectories.model_dump(mode="json"))
+                self._write_player_trajectory_csv(player_trajectory_csv, run_output.player_trajectories)
+                player_trajectory_json_path = str(player_trajectory_json)
+                player_trajectory_csv_path = str(player_trajectory_csv)
+                player_trajectory_url = f"/api/analysis/jobs/{job_id}/artifacts/player-trajectories"
+                player_count = len(run_output.player_trajectories.players)
+                sample_count = sum(len(samples) for samples in run_output.player_trajectories.players.values())
+                player_trajectory_status = "available" if sample_count else "no_detections"
+                player_trajectory_detail = f"已生成 {player_count} 名球员的 {sample_count} 个公制轨迹样本"
+
             detection_stage = self._stage(
                 "detection",
                 "人体检测",
@@ -262,7 +288,7 @@ class AnalysisPipeline:
             stages.append(projection_stage)
             self._notify_progress(progress_callback, projection_stage)
             self._check_cancelled(cancellation_token)
-            tracks = self._positions_to_projected_tracks(tracking_result.positions)
+            tracks = run_output.player_metric_tracks or self._positions_to_projected_tracks(tracking_result.positions)
             message = "Pipeline completed with Player Tracking Engine output."
         elif video and not calibration:
             limited_stages = [
@@ -322,11 +348,16 @@ class AnalysisPipeline:
                 tracking_overlay_url=tracking_overlay_url,
                 pose_overlay_json_path=pose_overlay_artifact_path,
                 pose_overlay_url=pose_overlay_url,
+                player_trajectory_json_path=player_trajectory_json_path,
+                player_trajectory_csv_path=player_trajectory_csv_path,
+                player_trajectory_url=player_trajectory_url,
                 source_video_url=source_video_url,
                 tracking_overlay_status=tracking_overlay_status,
                 tracking_overlay_detail=tracking_overlay_detail,
                 pose_overlay_status=pose_overlay_status,
                 pose_overlay_detail=pose_overlay_detail,
+                player_trajectory_status=player_trajectory_status,
+                player_trajectory_detail=player_trajectory_detail,
             ),
             message=message,
         )
@@ -370,7 +401,22 @@ class AnalysisPipeline:
             else None
         )
         pose_error: str | None = None
-        tracker = self.tracker or MultiObjectTracker()
+        tracker = self.tracker or MultiObjectTracker(max_lost=self.settings.player_identity_lost_buffer_frames)
+        identity_manager = PlayerIdentityManager(
+            PlayerIdentityConfig(
+                max_players=self.settings.player_identity_max_players,
+                fps=fps if fps > 0 else 30.0,
+                match_threshold=self.settings.player_identity_match_threshold,
+                max_reconnect_distance_m=self.settings.player_identity_max_reconnect_distance_m,
+                max_speed_mps=self.settings.player_identity_max_speed_mps,
+                lost_buffer_frames=self.settings.player_identity_lost_buffer_frames,
+                inactive_buffer_frames=self.settings.player_identity_inactive_buffer_frames,
+                interpolation_buffer_frames=self.settings.player_identity_interpolation_buffer_frames,
+                court_buffer_m=self.settings.player_identity_court_buffer_m,
+                input_court_unit="ft",
+                smoothing_window=self.settings.player_identity_smoothing_window,
+            )
+        )
 
         frame_index = 0
         try:
@@ -411,6 +457,23 @@ class AnalysisPipeline:
                     frame_height=frame_height,
                     eligible_track_ids=primary_player_track_ids,
                 )
+                player_samples = identity_manager.update(
+                    frame_index=frame_index,
+                    positions=frame_positions,
+                    eligible_track_ids=primary_player_track_ids,
+                )
+                player_by_track = {
+                    sample.track_id: sample.player_id
+                    for sample in player_samples
+                    if sample.track_id is not None and sample.tracking_status == "detected"
+                }
+                for detection in frame_detections:
+                    if detection.track_id is None:
+                        continue
+                    player_id = player_by_track.get(int(detection.track_id))
+                    if player_id is not None:
+                        detection.player_id = player_id
+                        detection.label = f"{player_id.replace('Player_', 'P')} / T{detection.track_id}"
 
                 all_detections.extend(detections)
                 overlay_frames.append(
@@ -470,6 +533,15 @@ class AnalysisPipeline:
             tracks=all_tracks,
             positions=positions,
         )
+        player_trajectories = identity_manager.to_artifact(
+            job_id=job_id,
+            video_id=video_id,
+            fps=fps,
+            frame_count=frame_count,
+            processed_frame_count=processed_frame_count,
+            frame_stride=stride,
+        )
+        player_metric_tracks = identity_manager.to_projected_track_points(output_court_unit="ft")
         if self.pose_estimator is not None:
             if pose_error:
                 pose_stage = self._stage("pose", "人体姿态", "skipped", f"RTMPose 不可用：{pose_error}")
@@ -491,6 +563,8 @@ class AnalysisPipeline:
             )
         return _TrackingRunOutput(
             tracking=tracking_result,
+            player_trajectories=player_trajectories,
+            player_metric_tracks=player_metric_tracks,
             pose=pose_artifact,
             pose_stage=pose_stage,
         )
@@ -626,6 +700,51 @@ class AnalysisPipeline:
             doubles_spacing=doubles_spacing(tracks),
             heatmap=generate_heatmap(tracks),
         )
+
+    @staticmethod
+    def _write_player_trajectory_csv(path: Path, artifact: PlayerTrajectoryArtifact) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=[
+                    "frame_index",
+                    "timestamp_seconds",
+                    "player_id",
+                    "track_id",
+                    "bbox",
+                    "image_footpoint",
+                    "court_x",
+                    "court_y",
+                    "smoothed_court_x",
+                    "smoothed_court_y",
+                    "court_unit",
+                    "confidence",
+                    "tracking_status",
+                    "is_interpolated",
+                ],
+            )
+            writer.writeheader()
+            for player_id, samples in sorted(artifact.players.items()):
+                for sample in samples:
+                    writer.writerow(
+                        {
+                            "frame_index": sample.frame_index,
+                            "timestamp_seconds": sample.timestamp_seconds,
+                            "player_id": player_id,
+                            "track_id": sample.track_id if sample.track_id is not None else "",
+                            "bbox": sample.bbox or "",
+                            "image_footpoint": sample.image_footpoint or "",
+                            "court_x": sample.court_x,
+                            "court_y": sample.court_y,
+                            "smoothed_court_x": sample.smoothed_court_x if sample.smoothed_court_x is not None else "",
+                            "smoothed_court_y": sample.smoothed_court_y if sample.smoothed_court_y is not None else "",
+                            "court_unit": sample.court_unit,
+                            "confidence": sample.confidence,
+                            "tracking_status": sample.tracking_status,
+                            "is_interpolated": sample.is_interpolated,
+                        }
+                    )
 
     def _write_result(self, result: AnalysisPipelineResult) -> None:
         self.storage.write_json(self.storage.output_json_path(result.job_id), result.model_dump(mode="json"))

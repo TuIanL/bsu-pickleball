@@ -1,3 +1,5 @@
+"""单应性矩阵（Homography）计算与坐标变换 —— 图像像素 ↔ 球场英尺坐标。"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

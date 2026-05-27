@@ -1,3 +1,5 @@
+"""人体检测器 —— 基于 YOLO 的人员检测，支持懒加载 ultralytics 依赖。"""
+
 from __future__ import annotations
 
 from typing import Any

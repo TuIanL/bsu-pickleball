@@ -1,3 +1,5 @@
+"""分析流水线（Pipeline）结果相关的 Pydantic 数据模型。"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,11 +10,12 @@ from pydantic import BaseModel, Field
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.tracking import ProjectedTrackPoint
 
-
+# 流水线阶段状态
 PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped", "canceled"]
 
 
 class PipelineStageResult(BaseModel):
+    """单个流水线阶段的执行结果。"""
     id: str
     label: str
     status: PipelineStageStatus
@@ -35,11 +38,16 @@ class AnalysisArtifacts(BaseModel):
     tracking_overlay_url: Optional[str] = None
     pose_overlay_json_path: Optional[str] = None
     pose_overlay_url: Optional[str] = None
+    player_trajectory_json_path: Optional[str] = None
+    player_trajectory_csv_path: Optional[str] = None
+    player_trajectory_url: Optional[str] = None
     source_video_url: Optional[str] = None
     tracking_overlay_status: Optional[str] = None
     tracking_overlay_detail: Optional[str] = None
     pose_overlay_status: Optional[str] = None
     pose_overlay_detail: Optional[str] = None
+    player_trajectory_status: Optional[str] = None
+    player_trajectory_detail: Optional[str] = None
     overlay_video_path: Optional[str] = None
 
 

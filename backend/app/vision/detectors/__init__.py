@@ -1,1 +1,1 @@
-"""Detector adapters such as future YOLO11 integrations."""
+"""检测器适配器 —— YOLO11 等目标检测模型集成。"""

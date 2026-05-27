@@ -1,3 +1,5 @@
+"""脚点估计器 —— 从检测框底部中点推算球员在图像中的脚部位置。"""
+
 from __future__ import annotations
 
 from app.schemas.tracking import BoundingBox, FootpointEstimate, FootpointMethod, Track

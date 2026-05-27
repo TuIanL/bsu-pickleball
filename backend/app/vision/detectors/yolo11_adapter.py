@@ -1,12 +1,11 @@
-"""Future YOLO11 detector adapter.
+"""YOLO11 检测器适配器（占位） —— 预留 ultralytics 模型集成接口。
 
-Expected normalization:
-- person/player boxes use label `player`
-- court-line or court-region detections use court-specific labels
-- all boxes are pixel coordinates in the original frame before court mapping
+预期归一化规范：
+- 球员框使用 label `player`
+- 球场线/区域检测使用球场特定标签
+- 所有框均为球场映射前的原始像素坐标
 
-The lightweight backend deliberately does not import ultralytics here. Add that
-dependency only when the real detector spike begins.
+轻量后端有意不在此处导入 ultralytics，仅在真实视觉阶段再引入该依赖。
 """
 
 from app.vision.detectors.base import Detection

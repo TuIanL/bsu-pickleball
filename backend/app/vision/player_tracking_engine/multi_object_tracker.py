@@ -1,3 +1,5 @@
+"""多目标跟踪器 —— 基于 IOU 的简单在线跟踪器，维持帧间检测框的连续性。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

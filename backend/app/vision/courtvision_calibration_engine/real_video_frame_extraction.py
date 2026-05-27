@@ -1,3 +1,5 @@
+"""真实视频帧提取 —— 按时间间隔从视频中抽取标注候选帧，用于标定数据集构建。"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

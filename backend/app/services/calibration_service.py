@@ -1,3 +1,5 @@
+"""场地标定服务 —— 管理手工/半自动标定的创建、存储和图像→球场坐标投影。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

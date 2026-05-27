@@ -1,3 +1,5 @@
+"""RTMPose26 姿态估计适配器 —— 按需加载 mmpose 依赖，对检测到的人体框进行 26 点关键点识别。"""
+
 """Optional RTMPose adapter with lazy heavyweight imports."""
 
 from math import isfinite

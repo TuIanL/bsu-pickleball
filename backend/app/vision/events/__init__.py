@@ -1,1 +1,1 @@
-"""Event-analysis modules are paused for the current movement-focused MVP."""
+"""事件分析模块 —— 当前 MVP 阶段暂不启用，专注于移动指标分析。"""

@@ -1,1 +1,1 @@
-"""Court calibration and image-to-court coordinate mapping."""
+"""球场标定与图像→球场坐标映射。"""

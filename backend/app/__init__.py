@@ -1,1 +1,1 @@
-"""Python backend foundation for pickleball visual analysis."""
+"""匹克球视觉分析后端 —— FastAPI 应用入口。"""
