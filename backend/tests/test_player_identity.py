@@ -140,6 +140,17 @@ def test_projected_track_points_can_be_exported_in_feet_for_legacy_metrics():
     assert points[0].court_point.y == pytest.approx(20)
 
 
+def test_projected_track_points_preserve_tolerated_boundary_observations():
+    manager = PlayerIdentityManager()
+    manager.update(0, [position(1, 0, 10, 44.2195)])
+
+    points = manager.to_projected_track_points(output_court_unit="ft")
+
+    assert points[0].track_id == "Player_1"
+    assert points[0].court_point.x == pytest.approx(10)
+    assert points[0].court_point.y == pytest.approx(44.2195)
+
+
 def test_player_trajectory_artifact_schema_accepts_empty_players():
     artifact = PlayerTrajectoryArtifact(job_id="job-empty")
 

@@ -1,11 +1,14 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
+from app.schemas.calibration import CourtPoint2D
 from app.schemas.tracking import (
     BoundingBox,
     Detection,
     PlayerFramePosition,
+    ProjectedTrackPoint,
     Track,
     TrackingResult,
 )
@@ -96,6 +99,26 @@ def test_tracking_schemas_are_json_serializable():
     assert payload["detections"][0]["class_name"] == "person"
     assert payload["tracks"][0]["track_id"] == 1
     assert payload["positions"][0]["image_footpoint"] == [20.0, 80.0]
+
+
+def test_projected_track_point_accepts_boundary_observation_outside_standard_court():
+    point = ProjectedTrackPoint(
+        frame_index=0,
+        timestamp_seconds=0.0,
+        track_id="Player_1",
+        image_point={"x": 100, "y": 200},
+        confidence=0.9,
+        court_point={"x": 10, "y": 44.2195},
+    )
+
+    payload = point.model_dump(mode="json")
+
+    assert payload["court_point"] == {"x": 10.0, "y": 44.2195}
+
+
+def test_calibration_court_point_keeps_strict_standard_bounds():
+    with pytest.raises(ValidationError):
+        CourtPoint2D(x=10, y=44.2195)
 
 
 def test_iou_tracker_reuses_ids_and_creates_new_ids():

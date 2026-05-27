@@ -7,7 +7,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.calibration import CourtPoint2D, ImagePoint
+from app.schemas.calibration import ImagePoint
 
 # 脚点估计方法：检测框底部中点 / 姿态脚踝均值 / 分割掩码底部
 FootpointMethod = Literal["bbox_bottom_center", "pose_ankle_average", "segmentation_mask_bottom"]
@@ -281,8 +281,23 @@ class ImageTrackPoint(BaseModel):
     side: Literal["near", "far", "unknown"] = "unknown"
 
 
+class ProjectedCourtPoint2D(BaseModel):
+    """Observed court-space projection point; may sit outside the standard court."""
+
+    x: float
+    y: float
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_coordinate(cls, value: float) -> float:
+        coordinate = float(value)
+        if not isfinite(coordinate):
+            raise ValueError("projected court coordinate must be finite")
+        return coordinate
+
+
 class ProjectedTrackPoint(ImageTrackPoint):
-    court_point: CourtPoint2D
+    court_point: ProjectedCourtPoint2D
 
 
 class PlayerTrack(BaseModel):

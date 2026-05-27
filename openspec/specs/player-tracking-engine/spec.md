@@ -225,3 +225,23 @@ The Player Tracking Engine SHALL support overlay labels that include stable play
 #### Scenario: More eligible tracks than match participants
 - **WHEN** a frame contains more eligible tracked people than the configured participant count
 - **THEN** the backend limits player-identity overlay subjects to the configured participant count and keeps rejected tracks in diagnostics where available
+
+### Requirement: 投影观测点 schema 边界语义
+后端 SHALL 使用不同的数据模型表达严格标定控制点和球员脚点投影观测点。标定控制点 MUST 保持标准 20 ft x 44 ft 球场内边界校验；球员脚点投影观测点 MUST 能表达有限数值的真实投影坐标，包括配置容差内的边界外坐标；运动指标和标准球场可视化输入 MUST 只使用经过标准球场边界处理的点。
+
+#### Scenario: 容差内越界投影点可序列化
+- **WHEN** 一个已跟踪球员脚点投影到 `x` 位于标准宽度附近且 `y` 等于 `44.2195 ft`
+- **THEN** 后端可以将该点作为投影观测记录序列化，而不会因为标准球场 `y <= 44 ft` 的严格校验使分析阶段失败
+
+#### Scenario: 标定控制点保持严格边界
+- **WHEN** 手动或半自动标定提交的球场控制点坐标超出 `x 0..20 ft` 或 `y 0..44 ft`
+- **THEN** 后端继续拒绝该标定输入并返回校验错误
+
+#### Scenario: 运动指标排除标准边界外观测
+- **WHEN** 投影观测记录包含标准球场边界外坐标
+- **THEN** 距离、速度、厨房区、双打间距和热力图计算不会把该越界观测作为标准球场内轨迹点消费
+
+#### Scenario: 原始投影观测保留诊断价值
+- **WHEN** 分析结果包含处于跟踪容差内但标准球场边界外的投影观测
+- **THEN** tracking 或 player trajectory artifact 保留该观测的原始坐标，以便排查标定误差、脚点估计抖动或边界动作
+

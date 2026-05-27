@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from app.schemas.calibration import CourtPoint2D
 from app.schemas.tracking import (
     FootpointEstimate,
     ImageTrackPoint,
     PlayerFramePosition,
+    ProjectedCourtPoint2D,
     ProjectedTrackPoint,
     Track,
 )
@@ -82,7 +82,7 @@ def project_track_points(
         projected.append(
             ProjectedTrackPoint(
                 **point.model_dump(),
-                court_point=CourtPoint2D(x=x, y=y),
+                court_point=ProjectedCourtPoint2D(x=x, y=y),
             )
         )
 

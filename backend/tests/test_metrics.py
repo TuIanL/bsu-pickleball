@@ -3,6 +3,7 @@ import pytest
 from app.schemas.tracking import ProjectedTrackPoint
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
+from app.vision.pickleball_performance_engine.metric_inputs import standard_court_metric_points
 from app.vision.pickleball_performance_engine.speed_metrics import speed_summaries
 from app.vision.pickleball_performance_engine.trajectory_metrics import total_distances
 from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
@@ -49,3 +50,23 @@ def test_kitchen_dwell_heatmap_and_doubles_spacing():
     assert dwell[0].kitchen_seconds == pytest.approx(1)
     assert sum(cell.count for cell in heatmap.cells) == 6
     assert spacing[0].average_spacing_ft == pytest.approx(10)
+
+
+def test_standard_court_metric_points_exclude_out_of_bounds_projected_observations():
+    tracks = [
+        point("p1", 0, 0, 0, 0),
+        point("p1", 1, 1, 3, 4),
+        point("p1", 2, 2, 3, 44.2195),
+        point("p2", 0, 0, 5, 14),
+        point("p2", 1, 1, 5, 44.2195),
+    ]
+
+    metric_tracks = standard_court_metric_points(tracks)
+    distances = total_distances(metric_tracks)
+    speeds = speed_summaries(metric_tracks)
+    heatmap = generate_heatmap(metric_tracks)
+
+    assert distances[0].distance_ft == pytest.approx(5)
+    assert speeds[0].average_speed_ft_per_s == pytest.approx(5)
+    assert sum(cell.count for cell in heatmap.cells) == 3
+    assert all(segment.end_time <= 1 for summary in speeds for segment in summary.segments)

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from app.schemas.calibration import CourtPoint2D, ImagePoint
+from app.schemas.calibration import ImagePoint
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
@@ -19,6 +19,7 @@ from app.schemas.tracking import (
     FrameDetection,
     PlayerFramePosition,
     PlayerTrajectoryArtifact,
+    ProjectedCourtPoint2D,
     ProjectedTrackPoint,
     SourceFrameSize,
     TrackingOverlayArtifact,
@@ -31,6 +32,7 @@ from app.core.config import get_settings
 from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
+from app.vision.pickleball_performance_engine.metric_inputs import standard_court_metric_points
 from app.vision.pickleball_performance_engine.speed_metrics import speed_summaries
 from app.vision.pickleball_performance_engine.trajectory_metrics import total_distances
 from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
@@ -679,7 +681,7 @@ class AnalysisPipeline:
                     image_point=ImagePoint(x=image_x, y=image_y),
                     confidence=position.confidence,
                     side="unknown",
-                    court_point=CourtPoint2D(x=court_x, y=court_y),
+                    court_point=ProjectedCourtPoint2D(x=court_x, y=court_y),
                 )
             )
         return projected
@@ -693,12 +695,13 @@ class AnalysisPipeline:
         return f"已生成 {valid_count} 个有效场地坐标球员位置"
 
     def _compute_metrics(self, tracks: list[ProjectedTrackPoint]) -> PerformanceMetrics:
+        metric_tracks = standard_court_metric_points(tracks)
         return PerformanceMetrics(
-            distances=total_distances(tracks),
-            speeds=speed_summaries(tracks),
-            kitchen_dwell=kitchen_dwell(tracks),
-            doubles_spacing=doubles_spacing(tracks),
-            heatmap=generate_heatmap(tracks),
+            distances=total_distances(metric_tracks),
+            speeds=speed_summaries(metric_tracks),
+            kitchen_dwell=kitchen_dwell(metric_tracks),
+            doubles_spacing=doubles_spacing(metric_tracks),
+            heatmap=generate_heatmap(metric_tracks),
         )
 
     @staticmethod
