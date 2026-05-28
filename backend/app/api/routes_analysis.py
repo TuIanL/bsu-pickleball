@@ -115,7 +115,7 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
     return report
 
 
-@router.get("/jobs/{job_id}/artifacts/{artifact_name}")
+@router.get("/jobs/{job_id}/artifacts/{artifact_name}", response_model=None)
 def read_analysis_artifact(
     job_id: str,
     artifact_name: Literal[
