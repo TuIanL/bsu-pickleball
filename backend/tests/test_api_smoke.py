@@ -256,6 +256,35 @@ def test_serve_events_artifact_route_returns_json(monkeypatch, tmp_path):
     assert response.json()["status"] == "no_candidates"
 
 
+def test_serve_debug_artifact_routes_return_json(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-serve-debug-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(storage.serve_debug_candidates_json_path(job.id), {"job_id": job.id, "candidates": []})
+    storage.write_json(storage.serve_score_series_json_path(job.id), {"job_id": job.id, "series": []})
+    storage.write_json(storage.serve_clips_manifest_json_path(job.id), {"job_id": job.id, "clips": []})
+
+    try:
+        candidates = client.get(f"/api/analysis/jobs/{job.id}/artifacts/serve-debug-candidates")
+        scores = client.get(f"/api/analysis/jobs/{job.id}/artifacts/serve-score-series")
+        clips = client.get(f"/api/analysis/jobs/{job.id}/artifacts/serve-clips-manifest")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert candidates.status_code == 200
+    assert scores.status_code == 200
+    assert clips.status_code == 200
+    assert candidates.json()["candidates"] == []
+    assert scores.json()["series"] == []
+    assert clips.json()["clips"] == []
+
+
 def test_delete_job_cleans_unreferenced_video_and_preserves_shared_calibration(monkeypatch, tmp_path):
     storage = make_temp_storage(tmp_path)
     monkeypatch.setattr("app.services.mock_analysis._STORAGE", storage)
@@ -693,7 +722,11 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert player_trajectories["players"]["Player_1"][0]["court_unit"] == "m"
     assert storage.player_trajectory_csv_path("job-overlay-test").exists()
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
-    assert serve_events["detector_version"] == "serve-start-mvp-v1"
+    assert serve_events["detector_version"] == "serve-moment-context-v1"
+    assert result.artifacts.serve_debug_candidates_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-debug-candidates"
+    assert result.artifacts.serve_score_series_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-score-series"
+    assert storage.serve_debug_candidates_json_path("job-overlay-test").exists()
+    assert storage.serve_score_series_json_path("job-overlay-test").exists()
 
 
 def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):

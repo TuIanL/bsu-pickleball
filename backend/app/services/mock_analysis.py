@@ -350,6 +350,10 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
         _STORAGE.ball_overlay_json_path(job_id),
         _STORAGE.pose_overlay_json_path(job_id),
         _STORAGE.serve_events_json_path(job_id),
+        _STORAGE.serve_debug_candidates_json_path(job_id),
+        _STORAGE.serve_score_series_json_path(job_id),
+        _STORAGE.serve_clips_manifest_json_path(job_id),
+        _STORAGE.serve_debug_overlay_video_path(job_id),
     ]:
         if path.exists():
             _STORAGE.delete_path(path)

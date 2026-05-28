@@ -45,4 +45,33 @@ describe("serve marker resolution", () => {
     expect(markers[0].position).toBe(100);
     expect(markers[0].seekTime).toBe(0);
   });
+
+  it("preserves context detector fields for marker tooltips", () => {
+    const markers = resolveServeMarkers(
+      {
+        ...artifact,
+        detector_version: "serve-moment-context-v1",
+        detection_mode: "pose",
+        events: [
+          {
+            ...artifact.events[0],
+            detection_mode: "pose",
+            start_time_seconds: 3,
+            end_time_seconds: 9,
+            signals: {
+              baseline_position_score: 0.9,
+              pre_stillness_score: 0.8,
+              arm_motion_peak_score: 0.7,
+              rally_after_score: 0.6,
+            },
+          },
+        ],
+      },
+      10
+    );
+
+    expect(markers[0].detection_mode).toBe("pose");
+    expect(markers[0].signals?.baseline_position_score).toBe(0.9);
+    expect(markers[0].start_time_seconds).toBe(3);
+  });
 });

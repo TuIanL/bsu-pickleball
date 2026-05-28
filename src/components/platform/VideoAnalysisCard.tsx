@@ -619,9 +619,13 @@ function RealVideoOverlay({
                   type="button"
                 >
                   <span className="pointer-events-none absolute bottom-6 left-1/2 z-30 w-56 -translate-x-1/2 rounded-xl border border-white/10 bg-[#111318] px-3 py-2 text-left text-xs font-semibold text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100">
-                    发球候选 · {formatSeconds(marker.timestamp_seconds)}
+                    发球时刻候选 · {formatSeconds(marker.timestamp_seconds)}
                     <br />
-                    置信度 {Math.round(marker.confidence * 100)}% · {marker.reason}
+                    置信度 {Math.round(marker.confidence * 100)}% · {serveMarkerModeLabel(marker.detection_mode)}
+                    <br />
+                    {serveMarkerSignalSummary(marker)}
+                    <br />
+                    {marker.reason}
                   </span>
                 </button>
               ))}
@@ -753,6 +757,31 @@ function formatSeconds(value: number): string {
   const minutes = Math.floor(value / 60);
   const seconds = Math.floor(value % 60);
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function serveMarkerModeLabel(mode: string | undefined): string {
+  if (mode === "pose") {
+    return "姿态峰值";
+  }
+  if (mode === "roi") {
+    return "ROI 降级";
+  }
+  if (mode === "tracking") {
+    return "tracking 降级";
+  }
+  return "上下文检测";
+}
+
+function serveMarkerSignalSummary(marker: ServeEventsArtifact["events"][number]): string {
+  const signals = marker.signals;
+  if (!signals) {
+    return "信号：旧版候选";
+  }
+  const baseline = Math.round((signals.baseline_position_score ?? 0) * 100);
+  const stillness = Math.round((signals.pre_stillness_score ?? 0) * 100);
+  const peak = Math.round(Math.max(signals.arm_motion_peak_score ?? 0, signals.roi_motion_peak_score ?? 0) * 100);
+  const rally = Math.round((signals.rally_after_score ?? 0) * 100);
+  return `底线 ${baseline}% · 静止 ${stillness}% · 峰值 ${peak}% · 回合 ${rally}%`;
 }
 
 export function resolveServeMarkers(serveEvents: ServeEventsArtifact | null | undefined, duration: number) {

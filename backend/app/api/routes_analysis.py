@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal, Union
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 # 导入分析相关的模式（Schemas）
 from app.schemas.analysis import AnalysisDeleteRequest, AnalysisDeleteResult, AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
@@ -118,8 +118,17 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
 @router.get("/jobs/{job_id}/artifacts/{artifact_name}")
 def read_analysis_artifact(
     job_id: str,
-    artifact_name: Literal["tracking-overlay", "pose-overlay", "player-trajectories", "serve-events"],
-) -> JSONResponse:
+    artifact_name: Literal[
+        "tracking-overlay",
+        "pose-overlay",
+        "player-trajectories",
+        "serve-events",
+        "serve-debug-candidates",
+        "serve-score-series",
+        "serve-clips-manifest",
+        "serve-debug-overlay",
+    ],
+) -> JSONResponse | FileResponse:
     """
     读取浏览器可消费的分析 overlay artifact
     """
@@ -133,8 +142,18 @@ def read_analysis_artifact(
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":
         path = _STORAGE.player_trajectory_json_path(job_id)
-    else:
+    elif artifact_name == "serve-events":
         path = _STORAGE.serve_events_json_path(job_id)
+    elif artifact_name == "serve-debug-candidates":
+        path = _STORAGE.serve_debug_candidates_json_path(job_id)
+    elif artifact_name == "serve-score-series":
+        path = _STORAGE.serve_score_series_json_path(job_id)
+    elif artifact_name == "serve-clips-manifest":
+        path = _STORAGE.serve_clips_manifest_json_path(job_id)
+    else:
+        path = _STORAGE.serve_debug_overlay_video_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Analysis artifact not found")
+    if artifact_name == "serve-debug-overlay":
+        return FileResponse(path, media_type="video/mp4")
     return JSONResponse(_STORAGE.read_json(path))

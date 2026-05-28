@@ -13,7 +13,7 @@ from app.schemas.calibration import ImagePoint
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
-from app.schemas.events import ServeEventsArtifact
+from app.schemas.events import ServeDebugArtifactRefs, ServeEventsArtifact
 from app.schemas.tracking import (
     Detection,
     DetectionOverlayFrame,
@@ -45,6 +45,7 @@ from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 from app.vision.events.serve_start_detector import ServeStartDetector
+from app.vision.events.serve_start_detector import ServeStartDetectorConfig
 
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,19 @@ class AnalysisPipeline:
             if self.settings.enable_pose_inference
             else None
         )
-        self.serve_start_detector = serve_start_detector or ServeStartDetector()
+        self.serve_start_detector = serve_start_detector or ServeStartDetector(
+            ServeStartDetectorConfig(
+                min_gap_seconds=self.settings.serve_min_gap_seconds,
+                pre_roll_seconds=self.settings.serve_clip_pre_seconds,
+                baseline_margin_ft=self.settings.serve_baseline_margin_ft,
+                pre_still_window_seconds=self.settings.serve_pre_still_window_seconds,
+                pre_still_gap_seconds=self.settings.serve_pre_still_gap_seconds,
+                post_rally_window_seconds=self.settings.serve_post_rally_window_seconds,
+                pose_smooth_window_frames=self.settings.serve_pose_smooth_window_frames,
+                clip_pre_seconds=self.settings.serve_clip_pre_seconds,
+                clip_post_seconds=self.settings.serve_clip_post_seconds,
+            )
+        )
         self.pose_inference_enabled = self.pose_estimator is not None
         self.frame_stride = max(1, int(frame_stride or self.settings.overlay_frame_stride))
 
@@ -178,6 +191,16 @@ class AnalysisPipeline:
         serve_events_url: str | None = None
         serve_events_status: str | None = None
         serve_events_detail: str | None = None
+        serve_debug_candidates_path: str | None = None
+        serve_debug_candidates_url: str | None = None
+        serve_score_series_path: str | None = None
+        serve_score_series_url: str | None = None
+        serve_clips_manifest_path: str | None = None
+        serve_clips_manifest_url: str | None = None
+        serve_debug_overlay_path: str | None = None
+        serve_debug_overlay_url: str | None = None
+        serve_debug_artifacts_status: str | None = None
+        serve_debug_artifacts_detail: str | None = None
         player_trajectory_json_path: str | None = None
         player_trajectory_csv_path: str | None = None
         player_trajectory_url: str | None = None
@@ -256,6 +279,7 @@ class AnalysisPipeline:
                 player_trajectory_status = "available" if sample_count else "no_detections"
                 player_trajectory_detail = f"已生成 {player_count} 名球员的 {sample_count} 个公制轨迹样本"
 
+            debug_refs = self._serve_debug_refs(job_id) if self.settings.enable_serve_debug_artifacts else None
             try:
                 serve_events = self.serve_start_detector.detect(
                     job_id=job_id,
@@ -263,6 +287,7 @@ class AnalysisPipeline:
                     tracking=tracking_result,
                     player_trajectories=run_output.player_trajectories,
                     pose_frames=run_output.pose_frames,
+                    debug_artifacts=debug_refs,
                 )
             except Exception as exc:
                 serve_events = self.serve_start_detector.unavailable(
@@ -270,6 +295,29 @@ class AnalysisPipeline:
                     video_id=video_id,
                     detail=f"发球开始检测不可用：{exc}",
                 )
+            if self.settings.enable_serve_debug_artifacts:
+                debug_status, debug_detail = self._write_serve_debug_artifacts(
+                    job_id=job_id,
+                    serve_events=serve_events,
+                    source_video_path=Path(video.path),
+                )
+                serve_debug_artifacts_status = debug_status
+                serve_debug_artifacts_detail = debug_detail
+                if serve_events.debug_artifacts is not None:
+                    serve_events.debug_artifacts.status = debug_status
+                    serve_events.debug_artifacts.detail = debug_detail
+                if self.storage.serve_debug_candidates_json_path(job_id).exists():
+                    serve_debug_candidates_path = str(self.storage.serve_debug_candidates_json_path(job_id))
+                    serve_debug_candidates_url = f"/api/analysis/jobs/{job_id}/artifacts/serve-debug-candidates"
+                if self.storage.serve_score_series_json_path(job_id).exists():
+                    serve_score_series_path = str(self.storage.serve_score_series_json_path(job_id))
+                    serve_score_series_url = f"/api/analysis/jobs/{job_id}/artifacts/serve-score-series"
+                if self.storage.serve_clips_manifest_json_path(job_id).exists():
+                    serve_clips_manifest_path = str(self.storage.serve_clips_manifest_json_path(job_id))
+                    serve_clips_manifest_url = f"/api/analysis/jobs/{job_id}/artifacts/serve-clips-manifest"
+                if self.storage.serve_debug_overlay_video_path(job_id).exists():
+                    serve_debug_overlay_path = str(self.storage.serve_debug_overlay_video_path(job_id))
+                    serve_debug_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/serve-debug-overlay"
             serve_events_path = self.storage.serve_events_json_path(job_id)
             self.storage.write_json(serve_events_path, serve_events.model_dump(mode="json"))
             serve_events_artifact_path = str(serve_events_path)
@@ -331,6 +379,10 @@ class AnalysisPipeline:
                 "status": serve_events.status,
                 "has_tracking": bool(tracking_result.overlay_frames),
                 "has_pose": bool(run_output.pose_frames),
+                "detection_mode": serve_events.detection_mode,
+                "available_signals": serve_events.available_signals,
+                "debug_artifacts_status": serve_debug_artifacts_status,
+                "court_unit": run_output.player_trajectories.court.court_unit if run_output.player_trajectories else None,
             }
             stages.append(serve_stage)
             self._notify_progress(progress_callback, serve_stage)
@@ -403,6 +455,14 @@ class AnalysisPipeline:
                 pose_overlay_url=pose_overlay_url,
                 serve_events_json_path=serve_events_artifact_path,
                 serve_events_url=serve_events_url,
+                serve_debug_candidates_json_path=serve_debug_candidates_path,
+                serve_debug_candidates_url=serve_debug_candidates_url,
+                serve_score_series_json_path=serve_score_series_path,
+                serve_score_series_url=serve_score_series_url,
+                serve_clips_manifest_json_path=serve_clips_manifest_path,
+                serve_clips_manifest_url=serve_clips_manifest_url,
+                serve_debug_overlay_path=serve_debug_overlay_path,
+                serve_debug_overlay_url=serve_debug_overlay_url,
                 player_trajectory_json_path=player_trajectory_json_path,
                 player_trajectory_csv_path=player_trajectory_csv_path,
                 player_trajectory_url=player_trajectory_url,
@@ -413,6 +473,8 @@ class AnalysisPipeline:
                 pose_overlay_detail=pose_overlay_detail,
                 serve_events_status=serve_events_status,
                 serve_events_detail=serve_events_detail,
+                serve_debug_artifacts_status=serve_debug_artifacts_status,
+                serve_debug_artifacts_detail=serve_debug_artifacts_detail,
                 player_trajectory_status=player_trajectory_status,
                 player_trajectory_detail=player_trajectory_detail,
             ),
@@ -804,6 +866,192 @@ class AnalysisPipeline:
                             "is_interpolated": sample.is_interpolated,
                         }
                     )
+
+    def _serve_debug_refs(self, job_id: str) -> ServeDebugArtifactRefs:
+        return ServeDebugArtifactRefs(
+            candidates_url=f"/api/analysis/jobs/{job_id}/artifacts/serve-debug-candidates",
+            score_series_url=f"/api/analysis/jobs/{job_id}/artifacts/serve-score-series",
+            clips_manifest_url=f"/api/analysis/jobs/{job_id}/artifacts/serve-clips-manifest"
+            if self.settings.enable_serve_debug_clips
+            else None,
+            debug_overlay_url=f"/api/analysis/jobs/{job_id}/artifacts/serve-debug-overlay"
+            if self.settings.enable_serve_debug_overlay
+            else None,
+            status="pending",
+            detail="发球候选调试 artifact 将在检测后写入",
+        )
+
+    def _write_serve_debug_artifacts(
+        self,
+        *,
+        job_id: str,
+        serve_events: ServeEventsArtifact,
+        source_video_path: Path,
+    ) -> tuple[str, str]:
+        try:
+            debug = getattr(self.serve_start_detector, "last_debug", None)
+            candidates_payload = {
+                "job_id": job_id,
+                "detector_version": serve_events.detector_version,
+                "status": serve_events.status,
+                "detail": serve_events.detail,
+                "thresholds": getattr(debug, "thresholds", {}),
+                "candidates": getattr(debug, "candidates", []),
+                "rejected": getattr(debug, "rejected", []),
+            }
+            self.storage.write_json(self.storage.serve_debug_candidates_json_path(job_id), candidates_payload)
+            score_payload = {
+                "job_id": job_id,
+                "detector_version": serve_events.detector_version,
+                "series": getattr(debug, "score_series", []),
+            }
+            self.storage.write_json(self.storage.serve_score_series_json_path(job_id), score_payload)
+            if self.settings.enable_serve_debug_clips:
+                manifest = self._write_serve_clip_manifest(job_id=job_id, serve_events=serve_events, source_video_path=source_video_path)
+                self.storage.write_json(self.storage.serve_clips_manifest_json_path(job_id), manifest)
+            if self.settings.enable_serve_debug_overlay:
+                self._write_serve_debug_overlay(job_id=job_id, source_video_path=source_video_path)
+            return "available", "已生成发球候选调试 JSON 和 score 时间序列"
+        except Exception as exc:  # noqa: BLE001 - debug artifacts should never block main results.
+            return "failed", f"发球候选调试 artifact 写入失败：{exc}"
+
+    def _write_serve_clip_manifest(
+        self,
+        *,
+        job_id: str,
+        serve_events: ServeEventsArtifact,
+        source_video_path: Path,
+    ) -> dict[str, object]:
+        limit = self.settings.serve_debug_clip_limit
+        clips = []
+        for event in serve_events.events[:limit]:
+            output_path = self.storage.serve_clips_dir(job_id) / f"{event.id}.mp4"
+            status = "planned"
+            if self.settings.enable_serve_debug_clips:
+                status = self._export_video_clip(
+                    source_video_path=source_video_path,
+                    output_path=output_path,
+                    start_seconds=event.start_time_seconds or max(0.0, event.timestamp_seconds - self.settings.serve_clip_pre_seconds),
+                    end_seconds=event.end_time_seconds or event.timestamp_seconds + self.settings.serve_clip_post_seconds,
+                )
+            clips.append(
+                {
+                    "id": event.id,
+                    "timestamp_seconds": event.timestamp_seconds,
+                    "start_time_seconds": event.start_time_seconds,
+                    "end_time_seconds": event.end_time_seconds,
+                    "player_id": event.player_id,
+                    "track_id": event.track_id,
+                    "confidence": event.confidence,
+                    "source_video_path": str(source_video_path),
+                    "output_path": str(output_path),
+                    "status": status,
+                }
+            )
+        return {
+            "job_id": job_id,
+            "status": "available",
+            "detail": "候选片段导出 manifest 已生成",
+            "clip_limit": limit,
+            "candidate_count": len(serve_events.events),
+            "omitted_count": max(0, len(serve_events.events) - len(clips)),
+            "clips": clips,
+        }
+
+    @staticmethod
+    def _export_video_clip(
+        *,
+        source_video_path: Path,
+        output_path: Path,
+        start_seconds: float,
+        end_seconds: float,
+    ) -> str:
+        try:
+            import cv2  # type: ignore
+        except ImportError:
+            return "skipped_opencv_unavailable"
+        capture = cv2.VideoCapture(str(source_video_path))
+        if not capture.isOpened():
+            return "failed_open_source"
+        try:
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            if fps <= 0 or width <= 0 or height <= 0:
+                return "failed_video_metadata"
+            start_frame = max(0, int(start_seconds * fps))
+            end_frame = max(start_frame + 1, int(end_seconds * fps))
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = output_path.with_suffix(".tmp.mp4")
+            writer = cv2.VideoWriter(str(temp_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+            if not writer.isOpened():
+                return "failed_open_writer"
+            try:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                frame_index = start_frame
+                while frame_index <= end_frame:
+                    ok, frame = capture.read()
+                    if not ok or frame is None:
+                        break
+                    writer.write(frame)
+                    frame_index += 1
+            finally:
+                writer.release()
+            temp_path.replace(output_path)
+            return "available"
+        finally:
+            capture.release()
+
+    def _write_serve_debug_overlay(self, *, job_id: str, source_video_path: Path) -> str:
+        try:
+            import cv2  # type: ignore
+        except ImportError:
+            return "skipped_opencv_unavailable"
+        debug = getattr(self.serve_start_detector, "last_debug", None)
+        candidates = getattr(debug, "candidates", []) if debug is not None else []
+        if not candidates:
+            return "skipped_no_candidates"
+        capture = cv2.VideoCapture(str(source_video_path))
+        if not capture.isOpened():
+            return "failed_open_source"
+        try:
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            if fps <= 0 or width <= 0 or height <= 0:
+                return "failed_video_metadata"
+            output_path = self.storage.serve_debug_overlay_video_path(job_id)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+            if not writer.isOpened():
+                return "failed_open_writer"
+            windows = []
+            for candidate in candidates[: self.settings.serve_debug_clip_limit]:
+                ts = float(candidate.get("timestamp_seconds", 0.0))
+                windows.append((max(0.0, ts - self.settings.serve_clip_pre_seconds), ts + self.settings.serve_clip_post_seconds, candidate))
+            try:
+                frame_index = 0
+                while True:
+                    ok, frame = capture.read()
+                    if not ok or frame is None:
+                        break
+                    timestamp = frame_index / fps
+                    active = next((item for item in windows if item[0] <= timestamp <= item[1]), None)
+                    if active is not None:
+                        _start, _end, candidate = active
+                        label = f"{candidate.get('player_id', '')} serve {candidate.get('confidence', 0):.2f}"
+                        cv2.putText(frame, label, (24, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                        bbox = candidate.get("bbox")
+                        if isinstance(bbox, list) and len(bbox) == 4:
+                            x1, y1, x2, y2 = [int(value) for value in bbox]
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                        writer.write(frame)
+                    frame_index += 1
+            finally:
+                writer.release()
+            return "available"
+        finally:
+            capture.release()
 
     def _write_result(self, result: AnalysisPipelineResult) -> None:
         self.storage.write_json(self.storage.output_json_path(result.job_id), result.model_dump(mode="json"))

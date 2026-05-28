@@ -58,6 +58,18 @@ class Settings(BaseModel):
     enable_gpu_jobs: bool = False
     job_stage_timeout_seconds: int = 0
     job_max_retries: int = 1
+    serve_baseline_margin_ft: float = 6.0
+    serve_pre_still_window_seconds: float = 1.5
+    serve_pre_still_gap_seconds: float = 0.2
+    serve_post_rally_window_seconds: float = 3.0
+    serve_min_gap_seconds: float = 6.0
+    serve_pose_smooth_window_frames: int = 5
+    serve_clip_pre_seconds: float = 2.0
+    serve_clip_post_seconds: float = 4.0
+    enable_serve_debug_artifacts: bool = True
+    enable_serve_debug_clips: bool = False
+    enable_serve_debug_overlay: bool = False
+    serve_debug_clip_limit: int = 20
 
     def resolve_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -176,6 +188,21 @@ def get_settings() -> Settings:
         enable_gpu_jobs=os.getenv("PICKLEBALL_ENABLE_GPU_JOBS", "false").lower() in {"1", "true", "yes"},
         job_stage_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_STAGE_TIMEOUT_SECONDS", "0"))),
         job_max_retries=max(0, int(os.getenv("PICKLEBALL_JOB_MAX_RETRIES", "1"))),
+        serve_baseline_margin_ft=float(os.getenv("PICKLEBALL_SERVE_BASELINE_MARGIN_FT", "6.0")),
+        serve_pre_still_window_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_WINDOW_SECONDS", "1.5")),
+        serve_pre_still_gap_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_GAP_SECONDS", "0.2")),
+        serve_post_rally_window_seconds=float(os.getenv("PICKLEBALL_SERVE_POST_RALLY_WINDOW_SECONDS", "3.0")),
+        serve_min_gap_seconds=float(os.getenv("PICKLEBALL_SERVE_MIN_GAP_SECONDS", "6.0")),
+        serve_pose_smooth_window_frames=max(1, int(os.getenv("PICKLEBALL_SERVE_POSE_SMOOTH_WINDOW_FRAMES", "5"))),
+        serve_clip_pre_seconds=float(os.getenv("PICKLEBALL_SERVE_CLIP_PRE_SECONDS", "2.0")),
+        serve_clip_post_seconds=float(os.getenv("PICKLEBALL_SERVE_CLIP_POST_SECONDS", "4.0")),
+        enable_serve_debug_artifacts=os.getenv("PICKLEBALL_ENABLE_SERVE_DEBUG_ARTIFACTS", "true").lower()
+        in {"1", "true", "yes"},
+        enable_serve_debug_clips=os.getenv("PICKLEBALL_ENABLE_SERVE_DEBUG_CLIPS", "false").lower()
+        in {"1", "true", "yes"},
+        enable_serve_debug_overlay=os.getenv("PICKLEBALL_ENABLE_SERVE_DEBUG_OVERLAY", "false").lower()
+        in {"1", "true", "yes"},
+        serve_debug_clip_limit=max(0, int(os.getenv("PICKLEBALL_SERVE_DEBUG_CLIP_LIMIT", "20"))),
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins
         else Settings.model_fields["cors_origins"].default_factory(),

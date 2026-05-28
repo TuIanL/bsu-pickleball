@@ -431,9 +431,23 @@ export interface ServeEventCandidate {
   confidence: number;
   seek_time_seconds: number;
   reason: string;
-  source_signals: Array<"tracking" | "pose" | "trajectory">;
+  source_signals: Array<"tracking" | "pose" | "trajectory" | "roi" | "video">;
   track_id?: string;
   player_id?: string;
+  start_time_seconds?: number;
+  end_time_seconds?: number;
+  detection_mode?: "pose" | "roi" | "trajectory" | "tracking";
+  context_state?: "ready_to_serve" | "candidate" | "rejected" | "unavailable";
+  court_position?: [number, number] | number[];
+  court_unit?: string;
+  signals?: {
+    baseline_position_score?: number;
+    pre_stillness_score?: number;
+    arm_motion_peak_score?: number;
+    roi_motion_peak_score?: number;
+    rally_after_score?: number;
+    receiver_waiting_score?: number;
+  };
 }
 
 export interface ServeEventsArtifact {
@@ -447,6 +461,16 @@ export interface ServeEventsArtifact {
   frame_count: number;
   processed_frame_count: number;
   frame_stride: number;
+  detection_mode?: "pose" | "roi" | "trajectory" | "tracking";
+  available_signals?: Array<"tracking" | "pose" | "trajectory" | "roi" | "video">;
+  debug_artifacts?: {
+    candidates_url?: string;
+    score_series_url?: string;
+    clips_manifest_url?: string;
+    debug_overlay_url?: string;
+    status?: string;
+    detail?: string;
+  };
   events: ServeEventCandidate[];
 }
 
@@ -499,6 +523,14 @@ export interface AnalysisPipelineResult {
     pose_overlay_url?: string;
     serve_events_json_path?: string;
     serve_events_url?: string;
+    serve_debug_candidates_json_path?: string;
+    serve_debug_candidates_url?: string;
+    serve_score_series_json_path?: string;
+    serve_score_series_url?: string;
+    serve_clips_manifest_json_path?: string;
+    serve_clips_manifest_url?: string;
+    serve_debug_overlay_path?: string;
+    serve_debug_overlay_url?: string;
     source_video_url?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
@@ -506,6 +538,8 @@ export interface AnalysisPipelineResult {
     pose_overlay_detail?: string;
     serve_events_status?: string;
     serve_events_detail?: string;
+    serve_debug_artifacts_status?: string;
+    serve_debug_artifacts_detail?: string;
     overlay_video_path?: string;
   };
   message: string;

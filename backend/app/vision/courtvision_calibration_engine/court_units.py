@@ -54,3 +54,32 @@ def point_meters_to_feet(point: list[float] | tuple[float, float]) -> list[float
 
 def standard_metric_court_metadata() -> CourtUnitMetadata:
     return CourtUnitMetadata()
+
+
+def normalize_court_unit(unit: str | None) -> str | None:
+    if unit is None:
+        return None
+    normalized = unit.strip().lower()
+    if normalized in {"m", "meter", "meters", "metre", "metres"}:
+        return "m"
+    if normalized in {"ft", "foot", "feet"}:
+        return "ft"
+    return None
+
+
+def court_dimensions_for_unit(unit: str | None) -> tuple[float, float] | None:
+    normalized = normalize_court_unit(unit)
+    if normalized == "m":
+        return PICKLEBALL_COURT_WIDTH_M, PICKLEBALL_COURT_LENGTH_M
+    if normalized == "ft":
+        return PICKLEBALL_COURT_WIDTH_FT, PICKLEBALL_COURT_LENGTH_FT
+    return None
+
+
+def feet_value_for_unit(value_ft: float, unit: str | None) -> float | None:
+    normalized = normalize_court_unit(unit)
+    if normalized == "m":
+        return feet_to_meters(value_ft)
+    if normalized == "ft":
+        return float(value_ft)
+    return None

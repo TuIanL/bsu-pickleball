@@ -1,8 +1,5 @@
-# serve-start-detection Specification
+## MODIFIED Requirements
 
-## Purpose
-Define backend serve-start candidate detection artifacts for completed real uploaded-video analysis jobs, so users can quickly locate likely rally starts without treating them as full rally segmentation.
-## Requirements
 ### Requirement: 发球开始候选事件 artifact
 
 系统 SHALL 为完成的真实上传视频分析任务生成或明确标记发球时刻候选事件 artifact，用于定位每个回合的发球击球时刻或其附近候选时间点。
@@ -55,33 +52,7 @@ Define backend serve-start candidate detection artifacts for completed real uplo
 - **WHEN** 发球检测生成 score、候选调试 JSON、候选 clips 或 debug overlay artifact
 - **THEN** pipeline 阶段或 pipeline result artifacts SHALL 暴露这些 artifact 的状态或 URL 引用，并不得要求前端先加载调试 artifact 才能播放视频
 
-### Requirement: 发球事件 artifact API
-
-系统 SHALL 通过分析任务 artifact API 暴露发球事件 artifact，并在 pipeline result 中提供可选引用。
-
-#### Scenario: 结果引用发球事件 artifact
-- **WHEN** 完成的真实分析任务生成或记录发球事件 artifact
-- **THEN** pipeline result 的 artifacts SHALL 包含发球事件 URL、状态和说明字段
-
-#### Scenario: 客户端读取发球事件 artifact
-- **WHEN** 客户端请求完成任务的发球事件 artifact URL
-- **THEN** API SHALL 返回浏览器可消费的 JSON artifact
-
-#### Scenario: artifact 不存在
-- **WHEN** 客户端请求不存在的发球事件 artifact
-- **THEN** API SHALL 返回明确的 404 或等效错误，而不是返回模拟事件数据
-
-### Requirement: 发球检测不产生完整回合结论
-
-系统 SHALL 将本能力限定为发球开始候选点检测，不得在没有后续能力支持时输出完整回合边界、回合结束、比分或战术结论。
-
-#### Scenario: 当前任务只有发球候选点
-- **WHEN** 发球事件 artifact 可用但没有回合结束检测能力
-- **THEN** 系统 SHALL 仅声明发球开始候选点，不得生成完整 rally segmentation 或比赛净时长统计
-
-#### Scenario: 报告需要战术语义
-- **WHEN** 报告或 UI 表面需要击球类型、得分原因、落点或战术判断
-- **THEN** 系统 SHALL 继续使用 unavailable 或候选说明，而不是从发球开始事件推断战术结论
+## ADDED Requirements
 
 ### Requirement: 上下文发球时刻检测
 
@@ -122,4 +93,3 @@ Define backend serve-start candidate detection artifacts for completed real uplo
 #### Scenario: 单位缺失时保守降级
 - **WHEN** 检测输入缺少 court unit metadata 且无法可靠推断单位
 - **THEN** 检测器 SHALL 标记发球检测为 `partial` 或 `unavailable`，并在 detail 中说明无法安全应用底线阈值
-

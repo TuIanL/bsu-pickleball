@@ -40,6 +40,14 @@ class AnalysisArtifacts(BaseModel):
     pose_overlay_url: Optional[str] = None
     serve_events_json_path: Optional[str] = None
     serve_events_url: Optional[str] = None
+    serve_debug_candidates_json_path: Optional[str] = None
+    serve_debug_candidates_url: Optional[str] = None
+    serve_score_series_json_path: Optional[str] = None
+    serve_score_series_url: Optional[str] = None
+    serve_clips_manifest_json_path: Optional[str] = None
+    serve_clips_manifest_url: Optional[str] = None
+    serve_debug_overlay_path: Optional[str] = None
+    serve_debug_overlay_url: Optional[str] = None
     player_trajectory_json_path: Optional[str] = None
     player_trajectory_csv_path: Optional[str] = None
     player_trajectory_url: Optional[str] = None
@@ -50,6 +58,8 @@ class AnalysisArtifacts(BaseModel):
     pose_overlay_detail: Optional[str] = None
     serve_events_status: Optional[str] = None
     serve_events_detail: Optional[str] = None
+    serve_debug_artifacts_status: Optional[str] = None
+    serve_debug_artifacts_detail: Optional[str] = None
     player_trajectory_status: Optional[str] = None
     player_trajectory_detail: Optional[str] = None
     overlay_video_path: Optional[str] = None

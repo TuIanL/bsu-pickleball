@@ -90,6 +90,21 @@ class StorageService:
     def serve_events_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "serve_events.json"
 
+    def serve_debug_candidates_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "serve_debug_candidates.json"
+
+    def serve_score_series_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "serve_score_series.json"
+
+    def serve_clips_manifest_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "serve_clips_manifest.json"
+
+    def serve_debug_overlay_video_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "serve_debug_overlay.mp4"
+
+    def serve_clips_dir(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "serve_clips"
+
     def player_trajectory_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "players_trajectory.json"
 
