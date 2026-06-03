@@ -463,6 +463,24 @@ export interface ServeEventsArtifact {
   frame_stride: number;
   detection_mode?: "pose" | "roi" | "trajectory" | "tracking";
   available_signals?: Array<"tracking" | "pose" | "trajectory" | "roi" | "video">;
+  coverage?: {
+    source_duration_seconds?: number;
+    tracking_first_timestamp_seconds?: number;
+    tracking_last_timestamp_seconds?: number;
+    pose_first_timestamp_seconds?: number;
+    pose_last_timestamp_seconds?: number;
+    trajectory_first_timestamp_seconds?: number;
+    trajectory_last_timestamp_seconds?: number;
+    score_series_first_timestamp_seconds?: number;
+    score_series_last_timestamp_seconds?: number;
+    score_series_count?: number;
+    candidate_first_timestamp_seconds?: number;
+    candidate_last_timestamp_seconds?: number;
+    candidate_count?: number;
+    coverage_ratio?: number;
+    warnings?: string[];
+    gaps?: string[];
+  };
   debug_artifacts?: {
     candidates_url?: string;
     score_series_url?: string;

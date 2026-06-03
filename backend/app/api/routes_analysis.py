@@ -120,6 +120,8 @@ def read_analysis_artifact(
     job_id: str,
     artifact_name: Literal[
         "tracking-overlay",
+        "player-selection",
+        "player-selection-training-samples",
         "pose-overlay",
         "player-trajectories",
         "serve-events",
@@ -138,6 +140,10 @@ def read_analysis_artifact(
 
     if artifact_name == "tracking-overlay":
         path = _STORAGE.tracking_overlay_json_path(job_id)
+    elif artifact_name == "player-selection":
+        path = _STORAGE.player_selection_json_path(job_id)
+    elif artifact_name == "player-selection-training-samples":
+        path = _STORAGE.player_selection_training_samples_json_path(job_id)
     elif artifact_name == "pose-overlay":
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":

@@ -21,6 +21,25 @@ class ServeSignalScores(BaseModel):
     receiver_waiting_score: Optional[float] = Field(default=None, ge=0, le=1)
 
 
+class ServeCoverageDiagnostics(BaseModel):
+    source_duration_seconds: Optional[float] = Field(default=None, ge=0)
+    tracking_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    tracking_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    pose_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    pose_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    trajectory_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    trajectory_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    score_series_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    score_series_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    score_series_count: int = Field(default=0, ge=0)
+    candidate_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    candidate_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    candidate_count: int = Field(default=0, ge=0)
+    coverage_ratio: Optional[float] = Field(default=None, ge=0, le=1)
+    warnings: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+
+
 class ServeDebugArtifactRefs(BaseModel):
     candidates_url: Optional[str] = None
     score_series_url: Optional[str] = None
@@ -78,6 +97,7 @@ class ServeEventsArtifact(BaseModel):
     detection_mode: Optional[ServeDetectionMode] = None
     available_signals: list[ServeSignal] = Field(default_factory=list)
     debug_artifacts: Optional[ServeDebugArtifactRefs] = None
+    coverage: Optional[ServeCoverageDiagnostics] = None
     events: list[ServeEventCandidate] = Field(default_factory=list)
 
     @model_validator(mode="after")

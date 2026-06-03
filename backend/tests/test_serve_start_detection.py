@@ -5,6 +5,8 @@ from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
 from app.schemas.tracking import (
     CourtCoordinateMetadata,
     CourtDimensions,
+    DetectionOverlayFrame,
+    FrameDetection,
     PlayerTrajectoryArtifact,
     PlayerTrajectorySample,
     TrackingResult,
@@ -28,6 +30,34 @@ def sample(frame, time, x, y, *, player_id="Player_1", track_id=1, unit="m"):
 
 def tracking():
     return TrackingResult(fps=5, frame_count=80, processed_frame_count=8, frame_stride=1)
+
+
+def tracking_with_overlay(duration=120):
+    frames = []
+    for index in range(0, duration * 5, 5):
+        timestamp = index / 5
+        x = 100
+        if timestamp > 100:
+            x += (timestamp - 100) * 80
+        frames.append(
+            DetectionOverlayFrame(
+                frame_index=index,
+                timestamp_seconds=timestamp,
+                detections=[
+                    FrameDetection(
+                        frame_index=index,
+                        timestamp_seconds=timestamp,
+                        bbox=[x, 100, x + 50, 210],
+                        confidence=0.9,
+                        track_id="7",
+                        player_id="Player_9",
+                        source_width=1280,
+                        source_height=720,
+                    )
+                ],
+            )
+        )
+    return TrackingResult(fps=5, frame_count=duration * 5, processed_frame_count=len(frames), frame_stride=5, overlay_frames=frames)
 
 
 def metric_court(unit="m"):
@@ -170,3 +200,53 @@ def test_detector_reports_unavailable_without_tracking():
 
     assert artifact.status == "unavailable"
     assert "tracking" in artifact.detail
+
+
+def test_detector_reports_coverage_when_trajectory_ends_early_and_falls_back_to_tracking():
+    trajectories = PlayerTrajectoryArtifact(
+        job_id="job-serve",
+        court=metric_court("m"),
+        players={
+            "Player_1": [
+                sample(0, 0, 3.0, 12.7),
+                sample(5, 1, 3.0, 12.7),
+                sample(10, 2, 3.0, 12.7),
+            ]
+        },
+    )
+
+    artifact = ServeStartDetector().detect(
+        job_id="job-serve",
+        video_id="video-serve",
+        tracking=tracking_with_overlay(),
+        player_trajectories=trajectories,
+    )
+
+    assert artifact.coverage is not None
+    assert "trajectory_ends_before_source_video" in artifact.coverage.warnings
+    assert artifact.coverage.tracking_last_timestamp_seconds and artifact.coverage.tracking_last_timestamp_seconds > 100
+    assert artifact.coverage.trajectory_last_timestamp_seconds == 2
+    assert artifact.status == "partial"
+    assert artifact.events
+    assert artifact.events[-1].timestamp_seconds >= 100
+    assert artifact.events[-1].detection_mode == "tracking"
+
+
+def test_detector_keeps_rejection_buckets_beyond_rejected_detail_limit():
+    samples = [sample(index * 5, index, 3.0, 6.0) for index in range(260)]
+    trajectories = PlayerTrajectoryArtifact(job_id="job-serve", court=metric_court("m"), players={"Player_1": samples})
+    detector = ServeStartDetector()
+
+    artifact = detector.detect(
+        job_id="job-serve",
+        video_id="video-serve",
+        tracking=TrackingResult(fps=1, frame_count=260, processed_frame_count=260, frame_stride=1),
+        player_trajectories=trajectories,
+    )
+
+    assert artifact.status == "no_candidates"
+    assert len(detector.last_debug.rejected) == 200
+    assert detector.last_debug.rejected_buckets
+    bucket_total = sum(bucket["count"] for bucket in detector.last_debug.rejected_buckets)
+    assert bucket_total == 260
+    assert detector.last_debug.coverage["score_series_last_timestamp_seconds"] == 259

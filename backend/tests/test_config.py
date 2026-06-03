@@ -77,3 +77,24 @@ def test_primary_player_filter_configuration(monkeypatch):
         assert settings.primary_player_court_margin_ft == 18
     finally:
         config.get_settings.cache_clear()
+
+
+def test_court_aware_attention_selector_configuration(monkeypatch):
+    monkeypatch.setenv("PICKLEBALL_PRIMARY_PLAYER_WINDOW_FRAMES", "45")
+    monkeypatch.setenv("PICKLEBALL_PRIMARY_PLAYER_TARGET_COURT_THRESHOLD", "0.61")
+    monkeypatch.setenv("PICKLEBALL_PRIMARY_PLAYER_QUALITY_THRESHOLD", "0.33")
+    monkeypatch.setenv("PICKLEBALL_ENABLE_ATTENTION_PLAYER_SELECTOR", "true")
+    monkeypatch.setenv("PICKLEBALL_ATTENTION_PLAYER_SELECTOR_MODEL_PATH", "/tmp/selector.pt")
+    monkeypatch.setenv("PICKLEBALL_ATTENTION_PLAYER_SELECTOR_CONFIDENCE", "0.77")
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.primary_player_window_frames == 45
+        assert settings.primary_player_target_court_threshold == 0.61
+        assert settings.primary_player_quality_threshold == 0.33
+        assert settings.enable_attention_player_selector is True
+        assert settings.attention_player_selector_model_path == "/tmp/selector.pt"
+        assert settings.attention_player_selector_confidence == 0.77
+    finally:
+        config.get_settings.cache_clear()

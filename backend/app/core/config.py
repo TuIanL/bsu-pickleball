@@ -38,6 +38,12 @@ class Settings(BaseModel):
     primary_player_min_box_area_ratio: float = 0.0005
     primary_player_max_box_area_ratio: float = 0.85
     primary_player_court_margin_ft: float = 12.0
+    primary_player_window_frames: int = 90
+    primary_player_target_court_threshold: float = 0.45
+    primary_player_quality_threshold: float = 0.28
+    enable_attention_player_selector: bool = False
+    attention_player_selector_model_path: str | None = None
+    attention_player_selector_confidence: float = 0.65
     player_identity_max_players: int = 4
     player_identity_lost_buffer_frames: int = 90
     player_identity_inactive_buffer_frames: int = 180
@@ -152,6 +158,25 @@ def get_settings() -> Settings:
         primary_player_min_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MIN_BOX_AREA_RATIO", "0.0005")),
         primary_player_max_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MAX_BOX_AREA_RATIO", "0.85")),
         primary_player_court_margin_ft=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT", "12.0")),
+        primary_player_window_frames=max(1, int(os.getenv("PICKLEBALL_PRIMARY_PLAYER_WINDOW_FRAMES", "90"))),
+        primary_player_target_court_threshold=_clamp_float(
+            os.getenv("PICKLEBALL_PRIMARY_PLAYER_TARGET_COURT_THRESHOLD", "0.45"),
+            0.0,
+            1.0,
+        ),
+        primary_player_quality_threshold=_clamp_float(
+            os.getenv("PICKLEBALL_PRIMARY_PLAYER_QUALITY_THRESHOLD", "0.28"),
+            0.0,
+            1.0,
+        ),
+        enable_attention_player_selector=os.getenv("PICKLEBALL_ENABLE_ATTENTION_PLAYER_SELECTOR", "false").lower()
+        in {"1", "true", "yes"},
+        attention_player_selector_model_path=os.getenv("PICKLEBALL_ATTENTION_PLAYER_SELECTOR_MODEL_PATH") or None,
+        attention_player_selector_confidence=_clamp_float(
+            os.getenv("PICKLEBALL_ATTENTION_PLAYER_SELECTOR_CONFIDENCE", "0.65"),
+            0.0,
+            1.0,
+        ),
         player_identity_max_players=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_PLAYERS", "4"))),
         player_identity_lost_buffer_frames=max(
             1,

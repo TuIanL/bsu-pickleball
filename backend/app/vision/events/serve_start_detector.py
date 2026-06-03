@@ -8,6 +8,7 @@ from math import hypot
 from typing import Any
 
 from app.schemas.events import (
+    ServeCoverageDiagnostics,
     ServeDebugArtifactRefs,
     ServeEventCandidate,
     ServeEventsArtifact,
@@ -46,6 +47,8 @@ class ServeDetectionDebug:
     candidates: list[dict[str, Any]] = field(default_factory=list)
     rejected: list[dict[str, Any]] = field(default_factory=list)
     score_series: list[dict[str, Any]] = field(default_factory=list)
+    rejected_buckets: list[dict[str, Any]] = field(default_factory=list)
+    coverage: dict[str, Any] = field(default_factory=dict)
     thresholds: dict[str, Any] = field(default_factory=dict)
     debug_artifacts: ServeDebugArtifactRefs | None = None
 
@@ -88,6 +91,13 @@ class ServeStartDetector:
         self.last_debug = ServeDetectionDebug(debug_artifacts=debug_artifacts)
         duration_seconds = self._duration_seconds(tracking)
         if not tracking or tracking.processed_frame_count == 0:
+            coverage = self._build_coverage(
+                tracking=tracking,
+                player_trajectories=player_trajectories,
+                pose_frames=pose_frames or [],
+                events=[],
+                duration_seconds=duration_seconds,
+            )
             return self._artifact(
                 job_id=job_id,
                 video_id=video_id,
@@ -95,11 +105,19 @@ class ServeStartDetector:
                 detail="缺少可用 tracking 帧，无法识别发球时刻候选",
                 tracking=tracking,
                 duration_seconds=duration_seconds,
+                coverage=coverage,
             )
 
         samples_by_player = self._trajectory_samples(player_trajectories)
         court_context = self._court_context(player_trajectories)
         if samples_by_player and court_context is None:
+            coverage = self._build_coverage(
+                tracking=tracking,
+                player_trajectories=player_trajectories,
+                pose_frames=pose_frames or [],
+                events=[],
+                duration_seconds=duration_seconds,
+            )
             return self._artifact(
                 job_id=job_id,
                 video_id=video_id,
@@ -108,19 +126,38 @@ class ServeStartDetector:
                 tracking=tracking,
                 duration_seconds=duration_seconds,
                 debug_artifacts=debug_artifacts,
+                coverage=coverage,
             )
 
         pose_by_track = self._pose_motion_by_track(pose_frames or [])
         if samples_by_player and court_context is not None:
             drafts = self._drafts_from_context(samples_by_player, court_context, pose_by_track)
-            events = self._dedupe([self._candidate(index + 1, draft, duration_seconds) for index, draft in enumerate(drafts)])
+            context_events = self._dedupe([self._candidate(index + 1, draft, duration_seconds) for index, draft in enumerate(drafts)])
+            fallback_events = []
+            if self._trajectory_ends_before_tracking(player_trajectories, tracking):
+                fallback_events = self._events_from_tracking_frames(
+                    tracking.overlay_frames,
+                    pose_by_track=pose_by_track,
+                    after_seconds=self._trajectory_last_timestamp(player_trajectories),
+                    reason_prefix="player trajectory 提前中断，已降级使用 tracking/pose 信号：",
+                )
+            events = self._dedupe([*context_events, *fallback_events])
             detection_mode = self._artifact_detection_mode(events)
             status = "available" if events and any(event.detection_mode == "pose" for event in events) else "partial" if events else "no_candidates"
+            coverage = self._build_coverage(
+                tracking=tracking,
+                player_trajectories=player_trajectories,
+                pose_frames=pose_frames or [],
+                events=events,
+                duration_seconds=duration_seconds,
+            )
             detail = (
                 f"已基于底线站位、发球前静止、局部运动峰值和后续回合状态识别 {len(events)} 个发球时刻候选"
                 if events
                 else "上下文发球检测已运行，但没有达到阈值的发球时刻候选"
             )
+            if coverage.warnings:
+                detail = f"{detail}；覆盖诊断：{coverage.warnings[0]}"
             return self._artifact(
                 job_id=job_id,
                 video_id=video_id,
@@ -132,9 +169,17 @@ class ServeStartDetector:
                 detection_mode=detection_mode,
                 available_signals=self._available_signals(events, pose_available=bool(pose_by_track)),
                 debug_artifacts=debug_artifacts,
+                coverage=coverage,
             )
 
-        events = self._events_from_tracking_frames(tracking.overlay_frames, pose_available=bool(pose_by_track))
+        events = self._events_from_tracking_frames(tracking.overlay_frames, pose_by_track=pose_by_track)
+        coverage = self._build_coverage(
+            tracking=tracking,
+            player_trajectories=player_trajectories,
+            pose_frames=pose_frames or [],
+            events=events,
+            duration_seconds=duration_seconds,
+        )
         if events:
             return self._artifact(
                 job_id=job_id,
@@ -147,6 +192,7 @@ class ServeStartDetector:
                 detection_mode="tracking",
                 available_signals=["tracking"] + (["pose"] if pose_by_track else []),
                 debug_artifacts=debug_artifacts,
+                coverage=coverage,
             )
 
         return self._artifact(
@@ -157,6 +203,7 @@ class ServeStartDetector:
             tracking=tracking,
             duration_seconds=duration_seconds,
             debug_artifacts=debug_artifacts,
+            coverage=coverage,
         )
 
     def unavailable(
@@ -299,9 +346,18 @@ class ServeStartDetector:
             signals=draft.signals,
         )
 
-    def _events_from_tracking_frames(self, frames, *, pose_available: bool) -> list[ServeEventCandidate]:
+    def _events_from_tracking_frames(
+        self,
+        frames,
+        *,
+        pose_by_track: dict[str, dict[int, float]],
+        after_seconds: float | None = None,
+        reason_prefix: str = "",
+    ) -> list[ServeEventCandidate]:
         by_track = defaultdict(list)
         for frame in frames:
+            if after_seconds is not None and frame.timestamp_seconds <= after_seconds:
+                continue
             for detection in frame.detections:
                 if detection.track_id is None:
                     continue
@@ -318,10 +374,18 @@ class ServeStartDetector:
             for previous, current, next_point in zip(points, points[1:], points[2:]):
                 still_speed = self._point_speed(previous, current)
                 burst_speed = self._point_speed(current, next_point)
-                if still_speed > 25.0 or burst_speed < self.config.roi_speed_peak_threshold:
+                pose_motion = pose_by_track.get(str(track_id), {}).get(current[0], 0.0)
+                pose_score = self._clamp01(pose_motion / max(1.0, self.config.arm_speed_peak_threshold))
+                if still_speed > 25.0 or (
+                    burst_speed < self.config.roi_speed_peak_threshold and pose_score < 0.35
+                ):
                     continue
                 roi_score = self._clamp01(burst_speed / max(1.0, self.config.roi_speed_peak_threshold * 2))
-                confidence = min(0.68, 0.34 + roi_score * 0.26 + (0.08 if pose_available else 0))
+                detection_mode = "pose" if pose_score >= roi_score and pose_score >= 0.35 else "tracking"
+                confidence = min(0.68, 0.34 + max(roi_score, pose_score) * 0.26 + (0.08 if pose_by_track else 0))
+                source_signals: list[ServeSignal] = ["tracking"]
+                if detection_mode == "pose":
+                    source_signals.append("pose")
                 candidates.append(
                     ServeEventCandidate(
                         id=f"serve-{len(candidates) + 1:03d}",
@@ -331,13 +395,16 @@ class ServeStartDetector:
                         seek_time_seconds=max(0.0, current[1] - self.config.pre_roll_seconds),
                         start_time_seconds=max(0.0, current[1] - self.config.clip_pre_seconds),
                         end_time_seconds=current[1] + self.config.clip_post_seconds,
-                        reason=f"Track {track_id} 人体框短暂稳定后出现局部运动峰值",
-                        source_signals=["tracking"] + (["pose"] if pose_available else []),
+                        reason=f"{reason_prefix}Track {track_id} 人体框短暂稳定后出现局部运动峰值",
+                        source_signals=source_signals,
                         track_id=str(track_id),
                         player_id=current[4],
-                        detection_mode="tracking",
+                        detection_mode=detection_mode,
                         context_state="candidate",
-                        signals=ServeSignalScores(roi_motion_peak_score=round(roi_score, 3)),
+                        signals=ServeSignalScores(
+                            arm_motion_peak_score=round(pose_score, 3) if detection_mode == "pose" else None,
+                            roi_motion_peak_score=round(roi_score, 3),
+                        ),
                     )
                 )
         return self._dedupe(candidates)
@@ -574,20 +641,19 @@ class ServeStartDetector:
         )
 
     def _record_rejection(self, sample: PlayerTrajectorySample, reason: str, **signals: Any) -> None:
-        if len(self.last_debug.rejected) >= 200:
-            return
-        self.last_debug.rejected.append(
-            {
-                "timestamp_seconds": round(sample.timestamp_seconds, 3),
-                "frame_index": sample.frame_index,
-                "player_id": sample.player_id,
-                "track_id": sample.track_id,
-                "court_position": [sample.court_x, sample.court_y],
-                "court_unit": sample.court_unit,
-                "reason": reason,
-                "signals": signals,
-            }
-        )
+        if len(self.last_debug.rejected) < 200:
+            self.last_debug.rejected.append(
+                {
+                    "timestamp_seconds": round(sample.timestamp_seconds, 3),
+                    "frame_index": sample.frame_index,
+                    "player_id": sample.player_id,
+                    "track_id": sample.track_id,
+                    "court_position": [sample.court_x, sample.court_y],
+                    "court_unit": sample.court_unit,
+                    "reason": reason,
+                    "signals": signals,
+                }
+            )
         self.last_debug.score_series.append(
             {
                 "timestamp_seconds": round(sample.timestamp_seconds, 3),
@@ -616,6 +682,7 @@ class ServeStartDetector:
         detection_mode: str | None = None,
         available_signals: list[ServeSignal] | None = None,
         debug_artifacts: ServeDebugArtifactRefs | None = None,
+        coverage: ServeCoverageDiagnostics | None = None,
     ) -> ServeEventsArtifact:
         return ServeEventsArtifact(
             job_id=job_id,
@@ -631,5 +698,116 @@ class ServeStartDetector:
             detection_mode=detection_mode,  # type: ignore[arg-type]
             available_signals=available_signals or [],
             debug_artifacts=debug_artifacts,
+            coverage=coverage,
             events=events or [],
         )
+
+    def _build_coverage(
+        self,
+        *,
+        tracking: TrackingResult | None,
+        player_trajectories: PlayerTrajectoryArtifact | None,
+        pose_frames: list[PoseOverlayFrame],
+        events: list[ServeEventCandidate],
+        duration_seconds: float | None,
+    ) -> ServeCoverageDiagnostics:
+        tracking_times = [frame.timestamp_seconds for frame in tracking.overlay_frames] if tracking else []
+        pose_times = [frame.timestamp_seconds for frame in pose_frames]
+        trajectory_times = [
+            sample.timestamp_seconds
+            for samples in (player_trajectories.players.values() if player_trajectories else [])
+            for sample in samples
+        ]
+        score_times = [
+            float(item["timestamp_seconds"])
+            for item in self.last_debug.score_series
+            if isinstance(item.get("timestamp_seconds"), (int, float))
+        ]
+        event_times = [event.timestamp_seconds for event in events]
+        source_duration = duration_seconds
+        last_score = max(score_times) if score_times else None
+        last_tracking = max(tracking_times) if tracking_times else None
+        last_trajectory = max(trajectory_times) if trajectory_times else None
+        warnings: list[str] = []
+        gaps: list[str] = []
+        reference_end = source_duration or last_tracking
+        if reference_end and last_score is not None and last_score < reference_end * 0.75:
+            warnings.append("score_series_ends_before_source_video")
+            gaps.append("serve scoring did not cover late video")
+        if reference_end and last_trajectory is not None and last_trajectory < reference_end * 0.75:
+            warnings.append("trajectory_ends_before_source_video")
+            gaps.append("player trajectory ended while video/tracking continued")
+        if last_tracking is not None and last_trajectory is None:
+            warnings.append("missing_player_trajectory")
+            gaps.append("tracking exists but player trajectory is unavailable")
+        coverage_ratio = (last_score / reference_end) if reference_end and last_score is not None else None
+        coverage = ServeCoverageDiagnostics(
+            source_duration_seconds=source_duration,
+            tracking_first_timestamp_seconds=min(tracking_times) if tracking_times else None,
+            tracking_last_timestamp_seconds=last_tracking,
+            pose_first_timestamp_seconds=min(pose_times) if pose_times else None,
+            pose_last_timestamp_seconds=max(pose_times) if pose_times else None,
+            trajectory_first_timestamp_seconds=min(trajectory_times) if trajectory_times else None,
+            trajectory_last_timestamp_seconds=last_trajectory,
+            score_series_first_timestamp_seconds=min(score_times) if score_times else None,
+            score_series_last_timestamp_seconds=last_score,
+            score_series_count=len(score_times),
+            candidate_first_timestamp_seconds=min(event_times) if event_times else None,
+            candidate_last_timestamp_seconds=max(event_times) if event_times else None,
+            candidate_count=len(events),
+            coverage_ratio=coverage_ratio,
+            warnings=warnings,
+            gaps=gaps,
+        )
+        self.last_debug.coverage = coverage.model_dump(mode="json")
+        self.last_debug.rejected_buckets = self._rejected_buckets(source_duration or last_tracking)
+        return coverage
+
+    def _rejected_buckets(self, duration_seconds: float | None) -> list[dict[str, Any]]:
+        rejected = [item for item in self.last_debug.score_series if item.get("rejected_reason")]
+        if not rejected:
+            return []
+        bucket_count = 12
+        if duration_seconds and duration_seconds > 0:
+            bucket_size = max(10.0, duration_seconds / bucket_count)
+        else:
+            max_time = max(float(item.get("timestamp_seconds", 0.0)) for item in rejected)
+            bucket_size = max(10.0, max_time / bucket_count) if max_time > 0 else 10.0
+        buckets: dict[int, dict[str, Any]] = {}
+        for item in rejected:
+            timestamp = float(item.get("timestamp_seconds", 0.0))
+            bucket_index = int(timestamp // bucket_size)
+            bucket = buckets.setdefault(
+                bucket_index,
+                {
+                    "start_seconds": round(bucket_index * bucket_size, 3),
+                    "end_seconds": round((bucket_index + 1) * bucket_size, 3),
+                    "count": 0,
+                    "reasons": {},
+                    "player_ids": {},
+                },
+            )
+            reason = str(item.get("rejected_reason") or "unknown")
+            player_id = str(item.get("player_id") or "unknown")
+            bucket["count"] += 1
+            bucket["reasons"][reason] = bucket["reasons"].get(reason, 0) + 1
+            bucket["player_ids"][player_id] = bucket["player_ids"].get(player_id, 0) + 1
+        return [buckets[index] for index in sorted(buckets)]
+
+    @staticmethod
+    def _trajectory_last_timestamp(player_trajectories: PlayerTrajectoryArtifact | None) -> float | None:
+        if player_trajectories is None:
+            return None
+        values = [sample.timestamp_seconds for samples in player_trajectories.players.values() for sample in samples]
+        return max(values) if values else None
+
+    def _trajectory_ends_before_tracking(
+        self,
+        player_trajectories: PlayerTrajectoryArtifact | None,
+        tracking: TrackingResult,
+    ) -> bool:
+        trajectory_last = self._trajectory_last_timestamp(player_trajectories)
+        tracking_last = max((frame.timestamp_seconds for frame in tracking.overlay_frames), default=None)
+        if trajectory_last is None or tracking_last is None:
+            return False
+        return trajectory_last < tracking_last * 0.75

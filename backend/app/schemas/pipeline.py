@@ -36,6 +36,10 @@ class AnalysisArtifacts(BaseModel):
     tracking_result_json_path: Optional[str] = None
     tracking_overlay_json_path: Optional[str] = None
     tracking_overlay_url: Optional[str] = None
+    player_selection_json_path: Optional[str] = None
+    player_selection_url: Optional[str] = None
+    player_selection_training_samples_json_path: Optional[str] = None
+    player_selection_training_samples_url: Optional[str] = None
     pose_overlay_json_path: Optional[str] = None
     pose_overlay_url: Optional[str] = None
     serve_events_json_path: Optional[str] = None
@@ -54,6 +58,8 @@ class AnalysisArtifacts(BaseModel):
     source_video_url: Optional[str] = None
     tracking_overlay_status: Optional[str] = None
     tracking_overlay_detail: Optional[str] = None
+    player_selection_status: Optional[str] = None
+    player_selection_detail: Optional[str] = None
     pose_overlay_status: Optional[str] = None
     pose_overlay_detail: Optional[str] = None
     serve_events_status: Optional[str] = None

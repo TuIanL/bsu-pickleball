@@ -156,3 +156,22 @@ def test_player_trajectory_artifact_schema_accepts_empty_players():
 
     assert artifact.court.court_unit == "m"
     assert artifact.players == {}
+
+
+def test_identity_filters_non_target_court_tracks_from_eligible_set():
+    manager = PlayerIdentityManager()
+
+    samples = manager.update(
+        0,
+        [position(1, 0, 10, 20), position(2, 0, 35, 20)],
+        eligible_track_ids={1},
+    )
+
+    assert [sample.track_id for sample in samples] == [1]
+    assert 2 not in manager.track_to_player
+    assert any(
+        diagnostic.event == "filtered"
+        and diagnostic.track_id == 2
+        and diagnostic.reason == "not target-court eligible"
+        for diagnostic in manager.diagnostics
+    )

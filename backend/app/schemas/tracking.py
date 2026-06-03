@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from math import isfinite
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -14,6 +14,8 @@ FootpointMethod = Literal["bbox_bottom_center", "pose_ankle_average", "segmentat
 PositionValidity = Literal["valid", "invalid"]
 CourtUnit = Literal["m", "ft"]
 PlayerTrackingStatus = Literal["detected", "interpolated", "lost", "inactive", "unmatched"]
+PlayerSelectionMode = Literal["rule", "attention", "fallback"]
+PlayerCandidateLabel = Literal["target_player", "neighbor_court_player", "spectator", "uncertain"]
 
 
 def _validate_point(values: list[float], label: str) -> list[float]:
@@ -155,6 +157,76 @@ class TrackingResult(BaseModel):
     positions: list[PlayerFramePosition] = Field(default_factory=list)
 
 
+class PlayerTrackletFeature(BaseModel):
+    track_id: int = Field(ge=1)
+    frame_start: int = Field(ge=0)
+    frame_end: int = Field(ge=0)
+    first_timestamp_seconds: float = Field(ge=0)
+    last_timestamp_seconds: float = Field(ge=0)
+    appearances: int = Field(ge=1)
+    valid_positions: int = Field(default=0, ge=0)
+    mean_confidence: float = Field(default=0.0, ge=0, le=1)
+    latest_confidence: float = Field(default=0.0, ge=0, le=1)
+    mean_bbox_area_ratio: float = Field(default=0.0, ge=0)
+    court_position: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    mean_court_position: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    court_unit: CourtUnit = "ft"
+    target_court_occupancy: float = Field(default=0.0, ge=0, le=1)
+    mean_target_court_distance: float = Field(default=0.0, ge=0)
+    max_target_court_distance: float = Field(default=0.0, ge=0)
+    mean_speed: float = Field(default=0.0, ge=0)
+    continuity: float = Field(default=0.0, ge=0, le=1)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    image_footpoint: list[float] = Field(min_length=2, max_length=2)
+
+    @field_validator("bbox")
+    @classmethod
+    def validate_tracklet_bbox(cls, value: list[float]) -> list[float]:
+        return _validate_bbox(value)
+
+    @field_validator("image_footpoint")
+    @classmethod
+    def validate_tracklet_image_footpoint(cls, value: list[float]) -> list[float]:
+        return _validate_point(value, "image_footpoint")
+
+    @field_validator("court_position", "mean_court_position")
+    @classmethod
+    def validate_tracklet_court_position(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+        if value is None:
+            return None
+        return _validate_point(value, "court_position")
+
+
+class PlayerSelectionDiagnostic(BaseModel):
+    track_id: int = Field(ge=1)
+    selected: bool
+    selection_mode: PlayerSelectionMode = "rule"
+    fallback_reason: Optional[str] = None
+    target_court_score: float = Field(default=0.0, ge=0, le=1)
+    tracklet_quality_score: float = Field(default=0.0, ge=0, le=1)
+    group_consistency_score: float = Field(default=0.0, ge=0, le=1)
+    attention_target_probability: Optional[float] = Field(default=None, ge=0, le=1)
+    attention_non_target_probability: Optional[float] = Field(default=None, ge=0, le=1)
+    final_score: float = Field(default=0.0, ge=0, le=1)
+    candidate_label: PlayerCandidateLabel = "uncertain"
+    reason: str
+    frame_start: int = Field(ge=0)
+    frame_end: int = Field(ge=0)
+    components: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlayerSelectionArtifact(BaseModel):
+    job_id: str
+    video_id: Optional[str] = None
+    status: Literal["available", "unavailable"] = "available"
+    detail: str
+    selection_mode: PlayerSelectionMode = "rule"
+    fallback_reason: Optional[str] = None
+    participant_limit: int = Field(default=4, ge=1)
+    diagnostics: list[PlayerSelectionDiagnostic] = Field(default_factory=list)
+    training_samples: list[PlayerTrackletFeature] = Field(default_factory=list)
+
+
 class CourtDimensions(BaseModel):
     width: float = Field(gt=0)
     length: float = Field(gt=0)
@@ -244,6 +316,30 @@ class PlayerIdentityDiagnostic(BaseModel):
         return _validate_point(value, "court_position_m")
 
 
+class PlayerTrajectoryCoverage(BaseModel):
+    player_id: str
+    sample_count: int = Field(default=0, ge=0)
+    detected_count: int = Field(default=0, ge=0)
+    interpolated_count: int = Field(default=0, ge=0)
+    first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    first_frame_index: Optional[int] = Field(default=None, ge=0)
+    last_frame_index: Optional[int] = Field(default=None, ge=0)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    history_track_ids: list[int] = Field(default_factory=list)
+
+
+class PlayerTrajectoryCoverageDiagnostics(BaseModel):
+    source_duration_seconds: Optional[float] = Field(default=None, ge=0)
+    tracking_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    trajectory_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    trajectory_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    coverage_ratio: Optional[float] = Field(default=None, ge=0, le=1)
+    players: list[PlayerTrajectoryCoverage] = Field(default_factory=list)
+    diagnostic_event_counts: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class PlayerTrajectoryArtifact(BaseModel):
     job_id: str
     video_id: Optional[str] = None
@@ -255,6 +351,7 @@ class PlayerTrajectoryArtifact(BaseModel):
     players: dict[str, list[PlayerTrajectorySample]] = Field(default_factory=dict)
     states: dict[str, PlayerTrajectoryState] = Field(default_factory=dict)
     diagnostics: list[PlayerIdentityDiagnostic] = Field(default_factory=list)
+    coverage: Optional[PlayerTrajectoryCoverageDiagnostics] = None
 
 
 class BoundingBox(BaseModel):

@@ -23,7 +23,24 @@ Use this checklist when validating stable doubles player identities on real matc
 - Player colors in debug views should be keyed by `player_id`, not by temporary `track_id`.
 - Interpolated trajectory points must be visually distinguishable from detector-backed points.
 
+## Court-Aware Player Selection
+
+- Review `player_selection.json` before trusting a difficult multi-court clip.
+- Target players should have high `target_court_score` and be selected as `target_player`.
+- Adjacent-court players may move actively; they should still be rejected with `neighbor_court_player` or low target-court membership.
+- Do not treat missing target-court players as a reason to fill the roster with lower-scoring adjacent-court tracks.
+- If `selection_mode` is `fallback`, confirm the fallback reason and verify the rule selector still produced reasonable eligible tracks.
+
+## Training Sample Labels
+
+- Exported `player_selection_training_samples.json` samples start as `uncertain`.
+- Label target-court players as `target_player`.
+- Label active players from adjacent courts as `neighbor_court_player`.
+- Label non-participating people as `spectator`.
+- Keep ambiguous or occluded cases as `uncertain` until video review resolves them.
+
 ## Acceptance Targets
 
 - First pass: reduce raw dozens of source tracks to four to six reviewable identities, with the final metric artifact capped at four players.
 - Second pass: maintain four stable player trajectories with visibly reduced ID switches and no obvious distance or heatmap jumps.
+- Multi-court clips: adjacent-court moving players should not appear in final player trajectories for the target court.

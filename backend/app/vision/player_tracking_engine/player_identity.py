@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import Counter
 from math import hypot
 
 from app.schemas.tracking import (
     CourtCoordinateMetadata,
     PlayerFramePosition,
     PlayerIdentityDiagnostic,
+    PlayerTrajectoryCoverage,
+    PlayerTrajectoryCoverageDiagnostics,
     PlayerTrajectoryArtifact,
     PlayerTrajectorySample,
     PlayerTrajectoryState,
@@ -95,6 +98,15 @@ class PlayerIdentityManager:
             if position.valid and position.court_position is not None
         ]
         if eligible_track_ids is not None:
+            excluded = [obs for obs in observations if obs.track_id not in eligible_track_ids]
+            for observation in excluded:
+                self._diagnose(
+                    frame_index,
+                    "filtered",
+                    reason="not target-court eligible",
+                    track_id=observation.track_id,
+                    court_position_m=observation.court_position_m,
+                )
             observations = [obs for obs in observations if obs.track_id in eligible_track_ids]
 
         outputs: list[PlayerTrajectorySample] = []
@@ -136,6 +148,11 @@ class PlayerIdentityManager:
         processed_frame_count: int,
         frame_stride: int,
     ) -> PlayerTrajectoryArtifact:
+        players = {
+            player_id: _with_smoothed_positions(player.trajectory, self.config.smoothing_window)
+            for player_id, player in sorted(self.players.items())
+        }
+        coverage = self._coverage_diagnostics(players=players, fps=fps, frame_count=frame_count)
         return PlayerTrajectoryArtifact(
             job_id=job_id,
             video_id=video_id,
@@ -144,12 +161,10 @@ class PlayerIdentityManager:
             processed_frame_count=processed_frame_count,
             frame_stride=frame_stride,
             court=CourtCoordinateMetadata(),
-            players={
-                player_id: _with_smoothed_positions(player.trajectory, self.config.smoothing_window)
-                for player_id, player in sorted(self.players.items())
-            },
+            players=players,
             states={player_id: player.to_schema() for player_id, player in sorted(self.players.items())},
             diagnostics=self.diagnostics,
+            coverage=coverage,
         )
 
     def to_projected_track_points(self, output_court_unit: str = "m") -> list[ProjectedTrackPoint]:
@@ -405,6 +420,60 @@ class PlayerIdentityManager:
                 reason=reason,
                 court_position_m=court_position_m,
             )
+        )
+
+    def _coverage_diagnostics(
+        self,
+        *,
+        players: dict[str, list[PlayerTrajectorySample]],
+        fps: float,
+        frame_count: int,
+    ) -> PlayerTrajectoryCoverageDiagnostics:
+        source_duration = frame_count / fps if fps > 0 and frame_count > 0 else None
+        player_coverages: list[PlayerTrajectoryCoverage] = []
+        first_values: list[float] = []
+        last_values: list[float] = []
+        warnings: list[str] = []
+        for player_id, samples in sorted(players.items()):
+            ordered = sorted(samples, key=lambda item: item.timestamp_seconds)
+            status_counts = Counter(sample.tracking_status for sample in ordered)
+            detected_count = sum(1 for sample in ordered if not sample.is_interpolated)
+            interpolated_count = sum(1 for sample in ordered if sample.is_interpolated)
+            first = ordered[0].timestamp_seconds if ordered else None
+            last = ordered[-1].timestamp_seconds if ordered else None
+            if first is not None:
+                first_values.append(first)
+            if last is not None:
+                last_values.append(last)
+            player = self.players.get(player_id)
+            player_coverages.append(
+                PlayerTrajectoryCoverage(
+                    player_id=player_id,
+                    sample_count=len(ordered),
+                    detected_count=detected_count,
+                    interpolated_count=interpolated_count,
+                    first_timestamp_seconds=first,
+                    last_timestamp_seconds=last,
+                    first_frame_index=ordered[0].frame_index if ordered else None,
+                    last_frame_index=ordered[-1].frame_index if ordered else None,
+                    status_counts=dict(status_counts),
+                    history_track_ids=sorted(player.history_track_ids) if player else [],
+                )
+            )
+        trajectory_last = max(last_values) if last_values else None
+        if source_duration and trajectory_last is not None and trajectory_last < source_duration * 0.75:
+            warnings.append("trajectory_ends_before_source_video")
+        if not player_coverages:
+            warnings.append("no_player_trajectories")
+        return PlayerTrajectoryCoverageDiagnostics(
+            source_duration_seconds=source_duration,
+            tracking_last_timestamp_seconds=source_duration,
+            trajectory_first_timestamp_seconds=min(first_values) if first_values else None,
+            trajectory_last_timestamp_seconds=trajectory_last,
+            coverage_ratio=min(1.0, trajectory_last / source_duration) if source_duration and trajectory_last is not None else None,
+            players=player_coverages,
+            diagnostic_event_counts=dict(Counter(item.event for item in self.diagnostics)),
+            warnings=warnings,
         )
 
 

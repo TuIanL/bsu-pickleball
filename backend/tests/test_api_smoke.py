@@ -280,6 +280,31 @@ def test_serve_debug_artifact_routes_return_json(monkeypatch, tmp_path):
     assert candidates.status_code == 200
     assert scores.status_code == 200
     assert clips.status_code == 200
+
+
+def test_player_selection_artifact_routes_return_json(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-player-selection-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(storage.player_selection_json_path(job.id), {"job_id": job.id, "selection_mode": "rule"})
+    storage.write_json(storage.player_selection_training_samples_json_path(job.id), {"job_id": job.id, "samples": []})
+
+    try:
+        selection = client.get(f"/api/analysis/jobs/{job.id}/artifacts/player-selection")
+        samples = client.get(f"/api/analysis/jobs/{job.id}/artifacts/player-selection-training-samples")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert selection.status_code == 200
+    assert selection.json()["selection_mode"] == "rule"
+    assert samples.status_code == 200
+    assert samples.json()["samples"] == []
     assert candidates.json()["candidates"] == []
     assert scores.json()["series"] == []
     assert clips.json()["clips"] == []
@@ -700,6 +725,8 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert result.status == "completed"
     assert result.artifacts.source_video_url == f"/api/videos/{video_id}/stream"
     assert result.artifacts.tracking_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/tracking-overlay"
+    assert result.artifacts.player_selection_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-selection"
+    assert result.artifacts.player_selection_training_samples_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-selection-training-samples"
     assert result.artifacts.pose_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/pose-overlay"
     assert result.artifacts.player_trajectory_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-trajectories"
     assert result.artifacts.serve_events_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-events"
@@ -712,12 +739,18 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
 
     storage = StorageService()
     tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-overlay-test"))
+    player_selection = storage.read_json(storage.player_selection_json_path("job-overlay-test"))
+    player_selection_samples = storage.read_json(storage.player_selection_training_samples_json_path("job-overlay-test"))
     player_trajectories = storage.read_json(storage.player_trajectory_json_path("job-overlay-test"))
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-overlay-test"))
     serve_events = storage.read_json(storage.serve_events_json_path("job-overlay-test"))
     assert tracking_overlay["frames"][0]["detections"][0]["track_id"] == "1"
     assert tracking_overlay["frames"][0]["detections"][0]["player_id"] == "Player_1"
     assert tracking_overlay["frames"][0]["detections"][0]["label"] == "P1 / T1"
+    assert player_selection["selection_mode"] in {"rule", "fallback"}
+    assert player_selection["diagnostics"]
+    assert player_selection_samples["labels"] == ["target_player", "neighbor_court_player", "spectator", "uncertain"]
+    assert player_selection_samples["samples"]
     assert player_trajectories["court"]["court_unit"] == "m"
     assert player_trajectories["players"]["Player_1"][0]["court_unit"] == "m"
     assert storage.player_trajectory_csv_path("job-overlay-test").exists()

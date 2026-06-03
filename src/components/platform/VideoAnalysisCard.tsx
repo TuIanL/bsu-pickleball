@@ -34,6 +34,8 @@ interface VideoAnalysisCardProps {
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
+type ServeMarker = ReturnType<typeof resolveServeMarkers>[number];
+
 const toneClass = {
   advantage: "border-[#22C55E]/40 bg-[#22C55E]/15 text-[#DCFCE7]",
   risk: "border-[#FF9500]/40 bg-[#FF9500]/15 text-[#FFD7A0]",
@@ -451,25 +453,26 @@ function RealVideoOverlay({
   };
 
   return (
-    <div
-      className="relative aspect-video overflow-hidden bg-[#091016] data-[fullscreen=true]:aspect-auto data-[fullscreen=true]:h-screen data-[fullscreen=true]:w-screen"
-      data-fullscreen={isFullscreen}
-      ref={containerRef}
-    >
-      <video
-        className="absolute inset-0 h-full w-full bg-black object-contain"
-        muted={isMuted}
-        playsInline
-        preload="metadata"
-        ref={videoRef}
-        src={videoSrc}
-      />
-
-      <svg
-        className="pointer-events-none absolute inset-0 h-full w-full"
-        preserveAspectRatio="xMidYMid meet"
-        viewBox={`0 0 ${source.width} ${source.height}`}
+    <div className="bg-[#091016]">
+      <div
+        className="relative aspect-video overflow-hidden bg-[#091016] data-[fullscreen=true]:aspect-auto data-[fullscreen=true]:h-screen data-[fullscreen=true]:w-screen"
+        data-fullscreen={isFullscreen}
+        ref={containerRef}
       >
+        <video
+          className="absolute inset-0 h-full w-full bg-black object-contain"
+          muted={isMuted}
+          playsInline
+          preload="metadata"
+          ref={videoRef}
+          src={videoSrc}
+        />
+
+        <svg
+          className="pointer-events-none absolute inset-0 h-full w-full"
+          preserveAspectRatio="xMidYMid meet"
+          viewBox={`0 0 ${source.width} ${source.height}`}
+        >
         {showBoxes && detectionRenderFrame?.detections.map((detection) => {
           const [x1, y1, x2, y2] = detection.bbox;
           const width = Math.max(0, x2 - x1);
@@ -537,14 +540,14 @@ function RealVideoOverlay({
           </g>
         ))}
 
-      </svg>
+        </svg>
 
-      <div className="absolute left-4 top-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur">
+        <div className="absolute left-4 top-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">{match.teams}</p>
         <strong className="text-sm text-white">{match.venue}</strong>
-      </div>
+        </div>
 
-      <div className="absolute right-4 top-4 flex gap-2">
+        <div className="absolute right-4 top-4 flex gap-2">
         <button
           className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showBoxes ? "border-[#22C55E]/45 bg-[#22C55E]/20 text-[#D9FF3F]" : "border-white/10 bg-black/45 text-white"}`}
           onClick={() => setShowBoxes((value) => !value)}
@@ -560,9 +563,9 @@ function RealVideoOverlay({
         >
           骨架
         </button>
-      </div>
+        </div>
 
-      <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
+        <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">
           {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
         </p>
@@ -574,10 +577,10 @@ function RealVideoOverlay({
               : statusCopy(poseStatusLabel, poseDetail)}
           </p>
         ) : null}
-      </div>
+        </div>
 
-      <div className="absolute inset-x-4 bottom-4 flex flex-col gap-3 sm:left-auto sm:right-4 sm:w-[min(30rem,calc(100%-2rem))]">
-        <div className="rounded-2xl border border-white/10 bg-black/50 p-3 text-white backdrop-blur">
+        <div className="absolute inset-x-4 bottom-4 flex flex-col gap-3 sm:left-auto sm:right-4 sm:w-[min(30rem,calc(100%-2rem))]">
+          <div className="rounded-2xl border border-white/10 bg-black/50 p-3 text-white backdrop-blur">
           <div className="flex items-center gap-3">
             <button
               aria-label={isPlaying ? "暂停视频" : "播放视频"}
@@ -609,26 +612,6 @@ function RealVideoOverlay({
                 type="range"
                 value={progress}
               />
-              {serveMarkers.map((marker) => (
-                <button
-                  aria-label={`跳转到发球候选 ${formatSeconds(marker.timestamp_seconds)}`}
-                  className="group absolute top-1/2 z-20 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-black bg-[#D9FF3F] shadow-[0_0_18px_rgba(217,255,63,0.45)] transition hover:scale-125"
-                  key={marker.id}
-                  onClick={() => seekToServeMarker(marker.seekTime)}
-                  style={{ left: `${marker.position}%` }}
-                  type="button"
-                >
-                  <span className="pointer-events-none absolute bottom-6 left-1/2 z-30 w-56 -translate-x-1/2 rounded-xl border border-white/10 bg-[#111318] px-3 py-2 text-left text-xs font-semibold text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100">
-                    发球时刻候选 · {formatSeconds(marker.timestamp_seconds)}
-                    <br />
-                    置信度 {Math.round(marker.confidence * 100)}% · {serveMarkerModeLabel(marker.detection_mode)}
-                    <br />
-                    {serveMarkerSignalSummary(marker)}
-                    <br />
-                    {marker.reason}
-                  </span>
-                </button>
-              ))}
             </div>
             <button
               aria-label={isFullscreen ? "退出全屏" : "全屏播放"}
@@ -643,13 +626,22 @@ function RealVideoOverlay({
           <div className="mt-2 h-1 rounded-full bg-white/15">
             <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${progress}%` }} />
           </div>
-          {serveEventsLoadState !== "idle" ? (
-            <p className="mt-2 text-[0.68rem] font-semibold text-slate-300">
-              发球候选：{serveMarkers.length ? `${serveMarkers.length} 个 marker` : statusCopy(serveStatus, serveDetail)}
-            </p>
-          ) : null}
+            {serveEventsLoadState !== "idle" ? (
+              <p className="mt-2 text-[0.68rem] font-semibold text-slate-300">
+                发球候选：{serveMarkers.length ? `${serveMarkers.length} 个候选` : statusCopy(serveStatus, serveDetail)}
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
+      <ServeRallyStrip
+        currentTime={currentTime}
+        loadState={serveEventsLoadState}
+        markers={serveMarkers}
+        onSeek={seekToServeMarker}
+        status={serveStatus}
+        statusDetail={serveDetail}
+      />
     </div>
   );
 }
@@ -690,6 +682,77 @@ function RealVideoFooter({
           {poseStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(poseStatus)}</span> : null}
           <p className="mt-1 text-slate-600">{poseDetail}</p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function ServeRallyStrip({
+  currentTime,
+  loadState,
+  markers,
+  onSeek,
+  status,
+  statusDetail,
+}: {
+  currentTime: number;
+  loadState: OverlayLoadState;
+  markers: ServeMarker[];
+  onSeek: (seekTime: number) => void;
+  status: string;
+  statusDetail: string;
+}) {
+  if (loadState === "idle") {
+    return null;
+  }
+
+  const showMarkers = markers.length > 0;
+  return (
+    <div className="border-t border-white/10 bg-[#0D1419] px-4 py-3 text-white">
+      <div className="mx-auto flex w-full max-w-full flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-[#D9FF3F]">发球候选导航</p>
+            <p className="text-[0.68rem] font-semibold text-slate-300">
+              {showMarkers ? `${markers.length} 个回合起点候选` : statusCopy(status, statusDetail)}
+            </p>
+          </div>
+          {status === "partial" ? (
+            <span className="rounded-full border border-[#FF9500]/35 bg-[#FF9500]/15 px-2 py-1 text-[0.65rem] font-black text-[#FFD7A0]">
+              降级信号
+            </span>
+          ) : null}
+        </div>
+        {showMarkers ? (
+          <div className="flex w-full gap-2 overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:thin]">
+            {markers.map((marker, index) => {
+              const active = isServeMarkerActive(marker, currentTime);
+              return (
+                <button
+                  aria-label={`跳转到第 ${index + 1} 个发球候选 ${formatSeconds(marker.timestamp_seconds)}`}
+                  className={`min-h-20 w-36 shrink-0 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:border-[#D9FF3F]/70 ${
+                    active
+                      ? "border-[#D9FF3F] bg-[#D9FF3F]/18 shadow-[0_0_22px_rgba(217,255,63,0.25)]"
+                      : "border-white/10 bg-white/[0.06]"
+                  }`}
+                  key={marker.id}
+                  onClick={() => onSeek(marker.seekTime)}
+                  title={`${serveMarkerSignalSummary(marker)} · ${marker.reason}`}
+                  type="button"
+                >
+                  <span className="block text-[0.65rem] font-black uppercase text-slate-400">#{String(index + 1).padStart(2, "0")}</span>
+                  <span className="mt-1 block text-lg font-black text-white">{formatSeconds(marker.timestamp_seconds)}</span>
+                  <span className="mt-1 block truncate text-[0.68rem] font-semibold text-slate-300">
+                    {Math.round(marker.confidence * 100)}% · {serveMarkerModeLabel(marker.detection_mode)}
+                  </span>
+                  <span className="mt-1 block truncate text-[0.65rem] font-semibold text-slate-400">
+                    {serveMarkerSignalSummary(marker)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -793,4 +856,10 @@ export function resolveServeMarkers(serveEvents: ServeEventsArtifact | null | un
     position: Math.min(100, Math.max(0, (event.timestamp_seconds / duration) * 100)),
     seekTime: Math.min(duration, Math.max(0, event.seek_time_seconds)),
   }));
+}
+
+function isServeMarkerActive(marker: ServeMarker, currentTime: number): boolean {
+  const start = marker.start_time_seconds ?? Math.max(0, marker.timestamp_seconds - 2);
+  const end = marker.end_time_seconds ?? marker.timestamp_seconds + 4;
+  return currentTime >= start && currentTime <= end;
 }

@@ -19,6 +19,7 @@ from app.schemas.tracking import (
     DetectionOverlayFrame,
     FrameDetection,
     PlayerFramePosition,
+    PlayerSelectionArtifact,
     PlayerTrajectoryArtifact,
     ProjectedCourtPoint2D,
     ProjectedTrackPoint,
@@ -62,6 +63,7 @@ class _TrackingRunOutput:
     tracking: TrackingResult
     player_trajectories: PlayerTrajectoryArtifact | None = None
     player_metric_tracks: list[ProjectedTrackPoint] | None = None
+    player_selection: PlayerSelectionArtifact | None = None
     pose: PoseOverlayArtifact | None = None
     pose_stage: PipelineStageResult | None = None
     pose_frames: list[Any] | None = None
@@ -115,6 +117,12 @@ class AnalysisPipeline:
             min_box_area_ratio=self.settings.primary_player_min_box_area_ratio,
             max_box_area_ratio=self.settings.primary_player_max_box_area_ratio,
             court_margin_ft=self.settings.primary_player_court_margin_ft,
+            window_frames=self.settings.primary_player_window_frames,
+            target_court_threshold=self.settings.primary_player_target_court_threshold,
+            quality_threshold=self.settings.primary_player_quality_threshold,
+            attention_enabled=self.settings.enable_attention_player_selector,
+            attention_model_path=self.settings.attention_player_selector_model_path,
+            attention_confidence_threshold=self.settings.attention_player_selector_confidence,
         )
         self.pose_estimator = pose_estimator or (
             RTMPose26Adapter(
@@ -183,6 +191,12 @@ class AnalysisPipeline:
         tracking_overlay_url: str | None = None
         tracking_overlay_status: str | None = None
         tracking_overlay_detail: str | None = None
+        player_selection_path: str | None = None
+        player_selection_url: str | None = None
+        player_selection_training_samples_path: str | None = None
+        player_selection_training_samples_url: str | None = None
+        player_selection_status: str | None = None
+        player_selection_detail: str | None = None
         pose_overlay_artifact_path: str | None = None
         pose_overlay_url: str | None = None
         pose_overlay_status: str | None = None
@@ -254,6 +268,29 @@ class AnalysisPipeline:
             tracking_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/tracking-overlay"
             tracking_overlay_status = tracking_overlay.status
             tracking_overlay_detail = tracking_overlay.detail
+
+            if run_output.player_selection is not None:
+                selection_json_path = self.storage.player_selection_json_path(job_id)
+                self.storage.write_json(selection_json_path, run_output.player_selection.model_dump(mode="json"))
+                player_selection_path = str(selection_json_path)
+                player_selection_url = f"/api/analysis/jobs/{job_id}/artifacts/player-selection"
+                player_selection_status = run_output.player_selection.status
+                player_selection_detail = run_output.player_selection.detail
+                training_samples_path = self.storage.player_selection_training_samples_json_path(job_id)
+                self.storage.write_json(
+                    training_samples_path,
+                    {
+                        "job_id": job_id,
+                        "video_id": video_id,
+                        "labels": ["target_player", "neighbor_court_player", "spectator", "uncertain"],
+                        "samples": [
+                            sample.model_dump(mode="json") | {"label": "uncertain"}
+                            for sample in run_output.player_selection.training_samples
+                        ],
+                    },
+                )
+                player_selection_training_samples_path = str(training_samples_path)
+                player_selection_training_samples_url = f"/api/analysis/jobs/{job_id}/artifacts/player-selection-training-samples"
 
             if run_output.pose is not None:
                 pose_overlay_path = self.storage.pose_overlay_json_path(job_id)
@@ -383,6 +420,8 @@ class AnalysisPipeline:
                 "available_signals": serve_events.available_signals,
                 "debug_artifacts_status": serve_debug_artifacts_status,
                 "court_unit": run_output.player_trajectories.court.court_unit if run_output.player_trajectories else None,
+                "player_selection_status": player_selection_status,
+                "coverage": serve_events.coverage.model_dump(mode="json") if serve_events.coverage else None,
             }
             stages.append(serve_stage)
             self._notify_progress(progress_callback, serve_stage)
@@ -451,6 +490,10 @@ class AnalysisPipeline:
                 tracking_result_json_path=tracking_artifact_path,
                 tracking_overlay_json_path=tracking_overlay_artifact_path,
                 tracking_overlay_url=tracking_overlay_url,
+                player_selection_json_path=player_selection_path,
+                player_selection_url=player_selection_url,
+                player_selection_training_samples_json_path=player_selection_training_samples_path,
+                player_selection_training_samples_url=player_selection_training_samples_url,
                 pose_overlay_json_path=pose_overlay_artifact_path,
                 pose_overlay_url=pose_overlay_url,
                 serve_events_json_path=serve_events_artifact_path,
@@ -469,6 +512,8 @@ class AnalysisPipeline:
                 source_video_url=source_video_url,
                 tracking_overlay_status=tracking_overlay_status,
                 tracking_overlay_detail=tracking_overlay_detail,
+                player_selection_status=player_selection_status,
+                player_selection_detail=player_selection_detail,
                 pose_overlay_status=pose_overlay_status,
                 pose_overlay_detail=pose_overlay_detail,
                 serve_events_status=serve_events_status,
@@ -536,6 +581,8 @@ class AnalysisPipeline:
                 smoothing_window=self.settings.player_identity_smoothing_window,
             )
         )
+        selection_diagnostics = []
+        selection_training_samples = []
 
         frame_index = 0
         try:
@@ -568,6 +615,8 @@ class AnalysisPipeline:
                         frame_height=frame_height,
                     )
                 }
+                selection_diagnostics.extend(self.primary_player_selector.last_diagnostics)
+                selection_training_samples = self.primary_player_selector.last_training_samples
                 frame_detections = self._tracks_to_frame_detections(
                     tracks=tracks,
                     frame_index=frame_index,
@@ -661,6 +710,20 @@ class AnalysisPipeline:
             frame_stride=stride,
         )
         player_metric_tracks = identity_manager.to_projected_track_points(output_court_unit="ft")
+        player_selection = PlayerSelectionArtifact(
+            job_id=job_id,
+            video_id=video_id,
+            status="available",
+            detail=(
+                f"已生成 {len(selection_diagnostics)} 条目标球场主球员选择诊断；"
+                f"模式 {self.primary_player_selector.last_selection_mode}"
+            ),
+            selection_mode=self.primary_player_selector.last_selection_mode,  # type: ignore[arg-type]
+            fallback_reason=self.primary_player_selector.last_fallback_reason,
+            participant_limit=self.settings.primary_player_max_subjects,
+            diagnostics=selection_diagnostics,
+            training_samples=selection_training_samples,
+        )
         if self.pose_estimator is not None:
             if pose_error:
                 pose_stage = self._stage("pose", "人体姿态", "skipped", f"RTMPose 不可用：{pose_error}")
@@ -684,6 +747,7 @@ class AnalysisPipeline:
             tracking=tracking_result,
             player_trajectories=player_trajectories,
             player_metric_tracks=player_metric_tracks,
+            player_selection=player_selection,
             pose=pose_artifact,
             pose_stage=pose_stage,
             pose_frames=pose_frames,
@@ -895,14 +959,18 @@ class AnalysisPipeline:
                 "detector_version": serve_events.detector_version,
                 "status": serve_events.status,
                 "detail": serve_events.detail,
+                "coverage": serve_events.coverage.model_dump(mode="json") if serve_events.coverage else getattr(debug, "coverage", {}),
                 "thresholds": getattr(debug, "thresholds", {}),
                 "candidates": getattr(debug, "candidates", []),
                 "rejected": getattr(debug, "rejected", []),
+                "rejected_buckets": getattr(debug, "rejected_buckets", []),
             }
             self.storage.write_json(self.storage.serve_debug_candidates_json_path(job_id), candidates_payload)
             score_payload = {
                 "job_id": job_id,
                 "detector_version": serve_events.detector_version,
+                "coverage": serve_events.coverage.model_dump(mode="json") if serve_events.coverage else getattr(debug, "coverage", {}),
+                "rejected_buckets": getattr(debug, "rejected_buckets", []),
                 "series": getattr(debug, "score_series", []),
             }
             self.storage.write_json(self.storage.serve_score_series_json_path(job_id), score_payload)
