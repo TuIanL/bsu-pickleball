@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from app.schemas.calibration import ImagePoint
+from app.schemas.calibration import CalibrationKeypoint, ImagePoint
+from app.schemas.court_view import CourtViewRoiArtifact, CourtViewThresholds
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
@@ -32,6 +33,14 @@ from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
 from app.core.config import get_settings
 from app.vision.courtvision_calibration_engine.court_geometry import standard_court
+from app.vision.court_view import (
+    CourtViewFrameScorer,
+    CourtViewStateMachine,
+    RoiComputationConfig,
+    build_court_view_roi_artifact,
+    compute_expanded_detection_roi,
+    filter_detections_to_roi,
+)
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
 from app.vision.pickleball_performance_engine.metric_inputs import standard_court_metric_points
@@ -67,6 +76,7 @@ class _TrackingRunOutput:
     pose: PoseOverlayArtifact | None = None
     pose_stage: PipelineStageResult | None = None
     pose_frames: list[Any] | None = None
+    court_view_roi: CourtViewRoiArtifact | None = None
 
 
 class AnalysisPipeline:
@@ -220,6 +230,10 @@ class AnalysisPipeline:
         player_trajectory_url: str | None = None
         player_trajectory_status: str | None = None
         player_trajectory_detail: str | None = None
+        court_view_roi_path: str | None = None
+        court_view_roi_url: str | None = None
+        court_view_roi_status: str | None = None
+        court_view_roi_detail: str | None = None
         if video and calibration:
             try:
                 self._notify_progress(
@@ -232,6 +246,7 @@ class AnalysisPipeline:
                     homography=calibration.homography.values,
                     video_id=video_id,
                     calibration_id=calibration_id,
+                    calibration_keypoints=calibration.keypoints,
                     frame_stride=frame_stride or self.frame_stride,
                     cancellation_token=cancellation_token,
                 )
@@ -243,6 +258,13 @@ class AnalysisPipeline:
                 self._write_result(result)
                 return result
             tracking_result = run_output.tracking
+            if run_output.court_view_roi is not None:
+                court_view_roi_json = self.storage.court_view_roi_json_path(job_id)
+                self.storage.write_json(court_view_roi_json, run_output.court_view_roi.model_dump(mode="json"))
+                court_view_roi_path = str(court_view_roi_json)
+                court_view_roi_url = f"/api/analysis/jobs/{job_id}/artifacts/court-view-roi"
+                court_view_roi_status = run_output.court_view_roi.status
+                court_view_roi_detail = run_output.court_view_roi.detail
             sampling_stage = self._stage(
                 "frame-sampling",
                 "抽帧采样",
@@ -252,6 +274,27 @@ class AnalysisPipeline:
             stages.append(sampling_stage)
             self._notify_progress(progress_callback, sampling_stage)
             self._check_cancelled(cancellation_token)
+
+            if run_output.court_view_roi is not None:
+                court_view_stage = self._stage(
+                    "court-view-roi",
+                    "球场视角与检测 ROI",
+                    "done" if run_output.court_view_roi.status in {"available", "partial"} else "skipped",
+                    run_output.court_view_roi.detail,
+                )
+                court_view_stage.counters = {
+                    "status": run_output.court_view_roi.status,
+                    "processed_frame_count": run_output.court_view_roi.processed_frame_count,
+                    "candidate_segment_count": len(run_output.court_view_roi.candidate_segments),
+                    "gated_frame_count": run_output.court_view_roi.gated_frame_count,
+                    "roi_status": run_output.court_view_roi.roi.status,
+                    "roi_filtered_detection_count": run_output.court_view_roi.roi_filtered_detection_count,
+                    "full_frame_fallback_count": run_output.court_view_roi.full_frame_fallback_count,
+                    "semantic_boundary": "court-view candidates are not complete rally segmentation",
+                }
+                stages.append(court_view_stage)
+                self._notify_progress(progress_callback, court_view_stage)
+                self._check_cancelled(cancellation_token)
 
             tracking_path = self.storage.tracking_json_path(job_id)
             self.storage.write_json(tracking_path, tracking_result.model_dump(mode="json"))
@@ -509,6 +552,8 @@ class AnalysisPipeline:
                 player_trajectory_json_path=player_trajectory_json_path,
                 player_trajectory_csv_path=player_trajectory_csv_path,
                 player_trajectory_url=player_trajectory_url,
+                court_view_roi_json_path=court_view_roi_path,
+                court_view_roi_url=court_view_roi_url,
                 source_video_url=source_video_url,
                 tracking_overlay_status=tracking_overlay_status,
                 tracking_overlay_detail=tracking_overlay_detail,
@@ -522,6 +567,8 @@ class AnalysisPipeline:
                 serve_debug_artifacts_detail=serve_debug_artifacts_detail,
                 player_trajectory_status=player_trajectory_status,
                 player_trajectory_detail=player_trajectory_detail,
+                court_view_roi_status=court_view_roi_status,
+                court_view_roi_detail=court_view_roi_detail,
             ),
             message=message,
         )
@@ -535,6 +582,7 @@ class AnalysisPipeline:
         homography: list[list[float]],
         video_id: str | None,
         calibration_id: str | None,
+        calibration_keypoints: list[CalibrationKeypoint] | None,
         frame_stride: int,
         cancellation_token: CancellationToken | None = None,
     ) -> _TrackingRunOutput:
@@ -553,6 +601,47 @@ class AnalysisPipeline:
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        court_view_thresholds = CourtViewThresholds(
+            match_threshold=self.settings.court_view_match_threshold,
+            start_frames=self.settings.court_view_start_frames,
+            end_frames=self.settings.court_view_end_frames,
+            diagnostic_only=self.settings.court_view_diagnostic_only or not self.settings.enable_court_view_gate,
+            skip_non_court_frames=self.settings.court_view_skip_non_court_frames
+            and self.settings.enable_court_view_gate,
+        )
+        court_view_scorer = CourtViewFrameScorer(match_width=self.settings.court_view_match_width)
+        court_view_state = CourtViewStateMachine(thresholds=court_view_thresholds)
+        court_view_frame_samples = []
+        roi_artifact = (
+            compute_expanded_detection_roi(
+                self._calibration_image_points(calibration_keypoints),
+                frame_width,
+                frame_height,
+                calibration_id=calibration_id,
+                config=RoiComputationConfig(
+                    padding_ratio=self.settings.detection_roi_padding_ratio,
+                    min_padding_px=self.settings.detection_roi_min_padding_px,
+                ),
+            )
+            if self.settings.enable_detection_roi_filter
+            else compute_expanded_detection_roi(
+                None,
+                frame_width,
+                frame_height,
+                calibration_id=calibration_id,
+            ).model_copy(
+                update={
+                    "status": "skipped",
+                    "detail": "detection ROI filter 已被配置禁用，使用全帧 detection fallback",
+                    "disabled": True,
+                    "diagnostics": {"reason": "disabled_by_config"},
+                }
+            )
+        )
+        roi_filtered_detection_count = 0
+        full_frame_fallback_count = 0
+        last_processed_frame_index: int | None = None
+        last_processed_timestamp: float | None = None
         processed_frame_count = 0
         all_detections: list[Detection] = []
         overlay_frames: list[DetectionOverlayFrame] = []
@@ -596,7 +685,28 @@ class AnalysisPipeline:
                     continue
 
                 timestamp = frame_index / raw_fps if raw_fps > 0 else float(frame_index)
-                detections = self._detect_frame(frame, frame_index)
+                last_processed_frame_index = frame_index
+                last_processed_timestamp = timestamp
+                if processed_frame_count == 0 and self.settings.enable_court_view_gate:
+                    court_view_scorer.initialize(frame)
+                court_view_score = (
+                    court_view_scorer.score(frame)
+                    if self.settings.enable_court_view_gate and court_view_scorer.available
+                    else None
+                )
+                court_view_sample = court_view_state.update(frame_index, timestamp, court_view_score)
+                court_view_frame_samples.append(court_view_sample)
+                processed_frame_count += 1
+                if court_view_sample.reason == "gated_non_court_view":
+                    self._check_cancelled(cancellation_token)
+                    frame_index += 1
+                    continue
+
+                raw_detections = self._detect_frame(frame, frame_index)
+                detections, roi_filtered = filter_detections_to_roi(raw_detections, roi_artifact)
+                roi_filtered_detection_count += roi_filtered
+                if roi_artifact.status != "available":
+                    full_frame_fallback_count += 1
                 tracks = tracker.update(detections)
                 footpoints = {track.track_id: self.footpoint_estimator.estimate(track) for track in tracks}
                 frame_positions = self.projector.project(
@@ -643,7 +753,7 @@ class AnalysisPipeline:
                         detection.player_id = player_id
                         detection.label = f"{player_id.replace('Player_', 'P')} / T{detection.track_id}"
 
-                all_detections.extend(detections)
+                all_detections.extend(raw_detections)
                 overlay_frames.append(
                     DetectionOverlayFrame(
                         frame_index=frame_index,
@@ -667,7 +777,6 @@ class AnalysisPipeline:
                     except Exception as exc:
                         pose_error = str(exc)
                         pose_frames = []
-                processed_frame_count += 1
                 self._check_cancelled(cancellation_token)
 
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
@@ -680,6 +789,7 @@ class AnalysisPipeline:
                 frame_index += 1
         finally:
             capture.release()
+        court_view_state.finish(last_processed_frame_index, last_processed_timestamp)
 
         logger.info(
             "Player tracking completed: processed %s frames, %s projected position samples",
@@ -743,6 +853,22 @@ class AnalysisPipeline:
                 skeleton_edges=default_skeleton_edges(),
                 frames=pose_frames,
             )
+        court_view_roi_artifact = build_court_view_roi_artifact(
+            job_id=job_id,
+            video_id=video_id,
+            calibration_id=calibration_id,
+            thresholds=court_view_thresholds,
+            roi=roi_artifact,
+            state_machine=court_view_state,
+            processed_frame_count=processed_frame_count,
+            frame_samples=court_view_frame_samples,
+            scorer_detail=court_view_scorer.detail
+            if self.settings.enable_court_view_gate
+            else "court-view gate 已被配置禁用",
+            scorer_available=court_view_scorer.available and self.settings.enable_court_view_gate,
+            roi_filtered_detection_count=roi_filtered_detection_count,
+            full_frame_fallback_count=full_frame_fallback_count,
+        )
         return _TrackingRunOutput(
             tracking=tracking_result,
             player_trajectories=player_trajectories,
@@ -751,7 +877,20 @@ class AnalysisPipeline:
             pose=pose_artifact,
             pose_stage=pose_stage,
             pose_frames=pose_frames,
+            court_view_roi=court_view_roi_artifact,
         )
+
+    @staticmethod
+    def _calibration_image_points(keypoints: list[CalibrationKeypoint] | None) -> list[tuple[float, float]] | None:
+        if not keypoints:
+            return None
+        by_name = {keypoint.name: keypoint.image for keypoint in keypoints}
+        ordered_names = ["top_left", "top_right", "bottom_right", "bottom_left"]
+        if all(name in by_name for name in ordered_names):
+            return [(float(by_name[name].x), float(by_name[name].y)) for name in ordered_names]
+        if len(keypoints) < 4:
+            return None
+        return [(float(keypoint.image.x), float(keypoint.image.y)) for keypoint in keypoints[:4]]
 
     def _detect_frame(self, frame: object, frame_index: int) -> list[Detection]:
         if hasattr(self.detector, "detect_frame"):

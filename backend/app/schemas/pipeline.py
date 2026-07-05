@@ -55,6 +55,8 @@ class AnalysisArtifacts(BaseModel):
     player_trajectory_json_path: Optional[str] = None
     player_trajectory_csv_path: Optional[str] = None
     player_trajectory_url: Optional[str] = None
+    court_view_roi_json_path: Optional[str] = None
+    court_view_roi_url: Optional[str] = None
     source_video_url: Optional[str] = None
     tracking_overlay_status: Optional[str] = None
     tracking_overlay_detail: Optional[str] = None
@@ -68,6 +70,8 @@ class AnalysisArtifacts(BaseModel):
     serve_debug_artifacts_detail: Optional[str] = None
     player_trajectory_status: Optional[str] = None
     player_trajectory_detail: Optional[str] = None
+    court_view_roi_status: Optional[str] = None
+    court_view_roi_detail: Optional[str] = None
     overlay_video_path: Optional[str] = None
 
 

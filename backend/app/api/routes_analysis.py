@@ -129,6 +129,7 @@ def read_analysis_artifact(
         "serve-score-series",
         "serve-clips-manifest",
         "serve-debug-overlay",
+        "court-view-roi",
     ],
 ) -> JSONResponse | FileResponse:
     """
@@ -156,6 +157,8 @@ def read_analysis_artifact(
         path = _STORAGE.serve_score_series_json_path(job_id)
     elif artifact_name == "serve-clips-manifest":
         path = _STORAGE.serve_clips_manifest_json_path(job_id)
+    elif artifact_name == "court-view-roi":
+        path = _STORAGE.court_view_roi_json_path(job_id)
     else:
         path = _STORAGE.serve_debug_overlay_video_path(job_id)
     if not path.exists():

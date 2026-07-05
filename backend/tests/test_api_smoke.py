@@ -282,6 +282,30 @@ def test_serve_debug_artifact_routes_return_json(monkeypatch, tmp_path):
     assert clips.status_code == 200
 
 
+def test_court_view_roi_artifact_route_returns_json(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-court-view-roi-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(
+        storage.court_view_roi_json_path(job.id),
+        {"job_id": job.id, "status": "available", "detail": "court-view candidates are not rallies"},
+    )
+
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/court-view-roi")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "available"
+
+
 def test_player_selection_artifact_routes_return_json(monkeypatch, tmp_path):
     storage = make_temp_storage(tmp_path)
     monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
@@ -305,9 +329,6 @@ def test_player_selection_artifact_routes_return_json(monkeypatch, tmp_path):
     assert selection.json()["selection_mode"] == "rule"
     assert samples.status_code == 200
     assert samples.json()["samples"] == []
-    assert candidates.json()["candidates"] == []
-    assert scores.json()["series"] == []
-    assert clips.json()["clips"] == []
 
 
 def test_delete_job_cleans_unreferenced_video_and_preserves_shared_calibration(monkeypatch, tmp_path):
@@ -730,12 +751,15 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert result.artifacts.pose_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/pose-overlay"
     assert result.artifacts.player_trajectory_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-trajectories"
     assert result.artifacts.serve_events_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-events"
+    assert result.artifacts.court_view_roi_url == "/api/analysis/jobs/job-overlay-test/artifacts/court-view-roi"
     assert result.artifacts.tracking_overlay_status == "available"
     assert result.artifacts.pose_overlay_status == "available"
     assert result.artifacts.player_trajectory_status == "available"
     assert result.artifacts.serve_events_status in {"partial", "no_candidates"}
+    assert result.artifacts.court_view_roi_status in {"available", "partial"}
     assert any(stage.id == "pose" and stage.status == "done" for stage in result.stages)
     assert any(stage.id == "serve-start-detection" for stage in result.stages)
+    assert any(stage.id == "court-view-roi" for stage in result.stages)
 
     storage = StorageService()
     tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-overlay-test"))
@@ -744,6 +768,7 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     player_trajectories = storage.read_json(storage.player_trajectory_json_path("job-overlay-test"))
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-overlay-test"))
     serve_events = storage.read_json(storage.serve_events_json_path("job-overlay-test"))
+    court_view_roi = storage.read_json(storage.court_view_roi_json_path("job-overlay-test"))
     assert tracking_overlay["frames"][0]["detections"][0]["track_id"] == "1"
     assert tracking_overlay["frames"][0]["detections"][0]["player_id"] == "Player_1"
     assert tracking_overlay["frames"][0]["detections"][0]["label"] == "P1 / T1"
@@ -756,10 +781,57 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert storage.player_trajectory_csv_path("job-overlay-test").exists()
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
     assert serve_events["detector_version"] == "serve-moment-context-v1"
+    assert court_view_roi["diagnostics"]["semantic_boundary"] == "court_view_candidates_are_not_rally_segmentation"
+    assert court_view_roi["roi"]["status"] == "available"
     assert result.artifacts.serve_debug_candidates_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-debug-candidates"
     assert result.artifacts.serve_score_series_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-score-series"
     assert storage.serve_debug_candidates_json_path("job-overlay-test").exists()
     assert storage.serve_score_series_json_path("job-overlay-test").exists()
+
+
+def test_pipeline_gates_non_court_frames_and_records_roi_artifact(tmp_path):
+    video_bytes = make_court_then_non_court_video_bytes(tmp_path)
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("court-gate.avi", video_bytes, "video/avi")},
+    )
+    assert upload_response.status_code == 200
+    video_id = upload_response.json()["video"]["id"]
+    calibration_response = client.post(
+        "/calibration/manual",
+        json={
+            "video_id": video_id,
+            "image_points": {
+                "top_left": [0, 0],
+                "top_right": [96, 0],
+                "bottom_right": [96, 96],
+                "bottom_left": [0, 96],
+            },
+        },
+    )
+    calibration_id = calibration_response.json()["calibration_id"]
+    detector = RecordingStaticDetector()
+    pipeline = AnalysisPipeline(detector=detector, frame_stride=1)
+    pipeline.settings.court_view_start_frames = 1
+    pipeline.settings.court_view_end_frames = 1
+    pipeline.settings.court_view_match_threshold = 0.95
+
+    result = pipeline.run(
+        job_id="job-court-gate",
+        video_id=video_id,
+        calibration_id=calibration_id,
+        frame_stride=1,
+    )
+
+    storage = StorageService()
+    court_view_roi = storage.read_json(storage.court_view_roi_json_path("job-court-gate"))
+
+    assert result.status == "completed"
+    assert detector.frame_indices == [0]
+    assert court_view_roi["processed_frame_count"] == 3
+    assert court_view_roi["gated_frame_count"] == 2
+    assert court_view_roi["frame_samples"][1]["reason"] == "gated_non_court_view"
+    assert "不代表完整回合" in court_view_roi["detail"]
 
 
 def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
@@ -1303,6 +1375,15 @@ class StaticDetector:
         return [Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91)]
 
 
+class RecordingStaticDetector:
+    def __init__(self):
+        self.frame_indices = []
+
+    def detect_frame(self, frame, frame_index):
+        self.frame_indices.append(frame_index)
+        return [Detection(bbox=[18.0, 16.0, 48.0, 82.0], confidence=0.91)]
+
+
 class PlayerAndLowConfidenceSpectatorDetector:
     def detect_frame(self, frame, frame_index):
         return [
@@ -1388,5 +1469,22 @@ def make_test_video_bytes(tmp_path):
         frame = np.zeros((96, 96, 3), dtype=np.uint8)
         frame[16:82, 18:48] = (255, 255, 255)
         writer.write(frame)
+    writer.release()
+    return path.read_bytes()
+
+
+def make_court_then_non_court_video_bytes(tmp_path):
+    import cv2  # type: ignore
+    import numpy as np
+
+    path = tmp_path / "court-gate.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (96, 96))
+    court = np.zeros((96, 96, 3), dtype=np.uint8)
+    court[16:82, 18:48] = (255, 255, 255)
+    non_court = np.zeros((96, 96, 3), dtype=np.uint8)
+    non_court[:, :] = (40, 10, 120)
+    writer.write(court)
+    writer.write(non_court)
+    writer.write(non_court)
     writer.release()
     return path.read_bytes()

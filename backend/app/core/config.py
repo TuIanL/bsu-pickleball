@@ -76,6 +76,16 @@ class Settings(BaseModel):
     enable_serve_debug_clips: bool = False
     enable_serve_debug_overlay: bool = False
     serve_debug_clip_limit: int = 20
+    enable_court_view_gate: bool = True
+    court_view_match_threshold: float = 0.75
+    court_view_start_frames: int = 5
+    court_view_end_frames: int = 5
+    court_view_match_width: int = 320
+    court_view_diagnostic_only: bool = False
+    court_view_skip_non_court_frames: bool = True
+    enable_detection_roi_filter: bool = True
+    detection_roi_padding_ratio: float = 0.15
+    detection_roi_min_padding_px: int = 24
 
     def resolve_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -228,6 +238,24 @@ def get_settings() -> Settings:
         enable_serve_debug_overlay=os.getenv("PICKLEBALL_ENABLE_SERVE_DEBUG_OVERLAY", "false").lower()
         in {"1", "true", "yes"},
         serve_debug_clip_limit=max(0, int(os.getenv("PICKLEBALL_SERVE_DEBUG_CLIP_LIMIT", "20"))),
+        enable_court_view_gate=os.getenv("PICKLEBALL_ENABLE_COURT_VIEW_GATE", "true").lower()
+        in {"1", "true", "yes"},
+        court_view_match_threshold=_clamp_float(
+            os.getenv("PICKLEBALL_COURT_VIEW_MATCH_THRESHOLD", "0.75"),
+            0.0,
+            1.0,
+        ),
+        court_view_start_frames=max(1, int(os.getenv("PICKLEBALL_COURT_VIEW_START_FRAMES", "5"))),
+        court_view_end_frames=max(1, int(os.getenv("PICKLEBALL_COURT_VIEW_END_FRAMES", "5"))),
+        court_view_match_width=max(1, int(os.getenv("PICKLEBALL_COURT_VIEW_MATCH_WIDTH", "320"))),
+        court_view_diagnostic_only=os.getenv("PICKLEBALL_COURT_VIEW_DIAGNOSTIC_ONLY", "false").lower()
+        in {"1", "true", "yes"},
+        court_view_skip_non_court_frames=os.getenv("PICKLEBALL_COURT_VIEW_SKIP_NON_COURT_FRAMES", "true").lower()
+        in {"1", "true", "yes"},
+        enable_detection_roi_filter=os.getenv("PICKLEBALL_ENABLE_DETECTION_ROI_FILTER", "true").lower()
+        in {"1", "true", "yes"},
+        detection_roi_padding_ratio=max(0.0, float(os.getenv("PICKLEBALL_DETECTION_ROI_PADDING_RATIO", "0.15"))),
+        detection_roi_min_padding_px=max(0, int(os.getenv("PICKLEBALL_DETECTION_ROI_MIN_PADDING_PX", "24"))),
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins
         else Settings.model_fields["cors_origins"].default_factory(),

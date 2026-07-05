@@ -117,6 +117,9 @@ class StorageService:
     def player_trajectory_csv_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "players_trajectory.csv"
 
+    def court_view_roi_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "court_view_roi.json"
+
     def video_metadata_path(self, video_id: str) -> Path:
         return self.uploads_dir / f"{video_id}.json"
 

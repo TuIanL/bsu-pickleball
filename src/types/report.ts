@@ -549,6 +549,8 @@ export interface AnalysisPipelineResult {
     serve_clips_manifest_url?: string;
     serve_debug_overlay_path?: string;
     serve_debug_overlay_url?: string;
+    court_view_roi_json_path?: string;
+    court_view_roi_url?: string;
     source_video_url?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
@@ -558,6 +560,8 @@ export interface AnalysisPipelineResult {
     serve_events_detail?: string;
     serve_debug_artifacts_status?: string;
     serve_debug_artifacts_detail?: string;
+    court_view_roi_status?: string;
+    court_view_roi_detail?: string;
     overlay_video_path?: string;
   };
   message: string;
