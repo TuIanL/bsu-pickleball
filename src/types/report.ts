@@ -47,6 +47,7 @@ export type AppPath =
   | "/vision"
   | "/analysis/new"
   | "/analysis/tasks"
+  | "/camera"
   | `/analysis/${string}`
   | `/analysis/${string}/details`
   | `/analysis/${string}/vision`
@@ -181,6 +182,65 @@ export interface HardwarePreview {
     sensor: string;
     insight: string;
   }>;
+}
+
+export interface CameraInfo {
+  camera_id: string;
+  name: string;
+  stream_url: string;
+  protocol: "rtsp" | "rtmp" | "http";
+  username?: string;
+  password?: string;
+  created_at: string;
+}
+
+export interface CameraCreateRequest {
+  camera_id: string;
+  name: string;
+  stream_url: string;
+  protocol: "rtsp" | "rtmp" | "http";
+  username?: string;
+  password?: string;
+}
+
+export interface ProbeResult {
+  camera_id: string;
+  online: boolean;
+  latency_ms?: number;
+  resolution?: string;
+  detected_at: string;
+  error_message?: string;
+}
+
+export type RecordingSessionStatus = "recording" | "completed" | "failed" | "canceled";
+
+export interface RecordingStartRequest {
+  camera_id: string;
+  court_name?: string;
+  match_format?: "singles" | "doubles";
+  camera_angle?: string;
+  fps?: number;
+  resolution?: string;
+  auto_analyze_after_stop?: boolean;
+}
+
+export interface RecordingSession {
+  session_id: string;
+  camera_id: string;
+  court_name: string;
+  match_format: string;
+  camera_angle: string;
+  fps: number;
+  resolution: string;
+  auto_analyze_after_stop: boolean;
+  status: RecordingSessionStatus;
+  started_at: string;
+  stopped_at?: string;
+  duration_sec?: number;
+  video_path?: string;
+  video_id?: string;
+  auto_analysis_job_id?: string;
+  error_message?: string;
 }
 
 export interface NavigationItem {
@@ -324,6 +384,27 @@ export interface AutomaticCalibrationResponse {
   };
   preview_image_url?: string;
   calibration_id?: string;
+  reference?: ReferenceLineDiagnostics;
+  confidence_breakdown?: ConfidenceBreakdown;
+}
+
+export interface ReferenceLineDiagnostics {
+  reference_score: number;
+  coverage: number;
+  supported_lines: number;
+  total_lines: number;
+  tolerance_px: number;
+  line_count_supported: number;
+  passing_line_names: string[];
+  rejection_reason?: string;
+  summary: string;
+}
+
+export interface ConfidenceBreakdown {
+  segmentation: number;
+  geometry: number;
+  reference: number;
+  combined: number;
 }
 
 export interface PipelineStageResult {

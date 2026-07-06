@@ -205,6 +205,7 @@ export const hardwarePreview: HardwarePreview = {
 export const platformNavigation: NavigationItem[] = [
   { id: "dashboard", label: "总览", shortLabel: "首页", path: "/" },
   { id: "analysis", label: "视频分析", shortLabel: "视频", path: "/analysis/tasks" },
+  { id: "camera", label: "球场采集", shortLabel: "采集", path: "/camera" },
   { id: "training", label: "训练", shortLabel: "训练", path: "/training" },
 ];
 

@@ -16,6 +16,7 @@ class VideoMetadata(BaseModel):
     size_bytes: int = Field(ge=0)
     path: str
     uploaded_at: datetime
+    source: str = "upload"
 
     @property
     def filename(self) -> str:

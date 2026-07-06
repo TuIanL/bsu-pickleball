@@ -598,4 +598,70 @@ export async function getServeEvents(result: AnalysisPipelineResult): Promise<Se
   return path ? requestJson<ServeEventsArtifact>(path) : null;
 }
 
+// Camera API functions
+import type {
+  CameraCreateRequest,
+  CameraInfo,
+  ProbeResult,
+  RecordingSession,
+  RecordingStartRequest,
+} from "../types/report";
+
+export async function listCameras(): Promise<CameraInfo[]> {
+  return requestJson<CameraInfo[]>("/api/cameras");
+}
+
+export async function createCamera(request: CameraCreateRequest): Promise<CameraInfo> {
+  return requestJson<CameraInfo>("/api/cameras", {
+    body: JSON.stringify(request),
+    method: "POST",
+  });
+}
+
+export async function deleteCamera(cameraId: string): Promise<{ deleted: boolean }> {
+  return requestJson<{ deleted: boolean }>(`/api/cameras/${cameraId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function probeCamera(cameraId: string): Promise<ProbeResult> {
+  return requestJson<ProbeResult>(`/api/cameras/${cameraId}/probe`, {
+    method: "POST",
+  });
+}
+
+export async function startRecording(request: RecordingStartRequest): Promise<RecordingSession> {
+  return requestJson<RecordingSession>("/api/recordings/start", {
+    body: JSON.stringify(request),
+    method: "POST",
+  });
+}
+
+export async function stopRecording(sessionId: string): Promise<RecordingSession> {
+  return requestJson<RecordingSession>(`/api/recordings/${sessionId}/stop`, {
+    method: "POST",
+  });
+}
+
+export async function cancelRecording(sessionId: string): Promise<RecordingSession> {
+  return requestJson<RecordingSession>(`/api/recordings/${sessionId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export async function listRecordings(params?: {
+  camera_id?: string;
+  status?: string;
+}): Promise<RecordingSession[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.camera_id) searchParams.set("camera_id", params.camera_id);
+  if (params?.status) searchParams.set("status", params.status);
+  const query = searchParams.toString();
+  return requestJson<RecordingSession[]>(`/api/recordings${query ? `?${query}` : ""}`);
+}
+
+export async function getRecording(sessionId: string): Promise<RecordingSession> {
+  return requestJson<RecordingSession>(`/api/recordings/${sessionId}`);
+}
+
 export { demoAnalysisReport };

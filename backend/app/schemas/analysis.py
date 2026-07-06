@@ -61,6 +61,8 @@ class AnalysisUploadMetadata(BaseModel):
     cameraAngle: Literal["baseline", "sideline", "elevated", "unknown"]
     athleteLabel: str
     level: str
+    camera_id: Optional[str] = None
+    recording_session_id: Optional[str] = None
 
 
 class AnalysisPipelineOptions(BaseModel):

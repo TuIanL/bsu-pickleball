@@ -79,24 +79,37 @@ export function automaticCalibrationNotice(
 
   const frame = response?.selected_frame;
   const mask = response?.mask;
+  const reference = response?.reference;
+  const breakdown = response?.confidence_breakdown;
+
+  const rejectedByReference = reference?.rejection_reason != null;
   const body =
     status === "ready"
       ? "已填入自动角点，仍可手动重新点选修正。"
       : status === "rejected"
-        ? "检测结果未通过几何校验，请手动点选或调整标定帧。"
+        ? rejectedByReference
+          ? `自动标定被拒绝：球场线参考支持度不足 (ref=${(reference?.reference_score ?? 0).toFixed(2)})。请手动点选或调整标定帧。`
+          : "检测结果未通过几何校验，请手动点选或调整标定帧。"
         : "自动模型暂不可用，请继续手动点选四角。";
 
   return {
-    title: status === "ready" ? "自动识别已就绪" : status === "rejected" ? "自动识别未通过校验" : "自动识别不可用",
+    title: status === "ready"
+      ? "自动识别已就绪"
+      : status === "rejected"
+        ? rejectedByReference ? "球场线参考不足" : "自动识别未通过校验"
+        : "自动识别不可用",
     body,
     detailItems: [
       ["后端说明", response?.detail],
       ["模型已配置", mask ? (mask.model_configured ? "是" : "否") : undefined],
       ["模型路径", mask?.model_path],
-      ["整体置信度", formatPercent(response?.confidence)],
+      ["综合置信度", breakdown ? `${formatPercent(breakdown.combined)} (分割${formatPercent(breakdown.segmentation)} + 几何${formatPercent(breakdown.geometry)} + 参考${formatPercent(breakdown.reference)})` : formatPercent(response?.confidence)],
       ["Mask 置信度", formatPercent(mask?.confidence)],
       ["Mask 面积占比", formatPercent(mask?.mask_area_ratio)],
       ["线段数量", mask?.line_count],
+      ["球场线参考分", reference ? `${reference.reference_score.toFixed(2)} · ${reference.supported_lines}/${reference.total_lines} 线支持 · 覆盖 ${(reference.coverage * 100).toFixed(0)}%` : undefined],
+      ["参考线详情", reference?.summary],
+      ["拒绝原因", reference?.rejection_reason],
       ["Mask 说明", mask?.detail],
       ["选中帧", frame ? `#${frame.frame_index} · ${formatSeconds(frame.timestamp_seconds) ?? "时间未知"}` : undefined],
       ["帧尺寸", frame?.width && frame.height ? `${frame.width} x ${frame.height}` : undefined],

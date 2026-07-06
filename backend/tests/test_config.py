@@ -98,3 +98,48 @@ def test_court_aware_attention_selector_configuration(monkeypatch):
         assert settings.attention_player_selector_confidence == 0.77
     finally:
         config.get_settings.cache_clear()
+
+
+def test_analysis_artifact_configuration_defaults_do_not_require_new_outputs(monkeypatch):
+    for name in [
+        "PICKLEBALL_BALL_MODEL_PATH",
+        "PICKLEBALL_ENABLE_BALL_DETECTION",
+        "PICKLEBALL_ENABLE_BOUNCE_DETECTION",
+        "PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO",
+        "PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS",
+        "PICKLEBALL_VISUALIZATION_LANGUAGE",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.ball_model_path is None
+        assert settings.enable_ball_detection is False
+        assert settings.enable_bounce_detection is False
+        assert settings.enable_analysis_overlay_video is False
+        assert settings.enable_position_visualizations is False
+        assert settings.visualization_language == "zh-CN"
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_analysis_artifact_configuration_env_overrides(monkeypatch):
+    monkeypatch.setenv("PICKLEBALL_BALL_MODEL_PATH", "/tmp/ball.pt")
+    monkeypatch.setenv("PICKLEBALL_ENABLE_BALL_DETECTION", "true")
+    monkeypatch.setenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "true")
+    monkeypatch.setenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "true")
+    monkeypatch.setenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true")
+    monkeypatch.setenv("PICKLEBALL_VISUALIZATION_LANGUAGE", "en-US")
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.ball_model_path == "/tmp/ball.pt"
+        assert settings.enable_ball_detection is True
+        assert settings.enable_bounce_detection is True
+        assert settings.enable_analysis_overlay_video is True
+        assert settings.enable_position_visualizations is True
+        assert settings.visualization_language == "en-US"
+    finally:
+        config.get_settings.cache_clear()

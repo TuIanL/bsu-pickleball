@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal, Union
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 # 导入分析相关的模式（Schemas）
 from app.schemas.analysis import AnalysisDeleteRequest, AnalysisDeleteResult, AnalysisJobCreate, AnalysisJobSummary, AnalysisReport
@@ -122,6 +122,14 @@ def read_analysis_artifact(
         "tracking-overlay",
         "player-selection",
         "player-selection-training-samples",
+        "ball-overlay",
+        "detections",
+        "ball-trajectory",
+        "cleaned-ball-trajectory",
+        "bounce-events",
+        "analysis-overlay-video",
+        "position-heatmaps",
+        "position-scatter-plots",
         "pose-overlay",
         "player-trajectories",
         "serve-events",
@@ -131,7 +139,7 @@ def read_analysis_artifact(
         "serve-debug-overlay",
         "court-view-roi",
     ],
-) -> JSONResponse | FileResponse:
+) -> JSONResponse | FileResponse | PlainTextResponse:
     """
     读取浏览器可消费的分析 overlay artifact
     """
@@ -145,6 +153,22 @@ def read_analysis_artifact(
         path = _STORAGE.player_selection_json_path(job_id)
     elif artifact_name == "player-selection-training-samples":
         path = _STORAGE.player_selection_training_samples_json_path(job_id)
+    elif artifact_name == "ball-overlay":
+        path = _STORAGE.ball_overlay_json_path(job_id)
+    elif artifact_name == "detections":
+        path = _STORAGE.detections_jsonl_path(job_id)
+    elif artifact_name == "ball-trajectory":
+        path = _STORAGE.ball_trajectory_json_path(job_id)
+    elif artifact_name == "cleaned-ball-trajectory":
+        path = _STORAGE.cleaned_ball_trajectory_json_path(job_id)
+    elif artifact_name == "bounce-events":
+        path = _STORAGE.bounce_events_json_path(job_id)
+    elif artifact_name == "analysis-overlay-video":
+        path = _STORAGE.analysis_overlay_video_path(job_id)
+    elif artifact_name == "position-heatmaps":
+        path = _STORAGE.heatmaps_manifest_json_path(job_id)
+    elif artifact_name == "position-scatter-plots":
+        path = _STORAGE.scatter_plots_manifest_json_path(job_id)
     elif artifact_name == "pose-overlay":
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":
@@ -163,6 +187,8 @@ def read_analysis_artifact(
         path = _STORAGE.serve_debug_overlay_video_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Analysis artifact not found")
-    if artifact_name == "serve-debug-overlay":
+    if artifact_name in {"serve-debug-overlay", "analysis-overlay-video"}:
         return FileResponse(path, media_type="video/mp4")
+    if artifact_name == "detections":
+        return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="application/x-ndjson")
     return JSONResponse(_STORAGE.read_json(path))

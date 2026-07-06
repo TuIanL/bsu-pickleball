@@ -20,6 +20,8 @@ class Settings(BaseModel):
     uploads_dir: Path = Path("data/uploads")
     outputs_dir: Path = Path("data/outputs")
     calibrations_dir: Path = Path("data/calibrations")
+    recordings_dir: Path = Path("data/recordings")
+    cameras_dir: Path = Path("data/cameras")
     tmp_dir: Path = Path("data/tmp")
     model_dir: Path = Path("../models")
     default_detector_model: str = "yolo11n.pt"
@@ -44,6 +46,12 @@ class Settings(BaseModel):
     enable_attention_player_selector: bool = False
     attention_player_selector_model_path: str | None = None
     attention_player_selector_confidence: float = 0.65
+    ball_model_path: str | None = None
+    enable_ball_detection: bool = False
+    enable_bounce_detection: bool = False
+    enable_analysis_overlay_video: bool = False
+    enable_position_visualizations: bool = False
+    visualization_language: str = "zh-CN"
     player_identity_max_players: int = 4
     player_identity_lost_buffer_frames: int = 90
     player_identity_inactive_buffer_frames: int = 180
@@ -105,6 +113,14 @@ class Settings(BaseModel):
         return self.resolve_path(self.calibrations_dir)
 
     @property
+    def resolved_recordings_dir(self) -> Path:
+        return self.resolve_path(self.recordings_dir)
+
+    @property
+    def resolved_cameras_dir(self) -> Path:
+        return self.resolve_path(self.cameras_dir)
+
+    @property
     def resolved_tmp_dir(self) -> Path:
         return self.resolve_path(self.tmp_dir)
 
@@ -114,6 +130,8 @@ class Settings(BaseModel):
             self.resolved_outputs_dir,
             self.resolved_calibrations_dir,
             self.resolved_tmp_dir,
+            self.resolved_recordings_dir,
+            self.resolved_cameras_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -147,6 +165,8 @@ def get_settings() -> Settings:
         uploads_dir=Path(os.getenv("PICKLEBALL_UPLOADS_DIR", "data/uploads")),
         outputs_dir=Path(os.getenv("PICKLEBALL_OUTPUTS_DIR", "data/outputs")),
         calibrations_dir=Path(os.getenv("PICKLEBALL_CALIBRATIONS_DIR", "data/calibrations")),
+        recordings_dir=Path(os.getenv("PICKLEBALL_RECORDINGS_DIR", "data/recordings")),
+        cameras_dir=Path(os.getenv("PICKLEBALL_CAMERAS_DIR", "data/cameras")),
         tmp_dir=Path(os.getenv("PICKLEBALL_TMP_DIR", "data/tmp")),
         model_dir=model_dir,
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
@@ -187,6 +207,16 @@ def get_settings() -> Settings:
             0.0,
             1.0,
         ),
+        ball_model_path=os.getenv("PICKLEBALL_BALL_MODEL_PATH") or None,
+        enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "false").lower()
+        in {"1", "true", "yes"},
+        enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "false").lower()
+        in {"1", "true", "yes"},
+        enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "false").lower()
+        in {"1", "true", "yes"},
+        enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "false").lower()
+        in {"1", "true", "yes"},
+        visualization_language=os.getenv("PICKLEBALL_VISUALIZATION_LANGUAGE", "zh-CN"),
         player_identity_max_players=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_PLAYERS", "4"))),
         player_identity_lost_buffer_frames=max(
             1,

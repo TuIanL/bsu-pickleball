@@ -128,15 +128,58 @@ class AutomaticCalibrationService:
             )
 
         suggestion_id = f"auto-calib-{uuid4().hex[:10]}"
+
+        from app.vision.courtvision_calibration_engine.reference_line_support import (
+            build_confidence_breakdown,
+            build_reference_diagnostics,
+            compute_reference_line_support,
+            DEFAULT_REFERENCE_REJECT_THRESHOLD,
+        )
+
+        reference_result = compute_reference_line_support(
+            segmentation.mask,
+            geometry.keypoints,
+        )
+        reference_diag = build_reference_diagnostics(reference_result)
+
+        # 组合置信度：seg(0.3) + geo(0.3) + ref(0.4)
+        combined_confidence = (
+            0.3 * segmentation.confidence
+            + 0.3 * geometry.confidence
+            + 0.4 * reference_result.reference_score
+        )
+        combined_confidence = float(max(0.0, min(1.0, combined_confidence)))
+
+        breakdown = build_confidence_breakdown(
+            segmentation_confidence=segmentation.confidence,
+            geometry_confidence=geometry.confidence,
+            reference_score=reference_result.reference_score,
+            combined_confidence=combined_confidence,
+        )
+
+        # 判定逻辑：geometry 必须通过基础验证，reference 低于下限直接 reject
+        if reference_result.reference_score < DEFAULT_REFERENCE_REJECT_THRESHOLD:
+            status = "rejected"
+            detail = f"Reference line support too low ({reference_result.reference_score:.2f} < {DEFAULT_REFERENCE_REJECT_THRESHOLD:.2f})"
+        elif combined_confidence >= self.settings.court_line_confidence:
+            status = "available"
+            detail = "Automatic court calibration suggestion is ready"
+        else:
+            status = "rejected"
+            detail = f"Combined confidence ({combined_confidence:.2f}) below threshold ({self.settings.court_line_confidence:.2f})"
+
         preview_url = self._write_preview(
             extracted.frame,
             segmentation=segmentation,
             geometry=geometry,
             suggestion_id=suggestion_id,
+            reference_diag=reference_diag,
         )
-        confidence = min(segmentation.confidence, geometry.confidence)
-        status = "available" if confidence >= self.settings.court_line_confidence else "rejected"
-        detail = "Automatic court calibration suggestion is ready" if status == "available" else "Automatic court calibration confidence is below threshold"
+
+        mask_diag_detail = (
+            f"seg={segmentation.confidence:.2f} geo={geometry.confidence:.2f} "
+            f"ref={reference_result.reference_score:.2f} combined={combined_confidence:.2f}"
+        )
 
         return AutomaticCalibrationResponse(
             status=status,
@@ -144,7 +187,7 @@ class AutomaticCalibrationService:
             suggestion_id=suggestion_id if status == "available" else None,
             selected_frame=selected_frame,
             keypoints=geometry.keypoints,
-            confidence=confidence,
+            confidence=combined_confidence,
             quality=calibration_quality,
             mask=AutomaticCalibrationMaskDiagnostics(
                 model_configured=True,
@@ -152,8 +195,10 @@ class AutomaticCalibrationService:
                 confidence=segmentation.confidence,
                 mask_area_ratio=geometry.mask_area_ratio,
                 line_count=geometry.line_count,
-                detail="Court-line mask was converted into ordered court keypoints",
+                detail=mask_diag_detail,
             ),
+            reference=reference_diag,
+            confidence_breakdown=breakdown,
             preview_image_url=preview_url,
         )
 
@@ -259,6 +304,7 @@ class AutomaticCalibrationService:
         segmentation: CourtLineSegmentationResult,
         geometry: MaskToKeypointsResult | None,
         suggestion_id: str,
+        reference_diag=None,
     ) -> str | None:
         try:
             import cv2  # type: ignore
@@ -288,8 +334,39 @@ class AutomaticCalibrationService:
                 matrix = compute_homography(points, [(0, 0), (20, 0), (20, 44), (0, 44)])
                 inverse = np.linalg.inv(matrix)
                 output = draw_court_overlay(output, inverse)
+
+                # 绘制 projected court lines 高亮
+                from app.vision.courtvision_calibration_engine.court_overlay import court_line_image_points
+                projected_lines = court_line_image_points(inverse)
+                for line_name, start, end in projected_lines:
+                    cv2.line(output, start, end, (255, 200, 40), 2)
             except Exception:
                 pass
+
+        # 绘制 reference support 摘要文本
+        if reference_diag is not None:
+            lines = [
+                f"ref_score={reference_diag.reference_score:.2f}",
+                f"supported={reference_diag.supported_lines}/{reference_diag.total_lines}",
+                f"coverage={reference_diag.coverage:.2f}",
+            ]
+            if reference_diag.rejection_reason:
+                lines.append(f"REJECT: {reference_diag.rejection_reason[:60]}")
+            y_offset = 30
+            for line_text in lines:
+                cv2.putText(
+                    output, line_text,
+                    (12, y_offset),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (255, 255, 255), 1,
+                )
+                cv2.putText(
+                    output, line_text,
+                    (12, y_offset),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (0, 0, 0), 1,
+                )
+                y_offset += 22
 
         path = self.storage.automatic_calibration_preview_path(suggestion_id)
         path.parent.mkdir(parents=True, exist_ok=True)

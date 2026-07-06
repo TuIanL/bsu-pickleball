@@ -90,6 +90,36 @@ class StorageService:
     def ball_overlay_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "ball_overlay.json"
 
+    def detections_jsonl_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "detections.jsonl"
+
+    def ball_trajectory_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "ball_trajectory.json"
+
+    def cleaned_ball_trajectory_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "cleaned_ball_trajectory.json"
+
+    def bounce_events_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "bounce_events.json"
+
+    def analysis_overlay_video_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "analysis_overlay.mp4"
+
+    def position_visualizations_dir(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "position_visualizations"
+
+    def heatmaps_dir(self, job_id: str) -> Path:
+        return self.position_visualizations_dir(job_id) / "heatmaps"
+
+    def scatter_plots_dir(self, job_id: str) -> Path:
+        return self.position_visualizations_dir(job_id) / "scatter_plots"
+
+    def heatmaps_manifest_json_path(self, job_id: str) -> Path:
+        return self.heatmaps_dir(job_id) / "manifest.json"
+
+    def scatter_plots_manifest_json_path(self, job_id: str) -> Path:
+        return self.scatter_plots_dir(job_id) / "manifest.json"
+
     def pose_overlay_json_path(self, job_id: str) -> Path:
         return self.outputs_dir / job_id / "pose_overlay.json"
 

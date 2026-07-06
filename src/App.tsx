@@ -48,9 +48,14 @@ import type {
   AnalysisUploadMetadata,
   AppPath,
   AutomaticCalibrationResponse,
+  CameraInfo,
+  CameraCreateRequest,
   DrillRecommendation,
   InsightTone,
   PoseOverlayArtifact,
+  ProbeResult,
+  RecordingSession,
+  RecordingStartRequest,
   ReportType,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
@@ -79,6 +84,14 @@ import {
   requestAutomaticCalibration,
   resolveAnalysisAssetUrl,
   uploadVideo,
+  listCameras,
+  createCamera,
+  deleteCamera,
+  probeCamera,
+  startRecording,
+  stopRecording,
+  cancelRecording,
+  listRecordings,
 } from "./services/analysisClient";
 import {
   type DiagnosticNotice,
@@ -101,6 +114,7 @@ type RouteState =
   | { page: "vision"; path: `/analysis/${string}/vision`; jobId: string } // 特定任务的视觉分析
   | { page: "report"; path: `/reports/${ReportType}`; reportType: ReportType } // 报告页
   | { page: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string } // 特定任务的报告
+  | { page: "camera-hub"; path: "/camera" } // 球场采集管理页
   | { page: "training"; path: "/training" } // 训练建议页
   | { page: "hardware"; path: "/hardware" }; // 硬件融合预览页
 
@@ -187,6 +201,10 @@ function parsePath(pathname: string): RouteState {
     return { page: "analysis-job", path: `/analysis/${jobId}`, jobId };
   }
 
+  if (pathname === "/camera") {
+    return { page: "camera-hub", path: "/camera" };
+  }
+
   if (pathname === "/vision") {
     return { page: "vision", path: "/vision" };
   }
@@ -259,6 +277,8 @@ function App() {
         return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={navigate} recentJob={recentJob} />;
       case "report":
         return <ReportPage jobId={"jobId" in route ? route.jobId : undefined} reportType={route.reportType} onNavigate={navigate} />;
+      case "camera-hub":
+        return <CameraHubPage onNavigate={navigate} />;
       case "training":
         return <TrainingPage onNavigate={navigate} />;
       case "hardware":
@@ -1350,6 +1370,37 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                     notice={automaticCalibrationDiagnostic}
                     tone={automaticCalibrationStatus === "ready" || automaticCalibrationStatus === "detecting" || automaticCalibrationStatus === "uploading" ? "info" : "error"}
                   />
+                ) : null}
+                {automaticCalibration?.confidence_breakdown ? (
+                  <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
+                    {([
+                      ["分割模型", automaticCalibration.confidence_breakdown.segmentation],
+                      ["几何拟合", automaticCalibration.confidence_breakdown.geometry],
+                      ["球场线校准", automaticCalibration.confidence_breakdown.reference],
+                      ["综合置信度", automaticCalibration.confidence_breakdown.combined],
+                    ] as const).map(([label, value]) => (
+                      <div key={label} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-2 text-center">
+                        <div className="font-black text-base text-[#17231D]">{(value * 100).toFixed(0)}%</div>
+                        <div className="mt-0.5 text-slate-400">{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {automaticCalibration?.reference ? (
+                  <div className="mt-2 rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-3 text-xs text-slate-600">
+                    <span className="font-bold text-[#17231D]">球场线参考: </span>
+                    {automaticCalibration.reference.summary}
+                    {automaticCalibration.reference.passing_line_names?.length > 0 && (
+                      <span className="ml-1 text-slate-400">
+                        (通过: {automaticCalibration.reference.passing_line_names.slice(0, 4).join(", ")})
+                      </span>
+                    )}
+                    {automaticCalibration.reference.rejection_reason && (
+                      <div className="mt-1 text-[#C92A2A]">
+                        拒绝原因: {automaticCalibration.reference.rejection_reason}
+                      </div>
+                    )}
+                  </div>
                 ) : null}
                 {automaticPreviewUrl ? (
                   <img
@@ -3354,6 +3405,384 @@ function DrillGrid({
         </article>
       ))}
     </div>
+  );
+}
+
+/**
+ * 球场采集管理页组件
+ */
+function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
+  const [cameras, setCameras] = useState<CameraInfo[]>([]);
+  const [sessions, setSessions] = useState<RecordingSession[]>([]);
+  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const [newCamera, setNewCamera] = useState<CameraCreateRequest>({
+    camera_id: "",
+    name: "",
+    stream_url: "",
+    protocol: "rtsp",
+    username: "",
+    password: "",
+  });
+
+  const [recordingForm, setRecordingForm] = useState<RecordingStartRequest>({
+    camera_id: "",
+    court_name: "",
+    match_format: "doubles",
+    camera_angle: "baseline_high",
+    fps: 30,
+    resolution: "1920x1080",
+    auto_analyze_after_stop: true,
+  });
+
+  const activeSession = sessions.find((s) => s.status === "recording");
+  const [loading, setLoading] = useState(false);
+
+  const loadData = useCallback(async () => {
+    try {
+      const [cam, rec] = await Promise.all([listCameras(), listRecordings()]);
+      setCameras(cam);
+      setSessions(rec);
+    } catch {
+      // backend not available, keep empty
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData, refreshKey]);
+
+  const handleRegisterCamera = async () => {
+    if (!newCamera.camera_id || !newCamera.name || !newCamera.stream_url) {
+      setError("请填写摄像头 ID、名称和流地址");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await createCamera(newCamera);
+      setNewCamera({ camera_id: "", name: "", stream_url: "", protocol: "rtsp", username: "", password: "" });
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "注册失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleProbe = async (cameraId: string) => {
+    try {
+      const result = await probeCamera(cameraId);
+      setProbeResults((prev) => ({ ...prev, [cameraId]: result }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "探测失败");
+    }
+  };
+
+  const handleStartRecording = async () => {
+    if (!recordingForm.camera_id) {
+      setError("请选择摄像头");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await startRecording(recordingForm);
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "开始录制失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStopRecording = async (sessionId: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await stopRecording(sessionId);
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "停止录制失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelRecording = async (sessionId: string) => {
+    if (!window.confirm("确定要取消录制吗？已录制的视频将被丢弃。")) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await cancelRecording(sessionId);
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "取消录制失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveCamera = async (cameraId: string) => {
+    if (!window.confirm(`确定要删除摄像头 ${cameraId} 吗？`)) return;
+    try {
+      await deleteCamera(cameraId);
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除失败");
+    }
+  };
+
+  const statusLabel = (status: string) => {
+    const map: Record<string, string> = { recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消" };
+    return map[status] ?? status;
+  };
+
+  const statusColor = (status: string) => {
+    const map: Record<string, string> = { recording: "text-red-500 bg-red-50", completed: "text-green-600 bg-green-50", failed: "text-orange-500 bg-orange-50", canceled: "text-gray-400 bg-gray-50" };
+    return map[status] ?? "text-gray-500 bg-gray-50";
+  };
+
+  return (
+    <PageFrame>
+      <div className="mb-8">
+        <h2 className="text-2xl font-black tracking-tight">球场采集管理</h2>
+        <p className="mt-1 text-sm text-slate-500">管理网络摄像头并控制录制会话</p>
+      </div>
+
+      {error && (
+        <div className="mb-6 rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 px-5 py-4 text-sm text-[#C92A2A]">
+          {error}
+          <button className="ml-3 underline" onClick={() => setError(null)} type="button">关闭</button>
+        </div>
+      )}
+
+      {activeSession && (
+        <div className="mb-6 rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/8 p-5">
+          <div className="flex items-center gap-3">
+            <span className="flex size-3 animate-pulse rounded-full bg-[#22C55E]" />
+            <span className="font-bold text-[#168A34]">正在录制</span>
+            <span className="text-sm text-slate-500">{activeSession.camera_id} · {activeSession.court_name}</span>
+            <span className="text-sm text-slate-400">{activeSession.started_at}</span>
+          </div>
+          <div className="mt-3 flex gap-3">
+            <button className="green-button px-6 py-2" disabled={loading} onClick={() => handleStopRecording(activeSession.session_id)} type="button">
+              停止录制
+            </button>
+            <button className="quiet-button px-6 py-2" disabled={loading} onClick={() => handleCancelRecording(activeSession.session_id)} type="button">
+              取消录制
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
+        {/* 左侧：摄像头管理 */}
+        <section className="space-y-6">
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+            <h3 className="mb-4 flex items-center gap-2 text-lg font-bold">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#19B84C]/12 text-[#168A34]">
+                <Camera size={16} />
+              </span>
+              摄像头列表
+            </h3>
+            {cameras.length === 0 ? (
+              <p className="py-4 text-center text-sm text-slate-400">暂无注册摄像头</p>
+            ) : (
+              <div className="space-y-3">
+                {cameras.map((cam) => {
+                  const probe = probeResults[cam.camera_id];
+                  return (
+                    <div key={cam.camera_id} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="font-bold text-[#17231D]">{cam.name}</span>
+                          <span className="ml-2 text-xs text-slate-400">({cam.camera_id})</span>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${probe?.online ? "text-[#168A34] bg-[#22C55E]/12" : "text-slate-400 bg-slate-100"}`}>
+                          <span className={`size-2 rounded-full ${probe?.online ? "bg-[#22C55E]" : "bg-slate-300"}`} />
+                          {probe?.online ? "在线" : probe ? "离线" : "未检测"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-400">{cam.stream_url}</p>
+                      {probe?.online && probe.resolution && (
+                        <p className="mt-1 text-xs text-slate-400">分辨率: {probe.resolution} · 延迟: {probe.latency_ms}ms</p>
+                      )}
+                      {probe && !probe.online && probe.error_message && (
+                        <p className="mt-1 text-xs text-[#C92A2A]">{probe.error_message}</p>
+                      )}
+                      <div className="mt-3 flex gap-2">
+                        <button className="quiet-button px-3 py-1.5 text-xs" onClick={() => handleProbe(cam.camera_id)} type="button">
+                          探测
+                        </button>
+                        <button
+                          className="quiet-button px-3 py-1.5 text-xs"
+                          disabled={!!activeSession}
+                          onClick={() => {
+                            setRecordingForm((f) => ({ ...f, camera_id: cam.camera_id }));
+                          }}
+                          type="button"
+                        >
+                          录制
+                        </button>
+                        <button className="quiet-button px-3 py-1.5 text-xs text-[#C92A2A]" onClick={() => handleRemoveCamera(cam.camera_id)} disabled={!!activeSession} type="button">
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 注册摄像头表单 */}
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+            <h3 className="mb-4 text-lg font-bold">注册新摄像头</h3>
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <input
+                  className="field-input col-span-2"
+                  placeholder="摄像头 ID (例: baseline-cam)"
+                  value={newCamera.camera_id}
+                  onChange={(e) => setNewCamera((c) => ({ ...c, camera_id: e.target.value }))}
+                />
+                <select
+                  className="field-input"
+                  value={newCamera.protocol}
+                  onChange={(e) => setNewCamera((c) => ({ ...c, protocol: e.target.value as "rtsp" | "rtmp" | "http" }))}
+                >
+                  <option value="rtsp">RTSP</option>
+                  <option value="rtmp">RTMP</option>
+                  <option value="http">HTTP</option>
+                </select>
+              </div>
+              <input
+                className="field-input"
+                placeholder="摄像头名称"
+                value={newCamera.name}
+                onChange={(e) => setNewCamera((c) => ({ ...c, name: e.target.value }))}
+              />
+              <input
+                className="field-input"
+                placeholder="流地址 (rtsp://...)"
+                value={newCamera.stream_url}
+                onChange={(e) => setNewCamera((c) => ({ ...c, stream_url: e.target.value }))}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  className="field-input"
+                  placeholder="用户名 (可选)"
+                  value={newCamera.username ?? ""}
+                  onChange={(e) => setNewCamera((c) => ({ ...c, username: e.target.value || undefined }))}
+                />
+                <input
+                  className="field-input"
+                  type="password"
+                  placeholder="密码 (可选)"
+                  value={newCamera.password ?? ""}
+                  onChange={(e) => setNewCamera((c) => ({ ...c, password: e.target.value || undefined }))}
+                />
+              </div>
+              <button className="green-button w-full py-2.5" disabled={loading} onClick={handleRegisterCamera} type="button">
+                {loading ? "注册中..." : "注册摄像头"}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* 右侧：录制控制 + 历史 */}
+        <section className="space-y-6">
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+            <h3 className="mb-4 text-lg font-bold">开始录制</h3>
+            <div className="space-y-3">
+              <select
+                className="field-input"
+                value={recordingForm.camera_id}
+                onChange={(e) => setRecordingForm((f) => ({ ...f, camera_id: e.target.value }))}
+              >
+                <option value="">选择摄像头...</option>
+                {cameras.map((cam) => (
+                  <option key={cam.camera_id} value={cam.camera_id}>{cam.name} ({cam.camera_id})</option>
+                ))}
+              </select>
+              <input
+                className="field-input"
+                placeholder="球场名称"
+                value={recordingForm.court_name ?? ""}
+                onChange={(e) => setRecordingForm((f) => ({ ...f, court_name: e.target.value }))}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <select
+                  className="field-input"
+                  value={recordingForm.match_format ?? "doubles"}
+                  onChange={(e) => setRecordingForm((f) => ({ ...f, match_format: e.target.value as "singles" | "doubles" }))}
+                >
+                  <option value="doubles">双打</option>
+                  <option value="singles">单打</option>
+                </select>
+                <select
+                  className="field-input"
+                  value={recordingForm.camera_angle ?? "baseline_high"}
+                  onChange={(e) => setRecordingForm((f) => ({ ...f, camera_angle: e.target.value }))}
+                >
+                  <option value="baseline_high">底线高角度</option>
+                  <option value="sideline">侧边</option>
+                  <option value="overhead">俯视</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-[#22C55E]"
+                  checked={recordingForm.auto_analyze_after_stop ?? true}
+                  onChange={(e) => setRecordingForm((f) => ({ ...f, auto_analyze_after_stop: e.target.checked }))}
+                />
+                停止后自动创建分析任务
+              </label>
+              <button className="green-button w-full py-2.5" disabled={loading || !!activeSession} onClick={handleStartRecording} type="button">
+                {activeSession ? "已有录制进行中" : loading ? "开始中..." : "开始录制"}
+              </button>
+            </div>
+          </div>
+
+          {/* 录制历史 */}
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+            <h3 className="mb-4 text-lg font-bold">录制历史</h3>
+            {sessions.length === 0 ? (
+              <p className="py-4 text-center text-sm text-slate-400">暂无录制记录</p>
+            ) : (
+              <div className="space-y-3 max-h-[500px] overflow-y-auto">
+                {sessions.map((session) => (
+                  <div key={session.session_id} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-sm text-[#17231D]">{session.session_id}</span>
+                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusColor(session.status)}`}>
+                        {statusLabel(session.status)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {session.camera_id} · {session.court_name} · {session.duration_sec ? `${session.duration_sec.toFixed(0)}秒` : ""}
+                    </p>
+                    {session.auto_analysis_job_id && (
+                      <button
+                        className="mt-2 text-xs font-semibold text-[#2F80ED] hover:underline"
+                        onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)}
+                        type="button"
+                      >
+                        查看分析任务 →
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </PageFrame>
   );
 }
 

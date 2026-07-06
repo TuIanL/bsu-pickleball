@@ -144,6 +144,27 @@ class AutomaticCalibrationKeypoints(BaseModel):
         }
 
 
+class ReferenceLineDiagnostics(BaseModel):
+    """基于标准球场线投影的一致性诊断。"""
+    reference_score: float = Field(ge=0.0, le=1.0)
+    coverage: float = Field(ge=0.0, le=1.0)
+    supported_lines: int = Field(ge=0)
+    total_lines: int = Field(ge=0)
+    tolerance_px: float = Field(ge=0.0)
+    line_count_supported: int = Field(ge=0)
+    passing_line_names: list[str] = Field(default_factory=list)
+    rejection_reason: Optional[str] = None
+    summary: str = ""
+
+
+class ConfidenceBreakdown(BaseModel):
+    """组合置信度拆解，暴露 segmentation、geometry、reference 三类来源。"""
+    segmentation: float = Field(ge=0.0, le=1.0)
+    geometry: float = Field(ge=0.0, le=1.0)
+    reference: float = Field(ge=0.0, le=1.0)
+    combined: float = Field(ge=0.0, le=1.0)
+
+
 class AutomaticCalibrationResponse(BaseModel):
     status: AutomaticCalibrationStatus
     detail: str
@@ -155,6 +176,8 @@ class AutomaticCalibrationResponse(BaseModel):
     mask: AutomaticCalibrationMaskDiagnostics
     preview_image_url: Optional[str] = None
     calibration_id: Optional[str] = None
+    reference: Optional[ReferenceLineDiagnostics] = None
+    confidence_breakdown: Optional[ConfidenceBreakdown] = None
 
 
 class SemiAutomaticCalibrationAcceptRequest(BaseModel):

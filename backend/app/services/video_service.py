@@ -57,6 +57,24 @@ class VideoService:
         )
         return metadata
 
+    def register_recording(self, file_path: Path, original_filename: str, file_size: int) -> str:
+        video_id = f"rec-{uuid4().hex[:10]}"
+        metadata = VideoMetadata(
+            id=video_id,
+            original_filename=original_filename,
+            content_type="video/mp4",
+            size_bytes=file_size,
+            path=str(file_path),
+            uploaded_at=datetime.now(timezone.utc),
+            source="recording",
+        )
+        VIDEOS[video_id] = metadata
+        self.storage.write_json(
+            self.storage.video_metadata_path(video_id),
+            metadata.model_dump(mode="json"),
+        )
+        return video_id
+
     def get_video(self, video_id: str) -> VideoMetadata | None:
         cached = VIDEOS.get(video_id)
         if cached is not None:

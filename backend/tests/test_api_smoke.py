@@ -4,6 +4,7 @@ from app.core.config import Settings
 from app.main import app
 from app.schemas.analysis import AnalysisJobCreate
 from app.schemas.analysis import AnalysisJobSummary as AnalysisJobSummarySchema
+from app.schemas.pipeline import AnalysisArtifacts
 from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
 from app.schemas.tracking import Detection
 from app.services.analysis_pipeline import AnalysisPipeline
@@ -254,6 +255,173 @@ def test_serve_events_artifact_route_returns_json(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["status"] == "no_candidates"
+
+
+def test_storage_service_resolves_extended_analysis_artifact_paths(tmp_path):
+    storage = make_temp_storage(tmp_path)
+    job_id = "job-extended-artifacts"
+
+    assert storage.ball_overlay_json_path(job_id) == storage.outputs_dir / job_id / "ball_overlay.json"
+    assert storage.detections_jsonl_path(job_id) == storage.outputs_dir / job_id / "detections.jsonl"
+    assert storage.ball_trajectory_json_path(job_id) == storage.outputs_dir / job_id / "ball_trajectory.json"
+    assert storage.cleaned_ball_trajectory_json_path(job_id) == storage.outputs_dir / job_id / "cleaned_ball_trajectory.json"
+    assert storage.bounce_events_json_path(job_id) == storage.outputs_dir / job_id / "bounce_events.json"
+    assert storage.analysis_overlay_video_path(job_id) == storage.outputs_dir / job_id / "analysis_overlay.mp4"
+    assert storage.heatmaps_manifest_json_path(job_id) == (
+        storage.outputs_dir / job_id / "position_visualizations" / "heatmaps" / "manifest.json"
+    )
+    assert storage.scatter_plots_manifest_json_path(job_id) == (
+        storage.outputs_dir / job_id / "position_visualizations" / "scatter_plots" / "manifest.json"
+    )
+
+
+def test_analysis_artifacts_extended_fields_are_optional_and_serializable():
+    legacy = AnalysisArtifacts(result_json_path="/tmp/result.json")
+
+    assert legacy.ball_overlay_json_path is None
+    assert legacy.detections_jsonl_path is None
+    assert legacy.analysis_overlay_video_url is None
+
+    artifact = AnalysisArtifacts(
+        detections_jsonl_path="/tmp/detections.jsonl",
+        detections_url="/api/analysis/jobs/job-1/artifacts/detections",
+        detections_status="available",
+        detections_detail="generated",
+        ball_overlay_json_path="/tmp/ball_overlay.json",
+        ball_overlay_url="/api/analysis/jobs/job-1/artifacts/ball-overlay",
+        ball_overlay_status="available",
+        ball_overlay_detail="generated",
+        ball_trajectory_json_path="/tmp/ball_trajectory.json",
+        ball_trajectory_url="/api/analysis/jobs/job-1/artifacts/ball-trajectory",
+        cleaned_ball_trajectory_json_path="/tmp/cleaned_ball_trajectory.json",
+        cleaned_ball_trajectory_url="/api/analysis/jobs/job-1/artifacts/cleaned-ball-trajectory",
+        bounce_events_json_path="/tmp/bounce_events.json",
+        bounce_events_url="/api/analysis/jobs/job-1/artifacts/bounce-events",
+        analysis_overlay_video_path="/tmp/analysis_overlay.mp4",
+        analysis_overlay_video_url="/api/analysis/jobs/job-1/artifacts/analysis-overlay-video",
+        heatmaps_manifest_json_path="/tmp/heatmaps/manifest.json",
+        heatmaps_url="/api/analysis/jobs/job-1/artifacts/position-heatmaps",
+        scatter_plots_manifest_json_path="/tmp/scatter_plots/manifest.json",
+        scatter_plots_url="/api/analysis/jobs/job-1/artifacts/position-scatter-plots",
+        position_visualizations_status="available",
+        position_visualizations_detail="generated",
+    )
+
+    dumped = artifact.model_dump(mode="json")
+
+    assert dumped["detections_url"].endswith("/detections")
+    assert dumped["ball_overlay_status"] == "available"
+    assert dumped["position_visualizations_detail"] == "generated"
+
+
+def test_extended_json_artifact_routes_return_json(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-extended-json-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(storage.ball_overlay_json_path(job.id), {"job_id": job.id, "schema_version": "1.0"})
+    storage.write_json(storage.ball_trajectory_json_path(job.id), {"job_id": job.id, "samples": []})
+    storage.write_json(storage.cleaned_ball_trajectory_json_path(job.id), {"job_id": job.id, "samples": []})
+    storage.write_json(storage.bounce_events_json_path(job.id), {"job_id": job.id, "events": []})
+    storage.write_json(storage.heatmaps_manifest_json_path(job.id), {"job_id": job.id, "items": []})
+    storage.write_json(storage.scatter_plots_manifest_json_path(job.id), {"job_id": job.id, "items": []})
+
+    try:
+        responses = {
+            name: client.get(f"/api/analysis/jobs/{job.id}/artifacts/{name}")
+            for name in [
+                "ball-overlay",
+                "ball-trajectory",
+                "cleaned-ball-trajectory",
+                "bounce-events",
+                "position-heatmaps",
+                "position-scatter-plots",
+            ]
+        }
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert all(response.status_code == 200 for response in responses.values())
+    assert responses["ball-overlay"].json()["schema_version"] == "1.0"
+    assert responses["position-scatter-plots"].json()["items"] == []
+
+
+def test_known_extended_artifact_route_returns_404_when_missing(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-missing-ball-overlay", status="completed")
+    JOBS[job.id] = job
+
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-overlay")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 404
+
+
+def test_detections_jsonl_artifact_route_preserves_record_boundaries(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-detections-jsonl-route", status="completed")
+    JOBS[job.id] = job
+    path = storage.detections_jsonl_path(job.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"schema_version":"1.0","job_id":"job-detections-jsonl-route","frame_index":0}\n'
+        '{"schema_version":"1.0","job_id":"job-detections-jsonl-route","frame_index":1}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/detections")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert response.text.count("\n") == 2
+    assert '"frame_index":0' in response.text
+    assert '"frame_index":1' in response.text
+
+
+def test_analysis_overlay_video_artifact_route_returns_mp4(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-analysis-overlay-video-route", status="completed")
+    JOBS[job.id] = job
+    path = storage.analysis_overlay_video_path(job.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"fake mp4")
+
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/analysis-overlay-video")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.content == b"fake mp4"
 
 
 def test_serve_debug_artifact_routes_return_json(monkeypatch, tmp_path):
@@ -870,8 +1038,10 @@ def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
     assert result.status == "completed"
     assert result.artifacts.tracking_overlay_status == "available"
     assert result.artifacts.player_trajectory_status == "available"
-    assert not hasattr(result.artifacts, "ball_overlay_status")
-    assert not hasattr(result.artifacts, "ball_overlay_url")
+    assert result.artifacts.ball_overlay_status is None
+    assert result.artifacts.ball_overlay_url is None
+    assert result.artifacts.detections_url is None
+    assert result.artifacts.analysis_overlay_video_url is None
     assert all(stage.id != "ball-tracking" for stage in result.stages)
 
     storage = StorageService()
@@ -1255,12 +1425,12 @@ def test_analysis_artifact_endpoint_returns_browser_safe_json():
     assert response.json()["detail"] == "test artifact"
 
 
-def test_analysis_artifact_endpoint_rejects_removed_ball_overlay():
+def test_analysis_artifact_endpoint_accepts_missing_ball_overlay_as_known_artifact():
     payload = AnalysisJobCreate(
         metadata={
-            "fileName": "removed-ball-artifact.mp4",
+            "fileName": "missing-ball-artifact.mp4",
             "fileSize": 16,
-            "matchTitle": "Removed Ball Artifact Test",
+            "matchTitle": "Missing Ball Artifact Test",
             "venue": "Test Court",
             "matchDate": "2026-05-07",
             "matchFormat": "doubles",
@@ -1273,7 +1443,7 @@ def test_analysis_artifact_endpoint_rejects_removed_ball_overlay():
 
     response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-overlay")
 
-    assert response.status_code == 422
+    assert response.status_code == 404
 
 
 def test_analysis_job_with_missing_video_fails_cleanly():
