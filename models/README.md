@@ -9,23 +9,27 @@ Model weights are intentionally ignored by git because they are large, machine-s
 Ball and future paddle detectors can live under dedicated subdirectories such as:
 
 ```text
-models/pickleball-multitarget/
-  model.pt
-  classes.json
+models/ball/
+  tennis-ball.pt
 ```
 
-The active backend can enable ball analysis through:
+When `PICKLEBALL_BALL_MODEL_PATH` is not set, the backend auto-discovers common
+local ball model paths including `models/ball/tennis-ball.pt`,
+`models/ball/pickleball-ball.pt`, `models/ball/best.pt`, and
+`models/pickleball-multitarget/model.pt`.
+
+You can still override the active model explicitly:
 
 ```bash
 PICKLEBALL_ENABLE_BALL_DETECTION=true
-PICKLEBALL_BALL_MODEL_PATH=../models/pickleball-multitarget/model.pt
+PICKLEBALL_BALL_MODEL_PATH=../models/ball/tennis-ball.pt
 PICKLEBALL_ENABLE_BOUNCE_DETECTION=true
 ```
 
-The pipeline keeps these switches off by default so local development and CI do
-not require heavy model assets. When enabled without a valid model path or
-runtime dependency, analysis jobs report a skipped or unavailable ball-analysis
-stage instead of failing the player tracking, pose, serve, or movement outputs.
+The pipeline enables ball and bounce analysis by default. When enabled without a
+valid model path or runtime dependency, analysis jobs report an unavailable
+ball-analysis stage instead of failing the player tracking, pose, serve, or
+movement outputs.
 
 Detector adapters should normalize model output into `player` and `ball`
 records today. `paddle` remains a supported direction for later adapters, but it

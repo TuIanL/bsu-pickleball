@@ -173,9 +173,13 @@ class CourtViewFrameScorer:
         try:
             gray = self._prepare_gray(frame, cv2)
             result = cv2.matchTemplate(gray, self.reference_gray, cv2.TM_CCOEFF_NORMED)
-            return float(result.max())
+            return self._clamp_score(float(result.max()))
         except Exception:
             return None
+
+    @staticmethod
+    def _clamp_score(score: float) -> float:
+        return max(0.0, min(1.0, score))
 
     def _prepare_gray(self, frame: object, cv2):
         import numpy as np
@@ -216,6 +220,7 @@ class CourtViewStateMachine:
                 is_court_view=None,
                 reason="gate_unavailable",
             )
+        score = CourtViewFrameScorer._clamp_score(float(score))
 
         is_court = score >= self.thresholds.match_threshold
         if is_court:

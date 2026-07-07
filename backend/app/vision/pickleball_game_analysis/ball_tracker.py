@@ -16,29 +16,38 @@ from app.vision.pickleball_game_analysis.schemas import BallCandidate, BallFrame
 
 @dataclass(frozen=True)
 class BallTrackerConfig:
-    confidence: float = 0.18
-    trajectory_length: int = 30
-    max_jump_pixels: float = 220.0
-    prediction_gate_pixels: float = 260.0
-    max_missing_frames: int = 5
-    roi_padding_ratio: float = 0.08
-    max_box_area_ratio: float = 0.004
-    max_aspect_ratio: float = 4.0
+    """
+    球跟踪器超参数（全部带默认值，可调）。
+
+    思路：先用"框尺寸/长宽比/ROI"过滤掉明显不是球的候选，
+    再用"轨迹连续性"（距离门限、预测门限、最大缺失帧）从剩余候选里挑最可信的一个。
+    """
+
+    confidence: float = 0.18                  # 调用检测器时的置信度阈值
+    trajectory_length: int = 30              # 保留的最近有效点数量（滑动窗口）
+    max_jump_pixels: float = 220.0           # 与上一个有效点的最大跳变（像素），超出视为不连续
+    prediction_gate_pixels: float = 260.0    # 与预测位置的偏差门限（像素），超出视为不连续
+    max_missing_frames: int = 5              # 允许连续缺失多少帧（超过则清空最后有效位置）
+    roi_padding_ratio: float = 0.08          # ROI 边距的放宽比例（在给定 ROI 外再扩一点）
+    max_box_area_ratio: float = 0.004        # 框面积占整帧比例上限（过大不像球）
+    max_aspect_ratio: float = 4.0            # 框宽高比上限（过长不像球）
 
 
 class BallTracker:
+    """逐帧处理：过滤候选、挑选最可信的球位置、维护轨迹连续性，并投影到球场坐标。"""
+
     def __init__(
         self,
         detector: BallDetectorProtocol,
         config: BallTrackerConfig | None = None,
         court_adapter: BallCourtAdapter | None = None,
     ) -> None:
-        self.detector = detector
-        self.config = config or BallTrackerConfig()
-        self.court_adapter = court_adapter or BallCourtAdapter()
-        self.trajectory: deque[Point2D] = deque(maxlen=self.config.trajectory_length)
-        self.last_valid_position: Point2D | None = None
-        self.missing_frames = 0
+        self.detector = detector                      # 底层球检测器（满足 BallDetectorProtocol）
+        self.config = config or BallTrackerConfig()   # 超参数
+        self.court_adapter = court_adapter or BallCourtAdapter()  # 图像→球场投影器
+        self.trajectory: deque[Point2D] = deque(maxlen=self.config.trajectory_length)  # 最近有效点队列
+        self.last_valid_position: Point2D | None = None  # 最近一个被接受的位置
+        self.missing_frames = 0                       # 连续未检测到球的帧数
 
     def update(
         self,
@@ -48,9 +57,20 @@ class BallTracker:
         roi_corners: tuple[tuple[int, int], tuple[int, int]] | None = None,
         homography: Sequence[Sequence[float]] | None = None,
     ) -> BallFrameSample:
+        """
+        处理一帧，返回该帧的球采样结果 BallFrameSample。
+
+        流程：
+          1. 调用检测器得到原始候选；
+          2. 过滤（框尺寸/长宽比/ROI）得到候选列表；
+          3. 从候选里挑一个最可信的；
+          4. 若没候选或挑出的点"不连续"，记为未接受；
+          5. 通过连续性检查后，投影到球场坐标并记为有效点。
+        """
         raw_candidates = self.detector.detect(frame, conf=self.config.confidence)
         candidates, reject_reasons = self._extract_candidates(raw_candidates, frame.shape, roi_corners)
         selected = self._select_candidate(candidates)
+        # 情况 A：过滤后没有候选
         if selected is None:
             self._record_missing_detection()
             reason = reject_reasons[0] if reject_reasons else "no_candidates"
@@ -68,6 +88,7 @@ class BallTracker:
             )
 
         point = selected.image_xy
+        # 情况 B：有候选，但与已有轨迹不连续（跳变过大 / 偏离预测）
         reject_reason = self._continuity_reject_reason(point)
         if reject_reason is not None:
             self._record_missing_detection()
@@ -84,6 +105,7 @@ class BallTracker:
                 in_bounds=None,
             )
 
+        # 情况 C：通过连续性检查 → 投影并记录为有效点
         projection = self.court_adapter.project(point, homography)
         self._append_valid_point(point)
         return self._sample(
@@ -101,6 +123,7 @@ class BallTracker:
         )
 
     def clear(self) -> None:
+        """重置跟踪状态（换一段新视频/新作业时调用）。"""
         self.trajectory.clear()
         self.last_valid_position = None
         self.missing_frames = 0
@@ -111,6 +134,11 @@ class BallTracker:
         frame_shape: Sequence[int],
         roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
     ) -> tuple[list[BallCandidate], list[str]]:
+        """
+        候选过滤：按"框尺寸 / 长宽比 / 是否在 ROI 内"筛掉不像球的候选。
+
+        返回：(过滤后的候选列表, 各被拒原因列表)。
+        """
         filtered: list[BallCandidate] = []
         reject_reasons: list[str] = []
         frame_area = max(1.0, float(frame_shape[0] * frame_shape[1]))
@@ -120,18 +148,23 @@ class BallTracker:
             height = candidate.height
             area_ratio = candidate.area_ratio
             aspect_ratio = candidate.aspect_ratio
+            # 若检测器给了宽高，先做有效性与比例计算
             if width is not None and height is not None:
                 if width <= 0 or height <= 0:
                     reject_reasons.append("invalid_box")
                     continue
+                # 缺失比例信息时，按宽高现算
                 area_ratio = area_ratio if area_ratio is not None else (float(width) * float(height)) / frame_area
                 aspect_ratio = aspect_ratio if aspect_ratio is not None else max(float(width) / float(height), float(height) / float(width))
+            # 框占整帧面积过大 → 不像球
             if area_ratio is not None and area_ratio > self.config.max_box_area_ratio:
                 reject_reasons.append("box_too_large")
                 continue
+            # 长宽比过大（过扁/过长）→ 不像球
             if aspect_ratio is not None and aspect_ratio > self.config.max_aspect_ratio:
                 reject_reasons.append("aspect_ratio")
                 continue
+            # 不在给定 ROI 内 → 排除
             if not self._point_in_roi(candidate.image_xy, roi_corners):
                 reject_reasons.append("outside_roi")
                 continue
@@ -150,6 +183,13 @@ class BallTracker:
         return filtered, reject_reasons
 
     def _select_candidate(self, candidates: Sequence[BallCandidate]) -> BallCandidate | None:
+        """
+        从过滤后的候选里挑一个最可信的。
+
+        规则：
+          - 若还没有轨迹历史，直接选置信度最高的；
+          - 否则基于"置信度 - 与预测位置的距离 - 框大小惩罚"综合打分，取最高分。
+        """
         if not candidates:
             return None
         if not self.trajectory:
@@ -168,6 +208,12 @@ class BallTracker:
         point: Point2D,
         roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
     ) -> bool:
+        """
+        判断点是否在 ROI（感兴趣区域）内。
+
+        若未提供 ROI 则视为"全部允许"；否则在两个对角点构成的矩形基础上，
+        按 roi_padding_ratio 向外放宽一点（避免边缘误杀）。
+        """
         if roi_corners is None:
             return True
         x1, y1 = roi_corners[0]
@@ -178,6 +224,14 @@ class BallTracker:
         return (left - padding) <= point[0] <= (right + padding) and (top - padding) <= point[1] <= (bottom + padding)
 
     def _continuity_reject_reason(self, point: Point2D) -> str | None:
+        """
+        连续性检查：返回拒绝原因（若连续）或 None（若连续良好）。
+
+        仅在"连续缺失帧数未超上限"时才检查；否则放宽（认为轨迹刚断了，先不拒）。
+        判据：
+          - 与上一个有效点跳变过大（>max_jump_pixels）→ "jump_distance"；
+          - 与预测位置偏差过大（>prediction_gate_pixels）→ "prediction_gate"。
+        """
         if not self.trajectory:
             return None
         strict_gate = self.missing_frames <= self.config.max_missing_frames
@@ -192,6 +246,11 @@ class BallTracker:
         return None
 
     def _predict_next_position(self) -> Point2D:
+        """
+        用最近两个有效点做"匀速外推"，预测球的下一帧位置。
+
+        若轨迹点不足 2 个，则退回到最近一个有效点本身。
+        """
         if len(self.trajectory) < 2:
             return self.trajectory[-1]
         prev_x, prev_y = self.trajectory[-2]
@@ -199,20 +258,24 @@ class BallTracker:
         return (last_x + (last_x - prev_x), last_y + (last_y - prev_y))
 
     def _append_valid_point(self, point: Point2D) -> None:
+        """记录一个被接受的有效点：加入轨迹队列、更新最后有效位置、清零缺失计数。"""
         self.trajectory.append(point)
         self.last_valid_position = point
         self.missing_frames = 0
 
     def _record_missing_detection(self) -> None:
+        """记录一次"未检测到球"：缺失计数 +1；超过上限则清空最后有效位置（避免用陈旧点做预测）。"""
         self.missing_frames += 1
         if self.missing_frames > self.config.max_missing_frames:
             self.last_valid_position = None
 
     @staticmethod
     def _distance(point_a: Point2D, point_b: Point2D) -> float:
+        """两点之间的欧氏距离（像素）。"""
         return float(hypot(point_a[0] - point_b[0], point_a[1] - point_b[1]))
 
     @staticmethod
     def _sample(**kwargs: object) -> BallFrameSample:
+        """构造 BallFrameSample 的小工具：把可选的 diagnostics 单独取出组装。"""
         diagnostics = kwargs.pop("diagnostics", None) or {}
         return BallFrameSample(**kwargs, diagnostics=diagnostics)  # type: ignore[arg-type]

@@ -13,6 +13,9 @@ import type {
 } from "../../types/report";
 import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 
+const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
+const MAX_VISIBLE_BOUNCE_MARKERS = 3;
+
 interface VideoAnalysisCardProps {
   compact?: boolean;
   labels: VideoOverlayLabel[];
@@ -351,7 +354,11 @@ function RealVideoOverlay({
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
   const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
   const ballSamples = useMemo(() => resolveBallSamples(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
-  const bounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
+  const allBounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
+  const visibleBounceMarkers = useMemo(
+    () => resolveVisibleBounceMarkers(allBounceMarkers, currentTime),
+    [allBounceMarkers, currentTime]
+  );
   const ballCount = ballSamples.length;
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
   const trackingStatusLabel = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
@@ -629,31 +636,18 @@ function RealVideoOverlay({
           </g>
         ) : null}
 
-        {showBall && bounceMarkers.map((event) => {
+        {showBall && visibleBounceMarkers.map((event) => {
           const [x, y] = event.image_xy;
           return (
             <g key={event.event_id}>
               <circle
                 cx={x}
                 cy={y}
-                fill="rgba(255,149,0,0.16)"
-                r={Math.max(10, source.width * 0.008)}
+                fill="rgba(255,149,0,0.24)"
+                r={Math.max(6, source.width * 0.0048)}
                 stroke="#FF9500"
-                strokeDasharray="5 5"
-                strokeWidth={Math.max(2, source.width * 0.0016)}
+                strokeWidth={Math.max(2, source.width * 0.0012)}
               />
-              <text
-                fill="#FFD7A0"
-                fontSize={Math.max(13, source.width * 0.012)}
-                fontWeight="800"
-                paintOrder="stroke"
-                stroke="rgba(0,0,0,0.75)"
-                strokeWidth={Math.max(3, source.width * 0.002)}
-                x={x + Math.max(8, source.width * 0.006)}
-                y={y - Math.max(8, source.width * 0.006)}
-              >
-                弹跳候选
-              </text>
             </g>
           );
         })}
@@ -765,7 +759,7 @@ function RealVideoOverlay({
             ) : null}
             {bounceEventsLoadState !== "idle" ? (
               <p className="mt-1 text-[0.68rem] font-semibold text-slate-300">
-                弹跳候选：{bounceMarkers.length ? `${bounceMarkers.length} 个候选 · 仅供复盘` : statusCopy(bounceStatusLabel, bounceDetail)}
+                弹跳候选：{allBounceMarkers.length ? `${allBounceMarkers.length} 个候选 · 当前显示 ${visibleBounceMarkers.length} 个 · 仅供复盘` : statusCopy(bounceStatusLabel, bounceDetail)}
               </p>
             ) : null}
           </div>
@@ -998,6 +992,16 @@ function resolveBallSamples(ballTrajectory: BallTrajectoryArtifact | null | unde
 
 function resolveBounceMarkers(bounceEvents: BounceEventsArtifact | null | undefined) {
   return (bounceEvents?.events ?? []).filter((event) => Array.isArray(event.image_xy) && event.image_xy.length >= 2);
+}
+
+function resolveVisibleBounceMarkers(
+  markers: ReturnType<typeof resolveBounceMarkers>,
+  currentTime: number
+) {
+  return markers
+    .filter((event) => typeof event.timestamp_sec === "number" && Math.abs(event.timestamp_sec - currentTime) <= BOUNCE_MARKER_WINDOW_SECONDS)
+    .sort((left, right) => Math.abs(left.timestamp_sec - currentTime) - Math.abs(right.timestamp_sec - currentTime))
+    .slice(0, MAX_VISIBLE_BOUNCE_MARKERS);
 }
 
 function formatSeconds(value: number): string {

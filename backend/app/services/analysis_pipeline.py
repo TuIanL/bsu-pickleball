@@ -81,6 +81,15 @@ from app.vision.pickleball_game_analysis.detection_writer import (
 )
 from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceEvent, TrajectoryPoint
 from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner
+from app.vision.pickleball_game_analysis.overlay_video_writer import OverlayVideoWriter
+from app.vision.pickleball_game_analysis.position_visualizer import PositionVisualizer
+from app.vision.pickleball_game_analysis.visualization_schemas import (
+    VisualizationConfig,
+    VisualizationResult,
+    ball_points_from_artifact,
+    bounce_points_from_artifact,
+    player_points_from_artifact,
+)
 from app.schemas.multitarget import MultiTargetDetection
 # 可配置的球检测适配器（缺失模型/依赖时抛出清晰错误，由 pipeline 降级为 unavailable）
 from app.vision.detectors.ball_adapter import (
@@ -137,6 +146,22 @@ class _BallArtifactFields:
     bounce_events_url: str | None = None
     bounce_events_status: str | None = None
     bounce_events_detail: str | None = None
+
+
+@dataclass
+class _VisualizationArtifactFields:
+    analysis_overlay_video_path: str | None = None
+    analysis_overlay_video_url: str | None = None
+    analysis_overlay_video_status: str | None = None
+    analysis_overlay_video_detail: str | None = None
+    heatmaps_manifest_json_path: str | None = None
+    heatmaps_url: str | None = None
+    scatter_plots_manifest_json_path: str | None = None
+    scatter_plots_url: str | None = None
+    position_visualizations_status: str | None = None
+    position_visualizations_detail: str | None = None
+    stage_status: str = "skipped"
+    stage_detail: str = "可视化输出未启用"
 
 
 @dataclass
@@ -722,24 +747,15 @@ class AnalysisPipeline:
                 self._write_result(result)
                 return result
 
-        # 计算运动指标（附加球分析摘要）
-        _ball_metrics = self._build_ball_metrics_summary(ball_run_output)
-        metrics = self._compute_metrics(tracks, ball_metrics=_ball_metrics)
-        metrics_stage = self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图")
-        stages.append(metrics_stage)
-        self._notify_progress(progress_callback, metrics_stage)
-        self._check_cancelled(cancellation_token)
-        # 可视化阶段在 MVP 中暂不生成叠加视频
-        visualization_stage = self._stage("visualization", "可视化视频", "skipped", "MVP 暂不生成叠加视频文件")
-        stages.append(visualization_stage)
-        self._notify_progress(progress_callback, visualization_stage)
-        self._check_cancelled(cancellation_token)
-
         # 把球分析阶段产出的 artifact 字段映射到结果构造用的局部变量
         detections_jsonl_path = ball_fields.detections_jsonl_path
         detections_url = ball_fields.detections_url
         detections_status = ball_fields.detections_status
         detections_detail = ball_fields.detections_detail
+        ball_overlay_json_path = ball_fields.ball_overlay_json_path
+        ball_overlay_url = ball_fields.ball_overlay_url
+        ball_overlay_status = ball_fields.ball_overlay_status if ball_fields.ball_overlay_json_path else None
+        ball_overlay_detail = ball_fields.ball_overlay_detail if ball_fields.ball_overlay_json_path else None
         ball_trajectory_json_path = ball_fields.ball_trajectory_json_path
         ball_trajectory_url = ball_fields.ball_trajectory_url
         ball_trajectory_status = ball_fields.ball_trajectory_status
@@ -752,6 +768,41 @@ class AnalysisPipeline:
         bounce_events_url = ball_fields.bounce_events_url
         bounce_events_status = ball_fields.bounce_events_status
         bounce_events_detail = ball_fields.bounce_events_detail
+
+        # 计算运动指标（附加球分析摘要）
+        _ball_metrics = self._build_ball_metrics_summary(ball_run_output)
+        metrics = self._compute_metrics(tracks, ball_metrics=_ball_metrics)
+        metrics_stage = self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图")
+        stages.append(metrics_stage)
+        self._notify_progress(progress_callback, metrics_stage)
+        self._check_cancelled(cancellation_token)
+
+        visualization_fields = self._run_visualization(job_id=job_id, video=video, progress_callback=progress_callback)
+        visualization_stage = self._stage(
+            "visualization",
+            "可视化输出",
+            visualization_fields.stage_status,
+            visualization_fields.stage_detail,
+        )
+        visualization_stage.counters = {
+            "overlay_video_status": visualization_fields.analysis_overlay_video_status,
+            "position_visualizations_status": visualization_fields.position_visualizations_status,
+            "heatmaps_url": visualization_fields.heatmaps_url,
+            "scatter_plots_url": visualization_fields.scatter_plots_url,
+        }
+        stages.append(visualization_stage)
+        self._notify_progress(progress_callback, visualization_stage)
+        self._check_cancelled(cancellation_token)
+        analysis_overlay_video_path = visualization_fields.analysis_overlay_video_path
+        analysis_overlay_video_url = visualization_fields.analysis_overlay_video_url
+        analysis_overlay_video_status = visualization_fields.analysis_overlay_video_status
+        analysis_overlay_video_detail = visualization_fields.analysis_overlay_video_detail
+        heatmaps_manifest_json_path = visualization_fields.heatmaps_manifest_json_path
+        heatmaps_url = visualization_fields.heatmaps_url
+        scatter_plots_manifest_json_path = visualization_fields.scatter_plots_manifest_json_path
+        scatter_plots_url = visualization_fields.scatter_plots_url
+        position_visualizations_status = visualization_fields.position_visualizations_status
+        position_visualizations_detail = visualization_fields.position_visualizations_detail
 
         # 汇总成最终结果
         result = AnalysisPipelineResult(
@@ -1047,6 +1098,150 @@ class AnalysisPipeline:
             "status": fields.bounce_events_status,
         }
         stages.append(bounce_stage)
+
+    def _run_visualization(
+        self,
+        *,
+        job_id: str,
+        video: VideoMetadata | None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> _VisualizationArtifactFields:
+        enabled_overlay = bool(self.settings.enable_analysis_overlay_video)
+        enabled_positions = bool(self.settings.enable_position_visualizations)
+        fields = _VisualizationArtifactFields()
+        if not enabled_overlay and not enabled_positions:
+            fields.analysis_overlay_video_status = "skipped"
+            fields.analysis_overlay_video_detail = "分析叠加视频未启用"
+            fields.position_visualizations_status = "skipped"
+            fields.position_visualizations_detail = "位置可视化未启用"
+            return fields
+
+        self._notify_progress(progress_callback, self._stage("visualization", "可视化输出", "active", "正在生成可视化 artifact…"))
+        config = VisualizationConfig(language=self.settings.visualization_language)
+        inputs = self._load_visualization_inputs(job_id)
+        player_points = player_points_from_artifact(inputs.get("players_trajectory") or {})
+        cleaned_ball_points = ball_points_from_artifact(inputs.get("cleaned_ball_trajectory") or {}, source="cleaned_ball_trajectory")
+        raw_ball_points = ball_points_from_artifact(inputs.get("ball_trajectory") or {}, source="ball_trajectory")
+        ball_points = cleaned_ball_points or raw_ball_points
+        bounce_points = bounce_points_from_artifact(inputs.get("bounce_events") or {})
+        results: list[VisualizationResult] = []
+
+        if enabled_positions:
+            try:
+                heatmaps_url = f"/api/analysis/jobs/{job_id}/artifacts/position-heatmaps"
+                scatter_url = f"/api/analysis/jobs/{job_id}/artifacts/position-scatter-plots"
+                image_prefix = f"/api/analysis/jobs/{job_id}/artifacts/position-visualization-images"
+                heat_result, scatter_result = PositionVisualizer(config=config).generate(
+                    job_id=job_id,
+                    heatmaps_dir=self.storage.heatmaps_dir(job_id),
+                    scatter_plots_dir=self.storage.scatter_plots_dir(job_id),
+                    heatmaps_manifest_path=self.storage.heatmaps_manifest_json_path(job_id),
+                    scatter_manifest_path=self.storage.scatter_plots_manifest_json_path(job_id),
+                    image_url_prefix=image_prefix,
+                    heatmaps_artifact_url=heatmaps_url,
+                    scatter_artifact_url=scatter_url,
+                    player_points=player_points,
+                    ball_points=ball_points,
+                    bounce_points=bounce_points,
+                )
+                fields.heatmaps_manifest_json_path = heat_result.path
+                fields.heatmaps_url = heatmaps_url
+                fields.scatter_plots_manifest_json_path = scatter_result.path
+                fields.scatter_plots_url = scatter_url
+                fields.position_visualizations_status = (
+                    "available" if any(result.status == "available" for result in [heat_result, scatter_result]) else "no_data"
+                )
+                fields.position_visualizations_detail = f"{heat_result.detail}；{scatter_result.detail}"
+                results.extend([heat_result, scatter_result])
+            except Exception as exc:
+                detail = f"位置可视化生成失败：{exc}"
+                fields.position_visualizations_status = "failed"
+                fields.position_visualizations_detail = detail
+                results.append(VisualizationResult("failed", detail))
+        else:
+            fields.position_visualizations_status = "skipped"
+            fields.position_visualizations_detail = "位置可视化未启用"
+
+        if enabled_overlay:
+            overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/analysis-overlay-video"
+            if video is None:
+                fields.analysis_overlay_video_status = "unavailable"
+                fields.analysis_overlay_video_detail = "缺少源视频，无法生成分析叠加视频"
+                results.append(VisualizationResult("unavailable", fields.analysis_overlay_video_detail))
+            else:
+                try:
+                    overlay_result = OverlayVideoWriter(config=config).write(
+                        source_video_path=Path(video.path),
+                        output_path=self.storage.analysis_overlay_video_path(job_id),
+                        tracking_overlay=inputs.get("tracking_overlay"),
+                        pose_overlay=inputs.get("pose_overlay"),
+                        ball_overlay=inputs.get("ball_overlay"),
+                        player_points=player_points,
+                        ball_points=ball_points,
+                        bounce_points=bounce_points,
+                    )
+                    fields.analysis_overlay_video_status = overlay_result.status
+                    fields.analysis_overlay_video_detail = overlay_result.detail
+                    if overlay_result.status == "available":
+                        fields.analysis_overlay_video_path = overlay_result.path
+                        fields.analysis_overlay_video_url = overlay_url
+                    results.append(overlay_result)
+                except Exception as exc:
+                    detail = f"分析叠加视频生成失败：{exc}"
+                    fields.analysis_overlay_video_status = "failed"
+                    fields.analysis_overlay_video_detail = detail
+                    results.append(VisualizationResult("failed", detail))
+        else:
+            fields.analysis_overlay_video_status = "skipped"
+            fields.analysis_overlay_video_detail = "分析叠加视频未启用"
+
+        fields.stage_status = self._visualization_stage_status(results)
+        fields.stage_detail = self._visualization_stage_detail(fields)
+        return fields
+
+    def _load_visualization_inputs(self, job_id: str) -> dict[str, dict[str, Any]]:
+        paths = {
+            "tracking_overlay": self.storage.tracking_overlay_json_path(job_id),
+            "pose_overlay": self.storage.pose_overlay_json_path(job_id),
+            "ball_overlay": self.storage.ball_overlay_json_path(job_id),
+            "players_trajectory": self.storage.player_trajectory_json_path(job_id),
+            "ball_trajectory": self.storage.ball_trajectory_json_path(job_id),
+            "cleaned_ball_trajectory": self.storage.cleaned_ball_trajectory_json_path(job_id),
+            "bounce_events": self.storage.bounce_events_json_path(job_id),
+        }
+        payloads: dict[str, dict[str, Any]] = {}
+        for name, path in paths.items():
+            if not path.exists():
+                continue
+            try:
+                payload = self.storage.read_json(path)
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                payloads[name] = payload
+        return payloads
+
+    @staticmethod
+    def _visualization_stage_status(results: list[VisualizationResult]) -> str:
+        statuses = [result.status for result in results] or ["skipped"]
+        if any(status == "available" for status in statuses) and any(status in {"failed", "unavailable"} for status in statuses):
+            return "partial"
+        if any(status == "available" for status in statuses):
+            return "done"
+        if any(status == "failed" for status in statuses):
+            return "failed"
+        if any(status in {"no_data", "unavailable"} for status in statuses):
+            return "unavailable"
+        return "skipped"
+
+    @staticmethod
+    def _visualization_stage_detail(fields: _VisualizationArtifactFields) -> str:
+        parts = []
+        if fields.analysis_overlay_video_status:
+            parts.append(f"叠加视频：{fields.analysis_overlay_video_detail or fields.analysis_overlay_video_status}")
+        if fields.position_visualizations_status:
+            parts.append(f"位置图：{fields.position_visualizations_detail or fields.position_visualizations_status}")
+        return "；".join(parts) if parts else "可视化输出未生成"
 
     def _run_tracking(
         self,

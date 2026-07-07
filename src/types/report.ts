@@ -265,7 +265,7 @@ export interface AnalysisUploadMetadata {
 export interface AnalysisStage {
   id: AnalysisStageId;
   label: string;
-  status: "pending" | "active" | "done" | "failed" | "skipped" | "unavailable" | "canceled";
+  status: "pending" | "active" | "done" | "partial" | "failed" | "skipped" | "unavailable" | "canceled";
   detail: string;
   startedAt?: string;
   endedAt?: string;
@@ -709,6 +709,16 @@ export interface AnalysisPipelineResult {
     bounce_events_url?: string;
     bounce_events_status?: string;
     bounce_events_detail?: string;
+    analysis_overlay_video_path?: string;
+    analysis_overlay_video_url?: string;
+    analysis_overlay_video_status?: string;
+    analysis_overlay_video_detail?: string;
+    heatmaps_manifest_json_path?: string;
+    heatmaps_url?: string;
+    scatter_plots_manifest_json_path?: string;
+    scatter_plots_url?: string;
+    position_visualizations_status?: string;
+    position_visualizations_detail?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
     pose_overlay_status?: string;
@@ -722,6 +732,29 @@ export interface AnalysisPipelineResult {
     overlay_video_path?: string;
   };
   message: string;
+}
+
+export interface VisualizationManifestItem {
+  id: string;
+  kind: string;
+  label: string;
+  title: string;
+  description: string;
+  file_name: string;
+  file_path?: string;
+  url: string;
+  artifact_url?: string;
+  width: number;
+  height: number;
+  source_artifacts: string[];
+}
+
+export interface VisualizationManifest {
+  schema_version: string;
+  job_id: string;
+  status: string;
+  detail: string;
+  items: VisualizationManifestItem[];
 }
 
 export interface AnalysisApiError {

@@ -3,6 +3,7 @@ import numpy as np
 from app.schemas.court_view import CourtViewThresholds
 from app.schemas.tracking import Detection
 from app.vision.court_view import (
+    CourtViewFrameScorer,
     CourtViewStateMachine,
     compute_expanded_detection_roi,
     filter_detections_to_roi,
@@ -58,6 +59,21 @@ def test_filter_detections_to_roi_uses_source_frame_footpoint():
 
     assert kept == [detections[0]]
     assert filtered == 1
+
+
+def test_court_view_frame_scorer_clamps_scores_to_schema_range():
+    assert CourtViewFrameScorer._clamp_score(-0.0216) == 0.0
+    assert CourtViewFrameScorer._clamp_score(0.42) == 0.42
+    assert CourtViewFrameScorer._clamp_score(1.4) == 1.0
+
+
+def test_court_view_state_machine_clamps_negative_score_samples():
+    state = CourtViewStateMachine(CourtViewThresholds(match_threshold=0.75, start_frames=1, end_frames=1))
+
+    sample = state.update(0, 0.0, -0.0216)
+
+    assert sample.score == 0.0
+    assert sample.reason == "gated_non_court_view"
 
 
 def test_court_view_state_machine_segments_and_gated_frames():

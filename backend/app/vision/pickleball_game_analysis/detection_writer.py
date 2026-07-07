@@ -28,6 +28,12 @@ def build_raw_trajectory_payload(
     court_width: float = 20.0,
     court_length: float = 44.0,
 ) -> dict[str, Any]:
+    """
+    构造"原始球轨迹"产物的 payload（字典）。
+
+    原始轨迹 = BallTracker 逐帧输出、未经清洗。字段含 schema 版本、作业 ID、
+    状态、坐标系统说明，以及每个采样点。
+    """
     return {
         "schema_version": "ball_trajectory.v1",
         "job_id": job_id,
@@ -48,6 +54,11 @@ def build_cleaned_trajectory_payload(
     court_width: float = 20.0,
     court_length: float = 44.0,
 ) -> dict[str, Any]:
+    """
+    构造"清洗后球轨迹"产物的 payload。
+
+    与原始轨迹相比，多了 filtering 字段，记录清洗参数（去异常、插值、缺口上限等）。
+    """
     config = config or TrajectoryCleanerConfig()
     return {
         "schema_version": "cleaned_ball_trajectory.v1",
@@ -75,6 +86,12 @@ def build_bounce_events_payload(
     court_width: float = 20.0,
     court_length: float = 44.0,
 ) -> dict[str, Any]:
+    """
+    构造"弹跳事件"产物的 payload。
+
+    status / detail 若未传则自动推断：有事件→available，无事件→no_candidates。
+    config 段会记录弹跳检测的关键参数，便于复现/调试。
+    """
     config = config or BounceDetectorConfig()
     resolved_status = status or ("available" if events else "no_candidates")
     resolved_detail = detail or (
@@ -100,20 +117,28 @@ def build_bounce_events_payload(
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> Path:
+    """
+    把产物字典写成带缩进的 JSON 文件（中文不转义）。
+
+    自动创建父目录；返回写入后的路径。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(to_jsonable(payload), ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
 def write_raw_trajectory(path: Path, *, job_id: str, samples: list[BallFrameSample], **kwargs: Any) -> Path:
+    """便捷方法：构造并写入"原始球轨迹"JSON。"""
     return write_json(path, build_raw_trajectory_payload(job_id=job_id, samples=samples, **kwargs))
 
 
 def write_cleaned_trajectory(path: Path, *, job_id: str, samples: list[TrajectoryPoint], **kwargs: Any) -> Path:
+    """便捷方法：构造并写入"清洗后球轨迹"JSON。"""
     return write_json(path, build_cleaned_trajectory_payload(job_id=job_id, samples=samples, **kwargs))
 
 
 def write_bounce_events(path: Path, *, job_id: str, events: list[BounceEvent], **kwargs: Any) -> Path:
+    """便捷方法：构造并写入"弹跳事件"JSON。"""
     return write_json(path, build_bounce_events_payload(job_id=job_id, events=events, **kwargs))
 
 
@@ -203,4 +228,5 @@ def build_ball_overlay_payload(
 
 
 def write_ball_overlay(path: Path, *, job_id: str, video_id: str | None = None, samples: list[BallFrameSample], **kwargs: Any) -> Path:
+    """便捷方法：构造并写入 ball_overlay.json（前端叠加/可视化用）。"""
     return write_json(path, build_ball_overlay_payload(job_id=job_id, video_id=video_id, samples=samples, **kwargs))

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 # Literal：限定某个参数只能取固定的几个字符串值（这里用于限定 artifact 名称白名单）
 # Union：表示返回值"可能是多种类型之一"
+from pathlib import Path
 from typing import Literal, Union
 
 from fastapi import APIRouter, HTTPException
@@ -263,3 +264,23 @@ def read_analysis_artifact(
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="application/x-ndjson")
     # 3) 其余都是 JSON 文件 → 读取后以 JSON 形式返回
     return JSONResponse(_STORAGE.read_json(path))
+
+
+@router.get("/jobs/{job_id}/artifacts/position-visualization-images/{kind}/{file_name}", response_model=None)
+def read_position_visualization_image(
+    job_id: str,
+    kind: Literal["heatmaps", "scatter_plots"],
+    file_name: str,
+) -> FileResponse:
+    """读取位置可视化 manifest 中引用的 PNG 图片。"""
+    job = get_mock_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    safe_name = Path(file_name).name
+    if safe_name != file_name or not safe_name.lower().endswith(".png"):
+        raise HTTPException(status_code=404, detail="Analysis artifact not found")
+    base_dir = _STORAGE.heatmaps_dir(job_id) if kind == "heatmaps" else _STORAGE.scatter_plots_dir(job_id)
+    path = base_dir / safe_name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Analysis artifact not found")
+    return FileResponse(path, media_type="image/png")

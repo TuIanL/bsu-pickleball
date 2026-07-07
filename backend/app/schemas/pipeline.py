@@ -16,7 +16,7 @@ from app.schemas.metrics import PerformanceMetrics
 from app.schemas.tracking import ProjectedTrackPoint
 
 # 流水线阶段状态：与 analysis 里的阶段状态含义一致
-PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped", "unavailable", "canceled"]
+PipelineStageStatus = Literal["pending", "active", "done", "partial", "failed", "skipped", "unavailable", "canceled"]
 
 
 class PipelineStageResult(BaseModel):

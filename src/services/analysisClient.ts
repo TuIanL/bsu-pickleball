@@ -15,6 +15,7 @@ import type {
   PoseOverlayArtifact,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
+  VisualizationManifest,
   VideoUploadResponse,
 } from "../types/report";
 
@@ -608,6 +609,20 @@ export async function getBallTrajectory(result: AnalysisPipelineResult): Promise
 export async function getBounceEvents(result: AnalysisPipelineResult): Promise<BounceEventsArtifact | null> {
   const path = result.artifacts.bounce_events_url;
   return path ? requestJson<BounceEventsArtifact>(path) : null;
+}
+
+export function getAnalysisOverlayVideoUrl(result: AnalysisPipelineResult): string | undefined {
+  return resolveAnalysisAssetUrl(result.artifacts.analysis_overlay_video_url);
+}
+
+export async function getPositionHeatmaps(result: AnalysisPipelineResult): Promise<VisualizationManifest | null> {
+  const path = result.artifacts.heatmaps_url;
+  return path ? requestJson<VisualizationManifest>(path) : null;
+}
+
+export async function getPositionScatterPlots(result: AnalysisPipelineResult): Promise<VisualizationManifest | null> {
+  const path = result.artifacts.scatter_plots_url;
+  return path ? requestJson<VisualizationManifest>(path) : null;
 }
 
 // Camera API functions

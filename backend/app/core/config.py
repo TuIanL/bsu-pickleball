@@ -73,15 +73,15 @@ class Settings(BaseModel):
     attention_player_selector_model_path: str | None = None  # 注意力选择器模型路径
     attention_player_selector_confidence: float = 0.65     # 注意力选择器置信度阈值
 
-    # ---- 球检测 / 弹跳检测（默认关闭）----
+    # ---- 球检测 / 弹跳检测（默认开启，缺少模型时自动降级为 unavailable）----
     ball_model_path: str | None = None                    # 球检测模型路径
-    enable_ball_detection: bool = False                   # 是否启用球检测
-    enable_bounce_detection: bool = False                 # 是否启用弹跳检测
+    enable_ball_detection: bool = True                    # 是否启用球检测
+    enable_bounce_detection: bool = True                  # 是否启用弹跳检测
     ball_analysis_strict: bool = False                    # 球分析严格模式：true 时球分析异常导致 pipeline failed
 
     # ---- 可视化输出 ----
-    enable_analysis_overlay_video: bool = False           # 是否生成分析叠加视频
-    enable_position_visualizations: bool = False          # 是否生成位置可视化图
+    enable_analysis_overlay_video: bool = True            # 是否生成分析叠加视频
+    enable_position_visualizations: bool = True           # 是否生成位置可视化图
     visualization_language: str = "zh-CN"                 # 可视化文字语言
 
     # ---- 球员身份跟踪（跨帧保持同一人身份）----
@@ -210,6 +210,15 @@ def get_settings() -> Settings:
         )
     )
     pose_inference_env = os.getenv("PICKLEBALL_ENABLE_POSE_INFERENCE")
+    ball_model_path = os.getenv("PICKLEBALL_BALL_MODEL_PATH") or _first_existing_path(
+        model_dir,
+        [
+            "ball/tennis-ball.pt",
+            "ball/pickleball-ball.pt",
+            "ball/best.pt",
+            "pickleball-multitarget/model.pt",
+        ],
+    )
 
     # 构造最终配置对象：逐项从环境变量读取，未设置则用默认值。
     # 注意下面大量使用 _env_bool(...) / _clamp_float(...) / max(...) 等，
@@ -262,16 +271,16 @@ def get_settings() -> Settings:
             0.0,
             1.0,
         ),
-        ball_model_path=os.getenv("PICKLEBALL_BALL_MODEL_PATH") or None,
-        enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "false").lower()
+        ball_model_path=ball_model_path,
+        enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "true").lower()
         in {"1", "true", "yes"},
-        enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "false").lower()
+        enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "true").lower()
         in {"1", "true", "yes"},
         ball_analysis_strict=os.getenv("PICKLEBALL_BALL_ANALYSIS_STRICT", "false").lower()
         in {"1", "true", "yes"},
-        enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "false").lower()
+        enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "true").lower()
         in {"1", "true", "yes"},
-        enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "false").lower()
+        enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true").lower()
         in {"1", "true", "yes"},
         visualization_language=os.getenv("PICKLEBALL_VISUALIZATION_LANGUAGE", "zh-CN"),
         player_identity_max_players=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_PLAYERS", "4"))),

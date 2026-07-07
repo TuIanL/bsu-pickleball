@@ -61,6 +61,7 @@ import type {
   ReportType,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
+  VisualizationManifest,
 } from "./types/report";
 import {
   type AnalysisApiError,
@@ -72,7 +73,10 @@ import {
   getBallTrajectory,
   getBounceEvents,
   getAnalysisJob,
+  getAnalysisOverlayVideoUrl,
   getPoseOverlay,
+  getPositionHeatmaps,
+  getPositionScatterPlots,
   getServeEvents,
   getAnalysisResult,
   getAnalysisReport,
@@ -2517,10 +2521,15 @@ function useVisualAnalysisReport(jobId?: string) {
     bounceEventsLoadState: OverlayLoadState;
     job: AnalysisJobSummary | null;
     jobId: string;
+    heatmapsManifest: VisualizationManifest | null;
+    heatmapsLoadState: OverlayLoadState;
+    overlayVideoSrc?: string;
     poseOverlay: PoseOverlayArtifact | null;
     poseOverlayLoadState: OverlayLoadState;
     report: AnalysisReport | null;
     result: AnalysisPipelineResult | null;
+    scatterManifest: VisualizationManifest | null;
+    scatterLoadState: OverlayLoadState;
     serveEvents: ServeEventsArtifact | null;
     serveEventsLoadState: OverlayLoadState;
     trackingOverlay: TrackingOverlayArtifact | null;
@@ -2547,6 +2556,10 @@ function useVisualAnalysisReport(jobId?: string) {
         serveEventsLoadState: OverlayLoadState;
         trackingOverlay: TrackingOverlayArtifact | null;
         trackingOverlayLoadState: OverlayLoadState;
+        heatmapsManifest: VisualizationManifest | null;
+        heatmapsLoadState: OverlayLoadState;
+        scatterManifest: VisualizationManifest | null;
+        scatterLoadState: OverlayLoadState;
       }>
     ) => {
       if (!alive) {
@@ -2565,6 +2578,8 @@ function useVisualAnalysisReport(jobId?: string) {
         const shouldLoadServeEvents = Boolean(pipelineResult?.artifacts.serve_events_url);
         const shouldLoadBallTrajectory = Boolean(pipelineResult?.artifacts.cleaned_ball_trajectory_url ?? pipelineResult?.artifacts.ball_trajectory_url);
         const shouldLoadBounceEvents = Boolean(pipelineResult?.artifacts.bounce_events_url);
+        const shouldLoadHeatmaps = Boolean(pipelineResult?.artifacts.heatmaps_url);
+        const shouldLoadScatter = Boolean(pipelineResult?.artifacts.scatter_plots_url);
 
         if (!alive) {
           return;
@@ -2576,12 +2591,17 @@ function useVisualAnalysisReport(jobId?: string) {
           ballTrajectoryLoadState: shouldLoadBallTrajectory ? "loading" : "unavailable",
           bounceEvents: null,
           bounceEventsLoadState: shouldLoadBounceEvents ? "loading" : "unavailable",
+          heatmapsManifest: null,
+          heatmapsLoadState: shouldLoadHeatmaps ? "loading" : "unavailable",
           job: nextJob,
           jobId,
+          overlayVideoSrc: pipelineResult ? getAnalysisOverlayVideoUrl(pipelineResult) : undefined,
           poseOverlay: null,
           poseOverlayLoadState: shouldLoadPose ? "loading" : "unavailable",
           report: adaptedReport,
           result: pipelineResult,
+          scatterManifest: null,
+          scatterLoadState: shouldLoadScatter ? "loading" : "unavailable",
           serveEvents: null,
           serveEventsLoadState: shouldLoadServeEvents ? "loading" : "unavailable",
           trackingOverlay: null,
@@ -2668,6 +2688,38 @@ function useVisualAnalysisReport(jobId?: string) {
               });
             });
         }
+
+        if (pipelineResult && shouldLoadHeatmaps) {
+          getPositionHeatmaps(pipelineResult)
+            .then((manifest) => {
+              setOverlayState({
+                heatmapsManifest: manifest,
+                heatmapsLoadState: manifest ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                heatmapsManifest: null,
+                heatmapsLoadState: "failed",
+              });
+            });
+        }
+
+        if (pipelineResult && shouldLoadScatter) {
+          getPositionScatterPlots(pipelineResult)
+            .then((manifest) => {
+              setOverlayState({
+                scatterManifest: manifest,
+                scatterLoadState: manifest ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                scatterManifest: null,
+                scatterLoadState: "failed",
+              });
+            });
+        }
       } catch (error) {
         if (alive) {
           setLoadedResult({
@@ -2676,12 +2728,17 @@ function useVisualAnalysisReport(jobId?: string) {
             ballTrajectoryLoadState: "unavailable",
             bounceEvents: null,
             bounceEventsLoadState: "unavailable",
+            heatmapsManifest: null,
+            heatmapsLoadState: "unavailable",
             job: null,
             jobId,
+            overlayVideoSrc: undefined,
             poseOverlay: null,
             poseOverlayLoadState: "unavailable",
             report: null,
             result: null,
+            scatterManifest: null,
+            scatterLoadState: "unavailable",
             serveEvents: null,
             serveEventsLoadState: "unavailable",
             trackingOverlay: null,
@@ -2705,11 +2762,16 @@ function useVisualAnalysisReport(jobId?: string) {
       ballTrajectoryLoadState: "idle" as OverlayLoadState,
       bounceEvents: null,
       bounceEventsLoadState: "idle" as OverlayLoadState,
+      heatmapsManifest: null,
+      heatmapsLoadState: "idle" as OverlayLoadState,
       job: null,
+      overlayVideoSrc: undefined,
       poseOverlay: null,
       poseOverlayLoadState: "idle" as OverlayLoadState,
       report: demoReport,
       result: null,
+      scatterManifest: null,
+      scatterLoadState: "idle" as OverlayLoadState,
       serveEvents: null,
       serveEventsLoadState: "idle" as OverlayLoadState,
       trackingOverlay: null,
@@ -2725,11 +2787,16 @@ function useVisualAnalysisReport(jobId?: string) {
       ballTrajectoryLoadState: "idle" as OverlayLoadState,
       bounceEvents: undefined,
       bounceEventsLoadState: "idle" as OverlayLoadState,
+      heatmapsManifest: undefined,
+      heatmapsLoadState: "idle" as OverlayLoadState,
       job: undefined,
+      overlayVideoSrc: undefined,
       poseOverlay: undefined,
       poseOverlayLoadState: "idle" as OverlayLoadState,
       report: undefined,
       result: undefined,
+      scatterManifest: undefined,
+      scatterLoadState: "idle" as OverlayLoadState,
       serveEvents: undefined,
       serveEventsLoadState: "idle" as OverlayLoadState,
       trackingOverlay: undefined,
@@ -2744,11 +2811,16 @@ function useVisualAnalysisReport(jobId?: string) {
     ballTrajectoryLoadState: loadedResult.ballTrajectoryLoadState,
     bounceEvents: loadedResult.bounceEvents,
     bounceEventsLoadState: loadedResult.bounceEventsLoadState,
+    heatmapsManifest: loadedResult.heatmapsManifest,
+    heatmapsLoadState: loadedResult.heatmapsLoadState,
     job: loadedResult.job,
+    overlayVideoSrc: loadedResult.overlayVideoSrc,
     poseOverlay: loadedResult.poseOverlay,
     poseOverlayLoadState: loadedResult.poseOverlayLoadState,
     report: loadedResult.report,
     result: loadedResult.result,
+    scatterManifest: loadedResult.scatterManifest,
+    scatterLoadState: loadedResult.scatterLoadState,
     serveEvents: loadedResult.serveEvents,
     serveEventsLoadState: loadedResult.serveEventsLoadState,
     trackingOverlay: loadedResult.trackingOverlay,
@@ -2767,11 +2839,16 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
     ballTrajectoryLoadState,
     bounceEvents,
     bounceEventsLoadState,
+    heatmapsManifest,
+    heatmapsLoadState,
     job,
+    overlayVideoSrc,
     poseOverlay,
     poseOverlayLoadState,
     report,
     result,
+    scatterManifest,
+    scatterLoadState,
     serveEvents,
     serveEventsLoadState,
     trackingOverlay,
@@ -2873,33 +2950,45 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
         </section>
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
-          <VideoAnalysisCard
-            labels={analysis.videoOverlayLabels}
-            ballTrajectory={ballTrajectory ?? null}
-            ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
-            ballTrajectoryLoadState={ballTrajectoryLoadState}
-            ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
-            bounceEvents={bounceEvents ?? null}
-            bounceEventsDetail={result?.artifacts.bounce_events_detail}
-            bounceEventsLoadState={bounceEventsLoadState}
-            bounceEventsStatus={result?.artifacts.bounce_events_status}
-            match={analysis.match}
-            players={analysis.playerMarkers}
-            poseOverlayDetail={result?.artifacts.pose_overlay_detail}
-            poseOverlayLoadState={poseOverlayLoadState}
-            poseOverlayStatus={result?.artifacts.pose_overlay_status}
-            poseOverlay={poseOverlay ?? null}
-            serveEvents={serveEvents ?? null}
-            serveEventsDetail={result?.artifacts.serve_events_detail}
-            serveEventsLoadState={serveEventsLoadState}
-            serveEventsStatus={result?.artifacts.serve_events_status}
-            timeline={analysis.timelineMarkers}
-            trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
-            trackingOverlayLoadState={trackingOverlayLoadState}
-            trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
-            trackingOverlay={trackingOverlay ?? null}
-            videoSrc={analysis.source === "job" ? videoSrc : undefined}
-          />
+          <div className="grid gap-5">
+            <VideoAnalysisCard
+              labels={analysis.videoOverlayLabels}
+              ballTrajectory={ballTrajectory ?? null}
+              ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
+              ballTrajectoryLoadState={ballTrajectoryLoadState}
+              ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
+              bounceEvents={bounceEvents ?? null}
+              bounceEventsDetail={result?.artifacts.bounce_events_detail}
+              bounceEventsLoadState={bounceEventsLoadState}
+              bounceEventsStatus={result?.artifacts.bounce_events_status}
+              match={analysis.match}
+              players={analysis.playerMarkers}
+              poseOverlayDetail={result?.artifacts.pose_overlay_detail}
+              poseOverlayLoadState={poseOverlayLoadState}
+              poseOverlayStatus={result?.artifacts.pose_overlay_status}
+              poseOverlay={poseOverlay ?? null}
+              serveEvents={serveEvents ?? null}
+              serveEventsDetail={result?.artifacts.serve_events_detail}
+              serveEventsLoadState={serveEventsLoadState}
+              serveEventsStatus={result?.artifacts.serve_events_status}
+              timeline={analysis.timelineMarkers}
+              trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
+              trackingOverlayLoadState={trackingOverlayLoadState}
+              trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
+              trackingOverlay={trackingOverlay ?? null}
+              videoSrc={analysis.source === "job" ? overlayVideoSrc ?? videoSrc : undefined}
+            />
+            <VisualizationArtifactGallery
+              heatmapsManifest={heatmapsManifest ?? null}
+              heatmapsLoadState={heatmapsLoadState}
+              heatmapsStatus={result?.artifacts.position_visualizations_status}
+              heatmapsDetail={result?.artifacts.position_visualizations_detail}
+              scatterManifest={scatterManifest ?? null}
+              scatterLoadState={scatterLoadState}
+              scatterStatus={result?.artifacts.position_visualizations_status}
+              scatterDetail={result?.artifacts.position_visualizations_detail}
+            />
+          </div>
           <AnalysisStatusRail
             analysis={analysis}
             ballTrajectory={ballTrajectory ?? null}
@@ -2912,6 +3001,10 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
             poseOverlayLoadState={poseOverlayLoadState}
             reportPath={reportPath}
             result={result}
+            heatmapsManifest={heatmapsManifest ?? null}
+            heatmapsLoadState={heatmapsLoadState}
+            scatterManifest={scatterManifest ?? null}
+            scatterLoadState={scatterLoadState}
             serveEvents={serveEvents ?? null}
             serveEventsLoadState={serveEventsLoadState}
             trackingOverlay={trackingOverlay ?? null}
@@ -2964,33 +3057,47 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
-        <VideoAnalysisCard
-          labels={analysis.videoOverlayLabels}
-          ballTrajectory={ballTrajectory ?? null}
-          ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
-          ballTrajectoryLoadState={ballTrajectoryLoadState}
-          ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
-          bounceEvents={bounceEvents ?? null}
-          bounceEventsDetail={result?.artifacts.bounce_events_detail}
-          bounceEventsLoadState={bounceEventsLoadState}
-          bounceEventsStatus={result?.artifacts.bounce_events_status}
-          match={analysis.match}
-          players={analysis.playerMarkers}
-          poseOverlayDetail={result?.artifacts.pose_overlay_detail}
-          poseOverlayLoadState={poseOverlayLoadState}
-          poseOverlayStatus={result?.artifacts.pose_overlay_status}
-          poseOverlay={poseOverlay ?? null}
-          serveEvents={serveEvents ?? null}
-          serveEventsDetail={result?.artifacts.serve_events_detail}
-          serveEventsLoadState={serveEventsLoadState}
-          serveEventsStatus={result?.artifacts.serve_events_status}
-          timeline={analysis.timelineMarkers}
-          trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
-          trackingOverlayLoadState={trackingOverlayLoadState}
-          trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
-          trackingOverlay={trackingOverlay ?? null}
-          videoSrc={analysis.source === "job" ? videoSrc : undefined}
-        />
+        <div className="grid gap-5">
+          <VideoAnalysisCard
+            labels={analysis.videoOverlayLabels}
+            ballTrajectory={ballTrajectory ?? null}
+            ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
+            ballTrajectoryLoadState={ballTrajectoryLoadState}
+            ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
+            bounceEvents={bounceEvents ?? null}
+            bounceEventsDetail={result?.artifacts.bounce_events_detail}
+            bounceEventsLoadState={bounceEventsLoadState}
+            bounceEventsStatus={result?.artifacts.bounce_events_status}
+            match={analysis.match}
+            players={analysis.playerMarkers}
+            poseOverlayDetail={result?.artifacts.pose_overlay_detail}
+            poseOverlayLoadState={poseOverlayLoadState}
+            poseOverlayStatus={result?.artifacts.pose_overlay_status}
+            poseOverlay={poseOverlay ?? null}
+            serveEvents={serveEvents ?? null}
+            serveEventsDetail={result?.artifacts.serve_events_detail}
+            serveEventsLoadState={serveEventsLoadState}
+            serveEventsStatus={result?.artifacts.serve_events_status}
+            timeline={analysis.timelineMarkers}
+            trackingOverlayDetail={result?.artifacts.tracking_overlay_detail}
+            trackingOverlayLoadState={trackingOverlayLoadState}
+            trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
+            trackingOverlay={trackingOverlay ?? null}
+            videoSrc={analysis.source === "job" ? overlayVideoSrc ?? videoSrc : undefined}
+          />
+          {analysis.source === "job" ? (
+            <VisualizationArtifactGallery
+              heatmapsManifest={heatmapsManifest ?? null}
+              heatmapsLoadState={heatmapsLoadState}
+              heatmapsStatus={result?.artifacts.position_visualizations_status}
+              heatmapsDetail={result?.artifacts.position_visualizations_detail}
+              scatterManifest={scatterManifest ?? null}
+              scatterLoadState={scatterLoadState}
+              scatterStatus={result?.artifacts.position_visualizations_status}
+              scatterDetail={result?.artifacts.position_visualizations_detail}
+            />
+          ) : null}
+        </div>
         <aside className="grid gap-5">
           <CoachNotesCard notes={analysis.coachNotes} />
           <HighlightsCard highlights={analysis.highlights} onNavigate={onNavigate} reportPath={reportPath} />
@@ -3033,18 +3140,97 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
   );
 }
 
+function VisualizationArtifactGallery({
+  heatmapsManifest,
+  heatmapsLoadState,
+  heatmapsStatus,
+  heatmapsDetail,
+  scatterManifest,
+  scatterLoadState,
+  scatterStatus,
+  scatterDetail,
+}: {
+  heatmapsManifest: VisualizationManifest | null;
+  heatmapsLoadState: OverlayLoadState;
+  heatmapsStatus?: string;
+  heatmapsDetail?: string;
+  scatterManifest: VisualizationManifest | null;
+  scatterLoadState: OverlayLoadState;
+  scatterStatus?: string;
+  scatterDetail?: string;
+}) {
+  const groups = [
+    { title: "位置热力图", manifest: heatmapsManifest, loadState: heatmapsLoadState, status: heatmapsStatus, detail: heatmapsDetail },
+    { title: "位置散点图", manifest: scatterManifest, loadState: scatterLoadState, status: scatterStatus, detail: scatterDetail },
+  ];
+  const hasAnyItems = groups.some((group) => (group.manifest?.items.length ?? 0) > 0);
+  if (!hasAnyItems && groups.every((group) => group.loadState === "unavailable" || group.status === "skipped" || !group.status)) {
+    return null;
+  }
+
+  return (
+    <section className="sport-card p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">可视化产物</p>
+          <h2 className="mt-2 text-xl font-black text-[#14241B]">热力图与散点图</h2>
+        </div>
+        <LineChart className="text-[#168A34]" size={22} aria-hidden="true" />
+      </div>
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        {groups.map((group) => {
+          const status = overlayLayerStatus(group.loadState, group.manifest?.status ?? group.status);
+          const meta = overlayStatusMeta(status);
+          const items = group.manifest?.items ?? [];
+          return (
+            <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={group.title}>
+              <div className="flex items-center justify-between gap-3">
+                <strong className="text-sm text-[#14241B]">{group.title}</strong>
+                <span className={`rounded-full px-2.5 py-1 text-xs font-black ${meta.className}`}>{meta.label}</span>
+              </div>
+              {items.length > 0 ? (
+                <div className="mt-4 grid gap-3">
+                  {items.map((item) => (
+                    <figure className="overflow-hidden rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1]" key={item.id}>
+                      <img
+                        alt={item.title || item.label}
+                        className="aspect-[11/16] w-full bg-white object-contain"
+                        src={resolveAnalysisAssetUrl(item.url)}
+                      />
+                      <figcaption className="border-t border-[#DDE9D6] bg-white/80 p-3">
+                        <strong className="block text-sm text-[#14241B]">{item.title || item.label}</strong>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm leading-6 text-slate-500">{group.manifest?.detail ?? group.detail ?? meta.detail}</p>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function AnalysisStatusRail({
   analysis,
   ballTrajectory,
   ballTrajectoryLoadState,
   bounceEvents,
   bounceEventsLoadState,
+  heatmapsManifest,
+  heatmapsLoadState,
   job,
   onNavigate,
   poseOverlay,
   poseOverlayLoadState,
   reportPath,
   result,
+  scatterManifest,
+  scatterLoadState,
   serveEvents,
   serveEventsLoadState,
   trackingOverlay,
@@ -3055,12 +3241,16 @@ function AnalysisStatusRail({
   ballTrajectoryLoadState: OverlayLoadState;
   bounceEvents: BounceEventsArtifact | null;
   bounceEventsLoadState: OverlayLoadState;
+  heatmapsManifest: VisualizationManifest | null;
+  heatmapsLoadState: OverlayLoadState;
   job?: AnalysisJobSummary | null;
   onNavigate: NavigateFn;
   poseOverlay: PoseOverlayArtifact | null;
   poseOverlayLoadState: OverlayLoadState;
   reportPath: (type: ReportType) => AppPath;
   result?: AnalysisPipelineResult | null;
+  scatterManifest: VisualizationManifest | null;
+  scatterLoadState: OverlayLoadState;
   serveEvents: ServeEventsArtifact | null;
   serveEventsLoadState: OverlayLoadState;
   trackingOverlay: TrackingOverlayArtifact | null;
@@ -3094,6 +3284,21 @@ function AnalysisStatusRail({
       label: "弹跳候选",
       status: overlayLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? result?.artifacts.bounce_events_status),
       detail: result?.artifacts.bounce_events_detail ?? bounceEvents?.detail,
+    },
+    {
+      label: "叠加视频",
+      status: result?.artifacts.analysis_overlay_video_status ?? "unavailable",
+      detail: result?.artifacts.analysis_overlay_video_detail,
+    },
+    {
+      label: "位置热力图",
+      status: overlayLayerStatus(heatmapsLoadState, heatmapsManifest?.status ?? result?.artifacts.position_visualizations_status),
+      detail: heatmapsManifest?.detail ?? result?.artifacts.position_visualizations_detail,
+    },
+    {
+      label: "位置散点图",
+      status: overlayLayerStatus(scatterLoadState, scatterManifest?.status ?? result?.artifacts.position_visualizations_status),
+      detail: scatterManifest?.detail ?? result?.artifacts.position_visualizations_detail,
     },
   ];
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
