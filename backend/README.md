@@ -341,11 +341,14 @@ replace the current interfaces later while preserving player movement metrics.
 
 Runtime artifacts live under `backend/data/`:
 
+- `app.sqlite3`: local SQLite database for business metadata such as Field Sessions and future capture relationships
 - `uploads/`: uploaded videos
 - `outputs/jobs/`: durable job records with state, timestamps, signatures, and stage telemetry
 - `outputs/`: JSON results, reports, overlays, and future visualized videos
 - `calibrations/`: manual calibration JSON files
 - `tmp/`: temporary frames and intermediate files
+
+SQLite stores lightweight business metadata and relationships. Videos, calibration JSON, analysis JSON/JSONL, images, reports, and overlay videos remain filesystem artifacts and should not be embedded in the database. Override the database location with `PICKLEBALL_DATABASE_PATH` when running isolated tests or alternate local environments.
 
 These generated files are ignored by git. Model weights should live in the repo-level `models/` directory and are also ignored.
 

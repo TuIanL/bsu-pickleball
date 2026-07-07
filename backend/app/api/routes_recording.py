@@ -100,16 +100,17 @@ def cancel_recording(session_id: str) -> RecordingSession:
 def list_recordings(
     camera_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    field_session_id: str | None = Query(default=None),
 ) -> list[RecordingSession]:
     """
     列出录制会话
 
-    支持两个可选过滤条件：
+    支持三个可选过滤条件：
     - camera_id：只看某个摄像头的录制
     - status：按状态过滤（如 recording / done / failed）
-    两个都不传则返回全部录制会话。
+    - field_session_id：只看某个 Field Session 下的录制
     """
-    return session_service.list_sessions(camera_id=camera_id, status=status)
+    return session_service.list_sessions(camera_id=camera_id, status=status, field_session_id=field_session_id)
 
 
 @router.get("/{session_id}", response_model=RecordingSession)

@@ -33,6 +33,7 @@ class Settings(BaseModel):
 
     # ---- 数据与模型存放目录 ----
     data_dir: Path = Path("data")                        # 总数据目录
+    database_path: Path = Path("data/app.sqlite3")       # 本地 SQLite 数据库文件
     uploads_dir: Path = Path("data/uploads")             # 上传视频存放目录
     outputs_dir: Path = Path("data/outputs")             # 分析结果输出目录
     calibrations_dir: Path = Path("data/calibrations")   # 标定文件目录
@@ -225,6 +226,8 @@ def get_settings() -> Settings:
     # 目的是把环境变量的"字符串"安全地转成对应的类型并限定取值范围。
     settings = Settings(
         app_name=os.getenv("PICKLEBALL_APP_NAME", Settings.model_fields["app_name"].default),
+        data_dir=Path(os.getenv("PICKLEBALL_DATA_DIR", "data")),
+        database_path=Path(os.getenv("PICKLEBALL_DATABASE_PATH", "data/app.sqlite3")),
         uploads_dir=Path(os.getenv("PICKLEBALL_UPLOADS_DIR", "data/uploads")),
         outputs_dir=Path(os.getenv("PICKLEBALL_OUTPUTS_DIR", "data/outputs")),
         calibrations_dir=Path(os.getenv("PICKLEBALL_CALIBRATIONS_DIR", "data/calibrations")),

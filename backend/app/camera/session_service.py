@@ -83,6 +83,27 @@ class SessionService:
         if self.find_active_session(request.camera_id) is not None:
             raise RuntimeError(f"摄像头 {request.camera_id} 正在录制中")
 
+        # Field Session 校验与上下文继承
+        field_session_id = request.field_session_id
+        court_name = request.court_name
+        match_format = request.match_format or "doubles"
+
+        if field_session_id:
+            from app.database import get_session_factory
+            from app.services.field_session_service import get_field_session
+            db = get_session_factory()()
+            try:
+                fs = get_field_session(db, field_session_id)
+                if fs is None:
+                    raise ValueError(f"Field Session {field_session_id} 不存在")
+                # 继承：未提供时使用 Field Session 的值
+                if not court_name:
+                    court_name = fs.court_name
+                if request.match_format is None:
+                    match_format = fs.match_format.value
+            finally:
+                db.close()
+
         # 生成会话 id 与输出路径
         session_id = self._generate_session_id()
         output_path = self._output_path(session_id, request.camera_id)
@@ -91,8 +112,9 @@ class SessionService:
         session = RecordingSession(
             session_id=session_id,
             camera_id=request.camera_id,
-            court_name=request.court_name,
-            match_format=request.match_format,
+            field_session_id=field_session_id,
+            court_name=court_name,
+            match_format=match_format,
             camera_angle=request.camera_angle,
             fps=request.fps,
             resolution=request.resolution,
@@ -271,7 +293,7 @@ class SessionService:
             return cached
         return self._load(session_id)
 
-    def list_sessions(self, camera_id: str | None = None, status: str | None = None) -> list[RecordingSession]:
+    def list_sessions(self, camera_id: str | None = None, status: str | None = None, field_session_id: str | None = None) -> list[RecordingSession]:
         result: list[RecordingSession] = []
 
         # 遍历所有会话 JSON（按文件名倒序，新的在前）
@@ -284,6 +306,8 @@ class SessionService:
                     if camera_id and session.camera_id != camera_id:
                         continue
                     if status and session.status != status:
+                        continue
+                    if field_session_id and session.field_session_id != field_session_id:
                         continue
                     result.append(session)
                 except Exception:

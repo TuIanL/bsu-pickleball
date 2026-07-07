@@ -1,9 +1,5 @@
-# recording-session-control Specification
+## MODIFIED Requirements
 
-## Purpose
-Define the recording session lifecycle control — starting, stopping, canceling FFmpeg-based camera recordings with state machine enforcement, error handling, video registration, optional Field Session association, and optional auto-analysis triggering.
-
-## Requirements
 ### Requirement: 录制会话生命周期
 
 录制会话 MUST 遵循严格的状态机：`recording → completed / failed / canceled`。终态（`completed`、`failed`、`canceled`）不可再转换。录制会话 MAY 关联一个 Field Session；未关联 Field Session 时 MUST 保持既有直接录制行为。
@@ -58,22 +54,6 @@ Define the recording session lifecycle control — starting, stopping, canceling
 - **THEN** 返回完整的 `RecordingSession` 详情
 - **AND** 如果 session 不存在，返回 404
 
-### Requirement: 录制异常处理
-
-系统 MUST 在 FFmpeg 录制异常时更新会话状态并避免触发自动分析。
-
-#### Scenario: FFmpeg 进程异常退出
-- **WHEN** 录制过程中 FFmpeg 子进程非正常退出（流断开超过重连容忍时间等）
-- **THEN** 系统捕获进程返回码，更新 session status 为 `failed`
-- **AND** 在 `error_message` 中记录退出原因
-- **AND** 已写入的部分视频文件保留（可能部分可用）
-- **AND** 不触发自动分析
-
-#### Scenario: 防止重复录制
-- **WHEN** 某摄像头已有一个 `status=recording` 的 session
-- **AND** 用户再次请求 `POST /api/recordings/start` 使用同一个 `camera_id`
-- **THEN** 返回 409 错误，提示该摄像头正在录制中
-
 ### Requirement: RecordingSession 数据模型
 
 系统 MUST 在 `RecordingSession` 中保存录制生命周期字段，并 MAY 保存其所属 Field Session。
@@ -107,6 +87,8 @@ Define the recording session lifecycle control — starting, stopping, canceling
 - **WHEN** 用户提供有效 `field_session_id` 开始录制
 - **THEN** RecordingSession SHALL 保存该 `field_session_id`
 
+## ADDED Requirements
+
 ### Requirement: 继承 Field Session 录制上下文
 
 系统 MUST 在 Field Session 内开始录制时继承任务上下文。
@@ -125,16 +107,3 @@ Define the recording session lifecycle control — starting, stopping, canceling
 - **WHEN** Field Session 内的录制停止并触发自动分析
 - **THEN** 自动创建的分析任务 SHALL 使用 RecordingSession 上最终确定的 `court_name` 和 `match_format`
 - **AND** 系统 SHALL 能通过 RecordingSession 追溯到 Field Session
-
-### Requirement: FFmpeg 依赖检查
-
-系统 MUST 在启动时检查 FFmpeg 是否可用。
-
-#### Scenario: FFmpeg 可用
-- **WHEN** 系统启动且 `ffmpeg -version` 返回正常
-- **THEN** 录制功能正常可用
-
-#### Scenario: FFmpeg 不可用
-- **WHEN** 系统启动且 `ffmpeg` 命令不可执行
-- **THEN** 录制相关 API 端点返回 503 错误
-- **AND** 错误信息明确提示需要安装 FFmpeg

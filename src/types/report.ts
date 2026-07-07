@@ -216,6 +216,7 @@ export type RecordingSessionStatus = "recording" | "completed" | "failed" | "can
 
 export interface RecordingStartRequest {
   camera_id: string;
+  field_session_id?: string;
   court_name?: string;
   match_format?: "singles" | "doubles";
   camera_angle?: string;
@@ -227,6 +228,7 @@ export interface RecordingStartRequest {
 export interface RecordingSession {
   session_id: string;
   camera_id: string;
+  field_session_id?: string;
   court_name: string;
   match_format: string;
   camera_angle: string;
@@ -241,6 +243,38 @@ export interface RecordingSession {
   video_id?: string;
   auto_analysis_job_id?: string;
   error_message?: string;
+}
+
+export interface FieldSession {
+  id: string;
+  title: string;
+  venue: string;
+  court_name: string;
+  capture_mode: string;
+  match_format: string;
+  camera_setup: string;
+  status: string;
+  notes: string;
+  started_at?: string;
+  ended_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FieldSessionCreate {
+  title?: string;
+  venue?: string;
+  court_name?: string;
+  capture_mode?: string;
+  match_format?: string;
+  camera_setup?: string;
+  notes?: string;
+}
+
+export interface FieldSessionDeleteResult {
+  id: string;
+  status: "deleted" | "blocked" | "not_found";
+  detail: string;
 }
 
 export interface NavigationItem {

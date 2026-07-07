@@ -58,8 +58,9 @@ RecordingSessionStatus = Literal["recording", "completed", "failed", "canceled"]
 # 开始录制的请求：前端点击"开始录制"时携带的参数
 class RecordingStartRequest(BaseModel):
     camera_id: str                          # 要录制的摄像头 id
-    court_name: str = ""                    # 球场名称（备注用）
-    match_format: Literal["singles", "doubles"] = "doubles"  # 单打 / 双打，默认双打
+    field_session_id: Optional[str] = None  # 关联的 Field Session id（可选）
+    court_name: str = ""                    # 球场名称（备注用）；可从 Field Session 继承
+    match_format: Optional[Literal["singles", "doubles"]] = None  # 单打/双打；None 时从 Field Session 继承，否则默认 doubles
     camera_angle: str = "baseline_high"     # 机位角度标识
     fps: int = Field(default=30, ge=1, le=120)  # 帧率，限制 1~120
     resolution: str = "1920x1080"           # 录制分辨率
@@ -70,6 +71,7 @@ class RecordingStartRequest(BaseModel):
 class RecordingSession(BaseModel):
     session_id: str                 # 会话唯一 ID
     camera_id: str                  # 对应的摄像头 id
+    field_session_id: Optional[str] = None   # 关联的 Field Session id（可选）
     court_name: str
     match_format: str
     camera_angle: str

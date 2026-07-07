@@ -629,6 +629,9 @@ export async function getPositionScatterPlots(result: AnalysisPipelineResult): P
 import type {
   CameraCreateRequest,
   CameraInfo,
+  FieldSession,
+  FieldSessionCreate,
+  FieldSessionDeleteResult,
   ProbeResult,
   RecordingSession,
   RecordingStartRequest,
@@ -679,10 +682,12 @@ export async function cancelRecording(sessionId: string): Promise<RecordingSessi
 export async function listRecordings(params?: {
   camera_id?: string;
   status?: string;
+  field_session_id?: string;
 }): Promise<RecordingSession[]> {
   const searchParams = new URLSearchParams();
   if (params?.camera_id) searchParams.set("camera_id", params.camera_id);
   if (params?.status) searchParams.set("status", params.status);
+  if (params?.field_session_id) searchParams.set("field_session_id", params.field_session_id);
   const query = searchParams.toString();
   return requestJson<RecordingSession[]>(`/api/recordings${query ? `?${query}` : ""}`);
 }
@@ -699,6 +704,58 @@ export async function deleteRecording(sessionId: string): Promise<{ session_id: 
 
 export function getCameraPreviewUrl(cameraId?: string): string | undefined {
   return cameraId ? toApiUrl(`/api/cameras/${cameraId}/preview`) : undefined;
+}
+
+// Field Session API functions
+export async function createFieldSession(request: FieldSessionCreate): Promise<FieldSession> {
+  return requestJson<FieldSession>("/api/field-sessions", {
+    body: JSON.stringify(request),
+    method: "POST",
+  });
+}
+
+export async function listFieldSessions(params?: {
+  status?: string;
+  capture_mode?: string;
+  match_format?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<FieldSession[]> {
+  const sp = new URLSearchParams();
+  if (params?.status) sp.set("status", params.status);
+  if (params?.capture_mode) sp.set("capture_mode", params.capture_mode);
+  if (params?.match_format) sp.set("match_format", params.match_format);
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  const q = sp.toString();
+  return requestJson<FieldSession[]>(`/api/field-sessions${q ? `?${q}` : ""}`);
+}
+
+export async function getFieldSession(id: string): Promise<FieldSession> {
+  return requestJson<FieldSession>(`/api/field-sessions/${id}`);
+}
+
+export async function updateFieldSession(id: string, request: Partial<FieldSessionCreate>): Promise<FieldSession> {
+  return requestJson<FieldSession>(`/api/field-sessions/${id}`, {
+    body: JSON.stringify(request),
+    method: "PATCH",
+  });
+}
+
+export async function startFieldSession(id: string): Promise<FieldSession> {
+  return requestJson<FieldSession>(`/api/field-sessions/${id}/start`, { method: "POST" });
+}
+
+export async function completeFieldSession(id: string): Promise<FieldSession> {
+  return requestJson<FieldSession>(`/api/field-sessions/${id}/complete`, { method: "POST" });
+}
+
+export async function archiveFieldSession(id: string): Promise<FieldSession> {
+  return requestJson<FieldSession>(`/api/field-sessions/${id}/archive`, { method: "POST" });
+}
+
+export async function deleteFieldSession(id: string): Promise<FieldSessionDeleteResult> {
+  return requestJson<FieldSessionDeleteResult>(`/api/field-sessions/${id}`, { method: "DELETE" });
 }
 
 export { demoAnalysisReport };

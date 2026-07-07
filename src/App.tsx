@@ -55,6 +55,8 @@ import type {
   CameraInfo,
   CameraCreateRequest,
   DrillRecommendation,
+  FieldSession,
+  FieldSessionCreate,
   InsightTone,
   PoseOverlayArtifact,
   ProbeResult,
@@ -104,6 +106,12 @@ import {
   cancelRecording,
   listRecordings,
   deleteRecording,
+  createFieldSession,
+  listFieldSessions,
+  startFieldSession,
+  completeFieldSession,
+  archiveFieldSession,
+  deleteFieldSession,
 } from "./services/analysisClient";
 import {
   type DiagnosticNotice,
@@ -3996,6 +4004,25 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
+  // Field Session 状态
+  const [fieldSessions, setFieldSessions] = useState<FieldSession[]>([]);
+  const [selectedFieldSession, setSelectedFieldSession] = useState<FieldSession | null>(null);
+  const [showCreateFsModal, setShowCreateFsModal] = useState(false);
+  const [newFsForm, setNewFsForm] = useState<FieldSessionCreate>({
+    title: "", venue: "", court_name: "", capture_mode: "practice", match_format: "doubles", camera_setup: "single", notes: "",
+  });
+
+  // 当选中的 Field Session 变化时，预填录制表单
+  useEffect(() => {
+    if (!selectedFieldSession || selectedFieldSession.status === "archived") return;
+    setRecordingForm((f) => ({
+      ...f,
+      field_session_id: selectedFieldSession.id,
+      court_name: selectedFieldSession.court_name || "",
+      match_format: (selectedFieldSession.match_format || "doubles") as "singles" | "doubles",
+    }));
+  }, [selectedFieldSession]);
+
   // Modal 状态
   const [showRegisterModal, setShowRegisterModal] = useState(false);
 
@@ -4042,13 +4069,84 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   const loadData = useCallback(async () => {
     try {
-      const [cam, rec] = await Promise.all([listCameras(), listRecordings()]);
+      const [cam, rec, fss] = await Promise.all([listCameras(), listRecordings(), listFieldSessions()]);
       setCameras(cam);
       setSessions(rec);
+      setFieldSessions(fss);
     } catch {
       // backend not available, keep empty
     }
   }, []);
+
+  const handleCreateFieldSession = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const fs = await createFieldSession(newFsForm);
+      setNewFsForm({ title: "", venue: "", court_name: "", capture_mode: "practice", match_format: "doubles", camera_setup: "single", notes: "" });
+      setShowCreateFsModal(false);
+      await loadData();
+      setSelectedFieldSession(fs);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "创建采集任务失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectDirectRecording = () => {
+    setSelectedFieldSession(null);
+    setRecordingForm((f) => ({
+      ...f,
+      field_session_id: undefined,
+      court_name: "",
+      match_format: "doubles",
+    }));
+  };
+
+  const refreshSelectedFieldSession = async (fieldSessionId: string) => {
+    const fss = await listFieldSessions();
+    setFieldSessions(fss);
+    setSelectedFieldSession(fss.find((fs) => fs.id === fieldSessionId) ?? null);
+  };
+
+  const handleFieldSessionAction = async (action: "start" | "complete" | "archive") => {
+    if (!selectedFieldSession) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const updated =
+        action === "start"
+          ? await startFieldSession(selectedFieldSession.id)
+          : action === "complete"
+            ? await completeFieldSession(selectedFieldSession.id)
+            : await archiveFieldSession(selectedFieldSession.id);
+      setSelectedFieldSession(updated);
+      await refreshSelectedFieldSession(updated.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "更新采集任务状态失败");
+      await loadData();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteFieldSession = async () => {
+    if (!selectedFieldSession) return;
+    if (!window.confirm(`确定删除采集任务「${selectedFieldSession.title || selectedFieldSession.id}」吗？已有录制记录的任务会被后端保护。`)) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await deleteFieldSession(selectedFieldSession.id);
+      handleSelectDirectRecording();
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除采集任务失败");
+      await loadData();
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     void loadData();
@@ -4230,6 +4328,102 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
         <h2 className="text-2xl font-black tracking-tight">球场采集管理</h2>
         <p className="mt-1 text-sm text-slate-500">管理网络摄像头并控制录制会话</p>
       </div>
+
+      {/* Field Session 选择器 */}
+      <div className="mb-6 rounded-2xl border border-[#DDE9D6] bg-white p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-600">
+            <Radar size={16} />
+            当前采集任务
+          </h3>
+          <button className="green-button px-3 py-1.5 text-xs" onClick={() => setShowCreateFsModal(true)} type="button">
+            + 新建采集任务
+          </button>
+        </div>
+        {fieldSessions.length === 0 ? (
+          <p className="text-xs text-slate-400">暂无采集任务，创建 Field Session 可将多段录制关联到同一次球场采集</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`px-4 py-2 rounded-full text-xs font-bold transition ${!selectedFieldSession ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"}`}
+              onClick={handleSelectDirectRecording}
+              type="button"
+            >
+              直接录制
+            </button>
+            {fieldSessions.slice(0, 8).map((fs) => (
+              <button
+                key={fs.id}
+                className={`px-4 py-2 rounded-full text-xs font-bold transition ${
+                  selectedFieldSession?.id === fs.id ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+                }`}
+                onClick={() => setSelectedFieldSession(fs)}
+                type="button"
+              >
+                {fs.title || fs.id}
+                <span className={`ml-1.5 inline-block size-1.5 rounded-full ${
+                  fs.status === "live" ? "bg-[#22C55E]" : fs.status === "completed" ? "bg-[#2F80ED]" : fs.status === "archived" ? "bg-slate-400" : "bg-slate-300"
+                }`} />
+              </button>
+            ))}
+          </div>
+        )}
+        {selectedFieldSession && (
+          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500 border-t border-[#DDE9D6] pt-3">
+            <span>状态: <strong className="text-[#17231D]">{selectedFieldSession.status === "live" ? "进行中" : selectedFieldSession.status === "completed" ? "已完成" : selectedFieldSession.status === "archived" ? "已归档" : "计划中"}</strong></span>
+            <span>{selectedFieldSession.venue} · {selectedFieldSession.court_name}</span>
+            <span>{selectedFieldSession.capture_mode === "practice" ? "练习" : selectedFieldSession.capture_mode === "match" ? "比赛" : "工程"} · {selectedFieldSession.match_format === "doubles" ? "双打" : "单打"}</span>
+            {selectedFieldSession.status !== "archived" && (
+              <div className="ml-auto flex items-center gap-2">
+                {selectedFieldSession.status === "planned" && (
+                  <button className="quiet-button px-2.5 py-1 text-xs" disabled={loading} onClick={() => handleFieldSessionAction("start")} type="button">开始任务</button>
+                )}
+                {(selectedFieldSession.status === "planned" || selectedFieldSession.status === "live") && (
+                  <button className="quiet-button px-2.5 py-1 text-xs" disabled={loading} onClick={() => handleFieldSessionAction("complete")} type="button">完成任务</button>
+                )}
+                {selectedFieldSession.status === "completed" && (
+                  <button className="quiet-button px-2.5 py-1 text-xs" disabled={loading} onClick={() => handleFieldSessionAction("archive")} type="button">归档任务</button>
+                )}
+                {selectedFieldSession.status !== "live" && (
+                  <button className="quiet-button px-2.5 py-1 text-xs text-[#C92A2A]" disabled={loading} onClick={handleDeleteFieldSession} type="button">删除任务</button>
+                )}
+                <button className="text-[#C92A2A] hover:underline" onClick={handleSelectDirectRecording} type="button">取消选择</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Create Field Session Modal */}
+      <Modal isOpen={showCreateFsModal} onClose={() => setShowCreateFsModal(false)} title="新建采集任务" size="md">
+        <div className="space-y-3">
+          <input className="field-input" placeholder="任务名称 (例: 周三双打训练)" value={newFsForm.title ?? ""} onChange={(e) => setNewFsForm((f) => ({ ...f, title: e.target.value }))} />
+          <div className="grid grid-cols-2 gap-3">
+            <input className="field-input" placeholder="场馆" value={newFsForm.venue ?? ""} onChange={(e) => setNewFsForm((f) => ({ ...f, venue: e.target.value }))} />
+            <input className="field-input" placeholder="球场" value={newFsForm.court_name ?? ""} onChange={(e) => setNewFsForm((f) => ({ ...f, court_name: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <select className="field-input" value={newFsForm.capture_mode ?? "practice"} onChange={(e) => setNewFsForm((f) => ({ ...f, capture_mode: e.target.value }))}>
+              <option value="practice">练习</option>
+              <option value="match">比赛</option>
+              <option value="engineering">工程调试</option>
+            </select>
+            <select className="field-input" value={newFsForm.match_format ?? "doubles"} onChange={(e) => setNewFsForm((f) => ({ ...f, match_format: e.target.value }))}>
+              <option value="doubles">双打</option>
+              <option value="singles">单打</option>
+            </select>
+            <select className="field-input" value={newFsForm.camera_setup ?? "single"} onChange={(e) => setNewFsForm((f) => ({ ...f, camera_setup: e.target.value }))}>
+              <option value="single">单摄</option>
+              <option value="dual">双摄</option>
+              <option value="debug_single">调试单摄</option>
+            </select>
+          </div>
+          <textarea className="field-input" placeholder="备注 (可选)" rows={2} value={newFsForm.notes ?? ""} onChange={(e) => setNewFsForm((f) => ({ ...f, notes: e.target.value }))} />
+          <button className="green-button w-full py-2.5" disabled={loading} onClick={handleCreateFieldSession} type="button">
+            {loading ? "创建中..." : "创建采集任务"}
+          </button>
+        </div>
+      </Modal>
 
       {error && (
         <div className="mb-6 rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 px-5 py-4 text-sm text-[#C92A2A]">
