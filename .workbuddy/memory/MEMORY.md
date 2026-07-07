@@ -29,3 +29,7 @@
 ## 架构文档（权威参考）
 - `system-architecture.md`（运行时架构 + 视频分析数据流 + 流水线分层 + 模块对照表）。
 - `structure picture.md`（高层模块说明 + 产品/科研边界）。
+
+## 已知缺陷 / 注意事项
+- **`uvicorn --reload` 会反复重启并卡死运行中的分析任务**：`start-local-runtime.sh` 启后端用 `--reload`，WatchFiles 默认监听整个 `backend/`（含 `backend/data`）。视觉分析任务往 `backend/data/outputs` 写产物时持续触发 server 子进程重启，杀掉 worker 线程且不自动恢复 running 任务 → 任务卡在 running 但无人执行。修复：加 `--reload-exclude backend/data`（或 `--reload-dir` 仅源码）；长任务场景勿开 `--reload`；卡死任务需取消重提或加启动自愈。
+- 任务状态字段滞后：`GET /jobs/{id}` 返回的 `progress`/`stage` 是状态文件快照，可能落后于日志中实时帧进度（如日志已到 player tracking 几百帧，API 仍显示 frame-sampling 34%）。以 `backend.log` 的 `Player tracking progress` 行和磁盘 job json mtime 为准判断真实活跃度。

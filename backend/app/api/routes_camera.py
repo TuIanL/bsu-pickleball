@@ -1,7 +1,7 @@
 """
 摄像头管理接口路由（/api/cameras）
 
-本文件负责"摄像头设备"的登记、查询、删除和连接探测。
+本文件负责"摄像头设备"的登记、查询、删除、连接探测和实时预览。
 摄像头登记之后，才能用录制接口（见 routes_recording.py）对它进行录制。
 
 安全提示：摄像头密码属于敏感信息，所以返回给前端之前会做"脱敏"处理，
@@ -11,11 +11,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from starlette.responses import StreamingResponse
 
 # 摄像头登记中心：负责在内存/文件里维护一份"已登记摄像头"的清单
 from app.camera.camera_registry import camera_registry
 # 摄像头相关的数据模型（请求/响应格式）
 from app.camera.models import CameraCreateRequest, CameraDeleteResponse, CameraInfo, ProbeResult
+# 预览服务：将摄像头流转换为 MJPEG over HTTP
+from app.camera.preview_service import preview_frames
 # 连接探测工具：尝试连上摄像头，返回能否播放、分辨率、帧率等信息
 from app.camera.stream_probe import probe_camera
 
@@ -111,4 +114,50 @@ async def probe_camera_endpoint(camera_id: str) -> ProbeResult:
         stream_url=camera.stream_url,
         username=camera.username,
         password=camera.password,
+    )
+
+
+@router.get("/{camera_id}/preview")
+def preview_stream(camera_id: str):
+    """
+    摄像头实时预览（MJPEG over HTTP）
+
+    返回 multipart/x-mixed-replace 响应，持续输出 JPEG 帧。
+    浏览器可用 <img src="..."> 直接展示预览画面。
+
+    行为：
+    - 摄像头不存在 → 404
+    - 摄像头无法打开或读帧失败 → 502（标明预览不可用）
+    - 客户端断开连接 → 停止帧循环并释放 VideoCapture
+    """
+    camera = camera_registry.get(camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
+
+    def generate():
+        try:
+            for jpeg_bytes in preview_frames(
+                stream_url=camera.stream_url,
+                protocol=camera.protocol,
+                username=camera.username,
+                password=camera.password,
+            ):
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(jpeg_bytes)).encode() + b"\r\n"
+                    b"\r\n"
+                    + jpeg_bytes
+                    + b"\r\n"
+                )
+        except RuntimeError as exc:
+            # 流不可达或读帧失败：记录错误信息
+            raise HTTPException(
+                status_code=502,
+                detail=f"摄像头 {camera_id} 预览不可用: {exc}",
+            )
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
     )

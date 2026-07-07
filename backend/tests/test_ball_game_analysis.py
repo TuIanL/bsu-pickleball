@@ -156,6 +156,39 @@ def test_ball_tracker_filters_candidates_roi_jumps_and_rebuilds_after_missing():
     assert steady.accepted is True
 
 
+def test_ball_tracker_rejects_stationary_logo_like_candidates():
+    detector = StubBallDetector([[BallCandidate(48, 52, 0.9, width=7, height=7)] for _ in range(8)])
+    tracker = BallTracker(
+        detector,
+        BallTrackerConfig(stationary_window_frames=4, stationary_radius_pixels=1.5, max_box_area_ratio=0.1),
+    )
+
+    samples = [tracker.update(frame(), index, index / 30) for index in range(8)]
+
+    assert any(sample.accepted for sample in samples[:3])
+    assert samples[3].accepted is False
+    assert samples[3].reject_reason == "stationary_candidate"
+    assert samples[-1].reject_reason == "stationary_candidate"
+
+
+def test_ball_tracker_rejects_points_projected_far_outside_court():
+    matrix = compute_homography(
+        [(0, 0), (100, 0), (100, 200), (0, 200)],
+        [(0, 0), (20, 0), (20, 44), (0, 44)],
+    )
+    detector = StubBallDetector([[BallCandidate(180, 100, 0.9, width=8, height=8)]])
+    tracker = BallTracker(
+        detector,
+        BallTrackerConfig(court_bounds_margin_ft=2.0, max_box_area_ratio=0.1),
+    )
+
+    sample = tracker.update(frame(), 1, 0.0, homography=matrix)
+
+    assert sample.accepted is False
+    assert sample.reject_reason == "projected_outside_court"
+    assert sample.court_xy == pytest.approx((36, 22))
+
+
 def test_trajectory_cleaner_removes_isolated_jump_and_interpolates_short_gaps():
     cleaner = TrajectoryCleaner(TrajectoryCleanerConfig(max_interpolation_gap=2, outlier_step_floor_px=50))
     points = [

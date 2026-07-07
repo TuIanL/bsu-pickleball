@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# dataclass：定义内部轨迹状态；Detection / Track 为检测与轨迹的数据模型。
 from dataclasses import dataclass
 
 from app.schemas.tracking import Detection, Track
@@ -9,6 +10,7 @@ from app.schemas.tracking import Detection, Track
 
 @dataclass
 class _TrackState:
+    # 内部维护的某条轨迹状态：track_id、当前 bbox、置信度、连续未匹配帧计数（lost_count）。
     track_id: int
     bbox: list[float]
     confidence: float
@@ -19,9 +21,10 @@ class MultiObjectTracker:
     """Simple IOU tracker with a replaceable detection-in / tracks-out contract."""
 
     def __init__(self, iou_threshold: float = 0.3, max_lost: int = 15) -> None:
+        # iou_threshold：匹配所需的最小 IOU；max_lost：超过此未匹配帧数则删除轨迹。
         self.iou_threshold = iou_threshold
         self.max_lost = max_lost
-        self._next_track_id = 1
+        self._next_track_id = 1  # 自增分配新 track_id
         self._tracks: dict[int, _TrackState] = {}
 
     def update(self, detections: list[Detection]) -> list[Track]:
@@ -29,11 +32,13 @@ class MultiObjectTracker:
         matched_detections: set[int] = set()
         active: list[Track] = []
 
+        # 1) 枚举所有 (检测, 轨迹) 对的 IOU，作为候选匹配。
         candidates: list[tuple[float, int, int]] = []
         for detection_index, detection in enumerate(detections):
             for track_id, state in self._tracks.items():
                 candidates.append((_iou(detection.bbox, state.bbox), track_id, detection_index))
 
+        # 2) 按 IOU 从高到低贪心匹配：IOU 低于阈值则停止；已匹配的跳过。
         candidates.sort(key=lambda item: item[0], reverse=True)
         for score, track_id, detection_index in candidates:
             if score < self.iou_threshold:
@@ -49,6 +54,7 @@ class MultiObjectTracker:
             matched_detections.add(detection_index)
             active.append(_state_to_track(state, lost=False))
 
+        # 3) 未匹配到的检测视为“新目标”，分配新 track_id 并新建轨迹。
         for detection_index, detection in enumerate(detections):
             if detection_index in matched_detections:
                 continue
@@ -59,6 +65,7 @@ class MultiObjectTracker:
             matched_tracks.add(track_id)
             active.append(_state_to_track(state, lost=False))
 
+        # 4) 本轮未匹配到的轨迹 lost_count+1；超过 max_lost 则彻底删除。
         for track_id in list(self._tracks):
             if track_id in matched_tracks:
                 continue
@@ -67,20 +74,24 @@ class MultiObjectTracker:
             if state.lost_count > self.max_lost:
                 del self._tracks[track_id]
 
+        # 按 track_id 升序返回当前活跃轨迹。
         active.sort(key=lambda track: track.track_id)
         return active
 
 
 class EmptyTracker:
+    # 空实现，用于测试或无需真实跟踪的占位场景（永远返回空列表）。
     def update(self, detections: list[Detection]) -> list[Track]:
         return []
 
 
 def _state_to_track(state: _TrackState, lost: bool) -> Track:
+    # 把内部 _TrackState 转成对外 Track 数据模型。
     return Track(track_id=state.track_id, bbox=state.bbox, confidence=state.confidence, lost=lost)
 
 
 def _iou(a: list[float], b: list[float]) -> float:
+    # 计算两个 [x1,y1,x2,y2] 框的交并比（IOU）。
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
 
@@ -100,4 +111,5 @@ def _iou(a: list[float], b: list[float]) -> float:
     return intersection / union
 
 
+# 别名：SimpleDetectionTracker 等价于 MultiObjectTracker（保持历史/兼容命名）。
 SimpleDetectionTracker = MultiObjectTracker

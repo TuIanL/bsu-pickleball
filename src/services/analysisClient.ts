@@ -691,4 +691,8 @@ export async function getRecording(sessionId: string): Promise<RecordingSession>
   return requestJson<RecordingSession>(`/api/recordings/${sessionId}`);
 }
 
+export function getCameraPreviewUrl(cameraId?: string): string | undefined {
+  return cameraId ? toApiUrl(`/api/cameras/${cameraId}/preview`) : undefined;
+}
+
 export { demoAnalysisReport };

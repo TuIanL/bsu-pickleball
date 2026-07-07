@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+# deque：定长历史窗口；dataclass / field：数据结构；hypot 距离、isfinite 有限性判断。
 from collections import deque
 from dataclasses import dataclass, field
 from math import hypot, isfinite
 
+# 轨迹相关 schema：PlayerFramePosition（单帧位置）、PlayerSelectionDiagnostic（诊断）、
+# PlayerTrackletFeature（tracklet 特征）、Track（跟踪框）。
 from app.schemas.tracking import PlayerFramePosition, PlayerSelectionDiagnostic, PlayerTrackletFeature, Track
+# 标准球场几何：用于边界判定与半场划分。
 from app.vision.courtvision_calibration_engine.court_geometry import StandardPickleballCourt, standard_court
 
 
 @dataclass(frozen=True)
 class PrimaryPlayerSelection:
+    # 单次选择结果：track_id、综合分、置信度、滚动置信度、出现次数，以及三个分项得分。
     track_id: int
     score: float
     confidence: float
@@ -24,16 +29,19 @@ class PrimaryPlayerSelection:
 
 @dataclass
 class _TrackQuality:
+    # 内部记录某 track 的出现次数与置信度累计（用于滚动置信度）。
     appearances: int = 0
     confidence_total: float = 0.0
 
     @property
     def rolling_confidence(self) -> float:
+        # 滚动置信度 = 累计置信度 / 出现次数。
         return self.confidence_total / self.appearances if self.appearances else 0.0
 
 
 @dataclass(frozen=True)
 class _Observation:
+    # 单帧对某个 track 的观测快照（含 bbox、脚点、球场位置、置信度、面积占比、有效性）。
     frame_index: int
     timestamp: float
     track_id: int
@@ -47,6 +55,8 @@ class _Observation:
 
 @dataclass
 class PrimaryPlayerSelectorConfig:
+    # 选择器的可调参数：置信度阈值、最多展示人数、框面积占比上下限、球场边距(英尺)、
+    # 历史窗口、目标球场/质量阈值、四人组权重、是否启用 attention 及其相关配置。
     min_confidence: float = 0.65
     max_subjects: int = 4
     min_box_area_ratio: float = 0.0005
@@ -63,6 +73,7 @@ class PrimaryPlayerSelectorConfig:
 
 @dataclass(frozen=True)
 class AttentionSelectionResult:
+    # attention 模型（若启用）的选择结果：被选中的 track 集合与各类概率、整体置信度。
     selected_track_ids: set[int]
     target_probabilities: dict[int, float]
     non_target_probabilities: dict[int, float]
@@ -78,6 +89,7 @@ class AttentionPlayerSelectorAdapter:
         self.last_fallback_reason: str | None = None
 
     def select(self, features: list[PlayerTrackletFeature], max_subjects: int) -> AttentionSelectionResult | None:
+        # 当前为占位边界：未配置模型路径或未实现推理时均返回 None 并记原因（走规则分支）。
         if not self.model_path:
             self.last_fallback_reason = "attention model path is not configured"
             return None
@@ -110,6 +122,7 @@ class PrimaryPlayerSelector:
         attention_confidence_threshold: float = 0.65,
         attention_adapter: AttentionPlayerSelectorAdapter | None = None,
     ) -> None:
+        # 把所有入参做“夹到合理范围”后写入配置对象（防止越界值）。
         self.config = PrimaryPlayerSelectorConfig(
             min_confidence=min(max(min_confidence, 0.0), 1.0),
             max_subjects=max(1, int(max_subjects)),
@@ -124,11 +137,11 @@ class PrimaryPlayerSelector:
             attention_confidence_threshold=min(max(attention_confidence_threshold, 0.0), 1.0),
         )
         self.court = court or standard_court()
-        self._qualities: dict[int, _TrackQuality] = {}
-        self._history: dict[int, deque[_Observation]] = {}
+        self._qualities: dict[int, _TrackQuality] = {}   # track_id -> 质量累计
+        self._history: dict[int, deque[_Observation]] = {}  # track_id -> 定长历史窗口
         self.last_diagnostics: list[PlayerSelectionDiagnostic] = []
         self.last_training_samples: list[PlayerTrackletFeature] = []
-        self.last_selection_mode: str = "rule"
+        self.last_selection_mode: str = "rule"   # 当前选择模式：rule / attention / fallback
         self.last_fallback_reason: str | None = None
         self.attention_adapter = attention_adapter or AttentionPlayerSelectorAdapter(
             model_path=attention_model_path,
@@ -162,6 +175,9 @@ class PrimaryPlayerSelector:
         frame_width: int,
         frame_height: int,
     ) -> list[PrimaryPlayerSelection]:
+        # 主流程：1) 更新每个 track 的质量与历史观测；2) 抽取 tracklet 特征；
+        # 3) 计算四人组一致性分、尝试 attention 选择；4) 对每个特征打分并产出候选；
+        # 5) 排序取前 max_subjects 名（若 attention 生效则用其选定集合）。返回选择结果列表。
         active_tracks = [track for track in tracks if not track.lost]
         positions_by_track_id = {position.track_id: position for position in positions}
         for track in active_tracks:
@@ -196,12 +212,15 @@ class PrimaryPlayerSelector:
                     attention_result=attention_result,
                 )
             )
+        # 按 (综合分, 滚动置信度, 置信度) 降序排序，取前 max_subjects。
         candidates.sort(key=lambda selection: (selection.score, selection.rolling_confidence, selection.confidence), reverse=True)
         selected_candidates = candidates[: self.max_subjects]
         selected_ids = {selection.track_id for selection in selected_candidates}
         if attention_result is not None:
+            # attention 生效时，直接使用其选定的 track 集合（再按上限截断）。
             selected_ids = selected_by_attention
             selected_candidates = [selection for selection in candidates if selection.track_id in selected_ids][: self.max_subjects]
+        # 回填诊断中的“是否最终被选中”标记，并缓存训练样本。
         self.last_diagnostics = [
             diagnostic.model_copy(update={"selected": diagnostic.track_id in {selection.track_id for selection in selected_candidates}})
             for diagnostic in diagnostics
@@ -215,6 +234,8 @@ class PrimaryPlayerSelector:
         group_score: float,
         attention_result: AttentionSelectionResult | None,
     ) -> PrimaryPlayerSelection | None:
+        # 按一系列门槛过滤：置信度、框面积占比、目标球场归属、tracklet 质量、attention 命中。
+        # 全通过后计算各项分并包装成 PrimaryPlayerSelection。
         if feature.latest_confidence < self.min_confidence:
             return None
         if not (self.min_box_area_ratio <= feature.mean_bbox_area_ratio <= self.max_box_area_ratio):
@@ -232,6 +253,7 @@ class PrimaryPlayerSelector:
         quality_score = self._tracklet_quality_score(feature)
         score = self._raw_score(feature, group_score)
         if attention_result is not None:
+            # attention 生效时用其目标概率覆盖综合分。
             score = attention_result.target_probabilities.get(feature.track_id, score)
         return PrimaryPlayerSelection(
             track_id=feature.track_id,
@@ -245,6 +267,8 @@ class PrimaryPlayerSelector:
         )
 
     def _raw_score(self, feature: PlayerTrackletFeature, group_score: float) -> float:
+        # 综合分 = 目标球场 0.42 + 质量 0.28 + 置信度 0.12 + 四人组 group_weight。
+        # 置信度分由 latest_confidence(0.45) 与 mean_confidence(0.55) 加权。
         target_score = self._target_court_score(feature)
         quality_score = self._tracklet_quality_score(feature)
         confidence_score = feature.latest_confidence * 0.45 + feature.mean_confidence * 0.55
@@ -257,6 +281,7 @@ class PrimaryPlayerSelector:
         return min(1.0, max(0.0, weighted))
 
     def _target_court_score(self, feature: PlayerTrackletFeature) -> float:
+        # 目标球场归属分：有效位置为 0 时给中性 0.5；否则由“归属比例 0.72 + 距离惩罚补足 0.28”构成。
         if feature.valid_positions == 0:
             return 0.5
         distance_penalty = min(1.0, feature.mean_target_court_distance / max(1.0, float(self.court_margin_ft or 1.0)))
@@ -264,6 +289,7 @@ class PrimaryPlayerSelector:
         return min(1.0, max(0.0, occupancy_score * 0.72 + (1.0 - distance_penalty) * 0.28))
 
     def _tracklet_quality_score(self, feature: PlayerTrackletFeature) -> float:
+        # tracklet 质量分：持续性、有效位置比例、框面积是否合规，以及置信度/连续性的加权组合。
         persistence = min(1.0, feature.appearances / 12.0)
         valid_ratio = feature.valid_positions / max(1, feature.appearances)
         bbox_score = 1.0 if self.min_box_area_ratio <= feature.mean_bbox_area_ratio <= self.max_box_area_ratio else 0.0
@@ -280,6 +306,7 @@ class PrimaryPlayerSelector:
         )
 
     def _group_consistency_scores(self, features: list[PlayerTrackletFeature]) -> dict[int, float]:
+        # 四人组一致性：考察每个 track 与“同侧/对侧”人数比例（双打通常每侧 1~2 人）以及横向居中程度。
         if not features:
             return {}
         valid = [feature for feature in features if feature.mean_court_position is not None]
@@ -302,6 +329,7 @@ class PrimaryPlayerSelector:
                 and other.mean_court_position is not None
                 and (other.mean_court_position[1] < half_length) != (feature.mean_court_position[1] < half_length)
             )
+            # 同侧（每侧期望约 1 人）占比 0.45、对侧（期望约 2 人）占比 0.55。
             side_score = min(1.0, same_side_count / 1.0) * 0.45 + min(1.0, opposite_side_count / 2.0) * 0.55
             center_x = feature.mean_court_position[0]
             width_score = 1.0 - min(1.0, abs(center_x - self.court.width_ft / 2.0) / max(1.0, self.court.width_ft))
@@ -309,6 +337,7 @@ class PrimaryPlayerSelector:
         return {feature.track_id: near_far_balance.get(feature.track_id, 0.35) for feature in features}
 
     def _attention_select(self, features: list[PlayerTrackletFeature]) -> AttentionSelectionResult | None:
+        # 尝试用 attention 适配器选择；未启用 / 无结果 / 置信度不足时回退规则分支。
         self.last_selection_mode = "rule"
         self.last_fallback_reason = None
         if not self.config.attention_enabled:
@@ -334,6 +363,7 @@ class PrimaryPlayerSelector:
         final_score: float,
         attention_result: AttentionSelectionResult | None,
     ) -> PlayerSelectionDiagnostic:
+        # 为单个特征生成选择诊断（含各项分、attention 概率、最终分、标签与拒绝原因）。
         target_score = self._target_court_score(feature)
         quality_score = self._tracklet_quality_score(feature)
         reason = "selected target-court player" if selected else self._rejection_reason(feature, target_score, quality_score, group_score)
@@ -367,6 +397,7 @@ class PrimaryPlayerSelector:
         )
 
     def _rejection_reason(self, feature: PlayerTrackletFeature, target_score: float, quality_score: float, group_score: float) -> str:
+        # 按优先级返回被拒绝的原因（用于诊断展示）。
         if feature.latest_confidence < self.min_confidence:
             return "confidence below threshold"
         if feature.valid_positions > 0 and target_score < self.config.target_court_threshold:
@@ -384,6 +415,7 @@ class PrimaryPlayerSelector:
         frame_width: int,
         frame_height: int,
     ) -> None:
+        # 把当前帧的 track 与位置打包成 _Observation，追加到该 track 的定长历史窗口。
         area_ratio = self._bbox_area_ratio(track.bbox, frame_width, frame_height)
         court_position = position.court_position if position and position.court_position is not None else None
         image_footpoint = position.image_footpoint if position is not None else self._bbox_bottom_center(track.bbox)
@@ -404,10 +436,12 @@ class PrimaryPlayerSelector:
         history.append(observation)
 
     def _has_reasonable_box(self, track: Track, frame_width: int, frame_height: int) -> bool:
+        # 判断框面积占比是否落在合理区间。
         area_ratio = self._bbox_area_ratio(track.bbox, frame_width, frame_height)
         return self.min_box_area_ratio <= area_ratio <= self.max_box_area_ratio
 
     def _bbox_area_ratio(self, bbox: list[float], frame_width: int, frame_height: int) -> float:
+        # 计算检测框面积占整帧面积的比例；坐标非法或面积非正返回 0。
         source_area = max(1.0, float(frame_width) * float(frame_height))
         x1, y1, x2, y2 = [float(value) for value in bbox]
         if not all(isfinite(value) for value in (x1, y1, x2, y2)):
@@ -419,6 +453,7 @@ class PrimaryPlayerSelector:
         return (width * height) / source_area
 
     def _passes_scene_sanity(self, position: PlayerFramePosition | None) -> bool:
+        # 场景合理性检查：若设置了 court_margin_ft，则要求位置在“球场外扩边距”内；否则直接通过。
         if self.court_margin_ft is None or position is None or position.court_position is None:
             return True
         x, y = position.court_position
@@ -435,6 +470,7 @@ class PrimaryPlayerSelector:
         frame_width: int,
         frame_height: int,
     ) -> PlayerTrackletFeature | None:
+        # 根据历史窗口抽取该 track 的 tracklet 特征（供打分与（未来）训练使用）。
         history = list(self._history.get(track_id, []))
         if not history:
             return None
@@ -444,6 +480,7 @@ class PrimaryPlayerSelector:
         distances = [self._distance_from_target_court(point) for point in court_points]
         in_target_count = sum(1 for distance in distances if distance <= float(self.court_margin_ft or 0.0))
         target_occupancy = in_target_count / valid_positions if valid_positions else 0.0
+        # 位置均值（米/英尺坐标）。
         mean_position = (
             [
                 sum(point[0] for point in court_points) / valid_positions,
@@ -452,6 +489,7 @@ class PrimaryPlayerSelector:
             if valid_positions
             else None
         )
+        # 基于相邻观测位置差与时间间隔估计速度序列。
         speeds = []
         for previous, current in zip(history, history[1:]):
             if previous.court_position is None or current.court_position is None:
@@ -460,6 +498,7 @@ class PrimaryPlayerSelector:
             if elapsed <= 0:
                 continue
             speeds.append(_distance(previous.court_position, current.court_position) / elapsed)
+        # 连续性：窗口内实际观测帧数 / 窗口跨帧数（越接近 1 越连续）。
         frame_span = max(1, history[-1].frame_index - history[0].frame_index + 1)
         continuity = min(1.0, len(history) / frame_span)
         bbox = latest.bbox or [float(value) for value in fallback_track.bbox]
@@ -487,6 +526,7 @@ class PrimaryPlayerSelector:
         )
 
     def _distance_from_target_court(self, point: list[float]) -> float:
+        # 点到“目标球场矩形”的最近距离（球场外为 0，球场内为正距离）。
         x, y = point
         dx = max(0.0, -x, x - self.court.width_ft)
         dy = max(0.0, -y, y - self.court.length_ft)
@@ -494,9 +534,11 @@ class PrimaryPlayerSelector:
 
     @staticmethod
     def _bbox_bottom_center(bbox: list[float]) -> list[float]:
+        # 检测框底边中点（脚点兜底估计），与 FootpointEstimator 的默认方法一致。
         x1, _y1, x2, y2 = [float(value) for value in bbox]
         return [(x1 + x2) / 2.0, y2]
 
 
 def _distance(a: list[float], b: list[float]) -> float:
+    # 两点欧氏距离。
     return hypot(a[0] - b[0], a[1] - b[1])

@@ -15,11 +15,12 @@ from app.schemas.pose import (
 from app.schemas.tracking import FrameDetection
 
 
-SUPPORTED_KEYPOINT_SCHEMA = "rtmpose26"
-EXPECTED_KEYPOINT_COUNT = len(RTMPOSE26_KEYPOINT_NAMES)
+SUPPORTED_KEYPOINT_SCHEMA = "rtmpose26"  # 本适配器只支持 rtmpose26 这一种关键点编号体系
+EXPECTED_KEYPOINT_COUNT = len(RTMPOSE26_KEYPOINT_NAMES)  # 期望输出的关键点数量（26）
 
 
 class RTMPose26Adapter:
+    # 构造函数：保存配置，模型推迟到首次推理时再加载（懒加载，避免无谓的启动开销）。
     def __init__(
         self,
         config_path: str | None,
@@ -28,13 +29,14 @@ class RTMPose26Adapter:
         conf_threshold: float = 0.3,
         keypoint_schema: str = "rtmpose26",
     ) -> None:
-        self.config_path = config_path
-        self.checkpoint_path = checkpoint_path
-        self.device = device or "cpu"
-        self.conf_threshold = conf_threshold
-        self.keypoint_schema = keypoint_schema
-        self._model: Any | None = None
+        self.config_path = config_path  # MMPose 模型配置文件路径（.py）
+        self.checkpoint_path = checkpoint_path  # MMPose 权重文件路径（.pth）
+        self.device = device or "cpu"  # 推理设备，默认 CPU
+        self.conf_threshold = conf_threshold  # 关键点可见性阈值，置信度低于此值标记为不可见
+        self.keypoint_schema = keypoint_schema  # 关键点编号体系名称
+        self._model: Any | None = None  # 模型缓存，首次推理后填充，后续复用
 
+    # 对单帧进行姿态估计，返回带关键点的叠加帧结果（PoseOverlayFrame）。
     def estimate_frame(
         self,
         frame: object,
@@ -42,38 +44,43 @@ class RTMPose26Adapter:
         frame_index: int,
         timestamp_seconds: float,
     ) -> PoseOverlayFrame:
+        # 仅保留边界框可用的主体，避免对无效框做推理。
         usable_subjects = [subject for subject in subjects if self._has_usable_bbox(subject.bbox)]
+        # 没有任何可用主体时，直接返回空结果（仍保留帧索引与时间戳）。
         if not usable_subjects:
             return PoseOverlayFrame(frame_index=frame_index, timestamp_seconds=timestamp_seconds)
-        self._validate_schema()
+        self._validate_schema()  # 校验关键点体系是否为本适配器支持的类型
 
-        model = self._load_model()
-        inference_topdown = self._inference_topdown()
+        model = self._load_model()  # 懒加载（必要时初始化）模型
+        inference_topdown = self._inference_topdown()  # 获取 mmpose 的 top-down 推理函数
 
         try:
             import numpy as np  # type: ignore
         except ImportError as exc:
             raise RuntimeError("numpy is required to run RTMPose inference") from exc
 
+        # 把所有可用主体的边界框堆叠成一个 numpy 数组，供模型批量推理。
         boxes = np.array([subject.bbox for subject in usable_subjects], dtype=float)
+        # 兼容不同 mmpose 版本的接口：新版本接受 bbox_format 关键字，旧版本只接受位置参数。
         try:
             pose_results = inference_topdown(model, frame, bboxes=boxes, bbox_format="xyxy")
         except TypeError:
             pose_results = inference_topdown(model, frame, boxes)
-        pose_results = self._as_result_list(pose_results)
+        pose_results = self._as_result_list(pose_results)  # 统一转成列表，便于按索引取用
 
         rendered_subjects: list[PoseSubject] = []
         for index, subject in enumerate(usable_subjects):
+            # 取出本主体对应的模型输出（防止索引越界）。
             sample = pose_results[index] if index < len(pose_results) else None
-            keypoints, scores = self._extract_keypoints(sample)
+            keypoints, scores = self._extract_keypoints(sample)  # 解析关键点坐标与分数
             if not keypoints:
-                continue
+                continue  # 解析不到关键点则跳过该主体
             rendered_subjects.append(
                 PoseSubject(
-                    track_id=subject.track_id or f"subject-{index + 1}",
+                    track_id=subject.track_id or f"subject-{index + 1}",  # 优先用跟踪 id，缺失时回退生成
                     bbox=subject.bbox,
                     confidence=subject.confidence,
-                    keypoints=self._normalize_keypoints(keypoints, scores),
+                    keypoints=self._normalize_keypoints(keypoints, scores),  # 归一化并附名称/可见性
                 )
             )
 
@@ -83,9 +90,10 @@ class RTMPose26Adapter:
             subjects=rendered_subjects,
         )
 
+    # 加载（或复用已缓存的）RTMPose 模型，包含路径校验与 mmpose 可用性检查。
     def _load_model(self) -> Any:
         if self._model is not None:
-            return self._model
+            return self._model  # 已加载则直接复用，避免重复初始化
         if not self.config_path or not self.checkpoint_path:
             raise RuntimeError("RTMPose config/checkpoint paths are not configured")
         if not Path(self.config_path).exists():
@@ -103,11 +111,12 @@ class RTMPose26Adapter:
 
             register_all_modules()
         except ImportError:
-            pass
+            pass  # 若该版本 mmpose 不需要手动注册模块，则忽略
 
         self._model = init_model(self.config_path, self.checkpoint_path, device=self.device)
         return self._model
 
+    # 返回 mmpose 的 top-down 推理函数，仅在使用时导入（懒导入，减少无关依赖）。
     @staticmethod
     def _inference_topdown() -> Any:
         try:
@@ -116,6 +125,7 @@ class RTMPose26Adapter:
             raise RuntimeError("mmpose inference_topdown is unavailable") from exc
         return inference_topdown
 
+    # 从模型输出样本中提取关键点坐标与对应分数，兼容「对象属性」与「字典」两种返回格式。
     @staticmethod
     def _extract_keypoints(sample: Any) -> tuple[list[list[float]], list[float]]:
         if sample is None:
@@ -136,12 +146,15 @@ class RTMPose26Adapter:
 
         keypoint_rows = RTMPose26Adapter._first_prediction_rows(keypoints)
         score_rows = RTMPose26Adapter._first_score_rows(scores) if scores is not None else None
+        # 把坐标转成普通 float 列表，丢掉 numpy 张量的包装。
         normalized_keypoints = [[float(point[0]), float(point[1])] for point in keypoint_rows]
+        # 若没有分数，则用 1.0 占位（表示全部视为满分）。
         normalized_scores = (
             [float(score) for score in score_rows] if score_rows is not None else [1.0] * len(normalized_keypoints)
         )
         return (normalized_keypoints, normalized_scores)
 
+    # 把原始坐标/分数转换成带名称、可见性标记的 PoseKeypoint 列表，并校验数量。
     def _normalize_keypoints(self, keypoints: list[list[float]], scores: list[float]) -> list[PoseKeypoint]:
         self._validate_schema()
         if keypoints and len(keypoints) != EXPECTED_KEYPOINT_COUNT:
@@ -151,6 +164,7 @@ class RTMPose26Adapter:
         names = RTMPOSE26_KEYPOINT_NAMES
         normalized: list[PoseKeypoint] = []
         for index, point in enumerate(keypoints):
+            # 把置信度裁剪到 [0, 1]，防止模型给出越界值。
             confidence = min(max(scores[index] if index < len(scores) else 0.0, 0.0), 1.0)
             normalized.append(
                 PoseKeypoint(
@@ -158,15 +172,17 @@ class RTMPose26Adapter:
                     x=point[0],
                     y=point[1],
                     confidence=confidence,
-                    visible=confidence >= self.conf_threshold,
+                    visible=confidence >= self.conf_threshold,  # 达阈值才视为可见
                 )
             )
         return normalized
 
+    # 校验当前指定的关键点体系是否被本适配器支持。
     def _validate_schema(self) -> None:
         if self.keypoint_schema != SUPPORTED_KEYPOINT_SCHEMA:
             raise RuntimeError(f"Unsupported RTMPose keypoint schema: {self.keypoint_schema}")
 
+    # 判断一个边界框是否有效：长度必须为 4，且坐标有限、宽高为正。
     @staticmethod
     def _has_usable_bbox(bbox: Sequence[float]) -> bool:
         if len(bbox) != 4:
@@ -174,6 +190,7 @@ class RTMPose26Adapter:
         x1, y1, x2, y2 = [float(value) for value in bbox]
         return all(isfinite(value) for value in (x1, y1, x2, y2)) and x2 > x1 and y2 > y1
 
+    # 把模型输出统一转换为列表（兼容 None / list / tuple / 单对象 等多种形态）。
     @staticmethod
     def _as_result_list(pose_results: Any) -> list[Any]:
         if pose_results is None:
@@ -184,6 +201,7 @@ class RTMPose26Adapter:
             return list(pose_results)
         return [pose_results]
 
+    # 从关键点数组中取出「第一个样本」的关键点行，并兼容 numpy 张量（先 tolist）。
     @staticmethod
     def _first_prediction_rows(value: Any) -> list[Any]:
         if hasattr(value, "tolist"):
@@ -199,6 +217,7 @@ class RTMPose26Adapter:
             return list(first)
         return list(value)
 
+    # 从分数数组中取出「第一个样本」的分数行，逻辑与上面类似但处理单元素包装。
     @staticmethod
     def _first_score_rows(value: Any) -> list[Any]:
         if hasattr(value, "tolist"):

@@ -18,6 +18,7 @@ import {
   Timer,
   Trash2,
   Upload,
+  X,
   Zap,
 } from "lucide-react";
 // 导入 React 核心钩子和类型
@@ -85,6 +86,7 @@ import {
   deleteAnalysisJob,
   deleteAnalysisJobs,
   getVideoStreamUrl,
+  getCameraPreviewUrl,
   isAnalysisApiError,
   listAnalysisJobs,
   RECENT_ANALYSIS_JOB_EVENT,
@@ -3756,8 +3758,27 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     auto_analyze_after_stop: true,
   });
 
+  // 预览状态（依赖 recordingForm，需在其后声明）
+  const [previewStatus, setPreviewStatus] = useState<"idle" | "loading" | "displaying" | "failed">("idle");
+  const previewUrl = useMemo(() => getCameraPreviewUrl(recordingForm.camera_id), [recordingForm.camera_id]);
+  const [previewKey, setPreviewKey] = useState(0); // 递增 key 强制 <img> 重载
+
+  // 视频播放器状态
+  const [playingSession, setPlayingSession] = useState<RecordingSession | null>(null);
+  const [playbackError, setPlaybackError] = useState(false);
+
   const activeSession = sessions.find((s) => s.status === "recording");
   const [loading, setLoading] = useState(false);
+
+  // 当选中的摄像头变化时，重置预览状态
+  useEffect(() => {
+    if (!recordingForm.camera_id) {
+      setPreviewStatus("idle");
+    } else {
+      setPreviewStatus("loading");
+      setPreviewKey((k) => k + 1); // 强制 <img> 加载新 URL
+    }
+  }, [recordingForm.camera_id]);
 
   const loadData = useCallback(async () => {
     try {
@@ -3772,6 +3793,14 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   useEffect(() => {
     void loadData();
   }, [loadData, refreshKey]);
+
+  useEffect(() => {
+    if (!activeSession) return;
+    const interval = window.setInterval(() => {
+      void loadData();
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [activeSession, loadData]);
 
   const handleRegisterCamera = async () => {
     if (!newCamera.camera_id || !newCamera.name || !newCamera.stream_url) {
@@ -3809,9 +3838,10 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     setError(null);
     try {
       await startRecording(recordingForm);
-      setRefreshKey((k) => k + 1);
+      await loadData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "开始录制失败");
+      await loadData();
     } finally {
       setLoading(false);
     }
@@ -3822,9 +3852,10 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     setError(null);
     try {
       await stopRecording(sessionId);
-      setRefreshKey((k) => k + 1);
+      await loadData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "停止录制失败");
+      await loadData();
     } finally {
       setLoading(false);
     }
@@ -3836,9 +3867,10 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     setError(null);
     try {
       await cancelRecording(sessionId);
-      setRefreshKey((k) => k + 1);
+      await loadData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "取消录制失败");
+      await loadData();
     } finally {
       setLoading(false);
     }
@@ -3854,6 +3886,20 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     }
   };
 
+  const handlePlaySession = (session: RecordingSession) => {
+    setPlaybackError(false);
+    setPlayingSession(session);
+  };
+
+  const handleClosePlayer = () => {
+    setPlayingSession(null);
+    setPlaybackError(false);
+  };
+
+  const isPlayableSession = (session: RecordingSession): boolean => {
+    return session.status === "completed" && !!session.video_id;
+  };
+
   const statusLabel = (status: string) => {
     const map: Record<string, string> = { recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消" };
     return map[status] ?? status;
@@ -3862,6 +3908,14 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const statusColor = (status: string) => {
     const map: Record<string, string> = { recording: "text-red-500 bg-red-50", completed: "text-green-600 bg-green-50", failed: "text-orange-500 bg-orange-50", canceled: "text-gray-400 bg-gray-50" };
     return map[status] ?? "text-gray-500 bg-gray-50";
+  };
+
+  const nonPlayableReason = (session: RecordingSession): string | null => {
+    if (session.status === "recording") return "录制进行中";
+    if (session.status === "canceled") return "已取消";
+    if (session.status === "failed") return "录制失败";
+    if (session.status === "completed" && !session.video_id) return "视频未注册";
+    return null;
   };
 
   return (
@@ -3875,6 +3929,53 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
         <div className="mb-6 rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 px-5 py-4 text-sm text-[#C92A2A]">
           {error}
           <button className="ml-3 underline" onClick={() => setError(null)} type="button">关闭</button>
+        </div>
+      )}
+
+      {/* 视频播放器弹窗 */}
+      {playingSession && (
+        <div className="mb-6 rounded-2xl border border-[#DDE9D6] bg-white p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold truncate pr-4">
+              录播回放 · {playingSession.session_id}
+            </h3>
+            <button
+              className="quiet-button p-2"
+              onClick={handleClosePlayer}
+              type="button"
+              title="关闭播放器"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <p className="mb-3 text-xs text-slate-400">
+            {playingSession.camera_id} · {playingSession.court_name}
+            {playingSession.duration_sec ? ` · ${playingSession.duration_sec.toFixed(0)}秒` : ""}
+          </p>
+          {playbackError ? (
+            <div className="rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 p-8 text-center">
+              <p className="text-sm font-semibold text-[#C92A2A] mb-2">视频播放失败</p>
+              <p className="text-xs text-slate-500">
+                视频文件可能已被删除或浏览器不支持此格式。播放器未直接使用本地文件路径。
+              </p>
+              <button
+                className="mt-3 quiet-button px-4 py-1.5 text-xs"
+                onClick={() => { setPlaybackError(false); }}
+                type="button"
+              >
+                重试
+              </button>
+            </div>
+          ) : (
+            <video
+              key={playingSession.session_id}
+              className="w-full rounded-xl bg-black"
+              controls
+              autoPlay
+              src={getVideoStreamUrl(playingSession.video_id)}
+              onError={() => setPlaybackError(true)}
+            />
+          )}
         </div>
       )}
 
@@ -4012,8 +4113,65 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </div>
         </section>
 
-        {/* 右侧：录制控制 + 历史 */}
+        {/* 右侧：预览 + 录制控制 + 历史 */}
         <section className="space-y-6">
+          {/* 实时预览 */}
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+            <h3 className="mb-4 flex items-center gap-2 text-lg font-bold">
+              <span className="grid size-8 place-items-center rounded-lg bg-[#19B84C]/12 text-[#168A34]">
+                <Play size={16} />
+              </span>
+              实时预览
+            </h3>
+
+            {previewStatus === "idle" && (
+              <div className="rounded-xl border border-dashed border-[#DDE9D6] bg-[#F8FBF5] p-10 text-center">
+                <Camera size={28} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-sm text-slate-400">选择摄像头后显示实时画面</p>
+              </div>
+            )}
+
+            {previewStatus === "loading" && (
+              <div className="rounded-xl border border-dashed border-[#DDE9D6] bg-[#F8FBF5] p-10 text-center">
+                <RefreshCw size={28} className="mx-auto mb-2 animate-spin text-slate-300" />
+                <p className="text-sm text-slate-400">正在加载摄像头画面...</p>
+              </div>
+            )}
+
+            {(previewStatus === "displaying" || previewStatus === "loading") && previewUrl && (
+              <img
+                key={previewKey}
+                src={previewUrl}
+                alt="摄像头实时预览"
+                className="w-full rounded-xl bg-black object-contain"
+                style={{ minHeight: "200px", maxHeight: "360px" }}
+                onLoad={() => setPreviewStatus("displaying")}
+                onError={() => setPreviewStatus("failed")}
+              />
+            )}
+
+            {previewStatus === "failed" && (
+              <div className="rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 p-8 text-center">
+                <p className="text-sm font-semibold text-[#C92A2A] mb-2">预览加载失败</p>
+                <p className="text-xs text-slate-500 mb-3">
+                  摄像头流可能不可达、鉴权失败或无法解码。
+                  请检查摄像头地址、用户名和密码是否正确，或点击「探测」检查在线状态。
+                </p>
+                <button
+                  className="quiet-button px-4 py-1.5 text-xs"
+                  onClick={() => {
+                    setPreviewStatus("loading");
+                    setPreviewKey((k) => k + 1);
+                  }}
+                  type="button"
+                >
+                  重试预览
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 录制控制 */}
           <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
             <h3 className="mb-4 text-lg font-bold">开始录制</h3>
             <div className="space-y-3">
@@ -4077,7 +4235,7 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 {sessions.map((session) => (
                   <div key={session.session_id} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-4">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-sm text-[#17231D]">{session.session_id}</span>
+                      <span className="font-bold text-sm text-[#17231D] truncate max-w-[180px]">{session.session_id}</span>
                       <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusColor(session.status)}`}>
                         {statusLabel(session.status)}
                       </span>
@@ -4085,15 +4243,32 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                     <p className="mt-1 text-xs text-slate-400">
                       {session.camera_id} · {session.court_name} · {session.duration_sec ? `${session.duration_sec.toFixed(0)}秒` : ""}
                     </p>
-                    {session.auto_analysis_job_id && (
-                      <button
-                        className="mt-2 text-xs font-semibold text-[#2F80ED] hover:underline"
-                        onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)}
-                        type="button"
-                      >
-                        查看分析任务 →
-                      </button>
-                    )}
+
+                    {/* 操作按钮组 */}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {isPlayableSession(session) ? (
+                        <button
+                          className="text-xs font-semibold text-[#2F80ED] hover:underline flex items-center gap-1"
+                          onClick={() => handlePlaySession(session)}
+                          type="button"
+                        >
+                          <Play size={12} /> 播放录制
+                        </button>
+                      ) : (
+                        nonPlayableReason(session) && (
+                          <span className="text-xs text-slate-400">{nonPlayableReason(session)}</span>
+                        )
+                      )}
+                      {session.auto_analysis_job_id && (
+                        <button
+                          className="text-xs font-semibold text-[#168A34] hover:underline"
+                          onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)}
+                          type="button"
+                        >
+                          查看分析任务 →
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

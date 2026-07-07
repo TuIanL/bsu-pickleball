@@ -31,6 +31,9 @@ class BallTrackerConfig:
     roi_padding_ratio: float = 0.08          # ROI 边距的放宽比例（在给定 ROI 外再扩一点）
     max_box_area_ratio: float = 0.004        # 框面积占整帧比例上限（过大不像球）
     max_aspect_ratio: float = 4.0            # 框宽高比上限（过长不像球）
+    court_bounds_margin_ft: float = 2.0      # 投影到球场后允许越界的容差（英尺）
+    stationary_window_frames: int = 8        # 静态误报检测窗口
+    stationary_radius_pixels: float = 3.0    # 窗口内都落在该半径内则视为固定物
 
 
 class BallTracker:
@@ -46,6 +49,7 @@ class BallTracker:
         self.config = config or BallTrackerConfig()   # 超参数
         self.court_adapter = court_adapter or BallCourtAdapter()  # 图像→球场投影器
         self.trajectory: deque[Point2D] = deque(maxlen=self.config.trajectory_length)  # 最近有效点队列
+        self.selected_history: deque[Point2D] = deque(maxlen=max(1, self.config.stationary_window_frames))
         self.last_valid_position: Point2D | None = None  # 最近一个被接受的位置
         self.missing_frames = 0                       # 连续未检测到球的帧数
 
@@ -88,6 +92,23 @@ class BallTracker:
             )
 
         point = selected.image_xy
+        self._record_selected_candidate(point)
+        stationary_reason = self._stationary_reject_reason()
+        if stationary_reason is not None:
+            self._record_missing_detection()
+            return self._sample(
+                frame_index=frame_index,
+                timestamp_sec=timestamp_sec,
+                image_xy=point,
+                court_xy=None,
+                confidence=selected.confidence,
+                visible=True,
+                accepted=False,
+                candidate_count=len(candidates),
+                reject_reason=stationary_reason,
+                in_bounds=None,
+            )
+
         # 情况 B：有候选，但与已有轨迹不连续（跳变过大 / 偏离预测）
         reject_reason = self._continuity_reject_reason(point)
         if reject_reason is not None:
@@ -107,6 +128,23 @@ class BallTracker:
 
         # 情况 C：通过连续性检查 → 投影并记录为有效点
         projection = self.court_adapter.project(point, homography)
+        bounds_reject_reason = self._court_bounds_reject_reason(projection.court_xy)
+        if bounds_reject_reason is not None:
+            self._record_missing_detection()
+            return self._sample(
+                frame_index=frame_index,
+                timestamp_sec=timestamp_sec,
+                image_xy=point,
+                court_xy=projection.court_xy,
+                confidence=selected.confidence,
+                visible=True,
+                accepted=False,
+                candidate_count=len(candidates),
+                reject_reason=bounds_reject_reason,
+                in_bounds=projection.in_bounds,
+                diagnostics={"court_projection": projection.detail},
+            )
+
         self._append_valid_point(point)
         return self._sample(
             frame_index=frame_index,
@@ -125,6 +163,7 @@ class BallTracker:
     def clear(self) -> None:
         """重置跟踪状态（换一段新视频/新作业时调用）。"""
         self.trajectory.clear()
+        self.selected_history.clear()
         self.last_valid_position = None
         self.missing_frames = 0
 
@@ -243,6 +282,30 @@ class BallTracker:
         predicted_distance = self._distance(point, self._predict_next_position())
         if predicted_distance > self.config.prediction_gate_pixels:
             return "prediction_gate"
+        return None
+
+    def _court_bounds_reject_reason(self, court_xy: Point2D | None) -> str | None:
+        if court_xy is None:
+            return None
+        margin = max(0.0, float(self.config.court_bounds_margin_ft))
+        x, y = court_xy
+        court = self.court_adapter.court
+        if -margin <= x <= court.width_ft + margin and -margin <= y <= court.length_ft + margin:
+            return None
+        return "projected_outside_court"
+
+    def _record_selected_candidate(self, point: Point2D) -> None:
+        self.selected_history.append(point)
+
+    def _stationary_reject_reason(self) -> str | None:
+        if len(self.selected_history) < max(1, self.config.stationary_window_frames):
+            return None
+        points = list(self.selected_history)
+        center_x = sum(point[0] for point in points) / len(points)
+        center_y = sum(point[1] for point in points) / len(points)
+        max_radius = max(self._distance(point, (center_x, center_y)) for point in points)
+        if max_radius <= self.config.stationary_radius_pixels:
+            return "stationary_candidate"
         return None
 
     def _predict_next_position(self) -> Point2D:

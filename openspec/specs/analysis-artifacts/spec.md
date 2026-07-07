@@ -181,6 +181,7 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 - **AND** MUST 包含 `detail`
 - **AND** MUST 包含 `items` 数组
 - **AND** 每个 item MUST 能表达 `id`、`kind`、`label`、`file_name`、`url`、`width` 和 `height`
+- **AND** 每个 item MUST 能表达 `title`、`description`、`file_path`、`artifact_url` 和 `source_artifacts`
 
 #### Scenario: Scatter plot manifest describes generated images
 
@@ -191,6 +192,7 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 - **AND** MUST 包含 `detail`
 - **AND** MUST 包含 `items` 数组
 - **AND** 每个 item MUST 能表达 `id`、`kind`、`label`、`file_name`、`url`、`width` 和 `height`
+- **AND** 每个 item MUST 能表达 `title`、`description`、`file_path`、`artifact_url` 和 `source_artifacts`
 
 ### Requirement: Analysis artifact configuration is available
 

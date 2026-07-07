@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+# dataclass / field：数据结构与可变默认工厂；Counter：统计状态计数；
+# hypot：求两点距离。feet_to_meters / meters_to_feet：英制与公制互转；
+# 标准球场尺寸常量 PICKLEBALL_COURT_WIDTH_M / LENGTH_M。
 from dataclasses import dataclass, field
 from collections import Counter
 from math import hypot
@@ -27,6 +30,8 @@ from app.vision.courtvision_calibration_engine.court_units import (
 
 @dataclass
 class PlayerIdentityConfig:
+    # 身份管理的可调参数：最多球员数、帧率、匹配阈值、重连距离/速度上限、
+    # 各类缓冲帧数、球场外扩边距、输入坐标单位、平滑窗口大小等。
     max_players: int = 4
     fps: float = 30.0
     match_threshold: float = 0.55
@@ -42,6 +47,7 @@ class PlayerIdentityConfig:
 
 @dataclass
 class PlayerObservation:
+    # 单条“观测”的中间结构：来自某一帧的某个 track 的位置信息（已换算到米）。
     frame_index: int
     timestamp_seconds: float
     track_id: int
@@ -53,6 +59,7 @@ class PlayerObservation:
 
 @dataclass
 class PlayerState:
+    # 某个稳定球员身份的运行时状态：活跃/历史 track_id 集合、最近出现帧、位置、速度、置信度、状态、轨迹样本。
     player_id: str
     active_track_ids: set[int] = field(default_factory=set)
     history_track_ids: set[int] = field(default_factory=set)
@@ -65,6 +72,7 @@ class PlayerState:
     trajectory: list[PlayerTrajectorySample] = field(default_factory=list)
 
     def to_schema(self) -> PlayerTrajectoryState:
+        # 把运行时状态转成对外 schema（PlayerTrajectoryState）。
         return PlayerTrajectoryState(
             player_id=self.player_id,
             status=self.status,  # type: ignore[arg-type]
@@ -82,9 +90,9 @@ class PlayerIdentityManager:
 
     def __init__(self, config: PlayerIdentityConfig | None = None) -> None:
         self.config = config or PlayerIdentityConfig()
-        self.players: dict[str, PlayerState] = {}
-        self.track_to_player: dict[int, str] = {}
-        self.diagnostics: list[PlayerIdentityDiagnostic] = []
+        self.players: dict[str, PlayerState] = {}        # player_id -> 状态
+        self.track_to_player: dict[int, str] = {}        # track_id -> player_id 映射
+        self.diagnostics: list[PlayerIdentityDiagnostic] = []  # 诊断事件累积
 
     def update(
         self,
@@ -92,11 +100,13 @@ class PlayerIdentityManager:
         positions: list[PlayerFramePosition],
         eligible_track_ids: set[int] | None = None,
     ) -> list[PlayerTrajectorySample]:
+        # 处理一帧：把有效位置转成观测，按资格过滤，再逐个分配到球员身份并产出轨迹样本。
         observations = [
             self._position_to_observation(position)
             for position in positions
             if position.valid and position.court_position is not None
         ]
+        # 若指定了“合格 track 集合”，先记录被过滤掉的观测，再丢弃它们。
         if eligible_track_ids is not None:
             excluded = [obs for obs in observations if obs.track_id not in eligible_track_ids]
             for observation in excluded:
@@ -112,6 +122,7 @@ class PlayerIdentityManager:
         outputs: list[PlayerTrajectorySample] = []
         updated_players: set[str] = set()
         for observation in observations:
+            # 落在度量边界外的点跳过并记录诊断。
             if not self._in_metric_bounds(observation.court_position_m):
                 self._diagnose(
                     frame_index,
@@ -148,6 +159,7 @@ class PlayerIdentityManager:
         processed_frame_count: int,
         frame_stride: int,
     ) -> PlayerTrajectoryArtifact:
+        # 汇总所有球员轨迹，生成最终 artifact（含平滑轨迹、状态、诊断、覆盖度）。
         players = {
             player_id: _with_smoothed_positions(player.trajectory, self.config.smoothing_window)
             for player_id, player in sorted(self.players.items())
@@ -168,6 +180,7 @@ class PlayerIdentityManager:
         )
 
     def to_projected_track_points(self, output_court_unit: str = "m") -> list[ProjectedTrackPoint]:
+        # 把内部（米）轨迹点转成对外投影轨迹点；output_court_unit='ft' 时换算成英尺。
         points: list[ProjectedTrackPoint] = []
         for player in self.players.values():
             for sample in _with_smoothed_positions(player.trajectory, self.config.smoothing_window):
@@ -196,6 +209,8 @@ class PlayerIdentityManager:
         return sorted(points, key=lambda point: (point.timestamp_seconds, point.frame_index, point.track_id))
 
     def _assign_player(self, observation: PlayerObservation) -> PlayerState | None:
+        # 把一次观测分配到球员身份：1) 已有 track->player 映射直接复用；2) 还有空位则新建；
+        # 3) 否则在现有球员里找最佳候选（得分需超过阈值），否则返回 None。
         player_id = self.track_to_player.get(observation.track_id)
         if player_id is not None and player_id in self.players:
             return self.players[player_id]
@@ -232,6 +247,7 @@ class PlayerIdentityManager:
         return player
 
     def _best_candidate(self, observation: PlayerObservation) -> tuple[PlayerState | None, float, str]:
+        # 在所有已有球员里挑“预测位置离观测最近且运动方向最一致”的作为最佳候选。
         best_player: PlayerState | None = None
         best_score = 0.0
         best_reason = ""
@@ -240,13 +256,16 @@ class PlayerIdentityManager:
                 continue
             predicted = self._predict_position(player, observation.frame_index)
             distance = _distance(predicted, observation.court_position_m)
+            # 速度不现实（超过上限）则位置分记 0。
             if not self._speed_is_plausible(player, observation):
                 position_score = 0.0
                 reason = "implausible speed"
             else:
+                # 距预测位置越近，位置分越高（按最大重连距离归一）。0..1
                 position_score = max(0.0, 1.0 - distance / self.config.max_reconnect_distance_m)
                 reason = "position"
             motion_score = self._motion_score(player, predicted, observation.court_position_m)
+            # 综合分：位置占 0.7、运动一致性占 0.3。
             score = 0.7 * position_score + 0.3 * motion_score
             if score > best_score:
                 best_player = player
@@ -255,6 +274,7 @@ class PlayerIdentityManager:
         return best_player, best_score, best_reason
 
     def _update_player(self, player: PlayerState, observation: PlayerObservation) -> list[PlayerTrajectorySample]:
+        # 用一次观测更新球员状态，并产出（含插值）轨迹样本。
         inserted = self._interpolate(player, observation)
         previous_position = player.last_position_m
         previous_timestamp = player.last_timestamp
@@ -266,6 +286,7 @@ class PlayerIdentityManager:
         player.last_seen_frame = observation.frame_index
         player.last_timestamp = observation.timestamp_seconds
         player.confidence = observation.confidence
+        # 若前后位置都具备，则按时间差计算原始速度，并用指数平滑（alpha=0.7）更新速度估计。
         if previous_position is not None:
             elapsed = observation.timestamp_seconds - previous_timestamp
             if elapsed > 0:
@@ -280,6 +301,7 @@ class PlayerIdentityManager:
                 ]
         player.last_position_m = observation.court_position_m
 
+        # 记录当前帧的真实（detected）样本。
         sample = PlayerTrajectorySample(
             frame_index=observation.frame_index,
             timestamp_seconds=observation.timestamp_seconds,
@@ -300,6 +322,7 @@ class PlayerIdentityManager:
         return [*inserted, sample]
 
     def _interpolate(self, player: PlayerState, observation: PlayerObservation) -> list[PlayerTrajectorySample]:
+        # 当两次观测之间缺失若干帧（且间隔在可插值范围内）时，做线性插值补齐中间帧（interpolated 样本）。
         if player.last_position_m is None or player.last_seen_frame < 0:
             return []
         gap = observation.frame_index - player.last_seen_frame
@@ -329,6 +352,7 @@ class PlayerIdentityManager:
         return inserted
 
     def _update_player_statuses(self, frame_index: int, updated_players: set[str]) -> None:
+        # 根据距上次出现的帧间隔更新未在本帧更新的球员状态：lost / inactive。
         for player in self.players.values():
             if player.player_id in updated_players:
                 continue
@@ -353,6 +377,7 @@ class PlayerIdentityManager:
                 )
 
     def _position_to_observation(self, position: PlayerFramePosition) -> PlayerObservation:
+        # 把对外 PlayerFramePosition 转成内部（米为单位）的 PlayerObservation。
         court_position = position.court_position or [0.0, 0.0]
         if position.court_unit == "ft":
             court_position_m = [feet_to_meters(court_position[0]), feet_to_meters(court_position[1])]
@@ -369,6 +394,7 @@ class PlayerIdentityManager:
         )
 
     def _predict_position(self, player: PlayerState, frame_index: int) -> list[float]:
+        # 基于上一位置与平滑速度，线性预测本帧球员应处的位置（用于重连匹配）。
         if player.last_position_m is None:
             return [0.0, 0.0]
         fps = self.config.fps if self.config.fps > 0 else 30.0
@@ -379,12 +405,14 @@ class PlayerIdentityManager:
         ]
 
     def _motion_score(self, player: PlayerState, predicted: list[float], observed: list[float]) -> float:
+        # 运动一致性分：比较“预测速度方向”与“实际观测位移方向”的余弦相似度（0..1，无关时 0.5）。
         if player.last_position_m is None:
             return 0.5
         observed_delta = [observed[0] - player.last_position_m[0], observed[1] - player.last_position_m[1]]
         return _cosine_score(player.last_velocity_mps, observed_delta) if _norm(observed_delta) > 1e-6 else 0.5
 
     def _speed_is_plausible(self, player: PlayerState, observation: PlayerObservation) -> bool:
+        # 判断本次观测相对上次的移动速度是否不超过上限（过滤明显错误的大跳变）。
         if player.last_position_m is None:
             return True
         elapsed = observation.timestamp_seconds - player.last_timestamp
@@ -393,6 +421,7 @@ class PlayerIdentityManager:
         return _distance(player.last_position_m, observation.court_position_m) / elapsed <= self.config.max_speed_mps
 
     def _in_metric_bounds(self, point: list[float]) -> bool:
+        # 判断球场坐标（米）是否落在含外扩边距的球场范围内。
         margin = self.config.court_buffer_m
         return (
             -margin <= point[0] <= PICKLEBALL_COURT_WIDTH_M + margin
@@ -410,6 +439,7 @@ class PlayerIdentityManager:
         score: float | None = None,
         court_position_m: list[float] | None = None,
     ) -> None:
+        # 追加一条诊断事件（用于排查身份分配/过滤原因）。
         self.diagnostics.append(
             PlayerIdentityDiagnostic(
                 frame_index=frame_index,
@@ -429,6 +459,7 @@ class PlayerIdentityManager:
         fps: float,
         frame_count: int,
     ) -> PlayerTrajectoryCoverageDiagnostics:
+        # 统计每个球员的轨迹覆盖度（样本数、检测/插值数、首末时间、状态计数等），并产出整体覆盖警告。
         source_duration = frame_count / fps if fps > 0 and frame_count > 0 else None
         player_coverages: list[PlayerTrajectoryCoverage] = []
         first_values: list[float] = []
@@ -461,6 +492,7 @@ class PlayerIdentityManager:
                 )
             )
         trajectory_last = max(last_values) if last_values else None
+        # 轨迹过早结束（不足源视频 75%）则警告。
         if source_duration and trajectory_last is not None and trajectory_last < source_duration * 0.75:
             warnings.append("trajectory_ends_before_source_video")
         if not player_coverages:
@@ -478,14 +510,17 @@ class PlayerIdentityManager:
 
 
 def _distance(a: list[float], b: list[float]) -> float:
+    # 欧氏距离。
     return hypot(a[0] - b[0], a[1] - b[1])
 
 
 def _norm(vector: list[float]) -> float:
+    # 向量的模长。
     return hypot(vector[0], vector[1])
 
 
 def _cosine_score(a: list[float], b: list[float]) -> float:
+    # 余弦相似度映射到 0..1（(-1,1)→(0,1)）。任一向量过短返回 0.5。
     norm_a = _norm(a)
     norm_b = _norm(b)
     if norm_a < 1e-6 or norm_b < 1e-6:
@@ -495,6 +530,7 @@ def _cosine_score(a: list[float], b: list[float]) -> float:
 
 
 def _side_for_metric_y(y: float) -> str:
+    # 按球场长度方向把位置分成近侧(near)/远侧(far)。
     return "near" if y < PICKLEBALL_COURT_LENGTH_M / 2.0 else "far"
 
 
@@ -502,6 +538,7 @@ def _with_smoothed_positions(
     samples: list[PlayerTrajectorySample],
     window: int,
 ) -> list[PlayerTrajectorySample]:
+    # 对轨迹坐标做滑动窗口均值平滑（window<=1 则直接浅拷贝原样本）。
     if window <= 1 or not samples:
         return [sample.model_copy() for sample in samples]
     ordered = sorted(samples, key=lambda item: (item.frame_index, item.timestamp_seconds))

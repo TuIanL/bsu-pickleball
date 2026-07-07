@@ -129,6 +129,12 @@ class SessionService:
             if session is None:
                 raise ValueError(f"录制会话 {session_id} 不存在")
 
+        # FFmpeg 可能已经异常退出并把会话标记为 failed；此时停止操作返回
+        # 当前终态，避免前端停留在过期的 recording 状态。
+        if session.status == "failed":
+            self._clear_active(session.camera_id)
+            return session
+
         # 只有 recording 状态才能停止
         if session.status != "recording":
             raise RuntimeError(f"录制会话 {session_id} 状态为 {session.status}，无法停止")
@@ -194,6 +200,11 @@ class SessionService:
             session = self._load(session_id)
             if session is None:
                 raise ValueError(f"录制会话 {session_id} 不存在")
+
+        # 已失败的录制已经是终态；返回当前会话让客户端刷新并解除录制锁。
+        if session.status == "failed":
+            self._clear_active(session.camera_id)
+            return session
 
         # 只有 recording 状态才能取消
         if session.status != "recording":
