@@ -77,6 +77,7 @@ class Settings(BaseModel):
     ball_model_path: str | None = None                    # 球检测模型路径
     enable_ball_detection: bool = False                   # 是否启用球检测
     enable_bounce_detection: bool = False                 # 是否启用弹跳检测
+    ball_analysis_strict: bool = False                    # 球分析严格模式：true 时球分析异常导致 pipeline failed
 
     # ---- 可视化输出 ----
     enable_analysis_overlay_video: bool = False           # 是否生成分析叠加视频
@@ -265,6 +266,8 @@ def get_settings() -> Settings:
         enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "false").lower()
         in {"1", "true", "yes"},
         enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "false").lower()
+        in {"1", "true", "yes"},
+        ball_analysis_strict=os.getenv("PICKLEBALL_BALL_ANALYSIS_STRICT", "false").lower()
         in {"1", "true", "yes"},
         enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "false").lower()
         in {"1", "true", "yes"},

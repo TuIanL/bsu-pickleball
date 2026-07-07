@@ -79,3 +79,11 @@ class PerformanceMetrics(BaseModel):
     kitchen_dwell: List[ZoneDwellMetric]                  # 各球员厨房区停留
     doubles_spacing: List[DoublesSpacingSummary]          # 双打间距
     heatmap: Heatmap                                     # 位置热力图
+    # 球轨迹与弹跳点摘要（可选，来自球分析阶段）
+    ball_detected_frame_count: int = 0                   # 球检测到的帧数
+    ball_detection_rate: float = 0.0                      # 球检测率
+    ball_trajectory_sample_count: int = 0                 # 原始球轨迹样本数
+    cleaned_ball_trajectory_sample_count: int = 0         # 清洗后轨迹点数
+    bounce_event_count: int = 0                           # 弹跳事件候选数
+    first_bounce_timestamp_seconds: float | None = None   # 第一次弹跳时间戳
+    last_bounce_timestamp_seconds: float | None = None    # 最后一次弹跳时间戳

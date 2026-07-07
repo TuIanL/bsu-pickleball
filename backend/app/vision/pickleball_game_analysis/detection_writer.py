@@ -115,3 +115,92 @@ def write_cleaned_trajectory(path: Path, *, job_id: str, samples: list[Trajector
 
 def write_bounce_events(path: Path, *, job_id: str, events: list[BounceEvent], **kwargs: Any) -> Path:
     return write_json(path, build_bounce_events_payload(job_id=job_id, events=events, **kwargs))
+
+
+def build_ball_overlay_payload(
+    *,
+    job_id: str,
+    video_id: str | None = None,
+    samples: list[BallFrameSample],
+    source_width: int = 0,
+    source_height: int = 0,
+    fps: float = 0.0,
+    frame_stride: int = 1,
+    processed_frame_count: int = 0,
+    status: str = "available",
+    detail: str = "ball overlay generated",
+) -> dict[str, Any]:
+    """从 BallFrameSample 列表构造 ball_overlay.json 的 payload。
+
+    只包含球分析实际运行过的抽样帧（方法 A），不强制补全每个 frame_index。
+    顶层包含 source 和 coverage 元数据以弥补稀疏帧的可索引性问题。
+    """
+    overlay_frames: list[dict[str, Any]] = []
+    detected_count = 0
+    for sample in samples:
+        bbox: list[float] | None = None
+        if sample.image_xy is not None:
+            bbox = [float(sample.image_xy[0]), float(sample.image_xy[1]), float(sample.image_xy[0]), float(sample.image_xy[1])]
+            # 尝试从 diagnostics 中提取原始 bbox
+            diag_bbox = sample.diagnostics.get("bbox")
+            if isinstance(diag_bbox, list | tuple) and len(diag_bbox) == 4:
+                try:
+                    bbox = [float(v) for v in diag_bbox]
+                except (TypeError, ValueError):
+                    pass
+        track_status: str
+        if sample.accepted:
+            track_status = "detected"
+            detected_count += 1
+        elif sample.reject_reason is not None:
+            track_status = "rejected"
+        else:
+            track_status = "missing"
+
+        court: dict[str, Any] | None = None
+        if sample.court_xy is not None:
+            court = {"x": round(float(sample.court_xy[0]), 4), "y": round(float(sample.court_xy[1]), 4), "unit": "ft"}
+
+        overlay_frames.append({
+            "frame_index": int(sample.frame_index),
+            "timestamp_seconds": round(float(sample.timestamp_sec), 6),
+            "ball": {
+                "center": (
+                    {"x": round(float(sample.image_xy[0]), 2), "y": round(float(sample.image_xy[1]), 2)}
+                    if sample.image_xy is not None
+                    else None
+                ),
+                "bbox": bbox,
+                "confidence": round(float(sample.confidence), 4) if sample.confidence is not None else None,
+                "track_status": track_status,
+                "court": court,
+            },
+        })
+
+    missing_count = max(0, processed_frame_count - detected_count)
+    detection_rate = round(detected_count / max(1, processed_frame_count), 4) if processed_frame_count > 0 else 0.0
+
+    return {
+        "schema_version": "ball_overlay.v1",
+        "job_id": job_id,
+        "video_id": video_id,
+        "status": status,
+        "detail": detail,
+        "source": {
+            "width": int(source_width),
+            "height": int(source_height),
+            "fps": round(float(fps), 2),
+            "frame_stride": int(frame_stride),
+            "processed_frame_count": int(processed_frame_count),
+        },
+        "coverage": {
+            "overlay_frame_count": detected_count,
+            "missing_frame_count": missing_count,
+            "detection_rate": detection_rate,
+        },
+        "frames": overlay_frames,
+    }
+
+
+def write_ball_overlay(path: Path, *, job_id: str, video_id: str | None = None, samples: list[BallFrameSample], **kwargs: Any) -> Path:
+    return write_json(path, build_ball_overlay_payload(job_id=job_id, video_id=video_id, samples=samples, **kwargs))
