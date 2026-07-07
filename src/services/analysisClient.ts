@@ -691,6 +691,12 @@ export async function getRecording(sessionId: string): Promise<RecordingSession>
   return requestJson<RecordingSession>(`/api/recordings/${sessionId}`);
 }
 
+export async function deleteRecording(sessionId: string): Promise<{ session_id: string; status: string; detail: string }> {
+  return requestJson<{ session_id: string; status: string; detail: string }>(`/api/recordings/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getCameraPreviewUrl(cameraId?: string): string | undefined {
   return cameraId ? toApiUrl(`/api/cameras/${cameraId}/preview`) : undefined;
 }

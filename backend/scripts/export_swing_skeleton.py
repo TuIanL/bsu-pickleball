@@ -9,6 +9,10 @@
     python backend/scripts/export_swing_skeleton.py --video swing.mp4 --device cuda --no-labels
 """
 
+# 挥拍视频「骨架叠加」导出工具（独立脚本）。
+# 流程：YOLO 人体检测 → IoU 多目标跟踪 → RTMPose 姿态估计 → 画骨架 → 写出叠加视频 + 逐帧 JPG。
+# 绘制函数直接复用 export_pose_overlay_video.py 里的实现（通过 importlib 动态加载，避免重复代码）。
+
 from __future__ import annotations
 
 import argparse
@@ -19,11 +23,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# backend 目录（scripts/ 的上两级），并加入 sys.path。
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
+# 支持作为源视频的后缀。
 SUPPORTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm")
 
+# 跟踪配色调色板（BGR 顺序，与 export_pose_overlay_video 保持一致）。
 COLOR_PALETTE = [
     (72, 220, 136),
     (47, 128, 237),
@@ -43,6 +50,7 @@ def _load_overlay_module():
     return module
 
 
+# 在导入期就加载一次绘制模块（供后续 draw_pose_frame / open_video_writer 调用）。
 _OVERLAY = _load_overlay_module()
 
 
@@ -59,6 +67,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def check_dependencies() -> None:
+    # 检查运行所需的关键 Python 依赖是否都已安装。
     missing = []
     for mod, hint in [
         ("ultralytics", "pip install ultralytics"),
@@ -80,6 +89,7 @@ def check_dependencies() -> None:
 
 
 def compute_iou(box1: list[float], box2: list[float]) -> float:
+    # 计算两个边界框（xyxy）的交并比 IoU。
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
@@ -105,6 +115,7 @@ def match_detections(
     assignments: dict[int, object] = {}
     unmatched = list(range(len(detections)))
 
+    # 对每个已有 track，在尚未匹配的检测里找 IoU 最大的那个（要求超过阈值）。
     for track_id, prev_bbox in active_tracks.items():
         best_iou = iou_threshold
         best_idx = -1
@@ -121,6 +132,7 @@ def match_detections(
 
 
 def color_for_track(track_id: int) -> tuple[int, int, int]:
+    # 根据 track_id 从调色板取稳定颜色。
     return COLOR_PALETTE[(track_id - 1) % len(COLOR_PALETTE)]
 
 
@@ -202,8 +214,8 @@ def main() -> int:
         return 1
 
     # ---- 主循环 ----
-    active_tracks: dict[int, list[float]] = {}
-    next_track_id = 1
+    active_tracks: dict[int, list[float]] = {}  # track_id -> 上一帧 bbox
+    next_track_id = 1  # 下一个新 track 的 id
     frame_index = 0
     processed = 0
 
@@ -219,14 +231,14 @@ def main() -> int:
         # Step 1: YOLO 人体检测
         detections = detector.detect(frame)
 
-        # Step 2: IoU 跟踪
+        # Step 2: IoU 跟踪（把检测关联到已有 track，未匹配的分配新 id）
         assignments, unmatched = match_detections(active_tracks, detections)
         for idx in unmatched:
             assignments[next_track_id] = detections[idx]
             next_track_id += 1
         active_tracks = {tid: det.bbox for tid, det in assignments.items()}
 
-        # Step 3: 构建 FrameDetection 列表
+        # Step 3: 构建 FrameDetection 列表（传给姿态估计）
         frame_detections = [
             FrameDetection(
                 frame_index=frame_index,

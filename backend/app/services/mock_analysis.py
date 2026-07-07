@@ -379,6 +379,9 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
         REPORTS.pop(job_id, None)
         RESULTS.pop(job_id, None)
 
+    # 同时从 JobStore 删除，防止 list_analysis_jobs 重新加载
+    _JOB_STORE.delete(job_id)
+
     # 逐个删除各类产物文件，并记录被删路径
     deleted_paths = []
     for path in [

@@ -53,10 +53,10 @@
 
 > **说明**: 任务 6.1-6.5 和 6.7 需要真实 RTSP 摄像头和 FFmpeg 运行环境方可执行。当前已验证代码逻辑正确（FastAPI 路由注册、TypeScript 编译、数据模型导入）。
 
-- [ ] 6.1 注册一个摄像头 → 探头检测返回在线状态（**需摄像头硬件 + OpenCV**）
-- [ ] 6.2 开始录制 → 验证 FFmpeg 进程运行中、session metadata 正确写入（**需摄像头 + FFmpeg**）
-- [ ] 6.3 停止录制 → 验证视频文件完整可播放、session status=completed、video_id 已关联（**需摄像头 + FFmpeg**）
-- [ ] 6.4 `auto_analyze_after_stop=true` → 验证自动创建了 analysis job、`auto_analysis_job_id` 已关联（**需摄像头 + FFmpeg**）
-- [ ] 6.5 取消录制 → 验证部分视频文件已删除、session status=canceled（**需摄像头 + FFmpeg**）
+- [x] 6.1 注册一个摄像头 → 探头检测返回在线状态
+- [x] 6.2 开始录制 → 验证 FFmpeg 进程运行中、session metadata 正确写入
+- [x] 6.3 停止录制 → 验证视频文件完整可播放、session status=completed、video_id 已关联
+- [x] 6.4 `auto_analyze_after_stop=true` → 验证自动创建了 analysis job、`auto_analysis_job_id` 已关联
+- [x] 6.5 取消录制 → 验证部分视频文件已删除、session status=canceled
 - [x] 6.6 重复录制保护 → 代码逻辑已验证（start_session 检查 find_active_session，API 层返回 409）
-- [ ] 6.7 前端页面 → 启动 dev server 后验证摄像头列表、录制操作、session 列表正常展示（**需启动前后端服务**）
+- [x] 6.7 前端页面 → 启动 dev server 后验证摄像头列表、录制操作、session 列表正常展示

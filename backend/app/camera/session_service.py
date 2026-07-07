@@ -236,6 +236,34 @@ class SessionService:
         logger.info("录制会话已取消: %s", session_id)
         return session
 
+    def delete_session(self, session_id: str) -> dict:
+        from app.camera.models import RecordingDeleteResult
+
+        session = self.get_session(session_id)
+        if session is None:
+            return {"session_id": session_id, "status": "not_found", "detail": "录制会话不存在"}
+
+        # 正在录制中的不允许删除
+        if session.status == "recording":
+            return {"session_id": session_id, "status": "blocked", "detail": "录制进行中，无法删除"}
+
+        # 从内存缓存清除
+        SESSIONS.pop(session_id, None)
+
+        # 删除会话 JSON 文件
+        session_path = self._sessions_dir / f"{session_id}.json"
+        if session_path.exists():
+            try:
+                session_path.unlink()
+            except Exception as exc:
+                logger.warning("删除录制会话文件失败: %s", exc)
+
+        # 清除活跃录制锁（如果是当前活跃的）
+        self._clear_active(session.camera_id)
+
+        logger.info("录制会话已删除: %s", session_id)
+        return {"session_id": session_id, "status": "deleted", "detail": "录制会话已删除"}
+
     def get_session(self, session_id: str) -> RecordingSession | None:
         # 先缓存后磁盘
         cached = SESSIONS.get(session_id)

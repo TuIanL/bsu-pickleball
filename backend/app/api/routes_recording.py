@@ -15,7 +15,7 @@ from __future__ import annotations
 # Query：用于从网址的查询参数（形如 ?camera_id=xxx&status=done）里取可选的过滤条件
 from fastapi import APIRouter, HTTPException, Query
 
-from app.camera.models import RecordingSession, RecordingStartRequest
+from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest
 # 检查当前系统是否安装了 FFmpeg 这个外部工具
 from app.camera.recorder import check_ffmpeg_available
 # 录制会话服务：真正管理录制生命周期（开始/停止/取消/查询）的对象
@@ -121,3 +121,19 @@ def get_recording(session_id: str) -> RecordingSession:
     if session is None:
         raise HTTPException(status_code=404, detail=f"录制会话 {session_id} 不存在")
     return session
+
+
+@router.delete("/{session_id}", response_model=RecordingDeleteResult)
+def delete_recording(session_id: str) -> RecordingDeleteResult:
+    """
+    删除录制会话
+
+    只允许删除终态（completed / failed / canceled）的录制。
+    正在录制中的会话返回 409。
+    """
+    result = session_service.delete_session(session_id)
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail=result["detail"])
+    if result["status"] == "blocked":
+        raise HTTPException(status_code=409, detail=result["detail"])
+    return RecordingDeleteResult(**result)

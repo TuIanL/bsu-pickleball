@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# 把已生成的 pose_overlay.json（骨架叠加数据）「烧录」成叠加视频。
+# 作用：读取一段视频 + 对应的姿态叠加数据，逐帧把骨架/边界框/标签画到画面上并写出 mp4。
+# 支持：按帧索引匹配、缺失帧线性插值、置信度过滤、是否画框/画标签等开关。
+
 import argparse
 import json
 import math
@@ -11,8 +15,11 @@ import cv2  # type: ignore
 import numpy as np
 
 
+# 支持作为源/上传视频的后缀。
 VIDEO_EXTENSIONS = (".mov", ".mp4", ".avi", ".mkv", ".webm")
+# 绘制关键点的最低置信度默认值。
 DEFAULT_KEYPOINT_CONFIDENCE = 0.25
+# 相邻叠加帧之间允许插值的最大间隔（帧），超过则不再插值。
 DEFAULT_MAX_GAP_FRAMES = 10
 
 
@@ -20,37 +27,47 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Burn an existing pose_overlay.json skeleton overlay into a video file."
     )
+    # 分析任务 id，例如 job-de44b626b9。
     parser.add_argument("--job-id", help="Analysis job id, for example job-de44b626b9.")
+    # 源视频路径（默认用该 job 上传的视频）。
     parser.add_argument("--video", type=Path, help="Source video path. Defaults to the job's uploaded video.")
+    # pose_overlay.json 路径（默认 backend/data/outputs/<job-id>/pose_overlay.json）。
     parser.add_argument(
         "--pose-overlay",
         type=Path,
         help="pose_overlay.json path. Defaults to backend/data/outputs/<job-id>/pose_overlay.json.",
     )
+    # 输出 .mp4 路径（默认同目录下的 pose_overlay_video.mp4）。
     parser.add_argument(
         "--output",
         type=Path,
         help="Output .mp4 path. Defaults to backend/data/outputs/<job-id>/pose_overlay_video.mp4.",
     )
+    # 绘制关键点的最低置信度阈值。
     parser.add_argument(
         "--keypoint-confidence",
         type=float,
         default=DEFAULT_KEYPOINT_CONFIDENCE,
         help=f"Minimum keypoint confidence to draw. Default: {DEFAULT_KEYPOINT_CONFIDENCE}.",
     )
+    # 允许插值的最大叠加帧间隔。
     parser.add_argument(
         "--max-gap-frames",
         type=int,
         default=DEFAULT_MAX_GAP_FRAMES,
         help="Largest overlay frame gap to interpolate across. Default: 10.",
     )
+    # 不画边界框。
     parser.add_argument("--no-boxes", action="store_true", help="Do not draw subject bounding boxes.")
+    # 不画 track id 标签。
     parser.add_argument("--no-labels", action="store_true", help="Do not draw track id labels.")
+    # 调试用：处理到这么多源帧就停。
     parser.add_argument(
         "--max-frames",
         type=int,
         help="Debug option: stop after this many source frames.",
     )
+    # 每处理多少帧打印一次进度。
     parser.add_argument(
         "--progress-interval",
         type=int,
@@ -62,18 +79,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    # backend 目录（scripts/ 的上一级）。
     backend_dir = Path(__file__).resolve().parents[1]
     job_id = args.job_id
 
+    # 解析 pose_overlay.json 路径并读取。
     pose_path = resolve_pose_overlay_path(backend_dir, job_id, args.pose_overlay)
     pose_overlay = read_json(pose_path)
+    # 若未显式给 job_id，则尝试从 json 里读。
     job_id = job_id or pose_overlay.get("job_id")
     if not job_id:
         raise SystemExit("Could not infer job id. Pass --job-id or use a pose_overlay.json with job_id.")
 
+    # 解析源视频路径与输出路径。
     video_path = resolve_video_path(backend_dir, pose_overlay, args.video)
     output_path = args.output or backend_dir / "data" / "outputs" / job_id / "pose_overlay_video.mp4"
 
+    # 调用核心：把骨架叠加烧录成视频。
     export_pose_overlay_video(
         video_path=video_path,
         pose_overlay=pose_overlay,
@@ -89,6 +111,7 @@ def main() -> int:
 
 
 def resolve_pose_overlay_path(backend_dir: Path, job_id: str | None, explicit_path: Path | None) -> Path:
+    # 优先级：显式路径 > 由 job_id 推导的默认路径 > 报错。
     if explicit_path:
         path = explicit_path
     elif job_id:
@@ -103,12 +126,14 @@ def resolve_pose_overlay_path(backend_dir: Path, job_id: str | None, explicit_pa
 
 
 def resolve_video_path(backend_dir: Path, pose_overlay: dict[str, Any], explicit_path: Path | None) -> Path:
+    # 若显式给了视频路径，直接用并校验存在。
     if explicit_path:
         path = explicit_path.expanduser().resolve()
         if not path.exists():
             raise SystemExit(f"video not found: {path}")
         return path
 
+    # 否则从 json 里的 video_id 推导上传目录下的视频文件。
     video_id = pose_overlay.get("video_id")
     if not video_id:
         raise SystemExit("Could not infer source video. Pass --video.")
@@ -122,6 +147,7 @@ def resolve_video_path(backend_dir: Path, pose_overlay: dict[str, Any], explicit
 
 
 def read_json(path: Path) -> dict[str, Any]:
+    # 读取 json 文件为字典。
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -137,17 +163,21 @@ def export_pose_overlay_video(
     max_frames: int | None = None,
     progress_interval: int = 300,
 ) -> Path:
+    # 按 frame_index 升序排列所有叠加帧。
     frames = sorted(pose_overlay.get("frames", []), key=lambda frame: frame.get("frame_index", 0))
     if not frames:
         raise ValueError("pose overlay contains no frames")
 
+    # 骨架连线定义（从一个关键点到另一个关键点）。
     skeleton_edges = pose_overlay.get("skeleton_edges", [])
     source = pose_overlay.get("source") or {}
 
+    # 打开源视频。
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise RuntimeError(f"Could not open source video: {video_path}")
 
+    # 读取视频基础属性：帧率、宽、高、总帧数。
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 0) or 30.0
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or source.get("width") or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or source.get("height") or 0)
@@ -156,21 +186,24 @@ def export_pose_overlay_video(
         capture.release()
         raise RuntimeError("Could not determine source video dimensions")
 
+    # 准备输出路径与临时文件（先写 .tmp.mp4，最后再重命名）。
     output_path = output_path.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".tmp.mp4")
     if temp_path.exists():
         temp_path.unlink()
 
+    # 尝试多种编码器打开视频写入器。
     writer = open_video_writer(temp_path, fps, (width, height))
     if not writer.isOpened():
         capture.release()
         raise RuntimeError(f"Could not create output video: {temp_path}")
 
+    # 源视频与叠加数据坐标系之间的缩放比例（处理分辨率不一致）。
     scale_x = width / float(source.get("width") or width)
     scale_y = height / float(source.get("height") or height)
-    frame_cursor = 0
-    written = 0
+    frame_cursor = 0  # 叠加帧游标，用于在已排序帧里向前推进
+    written = 0  # 已写出帧数
 
     try:
         while True:
@@ -180,7 +213,9 @@ def export_pose_overlay_video(
             if max_frames is not None and written >= max_frames:
                 break
 
+            # 当前源帧序号（CAP_PROP_POS_FRAMES 比实际刚读的帧多 1，所以减 1）。
             frame_index = int(capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            # 找到与当前帧对应的叠加帧（必要时插值）。
             overlay_frame, frame_cursor = resolve_pose_frame(
                 frames,
                 frame_index,
@@ -214,12 +249,14 @@ def export_pose_overlay_video(
             temp_path.unlink()
         raise RuntimeError("No frames were written")
 
+    # 把临时文件重命名为最终输出。
     shutil.move(str(temp_path), str(output_path))
     print(f"wrote {written} frames to {output_path}")
     return output_path
 
 
 def open_video_writer(path: Path, fps: float, size: tuple[int, int]) -> cv2.VideoWriter:
+    # 依次尝试多种 fourcc 编码器，返回第一个能成功打开的写入器。
     for fourcc_name in ("mp4v", "avc1", "H264"):
         writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*fourcc_name), fps, size)
         if writer.isOpened():
@@ -235,6 +272,7 @@ def resolve_pose_frame(
     *,
     max_gap_frames: int,
 ) -> tuple[dict[str, Any] | None, int]:
+    # 把游标向前推进到不超过当前 frame_index 的最近叠加帧。
     while cursor + 1 < len(frames) and int(frames[cursor + 1].get("frame_index", 0)) <= frame_index:
         cursor += 1
 
@@ -242,19 +280,23 @@ def resolve_pose_frame(
     next_frame = frames[cursor + 1] if cursor + 1 < len(frames) else None
     current_index = int(current.get("frame_index", 0))
 
+    # 完全重合：直接返回。
     if current_index == frame_index:
         return current, cursor
 
+    # 没有下一帧：若差距在允许范围内，用当前帧兜底，否则返回 None。
     if next_frame is None:
         return (current if frame_index - current_index <= max_gap_frames else None), cursor
 
     next_index = int(next_frame.get("frame_index", 0))
     gap = next_index - current_index
+    # 间隔非正或超出阈值：取更近的那一帧作为兜底（若差距过大则返回 None）。
     if gap <= 0 or gap > max_gap_frames:
         nearest = current if abs(frame_index - current_index) <= abs(next_index - frame_index) else next_frame
         nearest_index = int(nearest.get("frame_index", 0))
         return (nearest if abs(frame_index - nearest_index) <= max_gap_frames else None), cursor
 
+    # 正常范围：按当前帧与下一帧之间比例线性插值。
     ratio = (frame_index - current_index) / gap
     return interpolate_pose_frame(current, next_frame, ratio, frame_index), cursor
 
@@ -265,16 +307,18 @@ def interpolate_pose_frame(
     ratio: float,
     frame_index: int,
 ) -> dict[str, Any]:
+    # 把下一帧的主体按 track_id 建索引，便于按 id 配对插值。
     next_subjects = {subject.get("track_id"): subject for subject in next_frame.get("subjects", [])}
     subjects = []
     for subject in current.get("subjects", []):
         track_id = subject.get("track_id")
         next_subject = next_subjects.get(track_id)
+        # 能配对就插值，不能就用当前主体原样保留。
         subjects.append(interpolate_subject(subject, next_subject, ratio) if next_subject else subject)
 
     return {
         **current,
-        "frame_index": frame_index,
+        "frame_index": frame_index,  # 覆盖为插值目标帧序号
         "timestamp_seconds": lerp(
             float(current.get("timestamp_seconds", 0.0)),
             float(next_frame.get("timestamp_seconds", 0.0)),
@@ -285,6 +329,7 @@ def interpolate_pose_frame(
 
 
 def interpolate_subject(current: dict[str, Any], next_subject: dict[str, Any], ratio: float) -> dict[str, Any]:
+    # 把下一帧的关键点按名称建索引，逐关键点插值。
     next_keypoints = {keypoint.get("name"): keypoint for keypoint in next_subject.get("keypoints", [])}
     return {
         **current,
@@ -302,6 +347,7 @@ def interpolate_keypoint(
     next_keypoint: dict[str, Any] | None,
     ratio: float,
 ) -> dict[str, Any]:
+    # 单个关键点插值：x/y/confidence 线性插值；visible 需两端都可见。
     if not next_keypoint:
         return current
     return {
@@ -318,6 +364,7 @@ def interpolate_keypoint(
 
 
 def interpolate_list(current: list[Any], next_values: list[Any], ratio: float) -> list[float]:
+    # 对数值列表逐元素线性插值（边界缺失时回退用当前值）。
     return [
         lerp(float(value), float(next_values[index] if index < len(next_values) else value), ratio)
         for index, value in enumerate(current)
@@ -335,9 +382,11 @@ def draw_pose_frame(
     draw_labels: bool,
     keypoint_confidence: float,
 ) -> None:
+    # 遍历每一个主体，分别画边界框、骨架、关键点、标签。
     for subject in overlay_frame.get("subjects", []):
         track_id = str(subject.get("track_id") or "")
         color = color_for_track(track_id)
+        # 只保留「可见且置信度达标」的关键点，并按名称建索引。
         keypoints = {
             keypoint.get("name"): keypoint
             for keypoint in subject.get("keypoints", [])
@@ -356,6 +405,7 @@ def draw_pose_frame(
 
 
 def is_keypoint_drawable(keypoint: dict[str, Any], confidence_threshold: float) -> bool:
+    # 是否绘制该关键点：可见、坐标有限、且置信度达到阈值。
     return (
         bool(keypoint.get("visible", True))
         and math.isfinite(float(keypoint.get("x", 0.0)))
@@ -371,6 +421,7 @@ def draw_bbox(
     scale_x: float,
     scale_y: float,
 ) -> None:
+    # 画边界框：半透明矩形叠加到原帧上。
     if len(bbox) != 4:
         return
     x1, y1, x2, y2 = scaled_bbox(bbox, scale_x, scale_y)
@@ -387,6 +438,7 @@ def draw_skeleton(
     scale_x: float,
     scale_y: float,
 ) -> None:
+    # 按 skeleton_edges 把相邻关键点连成线段（骨架）。
     for edge in skeleton_edges:
         start = keypoints.get(edge.get("from_keypoint"))
         end = keypoints.get(edge.get("to_keypoint"))
@@ -409,6 +461,7 @@ def draw_keypoints(
     scale_x: float,
     scale_y: float,
 ) -> None:
+    # 画关键点：外层深色圆 + 内层彩色圆。
     for keypoint in keypoints:
         center = scaled_point(keypoint, scale_x, scale_y)
         cv2.circle(frame, center, 5, (8, 12, 18), -1, cv2.LINE_AA)
@@ -421,6 +474,7 @@ def draw_label(
     anchor: tuple[int, int],
     color: tuple[int, int, int],
 ) -> None:
+    # 画文本标签：先画半透明背景矩形，再写文字，并把位置限制在画面内。
     x, y = anchor
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.55
@@ -439,6 +493,7 @@ def label_point(
     scale_x: float,
     scale_y: float,
 ) -> tuple[int, int] | None:
+    # 标签锚点：优先放在 head/nose 关键点上方；否则放在边界框左上角上方。
     keypoints = list(keypoints)
     head = next((keypoint for keypoint in keypoints if keypoint.get("name") in {"head", "nose"}), None)
     if head:
@@ -453,15 +508,18 @@ def label_point(
 
 
 def scaled_point(keypoint: dict[str, Any], scale_x: float, scale_y: float) -> tuple[int, int]:
+    # 把关键点坐标从叠加数据坐标系缩放到输出视频坐标系。
     return (round(float(keypoint.get("x", 0.0)) * scale_x), round(float(keypoint.get("y", 0.0)) * scale_y))
 
 
 def scaled_bbox(bbox: list[Any], scale_x: float, scale_y: float) -> tuple[int, int, int, int]:
+    # 把边界框四角缩放到输出视频坐标系。
     x1, y1, x2, y2 = [float(value) for value in bbox[:4]]
     return (round(x1 * scale_x), round(y1 * scale_y), round(x2 * scale_x), round(y2 * scale_y))
 
 
 def color_for_track(track_id: str) -> tuple[int, int, int]:
+    # 根据 track_id 从调色板里取一个稳定的颜色（id 可解析为数字则按数字，否则按字符和）。
     palette = [
         (72, 220, 136),
         (47, 128, 237),
@@ -478,6 +536,7 @@ def color_for_track(track_id: str) -> tuple[int, int, int]:
 
 
 def lerp(start: float, end: float, ratio: float) -> float:
+    # 线性插值，并把比例裁剪到 [0, 1]。
     clamped_ratio = min(1.0, max(0.0, ratio))
     return start + (end - start) * clamped_ratio
 

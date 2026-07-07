@@ -84,3 +84,13 @@ class RecordingSession(BaseModel):
     video_id: Optional[str] = None               # 注册到视频系统后的 id
     auto_analysis_job_id: Optional[str] = None   # 自动创建的分析任务 id
     error_message: Optional[str] = None          # 失败时的错误信息
+
+
+# 删除录制会话的结果
+RecordingDeleteStatus = Literal["deleted", "blocked", "not_found"]
+
+
+class RecordingDeleteResult(BaseModel):
+    session_id: str
+    status: RecordingDeleteStatus
+    detail: str = ""
