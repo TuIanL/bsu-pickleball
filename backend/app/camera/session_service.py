@@ -273,7 +273,7 @@ class SessionService:
         SESSIONS.pop(session_id, None)
 
         # 删除会话 JSON 文件
-        session_path = self._sessions_dir / f"{session_id}.json"
+        session_path = self.sessions_dir / f"{session_id}.json"
         if session_path.exists():
             try:
                 session_path.unlink()
