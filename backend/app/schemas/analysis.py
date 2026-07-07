@@ -1,4 +1,11 @@
-"""分析任务相关的 Pydantic 数据模型 —— 任务创建、状态追踪、报告结构等。"""
+"""
+分析任务相关的 Pydantic 数据模型 —— 任务创建、状态追踪、报告结构等。
+
+本文件是整个"分析任务"业务的核心数据契约：
+- 任务的生命周期（创建→排队→处理→完成/失败/取消）与阶段（stages）
+- 任务摘要（Summary）返回给前端轮询进度
+- 最终给用户的"分析报告"（Report）及其中各类可视化/诊断/训练建议结构
+"""
 
 from typing import Any, Literal, Optional
 
@@ -6,11 +13,17 @@ from pydantic import BaseModel, Field
 
 # 趋势方向：上升 / 下降 / 持平
 TrendDirection = Literal["up", "down", "steady"]
+# 报告类型：运动表现 / 诊断
 ReportType = Literal["movement", "diagnosis"]
+# 洞察语气：优势 / 风险 / 错误 / 训练
 InsightTone = Literal["advantage", "risk", "error", "training"]
+# 任务业务状态
 AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed", "canceled"]
+# 任务规范化状态（前端统一展示用）
 AnalysisCanonicalStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+# 分析模式：演示 / 真实 / 受限
 AnalysisMode = Literal["demo", "real", "limited"]
+# 流水线阶段 id（稳定集合，外加 str 兼容未来扩展）
 AnalysisStageId = Literal[
     "upload",
     "queue",
@@ -25,8 +38,10 @@ AnalysisStageId = Literal[
     "visualization",
     "report",
 ] | str
+# 阶段状态：待执行 / 进行中 / 完成 / 失败 / 跳过 / 取消
 AnalysisStageStatus = Literal["pending", "active", "done", "failed", "skipped", "canceled"]
 
+# 稳定的阶段 id 列表（用于校验/排序）
 STABLE_ANALYSIS_STAGE_IDS: tuple[str, ...] = (
     "upload",
     "queue",
@@ -42,6 +57,7 @@ STABLE_ANALYSIS_STAGE_IDS: tuple[str, ...] = (
     "report",
 )
 
+# 错误码 → 对外错误标识 的映射表
 ANALYSIS_ERROR_CODES: dict[str, str] = {
     "video_not_found": "ANALYSIS_VIDEO_NOT_FOUND",
     "stage_failed": "ANALYSIS_STAGE_FAILED",
@@ -52,51 +68,56 @@ ANALYSIS_ERROR_CODES: dict[str, str] = {
 
 
 class AnalysisUploadMetadata(BaseModel):
+    """上传分析时附带的比赛元信息（前端填写/自动生成）。"""
     fileName: str
     fileSize: Optional[int] = None
-    matchTitle: str
-    venue: str
-    matchDate: str
-    matchFormat: Literal["singles", "doubles"]
-    cameraAngle: Literal["baseline", "sideline", "elevated", "unknown"]
-    athleteLabel: str
-    level: str
+    matchTitle: str                 # 比赛标题
+    venue: str                      # 场馆
+    matchDate: str                  # 比赛日期
+    matchFormat: Literal["singles", "doubles"]  # 单打/双打
+    cameraAngle: Literal["baseline", "sideline", "elevated", "unknown"]  # 机位角度
+    athleteLabel: str               # 运动员标签
+    level: str                      # 水平/级别
     camera_id: Optional[str] = None
     recording_session_id: Optional[str] = None
 
 
 class AnalysisPipelineOptions(BaseModel):
+    """分析流水线的选项（视频/标定 id、抽帧步长）。"""
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
-    frameStride: int = Field(default=1, ge=1)
+    frameStride: int = Field(default=1, ge=1)  # 每隔几帧处理一帧（≥1）
 
 
 class AnalysisStage(BaseModel):
+    """单个任务阶段的信息（前端进度条用）。"""
     id: AnalysisStageId
     label: str
     status: AnalysisStageStatus
     detail: str
     startedAt: Optional[str] = None
     endedAt: Optional[str] = None
-    durationMs: Optional[int] = None
-    progress: int = Field(default=0, ge=0, le=100)
+    durationMs: Optional[int] = None     # 耗时（毫秒）
+    progress: int = Field(default=0, ge=0, le=100)  # 进度百分比
     errorCode: Optional[str] = None
-    publicMessage: Optional[str] = None
-    internalMessage: Optional[str] = None
+    publicMessage: Optional[str] = None  # 给用户看的信息
+    internalMessage: Optional[str] = None  # 内部调试信息
     retryCount: int = Field(default=0, ge=0)
     counters: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalysisJobCreate(BaseModel):
+    """创建分析任务的请求。"""
     metadata: AnalysisUploadMetadata
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)
-    priority: int = Field(default=0, ge=0, le=100)
-    requestNewVersion: bool = False
+    priority: int = Field(default=0, ge=0, le=100)  # 优先级（0~100）
+    requestNewVersion: bool = False                  # 是否要求分析新版本
 
 
 class AnalysisJobSummary(BaseModel):
+    """任务摘要：前端轮询进度时返回的核心信息。"""
     id: str
     status: AnalysisJobStatus
     canonicalStatus: AnalysisCanonicalStatus = "queued"
@@ -112,14 +133,14 @@ class AnalysisJobSummary(BaseModel):
     canceledAt: Optional[str] = None
     workerId: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
-    attempt: int = Field(default=0, ge=0)
-    inputSignature: Optional[str] = None
-    configSignature: Optional[str] = None
+    attempt: int = Field(default=0, ge=0)            # 当前尝试次数
+    inputSignature: Optional[str] = None             # 输入签名（用于幂等/去重）
+    configSignature: Optional[str] = None            # 配置签名
     analysisVersion: int = Field(default=1, ge=1)
     previousJobId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)
     metadata: AnalysisUploadMetadata
-    stages: list[AnalysisStage]
+    stages: list[AnalysisStage]                      # 各阶段详情
     reportId: Optional[str] = None
     errorMessage: Optional[str] = None
     errorCode: Optional[str] = None
@@ -127,66 +148,75 @@ class AnalysisJobSummary(BaseModel):
     internalErrorMessage: Optional[str] = None
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
-    analysisMode: AnalysisMode = "demo"
+    analysisMode: AnalysisMode = "demo"              # 演示/真实/受限
 
 
+# 删除任务的状态
 AnalysisDeleteStatus = Literal["deleted", "blocked", "not_found", "failed"]
 
 
 class AnalysisDeleteResult(BaseModel):
+    """单个任务删除结果。"""
     job_id: str
     status: AnalysisDeleteStatus
     detail: str
 
 
 class AnalysisDeleteRequest(BaseModel):
+    """批量删除请求：一组 job_id。"""
     job_ids: list[str] = Field(min_length=1)
 
 
 class Metric(BaseModel):
+    """看板上的一个指标卡片（数值 + 趋势 + 迷你折线）。"""
     id: str
     icon: str
     label: str
     value: str
     detail: str
     trend: str
-    direction: TrendDirection
+    direction: TrendDirection       # 趋势方向
     progress: int
-    sparkline: list[float]
+    sparkline: list[float]          # 迷你折线数据
 
 
 class CourtPoint(BaseModel):
+    """球场上的一个坐标点（用于落点/路线可视化）。"""
     id: str
     x: float
     y: float
-    intensity: float
+    intensity: float                # 强度（热力用）
     label: str
 
 
 class CourtRoute(BaseModel):
+    """球场上的一条路线（如某次击球的移动路径）。"""
     id: str
-    from_: CourtPoint = Field(alias="from")
-    to: CourtPoint
+    from_: CourtPoint = Field(alias="from")  # 起点（字段名别名 from，避免与 Python 关键字冲突）
+    to: CourtPoint                            # 终点
     label: str
     result: Literal["得分", "受迫回球", "失误", "相持"]
 
 
 class MovementPoint(BaseModel):
+    """移动轨迹上的一个点。"""
     x: float
     y: float
 
 
 class Rally(BaseModel):
+    """一个回合（多拍来回）。"""
     id: str
     title: str
     duration: str
-    shots: int
-    pattern: str
+    shots: int                  # 拍数
+    pattern: str                # 回合模式
     result: str
-    observation: str
+    observation: str            # 观察点评
 
 
 class ReportSession(BaseModel):
+    """报告里的"会话"信息：运动员、场馆、各项可视化数据集合。"""
     athlete: str
     venue: str
     date: str
@@ -194,13 +224,14 @@ class ReportSession(BaseModel):
     reportId: str
     summary: str
     metrics: list[dict]
-    landingPoints: list[CourtPoint]
-    routes: list[CourtRoute]
-    movementPath: list[MovementPoint]
+    landingPoints: list[CourtPoint]          # 落点
+    routes: list[CourtRoute]                  # 路线
+    movementPath: list[MovementPoint]         # 移动路径
     rallies: list[Rally]
 
 
 class MatchSummary(BaseModel):
+    """报告里的比赛概览信息。"""
     title: str
     subtitle: str
     date: str
@@ -213,15 +244,17 @@ class MatchSummary(BaseModel):
 
 
 class PlayerMarker(BaseModel):
+    """视频叠加层上的球员标记。"""
     id: str
     label: str
-    team: Literal["near", "far"]
+    team: Literal["near", "far"]     # 近/远侧队伍
     x: float
     y: float
     color: str
 
 
 class ShotTrajectory(BaseModel):
+    """击球轨迹（叠加层用）。"""
     id: str
     path: str
     color: str
@@ -229,6 +262,7 @@ class ShotTrajectory(BaseModel):
 
 
 class VideoOverlayLabel(BaseModel):
+    """视频叠加层上的文字标签（带语气色）。"""
     id: str
     label: str
     tone: InsightTone
@@ -237,6 +271,7 @@ class VideoOverlayLabel(BaseModel):
 
 
 class TimelineMarker(BaseModel):
+    """时间轴上的标记点。"""
     id: str
     time: str
     position: float
@@ -245,6 +280,7 @@ class TimelineMarker(BaseModel):
 
 
 class Highlight(BaseModel):
+    """高光时刻。"""
     id: str
     title: str
     time: str
@@ -254,6 +290,7 @@ class Highlight(BaseModel):
 
 
 class CoachNote(BaseModel):
+    """教练点评/建议。"""
     id: str
     tone: InsightTone
     title: str
@@ -261,16 +298,18 @@ class CoachNote(BaseModel):
 
 
 class Diagnosis(BaseModel):
+    """诊断问题（发现问题 + 建议）。"""
     id: str
     issue: str
-    severity: Literal["高", "中", "低"]
-    evidence: str
-    suggestion: str
-    expectedOutcome: str
+    severity: Literal["高", "中", "低"]   # 严重程度
+    evidence: str                        # 证据
+    suggestion: str                      # 建议
+    expectedOutcome: str                 # 预期效果
     priority: str
 
 
 class ReportAction(BaseModel):
+    """报告里的一个可点击动作（跳转到某页）。"""
     type: ReportType
     title: str
     description: str
@@ -278,6 +317,7 @@ class ReportAction(BaseModel):
 
 
 class ReportDefinition(BaseModel):
+    """一个报告区块（如"移动表现"或"诊断"）的定义与内容。"""
     type: ReportType
     title: str
     eyebrow: str
@@ -291,16 +331,18 @@ class ReportDefinition(BaseModel):
 
 
 class TrainingRecommendation(BaseModel):
+    """训练建议（关联到某个诊断问题）。"""
     id: str
     issueId: str
     title: str
-    learningContent: str
-    practiceTask: str
-    nextTarget: str
+    learningContent: str     # 学习内容
+    practiceTask: str        # 练习任务
+    nextTarget: str          # 下一步目标
     progress: dict
 
 
 class DrillRecommendation(BaseModel):
+    """训练小项（ drill）推荐。"""
     id: str
     title: str
     goal: str
@@ -311,6 +353,7 @@ class DrillRecommendation(BaseModel):
 
 
 class ShotRow(BaseModel):
+    """击球明细表中的一行。"""
     id: str
     time: str
     type: str
@@ -322,6 +365,7 @@ class ShotRow(BaseModel):
 
 
 class SkillRating(BaseModel):
+    """技能评分项。"""
     id: str
     label: str
     score: int
@@ -329,16 +373,18 @@ class SkillRating(BaseModel):
 
 
 class ProgressPoint(BaseModel):
+    """进度追踪中的一个数据点（按比赛）。"""
     match: str
     performance: int
     errors: int
-    thirdShot: int
-    kitchen: int
+    thirdShot: int      # 第三拍质量
+    kitchen: int        # 网前表现
 
 
 class AnalysisReport(BaseModel):
+    """完整分析报告：前端报告页渲染所需的全部结构化数据。"""
     version: Literal["analysis-report-v1"]
-    source: Literal["demo", "job"]
+    source: Literal["demo", "job"]    # 数据来源（演示/真实任务）
     jobId: Optional[str] = None
     reportId: str
     generatedAt: str

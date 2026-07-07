@@ -1,15 +1,27 @@
-"""真实视频帧提取 —— 按时间间隔从视频中抽取标注候选帧，用于标定数据集构建。"""
+"""
+真实视频帧提取（real_video_frame_extraction）。
 
+用途：为"标定数据集构建"做准备——从真实比赛视频里，按固定时间间隔抽取若干帧，
+存成图片，并生成 manifest.json 清单。之后人工/自动在这些帧上标球场线，
+用于训练球场线分割模型。
+
+对外主入口是 extract_real_video_frames(input, output, settings)。
+本文件还导出 SUPPORTED_VIDEO_EXTENSIONS / sanitize_video_stem，被 action_classification_preprocessing 等复用。
+"""
+
+# `from __future__ import annotations`：兼容较新类型写法。
 from __future__ import annotations
 
+# asdict：dataclass 转 dict；dataclass：数据类。
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-import json
-from pathlib import Path
-import re
-from typing import Any
+from datetime import datetime, timezone   # 生成清单时间（带时区）
+import json   # 写 manifest JSON
+from pathlib import Path   # 路径对象
+import re   # 正则（用于清洗文件名）
+from typing import Any   # 泛指 dict 等
 
 
+# 支持的视频扩展名（小写），用于发现视频文件
 SUPPORTED_VIDEO_EXTENSIONS = {
     ".avi",
     ".m2ts",
@@ -23,11 +35,17 @@ SUPPORTED_VIDEO_EXTENSIONS = {
 
 
 class FrameExtractionError(ValueError):
+    """抽帧相关的错误（继承自 ValueError）。"""
     pass
 
 
 @dataclass(frozen=True)
 class FrameExtractionSettings:
+    """
+    抽帧设置（数据类，详见 schemas.py 注释）。
+
+    控制：每几秒抽一帧、单个视频最多抽多少帧、起止时间、JPEG 质量、是否覆盖、清单文件名。
+    """
     interval_seconds: float = 2.0
     max_frames_per_video: int | None = 200
     start_seconds: float = 0.0
@@ -42,7 +60,7 @@ def extract_real_video_frames(
     output_root: str | Path,
     settings: FrameExtractionSettings | None = None,
 ) -> dict[str, Any]:
-    """Extract annotation candidate frames from one video or a directory of videos."""
+    """从一个视频或"装着多个视频的文件夹"里抽取标注候选帧。"""
 
     settings = settings or FrameExtractionSettings()
     _validate_settings(settings)
@@ -54,12 +72,13 @@ def extract_real_video_frames(
     if source.is_dir() and output.resolve() == source.resolve():
         raise FrameExtractionError("Output root must be different from the input video directory")
 
+    # 发现所有视频文件
     video_paths = discover_video_paths(source)
     if not video_paths:
         raise FrameExtractionError(f"No supported video files found under: {source}")
 
     output.mkdir(parents=True, exist_ok=True)
-    used_stems: dict[str, int] = {}
+    used_stems: dict[str, int] = {}   # 用于同名视频去重
     videos = [
         _extract_one_video(
             video_path=video_path,
@@ -70,6 +89,7 @@ def extract_real_video_frames(
         for video_path in video_paths
     ]
 
+    # 汇总统计
     frames_written = sum(int(video["frames_written"]) for video in videos)
     error_count = sum(len(video["errors"]) for video in videos)
     manifest_path = output / settings.manifest_name
@@ -92,6 +112,7 @@ def extract_real_video_frames(
 
 
 def discover_video_paths(input_path: str | Path) -> list[Path]:
+    """根据输入路径发现视频文件（单个文件 or 文件夹内所有支持扩展名的文件，按名排序）。"""
     path = Path(input_path).expanduser()
     if path.is_file():
         return [path]
@@ -105,6 +126,11 @@ def discover_video_paths(input_path: str | Path) -> list[Path]:
 
 
 def sanitize_video_stem(stem: str) -> str:
+    """
+    清洗视频名（去掉扩展名后的部分），只保留字母数字和 . _ -，其余替换成 -。
+
+    用于生成安全的输出目录名；结果为空时退回 "video"。
+    """
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", stem.strip())
     normalized = re.sub(r"-{2,}", "-", normalized).strip("-._")
     return normalized or "video"
@@ -116,6 +142,7 @@ def _extract_one_video(
     output_stem: str,
     settings: FrameExtractionSettings,
 ) -> dict[str, Any]:
+    """处理单个视频：按 interval 抽帧、写图片、记录每帧元信息，返回该视频的清单 dict。"""
     video_output = output_root / output_stem
     entry: dict[str, Any] = {
         "source_path": str(video_path),
@@ -132,6 +159,7 @@ def _extract_one_video(
         "errors": [],
     }
 
+    # 延迟导入 OpenCV
     try:
         import cv2  # type: ignore
     except ImportError as exc:
@@ -144,6 +172,7 @@ def _extract_one_video(
         return entry
 
     try:
+        # 读视频元信息
         fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
@@ -167,6 +196,7 @@ def _extract_one_video(
             return entry
 
         video_output.mkdir(parents=True, exist_ok=True)
+        # 从 start_seconds 开始，每隔 interval_seconds 抽一帧
         target_time = settings.start_seconds
         while True:
             if settings.end_seconds is not None and target_time > settings.end_seconds + 1e-9:
@@ -202,6 +232,7 @@ def _extract_one_video(
                 )
                 break
 
+            # 写出 JPEG 图片
             written = cv2.imwrite(
                 str(frame_path),
                 frame,
@@ -217,6 +248,7 @@ def _extract_one_video(
                 )
                 break
 
+            # 记录这一帧的元信息
             frame_record = {
                 "source_path": str(video_path),
                 "output_path": str(frame_path),
@@ -231,12 +263,14 @@ def _extract_one_video(
             entry["frames_written"] = int(entry["frames_written"]) + 1
             target_time += settings.interval_seconds
     finally:
+        # 无论成功失败，都释放视频句柄
         capture.release()
 
     return entry
 
 
 def _validate_settings(settings: FrameExtractionSettings) -> None:
+    """校验抽帧设置的合法性。"""
     if settings.interval_seconds <= 0:
         raise FrameExtractionError("interval_seconds must be greater than 0")
     if settings.max_frames_per_video is not None and settings.max_frames_per_video <= 0:
@@ -252,6 +286,7 @@ def _validate_settings(settings: FrameExtractionSettings) -> None:
 
 
 def _unique_output_stem(video_path: Path, used_stems: dict[str, int]) -> str:
+    """生成不重复的输出名（同名视频第二次出现 → 加 -2 后缀）。"""
     base = sanitize_video_stem(video_path.stem)
     count = used_stems.get(base, 0) + 1
     used_stems[base] = count
@@ -259,4 +294,5 @@ def _unique_output_stem(video_path: Path, used_stems: dict[str, int]) -> str:
 
 
 def _frame_file_name(stem: str, frame_index: int, timestamp_seconds: float) -> str:
+    """生成帧图片文件名，如 video_f000123_t02.50s.jpg。"""
     return f"{stem}_f{frame_index:06d}_t{timestamp_seconds:08.2f}s.jpg"

@@ -1,6 +1,8 @@
 import { CirclePause, Maximize2, Minimize2, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
+  BallTrajectoryArtifact,
+  BounceEventsArtifact,
   MatchSummary,
   PlayerMarker,
   PoseOverlayArtifact,
@@ -14,6 +16,14 @@ import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback"
 interface VideoAnalysisCardProps {
   compact?: boolean;
   labels: VideoOverlayLabel[];
+  ballTrajectory?: BallTrajectoryArtifact | null;
+  ballTrajectoryDetail?: string;
+  ballTrajectoryLoadState?: OverlayLoadState;
+  ballTrajectoryStatus?: string;
+  bounceEvents?: BounceEventsArtifact | null;
+  bounceEventsDetail?: string;
+  bounceEventsLoadState?: OverlayLoadState;
+  bounceEventsStatus?: string;
   match: MatchSummary;
   players: PlayerMarker[];
   poseOverlayDetail?: string;
@@ -53,6 +63,14 @@ const markerClass = {
 export function VideoAnalysisCard({
   compact = false,
   labels,
+  ballTrajectory,
+  ballTrajectoryDetail,
+  ballTrajectoryLoadState = "idle",
+  ballTrajectoryStatus,
+  bounceEvents,
+  bounceEventsDetail,
+  bounceEventsLoadState = "idle",
+  bounceEventsStatus,
   match,
   players,
   poseOverlayDetail,
@@ -76,6 +94,14 @@ export function VideoAnalysisCard({
         <VideoCardHeader match={match} />
         <RealVideoOverlay
           match={match}
+          ballTrajectory={ballTrajectory}
+          ballTrajectoryDetail={ballTrajectoryDetail}
+          ballTrajectoryLoadState={ballTrajectoryLoadState}
+          ballTrajectoryStatus={ballTrajectoryStatus}
+          bounceEvents={bounceEvents}
+          bounceEventsDetail={bounceEventsDetail}
+          bounceEventsLoadState={bounceEventsLoadState}
+          bounceEventsStatus={bounceEventsStatus}
           poseOverlay={poseOverlay}
           poseOverlayDetail={poseOverlayDetail}
           poseOverlayLoadState={poseOverlayLoadState}
@@ -96,6 +122,14 @@ export function VideoAnalysisCard({
             poseOverlayLoadState={poseOverlayLoadState}
             poseOverlayStatus={poseOverlayStatus}
             poseOverlay={poseOverlay}
+            ballTrajectory={ballTrajectory}
+            ballTrajectoryDetail={ballTrajectoryDetail}
+            ballTrajectoryLoadState={ballTrajectoryLoadState}
+            ballTrajectoryStatus={ballTrajectoryStatus}
+            bounceEvents={bounceEvents}
+            bounceEventsDetail={bounceEventsDetail}
+            bounceEventsLoadState={bounceEventsLoadState}
+            bounceEventsStatus={bounceEventsStatus}
             trackingOverlayDetail={trackingOverlayDetail}
             trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={trackingOverlayStatus}
@@ -247,6 +281,14 @@ function VideoCardHeader({ match }: { match: MatchSummary }) {
 
 function RealVideoOverlay({
   match,
+  ballTrajectory,
+  ballTrajectoryDetail,
+  ballTrajectoryLoadState = "idle",
+  ballTrajectoryStatus,
+  bounceEvents,
+  bounceEventsDetail,
+  bounceEventsLoadState = "idle",
+  bounceEventsStatus,
   poseOverlay,
   poseOverlayDetail,
   poseOverlayLoadState = "idle",
@@ -262,6 +304,14 @@ function RealVideoOverlay({
   videoSrc,
 }: {
   match: MatchSummary;
+  ballTrajectory?: BallTrajectoryArtifact | null;
+  ballTrajectoryDetail?: string;
+  ballTrajectoryLoadState?: OverlayLoadState;
+  ballTrajectoryStatus?: string;
+  bounceEvents?: BounceEventsArtifact | null;
+  bounceEventsDetail?: string;
+  bounceEventsLoadState?: OverlayLoadState;
+  bounceEventsStatus?: string;
   poseOverlay?: PoseOverlayArtifact | null;
   poseOverlayDetail?: string;
   poseOverlayLoadState?: OverlayLoadState;
@@ -286,6 +336,7 @@ function RealVideoOverlay({
   const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 });
   const [showBoxes, setShowBoxes] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
+  const [showBall, setShowBall] = useState(true);
 
   const source = trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
   const detectionRenderFrame = useMemo(
@@ -299,11 +350,18 @@ function RealVideoOverlay({
 
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
   const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
+  const ballSamples = useMemo(() => resolveBallSamples(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
+  const bounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
+  const ballCount = ballSamples.length;
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
   const trackingStatusLabel = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
   const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
+  const ballStatusLabel = resolveLayerStatus(ballTrajectoryLoadState, ballTrajectory?.status ?? ballTrajectoryStatus);
+  const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
+  const ballDetail = layerDetail(ballTrajectoryLoadState, ballTrajectory?.detail ?? ballTrajectoryDetail, "球轨迹 layer");
+  const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
   const serveDetail = layerDetail(serveEventsLoadState, serveEvents?.detail ?? serveEventsDetail, "发球候选 marker");
   const serveStatus = resolveLayerStatus(serveEventsLoadState, serveEvents?.status ?? serveEventsStatus);
   const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
@@ -540,6 +598,66 @@ function RealVideoOverlay({
           </g>
         ))}
 
+        {showBall && ballSamples.length ? (
+          <g>
+            <polyline
+              fill="none"
+              points={ballSamples.map((sample) => sample.image_xy?.join(",")).filter(Boolean).join(" ")}
+              stroke="#D9FF3F"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={Math.max(2, source.width * 0.0018)}
+              opacity="0.75"
+            />
+            {ballSamples.slice(-1).map((sample) => {
+              if (!sample.image_xy) {
+                return null;
+              }
+              const [x, y] = sample.image_xy;
+              return (
+                <circle
+                  cx={x}
+                  cy={y}
+                  fill="#D9FF3F"
+                  key={`${sample.frame_index}-${sample.timestamp_sec}`}
+                  r={Math.max(5, source.width * 0.004)}
+                  stroke="#071008"
+                  strokeWidth={Math.max(2, source.width * 0.0016)}
+                />
+              );
+            })}
+          </g>
+        ) : null}
+
+        {showBall && bounceMarkers.map((event) => {
+          const [x, y] = event.image_xy;
+          return (
+            <g key={event.event_id}>
+              <circle
+                cx={x}
+                cy={y}
+                fill="rgba(255,149,0,0.16)"
+                r={Math.max(10, source.width * 0.008)}
+                stroke="#FF9500"
+                strokeDasharray="5 5"
+                strokeWidth={Math.max(2, source.width * 0.0016)}
+              />
+              <text
+                fill="#FFD7A0"
+                fontSize={Math.max(13, source.width * 0.012)}
+                fontWeight="800"
+                paintOrder="stroke"
+                stroke="rgba(0,0,0,0.75)"
+                strokeWidth={Math.max(3, source.width * 0.002)}
+                x={x + Math.max(8, source.width * 0.006)}
+                y={y - Math.max(8, source.width * 0.006)}
+              >
+                弹跳候选
+              </text>
+            </g>
+          );
+        })}
+
         </svg>
 
         <div className="absolute left-4 top-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur">
@@ -563,11 +681,20 @@ function RealVideoOverlay({
         >
           骨架
         </button>
+        <button
+          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showBall ? "border-[#D9FF3F]/45 bg-[#D9FF3F]/18 text-[#D9FF3F]" : "border-white/10 bg-black/45 text-white"}`}
+          title={ballTrajectory?.samples.length ? "显示或隐藏球轨迹与弹跳候选" : ballDetail}
+          onClick={() => setShowBall((value) => !value)}
+          type="button"
+        >
+          球
+        </button>
         </div>
 
         <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">
           {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
+          {ballTrajectoryLoadState !== "idle" ? ` · ${ballCount ? "球可见" : "球层无当前点"}` : ""}
         </p>
         <strong className="text-sm">{match.currentRally}</strong>
         {boxCount === 0 || skeletonCount === 0 ? (
@@ -575,6 +702,11 @@ function RealVideoOverlay({
             {boxCount === 0
               ? statusCopy(trackingStatusLabel, trackingDetail)
               : statusCopy(poseStatusLabel, poseDetail)}
+          </p>
+        ) : null}
+        {ballTrajectoryLoadState !== "idle" && !ballCount ? (
+          <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">
+            球轨迹：{statusCopy(ballStatusLabel, ballDetail)}
           </p>
         ) : null}
         </div>
@@ -631,6 +763,11 @@ function RealVideoOverlay({
                 发球候选：{serveMarkers.length ? `${serveMarkers.length} 个候选` : statusCopy(serveStatus, serveDetail)}
               </p>
             ) : null}
+            {bounceEventsLoadState !== "idle" ? (
+              <p className="mt-1 text-[0.68rem] font-semibold text-slate-300">
+                弹跳候选：{bounceMarkers.length ? `${bounceMarkers.length} 个候选 · 仅供复盘` : statusCopy(bounceStatusLabel, bounceDetail)}
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -647,6 +784,14 @@ function RealVideoOverlay({
 }
 
 function RealVideoFooter({
+  ballTrajectory,
+  ballTrajectoryDetail,
+  ballTrajectoryLoadState = "idle",
+  ballTrajectoryStatus,
+  bounceEvents,
+  bounceEventsDetail,
+  bounceEventsLoadState = "idle",
+  bounceEventsStatus,
   poseOverlayDetail,
   poseOverlayLoadState = "idle",
   poseOverlayStatus,
@@ -656,6 +801,14 @@ function RealVideoFooter({
   trackingOverlayStatus,
   trackingOverlay,
 }: {
+  ballTrajectory?: BallTrajectoryArtifact | null;
+  ballTrajectoryDetail?: string;
+  ballTrajectoryLoadState?: OverlayLoadState;
+  ballTrajectoryStatus?: string;
+  bounceEvents?: BounceEventsArtifact | null;
+  bounceEventsDetail?: string;
+  bounceEventsLoadState?: OverlayLoadState;
+  bounceEventsStatus?: string;
   poseOverlay?: PoseOverlayArtifact | null;
   poseOverlayDetail?: string;
   poseOverlayLoadState?: OverlayLoadState;
@@ -667,11 +820,15 @@ function RealVideoFooter({
 }) {
   const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "骨架关节 overlay");
+  const ballDetail = layerDetail(ballTrajectoryLoadState, ballTrajectory?.detail ?? ballTrajectoryDetail, "球轨迹 layer");
+  const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
   const trackingStatus = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
   const poseStatus = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
+  const ballStatus = resolveLayerStatus(ballTrajectoryLoadState, ballTrajectory?.status ?? ballTrajectoryStatus);
+  const bounceStatus = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   return (
     <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
-      <div className="grid gap-3 text-sm md:grid-cols-2">
+      <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl bg-[#F5FAF1] p-3">
           <strong className="text-[#168A34]">YOLO 人体框</strong>
           {trackingStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(trackingStatus)}</span> : null}
@@ -681,6 +838,16 @@ function RealVideoFooter({
           <strong className="text-[#1E63B6]">RTMPose 骨架</strong>
           {poseStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(poseStatus)}</span> : null}
           <p className="mt-1 text-slate-600">{poseDetail}</p>
+        </div>
+        <div className="rounded-2xl bg-[#F5FAF1] p-3">
+          <strong className="text-[#7A8F00]">球轨迹</strong>
+          {ballStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(ballStatus)}</span> : null}
+          <p className="mt-1 text-slate-600">{ballDetail}</p>
+        </div>
+        <div className="rounded-2xl bg-[#F5FAF1] p-3">
+          <strong className="text-[#A45A00]">弹跳候选</strong>
+          {bounceStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(bounceStatus)}</span> : null}
+          <p className="mt-1 text-slate-600">{bounceDetail}</p>
         </div>
       </div>
     </div>
@@ -774,7 +941,7 @@ function statusLabel(status: string): string {
   if (status === "skipped") {
     return "跳过";
   }
-  if (status === "no_detections" || status === "no_poses") {
+  if (status === "no_detections" || status === "no_poses" || status === "no_candidates") {
     return "无主体";
   }
   return "不可用";
@@ -810,10 +977,27 @@ function statusCopy(status: string, detail: string): string {
   if (status === "available") {
     return detail;
   }
-  if (status === "no_detections" || status === "no_poses") {
+  if (status === "no_detections" || status === "no_poses" || status === "no_candidates") {
     return detail;
   }
   return detail;
+}
+
+function resolveBallSamples(ballTrajectory: BallTrajectoryArtifact | null | undefined, currentTime: number): BallTrajectoryArtifact["samples"] {
+  const samples = (ballTrajectory?.samples ?? []).filter((sample) => sample.image_xy && (sample.accepted ?? true));
+  if (!samples.length) {
+    return [];
+  }
+  const currentIndex = samples.findIndex((sample) => Math.abs(sample.timestamp_sec - currentTime) <= 0.08);
+  if (currentIndex >= 0) {
+    return samples.slice(Math.max(0, currentIndex - 18), currentIndex + 1);
+  }
+  const previous = samples.filter((sample) => sample.timestamp_sec <= currentTime).slice(-18);
+  return previous.length ? previous : samples.slice(0, 1);
+}
+
+function resolveBounceMarkers(bounceEvents: BounceEventsArtifact | null | undefined) {
+  return (bounceEvents?.events ?? []).filter((event) => Array.isArray(event.image_xy) && event.image_xy.length >= 2);
 }
 
 function formatSeconds(value: number): string {

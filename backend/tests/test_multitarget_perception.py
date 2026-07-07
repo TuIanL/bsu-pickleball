@@ -21,6 +21,24 @@ def test_multitarget_detection_schema_serializes_player():
     assert payload[0]["bbox"] == [1.0, 2.0, 10.0, 20.0]
 
 
+def test_multitarget_detection_schema_serializes_ball_point():
+    detection = MultiTargetDetection(
+        frame_index=2,
+        timestamp_seconds=0.066,
+        class_name="ball",
+        point=[42, 24],
+        confidence=0.76,
+        source_width=96,
+        source_height=96,
+    )
+
+    payload = detection.model_dump(mode="json")
+
+    assert payload["class_name"] == "ball"
+    assert payload["point"] == [42.0, 24.0]
+    assert payload["bbox"] is None
+
+
 def test_multitarget_detection_rejects_invalid_bbox():
     with pytest.raises(ValueError):
         MultiTargetDetection(frame_index=0, timestamp_seconds=0, class_name="player", bbox=[5, 5, 4, 8], confidence=0.8, source_width=96, source_height=96)
@@ -43,6 +61,26 @@ def test_normalize_raw_multitarget_detections_filters_classes_and_confidence():
     )
 
     assert [detection.class_name for detection in detections] == ["player"]
+
+
+def test_normalize_raw_multitarget_detections_supports_ball_points_and_bbox_centers():
+    detections = normalize_raw_multitarget_detections(
+        [
+            {"class_name": "pickleball", "point": [14, 18], "confidence": 0.82},
+            {"class_name": "pickleball", "bbox": [20, 30, 28, 38], "confidence": 0.91},
+            {"class_name": "pickleball", "point": [90, 90], "confidence": 0.1},
+        ],
+        frame_index=5,
+        timestamp_seconds=0.2,
+        frame_width=96,
+        frame_height=96,
+        class_map={"pickleball": "ball"},
+        confidence_thresholds={"ball": 0.5},
+    )
+
+    assert [detection.class_name for detection in detections] == ["ball", "ball"]
+    assert detections[0].point == [14.0, 18.0]
+    assert detections[1].point == [24.0, 34.0]
 
 
 def test_fixture_and_empty_multitarget_detectors():

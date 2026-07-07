@@ -1,4 +1,9 @@
-"""运动表现指标相关的 Pydantic 数据模型 —— 距离、速度、区域停留、间距、热力图等。"""
+"""
+运动表现指标相关的 Pydantic 数据模型 —— 距离、速度、区域停留、间距、热力图等。
+
+这些模型是分析流水线计算出的"结果数据"：从原始轨迹算出球员移动了多少、
+跑多快、在厨房区（非截击区）待多久、双打搭档间距如何、常出现在哪些位置等。
+"""
 
 from __future__ import annotations
 
@@ -8,19 +13,21 @@ from pydantic import BaseModel, Field
 
 
 class DistanceMetric(BaseModel):
-    """单个轨迹的累计移动距离（英尺）。"""
+    """单个轨迹（一名球员）的累计移动距离（英尺）。"""
     track_id: str
-    distance_ft: float = Field(ge=0)
+    distance_ft: float = Field(ge=0)   # 距离（英尺），ge=0 表示非负
 
 
 class SpeedSegment(BaseModel):
+    """速度曲线上的一小段：在某个时间段内的瞬时速度。"""
     track_id: str
-    start_time: float = Field(ge=0)
-    end_time: float = Field(ge=0)
-    speed_ft_per_s: float = Field(ge=0)
+    start_time: float = Field(ge=0)    # 起始时间（秒）
+    end_time: float = Field(ge=0)      # 结束时间（秒）
+    speed_ft_per_s: float = Field(ge=0)  # 该段速度（英尺/秒）
 
 
 class SpeedSummary(BaseModel):
+    """某球员的速度汇总：平均速度、最大速度，以及逐段明细。"""
     track_id: str
     average_speed_ft_per_s: float = Field(ge=0)
     max_speed_ft_per_s: float = Field(ge=0)
@@ -28,20 +35,23 @@ class SpeedSummary(BaseModel):
 
 
 class ZoneDwellMetric(BaseModel):
+    """某球员在"厨房区"（非截击区，球场网前 7 英尺区域）的停留情况。"""
     track_id: str
-    kitchen_frames: int = Field(ge=0)
-    kitchen_seconds: float = Field(ge=0)
+    kitchen_frames: int = Field(ge=0)    # 停留帧数
+    kitchen_seconds: float = Field(ge=0)  # 停留秒数
 
 
 class DoublesSpacingSample(BaseModel):
+    """双打搭档间距的一个采样点（某一时刻两人距离）。"""
     timestamp_seconds: float = Field(ge=0)
-    track_a: str
-    track_b: str
+    track_a: str       # 球员 A 的 track_id
+    track_b: str       # 球员 B 的 track_id
     distance_ft: float = Field(ge=0)
 
 
 class DoublesSpacingSummary(BaseModel):
-    pair: Tuple[str, str]
+    """双打搭档间距汇总：平均/最小/最大间距，以及逐采样点明细。"""
+    pair: Tuple[str, str]               # 这一对搭档的两个 track_id
     average_spacing_ft: float = Field(ge=0)
     min_spacing_ft: float = Field(ge=0)
     max_spacing_ft: float = Field(ge=0)
@@ -49,20 +59,23 @@ class DoublesSpacingSummary(BaseModel):
 
 
 class HeatmapCell(BaseModel):
+    """热力图的一个格子：第几行第几列、被经过的次数。"""
     row: int = Field(ge=0)
     col: int = Field(ge=0)
-    count: int = Field(ge=0)
+    count: int = Field(ge=0)            # 该格命中次数（出现越多越"热"）
 
 
 class Heatmap(BaseModel):
-    rows: int = Field(gt=0)
-    cols: int = Field(gt=0)
+    """整张位置热力图：行列数与各格数据。"""
+    rows: int = Field(gt=0)             # 行数（必须大于 0）
+    cols: int = Field(gt=0)             # 列数
     cells: List[HeatmapCell]
 
 
 class PerformanceMetrics(BaseModel):
-    distances: List[DistanceMetric]
-    speeds: List[SpeedSummary]
-    kitchen_dwell: List[ZoneDwellMetric]
-    doubles_spacing: List[DoublesSpacingSummary]
-    heatmap: Heatmap
+    """一次分析汇总的全部运动表现指标。"""
+    distances: List[DistanceMetric]                       # 各球员移动距离
+    speeds: List[SpeedSummary]                            # 各球员速度
+    kitchen_dwell: List[ZoneDwellMetric]                  # 各球员厨房区停留
+    doubles_spacing: List[DoublesSpacingSummary]          # 双打间距
+    heatmap: Heatmap                                     # 位置热力图

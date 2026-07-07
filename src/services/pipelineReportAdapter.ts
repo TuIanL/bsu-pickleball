@@ -57,6 +57,12 @@ export function adaptPipelineResultToReport(
   const poseOverlayStatus = result.artifacts.pose_overlay_status;
   const hasTrackingOverlay = trackingOverlayStatus === "available";
   const hasPoseOverlay = poseOverlayStatus === "available";
+  // 球分析事实状态：只在真实 job 结果里消费，不回退为 demo 球数据
+  const ballTrajectoryStatus = result.artifacts.ball_trajectory_status;
+  const cleanedBallStatus = result.artifacts.cleaned_ball_trajectory_status;
+  const bounceStatus = result.artifacts.bounce_events_status;
+  const ballAvailable = ballTrajectoryStatus === "available";
+  const bounceAvailable = bounceStatus === "available" || bounceStatus === "no_candidates";
   const summary = noTracks
     ? limited
       ? "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。"
@@ -178,6 +184,22 @@ export function adaptPipelineResultToReport(
                 result.artifacts.pose_overlay_detail ? `骨架状态：${result.artifacts.pose_overlay_detail}` : undefined,
               ].filter(Boolean).join(" ")
             : result.artifacts.pose_overlay_detail ?? result.artifacts.tracking_overlay_detail ?? "当前任务没有可渲染的人体框或骨架 artifact。",
+      },
+      {
+        id: "ball-trajectory-evidence",
+        tone: ballAvailable ? "advantage" : ballTrajectoryStatus === "skipped" || ballTrajectoryStatus === "unavailable" ? "risk" : "training",
+        title: ballAvailable ? "球轨迹可用" : "球轨迹暂不可用",
+        body: ballAvailable
+          ? result.artifacts.ball_trajectory_detail ?? "已生成球轨迹事实 artifact，可在视频工作台叠加查看（仅候选，非击球/落点结论）。"
+          : result.artifacts.ball_trajectory_detail ?? "当前任务未启用球检测或球检测未生成可用轨迹。",
+      },
+      {
+        id: "bounce-evidence",
+        tone: bounceAvailable ? "advantage" : "training",
+        title: bounceAvailable ? "弹跳候选可用" : "弹跳候选暂不可用",
+        body: bounceAvailable
+          ? result.artifacts.bounce_events_detail ?? "已生成弹跳候选事实 artifact（仅候选，非落点/比分/犯规结论）。"
+          : result.artifacts.bounce_events_detail ?? "未启用弹跳检测或未生成清洗球轨迹。",
       },
     ],
     diagnoses: [

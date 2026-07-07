@@ -4,9 +4,9 @@ Place local YOLO11, RTMPose26, or future model checkpoints here during developme
 
 Model weights are intentionally ignored by git because they are large, machine-specific, and may have separate license constraints.
 
-## Pickleball Multi-target Models
+## Pickleball Ball and Multi-target Models
 
-Future ball/paddle detectors should live under a dedicated subdirectory such as:
+Ball and future paddle detectors can live under dedicated subdirectories such as:
 
 ```text
 models/pickleball-multitarget/
@@ -14,11 +14,22 @@ models/pickleball-multitarget/
   classes.json
 ```
 
-The backend expects future adapters to normalize detector output into
-`player`, `ball`, and `paddle` classes. Until a real pickleball-specific model
-is configured, keep `PICKLEBALL_ENABLE_MULTITARGET_INFERENCE=false`; the
-pipeline will still expose a clear unavailable ball-tracking state instead of
-claiming missing ball trajectories are real detections.
+The active backend can enable ball analysis through:
+
+```bash
+PICKLEBALL_ENABLE_BALL_DETECTION=true
+PICKLEBALL_BALL_MODEL_PATH=../models/pickleball-multitarget/model.pt
+PICKLEBALL_ENABLE_BOUNCE_DETECTION=true
+```
+
+The pipeline keeps these switches off by default so local development and CI do
+not require heavy model assets. When enabled without a valid model path or
+runtime dependency, analysis jobs report a skipped or unavailable ball-analysis
+stage instead of failing the player tracking, pose, serve, or movement outputs.
+
+Detector adapters should normalize model output into `player` and `ball`
+records today. `paddle` remains a supported direction for later adapters, but it
+is not required for the current pipeline activation.
 
 ## RTMPose26 Validation Assets
 

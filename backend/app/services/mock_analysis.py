@@ -1,4 +1,13 @@
-"""模拟分析服务 —— 提供 MVP 阶段的任务 CRUD、后台 Worker 调度和演示报告生成。"""
+"""模拟分析服务 —— 提供 MVP 阶段的任务 CRUD、后台 Worker 调度和演示报告生成。
+
+这个模块是"对外给路由层（api）用的分析服务门面"：
+- 创建/查询/删除/取消分析任务；
+- 把任务交给后台 Worker（AnalysisWorkerRuntime）执行；
+- 当分析完成后，根据真实 pipeline 结果拼出一份"演示报告"给前端。
+
+demo 模式下（没有真实视频）会直接返回一份写死的样例报告（DEMO_REPORT），
+让前端在还没有接入真实视频时也有完整界面可看。
+"""
 
 from __future__ import annotations
 
@@ -46,19 +55,22 @@ from app.services.video_service import video_service
 
 logger = logging.getLogger(__name__)
 
+# 内存中的各种缓存（MVP 阶段用，重启即丢，磁盘上有备份）
 JOBS: dict[str, AnalysisJobSummary] = {}
 REPORTS: dict[str, AnalysisReport] = {}
 RESULTS: dict[str, AnalysisPipelineResult] = {}
-_LOCK = Lock()
+_LOCK = Lock()  # 保护上面这些内存字典的线程锁
 _STORAGE = StorageService()
 _JOB_STORE = JobStore(_STORAGE)
 
 
 def _pipeline_factory() -> AnalysisPipeline:
+    # 工厂函数：每次需要跑分析时，新建一个 AnalysisPipeline 实例。
     return AnalysisPipeline()
 
 
 def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
+    # Worker 完成回调：保存结果，并（若成功）生成报告。
     with _LOCK:
         RESULTS[job.id] = result
     if result.status == "completed":
@@ -72,6 +84,7 @@ def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult
         _save_report(job.id, report)
 
 
+# 全局 Worker 运行时单例
 _WORKER = AnalysisWorkerRuntime(
     _JOB_STORE,
     pipeline_factory=_pipeline_factory,
@@ -81,6 +94,7 @@ _WORKER_STARTED = False
 
 
 def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
+    # 内部：如果传入了不同的 storage，就重建 JobStore 和 Worker，并沿用之前的启动状态。
     global _JOB_STORE, _WORKER, _WORKER_STARTED
     target = storage or _STORAGE
     if _JOB_STORE.storage is target:
@@ -98,6 +112,7 @@ def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
     if was_started:
         start_analysis_worker()
 
+# 阶段顺序表（本模块用到的顺序，与 job_orchestration 里的一致）
 ORDERED_STAGES: list[AnalysisStageId] = [
     "upload",
     "queue",
@@ -113,6 +128,7 @@ ORDERED_STAGES: list[AnalysisStageId] = [
     "report",
 ]
 
+# 每个阶段的中文标签 + 说明（与 job_orchestration 类似，但 detection/pose 文案偏向"预留"）
 STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
     "upload": ("视频上传", "保存视频和基础比赛信息"),
     "queue": ("任务排队", "等待视觉分析任务执行"),
@@ -130,6 +146,7 @@ STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
 
 
 def create_mock_job(metadata: AnalysisUploadMetadata) -> AnalysisJobSummary:
+    # 便捷入口：直接用"上传元数据"创建一个分析任务。
     return create_analysis_job(AnalysisJobCreate(metadata=metadata))
 
 
@@ -137,11 +154,15 @@ def create_analysis_job(
     payload: AnalysisJobCreate,
     background_tasks: BackgroundTasks | None = None,
 ) -> AnalysisJobSummary:
+    # 创建分析任务的主函数。根据是否有 videoId 分两种大情况：
+    #   - 有 videoId：进入"真实分析"流程（可能排队/后台跑）；
+    #   - 无 videoId（demo）：直接返回一个已完成任务 + 样例报告。
     _sync_orchestration_storage()
     now = utc_now()
 
     if payload.videoId:
         if video_service.get_video(payload.videoId) is None:
+            # 视频找不到 → 直接创建一个失败任务（带清晰错误信息）
             job_id = f"job-{uuid4().hex[:10]}"
             report_id = f"PV-{job_id.upper()}"
             job = AnalysisJobSummary(
@@ -168,6 +189,7 @@ def create_analysis_job(
             )
             return _save_job(job)
 
+        # 视频存在：先算签名，若要求"不强制新版本"且已有相同任务，则复用之（去重）
         input_signature, config_signature = analysis_signature(payload)
         if not payload.requestNewVersion:
             existing = _JOB_STORE.find_by_signature(input_signature, config_signature)
@@ -175,11 +197,13 @@ def create_analysis_job(
                 return existing
 
         if background_tasks is not None:
+            # Web 请求场景：用 FastAPI 的 BackgroundTasks 异步跑
             job = _JOB_STORE.create_job(payload)
             with _LOCK:
                 JOBS[job.id] = job
             background_tasks.add_task(run_analysis_job, job.id, payload, job.reportId or f"PV-{job.id.upper()}")
         else:
+            # 非 Web 场景（如脚本）：创建任务并通知 Worker；若 Worker 没启用则同步跑一个
             job = _JOB_STORE.create_job(payload)
             with _LOCK:
                 JOBS[job.id] = job
@@ -190,6 +214,7 @@ def create_analysis_job(
                 _WORKER.run_one()
         return job
 
+    # 没有 videoId → demo 模式：直接造一个"已完成"的任务 + 样例报告
     job_id = f"job-{uuid4().hex[:10]}"
     report_id = f"PV-{job_id.upper()}"
     job = AnalysisJobSummary(
@@ -216,11 +241,13 @@ def create_analysis_job(
 
 
 def run_analysis_job(job_id: str, payload: AnalysisJobCreate, report_id: str) -> None:
+    # BackgroundTasks 调用的目标：让 Worker 去执行指定任务。
     _sync_orchestration_storage()
     _WORKER.run_job(job_id)
 
 
 def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummary:
+    # 内部：局部更新一个任务对象并保存（不落 JobStore，直接走 _save_job）。
     payload = job.model_dump()
     payload.update(updates)
     payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
@@ -229,6 +256,7 @@ def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummar
 
 
 def _persist_stage_progress(job: AnalysisJobSummary, stage: AnalysisStage) -> AnalysisJobSummary:
+    # 内部：把流水线阶段进度合并到任务里（早期 mock 流程用的进度更新）。
     stages = merge_stage_progress(job.stages, stage)
     progress = max(job.progress, compute_progress_from_stages(stages))
     current_stage = current_stage_from_stages(stages, fallback=stage.id)
@@ -245,10 +273,12 @@ def _persist_stage_progress(job: AnalysisJobSummary, stage: AnalysisStage) -> An
 
 
 def _merge_progress_stage(stages: list[AnalysisStage], stage: AnalysisStage) -> list[AnalysisStage]:
+    # 内部：直接透传 merge_stage_progress（兼容旧调用）。
     return merge_stage_progress(stages, stage)
 
 
 def _save_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
+    # 内部：保存任务到 JobStore（落盘）并同步到内存缓存。
     _sync_orchestration_storage()
     saved = _JOB_STORE.save(job)
     with _LOCK:
@@ -257,6 +287,7 @@ def _save_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
 
 
 def _save_report(job_id: str, report: AnalysisReport) -> AnalysisReport:
+    # 内部：保存报告到内存 + 磁盘（原子写）。
     with _LOCK:
         REPORTS[job_id] = report
     _STORAGE.write_json_atomic(_STORAGE.report_json_path(job_id), report.model_dump(mode="json"))
@@ -264,6 +295,7 @@ def _save_report(job_id: str, report: AnalysisReport) -> AnalysisReport:
 
 
 def list_analysis_jobs(storage: StorageService | None = None) -> list[AnalysisJobSummary]:
+    # 列出所有分析任务（磁盘 + 内存），按更新时间倒序。
     _sync_orchestration_storage(storage)
     jobs: dict[str, AnalysisJobSummary] = {job.id: job for job in _JOB_STORE.list()}
     with _LOCK:
@@ -272,6 +304,7 @@ def list_analysis_jobs(storage: StorageService | None = None) -> list[AnalysisJo
 
 
 def _load_job_from_path(path: Path, storage: StorageService) -> AnalysisJobSummary | None:
+    # 内部：从磁盘读一个任务 JSON（损坏的忽略）。
     try:
         return AnalysisJobSummary.model_validate(storage.read_json(path))
     except Exception as exc:  # noqa: BLE001 - corrupted persisted jobs should not break the task list.
@@ -280,10 +313,12 @@ def _load_job_from_path(path: Path, storage: StorageService) -> AnalysisJobSumma
 
 
 def _job_sort_key(job: AnalysisJobSummary) -> tuple[str, str]:
+    # 内部：排序键（更新时间优先，其次创建时间）。
     return (job.updatedAt or job.createdAt, job.createdAt)
 
 
 def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:
+    # 按 job_id 取任务：先查 JobStore，再查内存，都没有返回 None。
     _sync_orchestration_storage()
     job = _JOB_STORE.get(job_id)
     if job is None:
@@ -297,6 +332,7 @@ def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:
 
 
 def get_mock_report(job_id: str) -> Optional[AnalysisReport]:
+    # 按 job_id 取报告：先查内存，再查磁盘。
     cached = REPORTS.get(job_id)
     if cached is not None:
         return cached
@@ -312,6 +348,7 @@ def get_mock_report(job_id: str) -> Optional[AnalysisReport]:
 
 
 def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
+    # 按 job_id 取流水线结果：先查内存，再查磁盘。
     cached = RESULTS.get(job_id)
     if cached is not None:
         return cached
@@ -327,11 +364,13 @@ def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
 
 
 def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
+    # 删除分析任务：从内存和磁盘清掉所有相关产物，并清理共享的视频/标定文件。
     _sync_orchestration_storage()
     job = get_mock_job(job_id)
     if job is None:
         return AnalysisDeleteResult(job_id=job_id, status="not_found", detail="Analysis job not found")
 
+    # 活跃中的任务不允许删除
     if job.status in ACTIVE_COMPAT_STATUSES:
         return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="Active analysis jobs cannot be deleted")
 
@@ -340,6 +379,7 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
         REPORTS.pop(job_id, None)
         RESULTS.pop(job_id, None)
 
+    # 逐个删除各类产物文件，并记录被删路径
     deleted_paths = []
     for path in [
         _STORAGE.job_json_path(job_id),
@@ -363,6 +403,7 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
     if job_output_dir.exists():
         _STORAGE.delete_path_tree(job_output_dir)
 
+    # 若该视频/标定已无其它任务使用，则一并清理（shared artifact）
     _cleanup_shared_video_artifacts(job.videoId, excluded_job_id=job_id)
     _cleanup_shared_calibration_artifacts(job.calibrationId, excluded_job_id=job_id)
 
@@ -374,6 +415,7 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
 
 
 def cancel_analysis_job(job_id: str) -> AnalysisJobSummary | None:
+    # 取消任务：交给 JobStore.cancel，并唤醒 Worker。
     _sync_orchestration_storage()
     job, _state = _JOB_STORE.cancel(job_id)
     if job is not None:
@@ -384,6 +426,7 @@ def cancel_analysis_job(job_id: str) -> AnalysisJobSummary | None:
 
 
 def start_analysis_worker() -> None:
+    # 启动后台分析 Worker（受配置 enable_job_worker 控制）。
     global _WORKER_STARTED
     _sync_orchestration_storage()
     from app.core.config import get_settings
@@ -394,16 +437,19 @@ def start_analysis_worker() -> None:
 
 
 def stop_analysis_worker() -> None:
+    # 停止后台分析 Worker。
     global _WORKER_STARTED
     _WORKER.stop()
     _WORKER_STARTED = False
 
 
 def batch_delete_analysis_jobs(job_ids: list[str]) -> list[AnalysisDeleteResult]:
+    # 批量删除多个任务。
     return [delete_analysis_job(job_id) for job_id in job_ids]
 
 
 def _remaining_jobs(excluded_job_id: str | None = None) -> list[AnalysisJobSummary]:
+    # 内部：找出"除了被排除的那个之外"的所有任务（用于判断共享资源是否还被引用）。
     by_id: dict[str, AnalysisJobSummary] = {}
     with _LOCK:
         for job in JOBS.values():
@@ -423,6 +469,7 @@ def _remaining_jobs(excluded_job_id: str | None = None) -> list[AnalysisJobSumma
 
 
 def _cleanup_shared_video_artifacts(video_id: str | None, *, excluded_job_id: str | None = None) -> None:
+    # 内部：如果没有其它任务还在用这个 video_id，就把视频文件和元数据删掉。
     if not video_id:
         return
     if any(job.videoId == video_id for job in _remaining_jobs(excluded_job_id)):
@@ -457,6 +504,7 @@ def _cleanup_shared_video_artifacts(video_id: str | None, *, excluded_job_id: st
 
 
 def _cleanup_shared_calibration_artifacts(calibration_id: str | None, *, excluded_job_id: str | None = None) -> None:
+    # 内部：若没有其它任务用这个标定，则删除标定文件与预览图。
     if not calibration_id:
         return
     if any(job.calibrationId == calibration_id for job in _remaining_jobs(excluded_job_id)):
@@ -480,6 +528,7 @@ def _cleanup_shared_calibration_artifacts(calibration_id: str | None, *, exclude
 
 
 def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[AnalysisStage]:
+    # 内部：把流水线阶段转成对外展示阶段，并补一个 report 阶段。
     stages = analysis_stages_from_pipeline(result)
     stages.append(
         AnalysisStage(
@@ -494,14 +543,17 @@ def _analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[Analy
 
 
 def _progress_from_stages(stages: list[AnalysisStage]) -> int:
+    # 内部：透传 compute_progress_from_stages。
     return compute_progress_from_stages(stages)
 
 
 def _current_stage_from_stages(stages: list[AnalysisStage], fallback: str = "frame-sampling") -> str:
+    # 内部：透传 current_stage_from_stages（默认 fallback 改为 frame-sampling）。
     return current_stage_from_stages(stages, fallback=fallback)
 
 
 def _first_failed_stage(stages: list[AnalysisStage]) -> str:
+    # 内部：透传 first_failed_stage。
     return first_failed_stage(stages)
 
 
@@ -512,6 +564,8 @@ def build_mock_report(
     generated_at: str,
     result: AnalysisPipelineResult | None = None,
 ) -> AnalysisReport:
+    # 构造一份报告：先深拷贝样例报告，再填入本次任务的元信息；
+    # 若不是 demo 模式，则根据真实 pipeline 结果覆盖成"真实数据反馈"。
     payload = deepcopy(DEMO_REPORT)
     payload["source"] = "job"
     payload["jobId"] = job.id
@@ -529,6 +583,7 @@ def build_mock_report(
     payload["session"]["reportId"] = report_id
 
     if job.analysisMode != "demo":
+        # 非 demo：用真实 pipeline 结果填充报告
         _apply_pipeline_feedback(payload, job, result)
 
     return AnalysisReport.model_validate(payload)
@@ -539,8 +594,10 @@ def _apply_pipeline_feedback(
     job: AnalysisJobSummary,
     result: AnalysisPipelineResult | None,
 ) -> None:
+    # 内部：把真实 pipeline 产出的轨迹/指标，写进报告各字段（给前端展示"真东西"）。
     tracks = result.tracks if result is not None else []
     metrics = result.metrics if result is not None else None
+    # 汇总几个关键数字
     total_distance = sum(item.distance_ft for item in metrics.distances) if metrics else 0.0
     avg_speed = _mean([item.average_speed_ft_per_s for item in metrics.speeds]) if metrics else 0.0
     max_speed = max([item.max_speed_ft_per_s for item in metrics.speeds], default=0.0) if metrics else 0.0
@@ -557,6 +614,7 @@ def _apply_pipeline_feedback(
     payload["match"]["currentTime"] = "完成"
     payload["match"]["duration"] = "pipeline"
 
+    # 一段文字总结：根据是否有轨迹/是否受限给出不同措辞
     payload["session"]["summary"] = (
         f"本次分析基于上传视频生成，检测到 {track_count} 条球员轨迹、{point_count} 个场地坐标点，"
         f"累计移动距离约 {total_distance:.1f} 英尺。"
@@ -572,6 +630,7 @@ def _apply_pipeline_feedback(
     payload["session"]["movementPath"] = _tracks_to_movement_path(tracks)
     payload["session"]["rallies"] = []
 
+    # 仪表盘指标 + 报告定义 + 球员标记 + 各类卡片
     payload["dashboardMetrics"] = _pipeline_dashboard_metrics(
         total_distance=total_distance,
         avg_speed=avg_speed,
@@ -694,6 +753,7 @@ def _pipeline_dashboard_metrics(
     kitchen_seconds: float,
     point_count: int,
 ) -> list[dict]:
+    # 内部：把汇总数字包装成"仪表盘指标"列表（每个含 id/标签/值/进度条等）。
     return [
         _metric("distance", "activity", "累计移动距离", f"{total_distance:.1f} ft", "来自场地投影轨迹的累计距离", "真实视频", min(100, int(total_distance))),
         _metric("avg-speed", "timer", "平均移动速度", f"{avg_speed:.1f} ft/s", f"最高速度 {max_speed:.1f} ft/s", "pipeline", min(100, int(avg_speed * 12))),
@@ -712,6 +772,7 @@ def _pipeline_report_definitions(
     limited: bool,
     no_tracks: bool,
 ) -> list[dict]:
+    # 内部：生成"报告定义"列表（移动报告 + 诊断不可用说明）。
     unavailable = "当前 MVP 未生成该类动作诊断数据。"
     source_note = "未提供有效标定，移动报告处于有限模式。" if limited else "来自上传视频的 pipeline 结果。"
     if no_tracks and not limited:
@@ -764,6 +825,7 @@ def _metric(
     trend: str,
     progress: int,
 ) -> dict:
+    # 内部：构造单个指标字典（进度裁剪到 0~100，附一个迷你 sparkline）。
     progress = min(100, max(0, progress))
     return {
         "id": metric_id,
@@ -779,10 +841,12 @@ def _metric(
 
 
 def _note(note_id: str, tone: str, title: str, body: str) -> dict:
+    # 内部：构造一段"洞察/备注"小卡片。
     return {"id": note_id, "tone": tone, "title": title, "body": body}
 
 
 def _heatmap_to_points(heatmap) -> list[dict]:
+    # 内部：把热力图网格转成前端可画的点（带强度/坐标百分比）。
     if heatmap is None or not heatmap.cells:
         return []
     max_count = max(cell.count for cell in heatmap.cells) or 1
@@ -801,6 +865,7 @@ def _heatmap_to_points(heatmap) -> list[dict]:
 
 
 def _tracks_to_movement_path(tracks) -> list[dict]:
+    # 内部：取第一条轨迹的前 24 个点，映射到球场百分比坐标，作为"移动路径"。
     first_track_id = tracks[0].track_id if tracks else None
     selected = [track for track in tracks if track.track_id == first_track_id][:24]
     return [
@@ -813,6 +878,7 @@ def _tracks_to_movement_path(tracks) -> list[dict]:
 
 
 def _tracks_to_player_markers(tracks) -> list[dict]:
+    # 内部：为最多 4 名球员生成"球场标记"（颜色按 A/B/C/D 分配）。
     latest: dict[str, object] = {}
     for track in tracks:
         latest[track.track_id] = track
@@ -834,9 +900,11 @@ def _tracks_to_player_markers(tracks) -> list[dict]:
 
 
 def _mean(values: list[float]) -> float:
+    # 内部：安全求平均（空列表返回 0）。
     return sum(values) / len(values) if values else 0.0
 
 
+# 演示用样例报告（写死的占位数据，demo 模式直接返回它）。
 DEMO_REPORT = {
     "version": "analysis-report-v1",
     "source": "demo",
@@ -963,6 +1031,7 @@ DEMO_REPORT = {
     "progressPoints": [{"match": "第1场", "performance": 67, "errors": 23, "thirdShot": 48, "kitchen": 52}],
 }
 
+# 给样例报告补上 reportDefinitions（移动报告 + 诊断报告两个占位）。
 DEMO_REPORT["reportDefinitions"] = [
     {
         "type": "movement",

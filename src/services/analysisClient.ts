@@ -8,6 +8,8 @@ import type {
   AnalysisStageId,
   AnalysisUploadMetadata,
   AutomaticCalibrationResponse,
+  BallTrajectoryArtifact,
+  BounceEventsArtifact,
   CalibrationPoint,
   ManualCalibrationResponse,
   PoseOverlayArtifact,
@@ -596,6 +598,16 @@ export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<Po
 export async function getServeEvents(result: AnalysisPipelineResult): Promise<ServeEventsArtifact | null> {
   const path = result.artifacts.serve_events_url;
   return path ? requestJson<ServeEventsArtifact>(path) : null;
+}
+
+export async function getBallTrajectory(result: AnalysisPipelineResult): Promise<BallTrajectoryArtifact | null> {
+  const path = result.artifacts.cleaned_ball_trajectory_url ?? result.artifacts.ball_trajectory_url;
+  return path ? requestJson<BallTrajectoryArtifact>(path) : null;
+}
+
+export async function getBounceEvents(result: AnalysisPipelineResult): Promise<BounceEventsArtifact | null> {
+  const path = result.artifacts.bounce_events_url;
+  return path ? requestJson<BounceEventsArtifact>(path) : null;
 }
 
 // Camera API functions

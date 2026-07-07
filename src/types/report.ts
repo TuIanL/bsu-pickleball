@@ -265,7 +265,7 @@ export interface AnalysisUploadMetadata {
 export interface AnalysisStage {
   id: AnalysisStageId;
   label: string;
-  status: "pending" | "active" | "done" | "failed" | "skipped" | "canceled";
+  status: "pending" | "active" | "done" | "failed" | "skipped" | "unavailable" | "canceled";
   detail: string;
   startedAt?: string;
   endedAt?: string;
@@ -410,7 +410,7 @@ export interface ConfidenceBreakdown {
 export interface PipelineStageResult {
   id: string;
   label: string;
-  status: "pending" | "active" | "done" | "failed" | "skipped" | "canceled";
+  status: "pending" | "active" | "done" | "failed" | "skipped" | "unavailable" | "canceled";
   detail: string;
   started_at?: string;
   finished_at?: string;
@@ -503,6 +503,62 @@ export interface PoseOverlayArtifact {
   source: FrameSourceSize;
   skeleton_edges: SkeletonEdge[];
   frames: PoseOverlayFrame[];
+}
+
+export interface BallTrajectorySample {
+  frame_index: number;
+  timestamp_sec: number;
+  image_xy?: [number, number] | number[] | null;
+  court_xy?: [number, number] | number[] | null;
+  confidence?: number | null;
+  visible?: boolean;
+  accepted?: boolean;
+  interpolated?: boolean;
+  candidate_count?: number;
+  source?: string;
+  in_bounds?: boolean | null;
+}
+
+export interface BallTrajectoryArtifact {
+  schema_version: string;
+  job_id: string;
+  status: "available" | "partial" | "no_candidates" | "no_detections" | "unavailable" | "skipped" | "failed";
+  detail: string;
+  coordinate_system?: {
+    image?: string;
+    court?: string;
+    court_width?: number;
+    court_length?: number;
+  };
+  filtering?: Record<string, unknown>;
+  samples: BallTrajectorySample[];
+}
+
+export interface BounceEventCandidate {
+  event_id: string;
+  frame_index: number;
+  timestamp_sec: number;
+  image_xy: [number, number] | number[];
+  court_xy?: [number, number] | number[] | null;
+  confidence: number;
+  detection_method: string;
+  diagnostics?: Record<string, unknown>;
+  rally_id?: string | null;
+}
+
+export interface BounceEventsArtifact {
+  schema_version: string;
+  job_id: string;
+  status: "available" | "no_candidates" | "partial" | "unavailable" | "skipped" | "failed";
+  detail: string;
+  coordinate_system?: {
+    image?: string;
+    court?: string;
+    court_width?: number;
+    court_length?: number;
+  };
+  detection_method?: string;
+  events: BounceEventCandidate[];
 }
 
 export interface ServeEventCandidate {
@@ -633,6 +689,26 @@ export interface AnalysisPipelineResult {
     court_view_roi_json_path?: string;
     court_view_roi_url?: string;
     source_video_url?: string;
+    detections_jsonl_path?: string;
+    detections_url?: string;
+    detections_status?: string;
+    detections_detail?: string;
+    ball_overlay_json_path?: string;
+    ball_overlay_url?: string;
+    ball_overlay_status?: string;
+    ball_overlay_detail?: string;
+    ball_trajectory_json_path?: string;
+    ball_trajectory_url?: string;
+    ball_trajectory_status?: string;
+    ball_trajectory_detail?: string;
+    cleaned_ball_trajectory_json_path?: string;
+    cleaned_ball_trajectory_url?: string;
+    cleaned_ball_trajectory_status?: string;
+    cleaned_ball_trajectory_detail?: string;
+    bounce_events_json_path?: string;
+    bounce_events_url?: string;
+    bounce_events_status?: string;
+    bounce_events_detail?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
     pose_overlay_status?: string;

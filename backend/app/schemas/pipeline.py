@@ -1,4 +1,9 @@
-"""分析流水线（Pipeline）结果相关的 Pydantic 数据模型。"""
+"""
+分析流水线（Pipeline）结果相关的 Pydantic 数据模型。
+
+一次完整分析的"最终产出"用这里的模型描述：包含各阶段执行情况、
+球场投影后的轨迹点、运动指标，以及所有中间产物（artifact）的文件路径清单。
+"""
 
 from __future__ import annotations
 
@@ -10,8 +15,8 @@ from pydantic import BaseModel, Field
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.tracking import ProjectedTrackPoint
 
-# 流水线阶段状态
-PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped", "canceled"]
+# 流水线阶段状态：与 analysis 里的阶段状态含义一致
+PipelineStageStatus = Literal["pending", "active", "done", "failed", "skipped", "unavailable", "canceled"]
 
 
 class PipelineStageResult(BaseModel):
@@ -23,15 +28,20 @@ class PipelineStageResult(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
-    progress: int = Field(default=0, ge=0, le=100)
+    progress: int = Field(default=0, ge=0, le=100)  # 进度百分比
     error_code: Optional[str] = None
-    public_message: Optional[str] = None
-    internal_message: Optional[str] = None
+    public_message: Optional[str] = None            # 给用户看的信息
+    internal_message: Optional[str] = None          # 内部调试信息
     retry_count: int = Field(default=0, ge=0)
     counters: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalysisArtifacts(BaseModel):
+    """所有分析中间产物的路径/URL 清单。
+
+    每个产物通常有 *_path（磁盘路径）和 *_url（访问地址）两对字段，
+    以及 *_status / *_detail（生成状态与说明）。这里集中列出，便于前端按名取用。
+    """
     result_json_path: Optional[str] = None
     tracking_result_json_path: Optional[str] = None
     tracking_overlay_json_path: Optional[str] = None
@@ -74,6 +84,7 @@ class AnalysisArtifacts(BaseModel):
     court_view_roi_json_path: Optional[str] = None
     court_view_roi_url: Optional[str] = None
     source_video_url: Optional[str] = None
+    # 下面是各产物的状态/说明（用于前端判断某个 overlay 是否可用）
     tracking_overlay_status: Optional[str] = None
     tracking_overlay_detail: Optional[str] = None
     player_selection_status: Optional[str] = None
@@ -106,13 +117,14 @@ class AnalysisArtifacts(BaseModel):
 
 
 class AnalysisPipelineResult(BaseModel):
+    """一次分析的完整流水线结果（前端读 /jobs/{id}/result 时返回这个）。"""
     job_id: str
     video_id: Optional[str] = None
     calibration_id: Optional[str] = None
-    status: Literal["completed", "failed"]
-    generated_at: datetime
-    stages: List[PipelineStageResult]
-    tracks: List[ProjectedTrackPoint] = Field(default_factory=list)
-    metrics: PerformanceMetrics
-    artifacts: AnalysisArtifacts
-    message: str
+    status: Literal["completed", "failed"]    # 整体结果状态
+    generated_at: datetime                     # 生成时间
+    stages: List[PipelineStageResult]          # 各阶段执行情况
+    tracks: List[ProjectedTrackPoint] = Field(default_factory=list)  # 球场投影后的轨迹点
+    metrics: PerformanceMetrics                # 运动指标
+    artifacts: AnalysisArtifacts               # 产物路径清单
+    message: str                               # 结果说明

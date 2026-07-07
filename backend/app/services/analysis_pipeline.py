@@ -1,10 +1,22 @@
-"""分析流水线 —— MVP 版本的端到端视频分析流程（检测→跟踪→投影→指标计算→可视化）。"""
+"""分析流水线 —— MVP 版本的端到端视频分析流程（检测→跟踪→投影→指标计算→可视化）。
+
+这是整个后端"分析"的核心。给定一段视频 + 一份标定，它会：
+1. 逐帧读取（按 frame_stride 抽帧）；
+2. 跑人体检测（YOLO）+ 多目标跟踪，把每帧的人连成轨迹；
+3. 用标定矩阵把"画面脚点"投影成"球场坐标"；
+4. 选出主球员、做姿态识别、检测发球开始；
+5. 计算移动距离/速度/厨房区/双打间距/热力图等指标；
+6. 把所有结果写成 JSON 产物，并返回给上层。
+
+如果缺视频或标定，会走"mock/demo"分支，返回确定性的占位结果，
+保证前端在 MVP 阶段也有东西可展示。
+"""
 
 from __future__ import annotations
 
 import logging
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -32,6 +44,7 @@ from app.services.calibration_service import CalibrationService
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
 from app.core.config import get_settings
+# 视觉引擎：球场几何、球场视角评分、各项性能指标、跟踪与姿态相关组件
 from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.court_view import (
     CourtViewFrameScorer,
@@ -56,19 +69,78 @@ from app.vision.player_tracking_engine.primary_player_selector import PrimaryPla
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 from app.vision.events.serve_start_detector import ServeStartDetector
 from app.vision.events.serve_start_detector import ServeStartDetectorConfig
+# 球分析引擎（detector-agnostic，仅在启用球分析时参与）：轨迹、清洗、弹跳、球场投影
+from app.vision.pickleball_game_analysis.ball_tracker import BallTracker
+from app.vision.pickleball_game_analysis.bounce_detector import BounceDetector, BounceDetectorConfig
+from app.vision.pickleball_game_analysis.court_adapter import BallCourtAdapter
+from app.vision.pickleball_game_analysis.detection_writer import (
+    build_bounce_events_payload,
+    build_cleaned_trajectory_payload,
+    build_raw_trajectory_payload,
+)
+from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceEvent, TrajectoryPoint
+from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner
+from app.schemas.multitarget import MultiTargetDetection
+# 可配置的球检测适配器（缺失模型/依赖时抛出清晰错误，由 pipeline 降级为 unavailable）
+from app.vision.detectors.ball_adapter import (
+    BallDetectionModelMissingError,
+    BallDetectionUnavailableError,
+    YoloBallDetectorAdapter,
+)
 
 
 logger = logging.getLogger(__name__)
+# 进度回调类型：每完成一个阶段就调用一次
 ProgressCallback = Callable[[PipelineStageResult], None]
 
 
 class CancellationToken(Protocol):
+    # 取消令牌协议（Protocol = 结构化类型，只要实现了 raise_if_cancelled 就满足）。
     def raise_if_cancelled(self) -> None:
         ...
 
 
 @dataclass
+class _BallRunOutput:
+    # 球分析运行的内部汇总输出（仅在启用球分析时由 _run_tracking 产生）。
+    status: str = "skipped"  # available / unavailable / failed / skipped
+    samples: list[BallFrameSample] = field(default_factory=list)
+    ball_detections: list[MultiTargetDetection] = field(default_factory=list)
+    raw_points: list[TrajectoryPoint] | None = None
+    cleaned_points: list[TrajectoryPoint] | None = None
+    bounce_events: list[BounceEvent] | None = None
+    accepted_count: int = 0
+    error: str | None = None
+
+
+@dataclass
+class _BallArtifactFields:
+    # 球相关 artifact 路径/URL/状态/说明的收集器，供 AnalysisArtifacts 装配。
+    detections_jsonl_path: str | None = None
+    detections_url: str | None = None
+    detections_status: str | None = None
+    detections_detail: str | None = None
+    ball_overlay_json_path: str | None = None
+    ball_overlay_url: str | None = None
+    ball_overlay_status: str | None = None
+    ball_overlay_detail: str | None = None
+    ball_trajectory_json_path: str | None = None
+    ball_trajectory_url: str | None = None
+    ball_trajectory_status: str | None = None
+    ball_trajectory_detail: str | None = None
+    cleaned_ball_trajectory_json_path: str | None = None
+    cleaned_ball_trajectory_url: str | None = None
+    cleaned_ball_trajectory_status: str | None = None
+    cleaned_ball_trajectory_detail: str | None = None
+    bounce_events_json_path: str | None = None
+    bounce_events_url: str | None = None
+    bounce_events_status: str | None = None
+    bounce_events_detail: str | None = None
+
+
+@dataclass
 class _TrackingRunOutput:
+    # 一次跟踪运行的内部汇总输出（多个产物打包在一起，方便 run() 使用）。
     tracking: TrackingResult
     player_trajectories: PlayerTrajectoryArtifact | None = None
     player_metric_tracks: list[ProjectedTrackPoint] | None = None
@@ -77,10 +149,12 @@ class _TrackingRunOutput:
     pose_stage: PipelineStageResult | None = None
     pose_frames: list[Any] | None = None
     court_view_roi: CourtViewRoiArtifact | None = None
+    ball_run_output: _BallRunOutput | None = None
+    player_multitarget_detections: list[MultiTargetDetection] = field(default_factory=list)
 
 
 class AnalysisPipeline:
-    """MVP analysis pipeline with real tracking when video and calibration are available."""
+    """MVP 分析流水线：当视频和标定都可用时，执行真实的球员跟踪。"""
 
     def __init__(
         self,
@@ -94,12 +168,14 @@ class AnalysisPipeline:
         primary_player_selector: PrimaryPlayerSelector | None = None,
         pose_estimator: Any | None = None,
         serve_start_detector: ServeStartDetector | None = None,
+        ball_detector: Any | None = None,
         frame_stride: int | None = None,
     ) -> None:
         self.video_service = video_service or VideoService()
         self.calibration_service = calibration_service or CalibrationService()
         self.storage = storage or StorageService()
         self.settings = get_settings()
+        # 检测器：没注入就按配置创建；如果配置关闭模型推理，则用一个"空检测器"（不真跑模型）
         detector_was_injected = detector is not None
         self.detector = detector or (
             PersonDetector(
@@ -121,6 +197,7 @@ class AnalysisPipeline:
             footpoint_estimator=self.footpoint_estimator,
             include_invalid=True,
         )
+        # 主球员选择器：把一堆轨迹里挑出"目标球员"，参数全部来自配置
         self.primary_player_selector = primary_player_selector or PrimaryPlayerSelector(
             min_confidence=self.settings.primary_player_min_confidence,
             max_subjects=self.settings.primary_player_max_subjects,
@@ -134,6 +211,7 @@ class AnalysisPipeline:
             attention_model_path=self.settings.attention_player_selector_model_path,
             attention_confidence_threshold=self.settings.attention_player_selector_confidence,
         )
+        # 姿态估计器：按配置创建 RTMPose26 适配器，关闭时设为 None
         self.pose_estimator = pose_estimator or (
             RTMPose26Adapter(
                 config_path=self.settings.rtmpose_config_path,
@@ -145,6 +223,7 @@ class AnalysisPipeline:
             if self.settings.enable_pose_inference
             else None
         )
+        # 发球开始检测器
         self.serve_start_detector = serve_start_detector or ServeStartDetector(
             ServeStartDetectorConfig(
                 min_gap_seconds=self.settings.serve_min_gap_seconds,
@@ -159,6 +238,28 @@ class AnalysisPipeline:
             )
         )
         self.pose_inference_enabled = self.pose_estimator is not None
+        # 球检测适配器：按配置接入；未注入则尝试用配置的模型路径构建 YOLO 适配器。
+        # 缺失模型/依赖时只记录原因并降级为 unavailable，不中断任务。
+        self.ball_detection_enabled = self.settings.enable_ball_detection
+        self.ball_detector = ball_detector
+        self.ball_detection_unavailable_reason: str | None = None
+        if self.ball_detection_enabled and self.ball_detector is None:
+            if self.settings.ball_model_path:
+                try:
+                    self.ball_detector = YoloBallDetectorAdapter(
+                        model_path=self.settings.ball_model_path,
+                        confidence_threshold=self.settings.detector_confidence or 0.18,
+                        device=self.settings.detector_device,
+                    )
+                except BallDetectionModelMissingError as exc:
+                    self.ball_detection_unavailable_reason = str(exc)
+                except Exception as exc:  # 其它初始化异常也降级，不中断主流程
+                    self.ball_detection_unavailable_reason = f"球检测适配器初始化失败：{exc}"
+            else:
+                self.ball_detection_unavailable_reason = (
+                    "未配置球检测模型路径（PICKLEBALL_BALL_MODEL_PATH），球检测不可用"
+                )
+        # 抽帧步长：至少 1
         self.frame_stride = max(1, int(frame_stride or self.settings.overlay_frame_stride))
 
     def run(
@@ -170,11 +271,19 @@ class AnalysisPipeline:
         progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> AnalysisPipelineResult:
+        # 流水线主入口。根据"有没有视频 / 有没有标定"分三条路径：
+        #   A) 有视频 + 有标定 → 跑真实跟踪（最完整）
+        #   B) 有视频 + 无标定 → 只做有限阶段（跳过需要标定的部分）
+        #   C) 无视频（demo）→ 返回确定性 mock 轨迹
         stages: list[PipelineStageResult] = []
+        ball_run_output: _BallRunOutput | None = None
+        ball_fields = _BallArtifactFields()
+        player_multitarget_detections: list[MultiTargetDetection] = []
         self._check_cancelled(cancellation_token)
         video = self.video_service.get_video(video_id) if video_id else None
 
         if video_id and video is None:
+            # 指定了 video_id 却找不到视频 → 直接判失败
             result = self._failed(job_id, video_id, calibration_id, "Uploaded video not found")
             self._write_result(result)
             return result
@@ -195,6 +304,8 @@ class AnalysisPipeline:
         self._notify_progress(progress_callback, calibration_stage)
         self._check_cancelled(cancellation_token)
 
+        # 下面这一大堆变量，用来收集各产物的"路径 / URL / 状态 / 说明"，
+        # 最后统一塞进 AnalysisArtifacts 返回。先全部初始化为 None。
         source_video_url = f"/api/videos/{video_id}/stream" if video_id else None
         tracking_artifact_path: str | None = None
         tracking_overlay_artifact_path: str | None = None
@@ -265,6 +376,7 @@ class AnalysisPipeline:
         court_view_roi_status: str | None = None
         court_view_roi_detail: str | None = None
         if video and calibration:
+            # ===== 路径 A：有视频 + 有标定，跑真实跟踪 =====
             try:
                 self._notify_progress(
                     progress_callback,
@@ -281,6 +393,7 @@ class AnalysisPipeline:
                     cancellation_token=cancellation_token,
                 )
             except Exception as exc:
+                # 跟踪阶段抛异常 → 整个任务失败
                 failed_stage = self._stage("tracking", "多目标跟踪", "failed", str(exc))
                 stages.append(failed_stage)
                 self._notify_progress(progress_callback, failed_stage)
@@ -288,6 +401,8 @@ class AnalysisPipeline:
                 self._write_result(result)
                 return result
             tracking_result = run_output.tracking
+            ball_run_output = run_output.ball_run_output
+            player_multitarget_detections = run_output.player_multitarget_detections
             if run_output.court_view_roi is not None:
                 court_view_roi_json = self.storage.court_view_roi_json_path(job_id)
                 self.storage.write_json(court_view_roi_json, run_output.court_view_roi.model_dump(mode="json"))
@@ -306,6 +421,7 @@ class AnalysisPipeline:
             self._check_cancelled(cancellation_token)
 
             if run_output.court_view_roi is not None:
+                # 球场视角 ROI 阶段：根据状态决定 done / skipped
                 court_view_stage = self._stage(
                     "court-view-roi",
                     "球场视角与检测 ROI",
@@ -326,6 +442,7 @@ class AnalysisPipeline:
                 self._notify_progress(progress_callback, court_view_stage)
                 self._check_cancelled(cancellation_token)
 
+            # 写出跟踪结果 JSON + 检测叠加 JSON
             tracking_path = self.storage.tracking_json_path(job_id)
             self.storage.write_json(tracking_path, tracking_result.model_dump(mode="json"))
             tracking_artifact_path = str(tracking_path)
@@ -343,6 +460,7 @@ class AnalysisPipeline:
             tracking_overlay_detail = tracking_overlay.detail
 
             if run_output.player_selection is not None:
+                # 主球员选择结果 + 训练样本
                 selection_json_path = self.storage.player_selection_json_path(job_id)
                 self.storage.write_json(selection_json_path, run_output.player_selection.model_dump(mode="json"))
                 player_selection_path = str(selection_json_path)
@@ -366,6 +484,7 @@ class AnalysisPipeline:
                 player_selection_training_samples_url = f"/api/analysis/jobs/{job_id}/artifacts/player-selection-training-samples"
 
             if run_output.pose is not None:
+                # 姿态叠加结果
                 pose_overlay_path = self.storage.pose_overlay_json_path(job_id)
                 self.storage.write_json(pose_overlay_path, run_output.pose.model_dump(mode="json"))
                 pose_overlay_artifact_path = str(pose_overlay_path)
@@ -377,6 +496,7 @@ class AnalysisPipeline:
                 pose_overlay_detail = run_output.pose_stage.detail
 
             if run_output.player_trajectories is not None:
+                # 球员轨迹 JSON + CSV
                 player_trajectory_json = self.storage.player_trajectory_json_path(job_id)
                 player_trajectory_csv = self.storage.player_trajectory_csv_path(job_id)
                 self.storage.write_json(player_trajectory_json, run_output.player_trajectories.model_dump(mode="json"))
@@ -389,6 +509,7 @@ class AnalysisPipeline:
                 player_trajectory_status = "available" if sample_count else "no_detections"
                 player_trajectory_detail = f"已生成 {player_count} 名球员的 {sample_count} 个公制轨迹样本"
 
+            # 发球开始检测（若开启调试产物，先准备调试引用）
             debug_refs = self._serve_debug_refs(job_id) if self.settings.enable_serve_debug_artifacts else None
             try:
                 serve_events = self.serve_start_detector.detect(
@@ -400,6 +521,7 @@ class AnalysisPipeline:
                     debug_artifacts=debug_refs,
                 )
             except Exception as exc:
+                # 检测失败则降级为 unavailable，不阻断主流程
                 serve_events = self.serve_start_detector.unavailable(
                     job_id=job_id,
                     video_id=video_id,
@@ -435,6 +557,7 @@ class AnalysisPipeline:
             serve_events_status = serve_events.status
             serve_events_detail = serve_events.detail
 
+            # 以下把各个"阶段"的状态/详情汇总进 stages 列表
             detection_stage = self._stage(
                 "detection",
                 "人体检测",
@@ -502,6 +625,7 @@ class AnalysisPipeline:
             tracks = run_output.player_metric_tracks or self._positions_to_projected_tracks(tracking_result.positions)
             message = "Pipeline completed with Player Tracking Engine output."
         elif video and not calibration:
+            # ===== 路径 B：有视频但无标定 → 有限阶段，跳过需要标定的部分 =====
             limited_stages = [
                 self._stage("frame-sampling", "抽帧采样", "skipped", "未提供标定，跳过真实抽帧分析"),
                 self._stage("detection", "人体检测", "skipped", "缺少场地标定，暂不运行真实检测"),
@@ -519,6 +643,7 @@ class AnalysisPipeline:
             serve_events_detail = "缺少场地标定和可用球员轨迹，暂不识别发球开始候选点"
             message = "Limited pipeline completed without court calibration; no court-projected tracks were generated."
         else:
+            # ===== 路径 C：无视频（demo） → 返回确定性 mock 轨迹 =====
             mock_stages = [
                 self._stage("frame-sampling", "抽帧采样", "skipped", "未提供真实视频，跳过抽帧"),
                 self._stage("detection", "人体检测", "skipped", "未提供视频或标定，返回确定性轨迹"),
@@ -539,16 +664,40 @@ class AnalysisPipeline:
             self._check_cancelled(cancellation_token)
             message = "MVP pipeline completed with deterministic model-free tracking output."
 
+        # 球分析阶段（所有路径统一处理：启用/缺依赖/未启用）
+        self._finalize_ball_analysis(job_id, ball_run_output, player_multitarget_detections, video_id, stages, ball_fields)
+
+        # 计算运动指标
         metrics = self._compute_metrics(tracks)
         metrics_stage = self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图")
         stages.append(metrics_stage)
         self._notify_progress(progress_callback, metrics_stage)
         self._check_cancelled(cancellation_token)
+        # 可视化阶段在 MVP 中暂不生成叠加视频
         visualization_stage = self._stage("visualization", "可视化视频", "skipped", "MVP 暂不生成叠加视频文件")
         stages.append(visualization_stage)
         self._notify_progress(progress_callback, visualization_stage)
         self._check_cancelled(cancellation_token)
 
+        # 把球分析阶段产出的 artifact 字段映射到结果构造用的局部变量
+        detections_jsonl_path = ball_fields.detections_jsonl_path
+        detections_url = ball_fields.detections_url
+        detections_status = ball_fields.detections_status
+        detections_detail = ball_fields.detections_detail
+        ball_trajectory_json_path = ball_fields.ball_trajectory_json_path
+        ball_trajectory_url = ball_fields.ball_trajectory_url
+        ball_trajectory_status = ball_fields.ball_trajectory_status
+        ball_trajectory_detail = ball_fields.ball_trajectory_detail
+        cleaned_ball_trajectory_json_path = ball_fields.cleaned_ball_trajectory_json_path
+        cleaned_ball_trajectory_url = ball_fields.cleaned_ball_trajectory_url
+        cleaned_ball_trajectory_status = ball_fields.cleaned_ball_trajectory_status
+        cleaned_ball_trajectory_detail = ball_fields.cleaned_ball_trajectory_detail
+        bounce_events_json_path = ball_fields.bounce_events_json_path
+        bounce_events_url = ball_fields.bounce_events_url
+        bounce_events_status = ball_fields.bounce_events_status
+        bounce_events_detail = ball_fields.bounce_events_detail
+
+        # 汇总成最终结果
         result = AnalysisPipelineResult(
             job_id=job_id,
             video_id=video_id,
@@ -635,6 +784,141 @@ class AnalysisPipeline:
         self._write_result(result)
         return result
 
+    def _finalize_ball_analysis(
+        self,
+        job_id: str,
+        ball_run_output: _BallRunOutput | None,
+        player_detections: list[MultiTargetDetection],
+        video_id: str | None,
+        stages: list[PipelineStageResult],
+        fields: _BallArtifactFields,
+    ) -> None:
+        """统一处理球分析阶段的状态记录与 artifact 写入。
+
+        所有路径都会进入：球未启用 → skipped；启用但缺依赖 → unavailable；
+        启用且产生候选 → 写入 detections/轨迹/清洗/弹跳 artifact。
+        任何失败都不会阻断已生成的 player/pose/serve 等结果。
+        """
+        enabled = self.ball_detection_enabled
+        if ball_run_output is None:
+            # 球检测未启用，或路径 B/C（无真实跟踪/标定）下不可用
+            detail = (
+                "球检测未启用（PICKLEBALL_ENABLE_BALL_DETECTION=false）"
+                if not enabled
+                else "缺少真实跟踪/标定，球轨迹不可用"
+            )
+            stages.append(self._stage("ball-detection", "球检测", "skipped", detail))
+            stages.append(self._stage("ball-trajectory", "球轨迹", "skipped", "球检测未运行，未生成轨迹"))
+            stages.append(self._stage("bounce-detection", "弹跳候选", "skipped", "球轨迹未生成，未运行弹跳检测"))
+            fields.detections_status = "skipped"
+            fields.detections_detail = detail
+            fields.ball_trajectory_status = "skipped"
+            fields.ball_trajectory_detail = "球检测未运行"
+            fields.cleaned_ball_trajectory_status = "skipped"
+            fields.cleaned_ball_trajectory_detail = "球轨迹未生成"
+            fields.bounce_events_status = "skipped"
+            fields.bounce_events_detail = "球轨迹未生成"
+            return
+
+        run = ball_run_output
+        # 1) 球检测阶段状态
+        if run.status == "available":
+            det_stage_status = "done"
+            candidate_count = len(run.ball_detections)
+            if run.accepted_count > 0:
+                det_status = "available"
+                det_detail = f"球检测已运行，{run.accepted_count} 帧接受候选（{candidate_count} 条 ball 检测记录）"
+            else:
+                det_status = "no_detections"
+                det_detail = "球检测已运行，但没有达到置信度/连续性阈值的球候选"
+        elif run.status == "unavailable":
+            det_stage_status = "unavailable"
+            det_status = "unavailable"
+            det_detail = run.error or "球检测不可用（缺少模型路径或依赖）"
+        else:  # failed
+            det_stage_status = "failed"
+            det_status = "failed"
+            det_detail = run.error or "球检测或轨迹处理失败"
+        detection_stage = self._stage("ball-detection", "球检测", det_stage_status, det_detail)
+        detection_stage.counters = {
+            "status": det_status,
+            "candidate_count": len(run.ball_detections),
+            "accepted_count": run.accepted_count,
+            "sample_count": len(run.samples),
+            "enabled": enabled,
+        }
+        stages.append(detection_stage)
+        fields.detections_status = det_status
+        fields.detections_detail = det_detail
+
+        if run.status != "available" or not run.raw_points:
+            # 无可用轨迹：轨迹/清洗/弹跳阶段标记 unavailable/failed
+            traj_status = run.status if run.status in {"unavailable", "failed"} else "skipped"
+            stages.append(self._stage("ball-trajectory", "球轨迹", traj_status, det_detail))
+            stages.append(self._stage("bounce-detection", "弹跳候选", "skipped", "未生成可用球轨迹"))
+            fields.ball_trajectory_status = traj_status
+            fields.ball_trajectory_detail = det_detail
+            fields.cleaned_ball_trajectory_status = traj_status
+            fields.cleaned_ball_trajectory_detail = det_detail
+            fields.bounce_events_status = "skipped"
+            fields.bounce_events_detail = "未生成可用球轨迹"
+            return
+
+        # 2) 写入 detections.jsonl（player + ball 共享合同）
+        detections_records = list(player_detections) + list(run.ball_detections)
+        if detections_records:
+            detections_path = self.storage.detections_jsonl_path(job_id)
+            self.storage.write_jsonl(detections_path, [rec.model_dump(mode="json") for rec in detections_records])
+            fields.detections_jsonl_path = str(detections_path)
+            fields.detections_url = f"/api/analysis/jobs/{job_id}/artifacts/detections"
+
+        # 3) 原始轨迹
+        raw_path = self.storage.ball_trajectory_json_path(job_id)
+        self.storage.write_json(raw_path, build_raw_trajectory_payload(job_id=job_id, samples=run.raw_points))
+        fields.ball_trajectory_json_path = str(raw_path)
+        fields.ball_trajectory_url = f"/api/analysis/jobs/{job_id}/artifacts/ball-trajectory"
+        fields.ball_trajectory_status = "available"
+        fields.ball_trajectory_detail = f"已生成 {len(run.raw_points)} 个逐帧球轨迹样本"
+
+        # 4) 清洗轨迹
+        if run.cleaned_points is not None:
+            cleaned_path = self.storage.cleaned_ball_trajectory_json_path(job_id)
+            self.storage.write_json(
+                cleaned_path,
+                build_cleaned_trajectory_payload(job_id=job_id, samples=run.cleaned_points),
+            )
+            fields.cleaned_ball_trajectory_json_path = str(cleaned_path)
+            fields.cleaned_ball_trajectory_url = f"/api/analysis/jobs/{job_id}/artifacts/cleaned-ball-trajectory"
+            fields.cleaned_ball_trajectory_status = "available"
+            fields.cleaned_ball_trajectory_detail = f"已清洗并插值生成 {len(run.cleaned_points)} 个轨迹点"
+
+        # 5) 弹跳候选（仅在启用弹跳检测且已生成清洗轨迹时）
+        if self.settings.enable_bounce_detection and run.bounce_events is not None:
+            bounce_path = self.storage.bounce_events_json_path(job_id)
+            self.storage.write_json(bounce_path, build_bounce_events_payload(job_id=job_id, events=run.bounce_events))
+            fields.bounce_events_json_path = str(bounce_path)
+            fields.bounce_events_url = f"/api/analysis/jobs/{job_id}/artifacts/bounce-events"
+            fields.bounce_events_status = "available" if run.bounce_events else "no_candidates"
+            fields.bounce_events_detail = (
+                f"检测到 {len(run.bounce_events)} 个弹跳候选"
+                if run.bounce_events
+                else "弹跳检测已运行，但未检测到候选事件"
+            )
+            bounce_stage_status = "done"
+            bounce_stage_detail = fields.bounce_events_detail
+        else:
+            bounce_stage_status = "skipped"
+            bounce_stage_detail = (
+                "PICKLEBALL_ENABLE_BOUNCE_DETECTION=false，跳过弹跳候选检测"
+                if not self.settings.enable_bounce_detection
+                else "未生成清洗球轨迹，跳过弹跳检测"
+            )
+            fields.bounce_events_status = "skipped"
+            fields.bounce_events_detail = bounce_stage_detail
+
+        stages.append(self._stage("ball-trajectory", "球轨迹", "done", fields.ball_trajectory_detail or "球轨迹已生成"))
+        stages.append(self._stage("bounce-detection", "弹跳候选", bounce_stage_status, bounce_stage_detail))
+
     def _run_tracking(
         self,
         job_id: str,
@@ -646,6 +930,7 @@ class AnalysisPipeline:
         frame_stride: int,
         cancellation_token: CancellationToken | None = None,
     ) -> _TrackingRunOutput:
+        # 真正的"逐帧跟踪"循环（只在 路径A 调用）。
         try:
             import cv2  # type: ignore
         except ImportError as exc:
@@ -656,11 +941,13 @@ class AnalysisPipeline:
         if not capture.isOpened():
             raise RuntimeError(f"Could not read uploaded video: {video.path}")
 
+        # 读取视频基础信息
         raw_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
         fps = raw_fps if raw_fps > 0 else 0.0
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        # 球场视角（court-view）相关评分器/状态机/阈值
         court_view_thresholds = CourtViewThresholds(
             match_threshold=self.settings.court_view_match_threshold,
             start_frames=self.settings.court_view_start_frames,
@@ -672,6 +959,7 @@ class AnalysisPipeline:
         court_view_scorer = CourtViewFrameScorer(match_width=self.settings.court_view_match_width)
         court_view_state = CourtViewStateMachine(thresholds=court_view_thresholds)
         court_view_frame_samples = []
+        # 检测 ROI（感兴趣区域）：开启则按标定四角算一个扩大框，关闭则用全帧 fallback
         roi_artifact = (
             compute_expanded_detection_roi(
                 self._calibration_image_points(calibration_keypoints),
@@ -708,13 +996,16 @@ class AnalysisPipeline:
         all_tracks = []
         positions: list[PlayerFramePosition] = []
         pose_frames = []
+        # 姿态阶段：未启用姿态估计时先预置一个 skipped 阶段
         pose_stage = (
             self._stage("pose", "人体姿态", "skipped", "RTMPose 姿态识别未启用，暂不生成骨架关节")
             if self.pose_estimator is None
             else None
         )
         pose_error: str | None = None
+        # 多目标跟踪器（没注入就新建，lost 缓冲帧数来自配置）
         tracker = self.tracker or MultiObjectTracker(max_lost=self.settings.player_identity_lost_buffer_frames)
+        # 球员身份管理器（把轨迹对应到稳定 player_id，处理重连/插值/跟丢）
         identity_manager = PlayerIdentityManager(
             PlayerIdentityConfig(
                 max_players=self.settings.player_identity_max_players,
@@ -732,6 +1023,16 @@ class AnalysisPipeline:
         )
         selection_diagnostics = []
         selection_training_samples = []
+        # 球检测（可选）：启用且适配器可用时逐帧运行，累积样本与 ball 检测记录
+        ball_tracker = (
+            BallTracker(detector=self.ball_detector, court_adapter=BallCourtAdapter())
+            if self.ball_detector is not None
+            else None
+        )
+        ball_samples: list[BallFrameSample] = []
+        ball_detections: list[MultiTargetDetection] = []
+        player_multitarget_detections: list[MultiTargetDetection] = []
+        ball_run_error: str | None = None
 
         frame_index = 0
         try:
@@ -740,6 +1041,7 @@ class AnalysisPipeline:
                 ok, frame = capture.read()
                 if not ok:
                     break
+                # 按 stride 抽帧：不是目标帧就跳过
                 if frame_index % stride != 0:
                     frame_index += 1
                     continue
@@ -757,18 +1059,24 @@ class AnalysisPipeline:
                 court_view_sample = court_view_state.update(frame_index, timestamp, court_view_score)
                 court_view_frame_samples.append(court_view_sample)
                 processed_frame_count += 1
+                # 被"非球场视角"门控挡住的帧，跳过后续检测
                 if court_view_sample.reason == "gated_non_court_view":
                     self._check_cancelled(cancellation_token)
                     frame_index += 1
                     continue
 
+                # 1) 检测本帧人体
                 raw_detections = self._detect_frame(frame, frame_index)
+                # 2) 把检测过滤到 ROI 内（并记录被过滤掉的数量）
                 detections, roi_filtered = filter_detections_to_roi(raw_detections, roi_artifact)
                 roi_filtered_detection_count += roi_filtered
                 if roi_artifact.status != "available":
                     full_frame_fallback_count += 1
+                # 3) 跟踪：把本帧检测关联到已有轨迹
                 tracks = tracker.update(detections)
+                # 4) 估算每个轨迹的脚点（画面坐标）
                 footpoints = {track.track_id: self.footpoint_estimator.estimate(track) for track in tracks}
+                # 5) 投影：脚点 + 单应矩阵 → 球场坐标
                 frame_positions = self.projector.project(
                     tracks=tracks,
                     homography=homography,
@@ -776,6 +1084,7 @@ class AnalysisPipeline:
                     timestamp=timestamp,
                     footpoints=footpoints,
                 )
+                # 6) 选主球员
                 primary_player_track_ids = {
                     selection.track_id
                     for selection in self.primary_player_selector.select(
@@ -787,6 +1096,7 @@ class AnalysisPipeline:
                 }
                 selection_diagnostics.extend(self.primary_player_selector.last_diagnostics)
                 selection_training_samples = self.primary_player_selector.last_training_samples
+                # 7) 把轨迹整理成"帧检测"格式（只保留主球员对应的轨迹）
                 frame_detections = self._tracks_to_frame_detections(
                     tracks=tracks,
                     frame_index=frame_index,
@@ -795,6 +1105,7 @@ class AnalysisPipeline:
                     frame_height=frame_height,
                     eligible_track_ids=primary_player_track_ids,
                 )
+                # 8) 身份管理：把本帧位置对应到稳定 player_id
                 player_samples = identity_manager.update(
                     frame_index=frame_index,
                     positions=frame_positions,
@@ -821,8 +1132,55 @@ class AnalysisPipeline:
                         detections=frame_detections,
                     )
                 )
+                # 把本帧"主球员"检测结果归一化为共享多目标检测记录（player 类别）
+                for detection in frame_detections:
+                    try:
+                        player_multitarget_detections.append(
+                            MultiTargetDetection(
+                                frame_index=frame_index,
+                                timestamp_seconds=timestamp,
+                                class_name="player",
+                                bbox=[float(value) for value in detection.bbox],
+                                confidence=float(detection.confidence),
+                                source_width=max(1, frame_width),
+                                source_height=max(1, frame_height),
+                                track_id=str(detection.track_id) if detection.track_id is not None else None,
+                            )
+                        )
+                    except ValueError as exc:
+                        logger.debug("Skipping player detection for shared detections artifact: %s", exc)
                 all_tracks.extend(tracks)
                 positions.extend(frame_positions)
+                # 球检测（可选）：逐帧运行球候选检测，累积样本与 ball 检测记录
+                if ball_tracker is not None:
+                    try:
+                        ball_sample = ball_tracker.update(
+                            frame=frame,
+                            frame_index=frame_index,
+                            timestamp_sec=timestamp,
+                            roi_corners=None,
+                            homography=homography,
+                        )
+                        ball_samples.append(ball_sample)
+                        if ball_sample.image_xy is not None and ball_sample.accepted:
+                            ball_detections.append(
+                                MultiTargetDetection(
+                                    frame_index=frame_index,
+                                    timestamp_seconds=timestamp,
+                                    class_name="ball",
+                                    point=[float(ball_sample.image_xy[0]), float(ball_sample.image_xy[1])],
+                                    confidence=float(ball_sample.confidence)
+                                    if ball_sample.confidence is not None
+                                    else 0.0,
+                                    source_width=max(1, frame_width),
+                                    source_height=max(1, frame_height),
+                                )
+                            )
+                    except Exception as exc:
+                        logger.warning("Ball detection failed on frame %s: %s", frame_index, exc)
+                        ball_tracker = None
+                        ball_run_error = f"球检测运行时失败：{exc}"
+                # 9) 姿态估计（可选）
                 if self.pose_estimator is not None and frame_detections and pose_error is None:
                     try:
                         pose_frame = self.pose_estimator.estimate_frame(
@@ -831,6 +1189,7 @@ class AnalysisPipeline:
                             frame_index=frame_index,
                             timestamp_seconds=timestamp,
                         )
+                        # 只保留有关键点的骨架
                         pose_frame.subjects = [subject for subject in pose_frame.subjects if subject.keypoints]
                         if pose_frame.subjects:
                             pose_frames.append(pose_frame)
@@ -839,6 +1198,7 @@ class AnalysisPipeline:
                         pose_frames = []
                 self._check_cancelled(cancellation_token)
 
+                # 每隔 30 帧打一条进度日志
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
                     logger.info(
                         "Player tracking progress: processed %s/%s frames",
@@ -857,6 +1217,7 @@ class AnalysisPipeline:
             len(positions),
         )
 
+        # 组装跟踪结果
         tracking_result = TrackingResult(
             video_id=video_id,
             calibration_id=calibration_id,
@@ -871,6 +1232,7 @@ class AnalysisPipeline:
             tracks=all_tracks,
             positions=positions,
         )
+        # 球员轨迹 + 投影轨迹点 + 主球员选择
         player_trajectories = identity_manager.to_artifact(
             job_id=job_id,
             video_id=video_id,
@@ -895,6 +1257,7 @@ class AnalysisPipeline:
             training_samples=selection_training_samples,
         )
         if self.pose_estimator is not None:
+            # 根据姿态估计结果决定姿态阶段状态
             if pose_error:
                 pose_stage = self._stage("pose", "人体姿态", "skipped", f"RTMPose 不可用：{pose_error}")
             elif pose_frames:
@@ -913,6 +1276,7 @@ class AnalysisPipeline:
                 skeleton_edges=default_skeleton_edges(),
                 frames=pose_frames,
             )
+        # 球场视角 ROI 产物
         court_view_roi_artifact = build_court_view_roi_artifact(
             job_id=job_id,
             video_id=video_id,
@@ -929,6 +1293,53 @@ class AnalysisPipeline:
             roi_filtered_detection_count=roi_filtered_detection_count,
             full_frame_fallback_count=full_frame_fallback_count,
         )
+        # 球分析后处理：把逐帧样本转成原始/清洗轨迹与弹跳候选（失败/缺依赖不阻断主流程）
+        ball_run_output: _BallRunOutput | None = None
+        if ball_tracker is not None and ball_samples:
+            try:
+                raw_points = [TrajectoryPoint.from_sample(sample) for sample in ball_samples]
+                cleaned_points = TrajectoryCleaner().clean(raw_points)
+                bounce_events: list[BounceEvent] = []
+                if self.settings.enable_bounce_detection and cleaned_points:
+                    bounce_detector = BounceDetector(
+                        config=BounceDetectorConfig(fps=fps if fps > 0 else 30.0)
+                    )
+                    bounce_events = bounce_detector.detect(cleaned_points)
+                accepted_count = sum(1 for sample in ball_samples if sample.accepted)
+                ball_run_output = _BallRunOutput(
+                    status="available",
+                    samples=ball_samples,
+                    ball_detections=ball_detections,
+                    raw_points=raw_points,
+                    cleaned_points=cleaned_points,
+                    bounce_events=bounce_events,
+                    accepted_count=accepted_count,
+                    error=None,
+                )
+            except Exception as exc:
+                logger.warning("Ball trajectory post-processing failed: %s", exc)
+                ball_run_output = _BallRunOutput(
+                    status="failed",
+                    samples=ball_samples,
+                    ball_detections=ball_detections,
+                    raw_points=None,
+                    cleaned_points=None,
+                    bounce_events=None,
+                    accepted_count=sum(1 for sample in ball_samples if sample.accepted),
+                    error=str(exc),
+                )
+        elif self.ball_detector is None and self.ball_detection_enabled:
+            # 启用但适配器不可用（缺模型路径/依赖）；记录原因供前端诊断
+            ball_run_output = _BallRunOutput(
+                status="unavailable",
+                samples=[],
+                ball_detections=[],
+                raw_points=None,
+                cleaned_points=None,
+                bounce_events=None,
+                accepted_count=0,
+                error=self.ball_detection_unavailable_reason,
+            )
         return _TrackingRunOutput(
             tracking=tracking_result,
             player_trajectories=player_trajectories,
@@ -938,10 +1349,14 @@ class AnalysisPipeline:
             pose_stage=pose_stage,
             pose_frames=pose_frames,
             court_view_roi=court_view_roi_artifact,
+            ball_run_output=ball_run_output,
+            player_multitarget_detections=player_multitarget_detections,
         )
 
     @staticmethod
     def _calibration_image_points(keypoints: list[CalibrationKeypoint] | None) -> list[tuple[float, float]] | None:
+        # 内部：从标定关键点里按固定顺序（左上、右上、右下、左下）取出图像坐标。
+        # 顺序对不上或不足 4 个时，退化为取前 4 个。
         if not keypoints:
             return None
         by_name = {keypoint.name: keypoint.image for keypoint in keypoints}
@@ -953,6 +1368,7 @@ class AnalysisPipeline:
         return [(float(keypoint.image.x), float(keypoint.image.y)) for keypoint in keypoints[:4]]
 
     def _detect_frame(self, frame: object, frame_index: int) -> list[Detection]:
+        # 内部：调用检测器的统一入口（兼容 detect_frame / detect 两种接口）。
         if hasattr(self.detector, "detect_frame"):
             return self.detector.detect_frame(frame, frame_index)
         return self.detector.detect(frame)
@@ -966,6 +1382,7 @@ class AnalysisPipeline:
         frame_height: int,
         eligible_track_ids: set[int] | None = None,
     ) -> list[FrameDetection]:
+        # 内部：把"跟踪轨迹"转成"帧检测"列表，过滤掉丢失的、以及不在主球员集合里的。
         source_width = max(1, int(frame_width))
         source_height = max(1, int(frame_height))
         return [
@@ -984,6 +1401,7 @@ class AnalysisPipeline:
 
     @staticmethod
     def _detection_stage_detail(tracking_result: TrackingResult, enabled: bool = True) -> str:
+        # 内部：根据真实检测结果，生成"人体检测"阶段的人类可读说明。
         if not enabled:
             return "模型推理未启用，未运行 YOLO 人体检测；可设置 PICKLEBALL_ENABLE_MODEL_INFERENCE=true"
         detection_count = len(tracking_result.detections)
@@ -1011,6 +1429,7 @@ class AnalysisPipeline:
         tracking_result: TrackingResult,
         enabled: bool = True,
     ) -> TrackingOverlayArtifact:
+        # 内部：根据检测情况，构造"检测叠加"产物（含状态与说明）。
         detection_count = sum(len(frame.detections) for frame in tracking_result.overlay_frames)
         if not enabled:
             status = "unavailable"
@@ -1046,6 +1465,8 @@ class AnalysisPipeline:
         )
 
     def _positions_to_projected_tracks(self, positions: list[PlayerFramePosition]) -> list[ProjectedTrackPoint]:
+        # 内部：把"逐帧球员位置"转成"投影轨迹点"列表。
+        # 只保留有效、且落在标准球场范围（20x44 英尺）内的点。
         projected: list[ProjectedTrackPoint] = []
         for position in positions:
             if not position.valid or position.court_position is None:
@@ -1069,6 +1490,7 @@ class AnalysisPipeline:
 
     @staticmethod
     def _projection_stage_detail(positions: list[PlayerFramePosition]) -> str:
+        # 内部：生成"脚点投影"阶段的说明（有效 / 越界样本数量）。
         valid_count = sum(1 for position in positions if position.valid and position.court_position is not None)
         invalid_count = len(positions) - valid_count
         if invalid_count:
@@ -1076,6 +1498,7 @@ class AnalysisPipeline:
         return f"已生成 {valid_count} 个有效场地坐标球员位置"
 
     def _compute_metrics(self, tracks: list[ProjectedTrackPoint]) -> PerformanceMetrics:
+        # 内部：根据投影轨迹点计算各项运动指标。
         metric_tracks = standard_court_metric_points(tracks)
         return PerformanceMetrics(
             distances=total_distances(metric_tracks),
@@ -1087,6 +1510,7 @@ class AnalysisPipeline:
 
     @staticmethod
     def _write_player_trajectory_csv(path: Path, artifact: PlayerTrajectoryArtifact) -> None:
+        # 内部：把球员轨迹写出成 CSV（方便 Excel 查看）。
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
@@ -1131,6 +1555,7 @@ class AnalysisPipeline:
                     )
 
     def _serve_debug_refs(self, job_id: str) -> ServeDebugArtifactRefs:
+        # 内部：构造发球调试产物的引用 URL（先占位，检测后写入）。
         return ServeDebugArtifactRefs(
             candidates_url=f"/api/analysis/jobs/{job_id}/artifacts/serve-debug-candidates",
             score_series_url=f"/api/analysis/jobs/{job_id}/artifacts/serve-score-series",
@@ -1151,6 +1576,8 @@ class AnalysisPipeline:
         serve_events: ServeEventsArtifact,
         source_video_path: Path,
     ) -> tuple[str, str]:
+        # 内部：把发球调试产物（候选 JSON、评分序列、片段、叠加视频）写盘。
+        # 即使这里出错也绝不阻断主结果（所以 except 后只返回 failed 状态）。
         try:
             debug = getattr(self.serve_start_detector, "last_debug", None)
             candidates_payload = {
@@ -1189,6 +1616,7 @@ class AnalysisPipeline:
         serve_events: ServeEventsArtifact,
         source_video_path: Path,
     ) -> dict[str, object]:
+        # 内部：为每个发球候选生成一段短视频片段（clip），返回 manifest。
         limit = self.settings.serve_debug_clip_limit
         clips = []
         for event in serve_events.events[:limit]:
@@ -1233,6 +1661,7 @@ class AnalysisPipeline:
         start_seconds: float,
         end_seconds: float,
     ) -> str:
+        # 内部：从源视频里截取 [start, end] 一段，写成新 mp4。返回状态字符串。
         try:
             import cv2  # type: ignore
         except ImportError:
@@ -1270,6 +1699,7 @@ class AnalysisPipeline:
             capture.release()
 
     def _write_serve_debug_overlay(self, *, job_id: str, source_video_path: Path) -> str:
+        # 内部：把发球候选在源视频上画框 + 文字，生成一段调试叠加视频。
         try:
             import cv2  # type: ignore
         except ImportError:
@@ -1321,6 +1751,7 @@ class AnalysisPipeline:
             capture.release()
 
     def _write_result(self, result: AnalysisPipelineResult) -> None:
+        # 内部：把最终结果 JSON 落盘。
         self.storage.write_json(self.storage.output_json_path(result.job_id), result.model_dump(mode="json"))
 
     def _failed(
@@ -1331,6 +1762,7 @@ class AnalysisPipeline:
         message: str,
         stages: list[PipelineStageResult] | None = None,
     ) -> AnalysisPipelineResult:
+        # 内部：构造一个"失败"的最终结果。
         return AnalysisPipelineResult(
             job_id=job_id,
             video_id=video_id,
@@ -1346,20 +1778,24 @@ class AnalysisPipeline:
 
     @staticmethod
     def _stage(stage_id: str, label: str, status: str, detail: str) -> PipelineStageResult:
+        # 内部：构造一个阶段结果（统一封装）。
         return PipelineStageResult(id=stage_id, label=label, status=status, detail=detail)
 
     @staticmethod
     def _notify_progress(progress_callback: ProgressCallback | None, stage: PipelineStageResult) -> None:
+        # 内部：如果上层传了进度回调，就通知它。
         if progress_callback is not None:
             progress_callback(stage)
 
     @staticmethod
     def _check_cancelled(cancellation_token: CancellationToken | None) -> None:
+        # 内部：如果任务被取消了，立即抛异常中断。
         if cancellation_token is not None:
             cancellation_token.raise_if_cancelled()
 
     @staticmethod
     def _mock_projected_tracks() -> list[ProjectedTrackPoint]:
+        # 内部：演示模式用的确定性 mock 轨迹（不依赖任何模型）。
         court = standard_court()
         raw_points = [
             ("near-a", "near", 0, 0.0, 5.0, 12.0),

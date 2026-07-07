@@ -1,32 +1,65 @@
-"""摄像头管理 API 路由。"""
+"""
+摄像头管理接口路由（/api/cameras）
+
+本文件负责"摄像头设备"的登记、查询、删除和连接探测。
+摄像头登记之后，才能用录制接口（见 routes_recording.py）对它进行录制。
+
+安全提示：摄像头密码属于敏感信息，所以返回给前端之前会做"脱敏"处理，
+也就是把真实密码替换成 ***，避免明文密码泄露到浏览器里。
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+# 摄像头登记中心：负责在内存/文件里维护一份"已登记摄像头"的清单
 from app.camera.camera_registry import camera_registry
+# 摄像头相关的数据模型（请求/响应格式）
 from app.camera.models import CameraCreateRequest, CameraDeleteResponse, CameraInfo, ProbeResult
+# 连接探测工具：尝试连上摄像头，返回能否播放、分辨率、帧率等信息
 from app.camera.stream_probe import probe_camera
 
+# 创建路由表，前缀 /api/cameras 表示本文件所有接口都以它开头
 router = APIRouter(prefix="/api/cameras", tags=["cameras"])
 
 
 def _sanitize(camera: CameraInfo) -> CameraInfo:
+    """
+    脱敏处理：把摄像头密码替换成 *** 再返回给前端。
+
+    原因：密码是敏感信息，列表/详情接口不应把明文密码透传给浏览器。
+    """
+    # 先把模型对象转成普通字典
     data = camera.model_dump()
+    # 如果存在 password 字段，就把它替换成星号
     if data.get("password"):
         data["password"] = "***"
+    # 用脱敏后的数据重新构建 CameraInfo 对象并返回
     return CameraInfo.model_validate(data)
 
 
 @router.get("", response_model=list[CameraInfo])
 def list_cameras() -> list[CameraInfo]:
+    """
+    列出所有已登记的摄像头
+
+    每个摄像头都会先经过 _sanitize 脱敏，避免泄露密码。
+    """
+    # 用列表推导式：对登记中心里的每一个摄像头都做脱敏，再组成列表返回
     return [_sanitize(c) for c in camera_registry.list_all()]
 
 
 @router.post("", response_model=CameraInfo, status_code=201)
 def create_camera(payload: CameraCreateRequest) -> CameraInfo:
+    """
+    登记一个新摄像头
+
+    如果同名（同 camera_id）的摄像头已经存在，返回 409（冲突），
+    要求用户先删除旧的再重新注册。
+    """
     if camera_registry.exists(payload.camera_id):
         raise HTTPException(status_code=409, detail=f"摄像头 {payload.camera_id} 已存在，请先删除再重新注册")
+    # 把摄像头信息写入登记中心
     camera = camera_registry.create(
         camera_id=payload.camera_id,
         name=payload.name,
@@ -35,16 +68,27 @@ def create_camera(payload: CameraCreateRequest) -> CameraInfo:
         username=payload.username,
         password=payload.password,
     )
+    # 返回时同样脱敏
     return _sanitize(camera)
 
 
 @router.delete("/{camera_id}", response_model=CameraDeleteResponse)
 def delete_camera(camera_id: str) -> CameraDeleteResponse:
+    """
+    删除一个摄像头
+
+    如果该摄像头正在录制（有进行中的录制会话），则不允许删除，返回 409，
+    避免打断正在进行的录制。
+    """
+    # 延迟导入：只在真正需要时才加载会话服务。
+    # 这样写可以避开"模块 A 导入 B、B 又导入 A"造成的循环导入问题。
     from app.camera.session_service import session_service
 
+    # 检查是否有正在进行的录制会话
     active = session_service.find_active_session(camera_id)
     if active is not None:
         raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 正在录制中，无法删除")
+    # 执行删除；登记中心返回 True 表示删除成功
     if not camera_registry.delete(camera_id):
         raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
     return CameraDeleteResponse(deleted=True)
@@ -52,9 +96,16 @@ def delete_camera(camera_id: str) -> CameraDeleteResponse:
 
 @router.post("/{camera_id}/probe", response_model=ProbeResult)
 async def probe_camera_endpoint(camera_id: str) -> ProbeResult:
+    """
+    探测摄像头连接
+
+    尝试连接该摄像头的视频流，返回是否可用、分辨率、帧率等信息，
+    帮助用户确认登记的地址/账号是否正确（相当于"测试连接"按钮）。
+    """
     camera = camera_registry.get(camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
+    # 调用探测工具，把连接所需参数传给它
     return await probe_camera(
         camera_id=camera_id,
         stream_url=camera.stream_url,

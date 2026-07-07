@@ -48,6 +48,8 @@ import type {
   AnalysisUploadMetadata,
   AppPath,
   AutomaticCalibrationResponse,
+  BallTrajectoryArtifact,
+  BounceEventsArtifact,
   CameraInfo,
   CameraCreateRequest,
   DrillRecommendation,
@@ -67,6 +69,8 @@ import {
   createAnalysisJob,
   createManualCalibration,
   demoAnalysisReport as demoReport,
+  getBallTrajectory,
+  getBounceEvents,
   getAnalysisJob,
   getPoseOverlay,
   getServeEvents,
@@ -2507,6 +2511,10 @@ function useAnalysisResultReport(jobId?: string) {
 function useVisualAnalysisReport(jobId?: string) {
   const [loadedResult, setLoadedResult] = useState<{
     error: DiagnosticNotice | null;
+    ballTrajectory: BallTrajectoryArtifact | null;
+    ballTrajectoryLoadState: OverlayLoadState;
+    bounceEvents: BounceEventsArtifact | null;
+    bounceEventsLoadState: OverlayLoadState;
     job: AnalysisJobSummary | null;
     jobId: string;
     poseOverlay: PoseOverlayArtifact | null;
@@ -2531,6 +2539,10 @@ function useVisualAnalysisReport(jobId?: string) {
       updates: Partial<{
         poseOverlay: PoseOverlayArtifact | null;
         poseOverlayLoadState: OverlayLoadState;
+        ballTrajectory: BallTrajectoryArtifact | null;
+        ballTrajectoryLoadState: OverlayLoadState;
+        bounceEvents: BounceEventsArtifact | null;
+        bounceEventsLoadState: OverlayLoadState;
         serveEvents: ServeEventsArtifact | null;
         serveEventsLoadState: OverlayLoadState;
         trackingOverlay: TrackingOverlayArtifact | null;
@@ -2551,6 +2563,8 @@ function useVisualAnalysisReport(jobId?: string) {
         const shouldLoadTracking = Boolean(pipelineResult?.artifacts.tracking_overlay_url);
         const shouldLoadPose = Boolean(pipelineResult?.artifacts.pose_overlay_url);
         const shouldLoadServeEvents = Boolean(pipelineResult?.artifacts.serve_events_url);
+        const shouldLoadBallTrajectory = Boolean(pipelineResult?.artifacts.cleaned_ball_trajectory_url ?? pipelineResult?.artifacts.ball_trajectory_url);
+        const shouldLoadBounceEvents = Boolean(pipelineResult?.artifacts.bounce_events_url);
 
         if (!alive) {
           return;
@@ -2558,6 +2572,10 @@ function useVisualAnalysisReport(jobId?: string) {
 
         setLoadedResult({
           error: null,
+          ballTrajectory: null,
+          ballTrajectoryLoadState: shouldLoadBallTrajectory ? "loading" : "unavailable",
+          bounceEvents: null,
+          bounceEventsLoadState: shouldLoadBounceEvents ? "loading" : "unavailable",
           job: nextJob,
           jobId,
           poseOverlay: null,
@@ -2583,6 +2601,38 @@ function useVisualAnalysisReport(jobId?: string) {
               setOverlayState({
                 trackingOverlay: null,
                 trackingOverlayLoadState: "failed",
+              });
+            });
+        }
+
+        if (pipelineResult && shouldLoadBallTrajectory) {
+          getBallTrajectory(pipelineResult)
+            .then((artifact) => {
+              setOverlayState({
+                ballTrajectory: artifact,
+                ballTrajectoryLoadState: artifact ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                ballTrajectory: null,
+                ballTrajectoryLoadState: "failed",
+              });
+            });
+        }
+
+        if (pipelineResult && shouldLoadBounceEvents) {
+          getBounceEvents(pipelineResult)
+            .then((artifact) => {
+              setOverlayState({
+                bounceEvents: artifact,
+                bounceEventsLoadState: artifact ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                bounceEvents: null,
+                bounceEventsLoadState: "failed",
               });
             });
         }
@@ -2622,6 +2672,10 @@ function useVisualAnalysisReport(jobId?: string) {
         if (alive) {
           setLoadedResult({
             error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
+            ballTrajectory: null,
+            ballTrajectoryLoadState: "unavailable",
+            bounceEvents: null,
+            bounceEventsLoadState: "unavailable",
             job: null,
             jobId,
             poseOverlay: null,
@@ -2647,6 +2701,10 @@ function useVisualAnalysisReport(jobId?: string) {
   if (!jobId) {
     return {
       error: null,
+      ballTrajectory: null,
+      ballTrajectoryLoadState: "idle" as OverlayLoadState,
+      bounceEvents: null,
+      bounceEventsLoadState: "idle" as OverlayLoadState,
       job: null,
       poseOverlay: null,
       poseOverlayLoadState: "idle" as OverlayLoadState,
@@ -2663,6 +2721,10 @@ function useVisualAnalysisReport(jobId?: string) {
   if (loadedResult?.jobId !== jobId) {
     return {
       error: null,
+      ballTrajectory: undefined,
+      ballTrajectoryLoadState: "idle" as OverlayLoadState,
+      bounceEvents: undefined,
+      bounceEventsLoadState: "idle" as OverlayLoadState,
       job: undefined,
       poseOverlay: undefined,
       poseOverlayLoadState: "idle" as OverlayLoadState,
@@ -2678,6 +2740,10 @@ function useVisualAnalysisReport(jobId?: string) {
 
   return {
     error: loadedResult.error,
+    ballTrajectory: loadedResult.ballTrajectory,
+    ballTrajectoryLoadState: loadedResult.ballTrajectoryLoadState,
+    bounceEvents: loadedResult.bounceEvents,
+    bounceEventsLoadState: loadedResult.bounceEventsLoadState,
     job: loadedResult.job,
     poseOverlay: loadedResult.poseOverlay,
     poseOverlayLoadState: loadedResult.poseOverlayLoadState,
@@ -2697,6 +2763,10 @@ function useVisualAnalysisReport(jobId?: string) {
 function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
   const {
     error,
+    ballTrajectory,
+    ballTrajectoryLoadState,
+    bounceEvents,
+    bounceEventsLoadState,
     job,
     poseOverlay,
     poseOverlayLoadState,
@@ -2805,6 +2875,14 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
           <VideoAnalysisCard
             labels={analysis.videoOverlayLabels}
+            ballTrajectory={ballTrajectory ?? null}
+            ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
+            ballTrajectoryLoadState={ballTrajectoryLoadState}
+            ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
+            bounceEvents={bounceEvents ?? null}
+            bounceEventsDetail={result?.artifacts.bounce_events_detail}
+            bounceEventsLoadState={bounceEventsLoadState}
+            bounceEventsStatus={result?.artifacts.bounce_events_status}
             match={analysis.match}
             players={analysis.playerMarkers}
             poseOverlayDetail={result?.artifacts.pose_overlay_detail}
@@ -2824,6 +2902,10 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
           />
           <AnalysisStatusRail
             analysis={analysis}
+            ballTrajectory={ballTrajectory ?? null}
+            ballTrajectoryLoadState={ballTrajectoryLoadState}
+            bounceEvents={bounceEvents ?? null}
+            bounceEventsLoadState={bounceEventsLoadState}
             job={job}
             onNavigate={onNavigate}
             poseOverlay={poseOverlay ?? null}
@@ -2884,6 +2966,14 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
       <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
         <VideoAnalysisCard
           labels={analysis.videoOverlayLabels}
+          ballTrajectory={ballTrajectory ?? null}
+          ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
+          ballTrajectoryLoadState={ballTrajectoryLoadState}
+          ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
+          bounceEvents={bounceEvents ?? null}
+          bounceEventsDetail={result?.artifacts.bounce_events_detail}
+          bounceEventsLoadState={bounceEventsLoadState}
+          bounceEventsStatus={result?.artifacts.bounce_events_status}
           match={analysis.match}
           players={analysis.playerMarkers}
           poseOverlayDetail={result?.artifacts.pose_overlay_detail}
@@ -2945,6 +3035,10 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
 
 function AnalysisStatusRail({
   analysis,
+  ballTrajectory,
+  ballTrajectoryLoadState,
+  bounceEvents,
+  bounceEventsLoadState,
   job,
   onNavigate,
   poseOverlay,
@@ -2957,6 +3051,10 @@ function AnalysisStatusRail({
   trackingOverlayLoadState,
 }: {
   analysis: AnalysisReport;
+  ballTrajectory: BallTrajectoryArtifact | null;
+  ballTrajectoryLoadState: OverlayLoadState;
+  bounceEvents: BounceEventsArtifact | null;
+  bounceEventsLoadState: OverlayLoadState;
   job?: AnalysisJobSummary | null;
   onNavigate: NavigateFn;
   poseOverlay: PoseOverlayArtifact | null;
@@ -2983,6 +3081,19 @@ function AnalysisStatusRail({
       label: "发球候选",
       status: overlayLayerStatus(serveEventsLoadState, serveEvents?.status ?? result?.artifacts.serve_events_status),
       detail: result?.artifacts.serve_events_detail ?? serveEvents?.detail,
+    },
+    {
+      label: "球轨迹",
+      status: overlayLayerStatus(
+        ballTrajectoryLoadState,
+        ballTrajectory?.status ?? result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status
+      ),
+      detail: result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail ?? ballTrajectory?.detail,
+    },
+    {
+      label: "弹跳候选",
+      status: overlayLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? result?.artifacts.bounce_events_status),
+      detail: result?.artifacts.bounce_events_detail ?? bounceEvents?.detail,
     },
   ];
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
@@ -3104,6 +3215,9 @@ function overlayStatusMeta(status?: string) {
   }
   if (status === "skipped") {
     return { label: "已跳过", className: "bg-slate-100 text-slate-600", detail: "该视觉层在本次分析中未启用。" };
+  }
+  if (status === "unavailable") {
+    return { label: "不可用", className: "bg-slate-100 text-slate-600", detail: "该视觉层缺少模型、配置或输入。" };
   }
   if (status === "no_detections" || status === "no_poses" || status === "no_candidates") {
     return { label: "无结果", className: "bg-[#FF9500]/14 text-[#A45A00]", detail: "模型已运行，但没有产生可用目标。" };

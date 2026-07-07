@@ -4,7 +4,7 @@ from app.core.config import Settings
 from app.main import app
 from app.schemas.analysis import AnalysisJobCreate
 from app.schemas.analysis import AnalysisJobSummary as AnalysisJobSummarySchema
-from app.schemas.pipeline import AnalysisArtifacts
+from app.schemas.pipeline import AnalysisArtifacts, PipelineStageResult
 from app.schemas.pose import PoseKeypoint, PoseOverlayFrame, PoseSubject
 from app.schemas.tracking import Detection
 from app.services.analysis_pipeline import AnalysisPipeline
@@ -312,6 +312,12 @@ def test_analysis_artifacts_extended_fields_are_optional_and_serializable():
     assert dumped["detections_url"].endswith("/detections")
     assert dumped["ball_overlay_status"] == "available"
     assert dumped["position_visualizations_detail"] == "generated"
+
+
+def test_pipeline_stage_result_accepts_unavailable_status():
+    stage = PipelineStageResult(id="ball-detection", label="球检测", status="unavailable", detail="缺少球模型")
+
+    assert stage.status == "unavailable"
 
 
 def test_extended_json_artifact_routes_return_json(monkeypatch, tmp_path):
@@ -1048,6 +1054,9 @@ def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
     assert storage.tracking_overlay_json_path("job-player-only-overlay").exists()
     assert storage.player_trajectory_json_path("job-player-only-overlay").exists()
     assert not storage.ball_overlay_json_path("job-player-only-overlay").exists()
+    assert not storage.ball_trajectory_json_path("job-player-only-overlay").exists()
+    assert not storage.cleaned_ball_trajectory_json_path("job-player-only-overlay").exists()
+    assert not storage.bounce_events_json_path("job-player-only-overlay").exists()
 
 
 def test_pipeline_filters_low_confidence_people_from_overlay_and_pose_inputs(tmp_path):

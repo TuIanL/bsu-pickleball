@@ -1,4 +1,14 @@
-"""录制会话生命周期管理 —— 开始/停止/取消录制，持久化 session metadata。"""
+"""
+录制会话生命周期管理 —— 开始 / 停止 / 取消录制，并持久化会话元数据。
+
+"录制会话"代表一次完整的录制过程。本模块负责：
+- 开始：校验摄像头、生成会话、启动 FFmpeg 录制
+- 停止：优雅结束、登记视频、可选自动创建分析任务
+- 取消：直接终止并删除半成品文件
+- 查询：列出 / 读取会话
+
+会话信息持久化到 data/recordings/sessions/{session_id}.json，内存也有缓存。
+"""
 
 from __future__ import annotations
 
@@ -13,8 +23,11 @@ from app.services.storage_service import StorageService
 
 logger = logging.getLogger(__name__)
 
+# 内存缓存：session_id -> RecordingSession
 SESSIONS: dict[str, RecordingSession] = {}
+# 全局唯一的录制器对象（同一时刻只录一路）
 _RECORDER = Recorder()
+# 当前正在录制的摄像头 id 与会话 id（全局变量，保证"一个摄像头同时只录一路"）
 _ACTIVE_CAMERA: str | None = None
 _ACTIVE_SESSION_ID: str | None = None
 
@@ -25,24 +38,30 @@ class SessionService:
 
     @property
     def sessions_dir(self) -> Path:
+        # 会话元数据存放目录
         return Path("data/recordings/sessions")
 
     @property
     def recordings_dir(self) -> Path:
+        # 录制视频文件存放目录
         return Path("data/recordings")
 
     def _session_path(self, session_id: str) -> Path:
+        # 拼出某个会话的 JSON 路径
         return self.sessions_dir / f"{session_id}.json"
 
     def _generate_session_id(self) -> str:
+        # 用当前时间生成形如 rec_20260706_210000 的会话 id
         now = datetime.now(timezone.utc)
         return f"rec_{now.strftime('%Y%m%d_%H%M%S')}"
 
     def _output_path(self, session_id: str, camera_id: str) -> Path:
+        # 输出路径：data/recordings/{日期}/{摄像头id}/{会话id}.mp4
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self.recordings_dir / date_str / camera_id / f"{session_id}.mp4"
 
     def find_active_session(self, camera_id: str) -> RecordingSession | None:
+        # 查找该摄像头是否有正在进行的录制会话
         global _ACTIVE_CAMERA, _ACTIVE_SESSION_ID
         if _ACTIVE_CAMERA == camera_id and _ACTIVE_SESSION_ID:
             return SESSIONS.get(_ACTIVE_SESSION_ID)
@@ -51,19 +70,24 @@ class SessionService:
     def start_session(self, request: RecordingStartRequest) -> RecordingSession:
         global _ACTIVE_CAMERA, _ACTIVE_SESSION_ID
 
+        # 前置检查：FFmpeg 是否可用
         if not check_ffmpeg_available():
             raise RuntimeError("FFmpeg 不可用，无法开始录制")
 
+        # 摄像头必须存在
         camera = camera_registry.get(request.camera_id)
         if camera is None:
             raise ValueError(f"摄像头 {request.camera_id} 不存在")
 
+        # 同一摄像头不能同时录两路
         if self.find_active_session(request.camera_id) is not None:
             raise RuntimeError(f"摄像头 {request.camera_id} 正在录制中")
 
+        # 生成会话 id 与输出路径
         session_id = self._generate_session_id()
         output_path = self._output_path(session_id, request.camera_id)
 
+        # 构造会话对象（初始状态 recording）
         session = RecordingSession(
             session_id=session_id,
             camera_id=request.camera_id,
@@ -77,6 +101,7 @@ class SessionService:
             started_at=datetime.now(timezone.utc),
         )
 
+        # 启动 FFmpeg 录制；on_exit 回调在进程退出时触发（用于标记失败）
         _RECORDER.start(
             stream_url=camera.stream_url,
             output_path=output_path,
@@ -87,6 +112,7 @@ class SessionService:
             on_exit=lambda code: self._on_recorder_exit(session_id, code),
         )
 
+        # 记录当前活跃会话，并写入缓存与磁盘
         _ACTIVE_CAMERA = request.camera_id
         _ACTIVE_SESSION_ID = session_id
         SESSIONS[session_id] = session
@@ -96,21 +122,25 @@ class SessionService:
         return session
 
     def stop_session(self, session_id: str) -> RecordingSession:
+        # 先从缓存取，缓存没有再从磁盘加载
         session = SESSIONS.get(session_id)
         if session is None:
             session = self._load(session_id)
             if session is None:
                 raise ValueError(f"录制会话 {session_id} 不存在")
 
+        # 只有 recording 状态才能停止
         if session.status != "recording":
             raise RuntimeError(f"录制会话 {session_id} 状态为 {session.status}，无法停止")
 
+        # 优雅停止 FFmpeg
         _RECORDER.stop()
         stopped_at = datetime.now(timezone.utc)
         duration = (stopped_at - session.started_at).total_seconds()
 
         output_path = self._output_path(session_id, session.camera_id)
 
+        # 尝试把生成的视频注册进视频系统（拿到 video_id，方便后续分析 / 播放）
         video_id = None
         if output_path.exists():
             try:
@@ -132,6 +162,7 @@ class SessionService:
             except Exception as exc:
                 logger.error("注册录制视频到 VideoService 失败: %s", exc)
 
+        # 如果开启了"停止后自动分析"且视频注册成功，则创建分析任务
         job_id = None
         if session.auto_analyze_after_stop and video_id:
             try:
@@ -139,6 +170,7 @@ class SessionService:
             except Exception as exc:
                 logger.error("自动创建分析任务失败: %s", exc)
 
+        # 更新会话为 completed，并保存
         session = session.model_copy(update={
             "status": "completed",
             "stopped_at": stopped_at,
@@ -156,20 +188,24 @@ class SessionService:
         return session
 
     def cancel_session(self, session_id: str) -> RecordingSession:
+        # 先从缓存取，缓存没有再从磁盘加载
         session = SESSIONS.get(session_id)
         if session is None:
             session = self._load(session_id)
             if session is None:
                 raise ValueError(f"录制会话 {session_id} 不存在")
 
+        # 只有 recording 状态才能取消
         if session.status != "recording":
             raise RuntimeError(f"录制会话 {session_id} 状态为 {session.status}，无法取消")
 
+        # 直接杀掉 FFmpeg（取消 = 放弃本次录制）
         _RECORDER.cancel()
         stopped_at = datetime.now(timezone.utc)
         duration = (stopped_at - session.started_at).total_seconds()
 
         output_path = self._output_path(session_id, session.camera_id)
+        # 删除半成品视频文件
         if output_path.exists():
             try:
                 output_path.unlink()
@@ -190,6 +226,7 @@ class SessionService:
         return session
 
     def get_session(self, session_id: str) -> RecordingSession | None:
+        # 先缓存后磁盘
         cached = SESSIONS.get(session_id)
         if cached is not None:
             return cached
@@ -198,11 +235,13 @@ class SessionService:
     def list_sessions(self, camera_id: str | None = None, status: str | None = None) -> list[RecordingSession]:
         result: list[RecordingSession] = []
 
+        # 遍历所有会话 JSON（按文件名倒序，新的在前）
         if self.sessions_dir.exists():
             for path in sorted(self.sessions_dir.glob("*.json"), reverse=True):
                 try:
                     session = RecordingSession.model_validate(self._storage.read_json(path))
                     SESSIONS[session.session_id] = session
+                    # 按过滤条件跳过不匹配的
                     if camera_id and session.camera_id != camera_id:
                         continue
                     if status and session.status != status:
@@ -214,6 +253,7 @@ class SessionService:
         return result
 
     def _on_recorder_exit(self, session_id: str, returncode: int) -> None:
+        # FFmpeg 进程退出回调：只有仍在 recording 且异常退出（非 0）才标记为 failed
         session = SESSIONS.get(session_id)
         if session is None or session.status != "recording":
             return
@@ -231,15 +271,18 @@ class SessionService:
             self._clear_active(session.camera_id)
 
     def _clear_active(self, camera_id: str) -> None:
+        # 清空该摄像头的"活跃会话"记录（允许它再次开始录制）
         global _ACTIVE_CAMERA, _ACTIVE_SESSION_ID
         if _ACTIVE_CAMERA == camera_id:
             _ACTIVE_CAMERA = None
             _ACTIVE_SESSION_ID = None
 
     def _persist(self, session: RecordingSession) -> None:
+        # 把会话写入磁盘 JSON
         self._storage.write_json(self._session_path(session.session_id), session.model_dump(mode="json"))
 
     def _load(self, session_id: str) -> RecordingSession | None:
+        # 从磁盘读取会话
         path = self._session_path(session_id)
         if not path.exists():
             return None
@@ -249,9 +292,11 @@ class SessionService:
             return None
 
     def _trigger_analysis(self, session: RecordingSession, video_id: str) -> str | None:
+        # 停止录制后，自动创建一个分析任务（复用分析模块的逻辑）
         from app.schemas.analysis import AnalysisJobCreate, AnalysisUploadMetadata
         from app.services.mock_analysis import create_analysis_job
 
+        # 组装分析任务需要的元数据
         metadata = AnalysisUploadMetadata(
             fileName=session.session_id + ".mp4",
             matchTitle=f"{session.court_name} {session.started_at.strftime('%Y-%m-%d %H:%M')}",
@@ -263,6 +308,7 @@ class SessionService:
             level="",
         )
 
+        # 调用分析模块创建任务
         job = create_analysis_job(AnalysisJobCreate(
             metadata=metadata,
             videoId=video_id,
@@ -272,6 +318,7 @@ class SessionService:
         return job.id
 
 
+# 把系统内部的机位角度标识映射成分析模块认识的枚举值
 def _map_camera_angle(angle: str) -> str:
     mapping = {
         "baseline_high": "elevated",
@@ -284,4 +331,5 @@ def _map_camera_angle(angle: str) -> str:
     return mapping.get(angle, "unknown")
 
 
+# 全局单例：整个程序共用一个会话服务
 session_service = SessionService()
