@@ -26,6 +26,7 @@ from app.services.field_session_service import (
     delete_field_session,
 )
 from app.camera.session_service import session_service
+from app.services.timeline_event_service import count_events_for_field_session
 
 router = APIRouter(prefix="/api/field-sessions", tags=["field-sessions"])
 
@@ -106,11 +107,21 @@ def archive(field_session_id: str, db: Session = Depends(get_db)) -> FieldSessio
 
 @router.delete("/{field_session_id}", response_model=FieldSessionDeleteResult)
 def delete(field_session_id: str, db: Session = Depends(get_db)) -> FieldSessionDeleteResult:
-    """删除空的 Field Session。已有录制或进行中的任务会被保护。"""
+    """删除空的 Field Session。已有录制、时间线事件或进行中的任务会被保护。"""
     recording_count = len(session_service.list_sessions(field_session_id=field_session_id))
+    timeline_event_count = count_events_for_field_session(db, field_session_id)
+
+    # 先检查时间线事件保护（在任何 db commit 之前）
+    if timeline_event_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"采集任务下已有 {timeline_event_count} 条时间线事件，无法删除",
+        )
+
     result = delete_field_session(db, field_session_id, recording_count=recording_count)
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail=result["detail"])
     if result["status"] == "blocked":
         raise HTTPException(status_code=409, detail=result["detail"])
+
     return FieldSessionDeleteResult(**result)

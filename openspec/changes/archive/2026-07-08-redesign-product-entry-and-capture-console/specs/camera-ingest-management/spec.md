@@ -1,9 +1,5 @@
-# camera-ingest-management Specification
+## MODIFIED Requirements
 
-## Purpose
-Define the camera ingest management capability — registering, listing, deleting network cameras and probing their online status for the recording pipeline.
-
-## Requirements
 ### Requirement: 摄像头注册与管理
 
 系统 MUST 支持注册网络摄像头，存储其连接信息用于后续探头检测和录制。后端 API 不变，前端展示从主页面平铺改为设备抽屉面板。
@@ -28,41 +24,7 @@ Define the camera ingest management capability — registering, listing, deletin
 - **WHEN** 用户尝试注册已存在的 `camera_id`
 - **THEN** 返回 409 错误，提示摄像头已存在，可先删除再重新注册
 
-### Requirement: 摄像头在线探测
-
-系统 MUST 支持探测指定摄像头是否在线可访问。
-
-#### Scenario: 探测在线摄像头
-- **WHEN** 用户请求 `POST /api/cameras/{camera_id}/probe`
-- **THEN** 系统使用 OpenCV `VideoCapture` 尝试打开摄像头流地址
-- **AND** 如果在超时时间内（默认 10 秒）成功读取到一帧，返回 `online: true`
-- **AND** 附带探测到的分辨率信息和延迟毫秒数
-- **AND** 记录探测时间戳 `detected_at`
-
-#### Scenario: 探测离线摄像头
-- **WHEN** 摄像头流地址不可达或认证失败
-- **THEN** 返回 `online: false`
-- **AND** 附带错误原因描述 `error_message`
-- **AND** `resolution` 和 `latency_ms` 字段为 `null`
-
-#### Scenario: 探测超时
-- **WHEN** 摄像头流地址响应过慢，超过 10 秒未返回帧
-- **THEN** 返回 `online: false`
-- **AND** `error_message` 提示超时
-
-### Requirement: 摄像头模型定义
-
-`CameraInfo` MUST 只存储连接信息，不包含球场语义。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| camera_id | string | 用户自定义唯一标识，如 `"baseline-cam"` |
-| name | string | 摄像头展示名称 |
-| stream_url | string | RTSP/RTMP/HTTP 流地址 |
-| protocol | string | 协议类型：`rtsp` / `rtmp` / `http` |
-| username | string | 认证用户名（可选） |
-| password | string | 认证密码（可选，API 响应中脱敏为 `"***"`） |
-| created_at | datetime | 注册时间 |
+## ADDED Requirements
 
 ### Requirement: 摄像头前端展示改为设备抽屉
 

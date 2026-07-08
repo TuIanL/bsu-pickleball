@@ -49,13 +49,17 @@ The system SHALL show how repeated reports can track improvement over time on th
 - **THEN** the system displays at least one previous-current-next comparison, trend chart, or goal indicator that explains how the platform supports continuous improvement
 
 ### Requirement: Dedicated training recommendations page
-The system SHALL provide a dedicated training page for recommended drills and progress-oriented practice guidance.
 
-#### Scenario: User opens training page
-- **WHEN** the user navigates to `/training`
-- **THEN** the system displays recommended drills, training goals, difficulty or duration context, evidence from analysis data, and actions to add or follow a training plan
+系统 SHALL 保留 `/training` 路由和训练页代码，但从所有一级导航和首页入口中隐藏训练入口。
+
+#### Scenario: 训练页从导航中隐藏
+- **WHEN** 用户在任意页面查看主导航或首页
+- **THEN** 主导航和首页卡片中不包含训练入口
+
+#### Scenario: 训练页保留直接路由访问
+- **WHEN** 用户直接访问 `/training` 路由
+- **THEN** 系统正常渲染训练页面，包含推荐训练项目、训练目标、难度/时长上下文和分析数据证据
 
 #### Scenario: User follows training link from report
-- **WHEN** the user selects a training recommendation from a report detail page or coach note
-- **THEN** the system opens or highlights the related training recommendation in the training experience
-
+- **WHEN** 用户在报告详情页选择训练建议
+- **THEN** 系统可导航到 `/training` 页面展示对应训练内容

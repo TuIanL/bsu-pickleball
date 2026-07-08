@@ -6,11 +6,14 @@ import {
   Camera,
   CheckCircle2,
   ChevronRight,
+  Clock,
   Cpu,
   Dumbbell,
+  Edit3,
   Gauge,
   LineChart,
   Play,
+  PlusCircle,
   Radar,
   RefreshCw,
   ShieldCheck,
@@ -23,6 +26,12 @@ import {
 } from "lucide-react";
 // 导入 React 核心钩子和类型
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { LandingPage } from "./pages/LandingPage";
+import { UploadModePage } from "./pages/UploadModePage";
+import { CaptureHomePage } from "./pages/CaptureHomePage";
+import { CaptureWizardPage } from "./pages/CaptureWizardPage";
+import { CaptureConsolePage } from "./pages/CaptureConsolePage";
+import { TasksPage } from "./pages/TasksPage";
 import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
 import { Modal } from "./components/platform/Modal";
@@ -64,6 +73,9 @@ import type {
   RecordingStartRequest,
   ReportType,
   ServeEventsArtifact,
+  SessionTimelineEvent,
+  TimelineEventCreate,
+  TimelineEventUpdate,
   TrackingOverlayArtifact,
   VisualizationManifest,
 } from "./types/report";
@@ -112,6 +124,10 @@ import {
   completeFieldSession,
   archiveFieldSession,
   deleteFieldSession,
+  createTimelineEvent,
+  listTimelineEvents,
+  updateTimelineEvent,
+  deleteTimelineEvent,
 } from "./services/analysisClient";
 import {
   type DiagnosticNotice,
@@ -122,21 +138,27 @@ import {
 } from "./services/analysisDiagnostics";
 import { buildCourtTrackSummaries, type CourtTrackSummary } from "./services/courtProjectionTracks";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
+import { quickEventsForMode, type QuickEventDef } from "./services/timelineQuickEvents";
 
 // 定义路由状态类型，用于管理应用内的页面导航
 type RouteState =
-  | { page: "overview"; path: "/" } // 总览页
-  | { page: "new-analysis"; path: "/analysis/new" } // 新建分析任务页
-  | { page: "analysis-tasks"; path: "/analysis/tasks" } // 分析任务管理页
-  | { page: "analysis-job"; path: `/analysis/${string}`; jobId: string } // 分析任务详情页
-  | { page: "analysis-details"; path: `/analysis/${string}/details`; jobId: string } // 分析详情页
-  | { page: "vision"; path: "/vision" } // 视觉分析工作台
-  | { page: "vision"; path: `/analysis/${string}/vision`; jobId: string } // 特定任务的视觉分析
-  | { page: "report"; path: `/reports/${ReportType}`; reportType: ReportType } // 报告页
-  | { page: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string } // 特定任务的报告
-  | { page: "camera-hub"; path: "/camera" } // 球场采集管理页
-  | { page: "training"; path: "/training" } // 训练建议页
-  | { page: "hardware"; path: "/hardware" }; // 硬件融合预览页
+  | { name: "landing"; path: "/" }
+  | { name: "upload"; path: "/upload"; videoId?: string; source?: string }
+  | { name: "captureHome"; path: "/capture" }
+  | { name: "captureNew"; path: "/capture/new" }
+  | { name: "captureConsole"; path: `/capture/${string}`; sessionId: string }
+  | { name: "tasks"; path: "/tasks" }
+  | { name: "new-analysis"; path: "/analysis/new" } // 保留，但不再作为一级入口
+  | { name: "analysis-tasks"; path: "/analysis/tasks" } // 保留，旧路由兼容
+  | { name: "analysis-job"; path: `/analysis/${string}`; jobId: string }
+  | { name: "analysis-details"; path: `/analysis/${string}/details`; jobId: string }
+  | { name: "vision"; path: "/vision" }
+  | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string }
+  | { name: "report"; path: `/reports/${ReportType}`; reportType: ReportType }
+  | { name: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string }
+  | { name: "camera-hub"; path: "/camera" } // 保留，旧路由兼容
+  | { name: "training"; path: "/training" }
+  | { name: "hardware"; path: "/hardware" };
 
 const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
 
@@ -172,19 +194,54 @@ function errorToNotice(title: string, fallbackBody: string, error: unknown): Dia
 }
 
 function parsePath(pathname: string): RouteState {
+  // === 新路由 ===
+  if (pathname === "/" || pathname === "") {
+    return { name: "landing", path: "/" };
+  }
+
+  if (pathname === "/upload") {
+    return { name: "upload", path: "/upload" };
+  }
+
+  // ?videoId=xxx&source=recording 参数支持
+  if (pathname.startsWith("/upload?")) {
+    const params = new URLSearchParams(pathname.slice("/upload?".length));
+    return { name: "upload", path: "/upload", videoId: params.get("videoId") ?? undefined, source: params.get("source") ?? undefined };
+  }
+
+  if (pathname === "/tasks") {
+    return { name: "tasks", path: "/tasks" };
+  }
+
+  // /capture/new 必须在 /capture/:id 之前匹配
+  if (pathname === "/capture/new") {
+    return { name: "captureNew", path: "/capture/new" };
+  }
+
+  if (pathname === "/capture") {
+    return { name: "captureHome", path: "/capture" };
+  }
+
+  const captureConsoleMatch = pathname.match(/^\/capture\/(.+)$/);
+  if (captureConsoleMatch) {
+    const [, sessionId] = captureConsoleMatch;
+    return { name: "captureConsole", path: `/capture/${sessionId}`, sessionId };
+  }
+
+  // === 旧路由（保留兼容） ===
   if (pathname === "/analysis/new" || pathname === "/upload") {
-    return { page: "new-analysis", path: "/analysis/new" };
+    return { name: "new-analysis", path: "/analysis/new" };
   }
 
   if (pathname === "/analysis/tasks") {
-    return { page: "analysis-tasks", path: "/analysis/tasks" };
+    return { name: "analysis-tasks", path: "/analysis/tasks" };
   }
 
   const analysisDetailsMatch = pathname.match(/^\/analysis\/([^/]+)\/details$/);
 
   if (analysisDetailsMatch) {
     const [, jobId] = analysisDetailsMatch;
-    return { page: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
+    return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
   }
 
   const analysisReportMatch = pathname.match(/^\/analysis\/([^/]+)\/reports\/([^/]+)$/);
@@ -194,21 +251,21 @@ function parsePath(pathname: string): RouteState {
 
     if (supportedReportTypes.includes(reportType as ReportType)) {
       return {
-        page: "report",
+        name: "report",
         path: `/analysis/${jobId}/reports/${reportType as ReportType}`,
         reportType: reportType as ReportType,
         jobId,
       };
     }
 
-    return { page: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
+    return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
   }
 
   const analysisVisionMatch = pathname.match(/^\/analysis\/([^/]+)\/vision$/);
 
   if (analysisVisionMatch) {
     const [, jobId] = analysisVisionMatch;
-    return { page: "vision", path: `/analysis/${jobId}/vision`, jobId };
+    return { name: "vision", path: `/analysis/${jobId}/vision`, jobId };
   }
 
   const analysisJobMatch = pathname.match(/^\/analysis\/([^/]+)$/);
@@ -216,38 +273,38 @@ function parsePath(pathname: string): RouteState {
   if (analysisJobMatch) {
     const [, jobId] = analysisJobMatch;
     if (jobId === "tasks") {
-      return { page: "analysis-tasks", path: "/analysis/tasks" };
+      return { name: "analysis-tasks", path: "/analysis/tasks" };
     }
-    return { page: "analysis-job", path: `/analysis/${jobId}`, jobId };
+    return { name: "analysis-job", path: `/analysis/${jobId}`, jobId };
   }
 
   if (pathname === "/camera") {
-    return { page: "camera-hub", path: "/camera" };
+    return { name: "camera-hub", path: "/camera" };
   }
 
   if (pathname === "/vision") {
-    return { page: "vision", path: "/vision" };
+    return { name: "vision", path: "/vision" };
   }
 
   if (pathname === "/training") {
-    return { page: "training", path: "/training" };
+    return { name: "training", path: "/training" };
   }
 
   if (pathname === "/hardware") {
-    return { page: "hardware", path: "/hardware" };
+    return { name: "hardware", path: "/hardware" };
   }
 
   if (pathname.startsWith("/reports/")) {
     const reportType = pathname.replace("/reports/", "") as ReportType;
 
     if (supportedReportTypes.includes(reportType)) {
-      return { page: "report", path: `/reports/${reportType}`, reportType };
+      return { name: "report", path: `/reports/${reportType}`, reportType };
     }
 
-    return { page: "report", path: "/reports/movement", reportType: "movement" };
+    return { name: "report", path: "/reports/movement", reportType: "movement" };
   }
 
-  return { page: "overview", path: "/" };
+  return { name: "landing", path: "/" };
 }
 
 function App() {
@@ -256,9 +313,9 @@ function App() {
   const [recentJob, setRecentJob] = useState<AnalysisJobSummary | null>(() => getRecentAnalysisJob());
 
   // 自定义导航函数，支持平滑滚动到顶部
-  const navigate = useCallback((path: AppPath | "/upload") => {
+  const navigate = useCallback((path: AppPath | `/upload` | `/upload?${string}`) => {
     const nextRoute = parsePath(path);
-    window.history.pushState({}, "", nextRoute.path);
+    window.history.pushState({}, "", path);
     setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
@@ -284,7 +341,17 @@ function App() {
 
   // 根据当前路由渲染对应的页面内容
   const content = useMemo(() => {
-    switch (route.page) {
+    switch (route.name) {
+      case "upload":
+        return <NewAnalysisPage onNavigate={navigate} />;
+      case "captureHome":
+        return <CaptureHomePage onNavigate={navigate} />;
+      case "captureNew":
+        return <CaptureWizardPage onNavigate={navigate} />;
+      case "captureConsole":
+        return <CaptureConsolePage sessionId={route.sessionId} onNavigate={navigate} />;
+      case "tasks":
+        return <AnalysisTasksPage onNavigate={navigate} recentJob={recentJob} />;
       case "new-analysis":
         return <NewAnalysisPage onNavigate={navigate} />;
       case "analysis-tasks":
@@ -303,14 +370,14 @@ function App() {
         return <TrainingPage onNavigate={navigate} />;
       case "hardware":
         return <HardwarePage onNavigate={navigate} />;
-      case "overview":
+      case "landing":
       default:
-        return <OverviewPage onNavigate={navigate} />;
+        return <LandingPage onNavigate={navigate} />;
     }
   }, [navigate, route, recentJob]);
 
   return (
-    <AppShell activePath={route.path} navigation={platformNavigation} onNavigate={navigate}>
+    <AppShell activePath={route.path} onNavigate={navigate}>
       {content}
     </AppShell>
   );
@@ -324,7 +391,7 @@ function PageFrame({ children, compact = false }: { children: ReactNode; compact
   );
 }
 
-type NavigateFn = (path: AppPath | "/upload") => void;
+type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 const calibrationPointOrder = [
   { id: "top_left", label: "远端左角" },
@@ -362,85 +429,6 @@ type CalibrationPointDraft = {
   x: number;
   y: number;
 };
-
-/**
- * 总览页组件
- */
-function OverviewPage({ onNavigate }: { onNavigate: NavigateFn }) {
-  return (
-    <PageFrame>
-      <section className="grid min-h-[calc(100vh-8rem)] gap-8 lg:grid-cols-[0.92fr_1.08fr] lg:items-center">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#22C55E]/35 bg-[#22C55E]/15 px-4 py-2 text-sm font-bold text-[#168A34]">
-            <Sparkles size={16} aria-hidden="true" />
-            智能比赛分析 · 真实产品与科研平台
-          </div>
-          <h1 className="mt-7 max-w-4xl text-5xl font-black leading-[0.98] text-[#14241B] sm:text-6xl xl:text-7xl">
-            把每一场匹克球比赛，转化为可执行的训练洞察
-          </h1>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-            当前聚焦真实视频上传、人员检测、姿态叠加、移动轨迹和标准球场投影底图；每次分析都会保留可追踪的执行记录，支撑产品复盘和后续科研产出。
-          </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <button className="green-button" onClick={() => onNavigate("/analysis/new")} type="button">
-              <Play size={18} fill="currentColor" aria-hidden="true" />
-              分析新比赛
-            </button>
-            <button className="quiet-button" onClick={() => onNavigate("/analysis/tasks")} type="button">
-              查看分析任务
-              <ArrowRight size={17} aria-hidden="true" />
-            </button>
-          </div>
-
-          <div className="mt-10 grid max-w-2xl grid-cols-3 gap-3">
-            {[
-              ["20x44", "标准球场"],
-              ["82", "表现评分"],
-              ["2", "当前报告"],
-            ].map(([value, label]) => (
-              <div className="rounded-2xl border border-[#DDE9D6] bg-white/80 p-4 shadow-sm" key={label}>
-                <strong className="block text-3xl font-black text-[#168A34]">{value}</strong>
-                <span className="mt-1 block text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="relative">
-          <div className="absolute -inset-4 rounded-[2.5rem] bg-[#22C55E]/10 blur-3xl" />
-          <div className="relative">
-            <VideoAnalysisCard
-              compact
-              labels={videoOverlayLabels.slice(0, 3)}
-              match={matchSummary}
-              players={playerMarkers}
-              timeline={timelineMarkers}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {overviewCards.map((card) => (
-          <button
-            className="sport-card group p-5 text-left transition hover:-translate-y-1 hover:border-[#22C55E]/35"
-            key={card.id}
-            onClick={() => onNavigate(card.path)}
-            type="button"
-          >
-            <span className="text-xs font-black uppercase tracking-[0.16em] text-[#168A34]">{card.metric}</span>
-            <strong className="mt-4 block text-xl font-black text-[#14241B]">{card.title}</strong>
-            <p className="mt-3 text-sm leading-6 text-slate-600">{card.body}</p>
-            <span className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-slate-700 transition group-hover:text-[#168A34]">
-              打开
-              <ChevronRight size={16} aria-hidden="true" />
-            </span>
-          </button>
-        ))}
-      </section>
-    </PageFrame>
-  );
-}
 
 function AnalysisTasksPage({
   onNavigate,
@@ -4012,16 +4000,41 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     title: "", venue: "", court_name: "", capture_mode: "practice", match_format: "doubles", camera_setup: "single", notes: "",
   });
 
-  // 当选中的 Field Session 变化时，预填录制表单
+  // Timeline Event 状态
+  const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
+  const [editingEvent, setEditingEvent] = useState<SessionTimelineEvent | null>(null);
+  const [showEventModal, setShowEventModal] = useState(false);
+  const [editForm, setEditForm] = useState<TimelineEventUpdate>({});
+  const [editPayloadText, setEditPayloadText] = useState("{}");
+  const activeSession = sessions.find((s) => s.status === "recording");
+
+  const loadTimelineEvents = useCallback(async (fieldSessionId: string, recordingSessionId?: string) => {
+    try {
+      const events = await listTimelineEvents(
+        fieldSessionId,
+        recordingSessionId ? { recording_session_id: recordingSessionId } : undefined,
+      );
+      setTimelineEvents(events);
+    } catch {
+      setTimelineEvents([]);
+    }
+  }, []);
+
+  // 当选中的 Field Session 变化时，预填录制表单并加载时间线事件
   useEffect(() => {
-    if (!selectedFieldSession || selectedFieldSession.status === "archived") return;
+    if (!selectedFieldSession || selectedFieldSession.status === "archived") {
+      setTimelineEvents([]);
+      return;
+    }
     setRecordingForm((f) => ({
       ...f,
       field_session_id: selectedFieldSession.id,
       court_name: selectedFieldSession.court_name || "",
       match_format: (selectedFieldSession.match_format || "doubles") as "singles" | "doubles",
     }));
-  }, [selectedFieldSession]);
+    const currentRecordingId = activeSession?.field_session_id === selectedFieldSession.id ? activeSession.session_id : undefined;
+    void loadTimelineEvents(selectedFieldSession.id, currentRecordingId);
+  }, [selectedFieldSession, activeSession?.field_session_id, activeSession?.session_id, loadTimelineEvents]);
 
   // Modal 状态
   const [showRegisterModal, setShowRegisterModal] = useState(false);
@@ -4054,7 +4067,6 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [playingSession, setPlayingSession] = useState<RecordingSession | null>(null);
   const [playbackError, setPlaybackError] = useState(false);
 
-  const activeSession = sessions.find((s) => s.status === "recording");
   const [loading, setLoading] = useState(false);
 
   // 当选中的摄像头变化时，重置预览状态
@@ -4133,7 +4145,7 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   const handleDeleteFieldSession = async () => {
     if (!selectedFieldSession) return;
-    if (!window.confirm(`确定删除采集任务「${selectedFieldSession.title || selectedFieldSession.id}」吗？已有录制记录的任务会被后端保护。`)) return;
+    if (!window.confirm(`确定删除采集任务「${selectedFieldSession.title || selectedFieldSession.id}」吗？已有录制记录或时间线事件的任务会被后端保护。`)) return;
     setLoading(true);
     setError(null);
     try {
@@ -4145,6 +4157,72 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       await loadData();
     } finally {
       setLoading(false);
+    }
+  };
+
+  // —— Timeline Event 操作 ——
+
+  const handleCreateQuickEvent = async (def: QuickEventDef) => {
+    if (!selectedFieldSession) return;
+    const recordingSessionId = activeSession?.session_id;
+    try {
+      const payload: TimelineEventCreate = {
+        event_type: def.type,
+        source: def.source,
+        label: def.label,
+        note: def.note,
+        payload_json: def.payload,
+        recording_session_id: recordingSessionId,
+      };
+      if (recordingSessionId && activeSession?.started_at) {
+        // 前端计算当前录制时间戳
+        const elapsed = Date.now() - new Date(activeSession.started_at).getTime();
+        payload.timestamp_ms = Math.max(0, elapsed);
+      }
+      await createTimelineEvent(selectedFieldSession.id, payload);
+      await loadTimelineEvents(selectedFieldSession.id, recordingSessionId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "创建时间线事件失败");
+    }
+  };
+
+  const handleEditEvent = (event: SessionTimelineEvent) => {
+    setEditingEvent(event);
+    setEditForm({
+      label: event.label,
+      note: event.note,
+    });
+    setEditPayloadText(JSON.stringify(event.payload_json ?? {}, null, 2));
+    setShowEventModal(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingEvent || !selectedFieldSession) return;
+    try {
+      const payloadJson = JSON.parse(editPayloadText || "{}");
+      if (!payloadJson || Array.isArray(payloadJson) || typeof payloadJson !== "object") {
+        setError("Payload JSON 必须是 JSON 对象");
+        return;
+      }
+      await updateTimelineEvent(editingEvent.id, { ...editForm, payload_json: payloadJson });
+      setShowEventModal(false);
+      setEditingEvent(null);
+      const currentRecordingId = activeSession?.field_session_id === selectedFieldSession.id ? activeSession.session_id : undefined;
+      await loadTimelineEvents(selectedFieldSession.id, currentRecordingId);
+    } catch (e) {
+      setError(e instanceof SyntaxError ? "Payload JSON 必须是有效 JSON" : e instanceof Error ? e.message : "更新时间线事件失败");
+    }
+  };
+
+  const handleDeleteEvent = async (eventId: string) => {
+    if (!selectedFieldSession) return;
+    if (!window.confirm("确定删除该时间线事件吗？")) return;
+    try {
+      await deleteTimelineEvent(eventId);
+      const currentRecordingId = activeSession?.field_session_id === selectedFieldSession.id ? activeSession.session_id : undefined;
+      await loadTimelineEvents(selectedFieldSession.id, currentRecordingId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除时间线事件失败");
     }
   };
 
@@ -4193,6 +4271,9 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       setError("请选择摄像头");
       return;
     }
+    // 录制前断开预览流，避免双连接导致摄像头掉帧
+    setPreviewStatus("idle");
+    setPreviewKey((k) => k + 1);
     setLoading(true);
     setError(null);
     try {
@@ -4212,6 +4293,11 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     try {
       await stopRecording(sessionId);
       await loadData();
+      // 停止录制后恢复预览
+      if (recordingForm.camera_id) {
+        setPreviewStatus("loading");
+        setPreviewKey((k) => k + 1);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "停止录制失败");
       await loadData();
@@ -4227,6 +4313,11 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     try {
       await cancelRecording(sessionId);
       await loadData();
+      // 取消录制后恢复预览
+      if (recordingForm.camera_id) {
+        setPreviewStatus("loading");
+        setPreviewKey((k) => k + 1);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "取消录制失败");
       await loadData();
@@ -4392,7 +4483,141 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
             )}
           </div>
         )}
+
+        {/* 时间线事件部分（仅在选中 Field Session 时显示） */}
+        {selectedFieldSession && selectedFieldSession.status !== "archived" && (
+          <div className="mt-3 border-t border-[#DDE9D6] pt-3">
+            {/* 快捷打点面板（仅在录制中显示） */}
+            {activeSession && activeSession.field_session_id === selectedFieldSession.id && (
+              <div className="mb-3">
+                <p className="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">
+                  <PlusCircle size={12} /> 快速打点
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {quickEventsForMode(selectedFieldSession.capture_mode || "practice").map((def, i) => (
+                    <button
+                      key={i}
+                      className="quiet-button px-2 py-1 text-[11px]"
+                      onClick={() => handleCreateQuickEvent(def)}
+                      type="button"
+                    >
+                      {def.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 时间线事件列表 */}
+            <div>
+              <p className="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">
+                <Clock size={12} /> 时间线事件 ({timelineEvents.length})
+              </p>
+              {timelineEvents.length === 0 ? (
+                <p className="text-[11px] text-slate-400">
+                  {activeSession ? "录制中可点击上方快捷按钮打点" : "暂无时间线事件，开始录制后可打点记录"}
+                </p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto space-y-1">
+                  {timelineEvents.map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="flex items-center justify-between rounded-lg border border-[#DDE9D6] bg-[#F8FBF5] px-3 py-1.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-[#17231D] truncate">
+                            {ev.label || ev.event_type}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {ev.timestamp_ms > 0 ? `${(ev.timestamp_ms / 1000).toFixed(1)}s` : "—"}
+                          </span>
+                          <span className={`rounded px-1 py-0.5 text-[9px] font-semibold ${
+                            ev.source === "manual" ? "bg-slate-100 text-slate-500" :
+                            ev.source === "algorithm" ? "bg-blue-50 text-blue-600" :
+                            "bg-amber-50 text-amber-600"
+                          }`}>
+                            {ev.source === "manual" ? "人工" : ev.source === "algorithm" ? "算法" : "修正"}
+                          </span>
+                        </div>
+                        {ev.note && (
+                          <p className="text-[10px] text-slate-400 truncate mt-0.5">{ev.note}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 ml-2 shrink-0">
+                        <button
+                          className="p-1 rounded hover:bg-[#E8F2DC] text-slate-400 hover:text-[#17231D]"
+                          onClick={() => handleEditEvent(ev)}
+                          type="button"
+                          title="编辑"
+                        >
+                          <Edit3 size={12} />
+                        </button>
+                        <button
+                          className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-[#C92A2A]"
+                          onClick={() => handleDeleteEvent(ev.id)}
+                          type="button"
+                          title="删除"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 直接录制时不显示时间线事件（task 4.8） */}
+        {!selectedFieldSession && null}
       </div>
+
+      {/* 编辑时间线事件 Modal */}
+      <Modal isOpen={showEventModal} onClose={() => { setShowEventModal(false); setEditingEvent(null); setEditPayloadText("{}"); }} title="编辑时间线事件" size="sm">
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">标签</label>
+            <input
+              className="field-input"
+              value={editForm.label ?? editingEvent?.label ?? ""}
+              onChange={(e) => setEditForm((f) => ({ ...f, label: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">备注</label>
+            <textarea
+              className="field-input"
+              rows={2}
+              value={editForm.note ?? editingEvent?.note ?? ""}
+              onChange={(e) => setEditForm((f) => ({ ...f, note: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">时间戳 (毫秒)</label>
+            <input
+              className="field-input"
+              type="number"
+              value={editForm.timestamp_ms ?? editingEvent?.timestamp_ms ?? 0}
+              onChange={(e) => setEditForm((f) => ({ ...f, timestamp_ms: Number(e.target.value) }))}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Payload JSON</label>
+            <textarea
+              className="field-input font-mono text-xs"
+              rows={5}
+              value={editPayloadText}
+              onChange={(e) => setEditPayloadText(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            <button className="green-button flex-1 py-2 text-sm" onClick={handleSaveEdit} type="button">保存</button>
+            <button className="quiet-button flex-1 py-2 text-sm" onClick={() => { setShowEventModal(false); setEditingEvent(null); setEditPayloadText("{}"); }} type="button">取消</button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Create Field Session Modal */}
       <Modal isOpen={showCreateFsModal} onClose={() => setShowCreateFsModal(false)} title="新建采集任务" size="md">
@@ -4460,6 +4685,7 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
             <span className="text-sm text-slate-500">{activeSession.camera_id} · {activeSession.court_name}</span>
             <span className="text-sm text-slate-400">{activeSession.started_at}</span>
           </div>
+          <p className="mt-2 text-xs text-slate-400">录制期间预览已暂停，停止录制后自动恢复</p>
           <div className="mt-3 flex gap-3">
             <button className="green-button px-6 py-2" disabled={loading} onClick={() => handleStopRecording(activeSession.session_id)} type="button">停止录制</button>
             <button className="quiet-button px-6 py-2" disabled={loading} onClick={() => handleCancelRecording(activeSession.session_id)} type="button">取消录制</button>

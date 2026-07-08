@@ -68,6 +68,7 @@ def init_db() -> None:
     """应用启动时调用：确保所有 ORM 表存在。"""
     # 导入所有模型以触发 Base.metadata 注册
     import app.models.field_session  # noqa: F401
+    import app.models.timeline_event  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
 

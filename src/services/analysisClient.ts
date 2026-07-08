@@ -350,6 +350,27 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestVoid(path: string, init?: RequestInit): Promise<void> {
+  const url = toApiUrl(path);
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...init?.headers,
+      },
+      ...init,
+    });
+  } catch (error) {
+    throw toNetworkError(path, url, error);
+  }
+
+  if (!response.ok) {
+    await throwResponseError(path, url, response);
+  }
+}
+
 async function requestForm<T>(path: string, body: FormData): Promise<T> {
   const url = toApiUrl(path);
   let response: Response;
@@ -635,6 +656,10 @@ import type {
   ProbeResult,
   RecordingSession,
   RecordingStartRequest,
+  SessionTimelineEvent,
+  TimelineEventCreate,
+  TimelineEventUpdate,
+  TimelineEventListParams,
 } from "../types/report";
 
 export async function listCameras(): Promise<CameraInfo[]> {
@@ -756,6 +781,48 @@ export async function archiveFieldSession(id: string): Promise<FieldSession> {
 
 export async function deleteFieldSession(id: string): Promise<FieldSessionDeleteResult> {
   return requestJson<FieldSessionDeleteResult>(`/api/field-sessions/${id}`, { method: "DELETE" });
+}
+
+// —— Timeline Event API ——
+
+export async function createTimelineEvent(
+  fieldSessionId: string,
+  payload: TimelineEventCreate,
+): Promise<SessionTimelineEvent> {
+  return requestJson<SessionTimelineEvent>(
+    `/api/field-sessions/${fieldSessionId}/timeline-events`,
+    { body: JSON.stringify(payload), method: "POST" },
+  );
+}
+
+export async function listTimelineEvents(
+  fieldSessionId: string,
+  params?: TimelineEventListParams,
+): Promise<SessionTimelineEvent[]> {
+  const sp = new URLSearchParams();
+  if (params?.event_type) sp.set("event_type", params.event_type);
+  if (params?.source) sp.set("source", params.source);
+  if (params?.recording_session_id) sp.set("recording_session_id", params.recording_session_id);
+  if (params?.from_ms !== undefined) sp.set("from_ms", String(params.from_ms));
+  if (params?.to_ms !== undefined) sp.set("to_ms", String(params.to_ms));
+  const q = sp.toString();
+  return requestJson<SessionTimelineEvent[]>(
+    `/api/field-sessions/${fieldSessionId}/timeline-events${q ? `?${q}` : ""}`,
+  );
+}
+
+export async function updateTimelineEvent(
+  eventId: string,
+  payload: TimelineEventUpdate,
+): Promise<SessionTimelineEvent> {
+  return requestJson<SessionTimelineEvent>(`/api/timeline-events/${eventId}`, {
+    body: JSON.stringify(payload),
+    method: "PATCH",
+  });
+}
+
+export async function deleteTimelineEvent(eventId: string): Promise<void> {
+  await requestVoid(`/api/timeline-events/${eventId}`, { method: "DELETE" });
 }
 
 export { demoAnalysisReport };

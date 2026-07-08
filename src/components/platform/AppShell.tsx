@@ -1,40 +1,24 @@
 import {
   Activity,
-  Camera,
-  ChevronRight,
-  Upload,
+  ListTodo,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { AppPath, NavigationItem } from "../../types/report";
+import type { AppPath } from "../../types/report";
 
 interface AppShellProps {
   activePath: string;
   children: ReactNode;
-  navigation: NavigationItem[];
-  onNavigate: (path: AppPath | "/upload") => void;
+  onNavigate: (path: AppPath | `/upload` | `/upload?${string}`) => void;
 }
 
-export function AppShell({ activePath, children, navigation, onNavigate }: AppShellProps) {
-  const isActive = (path: string) => {
-    if (path === "/") {
-      return activePath === "/";
-    }
-
-    if (path === "/analysis/tasks") {
-      return activePath.startsWith("/analysis") || activePath === "/vision";
-    }
-
-    if (path === "/vision") {
-      return activePath === "/vision" || /^\/analysis\/[^/]+\/vision$/.test(activePath);
-    }
-
-    return activePath === path;
-  };
+export function AppShell({ activePath, children, onNavigate }: AppShellProps) {
+  const isHome = activePath === "/";
 
   return (
     <div className="min-h-screen overflow-x-hidden text-[#17231D]">
       <header className="sticky top-0 z-50 border-b border-[#DDE9D6]/90 bg-white/88 backdrop-blur-2xl">
         <div className="mx-auto flex max-w-[1480px] items-center gap-4 px-4 py-3 sm:px-6 lg:px-8">
+          {/* 左侧：Logo + 产品名 */}
           <button
             className="group flex min-w-0 items-center gap-3 text-left"
             onClick={() => onNavigate("/")}
@@ -47,56 +31,30 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
               <span className="block truncate text-base font-black tracking-[0.02em]">
                 拍动视析
               </span>
-              <span className="block truncate text-xs text-slate-400">智能比赛分析 · 训练展示原型</span>
+              <span className="block truncate text-xs text-slate-400">匹克球运动表现智能分析平台</span>
             </span>
           </button>
 
-          <nav className="hidden flex-1 justify-center lg:flex" aria-label="主导航">
-            <div className="flex items-center gap-1 rounded-full border border-[#DDE9D6] bg-[#F1F7EC] p-1">
-              {navigation.map((item) => (
-                <button
-                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                    isActive(item.path)
-                      ? "bg-[#17231D] text-white shadow-sm"
-                      : "text-slate-600 hover:bg-white hover:text-[#17231D]"
-                  }`}
-                  key={item.id}
-                  onClick={() => onNavigate(item.path)}
-                  type="button"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </nav>
-
-          <div className="ml-auto hidden items-center gap-2 md:flex">
-            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
-              <Camera size={16} aria-hidden="true" />
-              任务管理
-            </button>
-            <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
-              <Upload size={16} aria-hidden="true" />
-              上传比赛
-            </button>
-          </div>
-        </div>
-
-        <div className="mx-auto flex max-w-[1480px] gap-2 overflow-x-auto px-4 pb-3 sm:px-6 lg:hidden">
-          {navigation.map((item) => (
+          {/* 右侧：辅助入口 */}
+          <div className="ml-auto flex items-center gap-2">
+            {!isHome && (
+              <button
+                className="quiet-button px-4 py-2.5"
+                onClick={() => onNavigate("/")}
+                type="button"
+              >
+                首页
+              </button>
+            )}
             <button
-              className={`shrink-0 rounded-full border px-3 py-2 text-xs font-bold transition ${
-                isActive(item.path)
-                  ? "border-[#22C55E] bg-[#22C55E] text-[#071008]"
-                  : "border-[#DDE9D6] bg-white/85 text-slate-700"
-              }`}
-              key={item.id}
-              onClick={() => onNavigate(item.path)}
+              className="quiet-button px-4 py-2.5"
+              onClick={() => onNavigate("/tasks")}
               type="button"
             >
-              {item.shortLabel}
+              <ListTodo size={16} aria-hidden="true" />
+              任务历史
             </button>
-          ))}
+          </div>
         </div>
       </header>
 
@@ -104,15 +62,8 @@ export function AppShell({ activePath, children, navigation, onNavigate }: AppSh
 
       <footer className="border-t border-[#DDE9D6] px-4 py-8 text-sm text-slate-500 sm:px-6 lg:px-8">
         <div className="mx-auto flex max-w-[1480px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <span>拍动视析 · 北京体育大学体育工程学院创新训练项目展示原型</span>
-          <button
-            className="inline-flex w-fit items-center gap-1 font-semibold text-slate-700 transition hover:text-[#168A34]"
-            onClick={() => onNavigate("/analysis/new")}
-            type="button"
-          >
-            上传比赛视频
-            <ChevronRight size={15} aria-hidden="true" />
-          </button>
+          <span>拍动视析 · 北京体育大学体育工程学院创新训练项目</span>
+          <span className="text-xs text-slate-400">基于视觉捕捉与智能传感的运动表现分析平台</span>
         </div>
       </footer>
     </div>

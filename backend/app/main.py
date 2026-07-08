@@ -8,6 +8,7 @@ from app.api.routes_calibration import router as calibration_router
 from app.api.routes_camera import router as camera_router
 from app.api.routes_field_sessions import router as field_sessions_router
 from app.api.routes_recording import router as recording_router
+from app.api.routes_timeline_events import router as timeline_events_router
 from app.api.routes_video import router as video_router
 # 导入配置和日志设置
 from app.core.config import get_settings
@@ -44,6 +45,7 @@ app.include_router(camera_router)
 app.include_router(recording_router)
 app.include_router(analysis_router)
 app.include_router(field_sessions_router)
+app.include_router(timeline_events_router)
 
 
 @app.on_event("startup")

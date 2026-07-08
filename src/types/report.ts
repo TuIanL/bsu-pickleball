@@ -44,6 +44,11 @@ export type MatchFormat = "singles" | "doubles";
 
 export type AppPath =
   | "/"
+  | "/upload"
+  | "/capture"
+  | "/capture/new"
+  | `/capture/${string}`
+  | "/tasks"
   | "/vision"
   | "/analysis/new"
   | "/analysis/tasks"
@@ -275,6 +280,73 @@ export interface FieldSessionDeleteResult {
   id: string;
   status: "deleted" | "blocked" | "not_found";
   detail: string;
+}
+
+// —— Session Timeline Event 类型 ——
+
+export type TimelineEventType =
+  | "session_note"
+  | "non_play_start"
+  | "non_play_end"
+  | "game_start"
+  | "game_end"
+  | "set_start"
+  | "set_end"
+  | "rally_start"
+  | "rally_end"
+  | "score_update"
+  | "score_correction"
+  | "side_change"
+  | "timeout_start"
+  | "timeout_end"
+  | "drill_start"
+  | "drill_end"
+  | "custom_marker";
+
+export type TimelineEventSource = "manual" | "algorithm" | "corrected";
+export type TimelineEventPayload = Record<string, unknown>;
+
+export interface SessionTimelineEvent {
+  id: string;
+  field_session_id: string;
+  recording_session_id?: string;
+  timestamp_ms: number;
+  occurred_at: string;
+  event_type: TimelineEventType;
+  source: TimelineEventSource;
+  label: string;
+  note: string;
+  payload_json: TimelineEventPayload;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TimelineEventCreate {
+  recording_session_id?: string;
+  timestamp_ms?: number;
+  occurred_at?: string;
+  event_type: TimelineEventType;
+  source?: TimelineEventSource;
+  label?: string;
+  note?: string;
+  payload_json?: TimelineEventPayload;
+}
+
+export interface TimelineEventUpdate {
+  timestamp_ms?: number;
+  event_type?: TimelineEventType;
+  source?: TimelineEventSource;
+  label?: string;
+  note?: string;
+  payload_json?: TimelineEventPayload;
+}
+
+export interface TimelineEventListParams {
+  event_type?: string;
+  source?: string;
+  recording_session_id?: string;
+  from_ms?: number;
+  to_ms?: number;
 }
 
 export interface NavigationItem {
