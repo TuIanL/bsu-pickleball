@@ -5,7 +5,7 @@ from __future__ import annotations
 # defaultdict：按帧序号分组时默认空列表；Path：面向对象的文件路径；Any：宽松类型标注（叠加数据为 dict）。
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2  # type: ignore
 import numpy as np
@@ -39,6 +39,7 @@ class OverlayVideoWriter:
         player_points: list[VisualizationPoint] | None = None,
         ball_points: list[VisualizationPoint] | None = None,
         bounce_points: list[VisualizationPoint] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> VisualizationResult:
         # 把人物检测/姿态/球检测等叠加层以及球场坐标点绘制到视频帧上，写出叠加视频。
         # 任一前置条件不满足时返回带状态说明的 VisualizationResult（不抛异常）。
@@ -49,6 +50,7 @@ class OverlayVideoWriter:
             return VisualizationResult("unavailable", "源视频无法打开，跳过叠加视频生成")
         # 读取视频帧率与尺寸；读取失败时用默认值（帧率 25，尺寸为 0）。
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         if width <= 0 or height <= 0:
@@ -106,6 +108,8 @@ class OverlayVideoWriter:
                 )
                 writer.write(frame)
                 written += 1
+                if progress_callback is not None and (written == 1 or written % 120 == 0):
+                    progress_callback(written, frame_count)
                 frame_index += 1
         except Exception as exc:
             # 写出过程中任何异常都转为失败结果，保证资源被释放。

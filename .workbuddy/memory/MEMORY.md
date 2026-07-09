@@ -31,5 +31,7 @@
 - `structure picture.md`（高层模块说明 + 产品/科研边界）。
 
 ## 已知缺陷 / 注意事项
-- **`uvicorn --reload` 会反复重启并卡死运行中的分析任务**：`start-local-runtime.sh` 启后端用 `--reload`，WatchFiles 默认监听整个 `backend/`（含 `backend/data`）。视觉分析任务往 `backend/data/outputs` 写产物时持续触发 server 子进程重启，杀掉 worker 线程且不自动恢复 running 任务 → 任务卡在 running 但无人执行。修复：加 `--reload-exclude backend/data`（或 `--reload-dir` 仅源码）；长任务场景勿开 `--reload`；卡死任务需取消重提或加启动自愈。
-- 任务状态字段滞后：`GET /jobs/{id}` 返回的 `progress`/`stage` 是状态文件快照，可能落后于日志中实时帧进度（如日志已到 player tracking 几百帧，API 仍显示 frame-sampling 34%）。以 `backend.log` 的 `Player tracking progress` 行和磁盘 job json mtime 为准判断真实活跃度。
+- **`uvicorn --reload` 会反复重启并卡死运行中的分析任务** ✅ **已修复**：`start-local-runtime.sh:215` 已加 `--reload-exclude "data/*" --reload-exclude ".venv/*" --reload-exclude "yolo11n.pt"`，分析任务的持续写盘不再触发重载。
+- **孤儿任务无自愈** ✅ **已修复**：`main.py` startup 事件调用 `recover_zombie_jobs()`（定义于 `mock_analysis.py`），启动时自动扫描 `canonicalStatus == "running"` 且 `updatedAt` 超过阈值（默认 120s，环境变量 `PICKLEBALL_JOB_ZOMBIE_TIMEOUT_SECONDS`）的任务，标记为 `failed`。
+- **去重返回 running 卡死任务** ✅ **已修复**：`job_orchestration.py:388` 的 `find_by_signature` 将 `canonicalStatus` 过滤从 `{"queued", "running", "succeeded"}` 收紧为 `{"queued", "succeeded"}`，不再返回僵尸任务。
+- 任务状态字段滞后：`GET /jobs/{id}` 返回的 `progress`/`stage` 是状态文件快照，可能落后于日志中实时帧进度。以 `backend.log` 的 `Player tracking progress` 行和磁盘 job json mtime 为准判断真实活跃度。

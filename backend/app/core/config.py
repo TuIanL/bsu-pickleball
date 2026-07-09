@@ -110,6 +110,7 @@ class Settings(BaseModel):
     enable_gpu_jobs: bool = False                          # 是否启用 GPU 任务
     job_stage_timeout_seconds: int = 0                     # 单个阶段超时秒数（0=不限制）
     job_max_retries: int = 1                               # 任务失败最大重试次数
+    job_zombie_timeout_seconds: int = 120                  # 僵尸任务判定阈值（秒，启动时超此时间未更新的 running 任务标为 failed）
 
     # ---- 发球（serve）检测相关 ----
     serve_baseline_margin_ft: float = 6.0                  # 发球基线边距（英尺）
@@ -322,6 +323,7 @@ def get_settings() -> Settings:
         enable_gpu_jobs=os.getenv("PICKLEBALL_ENABLE_GPU_JOBS", "false").lower() in {"1", "true", "yes"},
         job_stage_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_STAGE_TIMEOUT_SECONDS", "0"))),
         job_max_retries=max(0, int(os.getenv("PICKLEBALL_JOB_MAX_RETRIES", "1"))),
+        job_zombie_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_ZOMBIE_TIMEOUT_SECONDS", "120"))),
         serve_baseline_margin_ft=float(os.getenv("PICKLEBALL_SERVE_BASELINE_MARGIN_FT", "6.0")),
         serve_pre_still_window_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_WINDOW_SECONDS", "1.5")),
         serve_pre_still_gap_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_GAP_SECONDS", "0.2")),

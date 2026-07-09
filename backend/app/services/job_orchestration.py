@@ -154,14 +154,21 @@ def stage_from_pipeline(stage: PipelineStageResult) -> AnalysisStage:
     started = stage.started_at.isoformat() if stage.started_at else None
     finished = stage.finished_at.isoformat() if stage.finished_at else None
     progress = stage.progress
-    if progress == 0 and stage.status in {"done", "skipped"}:
+    status: AnalysisStageStatus
+    if stage.status == "partial":
+        status = "done"
+    elif stage.status == "unavailable":
+        status = "skipped"
+    else:
+        status = stage.status
+    if progress == 0 and status in {"done", "skipped"}:
         progress = 100
-    if progress == 0 and stage.status == "active":
+    if progress == 0 and status == "active":
         progress = 10
     return AnalysisStage(
         id=stage.id,
         label=stage.label,
-        status=stage.status,
+        status=status,
         detail=stage.public_message or stage.detail,
         startedAt=started,
         endedAt=finished,
@@ -385,7 +392,7 @@ class JobStore:
             if (
                 job.inputSignature == input_signature
                 and job.configSignature == config_signature
-                and job.canonicalStatus in {"queued", "running", "succeeded"}
+                and job.canonicalStatus in {"queued", "succeeded"}
             ):
                 return job
         return None
@@ -752,25 +759,32 @@ class AnalysisWorkerRuntime:
             def run_pipeline() -> AnalysisPipelineResult:
                 # 调用流水线（兼容旧版本：没有 cancellation_token 参数时退化为不带它调用）。
                 pipeline = self.pipeline_factory()
+                run_kwargs = {
+                    "job_id": job.id,
+                    "video_id": payload.videoId,
+                    "calibration_id": payload.calibrationId,
+                    "frame_stride": payload.frameStride,
+                    "court_view_match_threshold": payload.courtViewMatchThreshold,
+                    "progress_callback": progress_callback,
+                    "cancellation_token": token,
+                }
                 try:
-                    return pipeline.run(
-                        job_id=job.id,
-                        video_id=payload.videoId,
-                        calibration_id=payload.calibrationId,
-                        frame_stride=payload.frameStride,
-                        progress_callback=progress_callback,
-                        cancellation_token=token,
-                    )
+                    return pipeline.run(**run_kwargs)
                 except TypeError as exc:
-                    if "cancellation_token" not in str(exc):
+                    message = str(exc)
+                    if "court_view_match_threshold" in message:
+                        run_kwargs.pop("court_view_match_threshold", None)
+                    elif "cancellation_token" in message:
+                        run_kwargs.pop("cancellation_token", None)
+                    else:
                         raise
-                    return pipeline.run(
-                        job_id=job.id,
-                        video_id=payload.videoId,
-                        calibration_id=payload.calibrationId,
-                        frame_stride=payload.frameStride,
-                        progress_callback=progress_callback,
-                    )
+                    try:
+                        return pipeline.run(**run_kwargs)
+                    except TypeError as fallback_exc:
+                        if "cancellation_token" not in str(fallback_exc):
+                            raise
+                        run_kwargs.pop("cancellation_token", None)
+                        return pipeline.run(**run_kwargs)
 
             while True:
                 try:

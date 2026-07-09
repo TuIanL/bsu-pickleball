@@ -17,7 +17,7 @@ from app.api.routes_video import router as video_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.database import init_db
-from app.services.mock_analysis import start_analysis_worker, stop_analysis_worker
+from app.services.mock_analysis import start_analysis_worker, stop_analysis_worker, recover_zombie_jobs
 
 # 配置日志系统
 configure_logging()
@@ -61,6 +61,7 @@ app.mount("/api/sync-recordings/test-frames", StaticFiles(directory=_TEST_FRAMES
 def startup_workers() -> None:
     init_db()
     start_analysis_worker()
+    recover_zombie_jobs()
 
 
 @app.on_event("shutdown")

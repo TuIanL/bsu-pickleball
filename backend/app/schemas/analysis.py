@@ -83,10 +83,11 @@ class AnalysisUploadMetadata(BaseModel):
 
 
 class AnalysisPipelineOptions(BaseModel):
-    """分析流水线的选项（视频/标定 id、抽帧步长）。"""
+    """分析流水线的选项（视频/标定 id、抽帧步长、门控阈值覆盖）。"""
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)  # 每隔几帧处理一帧（≥1）
+    courtViewMatchThreshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # 覆盖场地视角门控匹配阈值
 
 
 class AnalysisStage(BaseModel):
@@ -114,6 +115,7 @@ class AnalysisJobCreate(BaseModel):
     frameStride: int = Field(default=1, ge=1)
     priority: int = Field(default=0, ge=0, le=100)  # 优先级（0~100）
     requestNewVersion: bool = False                  # 是否要求分析新版本
+    courtViewMatchThreshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # 覆盖场地视角门控匹配阈值
 
 
 class AnalysisJobSummary(BaseModel):

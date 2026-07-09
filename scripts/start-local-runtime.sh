@@ -210,8 +210,9 @@ say "RTMPose device:    $PICKLEBALL_RTMPOSE_DEVICE"
   export PICKLEBALL_RTMPOSE_CONFIG_PATH
   export PICKLEBALL_RTMPOSE_CHECKPOINT_PATH
   export PICKLEBALL_RTMPOSE_DEVICE
+  export PICKLEBALL_COURT_VIEW_MATCH_THRESHOLD="${PICKLEBALL_COURT_VIEW_MATCH_THRESHOLD:-0.5}"
   export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD
-  exec "$PYTHON_BIN" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload
+  exec "$PYTHON_BIN" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload --reload-exclude "data/*" --reload-exclude ".venv/*" --reload-exclude "yolo11n.pt"
 ) > "$BACKEND_LOG" 2>&1 &
 echo "$!" > "$BACKEND_PID_FILE"
 

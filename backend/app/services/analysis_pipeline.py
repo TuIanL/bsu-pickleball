@@ -318,6 +318,7 @@ class AnalysisPipeline:
         video_id: str | None,
         calibration_id: str | None = None,
         frame_stride: int | None = None,
+        court_view_match_threshold: float | None = None,
         progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> AnalysisPipelineResult:
@@ -440,6 +441,8 @@ class AnalysisPipeline:
                     calibration_id=calibration_id,
                     calibration_keypoints=calibration.keypoints,
                     frame_stride=frame_stride or self.frame_stride,
+                    court_view_match_threshold=court_view_match_threshold,
+                    progress_callback=progress_callback,
                     cancellation_token=cancellation_token,
                 )
             except Exception as exc:
@@ -1170,6 +1173,24 @@ class AnalysisPipeline:
                 results.append(VisualizationResult("unavailable", fields.analysis_overlay_video_detail))
             else:
                 try:
+                    def overlay_progress(written: int, frame_count: int) -> None:
+                        stage = self._stage(
+                            "visualization",
+                            "可视化输出",
+                            "active",
+                            f"正在生成分析叠加视频：已写出 {written}/{frame_count or 'unknown'} 帧",
+                        )
+                        if frame_count > 0:
+                            stage.progress = min(95, max(20, int((written / frame_count) * 95)))
+                        else:
+                            stage.progress = min(95, max(20, 20 + written // 120))
+                        stage.counters = {
+                            "written_frame_count": written,
+                            "source_frame_count": frame_count,
+                            "artifact": "analysis-overlay-video",
+                        }
+                        self._notify_progress(progress_callback, stage)
+
                     overlay_result = OverlayVideoWriter(config=config).write(
                         source_video_path=Path(video.path),
                         output_path=self.storage.analysis_overlay_video_path(job_id),
@@ -1179,6 +1200,7 @@ class AnalysisPipeline:
                         player_points=player_points,
                         ball_points=ball_points,
                         bounce_points=bounce_points,
+                        progress_callback=overlay_progress,
                     )
                     fields.analysis_overlay_video_status = overlay_result.status
                     fields.analysis_overlay_video_detail = overlay_result.detail
@@ -1252,6 +1274,8 @@ class AnalysisPipeline:
         calibration_id: str | None,
         calibration_keypoints: list[CalibrationKeypoint] | None,
         frame_stride: int,
+        court_view_match_threshold: float | None = None,
+        progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> _TrackingRunOutput:
         # 真正的"逐帧跟踪"循环（只在 路径A 调用）。
@@ -1272,8 +1296,14 @@ class AnalysisPipeline:
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         # 球场视角（court-view）相关评分器/状态机/阈值
+        # 支持任务级覆盖 court_view_match_threshold
+        effective_match_threshold = (
+            court_view_match_threshold
+            if court_view_match_threshold is not None
+            else self.settings.court_view_match_threshold
+        )
         court_view_thresholds = CourtViewThresholds(
-            match_threshold=self.settings.court_view_match_threshold,
+            match_threshold=effective_match_threshold,
             start_frames=self.settings.court_view_start_frames,
             end_frames=self.settings.court_view_end_frames,
             diagnostic_only=self.settings.court_view_diagnostic_only or not self.settings.enable_court_view_gate,
@@ -1510,6 +1540,24 @@ class AnalysisPipeline:
 
                 # 每隔 30 帧打一条进度日志
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
+                    frame_progress = self._tracking_frame_progress(
+                        processed_frame_count=processed_frame_count,
+                        frame_count=frame_count,
+                        stride=stride,
+                    )
+                    progress_stage = self._stage(
+                        "frame-sampling",
+                        "抽帧采样",
+                        "active",
+                        f"正在逐帧分析：已处理 {processed_frame_count}/{max(1, (frame_count + stride - 1) // stride) if frame_count else 'unknown'} 个抽样帧",
+                    )
+                    progress_stage.progress = frame_progress
+                    progress_stage.counters = {
+                        "processed_frame_count": processed_frame_count,
+                        "source_frame_count": frame_count,
+                        "frame_stride": stride,
+                    }
+                    self._notify_progress(progress_callback, progress_stage)
                     logger.info(
                         "Player tracking progress: processed %s/%s frames",
                         processed_frame_count,
@@ -1603,6 +1651,25 @@ class AnalysisPipeline:
             roi_filtered_detection_count=roi_filtered_detection_count,
             full_frame_fallback_count=full_frame_fallback_count,
         )
+        # 在 diagnostics 中记录阈值来源
+        threshold_source = "task_override" if court_view_match_threshold is not None else "default_config"
+        court_view_roi_artifact.diagnostics["match_threshold_source"] = threshold_source
+        court_view_roi_artifact.diagnostics["match_threshold_effective"] = effective_match_threshold
+        # 高剔除率预警
+        if (
+            court_view_roi_artifact.processed_frame_count > 0
+            and court_view_roi_artifact.non_court_view_frame_count / court_view_roi_artifact.processed_frame_count > 0.9
+        ):
+            gate_rate = court_view_roi_artifact.non_court_view_frame_count / court_view_roi_artifact.processed_frame_count
+            court_view_roi_artifact.detail += (
+                f"；注意：门控剔除率过高（{gate_rate:.0%}），骨架输出可能极度稀疏。"
+                f"可通过降低 courtViewMatchThreshold（当前 {effective_match_threshold}）或关闭门控来提升覆盖率"
+            )
+            court_view_roi_artifact.diagnostics["high_gating_rate_warning"] = (
+                f"non_court_view_frame_count/court_view_frame_count 比例为 "
+                f"{court_view_roi_artifact.non_court_view_frame_count}/{court_view_roi_artifact.court_view_frame_count} "
+                f"（剔除率 {gate_rate:.0%}），骨架输出可能极度稀疏"
+            )
         # 球分析后处理：提取至 _run_bounce_detection()，不再内联处理
         ball_run_output = self._run_bounce_detection(
             job_id=job_id,
@@ -2212,6 +2279,14 @@ class AnalysisPipeline:
     def _stage(stage_id: str, label: str, status: str, detail: str) -> PipelineStageResult:
         # 内部：构造一个阶段结果（统一封装）。
         return PipelineStageResult(id=stage_id, label=label, status=status, detail=detail)
+
+    @staticmethod
+    def _tracking_frame_progress(*, processed_frame_count: int, frame_count: int, stride: int) -> int:
+        # frame-sampling 只是长流水线的前半段，最高停在 95，给后续阶段留出进度空间。
+        if frame_count <= 0:
+            return min(95, max(10, processed_frame_count // 30))
+        expected_sample_count = max(1, (frame_count + max(1, stride) - 1) // max(1, stride))
+        return min(95, max(10, int((processed_frame_count / expected_sample_count) * 95)))
 
     @staticmethod
     def _notify_progress(progress_callback: ProgressCallback | None, stage: PipelineStageResult) -> None:

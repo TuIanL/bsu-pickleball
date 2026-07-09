@@ -11,7 +11,7 @@ import type {
   TrackingOverlayArtifact,
   VideoOverlayLabel,
 } from "../../types/report";
-import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
+import { resolveDetectionFrame, resolvePoseFrame, type PoseResolutionResult } from "./videoOverlayPlayback";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
@@ -352,7 +352,8 @@ function RealVideoOverlay({
   );
 
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
-  const skeletonCount = poseRenderFrame?.subjects.length ?? 0;
+  const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
+  const poseInGap = poseRenderFrame?.inGap ?? false;
   const ballSamples = useMemo(() => resolveBallSamples(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
   const allBounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
   const visibleBounceMarkers = useMemo(
@@ -570,8 +571,12 @@ function RealVideoOverlay({
           );
         })}
 
-        {showSkeleton && poseRenderFrame?.subjects.map((subject) => (
-          <g key={`${subject.track_id}-${subject.bbox.join("-")}`}>
+        {showSkeleton && poseRenderFrame?.frame?.subjects.map((subject) => (
+          <g
+            key={`${subject.track_id}-${subject.bbox.join("-")}`}
+            opacity={poseInGap ? 0 : 1}
+            style={{ transition: "opacity 0.3s ease-in-out" }}
+          >
             {poseOverlay?.skeleton_edges.map((edge) => {
               const from = subject.keypoints.find((keypoint) => keypoint.name === edge.from_keypoint && keypoint.visible);
               const to = subject.keypoints.find((keypoint) => keypoint.name === edge.to_keypoint && keypoint.visible);

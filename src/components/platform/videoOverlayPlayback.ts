@@ -8,6 +8,15 @@ import type {
 
 type OverlayFrame = DetectionOverlayFrame | PoseOverlayFrame;
 
+/** 骨架帧空洞超过此阈值（秒）时，骨架淡出隐藏而非沿用上一帧。 */
+const MAX_POSE_GAP_SECONDS = 0.5;
+
+export type PoseResolutionResult = {
+  frame: PoseOverlayFrame | undefined;
+  /** 当前播放时间是否落在骨架空洞区间（超出 MAX_POSE_GAP_SECONDS）。 */
+  inGap: boolean;
+};
+
 type FrameWindow<T extends OverlayFrame> = {
   current?: T;
   next?: T;
@@ -91,13 +100,20 @@ export function resolveDetectionFrame(frames: DetectionOverlayFrame[], currentTi
   };
 }
 
-export function resolvePoseFrame(frames: PoseOverlayFrame[], currentTime: number): PoseOverlayFrame | undefined {
+export function resolvePoseFrame(frames: PoseOverlayFrame[], currentTime: number): PoseResolutionResult {
   const window = findFrameWindow(frames, currentTime);
   if (!window.current) {
-    return undefined;
+    return { frame: undefined, inGap: false };
   }
   if (!window.next) {
-    return window.current;
+    return { frame: window.current, inGap: false };
+  }
+
+  // 检测空洞：当前帧与下一帧间隔超过阈值 → 标记骨架应隐藏
+  const gapSeconds = window.next.timestamp_seconds - window.current.timestamp_seconds;
+  const inGap = gapSeconds > MAX_POSE_GAP_SECONDS;
+  if (inGap) {
+    return { frame: window.current, inGap: true };
   }
 
   const nextByTrackId = new Map(window.next.subjects.map((subject) => [subject.track_id, subject]));
@@ -107,9 +123,12 @@ export function resolvePoseFrame(frames: PoseOverlayFrame[], currentTime: number
   });
 
   return {
-    ...window.current,
-    timestamp_seconds: currentTime,
-    subjects,
+    frame: {
+      ...window.current,
+      timestamp_seconds: currentTime,
+      subjects,
+    },
+    inGap: false,
   };
 }
 

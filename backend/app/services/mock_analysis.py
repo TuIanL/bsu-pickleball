@@ -446,6 +446,54 @@ def stop_analysis_worker() -> None:
     _WORKER_STARTED = False
 
 
+def recover_zombie_jobs() -> int:
+    """启动时回收僵尸任务：把长时间无进度更新的 running 任务标记为 failed。
+
+    被 reload 风暴、进程崩溃或 Worker 线程异常中断留下的 running 任务，
+    claim_next() 永远不会重新认领（它只认领 queued），必须显式置为终态。
+    这里的判断依据是 updatedAt 距离当前时间超过阈值（默认 120 秒）。
+    """
+    import logging
+    from datetime import datetime, timezone, timedelta
+    from app.core.config import get_settings
+
+    logger = logging.getLogger(__name__)
+    settings = get_settings()
+    threshold_seconds = max(60, settings.job_zombie_timeout_seconds)
+    now = datetime.now(timezone.utc)
+    recovered = 0
+
+    _sync_orchestration_storage()
+    for job in _JOB_STORE.list():
+        if job.canonicalStatus != "running":
+            continue
+        try:
+            updated = datetime.fromisoformat(job.updatedAt or job.createdAt)
+        except (ValueError, TypeError):
+            continue
+        if (now - updated).total_seconds() <= threshold_seconds:
+            continue
+
+        logger.warning(
+            "标记僵尸任务 %s 为 failed（%s 未更新，阈值=%ss）",
+            job.id, updated.isoformat(), threshold_seconds,
+        )
+        try:
+            _JOB_STORE.mark_failed(
+                job,
+                stages=job.stages,
+                message="分析任务因后端异常中断（热重载风暴或 Worker 崩溃），请重新提交。",
+                error_code="ZOMBIE_RECOVERED",
+            )
+            recovered += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("无法回收僵尸任务 %s: %s", job.id, exc)
+
+    if recovered:
+        logger.info("启动时回收了 %s 个僵尸任务", recovered)
+    return recovered
+
+
 def batch_delete_analysis_jobs(job_ids: list[str]) -> list[AnalysisDeleteResult]:
     # 批量删除多个任务。
     return [delete_analysis_job(job_id) for job_id in job_ids]
