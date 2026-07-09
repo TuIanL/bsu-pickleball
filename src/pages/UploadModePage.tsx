@@ -1,4 +1,3 @@
-import { useSearchParams } from "react";
 import type { ReactNode } from "react";
 import type { AppPath } from "../types/report";
 

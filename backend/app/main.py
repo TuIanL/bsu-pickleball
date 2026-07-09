@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import os as _os
 
 # 导入各个模块的路由
 from app.api.routes_analysis import router as analysis_router
@@ -8,6 +10,7 @@ from app.api.routes_calibration import router as calibration_router
 from app.api.routes_camera import router as camera_router
 from app.api.routes_field_sessions import router as field_sessions_router
 from app.api.routes_recording import router as recording_router
+from app.api.routes_sync_recording import router as sync_recording_router
 from app.api.routes_timeline_events import router as timeline_events_router
 from app.api.routes_video import router as video_router
 # 导入配置和日志设置
@@ -43,9 +46,15 @@ app.include_router(calibration_router)
 app.include_router(manual_calibration_router)
 app.include_router(camera_router)
 app.include_router(recording_router)
+app.include_router(sync_recording_router)
 app.include_router(analysis_router)
 app.include_router(field_sessions_router)
 app.include_router(timeline_events_router)
+
+# 挂载双摄短录测试首帧静态目录
+_TEST_FRAMES_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), "data", "sync-recordings", "tests")
+_os.makedirs(_TEST_FRAMES_DIR, exist_ok=True)
+app.mount("/api/sync-recordings/test-frames", StaticFiles(directory=_TEST_FRAMES_DIR), name="test_frames")
 
 
 @app.on_event("startup")

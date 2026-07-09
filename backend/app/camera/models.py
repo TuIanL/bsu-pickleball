@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # 摄像头信息：登记后在系统里保存的一条摄像头记录
@@ -96,3 +96,144 @@ class RecordingDeleteResult(BaseModel):
     session_id: str
     status: RecordingDeleteStatus
     detail: str = ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 双摄同步录制模型（add-dual-camera-sync-recording）
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 机位标识（两个摄像头的槽位 key，平等命名）
+CameraSlotRole = Literal["cam_1", "cam_2"]
+
+# 双摄录制会话状态
+SyncRecordingStatus = Literal["recording", "completed", "failed", "canceled"]
+
+# 分段状态
+SyncSegmentStatus = Literal["recording", "completed", "failed"]
+
+
+class CameraSlotConfig(BaseModel):
+    """一个机位槽位的配置（摄像头 + 机位角度）"""
+    role: CameraSlotRole
+    camera_id: str
+    camera_angle: str = ""  # baseline_high / sideline 等
+    stream_url_snapshot: str = ""  # 开始录制时的流地址快照
+
+
+class SyncStartRequest(BaseModel):
+    """开始双摄同步录制请求"""
+    cam_1_id: str = ""
+    cam_2_id: str = ""
+    field_session_id: Optional[str] = None
+    court_name: str = ""
+    match_format: Optional[Literal["singles", "doubles"]] = None
+    cam_1_angle: str = "baseline_high"
+    cam_2_angle: str = "baseline_high"
+    fps: int = Field(default=30, ge=1, le=120)
+    resolution: str = "1920x1080"
+    auto_analyze_after_stop: bool = True
+
+    # 临时兼容旧字段：允许前端使用 primary_camera_id / secondary_camera_id
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_old_fields(cls, data: any) -> any:
+        if isinstance(data, dict):
+            if data.get("primary_camera_id") and not data.get("cam_1_id"):
+                data["cam_1_id"] = data["primary_camera_id"]
+            if data.get("secondary_camera_id") and not data.get("cam_2_id"):
+                data["cam_2_id"] = data["secondary_camera_id"]
+            if data.get("primary_angle") and not data.get("cam_1_angle"):
+                data["cam_1_angle"] = data["primary_angle"]
+            if data.get("secondary_angle") and not data.get("cam_2_angle"):
+                data["cam_2_angle"] = data["secondary_angle"]
+        return data
+
+
+class SyncSegmentFile(BaseModel):
+    """一个分段中的单路文件信息"""
+    camera_id: str
+    role: CameraSlotRole
+    file_path: str
+    file_size: int = 0
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+
+class SyncSegment(BaseModel):
+    """一个同步分段（两路同时录制的一个片段）"""
+    segment_index: int
+    status: SyncSegmentStatus = "recording"
+    files: list[SyncSegmentFile] = []
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    restart_count: int = 0  # 该分段的同步重启次数
+    error_message: Optional[str] = None
+
+
+class SyncTestResult(BaseModel):
+    """双摄短录测试结果"""
+    success: bool
+    cam_1_id: str
+    cam_2_id: str
+    duration_sec: float
+    cam_1_online: bool = False
+    cam_2_online: bool = False
+    cam_1_first_frame_url: Optional[str] = None
+    cam_2_first_frame_url: Optional[str] = None
+    cam_1_first_frame_exists: bool = False
+    cam_2_first_frame_exists: bool = False
+    cam_1_file_size: int = 0
+    cam_2_file_size: int = 0
+    cam_1_error: Optional[str] = None
+    cam_2_error: Optional[str] = None
+    test_completed_at: Optional[datetime] = None
+
+
+class SyncRecordingSession(BaseModel):
+    """双摄同步录制会话"""
+    session_id: str
+    field_session_id: Optional[str] = None
+    status: SyncRecordingStatus = "recording"
+    camera_slots: dict[str, CameraSlotConfig] = {}  # "cam_1" / "cam_2"
+    segments: list[SyncSegment] = []
+    output_dir: str = ""
+    default_analysis_video_id: Optional[str] = None
+    registered_video_ids: dict[CameraSlotRole, str] = {}
+    associated_video_paths: list[str] = []
+    court_name: str = ""
+    match_format: str = "doubles"
+    fps: int = 30
+    resolution: str = "1920x1080"
+    auto_analyze_after_stop: bool = True
+    started_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    duration_sec: Optional[float] = None
+    error_message: Optional[str] = None
+    total_restarts: int = 0
+
+
+class SyncTestRequest(BaseModel):
+    """双摄短录测试请求"""
+    cam_1_id: str = ""
+    cam_2_id: str = ""
+    duration: int = Field(default=5, ge=3, le=30)  # 测试时长 3~30 秒
+
+    # 临时兼容旧字段
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_old_fields(cls, data: any) -> any:
+        if isinstance(data, dict):
+            if data.get("primary_camera_id") and not data.get("cam_1_id"):
+                data["cam_1_id"] = data["primary_camera_id"]
+            if data.get("secondary_camera_id") and not data.get("cam_2_id"):
+                data["cam_2_id"] = data["secondary_camera_id"]
+        return data
+
+
+class SyncStopResponse(BaseModel):
+    """停止双摄同步录制响应"""
+    session: SyncRecordingSession
+    default_analysis_video_id: Optional[str] = None
+    analysis_available: bool = False
+    analysis_blocked_reason: Optional[str] = None

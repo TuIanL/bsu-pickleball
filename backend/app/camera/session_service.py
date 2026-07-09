@@ -79,6 +79,11 @@ class SessionService:
         if camera is None:
             raise ValueError(f"摄像头 {request.camera_id} 不存在")
 
+        # 检查是否被双摄同步录制占用
+        from app.camera.sync_recorder_service import sync_recording_service
+        if sync_recording_service.is_camera_in_sync_recording(request.camera_id):
+            raise RuntimeError(f"摄像头 {request.camera_id} 正在参与双摄同步录制，无法单独开始录制")
+
         # 同一摄像头不能同时录两路
         if self.find_active_session(request.camera_id) is not None:
             raise RuntimeError(f"摄像头 {request.camera_id} 正在录制中")

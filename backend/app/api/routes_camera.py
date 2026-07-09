@@ -86,11 +86,16 @@ def delete_camera(camera_id: str) -> CameraDeleteResponse:
     # 延迟导入：只在真正需要时才加载会话服务。
     # 这样写可以避开"模块 A 导入 B、B 又导入 A"造成的循环导入问题。
     from app.camera.session_service import session_service
+    from app.camera.sync_recorder_service import sync_recording_service
 
-    # 检查是否有正在进行的录制会话
+    # 检查是否有正在进行的单摄录制会话
     active = session_service.find_active_session(camera_id)
     if active is not None:
         raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 正在录制中，无法删除")
+
+    # 检查是否正在参与双摄同步录制
+    if sync_recording_service.is_camera_in_sync_recording(camera_id):
+        raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 正在参与双摄同步录制中，无法删除")
     # 执行删除；登记中心返回 True 表示删除成功
     if not camera_registry.delete(camera_id):
         raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")

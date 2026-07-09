@@ -20,17 +20,6 @@ logger = logging.getLogger(__name__)
 OnExitCallback = Callable[[int], None]
 
 
-def _build_video_filter(fps: int, resolution: str | None) -> str:
-    safe_fps = max(1, min(int(fps or 30), 120))
-    filters = [f"fps={safe_fps}"]
-    if resolution and "x" in resolution:
-        width, height = resolution.lower().split("x", 1)
-        if width.isdigit() and height.isdigit():
-            filters.append(f"scale={int(width)}:{int(height)}")
-    filters.append("format=yuv420p")
-    return ",".join(filters)
-
-
 class Recorder:
     """管理一个 FFmpeg 子进程，将视频流录制为 MP4 文件。"""
 
@@ -48,7 +37,7 @@ class Recorder:
         output_path: Path,
         username: str | None = None,
         password: str | None = None,
-        fps: int = 30,
+        fps: int = 90,
         resolution: str = "1920x1080",
         on_exit: OnExitCallback | None = None,
     ) -> None:
@@ -69,24 +58,20 @@ class Recorder:
                 url = f"{parsed[0]}://{username}:{password}@{parsed[1]}"
 
         # 组装 FFmpeg 命令行参数。
-        # RTSP 摄像头的原始 H.264 包时间戳经常不适合浏览器直接回放；
-        # 直接 -c:v copy 写 MP4 时容易出现播放几秒卡一下。这里重新生成时间戳，
-        # 转成恒定帧率的 H.264 MP4，优先保证回放稳定。
+        # 单摄训练素材优先保留摄像头原始码流：重新编码 1080p/90fps 很容易
+        # 让本机 CPU 追不上，FFmpeg 随后用重复帧补齐恒定帧率，肉眼会看到
+        # 周期性卡顿。这里不再强制 -r/-vsync，而是让摄像头自己决定真实帧率。
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",          # RTSP 用 TCP 传输（比 UDP 更稳定）
-            "-timeout", "5000000",             # RTSP 建连/读包超时 5 秒，避免网络异常时长时间卡住
-            "-fflags", "+genpts",              # 为时间戳异常的流生成连续 PTS
-            "-use_wallclock_as_timestamps", "1",
+            "-timeout", "5000000",             # RTSP 建连/读包超时 5 秒
+            "-fflags", "+genpts",              # 输入时间戳不完整时生成连续 PTS
             "-i", url,                         # 输入：视频流地址
-            "-map", "0:v:0",                   # 只录第一路视频，避免音频时间戳拖慢浏览器回放
-            "-an",
-            "-vf", _build_video_filter(fps, resolution),
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-movflags", "+faststart",
-            "-avoid_negative_ts", "make_zero",
+            "-map", "0:v:0",                   # 只录第一路视频
+            "-an",                              # 不录音频
+            "-c:v", "copy",                    # 不重编码，避免 90fps 软件编码卡顿
+            "-fps_mode", "passthrough",        # 保留输入帧时间戳，不补帧/丢帧
+            "-movflags", "+faststart",         # MP4 moov atom 前置，支持快速打开
             "-y",                              # 输出文件已存在则覆盖
             str(output_path),                  # 输出文件路径
         ]

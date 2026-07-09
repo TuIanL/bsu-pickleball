@@ -250,6 +250,105 @@ export interface RecordingSession {
   error_message?: string;
 }
 
+export type SyncRecordingStatus = "recording" | "completed" | "failed" | "canceled";
+
+export type SyncSegmentStatus = "recording" | "completed" | "failed";
+
+export type CameraSlotRole = "cam_1" | "cam_2";
+
+export interface CameraSlotConfig {
+  role: CameraSlotRole;
+  camera_id: string;
+  camera_angle: string;
+  stream_url_snapshot: string;
+}
+
+export interface SyncSegmentFile {
+  camera_id: string;
+  role: CameraSlotRole;
+  file_path: string;
+  file_size: number;
+  started_at?: string;
+  ended_at?: string;
+  error_message?: string;
+}
+
+export interface SyncSegment {
+  segment_index: number;
+  status: SyncSegmentStatus;
+  files: SyncSegmentFile[];
+  started_at?: string;
+  ended_at?: string;
+  restart_count: number;
+  error_message?: string;
+}
+
+export interface SyncStartRequest {
+  cam_1_id: string;
+  cam_2_id: string;
+  field_session_id?: string;
+  court_name?: string;
+  match_format?: "singles" | "doubles";
+  cam_1_angle?: string;
+  cam_2_angle?: string;
+  fps?: number;
+  resolution?: string;
+  auto_analyze_after_stop?: boolean;
+}
+
+export interface SyncTestRequest {
+  cam_1_id: string;
+  cam_2_id: string;
+  duration: number;
+}
+
+export interface SyncTestResult {
+  success: boolean;
+  cam_1_id: string;
+  cam_2_id: string;
+  duration_sec: number;
+  cam_1_online: boolean;
+  cam_2_online: boolean;
+  cam_1_first_frame_url?: string | null;
+  cam_2_first_frame_url?: string | null;
+  cam_1_first_frame_exists: boolean;
+  cam_2_first_frame_exists: boolean;
+  cam_1_file_size: number;
+  cam_2_file_size: number;
+  cam_1_error?: string;
+  cam_2_error?: string;
+  test_completed_at?: string;
+}
+
+export interface SyncRecordingSession {
+  session_id: string;
+  field_session_id?: string;
+  status: SyncRecordingStatus;
+  camera_slots: Record<string, CameraSlotConfig>;
+  segments: SyncSegment[];
+  output_dir: string;
+  default_analysis_video_id?: string;
+  registered_video_ids?: Partial<Record<CameraSlotRole, string>>;
+  associated_video_paths: string[];
+  court_name: string;
+  match_format: string;
+  fps: number;
+  resolution: string;
+  auto_analyze_after_stop: boolean;
+  started_at?: string;
+  stopped_at?: string;
+  duration_sec?: number;
+  error_message?: string;
+  total_restarts: number;
+}
+
+export interface SyncStopResponse {
+  session: SyncRecordingSession;
+  default_analysis_video_id?: string;
+  analysis_available: boolean;
+  analysis_blocked_reason?: string;
+}
+
 export interface FieldSession {
   id: string;
   title: string;

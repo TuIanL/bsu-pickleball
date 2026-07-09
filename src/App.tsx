@@ -39,6 +39,8 @@ import { ProgressChart } from "./components/platform/ProgressChart";
 import { ReportVisualization } from "./components/platform/ReportVisualization";
 import { SkillRatings } from "./components/platform/SkillRatings";
 import { VideoAnalysisCard } from "./components/platform/VideoAnalysisCard";
+import { FieldSessionGroupCard } from "./components/platform/FieldSessionGroupCard";
+import { groupRecordingsByFieldSession } from "./services/recordingGrouping";
 import {
   drillRecommendations,
   hardwarePreview,
@@ -71,6 +73,7 @@ import type {
   ProbeResult,
   RecordingSession,
   RecordingStartRequest,
+  SyncRecordingSession,
   ReportType,
   ServeEventsArtifact,
   SessionTimelineEvent,
@@ -118,6 +121,8 @@ import {
   cancelRecording,
   listRecordings,
   deleteRecording,
+  listSyncRecordings,
+  deleteSyncRecording,
   createFieldSession,
   listFieldSessions,
   startFieldSession,
@@ -445,15 +450,31 @@ function AnalysisTasksPage({
   const [deletingJobIds, setDeletingJobIds] = useState<string[]>([]);
   const [cancelingJobIds, setCancelingJobIds] = useState<string[]>([]);
 
-  // 来源筛选：上传视频 / 录制视频
-  const [sourceFilter, setSourceFilter] = useState<"upload" | "recorded">("upload");
+  // 来源筛选：上传视频 / 录制视频 / 双摄录制
+  const [sourceFilter, setSourceFilter] = useState<"upload" | "recorded" | "sync_recording">("upload");
   const [recordings, setRecordings] = useState<RecordingSession[]>([]);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [fieldSessions, setFieldSessions] = useState<FieldSession[]>([]);
+
+  // 双摄同步录制
+  const [syncRecordings, setSyncRecordings] = useState<SyncRecordingSession[]>([]);
+  const [syncRecordingsLoading, setSyncRecordingsLoading] = useState(false);
+  const [fieldSessionsLoading, setFieldSessionsLoading] = useState(false);
   const [playingSession, setPlayingSession] = useState<RecordingSession | null>(null);
+  const [playingSyncSession, setPlayingSyncSession] = useState<SyncRecordingSession | null>(null);
   const [playbackError, setPlaybackError] = useState(false);
+  const [syncPlaybackErrors, setSyncPlaybackErrors] = useState<Record<string, boolean>>({});
 
   const handlePlaySession = (session: RecordingSession) => { setPlaybackError(false); setPlayingSession(session); };
   const handleClosePlayer = () => { setPlayingSession(null); setPlaybackError(false); };
+  const handlePlaySyncSession = (session: SyncRecordingSession) => {
+    setSyncPlaybackErrors({});
+    setPlayingSyncSession(session);
+  };
+  const handleCloseSyncPlayer = () => {
+    setPlayingSyncSession(null);
+    setSyncPlaybackErrors({});
+  };
 
   const handleDeleteRecordingSession = async (sessionId: string) => {
     if (!window.confirm("确定要删除该录制记录吗？")) return;
@@ -476,11 +497,52 @@ function AnalysisTasksPage({
     }
   }, []);
 
+  const loadFieldSessions = useCallback(async () => {
+    setFieldSessionsLoading(true);
+    try {
+      setFieldSessions(await listFieldSessions());
+    } catch {
+      setFieldSessions([]);
+    } finally {
+      setFieldSessionsLoading(false);
+    }
+  }, []);
+
+  const loadSyncRecordingsList = useCallback(async () => {
+    setSyncRecordingsLoading(true);
+    try {
+      setSyncRecordings(await listSyncRecordings());
+    } catch {
+      setSyncRecordings([]);
+    } finally {
+      setSyncRecordingsLoading(false);
+    }
+  }, []);
+
+  const handleDeleteSyncRecordingSession = async (sessionId: string) => {
+    if (!window.confirm("确定要删除该双摄录制记录吗？")) return;
+    try {
+      await deleteSyncRecording(sessionId);
+      await loadSyncRecordingsList();
+    } catch {
+      // silent
+    }
+  };
+
+  const recordingGroups = useMemo(
+    () => groupRecordingsByFieldSession(fieldSessions, recordings),
+    [fieldSessions, recordings],
+  );
+
   useEffect(() => {
     if (sourceFilter === "recorded") {
       void loadRecordings();
+      void loadFieldSessions();
     }
-  }, [sourceFilter, loadRecordings]);
+    if (sourceFilter === "sync_recording") {
+      void loadSyncRecordingsList();
+    }
+  }, [sourceFilter, loadRecordings, loadFieldSessions, loadSyncRecordingsList]);
 
   // 录制列表轮询（有活跃录制时）
   useEffect(() => {
@@ -698,25 +760,29 @@ function AnalysisTasksPage({
           </div>
         </div>
         <div className="grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-5 shadow-sm">
-          {sourceFilter === "upload"
+          {(sourceFilter === "upload"
             ? [
-                ["全部任务", visibleJobs.length],
-                ["分析中", activeCount],
-                ["已完成", completedCount],
-                ["失败", failedCount],
-                ["已取消", canceledCount],
-              ].map(([label, value]) => (
-                <div className="flex items-center justify-between rounded-2xl bg-[#F5FAF1] px-4 py-3" key={label}>
-                  <span className="text-sm font-bold text-slate-500">{label}</span>
-                  <strong className="text-2xl font-black text-[#14241B]">{value}</strong>
-                </div>
-              ))
-            : [
+              ["全部任务", visibleJobs.length],
+              ["分析中", activeCount],
+              ["已完成", completedCount],
+              ["失败", failedCount],
+              ["已取消", canceledCount],
+            ]
+            : sourceFilter === "sync_recording"
+              ? [
+                ["全部双摄", syncRecordings.length],
+                ["录制中", syncRecordings.filter((s) => s.status === "recording").length],
+                ["已完成", syncRecordings.filter((s) => s.status === "completed").length],
+                ["可预览", syncRecordings.filter((s) => !!s.registered_video_ids?.cam_1 || !!s.default_analysis_video_id).length],
+                ["失败/取消", syncRecordings.filter((s) => s.status === "failed" || s.status === "canceled").length],
+              ]
+              : [
                 ["全部录制", recordings.length],
                 ["录制中", recordings.filter((s) => s.status === "recording").length],
                 ["已完成", recordings.filter((s) => s.status === "completed").length],
                 ["失败/取消", recordings.filter((s) => s.status === "failed" || s.status === "canceled").length],
-              ].map(([label, value]) => (
+              ]
+          ).map(([label, value]) => (
                 <div className="flex items-center justify-between rounded-2xl bg-[#F5FAF1] px-4 py-3" key={label}>
                   <span className="text-sm font-bold text-slate-500">{label}</span>
                   <strong className="text-2xl font-black text-[#14241B]">{value}</strong>
@@ -758,6 +824,16 @@ function AnalysisTasksPage({
         >
           <Camera size={14} className="inline mr-1.5" />
           录制视频任务
+        </button>
+        <button
+          className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
+            sourceFilter === "sync_recording" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+          }`}
+          onClick={() => setSourceFilter("sync_recording")}
+          type="button"
+        >
+          <Camera size={14} className="inline mr-1.5" />
+          双摄录制
         </button>
       </div>
 
@@ -812,14 +888,14 @@ function AnalysisTasksPage({
         </>
       )}
 
-      {/* 录制视频任务列表 */}
+      {/* 录制视频任务列表（按采集任务分组） */}
       {sourceFilter === "recorded" && (
         <>
-          {recordingsLoading ? (
+          {recordingsLoading || fieldSessionsLoading ? (
             <section className="mt-6 sport-card p-8 text-center">
               <p className="text-sm font-bold text-[#168A34]">正在读取录制列表</p>
             </section>
-          ) : recordings.length === 0 ? (
+          ) : fieldSessions.length === 0 && recordings.length === 0 ? (
             <section className="mt-6 sport-card p-8 text-center">
               <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">暂无录制视频</p>
               <h2 className="mt-3 text-3xl font-black text-[#14241B]">先去球场采集录制</h2>
@@ -830,13 +906,51 @@ function AnalysisTasksPage({
             </section>
           ) : (
             <section className="mt-6 grid gap-4">
-              {recordings.map((session) => (
-                <RecordingTaskCard
-                  key={session.session_id}
-                  session={session}
+              {recordingGroups.map((group) => (
+                <FieldSessionGroupCard
+                  key={group.fieldSession?.id ?? "uncategorized"}
+                  fieldSession={group.fieldSession}
+                  recordings={group.recordings}
                   onNavigate={onNavigate}
-                  onRefresh={() => loadRecordings()}
+                  onRefresh={() => { void loadRecordings(); void loadFieldSessions(); }}
                   onPlay={handlePlaySession}
+                />
+              ))}
+            </section>
+          )}
+        </>
+      )}
+
+      {/* 双摄录制任务列表 */}
+      {sourceFilter === "sync_recording" && (
+        <>
+          {syncRecordingsLoading ? (
+            <section className="mt-8 text-center py-12 rounded-2xl bg-[#F1F7EC]/60">
+              <RefreshCw size={20} className="mx-auto mb-3 text-slate-300 animate-spin" />
+              <p className="text-sm text-slate-400">正在读取双摄录制列表</p>
+            </section>
+          ) : syncRecordings.length === 0 ? (
+            <section className="mt-8 text-center py-12 rounded-2xl border border-dashed border-[#DDE9D6]">
+              <Camera size={28} className="mx-auto mb-3 text-slate-300" />
+              <p className="text-sm font-bold text-slate-500 mb-1">暂无双摄录制记录</p>
+              <p className="text-xs text-slate-400 mb-4">前往采集控制台开始双摄同步录制</p>
+              <button
+                className="green-button inline-flex items-center gap-2 px-4 py-2 text-sm"
+                onClick={() => onNavigate("/capture" as AppPath)}
+                type="button"
+              >
+                进入采集
+              </button>
+            </section>
+          ) : (
+            <section className="mt-6 grid gap-4">
+              {syncRecordings.map((sr) => (
+                <SyncRecordingTaskCard
+                  key={sr.session_id}
+                  session={sr}
+                  onDelete={handleDeleteSyncRecordingSession}
+                  onNavigate={onNavigate}
+                  onPlay={handlePlaySyncSession}
                 />
               ))}
             </section>
@@ -856,6 +970,43 @@ function AnalysisTasksPage({
           ) : (
             <video key={playingSession.session_id} className="w-full rounded-xl bg-black" controls autoPlay src={getVideoStreamUrl(playingSession.video_id)} onError={() => setPlaybackError(true)} />
           )}
+        </Modal>
+      )}
+
+      {sourceFilter === "sync_recording" && playingSyncSession && (
+        <Modal isOpen onClose={handleCloseSyncPlayer} title={`双摄回放 · ${playingSyncSession.session_id}`} size="xl">
+          <div className="mb-3 flex flex-wrap gap-3 text-xs text-slate-400">
+            <span>{playingSyncSession.court_name || "未命名球场"}</span>
+            {playingSyncSession.duration_sec ? <span>{playingSyncSession.duration_sec.toFixed(0)}秒</span> : null}
+            <span>{playingSyncSession.segments?.length ?? 0} 个同步分段</span>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {(["cam_1", "cam_2"] as const).map((role) => {
+              const slot = playingSyncSession.camera_slots?.[role];
+              const videoId = playingSyncSession.registered_video_ids?.[role] ?? (role === "cam_1" ? playingSyncSession.default_analysis_video_id : undefined);
+              const hasError = syncPlaybackErrors[role];
+              return (
+                <section className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF4] p-3" key={role}>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-black text-[#14241B]">{role === "cam_1" ? "底线机位 A" : "底线机位 B"}</h3>
+                    <span className="truncate text-xs font-bold text-slate-500">{slot?.camera_id ?? "未记录摄像头"}</span>
+                  </div>
+                  {videoId && !hasError ? (
+                    <video
+                      className="aspect-video w-full rounded-lg bg-black object-contain"
+                      controls
+                      src={getVideoStreamUrl(videoId)}
+                      onError={() => setSyncPlaybackErrors((current) => ({ ...current, [role]: true }))}
+                    />
+                  ) : (
+                    <div className="flex aspect-video items-center justify-center rounded-lg bg-[#0F172A] px-4 text-center text-sm font-semibold text-white/60">
+                      {hasError ? "视频播放失败" : "该机位还没有注册成可预览视频"}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
         </Modal>
       )}
     </PageFrame>
@@ -1051,92 +1202,6 @@ function formatDurationMs(value: number) {
   return `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1000)}s`;
 }
 
-function RecordingTaskCard({
-  session,
-  onNavigate,
-  onRefresh,
-  onPlay,
-}: {
-  session: RecordingSession;
-  onNavigate: NavigateFn;
-  onRefresh: () => void;
-  onPlay: (session: RecordingSession) => void;
-}) {
-  const isPlayable = session.status === "completed" && !!session.video_id;
-  const hasAnalysis = !!session.auto_analysis_job_id;
-
-  const statusLabel = (status: string) => {
-    const map: Record<string, string> = { recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消" };
-    return map[status] ?? status;
-  };
-  const statusColor = (status: string) => {
-    const map: Record<string, string> = { recording: "text-red-500 bg-red-50", completed: "text-green-600 bg-green-50", failed: "text-orange-500 bg-orange-50", canceled: "text-gray-400 bg-gray-50" };
-    return map[status] ?? "text-gray-500 bg-gray-50";
-  };
-
-  const handleDelete = async () => {
-    if (!window.confirm(`确定删除录制「${session.session_id}」吗？`)) return;
-    try {
-      await deleteRecording(session.session_id);
-      onRefresh();
-    } catch {
-      // silent
-    }
-  };
-
-  return (
-    <article className="sport-card p-5 sm:p-6">
-      <div className="grid gap-5 lg:grid-cols-[1fr_0.38fr] lg:items-center">
-        <div>
-          <div className="flex flex-wrap items-center gap-2 mb-2">
-            <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-500">
-              <Camera size={12} /> 录制视频
-            </span>
-            <span className={`rounded-full px-3 py-1 text-xs font-black ${statusColor(session.status)}`}>{statusLabel(session.status)}</span>
-            {hasAnalysis && <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/8 px-3 py-1 text-xs font-bold text-[#168A34]">已分析</span>}
-            {session.duration_sec ? <span className="text-xs text-slate-400">{session.duration_sec.toFixed(0)}秒</span> : null}
-          </div>
-          <h4 className="text-lg font-black text-[#14241B]">{session.court_name || session.session_id}</h4>
-          <p className="mt-1 text-xs text-slate-400">
-            {session.camera_id} · {session.camera_angle ?? "未知角度"} · {session.match_format === "doubles" ? "双打" : "单打"}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-          {isPlayable && (
-            <button className="quiet-button px-3 py-2 text-xs" onClick={() => onPlay(session)} type="button">
-              <Play size={12} className="inline mr-1" />查看视频
-            </button>
-          )}
-          {isPlayable && !hasAnalysis && (
-            <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/new?videoId=${session.video_id}&source=recording&sessionId=${session.session_id}`)} type="button">
-              开始分析
-            </button>
-          )}
-          {hasAnalysis && (
-            <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)} type="button">
-              查看分析结果
-            </button>
-          )}
-          {session.status !== "recording" && (
-            <button className="quiet-button px-3 py-2 text-xs text-[#C92A2A]" onClick={handleDelete} type="button">
-              <Trash2 size={12} className="inline mr-1" />删除
-            </button>
-          )}
-          {session.status === "recording" && (
-            <span className="text-xs text-slate-400">录制进行中...</span>
-          )}
-          {!isPlayable && session.status !== "recording" && (
-            <span className="text-xs text-slate-400">{session.status === "failed" ? `失败: ${session.error_message ?? "未知错误"}` : "视频未注册"}</span>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-/**
- * 新建分析任务页组件
- */
 function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const today = new Date().toISOString().slice(0, 10);
   const calibrationVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -5027,6 +5092,98 @@ function FusionBlock({ icon, label, value }: { icon: ReactNode; label: string; v
         {label}
       </span>
       <strong className="mt-3 block text-base leading-6 text-[#14241B]">{value}</strong>
+    </div>
+  );
+}
+
+function SyncRecordingTaskCard({
+  session,
+  onDelete,
+  onNavigate,
+  onPlay,
+}: {
+  session: SyncRecordingSession;
+  onDelete: (sessionId: string) => void;
+  onNavigate: NavigateFn;
+  onPlay: (session: SyncRecordingSession) => void;
+}) {
+  const cam1Name = session.camera_slots?.cam_1?.camera_id ?? "—";
+  const cam2Name = session.camera_slots?.cam_2?.camera_id ?? "—";
+  const cam1VideoId = session.registered_video_ids?.cam_1 ?? session.default_analysis_video_id;
+  const cam2VideoId = session.registered_video_ids?.cam_2;
+  const canPlay = session.status === "completed" && (!!cam1VideoId || !!cam2VideoId);
+  const statusLabel: Record<string, string> = {
+    recording: "录制中",
+    completed: "已完成",
+    failed: "失败",
+    canceled: "已取消",
+  };
+  const statusColor: Record<string, string> = {
+    recording: "bg-[#FF4D4F]/12 text-[#C92A2A]",
+    completed: "bg-[#22C55E]/12 text-[#168A34]",
+    failed: "bg-[#FF4D4F]/12 text-[#C92A2A]",
+    canceled: "bg-slate-200 text-slate-500",
+  };
+
+  return (
+    <div className="rounded-xl border border-[#DDE9D6] bg-white p-4">
+      <div className="flex items-start justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold text-[#14241B]">
+              底线机位 A: {cam1Name}
+            </span>
+            <span className="text-xs text-slate-400">·</span>
+            <span className="text-sm font-bold text-[#14241B]">
+              底线机位 B: {cam2Name}
+            </span>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${statusColor[session.status] ?? ""}`}>
+              {statusLabel[session.status] ?? session.status}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+            {session.duration_sec != null && (
+              <span>时长: {Math.floor(session.duration_sec / 60)}分{Math.floor(session.duration_sec % 60)}秒</span>
+            )}
+            <span>分段: {session.segments?.length ?? 0}</span>
+            <span>可预览: {[cam1VideoId ? "A" : null, cam2VideoId ? "B" : null].filter(Boolean).join(" / ") || "未注册"}</span>
+            {session.total_restarts > 0 && <span className="text-[#E8A838]">重启 {session.total_restarts} 次</span>}
+          </div>
+        </div>
+      </div>
+      {session.error_message && (
+        <p className="mt-2 text-xs text-[#FF4D4F] truncate">{session.error_message}</p>
+      )}
+      {session.default_analysis_video_id && session.status === "completed" && (
+        <div className="mt-3 pt-3 border-t border-[#DDE9D6]">
+          <span className="text-xs text-[#168A34] font-bold">默认分析视频已就绪</span>
+        </div>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2 border-t border-[#DDE9D6] pt-3">
+        {canPlay && (
+          <button className="quiet-button px-3 py-2 text-xs" onClick={() => onPlay(session)} type="button">
+            <Play size={12} className="inline mr-1" />查看双路视频
+          </button>
+        )}
+        {cam1VideoId && session.status === "completed" && (
+          <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/new?videoId=${cam1VideoId}&source=recording&sessionId=${session.session_id}`)} type="button">
+            分析 A 机位
+          </button>
+        )}
+        {session.field_session_id && (
+          <button className="quiet-button px-3 py-2 text-xs" onClick={() => onNavigate(`/capture/${session.field_session_id}` as AppPath)} type="button">
+            返回采集
+          </button>
+        )}
+        {session.status !== "recording" && (
+          <button className="quiet-button px-3 py-2 text-xs text-[#C92A2A]" onClick={() => onDelete(session.session_id)} type="button">
+            <Trash2 size={12} className="inline mr-1" />删除
+          </button>
+        )}
+        {!canPlay && session.status === "completed" && (
+          <span className="self-center text-xs text-slate-400">视频尚未注册，请刷新列表或检查分段文件</span>
+        )}
+      </div>
     </div>
   );
 }

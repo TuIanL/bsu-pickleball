@@ -657,6 +657,11 @@ import type {
   RecordingSession,
   RecordingStartRequest,
   SessionTimelineEvent,
+  SyncRecordingSession,
+  SyncStartRequest,
+  SyncStopResponse,
+  SyncTestRequest,
+  SyncTestResult,
   TimelineEventCreate,
   TimelineEventUpdate,
   TimelineEventListParams,
@@ -723,6 +728,59 @@ export async function getRecording(sessionId: string): Promise<RecordingSession>
 
 export async function deleteRecording(sessionId: string): Promise<{ session_id: string; status: string; detail: string }> {
   return requestJson<{ session_id: string; status: string; detail: string }>(`/api/recordings/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
+// ── Dual-Camera Sync Recording API ──
+
+export async function startSyncRecording(request: SyncStartRequest): Promise<SyncRecordingSession> {
+  return requestJson<SyncRecordingSession>("/api/sync-recordings/start", {
+    body: JSON.stringify(request),
+    method: "POST",
+  });
+}
+
+export async function stopSyncRecording(sessionId: string): Promise<SyncStopResponse> {
+  return requestJson<SyncStopResponse>(`/api/sync-recordings/${sessionId}/stop`, {
+    method: "POST",
+  });
+}
+
+export async function cancelSyncRecording(sessionId: string): Promise<SyncRecordingSession> {
+  return requestJson<SyncRecordingSession>(`/api/sync-recordings/${sessionId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export async function listSyncRecordings(params?: {
+  status?: string;
+  field_session_id?: string;
+}): Promise<SyncRecordingSession[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.field_session_id) searchParams.set("field_session_id", params.field_session_id);
+  const query = searchParams.toString();
+  return requestJson<SyncRecordingSession[]>(`/api/sync-recordings${query ? `?${query}` : ""}`);
+}
+
+export async function getSyncRecording(sessionId: string): Promise<SyncRecordingSession> {
+  return requestJson<SyncRecordingSession>(`/api/sync-recordings/${sessionId}`);
+}
+
+export async function getActiveSyncRecording(): Promise<SyncRecordingSession | null> {
+  return requestJson<SyncRecordingSession | null>("/api/sync-recordings/active");
+}
+
+export async function runSyncTest(request: SyncTestRequest): Promise<SyncTestResult> {
+  return requestJson<SyncTestResult>("/api/sync-recordings/test", {
+    body: JSON.stringify(request),
+    method: "POST",
+  });
+}
+
+export async function deleteSyncRecording(sessionId: string): Promise<{ session_id: string; status: string; detail: string }> {
+  return requestJson<{ session_id: string; status: string; detail: string }>(`/api/sync-recordings/${sessionId}`, {
     method: "DELETE",
   });
 }
