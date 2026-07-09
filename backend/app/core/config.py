@@ -44,7 +44,7 @@ class Settings(BaseModel):
 
     # ---- 人体检测模型 ----
     default_detector_model: str = "yolo11n.pt"           # 默认人体检测模型文件名
-    detector_confidence: float = 0.25                    # 检测置信度阈值（低于此值不认为是人）
+    detector_confidence: float = 0.15                    # 检测置信度阈值（低于此值不认为是人）
     detector_device: str | None = None                   # 推理设备（None=自动/CPU；或 "cuda:0" 等 GPU）
 
     # ---- 姿态（Pose）推理 ----
@@ -53,7 +53,8 @@ class Settings(BaseModel):
     rtmpose_config_path: str | None = None               # RTMPose 配置文件路径
     rtmpose_checkpoint_path: str | None = None           # RTMPose 权重文件路径
     rtmpose_device: str | None = None                    # RTMPose 推理设备
-    pose_confidence: float = 0.3                         # 姿态关键点置信度阈值
+    pose_confidence: float = 0.3                         # 姿态关键点置信度阈值（进入可见）
+    pose_confidence_exit: float = 0.20                   # 姿态关键点置信度阈值（退出可见，hysteresis）
     pose_keypoint_schema: str = "rtmpose26"              # 姿态关键点方案名（26 点）
 
     # ---- 视频 / overlay 渲染 ----
@@ -66,7 +67,7 @@ class Settings(BaseModel):
     primary_player_max_box_area_ratio: float = 0.85      # 检测框最大面积占比（过滤太大框）
     primary_player_court_margin_ft: float = 12.0         # 球场外扩边距（英尺）
     primary_player_window_frames: int = 90               # 判定主球员的滑动窗口帧数
-    primary_player_target_court_threshold: float = 0.45  # 主球员在目标球场的比例阈值
+    primary_player_target_court_threshold: float = 0.65  # 主球员在目标球场的比例阈值（提高以减少邻场干扰）
     primary_player_quality_threshold: float = 0.28       # 主球员质量阈值
 
     # ---- 注意力式主球员选择器（可选，默认关闭）----
@@ -79,6 +80,7 @@ class Settings(BaseModel):
     enable_ball_detection: bool = True                    # 是否启用球检测
     enable_bounce_detection: bool = True                  # 是否启用弹跳检测
     ball_analysis_strict: bool = False                    # 球分析严格模式：true 时球分析异常导致 pipeline failed
+    ball_stationary_blacklist_frames: int = 60             # 球静止候选加入黑名单的累计帧阈值
 
     # ---- 可视化输出 ----
     enable_analysis_overlay_video: bool = True            # 是否生成分析叠加视频
@@ -237,7 +239,7 @@ def get_settings() -> Settings:
         tmp_dir=Path(os.getenv("PICKLEBALL_TMP_DIR", "data/tmp")),
         model_dir=model_dir,
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
-        detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.25")),
+        detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.15")),
         detector_device=os.getenv("PICKLEBALL_DETECTOR_DEVICE") or None,
         enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "true").lower()
         in {"1", "true", "yes"},
@@ -249,6 +251,7 @@ def get_settings() -> Settings:
         rtmpose_checkpoint_path=rtmpose_checkpoint_path,
         rtmpose_device=os.getenv("PICKLEBALL_RTMPOSE_DEVICE") or os.getenv("RTMPOSE_DEVICE") or None,
         pose_confidence=float(os.getenv("PICKLEBALL_POSE_CONFIDENCE", "0.3")),
+        pose_confidence_exit=float(os.getenv("PICKLEBALL_POSE_CONFIDENCE_EXIT", "0.20")),
         pose_keypoint_schema=os.getenv("PICKLEBALL_POSE_KEYPOINT_SCHEMA", "rtmpose26"),
         overlay_frame_stride=max(1, int(os.getenv("PICKLEBALL_OVERLAY_FRAME_STRIDE", "2"))),
         primary_player_min_confidence=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MIN_CONFIDENCE", "0.65")),
@@ -258,7 +261,7 @@ def get_settings() -> Settings:
         primary_player_court_margin_ft=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT", "12.0")),
         primary_player_window_frames=max(1, int(os.getenv("PICKLEBALL_PRIMARY_PLAYER_WINDOW_FRAMES", "90"))),
         primary_player_target_court_threshold=_clamp_float(
-            os.getenv("PICKLEBALL_PRIMARY_PLAYER_TARGET_COURT_THRESHOLD", "0.45"),
+            os.getenv("PICKLEBALL_PRIMARY_PLAYER_TARGET_COURT_THRESHOLD", "0.65"),
             0.0,
             1.0,
         ),
@@ -282,6 +285,9 @@ def get_settings() -> Settings:
         in {"1", "true", "yes"},
         ball_analysis_strict=os.getenv("PICKLEBALL_BALL_ANALYSIS_STRICT", "false").lower()
         in {"1", "true", "yes"},
+        ball_stationary_blacklist_frames=max(
+            1, int(os.getenv("PICKLEBALL_BALL_STATIONARY_BLACKLIST_FRAMES", "60"))
+        ),
         enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "true").lower()
         in {"1", "true", "yes"},
         enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true").lower()

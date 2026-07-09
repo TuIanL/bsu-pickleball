@@ -38,8 +38,17 @@ The backend SHALL run RTMPose on court-relevant tracked player boxes from proces
 - **THEN** the pose engine skips that frame without fabricating skeleton keypoints
 
 #### Scenario: Low-confidence keypoints are returned
-- **WHEN** RTMPose returns keypoints below the configured confidence threshold
-- **THEN** those keypoints are either marked low-confidence or excluded according to the normalized pose schema
+- **WHEN** RTMPose returns keypoints whose confidence values are near the configured thresholds
+- **THEN** keypoint visibility SHALL use hysteresis: keypoints transition from invisible to visible when confidence >= enter_threshold (default 0.30), and from visible to invisible only when confidence drops below exit_threshold (default 0.20)
+- **AND** keypoints already marked visible SHALL retain visibility through brief confidence dips between exit_threshold and enter_threshold, eliminating flicker
+- **AND** keypoints with confidence below exit_threshold SHALL be marked invisible immediately regardless of prior state
+- **AND** both enter_threshold and exit_threshold SHALL be independently configurable via environment variables
+
+#### Scenario: Distant players produce stable skeletons
+- **WHEN** a distant player's bounding box is detected with PersonDetector confidence as low as 0.15
+- **THEN** the detection SHALL be forwarded to pose estimation (PersonDetector.conf_threshold lowered from 0.25 to 0.15)
+- **AND** the pose engine SHALL apply hysteresis to keypoint visibility for that player, reducing skeleton flicker caused by marginally low keypoint confidence at long range
+- **AND** low-confidence detections SHALL still be subject to court-relevance and ROI filtering downstream
 
 ### Requirement: Pose result serialization
 The backend SHALL persist pose results as JSON that the frontend can render as skeleton overlays over the source video, and persisted renderable pose subjects SHALL match the court-relevant subject set used by detection overlays.

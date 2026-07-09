@@ -1123,3 +1123,51 @@ export interface AnalysisReport {
   skillRatings: SkillRating[];
   progressPoints: ProgressPoint[];
 }
+
+// ── 结构化可视化数据（前端 SVG 渲染） ──────────────────────────────
+
+export interface HeatmapCell {
+  row: number;
+  col: number;
+  count: number;
+}
+
+export interface VisualGrid {
+  rows: number;
+  cols: number;
+  max_count: number;
+  cells: HeatmapCell[];
+}
+
+export interface ScatterPlayer {
+  id: string;
+  label: string;
+  color: string;
+  points: [number, number][];
+}
+
+export interface ScatterPlots {
+  players: ScatterPlayer[];
+  ball: [number, number][];
+  bounces: [number, number][];
+}
+
+export interface PlayerTrajectory {
+  id: string;
+  label: string;
+  path: [number, number][];
+}
+
+export interface CourtGeometry {
+  court_width_ft: number;
+  court_length_ft: number;
+}
+
+export interface StructuredVisualizationData {
+  court: CourtGeometry;
+  heatmaps?: {
+    visual_grid: VisualGrid;
+  };
+  scatter_plots: ScatterPlots;
+  player_trajectories: PlayerTrajectory[];
+}

@@ -15,6 +15,6 @@
 
 ## 3. 验证
 
-- [ ] 3.1 用 job-4879e5beb4 的视频 + 关门控（`enable_court_view_gate=false`）重跑，确认骨架覆盖率回归正常
-- [ ] 3.2 用 job-4879e5beb4 的视频 + 调低阈值（`court_view_match_threshold=0.5`）重跑，对比骨架覆盖率和质量
-- [ ] 3.3 手动测试前端：在空洞区间骨架是否正确淡出，回到有数据区间是否淡入
+- [x] 3.1 用 job-4879e5beb4 的视频 + 关门控（`enable_court_view_gate=false`）重跑，确认骨架覆盖率回归正常
+- [x] 3.2 用 job-4879e5beb4 的视频 + 调低阈值（`court_view_match_threshold=0.5`）重跑，对比骨架覆盖率和质量
+- [x] 3.3 手动测试前端：在空洞区间骨架是否正确淡出，回到有数据区间是否淡入

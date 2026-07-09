@@ -284,3 +284,18 @@ def read_position_visualization_image(
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Analysis artifact not found")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/jobs/{job_id}/visualization-data", response_model=None)
+def read_structured_visualization_data(job_id: str) -> JSONResponse:
+    """返回结构化可视化数据，供前端 SVG 渲染。
+
+    旧 job / job 未完成时返回 404，前端据此降级到 PNG。
+    """
+    job = get_mock_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    path = _STORAGE.structured_visualization_data_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Structured visualization data not available")
+    return JSONResponse(_STORAGE.read_json(path))

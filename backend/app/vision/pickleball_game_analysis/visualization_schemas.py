@@ -35,7 +35,7 @@ class VisualizationConfig:
 
 @dataclass(frozen=True)
 class VisualizationPoint:
-    # 一个“球场坐标点”：x_ft/y_ft 为英尺坐标；frame_index/timestamp_seconds 可选；label/source/confidence 为元数据。
+    # 一个"球场坐标点"：x_ft/y_ft 为英尺坐标；frame_index/timestamp_seconds 可选；label/source/confidence 为元数据。
     x_ft: float
     y_ft: float
     frame_index: int | None = None
@@ -43,6 +43,12 @@ class VisualizationPoint:
     label: str | None = None
     source: str = "artifact"
     confidence: float | None = None
+    # 投影状态（inside_court / outside_court_visible / outside_tracking_area / projection_failed）
+    projection_status: str | None = None
+    # 脚点估计方法（bbox_bottom_center / pose_ankle_midpoint / ...）
+    footpoint_method: str | None = None
+    # 投影可信度（0~1）
+    projection_confidence: float | None = None
 
     @property
     def court_xy(self) -> Point2D:
@@ -75,6 +81,74 @@ class VisualizationResult:
     path: str | None = None
     url: str | None = None
     item_count: int = 0
+
+
+# ── 结构化可视化数据（前端 SVG 渲染用） ──────────────────────────────
+
+
+@dataclass(frozen=True)
+class CourtGeometry:
+    """球场物理尺寸（英尺）。"""
+    court_width_ft: float = 20.0
+    court_length_ft: float = 44.0
+
+
+@dataclass(frozen=True)
+class HeatmapCell:
+    """热力图网格中的一个单元格。"""
+    row: int
+    col: int
+    count: int
+
+
+@dataclass(frozen=True)
+class VisualGrid:
+    """22×10 热力图网格，用于前端 SVG 渲染。"""
+    rows: int = 22
+    cols: int = 10
+    max_count: int = 0
+    cells: list[HeatmapCell] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ScatterPlayer:
+    """散点图中的一个球员。"""
+    id: str
+    label: str
+    color: str
+    points: list[tuple[float, float]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ScatterPlots:
+    """散点图数据：球员 + 球 + 弹跳点。"""
+    players: list[ScatterPlayer] = field(default_factory=list)
+    ball: list[tuple[float, float]] = field(default_factory=list)
+    bounces: list[tuple[float, float]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlayerTrajectory:
+    """单个球员的轨迹路径。"""
+    id: str
+    label: str
+    path: list[tuple[float, float]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StructuredVisualizationData:
+    """前端 SVG 渲染所需的全部结构化数据。
+
+    由 PositionVisualizationDataBuilder 构建，
+    写入 position_visualizations/structured/ 目录，
+    通过 GET /visualization-data 端点暴露给前端。
+    """
+    court: CourtGeometry = field(default_factory=CourtGeometry)
+    heatmaps: VisualGrid | None = None
+    scatter_plots: ScatterPlots = field(default_factory=ScatterPlots)
+    player_trajectories: list[PlayerTrajectory] = field(default_factory=list)
+    outside_court_point_count: int = 0
+    dropped_point_count: int = 0
 
 
 # 多语言标签表：键为语言代码，值为 {标签键: 文案}。当前支持中文(zh-CN)与英文(en-US)。

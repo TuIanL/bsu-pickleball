@@ -15,6 +15,7 @@ import type {
   PoseOverlayArtifact,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
+  StructuredVisualizationData,
   VisualizationManifest,
   VideoUploadResponse,
 } from "../types/report";
@@ -644,6 +645,14 @@ export async function getPositionHeatmaps(result: AnalysisPipelineResult): Promi
 export async function getPositionScatterPlots(result: AnalysisPipelineResult): Promise<VisualizationManifest | null> {
   const path = result.artifacts.scatter_plots_url;
   return path ? requestJson<VisualizationManifest>(path) : null;
+}
+
+export async function getStructuredVizData(jobId: string): Promise<StructuredVisualizationData | null> {
+  try {
+    return await requestJson<StructuredVisualizationData>(`/api/analysis/jobs/${jobId}/visualization-data`);
+  } catch {
+    return null;
+  }
 }
 
 // Camera API functions

@@ -32,12 +32,13 @@ class PlayerProjector:
         y_bounds: tuple[float, float] = (-2.0, 46.0),
         include_invalid: bool = False,
         footpoint_estimator: FootpointEstimator | None = None,
+        drop_outside_tracking: bool = True,
     ) -> None:
-        # x_bounds/y_bounds：球场坐标的合法范围（默认允许略超出边界，便于容纳边缘球员）；
-        # include_invalid：是否保留投影后越界的点；footpoint_estimator：可注入自定义脚点估计器。
+        # x_bounds/y_bounds：向后兼容保留（已弃用，由 court.tracking_bounds 替代）。
+        # drop_outside_tracking：是否丢弃超出 tracking_bounds 的点（取代 include_invalid）。
         self.x_bounds = x_bounds
         self.y_bounds = y_bounds
-        self.include_invalid = include_invalid
+        self.drop_outside_tracking = drop_outside_tracking
         self.footpoint_estimator = footpoint_estimator or FootpointEstimator()
 
     def project(
@@ -58,10 +59,16 @@ class PlayerProjector:
             # 用单应矩阵把图像脚点映射到球场坐标（英尺）。
             court_x, court_y = image_to_court(footpoint.image_footpoint, homography)
             court_position = [float(court_x), float(court_y)]
-            valid = self._in_bounds(court_position)
-            # 越界且不允许保留则跳过。
-            if not valid and not self.include_invalid:
+
+            # 使用状态分类取代简单的 in_bounds 检查
+            status = self._classify_projection(court_position)
+            is_inside_court = status == "inside_court"
+            is_inside_tracking = status != "outside_tracking_area"
+
+            # 只有超出 tracking_bounds 且 drop_outside_tracking=True 时才丢弃
+            if status == "outside_tracking_area" and self.drop_outside_tracking:
                 continue
+
             positions.append(
                 PlayerFramePosition(
                     frame_index=frame_index,
@@ -71,18 +78,29 @@ class PlayerProjector:
                     image_footpoint=footpoint.image_footpoint,
                     court_position=court_position,
                     confidence=track.confidence,
-                    valid=valid,
-                    validity="valid" if valid else "invalid",
+                    valid=is_inside_court,
+                    validity="valid" if is_inside_court else "invalid",
                     footpoint_method=footpoint.method,
+                    is_inside_court=is_inside_court,
+                    is_inside_tracking_area=is_inside_tracking,
+                    projection_status=status,
+                    projection_confidence=footpoint.confidence,
                 )
             )
 
         return positions
 
-    def _in_bounds(self, court_position: list[float]) -> bool:
-        # 判断球场坐标是否落在允许范围内。
+    def _classify_projection(self, court_position: list[float]) -> str:
+        """分类投影点的空间状态。"""
+        from app.vision.courtvision_calibration_engine.court_geometry import standard_court
+
+        court = standard_court()
         x, y = court_position
-        return self.x_bounds[0] <= x <= self.x_bounds[1] and self.y_bounds[0] <= y <= self.y_bounds[1]
+        if court.is_in_court_bounds(x, y):
+            return "inside_court"
+        if court.is_in_tracking_bounds(x, y):
+            return "outside_court_visible"
+        return "outside_tracking_area"
 
 
 def project_track_points(

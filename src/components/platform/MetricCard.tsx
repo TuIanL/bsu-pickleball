@@ -27,11 +27,21 @@ interface MetricCardProps {
 
 export function MetricCard({ metric }: MetricCardProps) {
   const Icon = iconMap[metric.icon as keyof typeof iconMap] ?? Activity;
-  const sparkline = metric.sparkline.map((value, index) => {
-    const x = index * (100 / Math.max(metric.sparkline.length - 1, 1));
-    const y = 38 - (Number(value) / 100) * 30;
-    return `${x},${Math.max(4, Math.min(36, y))}`;
+  const values = metric.sparkline.map((v) => Number(v));
+  const avg = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+  const avgY = 38 - (avg / 100) * 30;
+
+  const points = values.map((value, index) => {
+    const x = index * (100 / Math.max(values.length - 1, 1));
+    const y = Math.max(4, Math.min(36, 38 - (value / 100) * 30));
+    return { x, y };
   });
+
+  const polylineStr = points.map((p) => `${p.x},${p.y}`).join(" ");
+  const areaStr =
+    points.length > 0
+      ? `${points[0].x},38 ${points.map((p) => `${p.x},${p.y}`).join(" ")} ${points[points.length - 1].x},38`
+      : "";
 
   return (
     <article className="sport-card group p-5 transition duration-300 hover:-translate-y-1 hover:border-[#22C55E]/35">
@@ -64,9 +74,22 @@ export function MetricCard({ metric }: MetricCardProps) {
           {metric.trend}
         </span>
         <svg className="h-10 w-24 text-[#168A34]/80" viewBox="0 0 100 42" aria-hidden="true">
+          <defs>
+            <linearGradient id={`sparkArea-${metric.id}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {points.length >= 3 && (
+            <line x1={0} y1={avgY} x2={100} y2={avgY} stroke="currentColor" strokeWidth="1" strokeDasharray="2,3" opacity="0.35" />
+          )}
+          <polygon
+            points={areaStr}
+            fill={`url(#sparkArea-${metric.id})`}
+          />
           <polyline
             fill="none"
-            points={sparkline.join(" ")}
+            points={polylineStr}
             stroke="currentColor"
             strokeLinecap="round"
             strokeLinejoin="round"

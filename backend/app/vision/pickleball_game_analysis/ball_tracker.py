@@ -32,8 +32,10 @@ class BallTrackerConfig:
     max_box_area_ratio: float = 0.004        # 框面积占整帧比例上限（过大不像球）
     max_aspect_ratio: float = 4.0            # 框宽高比上限（过长不像球）
     court_bounds_margin_ft: float = 2.0      # 投影到球场后允许越界的容差（英尺）
-    stationary_window_frames: int = 8        # 静态误报检测窗口
-    stationary_radius_pixels: float = 3.0    # 窗口内都落在该半径内则视为固定物
+    stationary_window_frames: int = 30        # 静态误报检测窗口
+    stationary_radius_pixels: float = 5.0     # 窗口内都落在该半径内则视为固定物
+    stationary_blacklist_frames: int = 60     # 静止候选跨帧累计帧数，达到后加入永久黑名单
+    stationary_blacklist_grid_px: int = 5     # 静止黑名单坐标离散化精度（像素）
 
 
 class BallTracker:
@@ -52,6 +54,10 @@ class BallTracker:
         self.selected_history: deque[Point2D] = deque(maxlen=max(1, self.config.stationary_window_frames))
         self.last_valid_position: Point2D | None = None  # 最近一个被接受的位置
         self.missing_frames = 0                       # 连续未检测到球的帧数
+        # 静止黑名单：离散化坐标 → 累计被检测到的帧计数
+        self._stationary_blacklist: dict[tuple[int, int], int] = {}
+        # 永久黑名单：已达到阈值的静止位置
+        self._stationary_blacklist_positions: set[tuple[int, int]] = set()
 
     def update(
         self,
@@ -73,6 +79,8 @@ class BallTracker:
         """
         raw_candidates = self.detector.detect(frame, conf=self.config.confidence)
         candidates, reject_reasons = self._extract_candidates(raw_candidates, frame.shape, roi_corners)
+        # 对所有过滤后候选做静止坐标投票，更新黑名单
+        self._update_stationary_blacklist(candidates)
         selected = self._select_candidate(candidates)
         # 情况 A：过滤后没有候选
         if selected is None:
@@ -93,6 +101,23 @@ class BallTracker:
 
         point = selected.image_xy
         self._record_selected_candidate(point)
+        # 静止黑名单检查：若该位置已被标记为静止物，优先拒绝
+        # 但若候选与上一有效点连续（跳变/预测均在门限内），则覆盖黑名单允许接受
+        blacklist_reason = self._stationary_blacklist_reject_reason(point)
+        if blacklist_reason is not None:
+            self._record_missing_detection()
+            return self._sample(
+                frame_index=frame_index,
+                timestamp_sec=timestamp_sec,
+                image_xy=point,
+                court_xy=None,
+                confidence=selected.confidence,
+                visible=True,
+                accepted=False,
+                candidate_count=len(candidates),
+                reject_reason=blacklist_reason,
+                in_bounds=None,
+            )
         stationary_reason = self._stationary_reject_reason()
         if stationary_reason is not None:
             self._record_missing_detection()
@@ -166,6 +191,8 @@ class BallTracker:
         self.selected_history.clear()
         self.last_valid_position = None
         self.missing_frames = 0
+        self._stationary_blacklist.clear()
+        self._stationary_blacklist_positions.clear()
 
     def _extract_candidates(
         self,
@@ -306,6 +333,59 @@ class BallTracker:
         max_radius = max(self._distance(point, (center_x, center_y)) for point in points)
         if max_radius <= self.config.stationary_radius_pixels:
             return "stationary_candidate"
+        return None
+
+    def _update_stationary_blacklist(self, candidates: Sequence[BallCandidate]) -> None:
+        """对所有过滤后候选做静止坐标投票，达到阈值的加入永久黑名单。
+
+        算法：将每个候选的图像坐标按 stationary_blacklist_grid_px 精度离散化，
+        累加每帧的检测计数。连续被检测帧数达到 stationary_blacklist_frames 时，
+        该位置被加入永久黑名单。
+        """
+        grid = self.config.stationary_blacklist_grid_px
+        threshold = self.config.stationary_blacklist_frames
+        # 对本帧出现的坐标做离散化并递增计数
+        for candidate in candidates:
+            grid_x = int(candidate.image_x / grid) * grid
+            grid_y = int(candidate.image_y / grid) * grid
+            key = (grid_x, grid_y)
+            self._stationary_blacklist[key] = self._stationary_blacklist.get(key, 0) + 1
+            if self._stationary_blacklist[key] >= threshold:
+                self._stationary_blacklist_positions.add(key)
+
+    def _is_blacklisted(self, point: Point2D) -> bool:
+        """检查某个坐标是否落入已知静止黑名单区域。"""
+        grid = self.config.stationary_blacklist_grid_px
+        grid_x = int(point[0] / grid) * grid
+        grid_y = int(point[1] / grid) * grid
+        return (grid_x, grid_y) in self._stationary_blacklist_positions
+
+    def _stationary_blacklist_reject_reason(self, point: Point2D) -> str | None:
+        """检查被黑名单标记的候选是否应被拒绝。
+
+        若候选位置落入静止黑名单，默认应拒绝。
+        但若该候选通过了连续性检查（与上一个有效点有明显位移且距离/预测偏差均在门限内），
+        则覆盖黑名单——因为真球恰好经过先前被静止物占据的位置时不应被误杀。
+        """
+        if not self._is_blacklisted(point):
+            return None
+        # 若轨迹为空，直接拒绝（无历史参考，无法做连续性覆盖判断）
+        if not self.trajectory:
+            return "stationary_blacklisted"
+        jump_distance = self._distance(point, self.trajectory[-1])
+        # 若候选点距离上一个有效点很近（静止特征），不覆盖黑名单
+        # 使用 2 倍静止半径作为判定，避免静止候选自我绕过黑名单
+        if jump_distance < self.config.stationary_radius_pixels * 2:
+            return "stationary_blacklisted"
+        strict_gate = self.missing_frames <= self.config.max_missing_frames
+        if not strict_gate:
+            return "stationary_blacklisted"
+        if jump_distance > self.config.max_jump_pixels:
+            return "stationary_blacklisted"
+        predicted_distance = self._distance(point, self._predict_next_position())
+        if predicted_distance > self.config.prediction_gate_pixels:
+            return "stationary_blacklisted"
+        # 通过连续性检查 + 有显著位移 → 覆盖黑名单，允许接受该候选
         return None
 
     def _predict_next_position(self) -> Point2D:

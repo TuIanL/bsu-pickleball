@@ -26,6 +26,9 @@ class MinimapStyle:
     player: tuple[int, int, int] = (33, 138, 52)             # 球员轨迹/点颜色（绿）
     ball: tuple[int, int, int] = (28, 114, 235)              # 球轨迹/点颜色（蓝）
     bounce: tuple[int, int, int] = (30, 90, 255)             # 弹跳点标记颜色（亮蓝）
+    tracking_bounds_fill: tuple[int, int, int] = (236, 244, 234)  # tracking buffer 底色（比 court 更淡）
+    tracking_bounds_line: tuple[int, int, int] = (190, 210, 185)  # tracking buffer 虚线框颜色
+    outside_player: tuple[int, int, int] = (160, 200, 165)       # 界外球员点颜色（绿中带灰）
 
 
 PLAYER_COLORS: tuple[tuple[int, int, int], ...] = (
@@ -50,20 +53,27 @@ class MinimapVisualizer:
         self.court = court or standard_court()
         self.style = style or MinimapStyle()
 
-    def court_to_pixel(self, x_ft: float, y_ft: float, *, clamp: bool = False) -> tuple[int, int] | None:
-        # 把“英尺球场坐标 (x_ft, y_ft)”映射到小地图图像像素坐标。
-        # clamp=False 且点界外时返回 None；clamp=True 时把坐标夹到 [0, 边界] 再映射（保证不越界）。
-        if not clamp and not self.court.is_in_bounds(x_ft, y_ft):
+    def court_to_pixel(self, x_ft: float, y_ft: float, *, clamp: bool = False, bounds: str = "tracking") -> tuple[int, int] | None:
+        # 把"英尺球场坐标 (x_ft, y_ft)"映射到小地图图像像素坐标。
+        # bounds="tracking" 时使用 tracking_bounds 做映射，可显示界外点；
+        # bounds="court" 时使用 court_bounds，界外点返回 None。
+        if bounds == "court":
+            valid = self.court.is_in_court_bounds(x_ft, y_ft)
+        else:
+            valid = self.court.is_in_tracking_bounds(x_ft, y_ft)
+        if not clamp and not valid:
             return None
-        # 若开启 clamp，则把坐标限制在合法范围内，否则直接使用原始坐标。
-        x = min(self.court.width_ft, max(0.0, float(x_ft))) if clamp else float(x_ft)
-        y = min(self.court.length_ft, max(0.0, float(y_ft))) if clamp else float(y_ft)
-        pad = self.config.minimap_padding  # 小地图四周留白像素
-        draw_width = self.config.minimap_width - pad * 2     # 实际可绘制宽度
-        draw_height = self.config.minimap_height - pad * 2  # 实际可绘制高度
-        # 按“坐标 / 球场尺寸”的比例映射到像素空间，再加上留白偏移。
-        px = pad + (x / self.court.width_ft) * draw_width
-        py = pad + (y / self.court.length_ft) * draw_height
+        # 使用 tracking_bounds 的范围做像素映射
+        tb = self.court.tracking_bounds
+        x_span = tb.x_max - tb.x_min  # 28 ft
+        y_span = tb.y_max - tb.y_min  # 60 ft
+        x = min(tb.x_max, max(tb.x_min, float(x_ft))) if clamp else float(x_ft)
+        y = min(tb.y_max, max(tb.y_min, float(y_ft))) if clamp else float(y_ft)
+        pad = self.config.minimap_padding
+        draw_width = self.config.minimap_width - pad * 2
+        draw_height = self.config.minimap_height - pad * 2
+        px = pad + ((x - tb.x_min) / x_span) * draw_width
+        py = pad + ((y - tb.y_min) / y_span) * draw_height
         return (int(round(px)), int(round(py)))
 
     def render(
@@ -75,59 +85,77 @@ class MinimapVisualizer:
         limit_player_trails: bool = True,
     ) -> np.ndarray:
         # 生成一张小地图图像：先铺背景，再画球场、球员轨迹、球轨迹，最后画弹跳点标记。
-        # 用 np.full 创建一张纯色背景图（高度、宽度、3 通道），dtype=uint8。
         image = np.full(
             (self.config.minimap_height, self.config.minimap_width, 3),
             self.style.background,
             dtype=np.uint8,
         )
-        self._draw_court(image)  # 画球场底色、厨房区、各条线
+        self._draw_tracking_bounds(image)  # 先画 tracking buffer 底纹
+        self._draw_court(image)            # 再画正式球场
         for index, (_label, points) in enumerate(_points_by_label(list(player_points)).items()):
             draw_points = points[-self.config.trail_length :] if limit_player_trails else points
-            self._draw_trails(image, draw_points, player_color(index), radius=4)
-        # 画球轨迹，但只保留最后 trail_length 个点（形成拖尾效果）。
-        self._draw_trails(image, list(ball_points)[-self.config.trail_length :], self.style.ball, radius=3)
+            inside = [p for p in draw_points if self.court.is_in_court_bounds(p.x_ft, p.y_ft)]
+            outside = [p for p in draw_points if self.court.is_outside_court_visible(p.x_ft, p.y_ft)]
+            self._draw_trails(image, inside, player_color(index), radius=4)
+            self._draw_trails_outside(image, outside, self.style.outside_player, radius=3, alpha=0.4)
+        # 画球轨迹
+        ball_draw = list(ball_points)[-self.config.trail_length :]
+        self._draw_trails(image, ball_draw, self.style.ball, radius=3, bounds="court")
         for point in bounce_points:
-            # 每个弹跳点画一个倾斜十字标记。
             pixel = self.court_to_pixel(point.x_ft, point.y_ft)
             if pixel is not None:
                 cv2.drawMarker(image, pixel, self.style.bounce, markerType=cv2.MARKER_TILTED_CROSS, markerSize=12, thickness=2)
         return image
 
     def _draw_court(self, image: np.ndarray) -> None:
-        # 先构造球场外边界四个角的像素坐标（强制 clamp 避免越界），填充球场底色多边形。
+        # 先构造球场外边界四个角的像素坐标（使用 court bounds 做 clamp 映射），填充球场底色多边形。
         boundary = [
-            self.court_to_pixel(0, 0, clamp=True),
-            self.court_to_pixel(self.court.width_ft, 0, clamp=True),
-            self.court_to_pixel(self.court.width_ft, self.court.length_ft, clamp=True),
-            self.court_to_pixel(0, self.court.length_ft, clamp=True),
+            self.court_to_pixel(0, 0, clamp=True, bounds="court"),
+            self.court_to_pixel(self.court.width_ft, 0, clamp=True, bounds="court"),
+            self.court_to_pixel(self.court.width_ft, self.court.length_ft, clamp=True, bounds="court"),
+            self.court_to_pixel(0, self.court.length_ft, clamp=True, bounds="court"),
         ]
-        # 过滤掉 None 后转成 numpy 数组，填充多边形。
         pts = np.array([point for point in boundary if point is not None], dtype=np.int32)
         cv2.fillPoly(image, [pts], self.style.court_fill)
-        # 逐个厨房区（非截击区）填充浅蓝色多边形。
         for zone in self.court.kitchen_zones:
-            zone_pts = [self.court_to_pixel(p.x, p.y, clamp=True) for p in zone.polygon.points]
+            zone_pts = [self.court_to_pixel(p.x, p.y, clamp=True, bounds="court") for p in zone.polygon.points]
             cv2.fillPoly(image, [np.array([p for p in zone_pts if p is not None], dtype=np.int32)], self.style.kitchen_fill)
-        # 逐条球场线绘制。
         for line in self.court.lines:
             self._draw_line(image, line)
 
     def _draw_line(self, image: np.ndarray, line: CourtLine) -> None:
-        # 把一条球场线的起止点映射到像素并画线（抗锯齿）。
-        start = self.court_to_pixel(line.start.x, line.start.y, clamp=True)
-        end = self.court_to_pixel(line.end.x, line.end.y, clamp=True)
+        start = self.court_to_pixel(line.start.x, line.start.y, clamp=True, bounds="court")
+        end = self.court_to_pixel(line.end.x, line.end.y, clamp=True, bounds="court")
         if start is not None and end is not None:
             cv2.line(image, start, end, self.style.line, 2, lineType=cv2.LINE_AA)
 
-    def _draw_trails(self, image: np.ndarray, points: list[VisualizationPoint], color: tuple[int, int, int], radius: int) -> None:
-        # 把轨迹点映射成像素坐标（过滤无效点）。
-        pixels = [self.court_to_pixel(point.x_ft, point.y_ft) for point in points]
+    def _draw_tracking_bounds(self, image: np.ndarray) -> None:
+        tb = self.court.tracking_bounds
+        corners = [
+            self.court_to_pixel(tb.x_min, tb.y_min, clamp=True),
+            self.court_to_pixel(tb.x_max, tb.y_min, clamp=True),
+            self.court_to_pixel(tb.x_max, tb.y_max, clamp=True),
+            self.court_to_pixel(tb.x_min, tb.y_max, clamp=True),
+        ]
+        pts = np.array([p for p in corners if p is not None], dtype=np.int32)
+        cv2.fillPoly(image, [pts], self.style.tracking_bounds_fill)
+        cv2.polylines(image, [pts], isClosed=True, color=self.style.tracking_bounds_line, thickness=1, lineType=cv2.LINE_AA)
+
+    def _draw_trails(self, image: np.ndarray, points: list[VisualizationPoint], color: tuple[int, int, int], radius: int, *, bounds: str = "tracking") -> None:
+        pixels = [self.court_to_pixel(point.x_ft, point.y_ft, bounds=bounds) for point in points]
         pixels = [pixel for pixel in pixels if pixel is not None]
-        # 至少 2 个点才画折线（拖尾轨迹），否则只画散点。
         if len(pixels) >= 2:
             cv2.polylines(image, [np.array(pixels, dtype=np.int32)], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
-        # 每个点画一个实心圆（半径 radius）。
+        for pixel in pixels:
+            cv2.circle(image, pixel, radius, color, -1, lineType=cv2.LINE_AA)
+
+    def _draw_trails_outside(self, image: np.ndarray, points: list[VisualizationPoint], color: tuple[int, int, int], radius: int, alpha: float) -> None:
+        pixels = [self.court_to_pixel(point.x_ft, point.y_ft) for point in points]
+        pixels = [pixel for pixel in pixels if pixel is not None]
+        if len(pixels) >= 2:
+            overlay = image.copy()
+            cv2.polylines(overlay, [np.array(pixels, dtype=np.int32)], isClosed=False, color=color, thickness=1, lineType=cv2.LINE_AA)
+            cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
         for pixel in pixels:
             cv2.circle(image, pixel, radius, color, -1, lineType=cv2.LINE_AA)
 

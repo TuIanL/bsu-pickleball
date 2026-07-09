@@ -83,6 +83,7 @@ from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceE
 from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner
 from app.vision.pickleball_game_analysis.overlay_video_writer import OverlayVideoWriter
 from app.vision.pickleball_game_analysis.position_visualizer import PositionVisualizer
+from app.vision.pickleball_game_analysis.visualization_data_builder import PositionVisualizationDataBuilder
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     VisualizationConfig,
     VisualizationResult,
@@ -245,6 +246,14 @@ class AnalysisPipeline:
         self.projector = projector or PlayerProjector(
             footpoint_estimator=self.footpoint_estimator,
             include_invalid=True,
+            drop_outside_tracking=False,
+        )
+        # 球员球场坐标时间平滑器
+        from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
+        self.position_smoother = CourtPositionSmoother(
+            alpha=0.45,
+            max_speed_ft_s=30.0,
+            max_gap_frames=10,
         )
         # 主球员选择器：把一堆轨迹里挑出"目标球员"，参数全部来自配置
         self.primary_player_selector = primary_player_selector or PrimaryPlayerSelector(
@@ -267,6 +276,7 @@ class AnalysisPipeline:
                 checkpoint_path=self.settings.rtmpose_checkpoint_path,
                 device=self.settings.rtmpose_device,
                 conf_threshold=self.settings.pose_confidence,
+                conf_exit_threshold=self.settings.pose_confidence_exit,
                 keypoint_schema=self.settings.pose_keypoint_schema,
             )
             if self.settings.enable_pose_inference
@@ -1131,11 +1141,21 @@ class AnalysisPipeline:
 
         if enabled_positions:
             try:
+                # 1. 构建结构化可视化数据（前端 SVG 渲染 + PNG fallback 共用）
+                builder = PositionVisualizationDataBuilder()
+                structured_data = builder.build_and_write(
+                    output_path=self.storage.structured_visualization_data_path(job_id),
+                    player_points=player_points,
+                    ball_points=ball_points,
+                    bounce_points=bounce_points,
+                )
+                # 2. 生成 PNG（消费结构化数据以避免重复计算 22×10 网格）
                 heatmaps_url = f"/api/analysis/jobs/{job_id}/artifacts/position-heatmaps"
                 scatter_url = f"/api/analysis/jobs/{job_id}/artifacts/position-scatter-plots"
                 image_prefix = f"/api/analysis/jobs/{job_id}/artifacts/position-visualization-images"
                 heat_result, scatter_result = PositionVisualizer(config=config).generate(
                     job_id=job_id,
+                    structured_data=structured_data,
                     heatmaps_dir=self.storage.heatmaps_dir(job_id),
                     scatter_plots_dir=self.storage.scatter_plots_dir(job_id),
                     heatmaps_manifest_path=self.storage.heatmaps_manifest_json_path(job_id),
@@ -1375,12 +1395,20 @@ class AnalysisPipeline:
                 smoothing_window=self.settings.player_identity_smoothing_window,
             )
         )
+        from app.vision.pickleball_game_analysis.ball_tracker import BallTrackerConfig
+
         selection_diagnostics = []
         selection_training_samples = []
         # 球检测（可选）：启用且适配器可用时逐帧运行，使用局部 context 封装状态
         ball_ctx = _BallRunContext(
             tracker=(
-                BallTracker(detector=self.ball_detector, court_adapter=BallCourtAdapter())
+                BallTracker(
+                    detector=self.ball_detector,
+                    config=BallTrackerConfig(
+                        stationary_blacklist_frames=self.settings.ball_stationary_blacklist_frames,
+                    ),
+                    court_adapter=BallCourtAdapter(),
+                )
                 if self.ball_detector is not None
                 else None
             ),
@@ -1442,6 +1470,18 @@ class AnalysisPipeline:
                     timestamp=timestamp,
                     footpoints=footpoints,
                 )
+                # 5b) 对投影后的球场坐标做时间平滑（降低抖动和异常跳变）
+                for pos in frame_positions:
+                    if pos.court_position is not None:
+                        result = self.position_smoother.update(
+                            track_id=pos.track_id,
+                            frame_index=pos.frame_index,
+                            x_ft=pos.court_position[0],
+                            y_ft=pos.court_position[1],
+                            timestamp=pos.timestamp,
+                            confidence=pos.confidence,
+                        )
+                        pos.court_position = [result.x, result.y]
                 # 6) 选主球员
                 primary_player_track_ids = {
                     selection.track_id

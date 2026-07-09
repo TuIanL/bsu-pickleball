@@ -38,6 +38,8 @@ import { Modal } from "./components/platform/Modal";
 import { ProgressChart } from "./components/platform/ProgressChart";
 import { ReportVisualization } from "./components/platform/ReportVisualization";
 import { SkillRatings } from "./components/platform/SkillRatings";
+import StructuredHeatmap from "./components/platform/StructuredHeatmap";
+import StructuredScatterPlot from "./components/platform/StructuredScatterPlot";
 import { VideoAnalysisCard } from "./components/platform/VideoAnalysisCard";
 import { FieldSessionGroupCard } from "./components/platform/FieldSessionGroupCard";
 import { groupRecordingsByFieldSession } from "./services/recordingGrouping";
@@ -77,6 +79,7 @@ import type {
   ReportType,
   ServeEventsArtifact,
   SessionTimelineEvent,
+  StructuredVisualizationData,
   TimelineEventCreate,
   TimelineEventUpdate,
   TrackingOverlayArtifact,
@@ -97,6 +100,7 @@ import {
   getPositionHeatmaps,
   getPositionScatterPlots,
   getServeEvents,
+  getStructuredVizData,
   getAnalysisResult,
   getAnalysisReport,
   getRecentAnalysisJob,
@@ -2466,7 +2470,8 @@ function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["tracks"
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(260px,420px)_minmax(0,1fr)]">
         <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
-          <svg className="mx-auto block aspect-[20/44] max-h-[760px] w-full max-w-[420px]" viewBox="-2 -2 24 48" role="img" aria-label="标准匹克球球场二维平面图">
+          <svg className="mx-auto block aspect-[28/60] max-h-[760px] w-full max-w-[420px]" viewBox="-4 -8 28 60" role="img" aria-label="标准匹克球球场二维平面图（含跟踪缓冲区）">
+            <rect x="-4" y="-8" width="28" height="60" rx="0.2" fill="#F0F4EE" stroke="#BCCFBB" strokeWidth="0.12" strokeDasharray="0.6 0.3" />
             <rect x="0" y="0" width="20" height="44" rx="0.2" fill="#DDEFE2" stroke="#173321" strokeWidth="0.24" />
             <rect x="0" y="15" width="20" height="14" fill="#C7E7D5" opacity="0.85" />
             <line x1="0" x2="20" y1="22" y2="22" stroke="#173321" strokeWidth="0.32" />
@@ -2615,30 +2620,44 @@ function CourtTrackSvgLayer({
   selected: boolean;
   summary: CourtTrackSummary;
 }) {
-  const pathPoints = summary.sampledPoints.map((point) => `${point.court_point.x},${point.court_point.y}`).join(" ");
   const opacity = dimmed ? 0.24 : 0.9;
+  const { insideSegments, outsideSegments } = splitCourtSegments(summary.sampledPoints);
 
   return (
     <g opacity={opacity}>
-      {pathPoints ? (
+      {insideSegments.map((segment, i) => (
         <polyline
           fill="none"
-          points={pathPoints}
+          key={`inside-${i}`}
+          points={segment.map((p) => `${p.court_point.x},${p.court_point.y}`).join(" ")}
           stroke={summary.color}
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeWidth={selected ? 0.42 : 0.28}
         />
-      ) : null}
+      ))}
+      {outsideSegments.map((segment, i) => (
+        <polyline
+          fill="none"
+          key={`outside-${i}`}
+          points={segment.map((p) => `${p.court_point.x},${p.court_point.y}`).join(" ")}
+          stroke={summary.color}
+          strokeDasharray="0.25 0.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={selected ? 0.36 : 0.22}
+        />
+      ))}
       {summary.sampledPoints.map((point) => {
         const key = courtPointKey(summary.trackId, point);
         const inspected = inspectedPointKey === key;
+        const inBounds = point.court_point.x >= 0 && point.court_point.x <= 20 && point.court_point.y >= 0 && point.court_point.y <= 44;
         return (
           <circle
             aria-label={`${summary.label} ${formatSeconds(point.timestamp_seconds) ?? `#${point.frame_index}`}`}
             cx={point.court_point.x}
             cy={point.court_point.y}
-            fill={inspected ? "#D9FF3F" : summary.color}
+            fill={inspected ? "#D9FF3F" : inBounds ? summary.color : "#A0C8A5"}
             key={key}
             onClick={() => onInspectPoint(key)}
             onKeyDown={(event) => {
@@ -2647,10 +2666,10 @@ function CourtTrackSvgLayer({
                 onInspectPoint(key);
               }
             }}
-            r={inspected ? 0.36 : selected ? 0.24 : 0.2}
+            r={inspected ? 0.36 : inBounds ? (selected ? 0.24 : 0.2) : 0.16}
             role="button"
             stroke="#071008"
-            strokeWidth={inspected ? 0.1 : 0.06}
+            strokeWidth={inspected ? 0.1 : inBounds ? 0.06 : 0.04}
             tabIndex={0}
           />
         );
@@ -2659,6 +2678,34 @@ function CourtTrackSvgLayer({
       <circle cx={summary.latestPoint.court_point.x} cy={summary.latestPoint.court_point.y} fill={summary.color} r="0.42" stroke="#071008" strokeWidth="0.08" />
     </g>
   );
+}
+
+function splitCourtSegments(points: AnalysisPipelineResult["tracks"]) {
+  const inside: AnalysisPipelineResult["tracks"][] = [];
+  const outside: AnalysisPipelineResult["tracks"][] = [];
+  let currentInside: AnalysisPipelineResult["tracks"] = [];
+  let currentOutside: AnalysisPipelineResult["tracks"] = [];
+
+  for (const point of points) {
+    const inBounds = point.court_point.x >= 0 && point.court_point.x <= 20 && point.court_point.y >= 0 && point.court_point.y <= 44;
+    if (inBounds) {
+      if (currentOutside.length > 0) {
+        outside.push(currentOutside);
+        currentOutside = [];
+      }
+      currentInside.push(point);
+    } else {
+      if (currentInside.length > 0) {
+        inside.push(currentInside);
+        currentInside = [];
+      }
+      currentOutside.push(point);
+    }
+  }
+  if (currentInside.length > 0) inside.push(currentInside);
+  if (currentOutside.length > 0) outside.push(currentOutside);
+
+  return { insideSegments: inside, outsideSegments: outside };
 }
 
 function courtPointKey(trackId: string, point: AnalysisPipelineResult["tracks"][number]) {
@@ -3307,6 +3354,7 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
               scatterLoadState={scatterLoadState}
               scatterStatus={result?.artifacts.position_visualizations_status}
               scatterDetail={result?.artifacts.position_visualizations_detail}
+              jobId={jobId}
             />
           </div>
           <AnalysisStatusRail
@@ -3415,6 +3463,7 @@ function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNaviga
               scatterLoadState={scatterLoadState}
               scatterStatus={result?.artifacts.position_visualizations_status}
               scatterDetail={result?.artifacts.position_visualizations_detail}
+              jobId={jobId}
             />
           ) : null}
         </div>
@@ -3469,6 +3518,7 @@ function VisualizationArtifactGallery({
   scatterLoadState,
   scatterStatus,
   scatterDetail,
+  jobId,
 }: {
   heatmapsManifest: VisualizationManifest | null;
   heatmapsLoadState: OverlayLoadState;
@@ -3478,15 +3528,55 @@ function VisualizationArtifactGallery({
   scatterLoadState: OverlayLoadState;
   scatterStatus?: string;
   scatterDetail?: string;
+  jobId?: string;
 }) {
+  const [structuredViz, setStructuredViz] = useState<StructuredVisualizationData | null>(null);
+  const [structuredVizLoadState, setStructuredVizLoadState] = useState<OverlayLoadState>("idle");
+
+  useEffect(() => {
+    if (!jobId) return;
+    setStructuredVizLoadState("loading");
+    getStructuredVizData(jobId)
+      .then((data) => {
+        setStructuredViz(data);
+        setStructuredVizLoadState(data ? "available" : "unavailable");
+      })
+      .catch(() => {
+        setStructuredViz(null);
+        setStructuredVizLoadState("failed");
+      });
+  }, [jobId]);
+
+  const hasStructuredHeatmap = !!(structuredViz?.heatmaps?.visual_grid?.cells.length);
+  const hasStructuredScatter = !!(structuredViz?.scatter_plots.players?.length || structuredViz?.scatter_plots.ball?.length || structuredViz?.scatter_plots.bounces?.length);
+
   const groups = [
-    { title: "位置热力图", manifest: heatmapsManifest, loadState: heatmapsLoadState, status: heatmapsStatus, detail: heatmapsDetail },
-    { title: "位置散点图", manifest: scatterManifest, loadState: scatterLoadState, status: scatterStatus, detail: scatterDetail },
+    {
+      title: "位置热力图",
+      manifest: heatmapsManifest,
+      loadState: heatmapsLoadState,
+      status: heatmapsStatus,
+      detail: heatmapsDetail,
+      structuredKey: "heatmap" as const,
+      hasStructured: hasStructuredHeatmap,
+    },
+    {
+      title: "位置散点图",
+      manifest: scatterManifest,
+      loadState: scatterLoadState,
+      status: scatterStatus,
+      detail: scatterDetail,
+      structuredKey: "scatter" as const,
+      hasStructured: hasStructuredScatter,
+    },
   ];
-  const hasAnyItems = groups.some((group) => (group.manifest?.items.length ?? 0) > 0);
+
+  const hasAnyItems = groups.some((group) => (group.manifest?.items.length ?? 0) > 0 || group.hasStructured);
   if (!hasAnyItems && groups.every((group) => group.loadState === "unavailable" || group.status === "skipped" || !group.status)) {
     return null;
   }
+
+  const structuredData = structuredViz;
 
   return (
     <section className="sport-card p-5">
@@ -3502,6 +3592,26 @@ function VisualizationArtifactGallery({
           const status = overlayLayerStatus(group.loadState, group.manifest?.status ?? group.status);
           const meta = overlayStatusMeta(status);
           const items = group.manifest?.items ?? [];
+          const firstPngUrl = items.length > 0 ? resolveAnalysisAssetUrl(items[0].url) : undefined;
+
+          if (group.hasStructured && structuredData) {
+            return (
+              <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={group.title}>
+                <div className="flex items-center justify-between gap-3">
+                  <strong className="text-sm text-[#14241B]">{group.title}</strong>
+                  <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-black text-green-700">SVG</span>
+                </div>
+                <div className="mt-4">
+                  {group.structuredKey === "heatmap" ? (
+                    <StructuredHeatmap data={structuredData} fallbackPngUrl={firstPngUrl} />
+                  ) : (
+                    <StructuredScatterPlot data={structuredData} fallbackPngUrl={firstPngUrl} />
+                  )}
+                </div>
+              </article>
+            );
+          }
+
           return (
             <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={group.title}>
               <div className="flex items-center justify-between gap-3">

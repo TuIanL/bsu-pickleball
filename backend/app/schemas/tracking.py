@@ -34,8 +34,15 @@ from app.schemas.calibration import ImagePoint
 # 脚点估计方法（即"如何判断一个人站在球场的哪个位置"）：
 # - bbox_bottom_center：取检测框底部的中心点（最常用、最省算力）
 # - pose_ankle_average：取姿态估计中两个脚踝的平均位置（更准但需要姿态模型）
+# - pose_ankle_midpoint：取左右脚踝中点（姿态可用时推荐）
+# - pose_ankle_single：取可见单侧脚踝（另一侧被遮挡时）
+# - knee_extrapolated：从双膝向下外推估算脚点（脚踝不可见时）
 # - segmentation_mask_bottom：取人体分割掩码的最底部（最准但最慢）
-FootpointMethod = Literal["bbox_bottom_center", "pose_ankle_average", "segmentation_mask_bottom"]
+# - hybrid：自动优先级选择（pose_ankle_midpoint > pose_ankle_single > knee_extrapolated > bbox_bottom_center）
+FootpointMethod = Literal["bbox_bottom_center", "pose_ankle_average", "pose_ankle_midpoint", "pose_ankle_single", "knee_extrapolated", "segmentation_mask_bottom", "hybrid"]
+
+# 投影状态枚举：描述投影点相对于球场和跟踪缓冲区的空间关系
+ProjectionStatus = Literal["inside_court", "outside_court_visible", "outside_tracking_area", "projection_failed", "unknown"]
 
 # 某个坐标/位置是否有效（valid=有效，invalid=无效，例如被判定为异常抖动）
 PositionValidity = Literal["valid", "invalid"]
@@ -233,6 +240,8 @@ class FootpointEstimate(BaseModel):
     image_footpoint: list[float] = Field(min_length=2, max_length=2)
     # 用哪种方法估计的脚点（见顶部 FootpointMethod 说明）
     method: FootpointMethod = "bbox_bottom_center"
+    # 脚点估计的可信度（0~1），仅 hybrid/pose 方法有值，bbox 时为 None
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("image_footpoint")
     @classmethod
@@ -266,6 +275,14 @@ class PlayerFramePosition(BaseModel):
     validity: PositionValidity = "valid"
     # 脚点估计方法
     footpoint_method: FootpointMethod = "bbox_bottom_center"
+    # 是否在正式球场范围内
+    is_inside_court: bool = True
+    # 是否在跟踪缓冲范围内
+    is_inside_tracking_area: bool = True
+    # 投影状态分类
+    projection_status: ProjectionStatus = "inside_court"
+    # 投影可信度（0~1）
+    projection_confidence: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("bbox")
     @classmethod

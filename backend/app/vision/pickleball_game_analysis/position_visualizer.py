@@ -16,6 +16,8 @@ from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisual
 # 清单条目、配置、坐标点、结果对象、标签函数、清单写出函数。
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     ManifestItem,
+    StructuredVisualizationData,
+    VisualGrid,
     VisualizationConfig,
     VisualizationPoint,
     VisualizationResult,
@@ -36,6 +38,7 @@ class PositionVisualizer:
         self,
         *,
         job_id: str,
+        structured_data: StructuredVisualizationData | None = None,
         heatmaps_dir: Path,
         scatter_plots_dir: Path,
         heatmaps_manifest_path: Path,
@@ -47,14 +50,15 @@ class PositionVisualizer:
         ball_points: list[VisualizationPoint],
         bounce_points: list[VisualizationPoint],
     ) -> tuple[VisualizationResult, VisualizationResult]:
-        # 主入口：分别生成“球员热力图”与“散点图（球员/球/弹跳）”两组静态图，并写出各自清单。
-        # 返回 (热力图结果, 散点图结果) 两个 VisualizationResult。
+        # 主入口：分别生成"球员热力图"与"散点图（球员/球/弹跳）"两组静态图，并写出各自清单。
+        # 如果传入 structured_data，则使用其预计算的 22×10 网格，避免重复计算。
         heat_items = self._generate_heatmaps(
             job_id=job_id,
             output_dir=heatmaps_dir,
             image_url_prefix=f"{image_url_prefix}/heatmaps",
             artifact_url=heatmaps_artifact_url,
             player_points=player_points,
+            visual_grid=structured_data.heatmaps if structured_data else None,
         )
         scatter_items = self._generate_scatters(
             job_id=job_id,
@@ -102,16 +106,17 @@ class PositionVisualizer:
         image_url_prefix: str,
         artifact_url: str,
         player_points: list[VisualizationPoint],
+        visual_grid: VisualGrid | None = None,
     ) -> list[ManifestItem]:
-        # 基于“界内球员点”生成总热力图，并为每个稳定 player_id 额外生成一张热力图。
-        valid = [point for point in player_points if self.court.is_in_bounds(point.x_ft, point.y_ft)]
+        # 热力图只使用正式球场（court_bounds）内的点，界外点不统计。
+        valid = [point for point in player_points if self.court.is_in_court_bounds(point.x_ft, point.y_ft)]
         if not valid:
             return []
         output_dir.mkdir(parents=True, exist_ok=True)
         items: list[ManifestItem] = []
 
         file_name = "player_positions_heatmap.png"
-        image = self._heatmap_image(valid)
+        image = self._heatmap_image(valid, grid=visual_grid)
         cv2.imwrite(str(output_dir / file_name), image)
         items.append(
             ManifestItem(
@@ -219,22 +224,29 @@ class PositionVisualizer:
         points: Iterable[VisualizationPoint],
         *,
         heat_color: tuple[int, int, int] = (0, 208, 255),
+        grid: VisualGrid | None = None,
     ) -> np.ndarray:
-        # 基于小地图底图，叠加“网格密度着色”得到热力图。
+        # 基于小地图底图，叠加"网格密度着色"得到热力图。
         base = self.minimap.render()                      # 干净的球场底图
         overlay = np.zeros_like(base, dtype=np.uint8)     # 同尺寸空叠加层
         rows = self.config.heatmap_rows
         cols = self.config.heatmap_cols
-        counts: dict[tuple[int, int], int] = defaultdict(int)
-        # 统计每个网格单元里落入的球员点数。
-        for point in points:
-            if not self.court.is_in_bounds(point.x_ft, point.y_ft):
-                continue
-            col = min(cols - 1, max(0, int(point.x_ft / self.court.width_ft * cols)))
-            row = min(rows - 1, max(0, int(point.y_ft / self.court.length_ft * rows)))
-            counts[(row, col)] += 1
-        # 以最大计数为基准计算颜色强度，密度越高越偏蓝绿亮色。
-        max_count = max(counts.values(), default=1)
+        if grid is not None:
+            # 使用预计算的网格，避免重复计数。
+            counts: dict[tuple[int, int], int] = defaultdict(int)
+            for cell in grid.cells:
+                counts[(cell.row, cell.col)] = cell.count
+            max_count = grid.max_count or 1
+        else:
+            counts = defaultdict(int)
+            # 统计每个网格单元里落入的球员点数。
+            for point in points:
+                if not self.court.is_in_court_bounds(point.x_ft, point.y_ft):
+                    continue
+                col = min(cols - 1, max(0, int(point.x_ft / self.court.width_ft * cols)))
+                row = min(rows - 1, max(0, int(point.y_ft / self.court.length_ft * rows)))
+                counts[(row, col)] += 1
+            max_count = max(counts.values(), default=1)
         for (row, col), count in counts.items():
             x1 = int(self.config.minimap_padding + col / cols * (self.config.minimap_width - self.config.minimap_padding * 2))
             x2 = int(self.config.minimap_padding + (col + 1) / cols * (self.config.minimap_width - self.config.minimap_padding * 2))

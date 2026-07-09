@@ -176,6 +176,14 @@ class StorageService:
         # 散点图目录
         return self.position_visualizations_dir(job_id) / "scatter_plots"
 
+    def structured_visualization_data_dir(self, job_id: str) -> Path:
+        # 结构化可视化数据目录（JSON，供前端 SVG 渲染）
+        return self.position_visualizations_dir(job_id) / "structured"
+
+    def structured_visualization_data_path(self, job_id: str) -> Path:
+        # 结构化可视化数据 JSON 文件路径
+        return self.structured_visualization_data_dir(job_id) / "data.json"
+
     def heatmaps_manifest_json_path(self, job_id: str) -> Path:
         # 热力图清单（索引）JSON
         return self.heatmaps_dir(job_id) / "manifest.json"

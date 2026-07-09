@@ -45,6 +45,18 @@ The backend SHALL generate ball trajectory continuity artifacts when ball detect
 - **WHEN** ball trajectory processing is omitted, unavailable, or fails in a recoverable way
 - **THEN** player/person detection, pose, tracking, projection, and movement metrics remain the supported analysis path
 
+#### Scenario: Stationary false positives are filtered over time
+- **WHEN** ball tracker processes frames where a stationary object (e.g., court marking, debris) is repeatedly detected at the same image position
+- **THEN** the tracker SHALL accumulate a per-position stationary vote count across frames
+- **AND** SHALL permanently reject candidates at positions whose accumulated stationary frame count exceeds the configured threshold (default 60 frames)
+- **AND** the rejection reason SHALL be recorded as `stationary_blacklisted`
+- **AND** the blacklist SHALL be scoped to the current job (cleared on recalibration)
+
+#### Scenario: Genuine ball movement overrides stationary blacklist
+- **WHEN** a candidate at a blacklisted position passes continuity checks (within max_jump_pixels and prediction_gate_pixels of the last valid ball position)
+- **THEN** the tracker SHALL accept the candidate despite the blacklist
+- **AND** this ensures the blacklist does not inhibit real ball tracking when the ball happens to occupy a previously flagged position
+
 ### Requirement: Ball overlay artifact retrieval
 系统 SHALL 在 job 生成 `ball_overlay.json` 时通过共享分析 artifact 合同支持球 overlay artifact 获取，返回包含 source metadata、coverage 摘要和 frame 数组的完整 payload。
 

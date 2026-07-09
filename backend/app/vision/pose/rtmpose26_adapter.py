@@ -28,13 +28,17 @@ class RTMPose26Adapter:
         device: str | None = None,
         conf_threshold: float = 0.3,
         keypoint_schema: str = "rtmpose26",
+        conf_exit_threshold: float = 0.20,
     ) -> None:
         self.config_path = config_path  # MMPose 模型配置文件路径（.py）
         self.checkpoint_path = checkpoint_path  # MMPose 权重文件路径（.pth）
         self.device = device or "cpu"  # 推理设备，默认 CPU
-        self.conf_threshold = conf_threshold  # 关键点可见性阈值，置信度低于此值标记为不可见
+        self.conf_threshold = conf_threshold  # 关键点可见性阈值（进入），置信度 >= 此值标记为可见
+        self.conf_exit_threshold = conf_exit_threshold  # 关键点可见性阈值（退出），置信度 < 此值才退出可见
         self.keypoint_schema = keypoint_schema  # 关键点编号体系名称
         self._model: Any | None = None  # 模型缓存，首次推理后填充，后续复用
+        # Hysteresis 状态：按 (track_id, keypoint_name) 索引，记录跨帧可见性
+        self._visible_states: dict[str, dict[str, bool]] = {}
 
     # 对单帧进行姿态估计，返回带关键点的叠加帧结果（PoseOverlayFrame）。
     def estimate_frame(
@@ -75,12 +79,13 @@ class RTMPose26Adapter:
             keypoints, scores = self._extract_keypoints(sample)  # 解析关键点坐标与分数
             if not keypoints:
                 continue  # 解析不到关键点则跳过该主体
+            track_id = subject.track_id or f"subject-{index + 1}"
             rendered_subjects.append(
                 PoseSubject(
-                    track_id=subject.track_id or f"subject-{index + 1}",  # 优先用跟踪 id，缺失时回退生成
+                    track_id=track_id,  # 优先用跟踪 id，缺失时回退生成
                     bbox=subject.bbox,
                     confidence=subject.confidence,
-                    keypoints=self._normalize_keypoints(keypoints, scores),  # 归一化并附名称/可见性
+                    keypoints=self._normalize_keypoints(keypoints, scores, track_id),  # 归一化并附名称/可见性（含 hysteresis）
                 )
             )
 
@@ -155,24 +160,43 @@ class RTMPose26Adapter:
         return (normalized_keypoints, normalized_scores)
 
     # 把原始坐标/分数转换成带名称、可见性标记的 PoseKeypoint 列表，并校验数量。
-    def _normalize_keypoints(self, keypoints: list[list[float]], scores: list[float]) -> list[PoseKeypoint]:
+    def _normalize_keypoints(self, keypoints: list[list[float]], scores: list[float], track_id: str = "") -> list[PoseKeypoint]:
         self._validate_schema()
         if keypoints and len(keypoints) != EXPECTED_KEYPOINT_COUNT:
             raise RuntimeError(
                 f"RTMPose output has {len(keypoints)} keypoints; expected {EXPECTED_KEYPOINT_COUNT} for rtmpose26"
             )
         names = RTMPOSE26_KEYPOINT_NAMES
+        # 初始化该 track_id 的 hysteresis 状态（若首次出现）
+        if track_id and track_id not in self._visible_states:
+            self._visible_states[track_id] = {name: False for name in names}
+        states = self._visible_states.get(track_id, {})
         normalized: list[PoseKeypoint] = []
+        enter = self.conf_threshold          # 进入阈值（默认 0.30）
+        exit_t = self.conf_exit_threshold     # 退出阈值（默认 0.20）
         for index, point in enumerate(keypoints):
             # 把置信度裁剪到 [0, 1]，防止模型给出越界值。
             confidence = min(max(scores[index] if index < len(scores) else 0.0, 0.0), 1.0)
+            name = names[index] if index < len(names) else f"keypoint_{index}"
+            # Hysteresis 可见性判定
+            prev_visible = states.get(name, False)
+            if confidence >= enter:
+                visible = True
+            elif confidence < exit_t:
+                visible = False
+            else:
+                # 在 [exit_t, enter) 区间，保持上一帧的状态（防抖）
+                visible = prev_visible
+            # 更新状态
+            if track_id:
+                self._visible_states[track_id][name] = visible
             normalized.append(
                 PoseKeypoint(
-                    name=names[index] if index < len(names) else f"keypoint_{index}",
+                    name=name,
                     x=point[0],
                     y=point[1],
                     confidence=confidence,
-                    visible=confidence >= self.conf_threshold,  # 达阈值才视为可见
+                    visible=visible,
                 )
             )
         return normalized

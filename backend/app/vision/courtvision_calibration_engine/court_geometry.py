@@ -90,6 +90,9 @@ class PickleballCourtGeometry:
     length_ft: float = 44.0         # 球场长（英尺）
     net_y_ft: float = 22.0          # 球网所在的 y 坐标（球场正中）
     kitchen_depth_ft: float = 7.0   # 厨房区（非截击区）深度（英尺）
+    tracking_x_margin: float = 4.0  # 左右 tracking buffer 宽度（英尺）
+    tracking_y_near_margin: float = 8.0  # 近端底线外 tracking buffer（英尺）
+    tracking_y_far_margin: float = 8.0   # 远端底线外 tracking buffer（英尺）
 
     @property
     def near_kitchen_y_ft(self) -> float:
@@ -223,9 +226,37 @@ class PickleballCourtGeometry:
         """叠加绘制时要填充半透明的多边形（厨房区 + 发球区，不含外框）。"""
         return [zone.polygon for zone in self.kitchen_zones + self.service_zones]
 
+    @property
+    def court_bounds(self) -> CourtZone:
+        """正式球场范围（等价于旧 bounds）。"""
+        return CourtZone("court_bounds", 0.0, self.width_ft, 0.0, self.length_ft)
+
+    @property
+    def tracking_bounds(self) -> CourtZone:
+        """跟踪缓冲范围（略大于球场，包含合理界外区域）。"""
+        return CourtZone(
+            "tracking_bounds",
+            -self.tracking_x_margin,
+            self.width_ft + self.tracking_x_margin,
+            -self.tracking_y_near_margin,
+            self.length_ft + self.tracking_y_far_margin,
+        )
+
     def is_in_bounds(self, x: float, y: float) -> bool:
-        """判断 (x, y) 是否落在整个球场边界内。"""
-        return self.bounds.contains(CourtPoint(x, y))
+        """判断 (x, y) 是否落在整个球场边界内。等价于 is_in_court_bounds。"""
+        return self.court_bounds.contains(CourtPoint(x, y))
+
+    def is_in_court_bounds(self, x: float, y: float) -> bool:
+        """判断 (x, y) 是否在正式球场范围内。"""
+        return self.court_bounds.contains(CourtPoint(x, y))
+
+    def is_in_tracking_bounds(self, x: float, y: float) -> bool:
+        """判断 (x, y) 是否在跟踪缓冲范围内。"""
+        return self.tracking_bounds.contains(CourtPoint(x, y))
+
+    def is_outside_court_visible(self, x: float, y: float) -> bool:
+        """判断 (x, y) 是否在 tracking buffer 内但不在 court 内。"""
+        return self.is_in_tracking_bounds(x, y) and not self.is_in_court_bounds(x, y)
 
     def is_in_kitchen(self, x: float, y: float) -> bool:
         """判断 (x, y) 是否在某个厨房区（非截击区）内。"""

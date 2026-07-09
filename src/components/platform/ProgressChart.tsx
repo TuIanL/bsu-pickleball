@@ -1,10 +1,27 @@
+import { useState } from "react";
 import type { ProgressPoint } from "../../types/report";
 
 interface ProgressChartProps {
   points: ProgressPoint[];
 }
 
+const BAR_COLORS = {
+  performance: "#22C55E",
+  thirdShot: "#2F80ED",
+  kitchen: "#D9FF3F",
+} as const;
+
+type BarKey = keyof typeof BAR_COLORS;
+
+const BAR_LABELS: Record<BarKey, string> = {
+  performance: "综合表现",
+  thirdShot: "回位效率",
+  kitchen: "网前控制",
+};
+
 export function ProgressChart({ points }: ProgressChartProps) {
+  const [hoveredMatch, setHoveredMatch] = useState<string | null>(null);
+  const [hoveredBar, setHoveredBar] = useState<BarKey | null>(null);
   const maxError = Math.max(...points.map((point) => point.errors));
 
   return (
@@ -22,45 +39,64 @@ export function ProgressChart({ points }: ProgressChartProps) {
       <div className="mt-6 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
           <div className="flex h-56 items-end gap-3">
-            {points.map((point) => (
-              <div className="flex min-w-0 flex-1 flex-col items-center gap-2" key={point.match}>
-                <div className="flex h-44 w-full items-end justify-center gap-1 rounded-2xl bg-white/75 px-2 py-2">
-                  <span
-                    className="w-2.5 rounded-full bg-[#22C55E]"
-                    style={{ height: `${point.performance}%` }}
-                    title={`综合表现 ${point.performance}`}
-                  />
-                  <span
-                    className="w-2.5 rounded-full bg-[#2F80ED]"
-                    style={{ height: `${point.thirdShot}%` }}
-                    title={`回位效率 ${point.thirdShot}`}
-                  />
-                  <span
-                    className="w-2.5 rounded-full bg-[#D9FF3F]"
-                    style={{ height: `${point.kitchen}%` }}
-                    title={`网前控制 ${point.kitchen}`}
-                  />
+            {points.map((point) => {
+              const isHovered = hoveredMatch === point.match;
+              return (
+                <div
+                  className="flex min-w-0 flex-1 flex-col items-center gap-1"
+                  key={point.match}
+                  onMouseEnter={() => setHoveredMatch(point.match)}
+                  onMouseLeave={() => { setHoveredMatch(null); setHoveredBar(null); }}
+                >
+                  <div className="flex h-44 w-full items-end justify-center gap-1 rounded-2xl bg-white/75 px-2 py-2">
+                    {(["performance", "thirdShot", "kitchen"] as BarKey[]).map((key) => {
+                      const barHovered = isHovered && hoveredBar === key;
+                      return (
+                        <div key={key} className="relative flex flex-col items-center">
+                          {isHovered && (
+                            <span className="absolute -top-5 whitespace-nowrap text-[10px] font-bold text-[#14241B]">
+                              {point[key]}
+                            </span>
+                          )}
+                          <span
+                            className={`rounded-full transition-all duration-200 ${barHovered ? "" : ""}`}
+                            style={{
+                              width: barHovered ? 6 : 3,
+                              height: `${point[key]}%`,
+                              backgroundColor: BAR_COLORS[key],
+                              minHeight: 4,
+                            }}
+                            onMouseEnter={(e) => { e.stopPropagation(); setHoveredBar(key); }}
+                            onMouseLeave={() => setHoveredBar(null)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <span className="text-xs font-bold text-slate-600">{point.match}</span>
                 </div>
-                <span className="text-xs font-bold text-slate-600">{point.match}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold text-slate-600">
-            <span className="inline-flex items-center gap-2">
-              <i className="size-2 rounded-full bg-[#22C55E]" /> 综合表现
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <i className="size-2 rounded-full bg-[#2F80ED]" /> 回位效率
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <i className="size-2 rounded-full bg-[#D9FF3F]" /> 网前控制
-            </span>
+            {(["performance", "thirdShot", "kitchen"] as BarKey[]).map((key) => (
+              <span key={key} className="inline-flex items-center gap-2">
+                <i className="size-2 rounded-full" style={{ backgroundColor: BAR_COLORS[key] }} /> {BAR_LABELS[key]}
+              </span>
+            ))}
           </div>
         </div>
 
         <div className="grid gap-3">
           {points.map((point) => (
-            <div className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={point.match}>
+            <div
+              className={`rounded-2xl border bg-white/75 p-4 transition-all duration-200 ${
+                hoveredMatch === point.match ? "border-[#22C55E] shadow-sm" : "border-[#DDE9D6]"
+              }`}
+              key={point.match}
+              onMouseEnter={() => setHoveredMatch(point.match)}
+              onMouseLeave={() => setHoveredMatch(null)}
+            >
               <div className="flex items-center justify-between">
                 <strong>{point.match}</strong>
                 <span className="text-sm font-bold text-[#168A34]">{point.performance}</span>

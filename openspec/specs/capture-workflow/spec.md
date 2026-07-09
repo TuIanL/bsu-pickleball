@@ -168,24 +168,26 @@ TBD - created by syncing change redesign-product-entry-and-capture-console.
 
 ### Requirement: 双摄采集控制台
 
-系统 SHALL 在 Field Session 的 `camera_setup` 为 `dual` 时展示双摄采集控制台，而不是单摄控制台。
+系统 SHALL 在 Field Session 的 `camera_setup` 为 `dual` 时展示双摄采集控制台，而不是单摄控制台。双摄模式下预览区展示两路并排实时画面。
 
 #### Scenario: 进入双摄采集控制台
 - **WHEN** 用户进入一个 `camera_setup` 为 `dual` 的采集任务
-- **THEN** 系统展示两个机位槽位：主机位和副机位
-- **AND** 每个槽位展示已选摄像头、连接状态、预览入口和更换操作
+- **THEN** 系统展示两个机位槽位：底线机位 A（`cam_1`）和底线机位 B（`cam_2`）
+- **AND** 每个槽位展示已选摄像头、连接状态、更换操作
+- **AND** 预览区展示两路并排 MJPEG 实时画面，各由一个 `<img>` 标签加载对应摄像头的预览流
+- **AND** 每个预览画面上方叠加摄像头名称标签和在线状态指示
 - **AND** 系统展示双摄同步录制控制区
 
 #### Scenario: 双摄机位未准备完成
 - **WHEN** 任一机位槽位未选择摄像头
-- **THEN** 系统禁用同步开始录制按钮
-- **AND** 系统引导用户为缺失槽位选择摄像头
+- **THEN** 该槽位对应的预览区展示「未选择摄像头」占位提示
+- **AND** 系统禁用同步开始录制按钮
 
 #### Scenario: 双摄录制中显示同步状态
 - **WHEN** 双摄同步录制会话处于 recording 状态
 - **THEN** 系统显示录制时长、当前分段编号、已保存分段数和重启次数
 - **AND** 系统继续显示场边事件标记和时间线
-- **AND** 系统暂停或弱化实时预览以避免占用录制资源
+- **AND** 系统暂停双路实时预览以避免占用录制资源
 
 ### Requirement: 双摄录制完成面板
 
@@ -193,7 +195,7 @@ TBD - created by syncing change redesign-product-entry-and-capture-console.
 
 #### Scenario: 双摄录制正常完成
 - **WHEN** 用户停止双摄同步录制且会话状态为 completed
-- **THEN** 系统展示主机位和副机位的保存摘要
+- **THEN** 系统展示两路摄像头的保存摘要
 - **AND** 系统展示录制时长、分段数量和输出状态
 - **AND** 若主机位视频可用于分析，系统提供创建分析任务入口
 - **AND** 系统提供继续采集入口

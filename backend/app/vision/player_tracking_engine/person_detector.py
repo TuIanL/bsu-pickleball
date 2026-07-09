@@ -17,7 +17,7 @@ class PersonDetector:
     def __init__(
         self,
         model_path: str = "yolov8n.pt",
-        conf_threshold: float = 0.25,
+        conf_threshold: float = 0.15,
         device: str | None = None,
     ) -> None:
         self.model_path = model_path
