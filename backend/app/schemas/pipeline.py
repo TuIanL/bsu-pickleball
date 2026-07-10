@@ -81,6 +81,8 @@ class AnalysisArtifacts(BaseModel):
     player_trajectory_json_path: Optional[str] = None
     player_trajectory_csv_path: Optional[str] = None
     player_trajectory_url: Optional[str] = None
+    player_render_trajectory_json_path: Optional[str] = None
+    player_render_trajectory_url: Optional[str] = None
     court_view_roi_json_path: Optional[str] = None
     court_view_roi_url: Optional[str] = None
     source_video_url: Optional[str] = None

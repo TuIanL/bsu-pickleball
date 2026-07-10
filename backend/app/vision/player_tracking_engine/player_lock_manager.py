@@ -276,6 +276,7 @@ class PlayerLockManager:
 
     def _update_slot_from_position(self, slot: PlayerSlot, pos: PlayerFramePosition, frame_index: int) -> None:
         prev_pos = slot.last_confirmed_position_m
+        previous_seen_frame = slot.last_seen_frame
         slot.current_track_id = pos.track_id
         if pos.track_id not in slot.track_id_history:
             slot.track_id_history.append(pos.track_id)
@@ -285,7 +286,9 @@ class PlayerLockManager:
         if pos.court_position is not None:
             new_pos = [float(pos.court_position[0]), float(pos.court_position[1])]
             if prev_pos is not None:
-                dt = max(pos.timestamp - slot.last_seen_frame / 30.0, 0.001)
+                fps = max(float(self.config.fps), 1.0)
+                previous_timestamp = previous_seen_frame / fps if previous_seen_frame >= 0 else pos.timestamp
+                dt = max(pos.timestamp - previous_timestamp, 0.001)
                 slot.last_velocity_mps = [
                     (new_pos[0] - prev_pos[0]) / dt,
                     (new_pos[1] - prev_pos[1]) / dt,

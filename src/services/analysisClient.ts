@@ -18,6 +18,7 @@ import type {
   StructuredVisualizationData,
   VisualizationManifest,
   VideoUploadResponse,
+  type RawPlayerRenderTrajectory,
 } from "../types/report";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
@@ -463,6 +464,7 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
         videoId: request.videoId,
         calibrationId: request.calibrationId,
         frameStride: request.frameStride ?? 2,
+        sourceFps: request.metadata.sourceFps,
         priority: request.priority ?? 0,
         requestNewVersion: request.requestNewVersion ?? false,
       }),
@@ -652,6 +654,17 @@ export async function getStructuredVizData(jobId: string): Promise<StructuredVis
     return await requestJson<StructuredVisualizationData>(`/api/analysis/jobs/${jobId}/visualization-data`);
   } catch {
     return null;
+  }
+}
+
+export async function getPlayerRenderTrajectory(jobId: string): Promise<RawPlayerRenderTrajectory | null> {
+  try {
+    return await requestJson<RawPlayerRenderTrajectory>(`/api/analysis/jobs/${jobId}/artifacts/player-render-trajectories`);
+  } catch (error: unknown) {
+    if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
+      return null;
+    }
+    throw error;
   }
 }
 

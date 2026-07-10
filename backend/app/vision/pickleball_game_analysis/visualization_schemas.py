@@ -31,6 +31,7 @@ class VisualizationConfig:
     heatmap_cols: int = 10
     trail_length: int = 20
     language: str = "zh-CN"
+    minimap_player_trail_seconds: float = 2.5
 
 
 @dataclass(frozen=True)
@@ -49,11 +50,79 @@ class VisualizationPoint:
     footpoint_method: str | None = None
     # 投影可信度（0~1）
     projection_confidence: float | None = None
+    # 渲染 segment ID（v2 artifact 中携带，用于 OverlayVideoWriter 断段检测）
+    segment_id: str | None = None
 
     @property
     def court_xy(self) -> Point2D:
         # 以 (x, y) 元组形式暴露坐标，便于与需要 Point2D 的接口对接。
         return (self.x_ft, self.y_ft)
+
+
+@dataclass(frozen=True)
+class CourtVisualizationStyleProfile:
+    version: str = "court-visual-theme.v1"
+    players: dict[str, str] = field(default_factory=lambda: {
+        "slot_1": "#22D3EE",
+        "slot_2": "#FBBF24",
+        "slot_3": "#A78BFA",
+        "slot_4": "#F97316",
+    })
+    ball: str = "#67E8F9"
+    bounce: str = "#FB923C"
+    outside_player: str = "#94A3B8"
+    player_trail_seconds: float = 2.5
+    ball_trail_seconds: float = 1.0
+    bounce_display_seconds: float = 0.8
+    radius_min_px: float = 2.0
+    radius_max_px: float = 6.0
+
+
+@dataclass(frozen=True)
+class CourtTrackSegmentationProfile:
+    version: str = "court-track-segmentation.v1"
+    jump_threshold_ft: float = 9.84
+    max_visible_gap_seconds: float = 0.75
+
+
+@dataclass(frozen=True)
+class CourtTrackSegmentationProfile:
+    version: str = "court-track-segmentation.v1"
+    jump_threshold_ft: float = 9.84
+    max_visible_gap_seconds: float = 0.75
+
+
+def load_render_profiles() -> tuple[CourtVisualizationStyleProfile, CourtTrackSegmentationProfile]:
+    """从 package resource 加载渲染 profile，不可用时使用内置默认值。"""
+    try:
+        from importlib.resources import files as resource_files
+        profile_json = resource_files("app.resources").joinpath("court_render_profile.v1.json").read_text(encoding="utf-8")
+        raw = json.loads(profile_json)
+    except Exception:
+        return CourtVisualizationStyleProfile(), CourtTrackSegmentationProfile()
+
+    raw_style = raw.get("style_profile", {})
+    style = CourtVisualizationStyleProfile(
+        version=raw_style.get("version", "court-visual-theme.v1"),
+        players=raw_style.get("players", {}),
+        ball=raw_style.get("ball", "#67E8F9"),
+        bounce=raw_style.get("bounce", "#FB923C"),
+        outside_player=raw_style.get("outside_player", "#94A3B8"),
+        player_trail_seconds=raw_style.get("player_trail_seconds", 2.5),
+        ball_trail_seconds=raw_style.get("ball_trail_seconds", 1.0),
+        bounce_display_seconds=raw_style.get("bounce_display_seconds", 0.8),
+        radius_min_px=raw_style.get("radius_min_px", 2.0),
+        radius_max_px=raw_style.get("radius_max_px", 6.0),
+    )
+
+    raw_seg = raw.get("segmentation_profile", {})
+    seg = CourtTrackSegmentationProfile(
+        version=raw_seg.get("version", "court-track-segmentation.v1"),
+        jump_threshold_ft=raw_seg.get("jump_threshold_ft", 9.84),
+        max_visible_gap_seconds=raw_seg.get("max_visible_gap_seconds", 0.75),
+    )
+
+    return style, seg
 
 
 @dataclass(frozen=True)
@@ -370,6 +439,173 @@ def bounce_points_from_artifact(payload: dict[str, Any]) -> list[VisualizationPo
             )
         )
     return points
+
+
+def player_render_points_from_artifact(payload: dict[str, Any]) -> list[VisualizationPoint]:
+    points: list[VisualizationPoint] = []
+    players = payload.get("players")
+    if not isinstance(players, dict):
+        samples = payload.get("samples")
+        if isinstance(samples, list):
+            return _parse_render_samples(samples)
+        return points
+    for player_id, samples in players.items():
+        if not isinstance(samples, list):
+            continue
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            x = safe_float(sample.get("x_ft"))
+            y = safe_float(sample.get("y_ft"))
+            if x is None or y is None:
+                continue
+            points.append(VisualizationPoint(
+                x_ft=x,
+                y_ft=y,
+                frame_index=_safe_int(sample.get("frame_index")),
+                timestamp_seconds=safe_float(sample.get("timestamp_seconds")),
+                label=str(player_id),
+                source=sample.get("source", "render"),
+                confidence=safe_float(sample.get("confidence")),
+            ))
+    return points
+
+
+def _parse_render_samples(samples: list[dict[str, Any]]) -> list[VisualizationPoint]:
+    points: list[VisualizationPoint] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        x = safe_float(sample.get("x_ft"))
+        y = safe_float(sample.get("y_ft"))
+        if x is None or y is None:
+            continue
+        player_id = str(sample.get("player_id", "unknown"))
+        points.append(VisualizationPoint(
+            x_ft=x,
+            y_ft=y,
+            frame_index=_safe_int(sample.get("frame_index")),
+            timestamp_seconds=safe_float(sample.get("timestamp_seconds")),
+            label=player_id,
+            source=sample.get("source", "render"),
+            confidence=safe_float(sample.get("confidence")),
+            projection_status=sample.get("projection_status"),
+            footpoint_method=sample.get("footpoint_method"),
+            projection_confidence=safe_float(sample.get("projection_confidence")),
+            segment_id=sample.get("segment_id"),
+        ))
+    return points
+
+
+def serialize_render_trajectory_v2(
+    result: dict[str, Any],
+    style_profile: CourtVisualizationStyleProfile | None = None,
+    segmentation_profile: CourtTrackSegmentationProfile | None = None,
+) -> dict[str, Any]:
+    from app.vision.pickleball_game_analysis.court_track_types import (
+        RenderPlayerMetadata,
+        RenderSegmentMetadata,
+    )
+    payload: dict[str, Any] = {
+        "schema_version": "player-render-trajectory.v2",
+        "players": [
+            {
+                "player_id": p.player_id if isinstance(p, RenderPlayerMetadata) else p.get("player_id", ""),
+                "render_slot": p.render_slot if isinstance(p, RenderPlayerMetadata) else p.get("render_slot", ""),
+                "initial_side": p.initial_side if isinstance(p, RenderPlayerMetadata) else p.get("initial_side", "unknown"),
+                "dominant_side": p.dominant_side if isinstance(p, RenderPlayerMetadata) else p.get("dominant_side", "unknown"),
+                "first_frame_index": p.first_frame_index if isinstance(p, RenderPlayerMetadata) else p.get("first_frame_index", 0),
+                "source_track_ids": p.source_track_ids if isinstance(p, RenderPlayerMetadata) else p.get("source_track_ids", []),
+            }
+            for p in result.get("players", [])
+        ],
+        "segments": [
+            {
+                "segment_id": s.segment_id if isinstance(s, RenderSegmentMetadata) else s.get("segment_id", ""),
+                "player_id": s.player_id if isinstance(s, RenderSegmentMetadata) else s.get("player_id", ""),
+                "identity_epoch": s.identity_epoch if isinstance(s, RenderSegmentMetadata) else s.get("identity_epoch", 0),
+                "start_frame_index": s.start_frame_index if isinstance(s, RenderSegmentMetadata) else s.get("start_frame_index", 0),
+                "end_frame_index": s.end_frame_index if isinstance(s, RenderSegmentMetadata) else s.get("end_frame_index", 0),
+                "start_timestamp_seconds": s.start_timestamp_seconds if isinstance(s, RenderSegmentMetadata) else s.get("start_timestamp_seconds", 0),
+                "end_timestamp_seconds": s.end_timestamp_seconds if isinstance(s, RenderSegmentMetadata) else s.get("end_timestamp_seconds", 0),
+                "break_before": s.break_before if isinstance(s, RenderSegmentMetadata) else s.get("break_before", "start"),
+                "sample_count": s.sample_count if isinstance(s, RenderSegmentMetadata) else s.get("sample_count", 0),
+            }
+            for s in result.get("segments", [])
+        ],
+        "samples": [
+            _sample_to_dict(s) for s in result.get("samples", [])
+        ],
+    }
+    if style_profile is not None:
+        payload["style_profile"] = {
+            "version": style_profile.version,
+            "players": style_profile.players,
+            "ball": style_profile.ball,
+            "bounce": style_profile.bounce,
+            "outside_player": style_profile.outside_player,
+            "player_trail_seconds": style_profile.player_trail_seconds,
+            "ball_trail_seconds": style_profile.ball_trail_seconds,
+            "bounce_display_seconds": style_profile.bounce_display_seconds,
+            "radius_min_px": style_profile.radius_min_px,
+            "radius_max_px": style_profile.radius_max_px,
+        }
+    if segmentation_profile is not None:
+        payload["segmentation_profile"] = {
+            "version": segmentation_profile.version,
+            "jump_threshold_ft": segmentation_profile.jump_threshold_ft,
+            "max_visible_gap_seconds": segmentation_profile.max_visible_gap_seconds,
+        }
+    return payload
+
+
+def _sample_to_dict(sample: Any) -> dict[str, Any]:
+    from app.vision.pickleball_game_analysis.court_track_types import RenderFrame
+    if isinstance(sample, RenderFrame):
+        return {
+            "sequence_index": sample.sequence_index,
+            "frame_index": sample.frame_index,
+            "timestamp_seconds": sample.timestamp_seconds,
+            "x_ft": sample.x_ft,
+            "y_ft": sample.y_ft,
+            "source": sample.source,
+            "confidence": sample.confidence,
+            "player_id": sample.player_id,
+            "render_slot": sample.render_slot,
+            "side": sample.side,
+            "segment_id": sample.segment_id,
+            "identity_epoch": sample.identity_epoch,
+            "source_track_id": sample.source_track_id,
+            "projection_status": sample.projection_status,
+            "projection_confidence": sample.projection_confidence,
+            "footpoint_method": sample.footpoint_method,
+        }
+    if isinstance(sample, dict):
+        return {
+            "sequence_index": sample.get("sequence_index", 0),
+            "frame_index": sample.get("frame_index", 0),
+            "timestamp_seconds": sample.get("timestamp_seconds", 0),
+            "x_ft": sample.get("x_ft", 0),
+            "y_ft": sample.get("y_ft", 0),
+            "source": sample.get("source", ""),
+            "confidence": sample.get("confidence"),
+            "player_id": sample.get("player_id", ""),
+            "render_slot": sample.get("render_slot", ""),
+            "side": sample.get("side", "unknown"),
+            "segment_id": sample.get("segment_id", ""),
+            "identity_epoch": sample.get("identity_epoch", 0),
+            "source_track_id": sample.get("source_track_id"),
+            "projection_status": sample.get("projection_status"),
+            "projection_confidence": sample.get("projection_confidence"),
+            "footpoint_method": sample.get("footpoint_method"),
+        }
+    return sample
+
+
+def canonical_player_id(value: str) -> str:
+    if value.startswith("player_"):
+        return "Player_" + value.removeprefix("player_")
+    return value
 
 
 def _safe_int(value: Any) -> int | None:

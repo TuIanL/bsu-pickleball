@@ -67,6 +67,7 @@ class Settings(BaseModel):
     primary_player_max_box_area_ratio: float = 0.85      # 检测框最大面积占比（过滤太大框）
     primary_player_court_margin_ft: float = 12.0         # 球场外扩边距（英尺）
     primary_player_window_frames: int = 90               # 判定主球员的滑动窗口帧数
+    primary_player_window_seconds: float = 1.0            # 判定主球员的滑动窗口时长
     primary_player_target_court_threshold: float = 0.65  # 主球员在目标球场的比例阈值（提高以减少邻场干扰）
     primary_player_quality_threshold: float = 0.28       # 主球员质量阈值
 
@@ -81,6 +82,7 @@ class Settings(BaseModel):
     enable_bounce_detection: bool = True                  # 是否启用弹跳检测
     ball_analysis_strict: bool = False                    # 球分析严格模式：true 时球分析异常导致 pipeline failed
     ball_stationary_blacklist_frames: int = 60             # 球静止候选加入黑名单的累计帧阈值
+    ball_stationary_blacklist_seconds: float = 2.0         # 球静止候选加入黑名单的累计时长
 
     # ---- 可视化输出 ----
     enable_analysis_overlay_video: bool = True            # 是否生成分析叠加视频
@@ -95,6 +97,9 @@ class Settings(BaseModel):
     player_identity_lost_buffer_frames: int = 90          # 跟丢后保留缓存帧数
     player_identity_inactive_buffer_frames: int = 180     # 不活跃时保留缓存帧数
     player_identity_interpolation_buffer_frames: int = 90 # 插值补齐缓存帧数
+    player_identity_lost_buffer_seconds: float = 1.0       # 跟丢后保留缓存时长
+    player_identity_inactive_buffer_seconds: float = 2.0   # 不活跃时保留缓存时长
+    player_identity_interpolation_buffer_seconds: float = 1.0 # 插值补齐缓存时长
     player_identity_match_threshold: float = 0.55         # 身份匹配阈值
     player_identity_max_reconnect_distance_m: float = 2.5 # 重连最大距离（米）
     player_identity_max_speed_mps: float = 7.0            # 最大速度（米/秒，过滤异常跳变）
@@ -110,6 +115,10 @@ class Settings(BaseModel):
     player_lock_plausible_min_hits: int = 3               # 进入 tentative 所需连续帧数
     player_lock_lost_grace_frames: int = 3                # 从 locked 到 lost 的容错帧数
     player_lock_lost_max_frames_locked: int = 300         # lost 状态最长容忍帧数
+    player_lock_bootstrap_min_seconds: float = 1.0         # bootstrap 最短收集时长
+    player_lock_bootstrap_max_seconds: float = 3.0         # bootstrap 最长收集时长
+    player_lock_lost_grace_seconds: float = 0.1            # 从 locked 到 lost 的容错时长
+    player_lock_lost_max_seconds_locked: float = 10.0      # lost 状态最长容忍时长
     player_lock_locked_conf: float = 0.06                 # locked 状态最低置信度
     player_lock_tentative_conf: float = 0.12              # tentative 状态最低置信度
     player_lock_searching_conf: float = 0.20              # searching 状态最低置信度
@@ -282,6 +291,12 @@ def get_settings() -> Settings:
         primary_player_max_box_area_ratio=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_MAX_BOX_AREA_RATIO", "0.85")),
         primary_player_court_margin_ft=float(os.getenv("PICKLEBALL_PRIMARY_PLAYER_COURT_MARGIN_FT", "12.0")),
         primary_player_window_frames=max(1, int(os.getenv("PICKLEBALL_PRIMARY_PLAYER_WINDOW_FRAMES", "90"))),
+        primary_player_window_seconds=_seconds_env(
+            "PICKLEBALL_PRIMARY_PLAYER_WINDOW_SECONDS",
+            "PICKLEBALL_PRIMARY_PLAYER_WINDOW_FRAMES",
+            1.0,
+            reference_fps=90.0,
+        ),
         primary_player_target_court_threshold=_clamp_float(
             os.getenv("PICKLEBALL_PRIMARY_PLAYER_TARGET_COURT_THRESHOLD", "0.65"),
             0.0,
@@ -310,6 +325,12 @@ def get_settings() -> Settings:
         ball_stationary_blacklist_frames=max(
             1, int(os.getenv("PICKLEBALL_BALL_STATIONARY_BLACKLIST_FRAMES", "60"))
         ),
+        ball_stationary_blacklist_seconds=_seconds_env(
+            "PICKLEBALL_BALL_STATIONARY_BLACKLIST_SECONDS",
+            "PICKLEBALL_BALL_STATIONARY_BLACKLIST_FRAMES",
+            2.0,
+            reference_fps=30.0,
+        ),
         enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "true").lower()
         in {"1", "true", "yes"},
         enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true").lower()
@@ -333,6 +354,24 @@ def get_settings() -> Settings:
             1,
             int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_INTERPOLATION_BUFFER_FRAMES", "90")),
         ),
+        player_identity_lost_buffer_seconds=_seconds_env(
+            "PICKLEBALL_PLAYER_IDENTITY_LOST_BUFFER_SECONDS",
+            "PICKLEBALL_PLAYER_IDENTITY_LOST_BUFFER_FRAMES",
+            1.0,
+            reference_fps=90.0,
+        ),
+        player_identity_inactive_buffer_seconds=_seconds_env(
+            "PICKLEBALL_PLAYER_IDENTITY_INACTIVE_BUFFER_SECONDS",
+            "PICKLEBALL_PLAYER_IDENTITY_INACTIVE_BUFFER_FRAMES",
+            2.0,
+            reference_fps=90.0,
+        ),
+        player_identity_interpolation_buffer_seconds=_seconds_env(
+            "PICKLEBALL_PLAYER_IDENTITY_INTERPOLATION_BUFFER_SECONDS",
+            "PICKLEBALL_PLAYER_IDENTITY_INTERPOLATION_BUFFER_FRAMES",
+            1.0,
+            reference_fps=90.0,
+        ),
         player_identity_match_threshold=_clamp_float(
             os.getenv("PICKLEBALL_PLAYER_IDENTITY_MATCH_THRESHOLD", "0.55"),
             0.0,
@@ -353,6 +392,30 @@ def get_settings() -> Settings:
         player_lock_plausible_min_hits=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_PLAUSIBLE_MIN_HITS", "3"))),
         player_lock_lost_grace_frames=max(0, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_GRACE_FRAMES", "3"))),
         player_lock_lost_max_frames_locked=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_MAX_FRAMES_LOCKED", "300"))),
+        player_lock_bootstrap_min_seconds=_seconds_env(
+            "PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MIN_SECONDS",
+            "PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MIN_FRAMES",
+            1.0,
+            reference_fps=60.0,
+        ),
+        player_lock_bootstrap_max_seconds=_seconds_env(
+            "PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MAX_SECONDS",
+            "PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MAX_FRAMES",
+            3.0,
+            reference_fps=60.0,
+        ),
+        player_lock_lost_grace_seconds=_seconds_env(
+            "PICKLEBALL_PLAYER_LOCK_LOST_GRACE_SECONDS",
+            "PICKLEBALL_PLAYER_LOCK_LOST_GRACE_FRAMES",
+            0.1,
+            reference_fps=30.0,
+        ),
+        player_lock_lost_max_seconds_locked=_seconds_env(
+            "PICKLEBALL_PLAYER_LOCK_LOST_MAX_SECONDS_LOCKED",
+            "PICKLEBALL_PLAYER_LOCK_LOST_MAX_FRAMES_LOCKED",
+            10.0,
+            reference_fps=30.0,
+        ),
         player_lock_locked_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_LOCKED_CONF", "0.06")),
         player_lock_tentative_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_TENTATIVE_CONF", "0.12")),
         player_lock_searching_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_SEARCHING_CONF", "0.20")),
@@ -426,6 +489,16 @@ def _env_bool(value: str | None) -> bool:
 # 把字符串转成浮点数，并限制在 [minimum, maximum] 区间内（防止配置越界）
 def _clamp_float(value: str, minimum: float, maximum: float) -> float:
     return min(max(float(value), minimum), maximum)
+
+
+def _seconds_env(seconds_name: str, legacy_frames_name: str, default_seconds: float, *, reference_fps: float) -> float:
+    seconds_value = os.getenv(seconds_name)
+    if seconds_value is not None:
+        return max(0.0, float(seconds_value))
+    frames_value = os.getenv(legacy_frames_name)
+    if frames_value is not None:
+        return max(0.0, float(frames_value) / max(reference_fps, 1.0))
+    return default_seconds
 
 
 # 在 base 目录下按 relative_paths 顺序找第一个真实存在的文件，返回其绝对路径字符串；都找不到返回 None

@@ -291,6 +291,7 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
     input_payload = {
         "videoId": payload.videoId,
         "calibrationId": payload.calibrationId,
+        "sourceFps": payload.sourceFps or payload.metadata.sourceFps,
         "metadata": payload.metadata.model_dump(mode="json"),
     }
     return _stable_hash(input_payload), _stable_hash(config_payload)
@@ -324,6 +325,7 @@ class JobStore:
             inputSignature=input_sig,
             configSignature=config_sig,
             frameStride=payload.frameStride,
+            sourceFps=payload.sourceFps or payload.metadata.sourceFps,
             metadata=payload.metadata,
             stages=build_stages("queue"),
             reportId=report_id,
@@ -741,6 +743,7 @@ class AnalysisWorkerRuntime:
             videoId=job.videoId,
             calibrationId=job.calibrationId,
             frameStride=job.frameStride,
+            sourceFps=job.sourceFps or job.metadata.sourceFps,
             priority=job.priority,
         )
         latest = job
@@ -764,6 +767,7 @@ class AnalysisWorkerRuntime:
                     "video_id": payload.videoId,
                     "calibration_id": payload.calibrationId,
                     "frame_stride": payload.frameStride,
+                    "source_fps": payload.sourceFps or payload.metadata.sourceFps,
                     "court_view_match_threshold": payload.courtViewMatchThreshold,
                     "progress_callback": progress_callback,
                     "cancellation_token": token,
@@ -774,6 +778,8 @@ class AnalysisWorkerRuntime:
                     message = str(exc)
                     if "court_view_match_threshold" in message:
                         run_kwargs.pop("court_view_match_threshold", None)
+                    elif "source_fps" in message:
+                        run_kwargs.pop("source_fps", None)
                     elif "cancellation_token" in message:
                         run_kwargs.pop("cancellation_token", None)
                     else:

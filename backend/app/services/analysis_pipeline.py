@@ -46,6 +46,7 @@ from app.services.calibration_service import CalibrationService
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
 from app.core.config import get_settings
+from app.utils.fps import frames_for_seconds, resolve_effective_fps
 # 视觉引擎：球场几何、球场视角评分、各项性能指标、跟踪与姿态相关组件
 from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.court_view import (
@@ -92,12 +93,17 @@ from app.vision.pickleball_game_analysis.position_visualizer import PositionVisu
 from app.vision.pickleball_game_analysis.projection_debug_writer import ProjectionDebugWriter
 from app.vision.pickleball_game_analysis.projection_debug_overlay_writer import ProjectionDebugOverlayWriter
 from app.vision.pickleball_game_analysis.visualization_data_builder import PositionVisualizationDataBuilder
+from app.vision.pickleball_game_analysis.court_track_postprocessor import CourtTrackPostProcessor
+from app.vision.pickleball_game_analysis.court_track_types import CourtTrackEvent, CourtTrackObservation, RenderSlotOverflowError, canonical_player_id
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     VisualizationConfig,
     VisualizationResult,
     ball_points_from_artifact,
     bounce_points_from_artifact,
+    load_render_profiles,
     player_points_from_artifact,
+    player_render_points_from_artifact,
+    serialize_render_trajectory_v2,
 )
 from app.schemas.multitarget import MultiTargetDetection
 # 可配置的球检测适配器（缺失模型/依赖时抛出清晰错误，由 pipeline 降级为 unavailable）
@@ -123,6 +129,35 @@ class CancellationToken(Protocol):
     # 取消令牌协议（Protocol = 结构化类型，只要实现了 raise_if_cancelled 就满足）。
     def raise_if_cancelled(self) -> None:
         ...
+
+
+def _render_track_list_to_players(render_tracks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    players: dict[str, list[dict[str, Any]]] = {}
+    for rf in render_tracks:
+        pid = rf["player_id"]
+        if pid not in players:
+            players[pid] = []
+        players[pid].append({
+            "frame_index": rf["frame_index"],
+            "timestamp_seconds": rf["timestamp_seconds"],
+            "x_ft": rf["x_ft"],
+            "y_ft": rf["y_ft"],
+            "source": rf["source"],
+            "confidence": rf["confidence"],
+        })
+    for pid in players:
+        players[pid].sort(key=lambda p: p["frame_index"])
+    return players
+
+
+# 渲染轨迹事件映射表：IdentityManager/LockManager diagnostics event → CourtTrackEvent type
+_RENDER_EVENT_MAPPING: dict[str, str] = {
+    "created": "identity_created",
+    "reconnected": "identity_reconnected",
+    "player_locked": "lock_acquired",
+    "player_reconnected_from_lost": "lock_reconnected",
+    "player_reset_after_prolonged_loss": "identity_reset",
+}
 
 
 @dataclass
@@ -216,6 +251,7 @@ class _TrackingRunOutput:
     ball_run_output: _BallRunOutput | None = None
     player_multitarget_detections: list[MultiTargetDetection] = field(default_factory=list)
     calibration_diagnostics_path: str | None = None
+    render_trajectory: list[dict[str, Any]] | None = None
 
 
 class AnalysisPipeline:
@@ -343,6 +379,7 @@ class AnalysisPipeline:
         video_id: str | None,
         calibration_id: str | None = None,
         frame_stride: int | None = None,
+        source_fps: float | None = None,
         court_view_match_threshold: float | None = None,
         progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
@@ -466,6 +503,7 @@ class AnalysisPipeline:
                     calibration_id=calibration_id,
                     calibration_keypoints=calibration.keypoints,
                     frame_stride=frame_stride or self.frame_stride,
+                    source_fps=source_fps,
                     court_view_match_threshold=court_view_match_threshold,
                     progress_callback=progress_callback,
                     cancellation_token=cancellation_token,
@@ -586,6 +624,31 @@ class AnalysisPipeline:
                 sample_count = sum(len(samples) for samples in run_output.player_trajectories.players.values())
                 player_trajectory_status = "available" if sample_count else "no_detections"
                 player_trajectory_detail = f"已生成 {player_count} 名球员的 {sample_count} 个公制轨迹样本"
+
+            if run_output.render_trajectory is not None:
+                render_traj_path = self.storage.player_render_trajectory_path(job_id)
+                style_profile, seg_profile = load_render_profiles()
+                render_traj_payload = serialize_render_trajectory_v2(
+                    run_output.render_trajectory,
+                    style_profile=style_profile,
+                    segmentation_profile=seg_profile,
+                )
+                render_traj_payload["job_id"] = job_id
+                render_traj_payload["status"] = "available"
+                render_traj_payload["fps"] = tracking_result.fps
+                render_traj_payload["total_frames"] = tracking_result.frame_count
+                sample_count = len(run_output.render_trajectory.get("samples", []))
+                render_traj_payload["detail"] = f"已生成逐帧渲染轨迹，共 {sample_count} 帧"
+                self.storage.write_json(render_traj_path, render_traj_payload)
+                player_render_trajectory_json_path = str(render_traj_path)
+                player_render_trajectory_url = f"/api/analysis/jobs/{job_id}/artifacts/player-render-trajectories"
+                player_render_trajectory_status = "available"
+                player_render_trajectory_detail = render_traj_payload["detail"]
+            else:
+                player_render_trajectory_json_path = None
+                player_render_trajectory_url = None
+                player_render_trajectory_status = "unavailable"
+                player_render_trajectory_detail = "渲染轨迹未生成"
 
             # 发球开始检测（若开启调试产物，先准备调试引用）
             debug_refs = self._serve_debug_refs(job_id) if self.settings.enable_serve_debug_artifacts else None
@@ -882,6 +945,8 @@ class AnalysisPipeline:
                 player_trajectory_json_path=player_trajectory_json_path,
                 player_trajectory_csv_path=player_trajectory_csv_path,
                 player_trajectory_url=player_trajectory_url,
+                player_render_trajectory_json_path=player_render_trajectory_json_path,
+                player_render_trajectory_url=player_render_trajectory_url,
                 court_view_roi_json_path=court_view_roi_path,
                 court_view_roi_url=court_view_roi_url,
                 calibration_diagnostics_json_path=run_output.calibration_diagnostics_path,
@@ -1149,11 +1214,16 @@ class AnalysisPipeline:
         self._notify_progress(progress_callback, self._stage("visualization", "可视化输出", "active", "正在生成可视化 artifact…"))
         config = VisualizationConfig(language=self.settings.visualization_language)
         inputs = self._load_visualization_inputs(job_id)
-        player_points = player_points_from_artifact(inputs.get("players_trajectory") or {})
+        metric_player_points = player_points_from_artifact(inputs.get("players_trajectory") or {})
+        render_player_points = (
+            player_render_points_from_artifact(inputs.get("player_render_trajectory") or {})
+            or metric_player_points
+        )
         cleaned_ball_points = ball_points_from_artifact(inputs.get("cleaned_ball_trajectory") or {}, source="cleaned_ball_trajectory")
         raw_ball_points = ball_points_from_artifact(inputs.get("ball_trajectory") or {}, source="ball_trajectory")
         ball_points = cleaned_ball_points or raw_ball_points
         bounce_points = bounce_points_from_artifact(inputs.get("bounce_events") or {})
+        overlay_fps = float((inputs.get("tracking_overlay") or {}).get("fps") or 0.0) or None
         results: list[VisualizationResult] = []
 
         if enabled_positions:
@@ -1162,7 +1232,7 @@ class AnalysisPipeline:
                 builder = PositionVisualizationDataBuilder()
                 structured_data = builder.build_and_write(
                     output_path=self.storage.structured_visualization_data_path(job_id),
-                    player_points=player_points,
+                    player_points=metric_player_points,
                     ball_points=ball_points,
                     bounce_points=bounce_points,
                 )
@@ -1180,7 +1250,7 @@ class AnalysisPipeline:
                     image_url_prefix=image_prefix,
                     heatmaps_artifact_url=heatmaps_url,
                     scatter_artifact_url=scatter_url,
-                    player_points=player_points,
+                    player_points=metric_player_points,
                     ball_points=ball_points,
                     bounce_points=bounce_points,
                 )
@@ -1234,9 +1304,10 @@ class AnalysisPipeline:
                         tracking_overlay=inputs.get("tracking_overlay"),
                         pose_overlay=inputs.get("pose_overlay"),
                         ball_overlay=inputs.get("ball_overlay"),
-                        player_points=player_points,
+                        player_points=render_player_points,
                         ball_points=ball_points,
                         bounce_points=bounce_points,
+                        fps_override=overlay_fps,
                         progress_callback=overlay_progress,
                     )
                     fields.analysis_overlay_video_status = overlay_result.status
@@ -1264,6 +1335,7 @@ class AnalysisPipeline:
             "pose_overlay": self.storage.pose_overlay_json_path(job_id),
             "ball_overlay": self.storage.ball_overlay_json_path(job_id),
             "players_trajectory": self.storage.player_trajectory_json_path(job_id),
+            "player_render_trajectory": self.storage.player_render_trajectory_path(job_id),
             "ball_trajectory": self.storage.ball_trajectory_json_path(job_id),
             "cleaned_ball_trajectory": self.storage.cleaned_ball_trajectory_json_path(job_id),
             "bounce_events": self.storage.bounce_events_json_path(job_id),
@@ -1311,6 +1383,7 @@ class AnalysisPipeline:
         calibration_id: str | None,
         calibration_keypoints: list[CalibrationKeypoint] | None,
         frame_stride: int,
+        source_fps: float | None = None,
         court_view_match_threshold: float | None = None,
         progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
@@ -1328,7 +1401,8 @@ class AnalysisPipeline:
 
         # 读取视频基础信息
         raw_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-        fps = raw_fps if raw_fps > 0 else 0.0
+        fps_info = resolve_effective_fps(source_fps, raw_fps)
+        fps = fps_info.effective_fps
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -1411,7 +1485,7 @@ class AnalysisPipeline:
         debug_overlay_path = self.storage.outputs_dir / job_id / "projection_debug_overlay.mp4"
         debug_overlay = ProjectionDebugOverlayWriter(
             debug_overlay_path,
-            fps=fps if fps > 0 else 30.0,
+            fps=fps,
             width=frame_width,
             height=frame_height,
         )
@@ -1432,18 +1506,34 @@ class AnalysisPipeline:
         )
         pose_error: str | None = None
         # 多目标跟踪器（没注入就新建，lost 缓冲帧数来自配置）
-        tracker = self.tracker or MultiObjectTracker(max_lost=self.settings.player_identity_lost_buffer_frames)
+        primary_player_window_frames = frames_for_seconds(self.settings.primary_player_window_seconds, fps)
+        identity_lost_buffer_frames = frames_for_seconds(self.settings.player_identity_lost_buffer_seconds, fps)
+        identity_inactive_buffer_frames = frames_for_seconds(self.settings.player_identity_inactive_buffer_seconds, fps)
+        identity_interpolation_buffer_frames = frames_for_seconds(self.settings.player_identity_interpolation_buffer_seconds, fps)
+        player_lock_bootstrap_min_frames = frames_for_seconds(self.settings.player_lock_bootstrap_min_seconds, fps)
+        player_lock_bootstrap_max_frames = max(
+            player_lock_bootstrap_min_frames,
+            frames_for_seconds(self.settings.player_lock_bootstrap_max_seconds, fps),
+        )
+        player_lock_lost_grace_frames = frames_for_seconds(self.settings.player_lock_lost_grace_seconds, fps, minimum=0)
+        player_lock_lost_max_frames_locked = frames_for_seconds(self.settings.player_lock_lost_max_seconds_locked, fps)
+        ball_stationary_blacklist_frames = frames_for_seconds(self.settings.ball_stationary_blacklist_seconds, fps)
+        self.position_smoother.max_gap_frames = frames_for_seconds(10.0 / 30.0, fps)
+        primary_player_selector = self.primary_player_selector
+        primary_player_selector.config.window_frames = primary_player_window_frames
+
+        tracker = self.tracker or MultiObjectTracker(max_lost=identity_lost_buffer_frames)
         # 球员身份管理器（把轨迹对应到稳定 player_id，处理重连/插值/跟丢）
         identity_manager = PlayerIdentityManager(
             PlayerIdentityConfig(
                 max_players=self.settings.player_identity_max_players,
-                fps=fps if fps > 0 else 30.0,
+                fps=fps,
                 match_threshold=self.settings.player_identity_match_threshold,
                 max_reconnect_distance_m=self.settings.player_identity_max_reconnect_distance_m,
                 max_speed_mps=self.settings.player_identity_max_speed_mps,
-                lost_buffer_frames=self.settings.player_identity_lost_buffer_frames,
-                inactive_buffer_frames=self.settings.player_identity_inactive_buffer_frames,
-                interpolation_buffer_frames=self.settings.player_identity_interpolation_buffer_frames,
+                lost_buffer_frames=identity_lost_buffer_frames,
+                inactive_buffer_frames=identity_inactive_buffer_frames,
+                interpolation_buffer_frames=identity_interpolation_buffer_frames,
                 court_buffer_m=self.settings.player_identity_court_buffer_m,
                 input_court_unit="ft",
                 smoothing_window=self.settings.player_identity_smoothing_window,
@@ -1452,14 +1542,15 @@ class AnalysisPipeline:
         # 球员锁定管理器（维护四名主球员的身份锁定状态）
         player_lock_manager = PlayerLockManager(
             PlayerLockConfig(
+                fps=fps,
                 target_player_count=self.settings.player_lock_target_player_count,
-                bootstrap_min_frames=self.settings.player_lock_bootstrap_min_frames,
-                bootstrap_max_frames=self.settings.player_lock_bootstrap_max_frames,
+                bootstrap_min_frames=player_lock_bootstrap_min_frames,
+                bootstrap_max_frames=player_lock_bootstrap_max_frames,
                 min_observed_frames=self.settings.player_lock_min_observed_frames,
                 lock_min_hits=self.settings.player_lock_lock_min_hits,
                 plausible_min_hits=self.settings.player_lock_plausible_min_hits,
-                lost_grace_frames=self.settings.player_lock_lost_grace_frames,
-                lost_max_frames_locked=self.settings.player_lock_lost_max_frames_locked,
+                lost_grace_frames=player_lock_lost_grace_frames,
+                lost_max_frames_locked=player_lock_lost_max_frames_locked,
                 locked_conf=self.settings.player_lock_locked_conf,
                 tentative_conf=self.settings.player_lock_tentative_conf,
                 searching_conf=self.settings.player_lock_searching_conf,
@@ -1481,7 +1572,7 @@ class AnalysisPipeline:
                 BallTracker(
                     detector=self.ball_detector,
                     config=BallTrackerConfig(
-                        stationary_blacklist_frames=self.settings.ball_stationary_blacklist_frames,
+                        stationary_blacklist_frames=ball_stationary_blacklist_frames,
                     ),
                     court_adapter=BallCourtAdapter(),
                 )
@@ -1498,6 +1589,12 @@ class AnalysisPipeline:
 
         _prev_player_centroids: dict[str, tuple[float, float]] = {}
 
+        # 渲染轨迹相关状态
+        render_observations: list[CourtTrackObservation] = []
+        render_identity_epoch_by_player: dict[str, int] = {}
+        render_events: list[CourtTrackEvent] = []
+        render_identity_diagnostic_cursor = 0
+
         frame_index = 0
         try:
             while True:
@@ -1510,7 +1607,7 @@ class AnalysisPipeline:
                     frame_index += 1
                     continue
 
-                timestamp = frame_index / raw_fps if raw_fps > 0 else float(frame_index)
+                timestamp = frame_index / fps
                 last_processed_frame_index = frame_index
                 last_processed_timestamp = timestamp
                 if processed_frame_count == 0 and self.settings.enable_court_view_gate:
@@ -1549,7 +1646,19 @@ class AnalysisPipeline:
                     footpoints=footpoints,
                     frame_shape=(frame_width, frame_height),
                 )
-                # 5b) 对投影后的球场坐标做时间平滑（降低抖动和异常跳变）
+                # 5b) 在平滑前保存原始球场坐标（供渲染轨迹使用）
+                render_raw_by_track: dict[int, dict[str, Any]] = {}
+                for pos in frame_positions:
+                    if pos.court_position is not None:
+                        render_raw_by_track[pos.track_id] = {
+                            "x_ft": pos.court_position[0],
+                            "y_ft": pos.court_position[1],
+                            "projection_status": pos.projection_status,
+                            "projection_confidence": pos.projection_confidence,
+                            "footpoint_method": pos.footpoint_method,
+                            "confidence": pos.confidence,
+                        }
+                # 5c) 对投影后的球场坐标做时间平滑（降低抖动和异常跳变）
                 for pos in frame_positions:
                     if pos.court_position is not None:
                         result = self.position_smoother.update(
@@ -1561,7 +1670,7 @@ class AnalysisPipeline:
                             confidence=pos.confidence,
                         )
                         pos.court_position = [result.x, result.y]
-                # 5c) 投影调试日志写入（每帧每个球员一行 JSONL）
+                # 5d) 投影调试日志写入（每帧每个球员一行 JSONL）
                 if debug_writer is not None and debug_minimap is not None:
                     for pos in frame_positions:
                         raw = pos.court_position
@@ -1591,15 +1700,15 @@ class AnalysisPipeline:
                             bbox_clip_suspected=clip_suspected,
                         )
                 # 6) 选主球员（建议集合，不再作为硬门控）
-                primary_selections = self.primary_player_selector.select(
+                primary_selections = primary_player_selector.select(
                     tracks=tracks,
                     positions=frame_positions,
                     frame_width=frame_width,
                     frame_height=frame_height,
                 )
                 suggested_track_ids = {selection.track_id for selection in primary_selections}
-                selection_diagnostics.extend(self.primary_player_selector.last_diagnostics)
-                selection_training_samples = self.primary_player_selector.last_training_samples
+                selection_diagnostics.extend(primary_player_selector.last_diagnostics)
+                selection_training_samples = primary_player_selector.last_training_samples
                 # 6b) 球员锁定管理：产生并联合格的 track_id 集合
                 lock_update = player_lock_manager.update(
                     frame_index=frame_index,
@@ -1629,6 +1738,30 @@ class AnalysisPipeline:
                     for sample in player_samples
                     if sample.track_id is not None and sample.tracking_status == "detected"
                 }
+                # 8b) 收集渲染观测（原始坐标 + 稳定身份）
+                for pos in frame_positions:
+                    raw = render_raw_by_track.get(pos.track_id)
+                    if raw is None:
+                        continue
+                    player_id = player_by_track.get(pos.track_id)
+                    if player_id is None:
+                        continue
+                    canonical_id = canonical_player_id(player_id)
+                    render_observations.append(CourtTrackObservation(
+                        frame_index=frame_index,
+                        timestamp_seconds=timestamp,
+                        player_id=canonical_id,
+                        identity_epoch=render_identity_epoch_by_player.get(canonical_id, 0),
+                        track_id=pos.track_id,
+                        raw_x_ft=raw["x_ft"],
+                        raw_y_ft=raw["y_ft"],
+                        confidence=raw["confidence"],
+                        projection_status=raw["projection_status"],
+                        projection_confidence=raw["projection_confidence"],
+                        footpoint_method=raw["footpoint_method"],
+                        lock_state=None,
+                        tracking_status="detected",
+                    ))
                 for detection in frame_detections:
                     if detection.track_id is None:
                         continue
@@ -1713,6 +1846,44 @@ class AnalysisPipeline:
                         pose_frames = []
                 self._check_cancelled(cancellation_token)
 
+                # 9b) 收集生命周期事件（诊断游标方式）
+                new_diags = identity_manager.diagnostics[render_identity_diagnostic_cursor:]
+                render_identity_diagnostic_cursor = len(identity_manager.diagnostics)
+                for diag in new_diags:
+                    event_type = _RENDER_EVENT_MAPPING.get(diag.event)
+                    if event_type is None:
+                        continue
+                    diag_player_id = canonical_player_id(diag.player_id) if diag.player_id else ""
+                    render_events.append(CourtTrackEvent(
+                        frame_index=frame_index,
+                        timestamp_seconds=timestamp,
+                        player_id=diag_player_id,
+                        event_type=event_type,
+                        reason=diag.reason,
+                    ))
+                    if diag.event == "player_reset_after_prolonged_loss" and diag.player_id:
+                        epoch_player = canonical_player_id(diag.player_id)
+                        render_identity_epoch_by_player[epoch_player] = (
+                            render_identity_epoch_by_player.get(epoch_player, 0) + 1
+                        )
+                for lock_diag in lock_update.diagnostics:
+                    lock_event_type = _RENDER_EVENT_MAPPING.get(lock_diag.event)
+                    if lock_event_type is None:
+                        continue
+                    lock_player_id = canonical_player_id(lock_diag.player_id) if lock_diag.player_id else ""
+                    render_events.append(CourtTrackEvent(
+                        frame_index=frame_index,
+                        timestamp_seconds=timestamp,
+                        player_id=lock_player_id,
+                        event_type=lock_event_type,
+                        reason=lock_diag.reason,
+                    ))
+                    if lock_diag.event == "player_reset_after_prolonged_loss" and lock_diag.player_id:
+                        epoch_player = canonical_player_id(lock_diag.player_id)
+                        render_identity_epoch_by_player[epoch_player] = (
+                            render_identity_epoch_by_player.get(epoch_player, 0) + 1
+                        )
+
                 # 每隔 30 帧打一条进度日志
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
                     frame_progress = self._tracking_frame_progress(
@@ -1790,8 +1961,8 @@ class AnalysisPipeline:
                 f"已生成 {len(selection_diagnostics)} 条目标球场主球员选择诊断；"
                 f"模式 {self.primary_player_selector.last_selection_mode}"
             ),
-            selection_mode=self.primary_player_selector.last_selection_mode,  # type: ignore[arg-type]
-            fallback_reason=self.primary_player_selector.last_fallback_reason,
+            selection_mode=primary_player_selector.last_selection_mode,  # type: ignore[arg-type]
+            fallback_reason=primary_player_selector.last_fallback_reason,
             participant_limit=self.settings.primary_player_max_subjects,
             diagnostics=selection_diagnostics,
             training_samples=selection_training_samples,
@@ -1837,6 +2008,18 @@ class AnalysisPipeline:
         threshold_source = "task_override" if court_view_match_threshold is not None else "default_config"
         court_view_roi_artifact.diagnostics["match_threshold_source"] = threshold_source
         court_view_roi_artifact.diagnostics["match_threshold_effective"] = effective_match_threshold
+        court_view_roi_artifact.diagnostics.update(fps_info.diagnostics())
+        court_view_roi_artifact.diagnostics["fps_time_windows"] = {
+            "primary_player_window_frames": primary_player_window_frames,
+            "player_identity_lost_buffer_frames": identity_lost_buffer_frames,
+            "player_identity_inactive_buffer_frames": identity_inactive_buffer_frames,
+            "player_identity_interpolation_buffer_frames": identity_interpolation_buffer_frames,
+            "player_lock_bootstrap_min_frames": player_lock_bootstrap_min_frames,
+            "player_lock_bootstrap_max_frames": player_lock_bootstrap_max_frames,
+            "player_lock_lost_grace_frames": player_lock_lost_grace_frames,
+            "player_lock_lost_max_frames_locked": player_lock_lost_max_frames_locked,
+            "ball_stationary_blacklist_frames": ball_stationary_blacklist_frames,
+        }
         # 高剔除率预警
         if (
             court_view_roi_artifact.processed_frame_count > 0
@@ -1857,8 +2040,76 @@ class AnalysisPipeline:
             job_id=job_id,
             video_id=video_id,
             ball_ctx=ball_ctx,
-            fps=fps if fps > 0 else 30.0,
+            fps=fps,
         )
+        # 渲染轨迹后处理：生成逐帧位置（仅在存在观测时）
+        render_output = None
+        if render_observations:
+            try:
+                postprocessor = CourtTrackPostProcessor(
+                    max_interpolation_gap_seconds=self.settings.overlay_frame_stride / fps + 0.15,
+                    max_visible_gap_seconds=0.60,
+                    max_spike_displacement_ft=6.0,
+                )
+                postprocess_result = postprocessor.process(
+                    observations=render_observations,
+                    events=render_events,
+                    fps=fps,
+                    total_frames=frame_count,
+                )
+                render_output = {
+                    "players": [
+                        {
+                            "player_id": p.player_id,
+                            "render_slot": p.render_slot,
+                            "initial_side": p.initial_side,
+                            "dominant_side": p.dominant_side,
+                            "first_frame_index": p.first_frame_index,
+                            "source_track_ids": p.source_track_ids,
+                        }
+                        for p in postprocess_result.players
+                    ],
+                    "segments": [
+                        {
+                            "segment_id": s.segment_id,
+                            "player_id": s.player_id,
+                            "identity_epoch": s.identity_epoch,
+                            "start_frame_index": s.start_frame_index,
+                            "end_frame_index": s.end_frame_index,
+                            "start_timestamp_seconds": s.start_timestamp_seconds,
+                            "end_timestamp_seconds": s.end_timestamp_seconds,
+                            "break_before": s.break_before,
+                            "sample_count": s.sample_count,
+                        }
+                        for s in postprocess_result.segments
+                    ],
+                    "samples": [
+                        {
+                            "sequence_index": s.sequence_index,
+                            "frame_index": s.frame_index,
+                            "timestamp_seconds": s.timestamp_seconds,
+                            "x_ft": s.x_ft,
+                            "y_ft": s.y_ft,
+                            "source": s.source,
+                            "confidence": s.confidence,
+                            "player_id": s.player_id,
+                            "render_slot": s.render_slot,
+                            "side": s.side,
+                            "segment_id": s.segment_id,
+                            "identity_epoch": s.identity_epoch,
+                            "source_track_id": s.source_track_id,
+                            "projection_status": s.projection_status,
+                            "projection_confidence": s.projection_confidence,
+                            "footpoint_method": s.footpoint_method,
+                        }
+                        for s in postprocess_result.samples
+                    ],
+                }
+            except RenderSlotOverflowError as exc:
+                logger.warning("渲染轨迹槽位不足: %s", exc)
+                render_output = None
+            except Exception:
+                logger.exception("渲染轨迹后处理失败，跳过 render_trajectory 生成")
         return _TrackingRunOutput(
             tracking=tracking_result,
             player_trajectories=player_trajectories,
@@ -1871,6 +2122,7 @@ class AnalysisPipeline:
             ball_run_output=ball_run_output,
             player_multitarget_detections=player_multitarget_detections,
             calibration_diagnostics_path=calibration_diagnostics_path,
+            render_trajectory=render_output,
         )
 
     @staticmethod
@@ -1968,7 +2220,7 @@ class AnalysisPipeline:
             bounce_events: list[BounceEvent] = []
             if self.settings.enable_bounce_detection and cleaned_points:
                 bounce_detector = BounceDetector(
-                    config=BounceDetectorConfig(fps=fps if fps > 0 else 30.0)
+                    config=BounceDetectorConfig(fps=fps)
                 )
                 bounce_events = bounce_detector.detect(cleaned_points)
             accepted_count = sum(1 for sample in ball_ctx.samples if sample.accepted)

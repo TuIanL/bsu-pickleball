@@ -231,6 +231,10 @@ class StorageService:
         # 球员轨迹 CSV（方便用 Excel 打开）
         return self.outputs_dir / job_id / "players_trajectory.csv"
 
+    def player_render_trajectory_path(self, job_id: str) -> Path:
+        # 渲染轨迹 JSON（逐帧坐标，仅用于小地图视频）
+        return self.outputs_dir / job_id / "player_render_trajectory.json"
+
     def court_view_roi_json_path(self, job_id: str) -> Path:
         # 球场视角与检测 ROI（感兴趣区域）JSON
         return self.outputs_dir / job_id / "court_view_roi.json"

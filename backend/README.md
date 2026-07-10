@@ -107,6 +107,15 @@ product-review setting for smooth person boxes and skeletons. For slower machine
 use `PICKLEBALL_OVERLAY_FRAME_STRIDE=3` or `5`; for maximum fidelity use `1` and
 expect substantially higher YOLO/RTMPose processing cost.
 
+Analysis jobs can include `metadata.sourceFps`, the user-confirmed source video
+frame rate. The pipeline resolves one `effective_fps` for all time-sensitive
+calculation: user-confirmed FPS first, video metadata FPS second, and 30fps as the
+fallback. Tracking timestamps, identity buffers, ball stationary windows, bounce
+event gaps, and overlay timing all derive from that value. New seconds-based
+settings such as `PICKLEBALL_PLAYER_IDENTITY_LOST_BUFFER_SECONDS` and
+`PICKLEBALL_BALL_STATIONARY_BLACKLIST_SECONDS` take precedence over legacy
+frame-count settings.
+
 ## Job Orchestration
 
 Real analysis jobs are persisted before execution and then claimed by a local worker.
@@ -285,6 +294,7 @@ curl -X POST http://localhost:8000/api/analysis/jobs \
     "metadata": {
       "fileName": "demo.mp4",
       "fileSize": 1234,
+      "sourceFps": 30,
       "matchTitle": "MVP Test Match",
       "venue": "Test Court",
       "matchDate": "2026-05-07",
@@ -307,6 +317,7 @@ curl -X POST http://localhost:8000/api/analysis/jobs \
     "metadata": {
       "fileName": "demo.mp4",
       "fileSize": 1234,
+      "sourceFps": 60,
       "matchTitle": "Pipeline MVP Match",
       "venue": "Test Court",
       "matchDate": "2026-05-07",

@@ -1,0 +1,24 @@
+{
+  "style_profile": {
+    "version": "court-visual-theme.v1",
+    "players": {
+      "slot_1": "#22D3EE",
+      "slot_2": "#FBBF24",
+      "slot_3": "#A78BFA",
+      "slot_4": "#F97316"
+    },
+    "ball": "#67E8F9",
+    "bounce": "#FB923C",
+    "outside_player": "#94A3B8",
+    "player_trail_seconds": 2.5,
+    "ball_trail_seconds": 1.0,
+    "bounce_display_seconds": 0.8,
+    "radius_min_px": 2.0,
+    "radius_max_px": 6.0
+  },
+  "segmentation_profile": {
+    "version": "court-track-segmentation.v1",
+    "jump_threshold_ft": 9.84,
+    "max_visible_gap_seconds": 0.75
+  }
+}

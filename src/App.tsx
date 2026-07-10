@@ -1226,12 +1226,15 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   // 支持从录制视频直接创建分析（?videoId=xxx）
   const [searchParams] = useState(() => new URLSearchParams(window.location.search));
   const videoIdParam = searchParams.get("videoId");
+  const recordingSessionIdParam = searchParams.get("sessionId");
+  const sourceFpsParam = Number(searchParams.get("fps") ?? NaN);
   const isFromRecording = searchParams.get("source") === "recording";
 
   const [metadata, setMetadata] = useState({
     matchTitle: "匹克球训练对局",
     venue: "北京体育大学匹克球训练场",
     matchDate: today,
+    sourceFps: 30,
     matchFormat: "doubles" as AnalysisUploadMetadata["matchFormat"],
     cameraAngle: "elevated" as AnalysisUploadMetadata["cameraAngle"],
     athleteLabel: "球馆体验用户 A",
@@ -1244,9 +1247,13 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   useEffect(() => {
     if (!videoIdParam) return;
     setUploadedVideoId(videoIdParam);
+    if (Number.isFinite(sourceFpsParam) && sourceFpsParam > 0) {
+      updateMetadata("sourceFps", sourceFpsParam);
+    }
+    if (!recordingSessionIdParam) return;
     // 尝试获取录制信息来预填元数据
     import("./services/analysisClient").then(({ getRecording }) => {
-      getRecording(videoIdParam).then((recording) => {
+      getRecording(recordingSessionIdParam).then((recording) => {
         if (!recording) return;
         const angleMap: Record<string, AnalysisUploadMetadata["cameraAngle"]> = {
           baseline_high: "elevated", baseline: "baseline", sideline: "sideline",
@@ -1256,6 +1263,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           matchTitle: `${recording.court_name || "录制比赛"} ${new Date(recording.started_at).toLocaleDateString("zh-CN")}`,
           venue: recording.court_name || "未知球场",
           matchDate: new Date(recording.started_at).toISOString().slice(0, 10),
+          sourceFps: recording.fps || 30,
           matchFormat: (recording.match_format === "singles" ? "singles" : "doubles") as AnalysisUploadMetadata["matchFormat"],
           cameraAngle: angleMap[recording.camera_angle ?? ""] ?? "elevated",
           athleteLabel: "球场采集",
@@ -1263,11 +1271,13 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         });
       }).catch(() => {});
     });
-  }, [videoIdParam]);
+  }, [recordingSessionIdParam, sourceFpsParam, videoIdParam]);
 
+  const validSourceFps = Number.isFinite(metadata.sourceFps) && metadata.sourceFps > 0 && metadata.sourceFps <= 240;
   const canSubmit = Boolean(
     (selectedFile || uploadedVideoId) &&
       calibrationPoints.length === calibrationPointOrder.length &&
+      validSourceFps &&
       metadata.matchTitle.trim() &&
       metadata.venue.trim() &&
       metadata.matchDate &&
@@ -1486,7 +1496,7 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   };
 
   const handleAutomaticCalibration = async () => {
-    if (!selectedFile || !canRequestAutomaticCalibration) {
+    if (!canRequestAutomaticCalibration) {
       return;
     }
 
@@ -1515,10 +1525,10 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   };
 
   const handleSubmit = async () => {
-    if (!selectedFile || !canSubmit) {
+    if (!canSubmit) {
       setError({
         title: "分析信息不完整",
-        body: "请选择视频、点选四个场地角点并补全比赛信息。",
+        body: "请选择视频、点选四个场地角点、确认视频帧率并补全比赛信息。",
       });
       return;
     }
@@ -1545,8 +1555,8 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
       const job = await createAnalysisJob({
         metadata: {
           ...metadata,
-          fileName: selectedFile.name,
-          fileSize: selectedFile.size,
+          fileName: selectedFile?.name ?? `recording-${videoId}.mp4`,
+          fileSize: selectedFile?.size,
         },
         videoId,
         calibrationId,
@@ -1864,6 +1874,30 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 type="date"
                 value={metadata.matchDate}
               />
+            </Field>
+            <Field label="视频帧率">
+              <div className="grid grid-cols-[1fr_110px] gap-2">
+                <select
+                  className="field-input"
+                  onChange={(event) => {
+                    if (event.target.value !== "custom") updateMetadata("sourceFps", Number(event.target.value));
+                  }}
+                  value={[24, 25, 30, 50, 60, 90, 120].includes(metadata.sourceFps) ? metadata.sourceFps : "custom"}
+                >
+                  {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                    <option key={fps} value={fps}>{fps} fps</option>
+                  ))}
+                  <option value="custom">自定义</option>
+                </select>
+                <input
+                  className="field-input"
+                  max={240}
+                  min={1}
+                  onChange={(event) => updateMetadata("sourceFps", Number(event.target.value))}
+                  type="number"
+                  value={metadata.sourceFps}
+                />
+              </div>
             </Field>
             <Field label="场地">
               <input
@@ -4972,6 +5006,11 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   <option value="baseline_high">底线高角度</option>
                   <option value="sideline">侧边</option>
                   <option value="overhead">俯视</option>
+                </select>
+                <select className="field-input" value={recordingForm.fps ?? 30} onChange={(e) => setRecordingForm((f) => ({ ...f, fps: Number(e.target.value) }))}>
+                  {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                    <option key={fps} value={fps}>{fps} fps</option>
+                  ))}
                 </select>
               </div>
               <label className="flex items-center gap-2 text-sm text-slate-600">

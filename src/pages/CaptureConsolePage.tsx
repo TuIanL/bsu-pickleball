@@ -92,6 +92,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
 
   // analysisIntent（从 sessionStorage 恢复）
   const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");
+  const [recordingFps, setRecordingFps] = useState<number>(30);
 
   // ── 双摄同步录制状态 ──
   const isDualMode = fieldSession?.camera_setup === "dual";
@@ -275,7 +276,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
         field_session_id: sessionId,
         court_name: fieldSession?.court_name || "",
         match_format: (fieldSession?.match_format || "doubles") as "singles" | "doubles",
-        fps: 90,
+        fps: recordingFps,
         auto_analyze_after_stop: analysisIntent === "auto_analyze",
       };
 
@@ -350,7 +351,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
         match_format: (fieldSession?.match_format || "doubles") as "singles" | "doubles",
         cam_1_angle: "baseline_high",
         cam_2_angle: "baseline_high",
-        fps: 30,
+        fps: recordingFps,
         auto_analyze_after_stop: analysisIntent === "auto_analyze",
       });
       setActiveSyncSession(session);
@@ -619,6 +620,19 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
               {/* 双摄录制控制 */}
               <div className="sport-card p-4">
                 <h3 className="text-sm font-bold text-[#14241B] mb-3">同步录制控制</h3>
+                <label className="mb-3 block text-xs font-bold text-slate-500">
+                  视频帧率
+                  <select
+                    className="field-input mt-1"
+                    disabled={dualState !== "setup"}
+                    onChange={(event) => setRecordingFps(Number(event.target.value))}
+                    value={recordingFps}
+                  >
+                    {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                      <option key={fps} value={fps}>{fps} fps</option>
+                    ))}
+                  </select>
+                </label>
 
                 {/* 短录测试 */}
                 {(dualState === "setup" || dualState === "testing") && (
@@ -770,6 +784,19 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
           {/* 录制控制区 */}
           <div className="sport-card p-4">
             <h3 className="text-sm font-bold text-[#14241B] mb-3">录制控制</h3>
+            <label className="mb-3 block text-xs font-bold text-slate-500">
+              视频帧率
+              <select
+                className="field-input mt-1"
+                disabled={consoleState !== "preview"}
+                onChange={(event) => setRecordingFps(Number(event.target.value))}
+                value={recordingFps}
+              >
+                {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                  <option key={fps} value={fps}>{fps} fps</option>
+                ))}
+              </select>
+            </label>
             {consoleState === "preview" && (
               <button
                 className="green-button w-full flex items-center justify-center gap-2 py-3"
@@ -843,7 +870,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
                 {analysisIntent !== "save_only" && completedRecording.video_id && (
                   <button
                     className="green-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-                    onClick={() => onNavigate(`/upload?videoId=${completedRecording.video_id}&source=recording`)}
+                    onClick={() => onNavigate(`/upload?videoId=${completedRecording.video_id}&source=recording&sessionId=${completedRecording.session_id}&fps=${completedRecording.fps}`)}
                     type="button"
                   >
                     <Upload size={16} /> 创建分析任务
@@ -893,7 +920,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
             {dualStopResponse.analysis_available && dualStopResponse.default_analysis_video_id ? (
               <button
                 className="green-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-                onClick={() => onNavigate(`/upload?videoId=${dualStopResponse.default_analysis_video_id}&source=recording`)}
+                onClick={() => onNavigate(`/upload?videoId=${dualStopResponse.default_analysis_video_id}&source=recording&sessionId=${dualStopResponse.session.session_id}&fps=${dualStopResponse.session.fps}`)}
                 type="button"
               >
                 <Upload size={16} /> 创建分析任务

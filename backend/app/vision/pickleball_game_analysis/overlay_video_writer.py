@@ -39,6 +39,7 @@ class OverlayVideoWriter:
         player_points: list[VisualizationPoint] | None = None,
         ball_points: list[VisualizationPoint] | None = None,
         bounce_points: list[VisualizationPoint] | None = None,
+        fps_override: float | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> VisualizationResult:
         # 把人物检测/姿态/球检测等叠加层以及球场坐标点绘制到视频帧上，写出叠加视频。
@@ -49,7 +50,7 @@ class OverlayVideoWriter:
         if not cap.isOpened():
             return VisualizationResult("unavailable", "源视频无法打开，跳过叠加视频生成")
         # 读取视频帧率与尺寸；读取失败时用默认值（帧率 25，尺寸为 0）。
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        fps = float(fps_override or cap.get(cv2.CAP_PROP_FPS) or 25.0)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -68,14 +69,24 @@ class OverlayVideoWriter:
         tracking_by_frame = _frames_by_index(tracking_overlay, "frames")
         pose_by_frame = _frames_by_index(pose_overlay, "frames")
         ball_by_frame = _frames_by_index(ball_overlay, "frames")
-        # 坐标点缺省时置为空列表，并预按帧分组（弹跳点只用于小地图标记）。
+        # 坐标点缺省时置为空列表。
         player_points = player_points or []
         ball_points = ball_points or []
         bounce_points = bounce_points or []
         points_by_frame = _points_by_frame(ball_points)
         bounces_by_frame = _points_by_frame(bounce_points)
+        # 预构建球员帧索引表（frame_index → {player_id → point}）
+        player_frame_table: dict[int, dict[str, VisualizationPoint]] = defaultdict(dict)
+        for pp in player_points:
+            if pp.frame_index is not None:
+                label = pp.label or ""
+                player_frame_table[pp.frame_index][label] = pp
+        trail_frames = round(self.config.minimap_player_trail_seconds * fps) if hasattr(self.config, "minimap_player_trail_seconds") else 0
+        has_render_track = bool(player_frame_table)
         frame_index = 0
         written = 0
+        from collections import deque
+        player_trails: dict[str, deque[VisualizationPoint]] = defaultdict(deque)
         try:
             # 逐帧读取、绘制、写回。
             while True:
@@ -88,12 +99,30 @@ class OverlayVideoWriter:
                 self._draw_ball_overlay(frame, ball_by_frame.get(frame_index))
                 self._draw_court_points(frame, points_by_frame.get(frame_index, []), bounces_by_frame.get(frame_index, []))
                 # 在角落叠加小地图面板。
-                current_time = frame_index / fps
+                if has_render_track and trail_frames > 0:
+                    # 使用帧索引表 + deque 方式（渲染轨迹路径）
+                    current_players = player_frame_table.get(frame_index, {})
+                    for pid, pt in current_players.items():
+                        trail = player_trails[pid]
+                        if trail:
+                            prev_seg = trail[-1].segment_id
+                            curr_seg = pt.segment_id
+                            if prev_seg is not None and curr_seg is not None and prev_seg != curr_seg:
+                                trail.clear()
+                        trail.append(pt)
+                    for pid in list(player_trails):
+                        while player_trails[pid] and player_trails[pid][0].frame_index is not None and player_trails[pid][0].frame_index < frame_index - trail_frames:
+                            player_trails[pid].popleft()
+                    minimap_player_points = [p for trail in player_trails.values() for p in trail]
+                else:
+                    # 回退路径：逐帧扫描（与修改前一致）
+                    current_time = frame_index / fps
+                    minimap_player_points = _points_until_time(player_points, current_time)
                 self._draw_minimap(
                     frame,
-                    _points_until_time(player_points, current_time),
-                    _points_until_time(ball_points, current_time),
-                    _points_near_time(bounce_points, current_time, window_seconds=0.5),
+                    minimap_player_points,
+                    _points_until_time(ball_points, frame_index / fps),
+                    _points_near_time(bounce_points, frame_index / fps, window_seconds=0.5),
                 )
                 # 在画面底部写入“时间: X.XXs”文本。
                 cv2.putText(

@@ -458,6 +458,7 @@ export interface NavigationItem {
 export interface AnalysisUploadMetadata {
   fileName: string;
   fileSize?: number;
+  sourceFps?: number;
   matchTitle: string;
   venue: string;
   matchDate: string;
@@ -1171,3 +1172,124 @@ export interface StructuredVisualizationData {
   scatter_plots: ScatterPlots;
   player_trajectories: PlayerTrajectory[];
 }
+
+// ── player-render-trajectory v2 types ──
+
+export interface RawPlayerRenderFrame {
+  sequence_index?: number;
+  frame_index: number;
+  timestamp_seconds: number;
+  x_ft: number;
+  y_ft: number;
+  source: string;
+  confidence?: number | null;
+  player_id: string;
+  render_slot?: string | null;
+  side?: string | null;
+  segment_id?: string | null;
+  identity_epoch?: number | null;
+  source_track_id?: number | null;
+  projection_status?: string | null;
+  projection_confidence?: number | null;
+  footpoint_method?: string | null;
+}
+
+export interface RenderPlayerMetadata {
+  player_id: string;
+  render_slot: string;
+  initial_side: string;
+  dominant_side: string;
+  first_frame_index: number;
+  source_track_ids: number[];
+}
+
+export interface RenderSegmentMetadata {
+  segment_id: string;
+  player_id: string;
+  identity_epoch: number;
+  start_frame_index: number;
+  end_frame_index: number;
+  start_timestamp_seconds: number;
+  end_timestamp_seconds: number;
+  break_before: string;
+  sample_count: number;
+}
+
+export interface CourtVisualizationStyleProfile {
+  version: string;
+  players: Record<string, string>;
+  ball: string;
+  bounce: string;
+  outside_player: string;
+  player_trail_seconds: number;
+  ball_trail_seconds: number;
+  bounce_display_seconds: number;
+  radius_min_px: number;
+  radius_max_px: number;
+}
+
+export interface RawPlayerRenderTrajectoryV1 {
+  schema_version?: string;
+  players?: Record<string, RawPlayerRenderFrame[]>;
+  samples?: RawPlayerRenderFrame[];
+}
+
+export type RawPlayerRenderTrajectoryV2 = {
+  schema_version: string;
+  players: RenderPlayerMetadata[];
+  segments: RenderSegmentMetadata[];
+  samples: RawPlayerRenderFrame[];
+  style_profile?: CourtVisualizationStyleProfile | null;
+  segmentation_profile?: { version: string; jump_threshold_ft: number; max_visible_gap_seconds: number } | null;
+};
+
+export type RawPlayerRenderTrajectory = RawPlayerRenderTrajectoryV1 | RawPlayerRenderTrajectoryV2;
+
+export interface NormalizedRenderFrame {
+  sequence_index: number;
+  frame_index: number;
+  timestamp_seconds: number;
+  x_ft: number;
+  y_ft: number;
+  source: string;
+  confidence: number | null;
+  player_id: string;
+  render_slot: string;
+  side: "near" | "far" | "unknown";
+  segment_id: string;
+  identity_epoch: number;
+  source_track_id: number | null;
+  projection_status: string | null;
+  projection_confidence: number | null;
+  footpoint_method: string | null;
+}
+
+export interface NormalizedPlayerRenderTrajectory {
+  players: RenderPlayerMetadata[];
+  segments: RenderSegmentMetadata[];
+  samples: NormalizedRenderFrame[];
+  style_profile: CourtVisualizationStyleProfile;
+  segmentation_profile: { version: string; jump_threshold_ft: number; max_visible_gap_seconds: number } | null;
+  /** samples indexed by player_id → samples[] */
+  byPlayer: Record<string, NormalizedRenderFrame[]>;
+  /** samples indexed by segment_id → samples[] */
+  bySegment: Record<string, NormalizedRenderFrame[]>;
+}
+
+export const DEFAULT_COURT_VISUAL_THEME_V1: CourtVisualizationStyleProfile = {
+  version: "court-visual-theme.v1",
+  players: {
+    slot_1: "#22D3EE",
+    slot_2: "#FBBF24",
+    slot_3: "#A78BFA",
+    slot_4: "#F97316",
+  },
+  ball: "#67E8F9",
+  bounce: "#FB923C",
+  outside_player: "#94A3B8",
+  player_trail_seconds: 2.5,
+  ball_trail_seconds: 1.0,
+  bounce_display_seconds: 0.8,
+  radius_min_px: 2.0,
+  radius_max_px: 6.0,
+};

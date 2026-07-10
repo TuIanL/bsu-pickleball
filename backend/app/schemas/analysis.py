@@ -71,6 +71,7 @@ class AnalysisUploadMetadata(BaseModel):
     """上传分析时附带的比赛元信息（前端填写/自动生成）。"""
     fileName: str
     fileSize: Optional[int] = None
+    sourceFps: Optional[float] = Field(default=None, gt=0, le=240)
     matchTitle: str                 # 比赛标题
     venue: str                      # 场馆
     matchDate: str                  # 比赛日期
@@ -87,6 +88,7 @@ class AnalysisPipelineOptions(BaseModel):
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)  # 每隔几帧处理一帧（≥1）
+    sourceFps: Optional[float] = Field(default=None, gt=0, le=240)
     courtViewMatchThreshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # 覆盖场地视角门控匹配阈值
 
 
@@ -113,6 +115,7 @@ class AnalysisJobCreate(BaseModel):
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)
+    sourceFps: Optional[float] = Field(default=None, gt=0, le=240)
     priority: int = Field(default=0, ge=0, le=100)  # 优先级（0~100）
     requestNewVersion: bool = False                  # 是否要求分析新版本
     courtViewMatchThreshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # 覆盖场地视角门控匹配阈值
@@ -141,6 +144,7 @@ class AnalysisJobSummary(BaseModel):
     analysisVersion: int = Field(default=1, ge=1)
     previousJobId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)
+    sourceFps: Optional[float] = Field(default=None, gt=0, le=240)
     metadata: AnalysisUploadMetadata
     stages: list[AnalysisStage]                      # 各阶段详情
     reportId: Optional[str] = None

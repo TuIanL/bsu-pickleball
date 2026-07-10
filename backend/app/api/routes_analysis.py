@@ -189,6 +189,7 @@ def read_analysis_artifact(
         "position-scatter-plots",                 # 位置散点图清单
         "pose-overlay",                           # 姿态骨架叠加
         "player-trajectories",                    # 球员轨迹
+        "player-render-trajectories",             # 渲染轨迹（逐帧坐标，仅用于小地图）
         "serve-events",                           # 发球事件
         "serve-debug-candidates",                 # 发球候选（调试用）
         "serve-score-series",                     # 发球评分序列
@@ -238,6 +239,8 @@ def read_analysis_artifact(
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":
         path = _STORAGE.player_trajectory_json_path(job_id)
+    elif artifact_name == "player-render-trajectories":
+        path = _STORAGE.player_render_trajectory_path(job_id)
     elif artifact_name == "serve-events":
         path = _STORAGE.serve_events_json_path(job_id)
     elif artifact_name == "serve-debug-candidates":

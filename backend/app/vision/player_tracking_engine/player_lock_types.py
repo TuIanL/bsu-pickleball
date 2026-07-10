@@ -9,6 +9,7 @@ from app.schemas.tracking import PlayerIdentityDiagnostic
 
 @dataclass
 class PlayerLockConfig:
+    fps: float = 30.0
     target_player_count: int = 4
     bootstrap_min_frames: int = 60
     bootstrap_max_frames: int = 180

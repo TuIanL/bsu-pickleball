@@ -367,6 +367,7 @@ class SessionService:
         # 组装分析任务需要的元数据
         metadata = AnalysisUploadMetadata(
             fileName=session.session_id + ".mp4",
+            sourceFps=float(session.fps),
             matchTitle=f"{session.court_name} {session.started_at.strftime('%Y-%m-%d %H:%M')}",
             venue=session.court_name,
             matchDate=session.started_at.strftime("%Y-%m-%d"),
@@ -380,6 +381,7 @@ class SessionService:
         job = create_analysis_job(AnalysisJobCreate(
             metadata=metadata,
             videoId=video_id,
+            sourceFps=float(session.fps),
             frameStride=1,
         ))
 
