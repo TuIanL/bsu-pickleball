@@ -1,0 +1,63 @@
+"""Coding Actions API schemas."""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class CodingActionRequest(BaseModel):
+    action: str = Field(..., description="语义命令类型")
+    timestamp_ms: Optional[int] = Field(None, ge=0, description="相对 CaptureTake 的时间戳（毫秒）")
+    client_occurred_at: Optional[str] = Field(None, description="前端操作发生的时刻（ISO 8601）")
+    client_action_id: str = Field(..., description="客户端幂等 ID")
+    expected_revision: int = Field(..., ge=0, description="期望的当前 revision")
+    payload: dict[str, Any] = Field(default_factory=dict, description="可选的 action payload")
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        from app.services.coding_actions_service import VALID_ACTIONS
+        if str(v) not in VALID_ACTIONS:
+            raise ValueError(f"无效的 action: {v}，合法值: {sorted(VALID_ACTIONS)}")
+        return str(v)
+
+
+class CodingActionResponse(BaseModel):
+    revision: int
+    created_events: list[dict[str, Any]]
+    updated_segments: list[dict[str, Any]]
+    live_state: dict[str, Any]
+    duplicate: bool = False
+
+    model_config = {"from_attributes": False}
+
+
+class LiveCodingStateResponse(BaseModel):
+    capture_take_id: str
+    revision: int
+    set_ordinal: int
+    game_ordinal: int
+    rally_ordinal: int
+    non_play: bool
+    current_set_segment_id: Optional[str] = None
+    current_game_segment_id: Optional[str] = None
+    current_rally_segment_id: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class CaptureTakeSummary(BaseModel):
+    id: str
+    field_session_id: str
+    capture_mode: str
+    source_session_type: str
+    source_session_id: str
+    status: str
+    started_at: str
+    ended_at: Optional[str] = None
+    duration_ms: Optional[int] = None
+    revision: int
+
+    model_config = {"from_attributes": True}

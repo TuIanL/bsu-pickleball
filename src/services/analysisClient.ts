@@ -19,6 +19,13 @@ import type {
   VisualizationManifest,
   VideoUploadResponse,
   type RawPlayerRenderTrajectory,
+  type CodingActionRequest,
+  type CodingActionResponse,
+  type LiveCodingState,
+  type CaptureTakeSummary,
+  type CaptureSegmentSummary,
+  type AnalysisBatchCreateResponse,
+  type AnalysisBatchDetail,
 } from "../types/report";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
@@ -903,6 +910,106 @@ export async function updateTimelineEvent(
 
 export async function deleteTimelineEvent(eventId: string): Promise<void> {
   await requestVoid(`/api/timeline-events/${eventId}`, { method: "DELETE" });
+}
+
+// ── CaptureTake & Coding Actions API ──
+
+export async function getCaptureTake(takeId: string): Promise<CaptureTakeSummary> {
+  return requestJson<CaptureTakeSummary>(`/api/capture-takes/${takeId}`);
+}
+
+export async function getLiveCodingState(takeId: string): Promise<LiveCodingState> {
+  return requestJson<LiveCodingState>(`/api/capture-takes/${takeId}/live-state`);
+}
+
+export async function executeCodingAction(
+  takeId: string,
+  request: CodingActionRequest,
+): Promise<CodingActionResponse> {
+  return requestJson<CodingActionResponse>(`/api/capture-takes/${takeId}/coding-actions`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function listSegments(
+  takeId: string,
+  segmentType?: string,
+): Promise<CaptureSegmentSummary[]> {
+  const sp = new URLSearchParams();
+  if (segmentType) sp.set("segment_type", segmentType);
+  const q = sp.toString();
+  return requestJson<CaptureSegmentSummary[]>(`/api/capture-takes/${takeId}/segments${q ? `?${q}` : ""}`);
+}
+
+// ── Segment Editing API ──
+
+export async function patchSegment(
+  segmentId: string,
+  patch: Record<string, unknown>,
+): Promise<CaptureSegmentSummary> {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined && v !== null) sp.set(k, String(v));
+  }
+  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}?${sp.toString()}`, {
+    method: "PATCH",
+  });
+}
+
+export async function resetSegmentBoundary(segmentId: string): Promise<CaptureSegmentSummary> {
+  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/reset-boundary-correction`, {
+    method: "POST",
+  });
+}
+
+export async function splitSegment(segmentId: string, splitMs: number): Promise<{ segments: CaptureSegmentSummary[] }> {
+  return requestJson<{ segments: CaptureSegmentSummary[] }>(`/api/capture-segments/${segmentId}/split?split_ms=${splitMs}`, {
+    method: "POST",
+  });
+}
+
+export async function mergeSegments(segmentIds: [string, string]): Promise<CaptureSegmentSummary> {
+  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/merge`, {
+    method: "POST",
+    body: JSON.stringify(segmentIds),
+  });
+}
+
+export async function archiveSegment(segmentId: string): Promise<CaptureSegmentSummary> {
+  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/archive`, {
+    method: "POST",
+  });
+}
+
+export async function restoreSegment(segmentId: string): Promise<CaptureSegmentSummary> {
+  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/restore`, {
+    method: "POST",
+  });
+}
+
+export async function deleteSegment(segmentId: string): Promise<void> {
+  await requestVoid(`/api/capture-segments/${segmentId}`, { method: "DELETE" });
+}
+
+// ── AnalysisBatch API ──
+
+export async function createAnalysisBatch(
+  takeId: string,
+  segmentIds: string[],
+  analysisProfile?: string,
+): Promise<AnalysisBatchCreateResponse> {
+  return requestJson<AnalysisBatchCreateResponse>(`/api/capture-takes/${takeId}/analysis-batches`, {
+    method: "POST",
+    body: JSON.stringify({
+      segment_ids: segmentIds,
+      analysis_profile: analysisProfile ?? "match_default",
+    }),
+  });
+}
+
+export async function getAnalysisBatch(takeId: string, batchId: string): Promise<AnalysisBatchDetail> {
+  return requestJson<AnalysisBatchDetail>(`/api/capture-takes/${takeId}/analysis-batches/${batchId}`);
 }
 
 export { demoAnalysisReport };

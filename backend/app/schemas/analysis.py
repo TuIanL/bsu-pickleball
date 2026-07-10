@@ -11,6 +11,9 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+# 比赛制式
+MatchFormat = Literal["singles", "doubles"]
+
 # 趋势方向：上升 / 下降 / 持平
 TrendDirection = Literal["up", "down", "steady"]
 # 报告类型：运动表现 / 诊断
@@ -75,7 +78,7 @@ class AnalysisUploadMetadata(BaseModel):
     matchTitle: str                 # 比赛标题
     venue: str                      # 场馆
     matchDate: str                  # 比赛日期
-    matchFormat: Literal["singles", "doubles"]  # 单打/双打
+    matchFormat: MatchFormat        # 单打/双打
     cameraAngle: Literal["baseline", "sideline", "elevated", "unknown"]  # 机位角度
     athleteLabel: str               # 运动员标签
     level: str                      # 水平/级别
@@ -116,9 +119,13 @@ class AnalysisJobCreate(BaseModel):
     calibrationId: Optional[str] = None
     frameStride: int = Field(default=1, ge=1)
     sourceFps: Optional[float] = Field(default=None, gt=0, le=240)
-    priority: int = Field(default=0, ge=0, le=100)  # 优先级（0~100）
-    requestNewVersion: bool = False                  # 是否要求分析新版本
-    courtViewMatchThreshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # 覆盖场地视角门控匹配阈值
+    priority: int = Field(default=0, ge=0, le=100)
+    requestNewVersion: bool = False
+    courtViewMatchThreshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    clipStartMs: Optional[int] = Field(default=None, ge=0)
+    clipEndMs: Optional[int] = Field(default=None, ge=0)
+    captureSegmentId: Optional[str] = None
+    segmentVersion: Optional[int] = None
 
 
 class AnalysisJobSummary(BaseModel):
@@ -154,7 +161,11 @@ class AnalysisJobSummary(BaseModel):
     internalErrorMessage: Optional[str] = None
     videoId: Optional[str] = None
     calibrationId: Optional[str] = None
-    analysisMode: AnalysisMode = "demo"              # 演示/真实/受限
+    analysisMode: AnalysisMode = "demo"
+    clipStartMs: Optional[int] = None
+    clipEndMs: Optional[int] = None
+    captureSegmentId: Optional[str] = None
+    segmentVersion: Optional[int] = None
 
 
 # 删除任务的状态
@@ -385,6 +396,55 @@ class ProgressPoint(BaseModel):
     errors: int
     thirdShot: int      # 第三拍质量
     kitchen: int        # 网前表现
+
+
+class MatchAnalysisContext(BaseModel):
+    """比赛制式驱动的分析上下文——只包含稳定的比赛领域事实，不含算法内部配置。"""
+    schema_version: Literal["match-analysis-context.v1"] = "match-analysis-context.v1"
+    match_format: MatchFormat
+    expected_player_count: Literal[2, 4]
+    players_per_side: Literal[1, 2]
+    near_side_quota: Literal[1, 2]
+    far_side_quota: Literal[1, 2]
+    enable_doubles_spacing: bool
+
+
+class PlayerGroupProfile(BaseModel):
+    """球员分组期望配置——由 MatchAnalysisContext 派生，评分算法内部使用。"""
+    expected_same_side_others: int
+    expected_opposite_players: int
+
+
+SINGLES_PROFILE = PlayerGroupProfile(expected_same_side_others=0, expected_opposite_players=1)
+DOUBLES_PROFILE = PlayerGroupProfile(expected_same_side_others=1, expected_opposite_players=2)
+
+
+def build_match_context(match_format: MatchFormat | None) -> MatchAnalysisContext:
+    if match_format is None or match_format == "doubles":
+        return MatchAnalysisContext(
+            match_format="doubles",
+            expected_player_count=4,
+            players_per_side=2,
+            near_side_quota=2,
+            far_side_quota=2,
+            enable_doubles_spacing=True,
+        )
+    return MatchAnalysisContext(
+        match_format="singles",
+        expected_player_count=2,
+        players_per_side=1,
+        near_side_quota=1,
+        far_side_quota=1,
+        enable_doubles_spacing=False,
+    )
+
+
+def build_player_group_profile(ctx: MatchAnalysisContext) -> PlayerGroupProfile:
+    return SINGLES_PROFILE if ctx.match_format == "singles" else DOUBLES_PROFILE
+
+
+def _count_match_score(actual: int, expected: int) -> float:
+    return 1.0 - min(1.0, abs(actual - expected) / max(1, expected))
 
 
 class AnalysisReport(BaseModel):

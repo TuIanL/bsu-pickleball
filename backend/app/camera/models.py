@@ -62,7 +62,7 @@ class RecordingStartRequest(BaseModel):
     court_name: str = ""                    # 球场名称（备注用）；可从 Field Session 继承
     match_format: Optional[Literal["singles", "doubles"]] = None  # 单打/双打；None 时从 Field Session 继承，否则默认 doubles
     camera_angle: str = "baseline_high"     # 机位角度标识
-    fps: int = Field(default=30, ge=1, le=120)  # 帧率，限制 1~120
+    fps: int = Field(default=60, ge=1, le=60)  # 帧率，限制 1~60
     resolution: str = "1920x1080"           # 录制分辨率
     auto_analyze_after_stop: bool = True    # 停止后是否自动创建分析任务
 
@@ -86,6 +86,7 @@ class RecordingSession(BaseModel):
     video_id: Optional[str] = None               # 注册到视频系统后的 id
     auto_analysis_job_id: Optional[str] = None   # 自动创建的分析任务 id
     error_message: Optional[str] = None          # 失败时的错误信息
+    capture_take_id: Optional[str] = None         # 关联的 CaptureTake ID
 
 
 # 删除录制会话的结果
@@ -129,7 +130,7 @@ class SyncStartRequest(BaseModel):
     match_format: Optional[Literal["singles", "doubles"]] = None
     cam_1_angle: str = "baseline_high"
     cam_2_angle: str = "baseline_high"
-    fps: int = Field(default=30, ge=1, le=120)
+    fps: int = Field(default=60, ge=1, le=60)
     resolution: str = "1920x1080"
     auto_analyze_after_stop: bool = True
 
@@ -211,6 +212,7 @@ class SyncRecordingSession(BaseModel):
     duration_sec: Optional[float] = None
     error_message: Optional[str] = None
     total_restarts: int = 0
+    capture_take_id: Optional[str] = None
 
 
 class SyncTestRequest(BaseModel):

@@ -151,3 +151,40 @@ Define Field Session timeline events as manually or system-generated timestamped
 - **THEN** 前端 SHALL 展示该 Field Session 的时间线事件列表
 - **AND** 用户 SHALL 能编辑事件备注、label、时间戳和 payload
 - **AND** 用户 SHALL 能删除事件
+
+### Requirement: 事件数据模型包含 CaptureTake 和 is_undone
+
+系统 MUST 在事件数据模型中包含 capture_take_id 和 is_undone 字段。
+
+#### Scenario: 事件关联 CaptureTake
+
+- **WHEN** 通过 coding-actions 创建事件
+- **THEN** 事件 SHALL 包含 `capture_take_id` 字段
+- **AND** 事件查询 SHALL 支持 `capture_take_id` 筛选
+
+#### Scenario: 事件标记 undone
+
+- **WHEN** 执行 undo 操作
+- **THEN** 被撤销的事件 `is_undone` SHALL 设置为 true
+- **AND** 默认查询 SHALL 不返回 is_undone 事件
+- **AND** `include_undone=true` 参数 SHALL 返回所有事件
+
+### Requirement: 事件服务事务边界分离
+
+系统 MUST 将事件服务拆分为内部方法（不提交事务）和外部 API 方法（负责事务）。
+
+#### Scenario: 内部方法不提交事务
+
+- **WHEN** coding-actions 调用 `_add_timeline_event()`
+- **THEN** 该方法 SHALL 执行 `db.add()` 和 `db.flush()`
+- **AND** SHALL 不执行 `db.commit()`
+
+#### Scenario: 外部 API 方法负责事务
+
+- **WHEN** 旧 API 创建事件
+- **THEN** `create_timeline_event()` SHALL 调用内部方法后在方法内提交事务
+
+#### Scenario: coding-actions 统一事务
+
+- **WHEN** coding-actions handler 创建事件
+- **THEN** 所有操作（action log、events、segments、state）SHALL 共享同一个事务

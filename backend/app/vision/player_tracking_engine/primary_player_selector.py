@@ -9,6 +9,7 @@ from math import hypot, isfinite
 
 # 轨迹相关 schema：PlayerFramePosition（单帧位置）、PlayerSelectionDiagnostic（诊断）、
 # PlayerTrackletFeature（tracklet 特征）、Track（跟踪框）。
+from app.schemas.analysis import PlayerGroupProfile, _count_match_score
 from app.schemas.tracking import PlayerFramePosition, PlayerSelectionDiagnostic, PlayerTrackletFeature, Track
 # 标准球场几何：用于边界判定与半场划分。
 from app.vision.courtvision_calibration_engine.court_geometry import StandardPickleballCourt, standard_court
@@ -69,6 +70,9 @@ class PrimaryPlayerSelectorConfig:
     attention_enabled: bool = False
     attention_model_path: str | None = None
     attention_confidence_threshold: float = 0.65
+    group_profile: PlayerGroupProfile | None = None
+    near_side_quota: int = 2
+    far_side_quota: int = 2
 
 
 @dataclass(frozen=True)
@@ -121,8 +125,11 @@ class PrimaryPlayerSelector:
         attention_model_path: str | None = None,
         attention_confidence_threshold: float = 0.65,
         attention_adapter: AttentionPlayerSelectorAdapter | None = None,
+        group_profile: PlayerGroupProfile | None = None,
+        near_side_quota: int = 2,
+        far_side_quota: int = 2,
     ) -> None:
-        # 把所有入参做“夹到合理范围”后写入配置对象（防止越界值）。
+        # 把所有入参做"夹到合理范围"后写入配置对象（防止越界值）。
         self.config = PrimaryPlayerSelectorConfig(
             min_confidence=min(max(min_confidence, 0.0), 1.0),
             max_subjects=max(1, int(max_subjects)),
@@ -135,6 +142,9 @@ class PrimaryPlayerSelector:
             attention_enabled=attention_enabled,
             attention_model_path=attention_model_path,
             attention_confidence_threshold=min(max(attention_confidence_threshold, 0.0), 1.0),
+            group_profile=group_profile,
+            near_side_quota=near_side_quota,
+            far_side_quota=far_side_quota,
         )
         self.court = court or standard_court()
         self._qualities: dict[int, _TrackQuality] = {}   # track_id -> 质量累计
@@ -212,15 +222,25 @@ class PrimaryPlayerSelector:
                     attention_result=attention_result,
                 )
             )
-        # 按 (综合分, 滚动置信度, 置信度) 降序排序，取前 max_subjects。
+        # 按 (综合分, 滚动置信度, 置信度) 降序排序。
         candidates.sort(key=lambda selection: (selection.score, selection.rolling_confidence, selection.confidence), reverse=True)
-        selected_candidates = candidates[: self.max_subjects]
-        selected_ids = {selection.track_id for selection in selected_candidates}
+        # 使用 quota-aware 最终组合选择（覆盖 rule 和 attention 两条路径）。
+        selected_candidates = self._select_balanced_candidates(
+            candidates=candidates,
+            positions_by_track_id=positions_by_track_id,
+            near_quota=self.config.near_side_quota,
+            far_quota=self.config.far_side_quota,
+        )
         if attention_result is not None:
-            # attention 生效时，直接使用其选定的 track 集合（再按上限截断）。
-            selected_ids = selected_by_attention
-            selected_candidates = [selection for selection in candidates if selection.track_id in selected_ids][: self.max_subjects]
-        # 回填诊断中的“是否最终被选中”标记，并缓存训练样本。
+            # attention 路径同样经过 quota-aware selection
+            attention_candidates = [c for c in candidates if c.track_id in selected_by_attention]
+            selected_candidates = self._select_balanced_candidates(
+                candidates=attention_candidates,
+                positions_by_track_id=positions_by_track_id,
+                near_quota=self.config.near_side_quota,
+                far_quota=self.config.far_side_quota,
+            )
+        # 回填诊断中的"是否最终被选中"标记，并缓存训练样本。
         self.last_diagnostics = [
             diagnostic.model_copy(update={"selected": diagnostic.track_id in {selection.track_id for selection in selected_candidates}})
             for diagnostic in diagnostics
@@ -306,8 +326,9 @@ class PrimaryPlayerSelector:
         )
 
     def _group_consistency_scores(self, features: list[PlayerTrackletFeature]) -> dict[int, float]:
-        # 四人组一致性：考察每个 track 与“同侧/对侧”人数比例（双打通常每侧 1~2 人）以及横向居中程度。
-        if not features:
+        # 赛制感知分组一致性：考察每个 track 与"同侧/对侧"人数比例是否匹配赛制期望。
+        profile = self.config.group_profile
+        if not features or profile is None:
             return {}
         valid = [feature for feature in features if feature.mean_court_position is not None]
         if not valid:
@@ -329,12 +350,55 @@ class PrimaryPlayerSelector:
                 and other.mean_court_position is not None
                 and (other.mean_court_position[1] < half_length) != (feature.mean_court_position[1] < half_length)
             )
-            # 同侧（每侧期望约 1 人）占比 0.45、对侧（期望约 2 人）占比 0.55。
-            side_score = min(1.0, same_side_count / 1.0) * 0.45 + min(1.0, opposite_side_count / 2.0) * 0.55
+            same_score = _count_match_score(same_side_count, profile.expected_same_side_others)
+            opposite_score = _count_match_score(opposite_side_count, profile.expected_opposite_players)
+            side_score = same_score * 0.45 + opposite_score * 0.55
             center_x = feature.mean_court_position[0]
             width_score = 1.0 - min(1.0, abs(center_x - self.court.width_ft / 2.0) / max(1.0, self.court.width_ft))
             near_far_balance[feature.track_id] = min(1.0, max(0.0, side_score * 0.7 + width_score * 0.3))
         return {feature.track_id: near_far_balance.get(feature.track_id, 0.35) for feature in features}
+
+    def _infer_side(
+        self,
+        track_id: int,
+        positions_by_track_id: dict[int, PlayerFramePosition],
+    ) -> str | None:
+        position = positions_by_track_id.get(track_id)
+        if position is None or position.court_position is None:
+            return None
+        half_length = self.court.length_ft / 2.0
+        y = position.court_position[1]
+        if abs(y - half_length) < 2.0:
+            return None
+        return "near" if y < half_length else "far"
+
+    def _select_balanced_candidates(
+        self,
+        candidates: list[PrimaryPlayerSelection],
+        positions_by_track_id: dict[int, PlayerFramePosition],
+        near_quota: int,
+        far_quota: int,
+    ) -> list[PrimaryPlayerSelection]:
+        near_group: list[PrimaryPlayerSelection] = []
+        far_group: list[PrimaryPlayerSelection] = []
+        unknown_group: list[PrimaryPlayerSelection] = []
+        for c in candidates:
+            side = self._infer_side(c.track_id, positions_by_track_id)
+            if side == "near":
+                near_group.append(c)
+            elif side == "far":
+                far_group.append(c)
+            else:
+                unknown_group.append(c)
+        near_group.sort(key=lambda x: x.score, reverse=True)
+        far_group.sort(key=lambda x: x.score, reverse=True)
+        selected = near_group[:near_quota] + far_group[:far_quota]
+        remaining_slots = (near_quota + far_quota) - len(selected)
+        if remaining_slots > 0 and unknown_group:
+            unknown_group.sort(key=lambda x: x.score, reverse=True)
+            selected.extend(unknown_group[:remaining_slots])
+        selected.sort(key=lambda x: x.score, reverse=True)
+        return selected[: near_quota + far_quota]
 
     def _attention_select(self, features: list[PlayerTrackletFeature]) -> AttentionSelectionResult | None:
         # 尝试用 attention 适配器选择；未启用 / 无结果 / 置信度不足时回退规则分支。

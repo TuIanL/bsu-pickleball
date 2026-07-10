@@ -26,10 +26,10 @@ describe("source FPS request metadata", () => {
     const dual: SyncStartRequest = {
       cam_1_id: "cam-1",
       cam_2_id: "cam-2",
-      fps: 90,
+      fps: 60,
     };
 
     expect(single.fps).toBe(60);
-    expect(dual.fps).toBe(90);
+    expect(dual.fps).toBe(60);
   });
 });

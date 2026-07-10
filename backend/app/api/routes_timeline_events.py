@@ -61,8 +61,10 @@ def list_for_session(
     event_type: str | None = Query(default=None),
     source: str | None = Query(default=None),
     recording_session_id: str | None = Query(default=None),
+    capture_take_id: str | None = Query(default=None),
     from_ms: int | None = Query(default=None),
     to_ms: int | None = Query(default=None),
+    include_undone: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> list[TimelineEventSummary]:
     """列出 Field Session 下的事件，支持按类型/来源/时间范围筛选。"""
@@ -75,8 +77,10 @@ def list_for_session(
         event_type=event_type,
         source=source,
         recording_session_id=recording_session_id,
+        capture_take_id=capture_take_id,
         from_ms=from_ms,
         to_ms=to_ms,
+        include_undone=include_undone,
     )
     return [TimelineEventSummary.model_validate(e) for e in events]
 

@@ -33,6 +33,7 @@ from app.schemas.analysis import (
     AnalysisStage,
     AnalysisStageId,
     AnalysisStageStatus,
+    build_match_context,
 )
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
 from app.services.storage_service import StorageService
@@ -293,6 +294,10 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         "calibrationId": payload.calibrationId,
         "sourceFps": payload.sourceFps or payload.metadata.sourceFps,
         "metadata": payload.metadata.model_dump(mode="json"),
+        "clipStartMs": payload.clipStartMs,
+        "clipEndMs": payload.clipEndMs,
+        "captureSegmentId": payload.captureSegmentId,
+        "segmentVersion": payload.segmentVersion,
     }
     return _stable_hash(input_payload), _stable_hash(config_payload)
 
@@ -745,6 +750,8 @@ class AnalysisWorkerRuntime:
             frameStride=job.frameStride,
             sourceFps=job.sourceFps or job.metadata.sourceFps,
             priority=job.priority,
+            clipStartMs=getattr(job, 'clipStartMs', None),
+            clipEndMs=getattr(job, 'clipEndMs', None),
         )
         latest = job
         retry_attempts = 0
@@ -762,6 +769,9 @@ class AnalysisWorkerRuntime:
             def run_pipeline() -> AnalysisPipelineResult:
                 # 调用流水线（兼容旧版本：没有 cancellation_token 参数时退化为不带它调用）。
                 pipeline = self.pipeline_factory()
+                match_context = build_match_context(
+                    job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
+                )
                 run_kwargs = {
                     "job_id": job.id,
                     "video_id": payload.videoId,
@@ -769,14 +779,22 @@ class AnalysisWorkerRuntime:
                     "frame_stride": payload.frameStride,
                     "source_fps": payload.sourceFps or payload.metadata.sourceFps,
                     "court_view_match_threshold": payload.courtViewMatchThreshold,
+                    "match_context": match_context,
                     "progress_callback": progress_callback,
                     "cancellation_token": token,
+                    "clip_start_ms": payload.clipStartMs,
+                    "clip_end_ms": payload.clipEndMs,
                 }
                 try:
                     return pipeline.run(**run_kwargs)
                 except TypeError as exc:
                     message = str(exc)
-                    if "court_view_match_threshold" in message:
+                    if "clip_start_ms" in message or "clip_end_ms" in message:
+                        run_kwargs.pop("clip_start_ms", None)
+                        run_kwargs.pop("clip_end_ms", None)
+                    elif "match_context" in message:
+                        run_kwargs.pop("match_context", None)
+                    elif "court_view_match_threshold" in message:
                         run_kwargs.pop("court_view_match_threshold", None)
                     elif "source_fps" in message:
                         run_kwargs.pop("source_fps", None)

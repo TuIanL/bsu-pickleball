@@ -248,6 +248,7 @@ export interface RecordingSession {
   video_id?: string;
   auto_analysis_job_id?: string;
   error_message?: string;
+  capture_take_id?: string;
 }
 
 export type SyncRecordingStatus = "recording" | "completed" | "failed" | "canceled";
@@ -340,6 +341,7 @@ export interface SyncRecordingSession {
   duration_sec?: number;
   error_message?: string;
   total_restarts: number;
+  capture_take_id?: string;
 }
 
 export interface SyncStopResponse {
@@ -409,6 +411,8 @@ export interface SessionTimelineEvent {
   id: string;
   field_session_id: string;
   recording_session_id?: string;
+  capture_take_id?: string;
+  is_undone?: boolean;
   timestamp_ms: number;
   occurred_at: string;
   event_type: TimelineEventType;
@@ -422,6 +426,7 @@ export interface SessionTimelineEvent {
 
 export interface TimelineEventCreate {
   recording_session_id?: string;
+  capture_take_id?: string;
   timestamp_ms?: number;
   occurred_at?: string;
   event_type: TimelineEventType;
@@ -441,11 +446,109 @@ export interface TimelineEventUpdate {
 }
 
 export interface TimelineEventListParams {
-  event_type?: string;
-  source?: string;
+  event_type?: TimelineEventType;
+  source?: TimelineEventSource;
   recording_session_id?: string;
+  capture_take_id?: string;
   from_ms?: number;
   to_ms?: number;
+  include_undone?: boolean;
+}
+
+// ── CaptureTake & Coding Actions ──
+
+export type CodingActionType =
+  | "start_set" | "start_game" | "start_next_rally"
+  | "end_rally" | "end_game" | "end_set"
+  | "toggle_non_play" | "change_side" | "add_note" | "undo";
+
+export interface CodingActionRequest {
+  action: CodingActionType;
+  timestamp_ms?: number;
+  client_occurred_at?: string;
+  client_action_id: string;
+  expected_revision: number;
+  payload?: Record<string, unknown>;
+}
+
+export interface LiveCodingState {
+  revision: number;
+  set_ordinal: number;
+  game_ordinal: number;
+  rally_ordinal: number;
+  non_play: boolean;
+  current_set_segment_id?: string;
+  current_game_segment_id?: string;
+  current_rally_segment_id?: string;
+}
+
+export interface CodingActionResponse {
+  revision: number;
+  created_events: Record<string, unknown>[];
+  updated_segments: Record<string, unknown>[];
+  live_state: LiveCodingState;
+  duplicate?: boolean;
+}
+
+export interface CaptureTakeSummary {
+  id: string;
+  field_session_id: string;
+  capture_mode: string;
+  source_session_type: string;
+  source_session_id: string;
+  status: string;
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  revision: number;
+}
+
+export interface CaptureSegmentSummary {
+  id: string;
+  capture_take_id?: string;
+  segment_type: "set" | "game" | "rally" | "custom";
+  ordinal: number;
+  label: string;
+  start_ms: number;
+  end_ms?: number;
+  corrected_start_ms?: number;
+  corrected_end_ms?: number;
+  effective_start_ms?: number;
+  effective_end_ms?: number;
+  edit_version: number;
+  edit_status: "active" | "superseded" | "archived";
+  status: "open" | "closed" | "inferred" | "corrected";
+  source: string;
+  is_highlight: boolean;
+  parent_segment_id?: string;
+}
+
+// ── AnalysisBatch ──
+
+export interface AnalysisBatchCreateResponse {
+  batch_id: string;
+  status: string;
+  analysis_profile: string;
+  items: AnalysisBatchItemSummary[];
+}
+
+export interface AnalysisBatchItemSummary {
+  id: string;
+  segment_id: string;
+  segment_version: number;
+  snapshot_start_ms: number;
+  snapshot_end_ms: number;
+  video_id: string;
+  status: string;
+  analysis_job_id?: string;
+  error_message?: string;
+}
+
+export interface AnalysisBatchDetail {
+  batch_id: string;
+  status: string;
+  analysis_profile: string;
+  items: AnalysisBatchItemSummary[];
 }
 
 export interface NavigationItem {
@@ -874,7 +977,23 @@ export interface AnalysisPipelineResult {
       cols: number;
       cells: Array<{ row: number; col: number; count: number }>;
     };
+    metric_statuses?: Record<string, {
+      status: "available" | "not_applicable" | "insufficient_players";
+      reason?: string;
+      expected_player_count?: number;
+      observed_player_count?: number;
+    }>;
   };
+  match_context?: {
+    schema_version: string;
+    match_format: "singles" | "doubles";
+    expected_player_count: 2 | 4;
+    players_per_side: 1 | 2;
+    near_side_quota: 1 | 2;
+    far_side_quota: 1 | 2;
+    enable_doubles_spacing: boolean;
+  };
+  observed_player_count?: number;
   artifacts: {
     result_json_path?: string;
     tracking_result_json_path?: string;

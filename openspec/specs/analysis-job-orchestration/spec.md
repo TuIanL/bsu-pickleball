@@ -163,3 +163,32 @@ The system SHALL preserve enough execution metadata to support product debugging
 - **WHEN** `analysis_signature()` 计算任务签名
 - **THEN** 签名输入 MUST 包含源 FPS 或其规范化等价值
 - **AND** 不同源 FPS 的任务 MUST 产生不同签名
+
+### Requirement: 分析任务支持时间裁剪与预热区间
+
+系统 MUST 在 AnalysisJob JSON Schema 中支持 clip 参数（非数据库列），Pipeline 执行时使用预热区间。
+
+#### Scenario: Job Schema 包含 clip 字段
+
+- **WHEN** 创建含裁剪参数的分析任务
+- **THEN** `AnalysisJobCreate` SHALL 包含 `clipStartMs`、`clipEndMs`、`captureSegmentId`、`segmentVersion`
+- **AND** `AnalysisJobSummary` SHALL 包含对应字段
+
+#### Scenario: 任务签名包含 clip 信息
+
+- **WHEN** `analysis_signature()` 计算
+- **THEN** 输入 payload SHALL 包含 `clipStartMs`、`clipEndMs`、`captureSegmentId`、`segmentVersion`
+- **AND** 同一视频不同 Rally SHALL 产生不同签名
+
+#### Scenario: Pipeline 预热区间
+
+- **WHEN** 任务携带 clip 范围
+- **THEN** 解码范围 SHALL = `[clip_start - pre_roll_ms, clip_end + post_roll_ms)`
+- **AND** 默认 pre_roll_ms=1500, post_roll_ms=500
+- **AND** 半开区间 `[start, end)`，相邻片段不会在边界重复处理
+- **AND** 预热帧不纳入正式分析指标
+
+#### Scenario: Pipeline 裁剪结果记录
+
+- **WHEN** Pipeline 按 clip 范围执行
+- **THEN** 结果 SHALL 记录 `requested_clip.start_ms/end_ms` 和 `decoded_range.start_ms/end_ms`

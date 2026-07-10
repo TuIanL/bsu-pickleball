@@ -69,6 +69,13 @@ def init_db() -> None:
     # 导入所有模型以触发 Base.metadata 注册
     import app.models.field_session  # noqa: F401
     import app.models.timeline_event  # noqa: F401
+    import app.models.capture_take  # noqa: F401
+    import app.models.capture_track  # noqa: F401
+    import app.models.capture_coding_action  # noqa: F401
+    import app.models.live_coding_state  # noqa: F401
+    import app.models.capture_segment  # noqa: F401
+    import app.models.segment_edit_operation  # noqa: F401
+    import app.models.analysis_batch  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
 

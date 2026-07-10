@@ -12,6 +12,7 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.analysis import MatchAnalysisContext
 from app.schemas.metrics import PerformanceMetrics
 from app.schemas.tracking import ProjectedTrackPoint
 
@@ -132,3 +133,5 @@ class AnalysisPipelineResult(BaseModel):
     metrics: PerformanceMetrics                # 运动指标
     artifacts: AnalysisArtifacts               # 产物路径清单
     message: str                               # 结果说明
+    match_context: Optional[MatchAnalysisContext] = None  # 比赛分析上下文
+    observed_player_count: Optional[int] = None            # 实际观察到的球员数

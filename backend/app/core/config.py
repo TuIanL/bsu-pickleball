@@ -106,8 +106,11 @@ class Settings(BaseModel):
     player_identity_court_buffer_m: float = 0.75          # 球场缓冲距离（米）
     player_identity_smoothing_window: int = 5             # 平滑窗口帧数
 
+    # ---- 球员分析容量（统一硬限制）----
+    player_analysis_hard_limit: int = 4                  # 系统能同时分析的最大球员数（容量上限）
+
     # ---- 球员锁定（跨帧保持 player_1~player_4 身份稳定性）----
-    player_lock_target_player_count: int = 4              # 主球员目标数量（singles=2, doubles=4）
+    player_lock_target_player_count: int = 4              # 主球员目标数量（singles=2, doubles=4）【deprecated: 改用 player_analysis_hard_limit】
     player_lock_bootstrap_min_frames: int = 60            # bootstrap 最短收集帧数
     player_lock_bootstrap_max_frames: int = 180           # bootstrap 最长收集帧数
     player_lock_min_observed_frames: int = 8              # 候选最少出现帧数
@@ -383,7 +386,9 @@ def get_settings() -> Settings:
         player_identity_max_speed_mps=float(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_SPEED_MPS", "7.0")),
         player_identity_court_buffer_m=float(os.getenv("PICKLEBALL_PLAYER_IDENTITY_COURT_BUFFER_M", "0.75")),
         player_identity_smoothing_window=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_SMOOTHING_WINDOW", "5"))),
-        # ---- 球员锁定配置 ----
+        # ---- 球员分析容量 ----
+        player_analysis_hard_limit=max(1, int(os.getenv("PICKLEBALL_PLAYER_ANALYSIS_HARD_LIMIT", "4"))),
+        # ---- 球员锁定配置（deprecated）----
         player_lock_target_player_count=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_TARGET_PLAYER_COUNT", "4"))),
         player_lock_bootstrap_min_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MIN_FRAMES", "60"))),
         player_lock_bootstrap_max_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MAX_FRAMES", "180"))),

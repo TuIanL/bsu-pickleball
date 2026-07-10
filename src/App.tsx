@@ -31,6 +31,7 @@ import { UploadModePage } from "./pages/UploadModePage";
 import { CaptureHomePage } from "./pages/CaptureHomePage";
 import { CaptureWizardPage } from "./pages/CaptureWizardPage";
 import { CaptureConsolePage } from "./pages/CaptureConsolePage";
+import { SegmentManagerPage } from "./pages/SegmentManagerPage";
 import { TasksPage } from "./pages/TasksPage";
 import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
@@ -156,6 +157,7 @@ type RouteState =
   | { name: "captureHome"; path: "/capture" }
   | { name: "captureNew"; path: "/capture/new" }
   | { name: "captureConsole"; path: `/capture/${string}`; sessionId: string }
+  | { name: "segmentManager"; path: `/capture/${string}/takes/${string}/segments`; fieldSessionId: string; takeId: string }
   | { name: "tasks"; path: "/tasks" }
   | { name: "new-analysis"; path: "/analysis/new" } // 保留，但不再作为一级入口
   | { name: "analysis-tasks"; path: "/analysis/tasks" } // 保留，旧路由兼容
@@ -232,6 +234,16 @@ function parsePath(pathname: string): RouteState {
   }
 
   const captureConsoleMatch = pathname.match(/^\/capture\/(.+)$/);
+
+  // /capture/:fieldSessionId/takes/:takeId/segments 必须优先匹配
+  const segmentManagerMatch = captureConsoleMatch
+    ? captureConsoleMatch[1].match(/^(.+)\/takes\/(.+)\/segments$/)
+    : null;
+  if (segmentManagerMatch) {
+    const [, fieldSessionId, takeId] = segmentManagerMatch;
+    return { name: "segmentManager", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, fieldSessionId, takeId };
+  }
+
   if (captureConsoleMatch) {
     const [, sessionId] = captureConsoleMatch;
     return { name: "captureConsole", path: `/capture/${sessionId}`, sessionId };
@@ -359,6 +371,8 @@ function App() {
         return <CaptureWizardPage onNavigate={navigate} />;
       case "captureConsole":
         return <CaptureConsolePage sessionId={route.sessionId} onNavigate={navigate} />;
+      case "segmentManager":
+        return <SegmentManagerPage fieldSessionId={route.fieldSessionId} takeId={route.takeId} onNavigate={navigate} />;
       case "tasks":
         return <AnalysisTasksPage onNavigate={navigate} recentJob={recentJob} />;
       case "new-analysis":
@@ -1914,14 +1928,30 @@ function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               />
             </Field>
             <Field label="比赛形式">
-              <select
-                className="field-input"
-                onChange={(event) => updateMetadata("matchFormat", event.target.value as AnalysisUploadMetadata["matchFormat"])}
-                value={metadata.matchFormat}
-              >
-                <option value="doubles">双打</option>
-                <option value="singles">单打</option>
-              </select>
+              <div className="flex gap-1 rounded-lg border border-gray-300 p-0.5 bg-gray-50">
+                <button
+                  type="button"
+                  className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    metadata.matchFormat === "doubles"
+                      ? "bg-white text-gray-900 shadow-sm border border-gray-200"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                  onClick={() => updateMetadata("matchFormat", "doubles")}
+                >
+                  双打（4人）
+                </button>
+                <button
+                  type="button"
+                  className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    metadata.matchFormat === "singles"
+                      ? "bg-white text-gray-900 shadow-sm border border-gray-200"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                  onClick={() => updateMetadata("matchFormat", "singles")}
+                >
+                  单打（2人）
+                </button>
+              </div>
             </Field>
             <Field label="拍摄角度">
               <select
@@ -4262,7 +4292,7 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     court_name: "",
     match_format: "doubles",
     camera_angle: "baseline_high",
-    fps: 30,
+    fps: 60,
     resolution: "1920x1080",
     auto_analyze_after_stop: true,
   });
@@ -5007,8 +5037,8 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   <option value="sideline">侧边</option>
                   <option value="overhead">俯视</option>
                 </select>
-                <select className="field-input" value={recordingForm.fps ?? 30} onChange={(e) => setRecordingForm((f) => ({ ...f, fps: Number(e.target.value) }))}>
-                  {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                <select className="field-input" value={recordingForm.fps ?? 60} onChange={(e) => setRecordingForm((f) => ({ ...f, fps: Number(e.target.value) }))}>
+                  {[24, 25, 30, 50, 60].map((fps) => (
                     <option key={fps} value={fps}>{fps} fps</option>
                   ))}
                 </select>

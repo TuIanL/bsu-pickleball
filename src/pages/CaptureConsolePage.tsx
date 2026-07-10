@@ -39,6 +39,10 @@ import {
   getActiveSyncRecording,
 } from "../services/analysisClient";
 import { quickEventsForMode, type QuickEventDef } from "../services/timelineQuickEvents";
+import { createOutboxItem, enqueueItem, createOutboxSender, MATCH_QUICK_EVENTS, type CodingOutboxItem } from "../services/codingOutbox";
+import { getLiveCodingState, executeCodingAction, listSegments, type LiveCodingState, type CaptureSegmentSummary } from "../services/analysisClient";
+import type { CodingActionType } from "../types/report";
+import { MiniTimeline } from "../components/MiniTimeline";
 
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 type ConsoleState = "preview" | "recording" | "stopped";
@@ -92,7 +96,15 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
 
   // analysisIntent（从 sessionStorage 恢复）
   const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");
-  const [recordingFps, setRecordingFps] = useState<number>(30);
+  const [recordingFps, setRecordingFps] = useState<number>(60);
+
+  // ── 实时编码状态 ──
+  const [captureTakeId, setCaptureTakeId] = useState<string | null>(null);
+  const [liveCodingState, setLiveCodingState] = useState<LiveCodingState | null>(null);
+  const [outboxItems, setOutboxItems] = useState<CodingOutboxItem[]>([]);
+  const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
+  const outboxSenderRef = useRef<ReturnType<typeof createOutboxSender> | null>(null);
+  const lastActionTimeRef = useRef<number>(0);
 
   // ── 双摄同步录制状态 ──
   const isDualMode = fieldSession?.camera_setup === "dual";
@@ -160,6 +172,14 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
     }
   }, [sessionId]);
 
+  const loadSegmentsData = useCallback(async () => {
+    if (!captureTakeId) return;
+    try {
+      const segs = await listSegments(captureTakeId);
+      setSegments(segs ?? []);
+    } catch { /* ignore */ }
+  }, [captureTakeId]);
+
   useEffect(() => {
     void loadFieldSession();
     void loadCameras();
@@ -176,19 +196,27 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
     }
   }, [selectedCameraId]);
 
-  // 录制计时器
+  // 录制计时器 + 定期刷新事件/segments
   useEffect(() => {
     if (consoleState === "recording") {
       elapsedTimer.current = setInterval(() => {
         setElapsedSec((s) => s + 1);
       }, 1000);
+      const pollTimer = setInterval(() => {
+        loadTimelineEvents();
+        void loadSegmentsData();
+      }, 5000);
+      return () => {
+        clearInterval(pollTimer);
+        if (elapsedTimer.current) clearInterval(elapsedTimer.current);
+      };
     } else {
       if (elapsedTimer.current) clearInterval(elapsedTimer.current);
     }
     return () => {
       if (elapsedTimer.current) clearInterval(elapsedTimer.current);
     };
-  }, [consoleState]);
+  }, [consoleState, loadTimelineEvents, loadSegmentsData]);
 
   // 双摄录制计时器 + 已选槽位持久化
   useEffect(() => {
@@ -284,7 +312,16 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
       setActiveRecording(recording);
       setConsoleState("recording");
       setElapsedSec(0);
-      setPreviewStatus("idle"); // 录制时断开预览
+      setPreviewStatus("idle");
+
+      // 设置 capture_take_id 并初始化 outbox
+      if (recording.capture_take_id) {
+        setCaptureTakeId(recording.capture_take_id);
+        try {
+          const state = await getLiveCodingState(recording.capture_take_id);
+          setLiveCodingState(state);
+        } catch { /* live-state 可能暂不存在，稍后初始化 */ }
+      }
     } catch { /* ignore */ }
   };
 
@@ -301,17 +338,41 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   };
 
   const handleAddTimelineEvent = async (event: QuickEventDef) => {
-    if (!activeRecording) return;
-    try {
-      const payload: TimelineEventCreate = {
-        event_type: event.type,
-        label: event.label,
-        source: "manual",
-        recording_session_id: activeRecording.session_id,
-      };
-      await createTimelineEvent(sessionId, payload);
-      await loadTimelineEvents();
-    } catch { /* ignore */ }
+    const takeId = captureTakeId ?? activeRecording?.capture_take_id;
+    if (!takeId) return;
+
+    // 误双击抑制：400ms
+    const now = Date.now();
+    if (now - lastActionTimeRef.current < 400) return;
+    lastActionTimeRef.current = now;
+
+    const timestampMs = elapsedSec * 1000;
+    const action = (event.type ?? "add_note") as CodingActionType;
+
+    // 乐观更新 liveCodingState
+    if (liveCodingState) {
+      const optimistic = { ...liveCodingState };
+      if (action === "start_next_rally" && !optimistic.non_play) {
+        optimistic.rally_ordinal += 1;
+      } else if (action === "start_game") {
+        optimistic.game_ordinal += 1;
+        optimistic.rally_ordinal = 0;
+      } else if (action === "start_set") {
+        optimistic.set_ordinal += 1;
+        optimistic.game_ordinal = 0;
+        optimistic.rally_ordinal = 0;
+      } else if (action === "toggle_non_play") {
+        optimistic.non_play = !optimistic.non_play;
+      } else if (action === "undo") {
+        optimistic.rally_ordinal = Math.max(0, optimistic.rally_ordinal - 1);
+      }
+      setLiveCodingState(optimistic);
+    }
+
+    const item = createOutboxItem(takeId, action, timestampMs, event.payload);
+    enqueueItem(item);
+    setOutboxItems((prev) => [...prev, item]);
+    outboxSenderRef.current?.flush();
   };
 
   const handleCloseComplete = () => {
@@ -382,6 +443,11 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  };
+
+  const formatMs = (ms: number) => {
+    const totalSec = Math.floor(ms / 1000);
+    return formatElapsed(totalSec);
   };
 
   const quickEvents = useMemo(
@@ -628,7 +694,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
                     onChange={(event) => setRecordingFps(Number(event.target.value))}
                     value={recordingFps}
                   >
-                    {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                    {[24, 25, 30, 50, 60].map((fps) => (
                       <option key={fps} value={fps}>{fps} fps</option>
                     ))}
                   </select>
@@ -792,7 +858,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
                 onChange={(event) => setRecordingFps(Number(event.target.value))}
                 value={recordingFps}
               >
-                {[24, 25, 30, 50, 60, 90, 120].map((fps) => (
+                {[24, 25, 30, 50, 60].map((fps) => (
                   <option key={fps} value={fps}>{fps} fps</option>
                 ))}
               </select>
@@ -941,47 +1007,114 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
         </div>
       )}
 
-      {/* 录制中：事件标记 + 时间线 */}
-      {consoleState === "recording" && (
+      {/* 录制中：实时编码控制台 */}
+      {(consoleState === "recording" || dualState === "recording") && (
         <div className="mt-6 space-y-4">
-          {/* 事件标记按钮 */}
+          {/* 当前结构 */}
+          {liveCodingState && (
+            <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+              <div className="flex items-center gap-4 text-sm font-bold text-[#14241B]">
+                <span>当前：</span>
+                <span className="text-[#F97316]">第{liveCodingState.set_ordinal || "?"}盘</span>
+                <span className="text-[#3B82F6]">第{liveCodingState.game_ordinal || "?"}局</span>
+                <span className="text-[#22C55E]">第{liveCodingState.rally_ordinal || "?"}分</span>
+                {liveCodingState.non_play && <span className="text-[#6B7280]">（非比赛）</span>}
+                <span className="text-xs text-slate-400 ml-auto">rev.{liveCodingState.revision}</span>
+              </div>
+            </div>
+          )}
+
+          {/* 事件按钮 */}
           <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-            <h3 className="text-sm font-bold text-[#14241B] mb-3">场边事件标记</h3>
+            <h3 className="text-sm font-bold text-[#14241B] mb-3">实时编码</h3>
             <div className="flex flex-wrap gap-2">
-              {quickEvents.map((event) => (
-                <button
-                  key={event.type}
-                  className="rounded-xl border border-[#DDE9D6] bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:border-[#2F80ED]/40 hover:text-[#2F80ED] transition"
-                  onClick={() => handleAddTimelineEvent(event)}
-                  type="button"
-                >
-                  {event.label}
-                </button>
-              ))}
+              {MATCH_QUICK_EVENTS.map((event) => {
+                const colorMap: Record<string, string> = {
+                  start_set: "bg-[#FFF7ED] border-[#F97316] text-[#F97316] hover:bg-[#F97316] hover:text-white",
+                  start_game: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6] hover:bg-[#3B82F6] hover:text-white",
+                  start_next_rally: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E] hover:bg-[#22C55E] hover:text-white",
+                  end_rally: "bg-slate-50 border-slate-300 text-slate-500 hover:bg-slate-500 hover:text-white",
+                  toggle_non_play: "bg-slate-50 border-slate-400 text-slate-500 hover:bg-slate-500 hover:text-white",
+                  change_side: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7] hover:bg-[#A855F7] hover:text-white",
+                  add_note: "bg-slate-50 border-slate-300 text-slate-500 hover:bg-slate-500 hover:text-white",
+                  undo: "bg-[#FEF2F2] border-[#EF4444] text-[#EF4444] hover:bg-[#EF4444] hover:text-white",
+                };
+                const keyMap: Record<string, string> = {
+                  start_set: "1", start_game: "2", start_next_rally: "3",
+                  toggle_non_play: "4", change_side: "5", add_note: "H", undo: "⌫",
+                  end_rally: "",
+                };
+                const colorClass = colorMap[event.type] ?? "";
+                return (
+                  <button
+                    key={event.type}
+                    className={`rounded-xl border px-3 py-2 text-xs font-bold transition ${colorClass}`}
+                    onClick={() => handleAddTimelineEvent(event)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAddTimelineEvent(event); }}
+                    type="button"
+                    title={event.note}
+                  >
+                    {event.label}{keyMap[event.type] ? ` [${keyMap[event.type]}]` : ""}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* 时间线 */}
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-            <h3 className="text-sm font-bold text-[#14241B] mb-3">时间线</h3>
-            {timelineEvents.length === 0 ? (
-              <p className="text-xs text-slate-400">录制中，尚未有任何事件标记</p>
-            ) : (
-              <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                {timelineEvents.slice(-10).reverse().map((evt) => (
-                  <div key={evt.id} className="flex items-center gap-3 text-sm">
-                    <span className="text-xs tabular-nums text-slate-400 w-14 shrink-0">
-                      {evt.timestamp_ms != null ? formatElapsed(Math.floor(evt.timestamp_ms / 1000)) : "—:—"}
-                    </span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#2F80ED] shrink-0" />
-                    <span className="font-medium text-slate-700">{evt.label}</span>
-                    {evt.note && <span className="text-slate-400 text-xs">{evt.note}</span>}
+          {/* Outbox 状态 */}
+          {outboxItems.filter((i) => i.status !== "synced").length > 0 && (
+            <div className="rounded-2xl border border-[#FEF3C7] bg-[#FFFBEB] p-3">
+              <h4 className="text-xs font-bold text-[#92400E] mb-1">同步状态</h4>
+              <div className="text-xs text-[#92400E] space-y-0.5">
+                {outboxItems.filter((i) => i.status !== "synced").slice(0, 5).map((item) => (
+                  <div key={item.clientActionId} className="flex items-center gap-2">
+                    <span>{item.action === "start_next_rally" ? "下一分" : item.action}</span>
+                    <span className="opacity-60">{item.status === "sending" ? "⟳" : item.status === "failed" ? "✗" : item.status === "blocked" ? "⊘" : "⏳"}</span>
                   </div>
                 ))}
               </div>
-            )}
+            </div>
+          )}
+
+          {/* 事件时间线列表 */}
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+            <h3 className="text-sm font-bold text-[#14241B] mb-3">
+              最近事件
+              <span className="ml-2 text-xs font-normal text-slate-400">
+                {timelineEvents.length} 条
+              </span>
+            </h3>
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {timelineEvents.slice(-15).reverse().map((event) => (
+                <div
+                  key={event.id}
+                  className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-1.5 text-xs"
+                >
+                  <span className="font-bold text-slate-600">{event.label || event.event_type}</span>
+                  <span className="ml-2 text-slate-400 tabular-nums">
+                    {formatMs(event.timestamp_ms)}
+                  </span>
+                  {event.note && (
+                    <span className="ml-2 truncate text-slate-400">{event.note}</span>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
+      )}
+
+      {/* 多轨时间线 */}
+      {(segments.length > 0 || timelineEvents.length > 0) && (
+        <MiniTimeline
+          segments={segments}
+          events={timelineEvents}
+          liveState={liveCodingState}
+          totalDurationMs={Math.max(elapsedSec * 1000, 60000)}
+          elapsedMs={elapsedSec * 1000}
+        />
+      )}
+    </div>
       )}
 
       {/* 设备抽屉 */}

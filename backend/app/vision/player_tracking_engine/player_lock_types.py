@@ -11,6 +11,11 @@ from app.schemas.tracking import PlayerIdentityDiagnostic
 class PlayerLockConfig:
     fps: float = 30.0
     target_player_count: int = 4
+    near_side_quota: int = 2
+    far_side_quota: int = 2
+    allow_quota_fallback: bool = True
+    fallback_promotion_frames: int = 90
+    fallback_replacement_margin: float = 1.15
     bootstrap_min_frames: int = 60
     bootstrap_max_frames: int = 180
     min_observed_frames: int = 8
@@ -43,6 +48,7 @@ class PlayerSlot:
     last_image_footpoint: list[float] | None = None
 
     side_hint: str | None = None
+    assignment_side: str | None = None
     confidence_ema: float = 0.0
     appearance_descriptor: list[float] | None = None
 

@@ -19,6 +19,8 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any, List, Literal, Optional
 
+from app.schemas.analysis import MatchAnalysisContext
+
 from pydantic import BaseModel, Field, field_validator
 
 # 从 calibration 模块导入"图像坐标点"模型（x, y 的二维点）。
@@ -662,6 +664,9 @@ class PlayerTrajectoryArtifact(BaseModel):
     diagnostics: list[PlayerIdentityDiagnostic] = Field(default_factory=list)
     # 覆盖率诊断（可选，可能还没计算）
     coverage: Optional[PlayerTrajectoryCoverageDiagnostics] = None
+    # 比赛分析上下文
+    match_context: Optional[MatchAnalysisContext] = None
+    observed_player_count: Optional[int] = None
 
 
 class BoundingBox(BaseModel):

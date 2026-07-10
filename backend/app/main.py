@@ -12,6 +12,9 @@ from app.api.routes_field_sessions import router as field_sessions_router
 from app.api.routes_recording import router as recording_router
 from app.api.routes_sync_recording import router as sync_recording_router
 from app.api.routes_timeline_events import router as timeline_events_router
+from app.api.routes_coding_actions import router as coding_actions_router
+from app.api.routes_segment_editing import router as segment_editing_router
+from app.api.routes_segment_editing import router2 as analysis_batch_router
 from app.api.routes_video import router as video_router
 # 导入配置和日志设置
 from app.core.config import get_settings
@@ -50,6 +53,9 @@ app.include_router(sync_recording_router)
 app.include_router(analysis_router)
 app.include_router(field_sessions_router)
 app.include_router(timeline_events_router)
+app.include_router(coding_actions_router)
+app.include_router(segment_editing_router)
+app.include_router(analysis_batch_router)
 
 # 挂载双摄短录测试首帧静态目录
 _TEST_FRAMES_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), "data", "sync-recordings", "tests")

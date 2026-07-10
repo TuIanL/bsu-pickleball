@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text, ForeignKey
+from sqlalchemy import Boolean, DateTime, Enum, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -45,6 +45,7 @@ class SessionTimelineEvent(Base):
         String(64), ForeignKey("field_sessions.id"), nullable=False, index=True
     )
     recording_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    capture_take_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     timestamp_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     occurred_at: Mapped[datetime] = mapped_column(
@@ -61,6 +62,7 @@ class SessionTimelineEvent(Base):
     label: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    is_undone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

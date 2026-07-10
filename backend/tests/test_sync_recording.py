@@ -9,6 +9,7 @@ import os
 import sys
 import pytest
 from pathlib import Path
+from pydantic import ValidationError
 
 
 # ── FFmpeg 可用性检查 ──
@@ -137,7 +138,31 @@ class TestSyncModels:
         assert req.cam_1_id == "cam_a"
         assert req.cam_2_id == "cam_b"
         assert req.cam_1_angle == "baseline_high"  # 默认值
-        assert req.fps == 30  # 默认值
+        assert req.fps == 60  # 默认值
+
+    def test_recording_start_request_fps_cap(self):
+        """验证单摄录制 FPS 默认值和上限"""
+        from app.camera.models import RecordingStartRequest
+        req = RecordingStartRequest(camera_id="cam_a")
+        assert req.fps == 60
+
+        explicit = RecordingStartRequest(camera_id="cam_a", fps=60)
+        assert explicit.fps == 60
+
+        with pytest.raises(ValidationError):
+            RecordingStartRequest(camera_id="cam_a", fps=61)
+
+    def test_sync_start_request_fps_cap(self):
+        """验证双摄录制 FPS 默认值和上限"""
+        from app.camera.models import SyncStartRequest
+        req = SyncStartRequest(cam_1_id="cam_a", cam_2_id="cam_b")
+        assert req.fps == 60
+
+        explicit = SyncStartRequest(cam_1_id="cam_a", cam_2_id="cam_b", fps=60)
+        assert explicit.fps == 60
+
+        with pytest.raises(ValidationError):
+            SyncStartRequest(cam_1_id="cam_a", cam_2_id="cam_b", fps=61)
 
     def test_sync_test_request_validation(self):
         """验证 SyncTestRequest 模型"""

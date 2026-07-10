@@ -37,7 +37,7 @@ class Recorder:
         output_path: Path,
         username: str | None = None,
         password: str | None = None,
-        fps: int = 90,
+        fps: int = 60,
         resolution: str = "1920x1080",
         on_exit: OnExitCallback | None = None,
     ) -> None:
@@ -58,7 +58,7 @@ class Recorder:
                 url = f"{parsed[0]}://{username}:{password}@{parsed[1]}"
 
         # 组装 FFmpeg 命令行参数。
-        # 单摄训练素材优先保留摄像头原始码流：重新编码 1080p/90fps 很容易
+        # 单摄训练素材优先保留摄像头原始码流：重新编码 1080p/高帧率很容易
         # 让本机 CPU 追不上，FFmpeg 随后用重复帧补齐恒定帧率，肉眼会看到
         # 周期性卡顿。这里不再强制 -r/-vsync，而是让摄像头自己决定真实帧率。
         cmd = [
@@ -69,7 +69,7 @@ class Recorder:
             "-i", url,                         # 输入：视频流地址
             "-map", "0:v:0",                   # 只录第一路视频
             "-an",                              # 不录音频
-            "-c:v", "copy",                    # 不重编码，避免 90fps 软件编码卡顿
+            "-c:v", "copy",                    # 不重编码，避免高帧率软件编码卡顿
             "-fps_mode", "passthrough",        # 保留输入帧时间戳，不补帧/丢帧
             "-movflags", "+faststart",         # MP4 moov atom 前置，支持快速打开
             "-y",                              # 输出文件已存在则覆盖

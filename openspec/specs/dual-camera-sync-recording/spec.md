@@ -97,3 +97,40 @@
 #### Scenario: 查询已完成双摄录制
 - **WHEN** 前端查询已完成的双摄会话
 - **THEN** 系统返回开始时间、停止时间、总时长、所有分段摘要、主机位视频引用和副机位素材引用
+
+### Requirement: 双摄同步录制 FPS 上限
+系统 SHALL 将双摄同步录制的默认 FPS 和最高允许 FPS 设为 60fps。
+
+#### Scenario: 双摄同步录制默认 60fps
+- **WHEN** 用户打开双摄同步录制控制台且未手动修改视频帧率
+- **THEN** FPS 控件 MUST 默认显示 60fps
+- **AND** 开始同步录制请求 MUST 使用 `fps=60`
+
+#### Scenario: 双摄同步录制选项最高为 60fps
+- **WHEN** 用户查看双摄同步录制 FPS 控件
+- **THEN** 控件 MUST 提供 60fps 选项
+- **AND** 控件 MUST NOT 提供 90fps 或 120fps 选项
+
+#### Scenario: 双摄同步录制 API 拒绝超过 60fps
+- **WHEN** 客户端提交 `POST /api/sync-recordings/start` 且 `fps > 60`
+- **THEN** 系统 MUST 拒绝该请求
+- **AND** 系统 MUST NOT 创建双摄同步录制会话
+- **AND** 系统 MUST NOT 启动任何 FFmpeg 录制进程
+
+### Requirement: 双摄录制创建 CaptureTake
+
+系统 MUST 在双摄录制启动时自动创建 CaptureTake 记录，支持事件打点。
+
+#### Scenario: 双摄录制创建 CaptureTake
+
+- **WHEN** 双摄同步录制启动成功
+- **THEN** 系统 SHALL 创建 CaptureTake
+- **AND** SHALL 为每个摄像头创建 CaptureTrack（含 offset_source/sync_quality）
+- **AND** 响应 SHALL 包含 capture_take_id
+
+#### Scenario: 双摄事件打点
+
+- **WHEN** 用户处于双摄录制状态
+- **THEN** 前端 SHALL 显示事件打点按钮
+- **AND** 事件 SHALL 关联 CaptureTake
+- **AND** timestamp_ms SHALL 相对 CaptureTake 开始时间

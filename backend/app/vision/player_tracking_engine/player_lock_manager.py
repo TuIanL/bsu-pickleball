@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
 from math import hypot
@@ -89,14 +90,25 @@ class PlayerLockManager:
                 if self._handle_lost_slot(slot, frame_index, positions, reconnect_candidates, track_hints, diagnostics) == "recovered":
                     newly_locked.append(slot.identity_id)
 
-            elif slot.state in {"searching", "tentative"}:
+            elif slot.state in {"searching", "tentative", "fallback_tentative"}:
                 if not self._bootstrap_complete:
                     continue
                 matched = self._find_new_candidate(slot, positions, locked_track_ids | reconnect_candidates)
                 if matched is not None:
+                    if slot.state == "fallback_tentative" and self._can_replace_fallback(slot, matched.track_id, matched.confidence):
+                        diagnostics.append(PlayerIdentityDiagnostic(
+                            frame_index=frame_index,
+                            event="side_quota_fallback_replaced",
+                            player_id=slot.identity_id,
+                            track_id=matched.track_id,
+                            reason=f"fallback_replaced; old_track={slot.current_track_id}",
+                            court_position_m=list(matched.court_position) if matched.court_position else None,
+                        ))
+                        slot.state = "searching"
+                        slot.current_track_id = None
                     self._try_lock_slot(slot, matched, frame_index, locked_track_ids, track_hints, diagnostics, newly_locked)
 
-        eligible_track_ids = suggested_ids | locked_track_ids | reconnect_candidates
+        eligible_track_ids = locked_track_ids | reconnect_candidates
 
         player_states = {
             slot.identity_id: slot.state
@@ -119,6 +131,66 @@ class PlayerLockManager:
                 result.add(slot.current_track_id)
         return result
 
+    @property
+    def near_occupancy(self) -> int:
+        return sum(
+            1 for slot in self.slots.values()
+            if slot.assignment_side == "near"
+            and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
+        )
+
+    @property
+    def far_occupancy(self) -> int:
+        return sum(
+            1 for slot in self.slots.values()
+            if slot.assignment_side == "far"
+            and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
+        )
+
+    def _side_has_capacity(self, side: str | None) -> bool:
+        if side == "near":
+            return self.near_occupancy < self.config.near_side_quota
+        if side == "far":
+            return self.far_occupancy < self.config.far_side_quota
+        return False
+
+    def _assign_candidate_to_slot(
+        self,
+        slot: PlayerSlot,
+        track_id: int,
+        side: str | None,
+        frame_index: int,
+        confidence: float,
+        observed_frames: int,
+    ) -> None:
+        if side and not self._side_has_capacity(side):
+            self._track_to_slot.pop(track_id, None)
+            return
+        slot.current_track_id = track_id
+        if track_id not in slot.track_id_history:
+            slot.track_id_history.append(track_id)
+        slot.assignment_side = side
+        slot.last_seen_frame = frame_index
+        slot.confidence_ema = 0.7 * slot.confidence_ema + 0.3 * confidence
+        slot.observed_frames = observed_frames
+        self._track_to_slot[track_id] = slot.identity_id
+        if slot.state in ("searching", "fallback_tentative"):
+            slot.state = "tentative"
+            if slot.observed_frames >= self.config.lock_min_hits:
+                slot.state = "locked"
+                slot.locked_since_frame = frame_index
+                slot.lost_frames = 0
+
+    def _can_replace_fallback(
+        self,
+        fallback_slot: PlayerSlot,
+        new_track_id: int,
+        new_confidence: float,
+    ) -> bool:
+        if fallback_slot.state != "fallback_tentative":
+            return False
+        return new_confidence > fallback_slot.confidence_ema * self.config.fallback_replacement_margin
+
     # ---------- bootstrap ----------
 
     def _run_bootstrap(self, frame_index: int, positions: Sequence[PlayerFramePosition]) -> None:
@@ -132,7 +204,7 @@ class PlayerLockManager:
         for pos in positions:
             if not pos.valid or pos.court_position is None:
                 continue
-            if not self._is_in_near_court_area(pos.court_position, self.config.bootstrap_court_margin_ft):
+            if not self._is_in_court_neighborhood(pos.court_position, self.config.bootstrap_court_margin_ft):
                 continue
             tl = self._bootstrap_tracklets.setdefault(pos.track_id, _BootstrapTracklet())
             tl.frame_indices.append(frame_index)
@@ -142,76 +214,104 @@ class PlayerLockManager:
                 tl.court_ys.append(pos.court_position[1])
 
     def _try_early_lock(self, frame_index: int) -> None:
+        half_length = self.court.length_ft / 2.0
         for track_id, tl in list(self._bootstrap_tracklets.items()):
             if len(tl.frame_indices) < self.config.min_observed_frames:
                 continue
             if tl.mean_confidence() < self.config.searching_conf:
                 continue
+            side = tl.inferred_side(half_length)
+            if side and not self._side_has_capacity(side):
+                continue
             for slot in self.slots.values():
                 if slot.state != "searching":
                     continue
-                slot.state = "tentative"
-                slot.current_track_id = track_id
-                slot.track_id_history = [track_id]
-                slot.last_seen_frame = frame_index
-                slot.confidence_ema = tl.mean_confidence()
-                slot.observed_frames = len(tl.frame_indices)
-                if slot.observed_frames >= self.config.lock_min_hits:
-                    slot.state = "locked"
-                    slot.locked_since_frame = frame_index
-                    slot.lost_frames = 0
-                self._track_to_slot[track_id] = slot.identity_id
+                self._assign_candidate_to_slot(
+                    slot=slot,
+                    track_id=track_id,
+                    side=side,
+                    frame_index=frame_index,
+                    confidence=tl.mean_confidence(),
+                    observed_frames=len(tl.frame_indices),
+                )
                 break
 
     def _finalize_bootstrap(self, frame_index: int) -> None:
-        candidates: list[tuple[int, _BootstrapTracklet]] = []
+        half_length = self.court.length_ft / 2.0
+        near_candidates: list[tuple[int, _BootstrapTracklet]] = []
+        far_candidates: list[tuple[int, _BootstrapTracklet]] = []
+        unknown_candidates: list[tuple[int, _BootstrapTracklet]] = []
         for track_id, tl in self._bootstrap_tracklets.items():
             if len(tl.frame_indices) < self.config.min_observed_frames:
                 continue
             if tl.mean_confidence() < self.config.searching_conf:
                 continue
-            candidates.append((track_id, tl))
-        candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
+            side = tl.inferred_side(half_length)
+            if side == "near":
+                near_candidates.append((track_id, tl))
+            elif side == "far":
+                far_candidates.append((track_id, tl))
+            else:
+                unknown_candidates.append((track_id, tl))
+        near_candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
+        far_candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
+        unknown_candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
 
         assigned: set[int] = set()
         for slot in self.slots.values():
             if slot.state != "searching":
                 assigned.add(slot.current_track_id or -1)
-                continue
-        for track_id, tl in candidates:
+
+        def _try_assign(track_id: int, tl: _BootstrapTracklet, side: str | None) -> bool:
             if track_id in assigned:
-                continue
+                return False
+            if side and not self._side_has_capacity(side):
+                return False
             for slot in self.slots.values():
                 if slot.state != "searching":
                     continue
-                slot.state = "tentative"
-                slot.current_track_id = track_id
-                slot.track_id_history = [track_id]
-                slot.last_seen_frame = frame_index
-                slot.confidence_ema = tl.mean_confidence()
-                slot.observed_frames = len(tl.frame_indices)
-                if slot.observed_frames >= self.config.lock_min_hits:
-                    slot.state = "locked"
-                    slot.locked_since_frame = frame_index
-                    slot.lost_frames = 0
-                self._track_to_slot[track_id] = slot.identity_id
-                self._assign_side_hint(slot, tl)
+                self._assign_candidate_to_slot(
+                    slot=slot,
+                    track_id=track_id,
+                    side=side,
+                    frame_index=frame_index,
+                    confidence=tl.mean_confidence(),
+                    observed_frames=len(tl.frame_indices),
+                )
                 assigned.add(track_id)
-                break
-        self._bootstrap_complete = True
+                return True
+            return False
 
-    def _assign_side_hint(self, slot: PlayerSlot, tl: _BootstrapTracklet) -> None:
-        if not tl.court_xs or not tl.court_ys:
-            return
-        mean_x = sum(tl.court_xs) / len(tl.court_xs)
-        mean_y = sum(tl.court_ys) / len(tl.court_ys)
-        side = "near" if mean_y < self.court.length_ft / 2.0 else "far"
-        left_right = "left" if mean_x < self.court.width_ft / 2.0 else "right"
-        slot.side_hint = f"{side}_{left_right}"
+        for track_id, tl in near_candidates:
+            _try_assign(track_id, tl, "near")
+        for track_id, tl in far_candidates:
+            _try_assign(track_id, tl, "far")
+        for track_id, tl in unknown_candidates:
+            _try_assign(track_id, tl, None)
+
+        remaining_searching = sum(1 for s in self.slots.values() if s.state == "searching")
+        if remaining_searching > 0 and self.config.allow_quota_fallback:
+            for track_id, tl in near_candidates + far_candidates + unknown_candidates:
+                if track_id in assigned:
+                    continue
+                for slot in self.slots.values():
+                    if slot.state != "searching":
+                        continue
+                    slot.state = "fallback_tentative"
+                    slot.current_track_id = track_id
+                    slot.track_id_history = [track_id]
+                    slot.last_seen_frame = frame_index
+                    slot.confidence_ema = tl.mean_confidence()
+                    slot.observed_frames = len(tl.frame_indices)
+                    slot.assignment_side = tl.inferred_side(half_length)
+                    self._track_to_slot[track_id] = slot.identity_id
+                    assigned.add(track_id)
+                    break
+        self._bootstrap_complete = True
 
     # ---------- spatial gating ----------
 
-    def _is_in_near_court_area(self, court_position: list[float], margin_ft: float) -> bool:
+    def _is_in_court_neighborhood(self, court_position: list[float], margin_ft: float) -> bool:
         x, y = court_position[0], court_position[1]
         return (
             -margin_ft <= x <= self.court.width_ft + margin_ft
@@ -223,12 +323,12 @@ class PlayerLockManager:
             return "inside_court"
         margin = self.config.court_margin_ft
         if slot_state in {"locked", "lost"}:
-            if self._is_in_near_court_area(court_position, margin):
+            if self._is_in_court_neighborhood(court_position, margin):
                 return "near_court_area"
             if self.court.is_in_tracking_bounds(court_position[0], court_position[1]):
                 return "tracking_area"
         else:
-            if self._is_in_near_court_area(court_position, margin):
+            if self._is_in_court_neighborhood(court_position, margin):
                 return "near_court_area"
         return "outside"
 
@@ -269,6 +369,7 @@ class PlayerLockManager:
             "locked": self.config.locked_conf,
             "lost": self.config.locked_conf,
             "inactive": 1.0,
+            "fallback_tentative": self.config.searching_conf,
         }
         return thresholds.get(state, self.config.searching_conf)
 
@@ -305,7 +406,14 @@ class PlayerLockManager:
         locked_track_ids: set[int], track_hints: dict[int, str],
         diagnostics: list[PlayerIdentityDiagnostic], newly_locked: list[str],
     ) -> None:
+        half_length = self.court.length_ft / 2.0
+        if pos.court_position is not None:
+            side = "near" if pos.court_position[1] < half_length else "far"
+            if slot.assignment_side is None:
+                slot.assignment_side = side
         if slot.state == "searching":
+            if slot.assignment_side and not self._side_has_capacity(slot.assignment_side):
+                return
             slot.observed_frames = 1
             if slot.observed_frames >= self.config.plausible_min_hits:
                 slot.state = "tentative"
@@ -322,6 +430,18 @@ class PlayerLockManager:
                     player_id=slot.identity_id,
                     track_id=pos.track_id,
                     reason=f"consecutive_hits={slot.observed_frames}",
+                    court_position_m=list(pos.court_position) if pos.court_position else None,
+                ))
+        elif slot.state == "fallback_tentative":
+            slot.observed_frames += 1
+            if slot.observed_frames >= self.config.fallback_promotion_frames:
+                slot.state = "tentative"
+                diagnostics.append(PlayerIdentityDiagnostic(
+                    frame_index=frame_index,
+                    event="fallback_tentative_promoted",
+                    player_id=slot.identity_id,
+                    track_id=pos.track_id,
+                    reason=f"fallback_promotion_frames={slot.observed_frames}",
                     court_position_m=list(pos.court_position) if pos.court_position else None,
                 ))
         locked_track_ids.add(pos.track_id)
@@ -458,6 +578,8 @@ def _norm(vector: list[float]) -> float:
 
 @dataclass
 class _BootstrapTracklet:
+    SIDE_DEAD_ZONE_FT = 2.0
+
     frame_indices: list[int] = field(default_factory=list)
     confidences: list[float] = field(default_factory=list)
     court_xs: list[float] = field(default_factory=list)
@@ -465,3 +587,11 @@ class _BootstrapTracklet:
 
     def mean_confidence(self) -> float:
         return sum(self.confidences) / len(self.confidences) if self.confidences else 0.0
+
+    def inferred_side(self, half_length: float) -> str | None:
+        if not self.court_ys:
+            return None
+        median_y = statistics.median(self.court_ys)
+        if abs(median_y - half_length) < self.SIDE_DEAD_ZONE_FT:
+            return None
+        return "near" if median_y < half_length else "far"

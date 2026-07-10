@@ -23,9 +23,10 @@ from math import hypot
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from app.schemas.analysis import MatchAnalysisContext, MatchFormat, build_match_context, build_player_group_profile
 from app.schemas.calibration import CalibrationKeypoint, ImagePoint
 from app.schemas.court_view import CourtViewRoiArtifact, CourtViewThresholds
-from app.schemas.metrics import PerformanceMetrics
+from app.schemas.metrics import MetricStatus, PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
 from app.schemas.events import ServeDebugArtifactRefs, ServeEventsArtifact
@@ -252,6 +253,12 @@ class _TrackingRunOutput:
     player_multitarget_detections: list[MultiTargetDetection] = field(default_factory=list)
     calibration_diagnostics_path: str | None = None
     render_trajectory: list[dict[str, Any]] | None = None
+    requested_clip: dict[str, int] | None = None
+    decoded_range: dict[str, int] | None = None
+
+
+class PipelineConfigurationError(ValueError):
+    ...
 
 
 class AnalysisPipeline:
@@ -306,20 +313,7 @@ class AnalysisPipeline:
             max_speed_ft_s=30.0,
             max_gap_frames=10,
         )
-        # 主球员选择器：把一堆轨迹里挑出"目标球员"，参数全部来自配置
-        self.primary_player_selector = primary_player_selector or PrimaryPlayerSelector(
-            min_confidence=self.settings.primary_player_min_confidence,
-            max_subjects=self.settings.primary_player_max_subjects,
-            min_box_area_ratio=self.settings.primary_player_min_box_area_ratio,
-            max_box_area_ratio=self.settings.primary_player_max_box_area_ratio,
-            court_margin_ft=self.settings.primary_player_court_margin_ft,
-            window_frames=self.settings.primary_player_window_frames,
-            target_court_threshold=self.settings.primary_player_target_court_threshold,
-            quality_threshold=self.settings.primary_player_quality_threshold,
-            attention_enabled=self.settings.enable_attention_player_selector,
-            attention_model_path=self.settings.attention_player_selector_model_path,
-            attention_confidence_threshold=self.settings.attention_player_selector_confidence,
-        )
+        # 主球员选择器：不再在 __init__ 中创建，改为在 _run_tracking 中按赛制创建
         # 姿态估计器：按配置创建 RTMPose26 适配器，关闭时设为 None
         self.pose_estimator = pose_estimator or (
             RTMPose26Adapter(
@@ -381,13 +375,23 @@ class AnalysisPipeline:
         frame_stride: int | None = None,
         source_fps: float | None = None,
         court_view_match_threshold: float | None = None,
+        match_context: MatchAnalysisContext | None = None,
         progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
+        clip_start_ms: int | None = None,
+        clip_end_ms: int | None = None,
     ) -> AnalysisPipelineResult:
         # 流水线主入口。根据"有没有视频 / 有没有标定"分三条路径：
         #   A) 有视频 + 有标定 → 跑真实跟踪（最完整）
         #   B) 有视频 + 无标定 → 只做有限阶段（跳过需要标定的部分）
         #   C) 无视频（demo）→ 返回确定性 mock 轨迹
+        match_ctx = match_context or build_match_context(None)
+        if match_ctx.expected_player_count > self.settings.player_analysis_hard_limit:
+            raise PipelineConfigurationError(
+                f"系统球员分析容量不足：比赛需要 {match_ctx.expected_player_count} 人，"
+                f"配置上限 {self.settings.player_analysis_hard_limit} 人"
+            )
+
         stages: list[PipelineStageResult] = []
         ball_run_output: _BallRunOutput | None = None
         ball_fields = _BallArtifactFields()
@@ -505,8 +509,11 @@ class AnalysisPipeline:
                     frame_stride=frame_stride or self.frame_stride,
                     source_fps=source_fps,
                     court_view_match_threshold=court_view_match_threshold,
+                    match_context=match_ctx,
                     progress_callback=progress_callback,
                     cancellation_token=cancellation_token,
+                    clip_start_ms=clip_start_ms,
+                    clip_end_ms=clip_end_ms,
                 )
             except Exception as exc:
                 # 跟踪阶段抛异常 → 整个任务失败
@@ -862,7 +869,7 @@ class AnalysisPipeline:
 
         # 计算运动指标（附加球分析摘要）
         _ball_metrics = self._build_ball_metrics_summary(ball_run_output)
-        metrics = self._compute_metrics(tracks, ball_metrics=_ball_metrics)
+        metrics = self._compute_metrics(tracks, ball_metrics=_ball_metrics, match_context=match_ctx)
         metrics_stage = self._stage("metrics", "运动指标", "done", "已计算距离、速度、厨房区、双打间距和热力图")
         stages.append(metrics_stage)
         self._notify_progress(progress_callback, metrics_stage)
@@ -982,6 +989,8 @@ class AnalysisPipeline:
                 court_view_roi_detail=court_view_roi_detail,
             ),
             message=message,
+            match_context=match_ctx,
+            observed_player_count=len({t.player_id for t in tracks if t.player_id}),
         )
         self._write_result(result)
         return result
@@ -1385,8 +1394,11 @@ class AnalysisPipeline:
         frame_stride: int,
         source_fps: float | None = None,
         court_view_match_threshold: float | None = None,
+        match_context: MatchAnalysisContext | None = None,
         progress_callback: ProgressCallback | None = None,
         cancellation_token: CancellationToken | None = None,
+        clip_start_ms: int | None = None,
+        clip_end_ms: int | None = None,
     ) -> _TrackingRunOutput:
         # 真正的"逐帧跟踪"循环（只在 路径A 调用）。
         try:
@@ -1406,6 +1418,34 @@ class AnalysisPipeline:
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+        # ── 时间裁剪 + 预热区间 ──
+        pre_roll_ms = self.settings.pre_roll_ms if hasattr(self.settings, 'pre_roll_ms') else 1500
+        post_roll_ms = self.settings.post_roll_ms if hasattr(self.settings, 'post_roll_ms') else 500
+        video_duration_ms = int((frame_count / fps) * 1000) if fps > 0 else 0
+        decode_start_ms = 0
+        decode_end_ms = video_duration_ms
+        clip_applied = False
+
+        if clip_start_ms is not None and clip_end_ms is not None:
+            clip_applied = True
+            decode_start_ms = max(0, clip_start_ms - pre_roll_ms)
+            decode_end_ms = min(video_duration_ms, clip_end_ms + post_roll_ms)
+            # 半开区间校验
+            if clip_start_ms < 0 or clip_end_ms <= clip_start_ms:
+                raise ValueError(f"无效 clip 范围: [{clip_start_ms}, {clip_end_ms})")
+            decode_start_frame = int((decode_start_ms / 1000.0) * fps)
+            decode_end_frame = int((decode_end_ms / 1000.0) * fps)
+            clip_start_frame = int((clip_start_ms / 1000.0) * fps)
+            clip_end_frame = int((clip_end_ms / 1000.0) * fps)
+            # Seek 到解码起始帧
+            capture.set(cv2.CAP_PROP_POS_FRAMES, decode_start_frame)
+            frame_index = decode_start_frame
+            # 调整 frame_count 用于进度百分比
+            adjusted_frame_count = decode_end_frame - decode_start_frame
+        else:
+            frame_index = 0
+            adjusted_frame_count = frame_count
         # 球场视角（court-view）相关评分器/状态机/阈值
         # 支持任务级覆盖 court_view_match_threshold
         effective_match_threshold = (
@@ -1519,14 +1559,34 @@ class AnalysisPipeline:
         player_lock_lost_max_frames_locked = frames_for_seconds(self.settings.player_lock_lost_max_seconds_locked, fps)
         ball_stationary_blacklist_frames = frames_for_seconds(self.settings.ball_stationary_blacklist_seconds, fps)
         self.position_smoother.max_gap_frames = frames_for_seconds(10.0 / 30.0, fps)
-        primary_player_selector = self.primary_player_selector
-        primary_player_selector.config.window_frames = primary_player_window_frames
+        match_ctx = match_context or build_match_context(None)
+        group_profile = build_player_group_profile(match_ctx)
+        effective_player_count = min(
+            match_ctx.expected_player_count,
+            self.settings.player_analysis_hard_limit,
+        )
+        primary_player_selector = PrimaryPlayerSelector(
+            min_confidence=self.settings.primary_player_min_confidence,
+            max_subjects=effective_player_count,
+            min_box_area_ratio=self.settings.primary_player_min_box_area_ratio,
+            max_box_area_ratio=self.settings.primary_player_max_box_area_ratio,
+            court_margin_ft=self.settings.primary_player_court_margin_ft,
+            window_frames=primary_player_window_frames,
+            target_court_threshold=self.settings.primary_player_target_court_threshold,
+            quality_threshold=self.settings.primary_player_quality_threshold,
+            attention_enabled=self.settings.enable_attention_player_selector,
+            attention_model_path=self.settings.attention_player_selector_model_path,
+            attention_confidence_threshold=self.settings.attention_player_selector_confidence,
+            group_profile=group_profile,
+            near_side_quota=match_ctx.near_side_quota,
+            far_side_quota=match_ctx.far_side_quota,
+        )
 
         tracker = self.tracker or MultiObjectTracker(max_lost=identity_lost_buffer_frames)
         # 球员身份管理器（把轨迹对应到稳定 player_id，处理重连/插值/跟丢）
         identity_manager = PlayerIdentityManager(
             PlayerIdentityConfig(
-                max_players=self.settings.player_identity_max_players,
+                max_players=effective_player_count,
                 fps=fps,
                 match_threshold=self.settings.player_identity_match_threshold,
                 max_reconnect_distance_m=self.settings.player_identity_max_reconnect_distance_m,
@@ -1543,7 +1603,9 @@ class AnalysisPipeline:
         player_lock_manager = PlayerLockManager(
             PlayerLockConfig(
                 fps=fps,
-                target_player_count=self.settings.player_lock_target_player_count,
+                target_player_count=effective_player_count,
+                near_side_quota=match_ctx.near_side_quota,
+                far_side_quota=match_ctx.far_side_quota,
                 bootstrap_min_frames=player_lock_bootstrap_min_frames,
                 bootstrap_max_frames=player_lock_bootstrap_max_frames,
                 min_observed_frames=self.settings.player_lock_min_observed_frames,
@@ -1595,12 +1657,23 @@ class AnalysisPipeline:
         render_events: list[CourtTrackEvent] = []
         render_identity_diagnostic_cursor = 0
 
-        frame_index = 0
+        if not clip_applied:
+            frame_index = 0
+
+        requested_clip = {}
+        decoded_range = {}
+        if clip_applied:
+            requested_clip = {"start_ms": clip_start_ms, "end_ms": clip_end_ms}
+            decoded_range = {"start_ms": decode_start_ms, "end_ms": decode_end_ms}
+
         try:
             while True:
                 self._check_cancelled(cancellation_token)
                 ok, frame = capture.read()
                 if not ok:
+                    break
+                # clip 范围终止
+                if clip_applied and frame_index > decode_end_frame:
                     break
                 # 按 stride 抽帧：不是目标帧就跳过
                 if frame_index % stride != 0:
@@ -1608,6 +1681,10 @@ class AnalysisPipeline:
                     continue
 
                 timestamp = frame_index / fps
+                # 标记帧是否为预热帧（pre-roll / post-roll context）
+                is_context_frame = clip_applied and (
+                    frame_index < clip_start_frame or frame_index > clip_end_frame
+                )
                 last_processed_frame_index = frame_index
                 last_processed_timestamp = timestamp
                 if processed_frame_count == 0 and self.settings.enable_court_view_gate:
@@ -1953,6 +2030,14 @@ class AnalysisPipeline:
             frame_stride=stride,
         )
         player_metric_tracks = identity_manager.to_projected_track_points(output_court_unit="ft")
+
+        # ── 过滤预热帧：仅保留 clip 范围内的 track points 用于指标计算 ──
+        if clip_applied and player_metric_tracks:
+            player_metric_tracks = [
+                pt for pt in player_metric_tracks
+                if clip_start_frame <= pt.frame_index <= clip_end_frame
+            ]
+
         player_selection = PlayerSelectionArtifact(
             job_id=job_id,
             video_id=video_id,
@@ -1963,7 +2048,7 @@ class AnalysisPipeline:
             ),
             selection_mode=primary_player_selector.last_selection_mode,  # type: ignore[arg-type]
             fallback_reason=primary_player_selector.last_fallback_reason,
-            participant_limit=self.settings.primary_player_max_subjects,
+            participant_limit=effective_player_count,
             diagnostics=selection_diagnostics,
             training_samples=selection_training_samples,
         )
@@ -2123,6 +2208,8 @@ class AnalysisPipeline:
             player_multitarget_detections=player_multitarget_detections,
             calibration_diagnostics_path=calibration_diagnostics_path,
             render_trajectory=render_output,
+            requested_clip=requested_clip,
+            decoded_range=decoded_range,
         )
 
     @staticmethod
@@ -2425,16 +2512,30 @@ class AnalysisPipeline:
         self,
         tracks: list[ProjectedTrackPoint],
         ball_metrics: dict[str, Any] | None = None,
+        match_context: MatchAnalysisContext | None = None,
     ) -> PerformanceMetrics:
         # 内部：根据投影轨迹点计算各项运动指标，可选地附加球分析摘要。
         metric_tracks = standard_court_metric_points(tracks)
         ball = ball_metrics or {}
+        ctx = match_context or build_match_context(None)
+        statuses: dict[str, MetricStatus] = {}
+        if ctx.enable_doubles_spacing:
+            spacing_result = doubles_spacing(metric_tracks)
+            statuses["doubles_spacing"] = MetricStatus(status="available")
+        else:
+            spacing_result = []
+            statuses["doubles_spacing"] = MetricStatus(
+                status="not_applicable",
+                reason="singles_match",
+                expected_player_count=ctx.expected_player_count,
+            )
         return PerformanceMetrics(
             distances=total_distances(metric_tracks),
             speeds=speed_summaries(metric_tracks),
             kitchen_dwell=kitchen_dwell(metric_tracks),
-            doubles_spacing=doubles_spacing(metric_tracks),
+            doubles_spacing=spacing_result,
             heatmap=generate_heatmap(metric_tracks),
+            metric_statuses=statuses,
             ball_detected_frame_count=ball.get("ball_detected_frame_count", 0),
             ball_detection_rate=ball.get("ball_detection_rate", 0.0),
             ball_trajectory_sample_count=ball.get("ball_trajectory_sample_count", 0),
@@ -2707,7 +2808,7 @@ class AnalysisPipeline:
             generated_at=datetime.now(timezone.utc),
             stages=stages or [self._stage("video-read", "读取视频", "failed", message)],
             tracks=[],
-            metrics=self._compute_metrics([]),
+            metrics=self._compute_metrics([], match_context=None),
             artifacts=AnalysisArtifacts(result_json_path=str(self.storage.output_json_path(job_id))),
             message=message,
         )

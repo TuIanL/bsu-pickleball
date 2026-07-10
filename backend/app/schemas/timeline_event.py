@@ -53,6 +53,7 @@ def _parse_payload_json(v: Any, *, allow_none: bool = False) -> dict[str, Any] |
 class TimelineEventCreate(BaseModel):
     """创建 Session Timeline Event 的请求体。"""
     recording_session_id: Optional[str] = Field(default=None, description="关联的录制会话 ID")
+    capture_take_id: Optional[str] = Field(default=None, description="关联的 CaptureTake ID")
     timestamp_ms: Optional[int] = Field(default=None, description="视频内时间戳（毫秒），未提交时后端兜底计算")
     occurred_at: Optional[datetime] = Field(default=None, description="真实世界时间")
     event_type: TimelineEventTypeStr = Field(..., description="事件类型")
@@ -148,6 +149,8 @@ class TimelineEventSummary(BaseModel):
     id: str
     field_session_id: str
     recording_session_id: Optional[str] = None
+    capture_take_id: Optional[str] = None
+    is_undone: bool = False
     timestamp_ms: int
     occurred_at: datetime
     event_type: str
@@ -172,6 +175,8 @@ class TimelineEventDetail(BaseModel):
     id: str
     field_session_id: str
     recording_session_id: Optional[str] = None
+    capture_take_id: Optional[str] = None
+    is_undone: bool = False
     timestamp_ms: int
     occurred_at: datetime
     event_type: str

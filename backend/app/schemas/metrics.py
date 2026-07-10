@@ -7,9 +7,17 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
+
+
+class MetricStatus(BaseModel):
+    """单个指标的评估状态——区分"不适用"和"未识别到"。"""
+    status: Literal["available", "not_applicable", "insufficient_players"]
+    reason: str = ""
+    expected_player_count: Optional[int] = None
+    observed_player_count: Optional[int] = None
 
 
 class DistanceMetric(BaseModel):
@@ -77,8 +85,9 @@ class PerformanceMetrics(BaseModel):
     distances: List[DistanceMetric]                       # 各球员移动距离
     speeds: List[SpeedSummary]                            # 各球员速度
     kitchen_dwell: List[ZoneDwellMetric]                  # 各球员厨房区停留
-    doubles_spacing: List[DoublesSpacingSummary]          # 双打间距
+    doubles_spacing: List[DoublesSpacingSummary]          # 双打间距（单打时为空数组，兼容旧消费者）
     heatmap: Heatmap                                     # 位置热力图
+    metric_statuses: Dict[str, MetricStatus] = Field(default_factory=dict)  # 各指标状态（旁路字段）
     # 球轨迹与弹跳点摘要（可选，来自球分析阶段）
     ball_detected_frame_count: int = 0                   # 球检测到的帧数
     ball_detection_rate: float = 0.0                      # 球检测率
