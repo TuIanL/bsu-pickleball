@@ -135,3 +135,84 @@ The backend SHALL expose diagnostics for identity assignment, reconnect, lost, i
 #### Scenario: 下游能力读取覆盖诊断
 - **WHEN** 发球检测消费 player trajectory artifact
 - **THEN** 它 SHALL 能读取或推导 trajectory 覆盖信息，并在覆盖不足时输出降级或诊断结果
+
+### Requirement: PlayerLockUpdate 驱动的 eligible_track_ids
+
+`_run_tracking()` 构建 `eligible_track_ids` 时 SHALL 消费 `PlayerLockManager.update()` 返回的 `PlayerLockUpdate` 结构，而非仅使用 `PrimaryPlayerSelector` 的 top 4 结果。`PlayerLockUpdate` 提供 `eligible_track_ids` 并集以及 `track_identity_hints` 映射。
+
+#### Scenario: PlayerLockUpdate 包含建议 + 锁定 + 重连候选
+
+- **WHEN** `PrimaryPlayerSelector` 建议 track_ids = {3, 7, 12, 15}
+- **AND** `PlayerLockManager` 已锁定 slot 包含 track_ids = {3, 4, 8}（4 为 LOST 恢复窗口中的 track）
+- **THEN** `PlayerLockUpdate.eligible_track_ids` SHALL = {3, 4, 7, 8, 12, 15}
+
+#### Scenario: track_identity_hints 告知身份管理器绑定关系
+
+- **WHEN** `PlayerLockManager` 确定 track_id=4 是 player_3 的 LOST 恢复候选
+- **THEN** `PlayerLockUpdate.track_identity_hints` SHALL 包含 `{4: "player_3"}`
+- **AND** `PlayerIdentityManager` 在 `_assign_player()` 中 SHALL 优先尝试绑定到 player_3
+
+#### Scenario: 已锁定 track 即使未进 top 4 也被保留
+
+- **WHEN** 远端球员 track_id=5 是已锁定的 `Player_4`，但本帧置信度低未进入 select() top 4
+- **AND** `PlayerLockManager` 的 LOCKED slot 中 `current_track_id=5`
+- **THEN** track_id=5 SHALL 仍在 `PlayerLockUpdate.eligible_track_ids` 中
+- **AND** `PlayerIdentityManager` SHALL 接收到该 track 的观测
+
+#### Scenario: 无锁定球员时不引入额外候选
+
+- **WHEN** `PlayerLockManager` 无任何 LOCKED/LOST slot（如 bootstrap 尚未完成）
+- **AND** `PrimaryPlayerSelector` 建议 track_ids = {1, 2, 3}
+- **THEN** `PlayerLockUpdate.eligible_track_ids` SHALL = {1, 2, 3}
+
+### Requirement: track 重连评分
+
+当已锁定球员的 track 断开后出现新 track，系统 SHALL 计算 reconnect_score 判断是否回连。首版 SHALL NOT 依赖外观特征。
+
+#### Scenario: 位置匹配贡献最高权重
+
+- **WHEN** 新候选的球场坐标距 Player_x 上次已知位置距离为 d
+- **THEN** position_score SHALL = max(0, 1 - d / max_reconnect_distance_ft)
+- **AND** position_score 在综合分中 SHALL 权重为 0.40
+
+#### Scenario: 运动预测权重
+
+- **WHEN** Player_x 有最近速度估计
+- **THEN** motion_prediction_score SHALL 基于预测位置与实际候选位置的匹配度计算
+- **AND** motion_prediction_score SHALL 权重为 0.30
+
+#### Scenario: 外观特征首版禁用
+
+- **WHEN** `player_lock_enable_appearance_score = False`（默认）
+- **THEN** 重连评分 SHALL 仅包含 position（0.40）+ motion（0.30）+ side（0.20）+ bbox_shape（0.10）
+- **AND** appearance_score 权重 SHALL 为 0.0
+
+#### Scenario: 总重连分达到阈值时回连
+
+- **WHEN** reconnect_score >= reconnect_threshold（默认 0.45）
+- **THEN** 系统 SHALL 将新 track 绑定到已有的 player identity
+- **AND** 状态 SHALL 从 LOST 恢复为 LOCKED
+- **AND** 诊断事件 SHALL 包含 `event: "player_reconnected_from_lost"` 及各分项 score
+
+### Requirement: 诊断事件扩展
+
+`PlayerIdentityDiagnostic` 的 `event` 字段 SHALL 扩展以支持锁定相关事件。
+
+#### Scenario: 新事件类型
+
+- **WHEN** `PlayerLockManager` 产生状态相关事件
+- **THEN** `event` 有效值 SHALL 包含：
+  - `"player_locked"` — 球员首次锁定
+  - `"player_reconnected_from_lost"` — 从 LOST 恢复
+  - `"player_reset_after_prolonged_loss"` — 长时间丢失后重置
+  - `"player_slot_filled"` — 空位被填充
+  - `"rejected_low_conf_unlocked"` — 未锁定低置信度拒绝
+  - `"rejected_outside_near_court"` — 超出近场区域拒绝
+  - `"rejected_outside_tracking"` — 超出跟踪区域拒绝
+  - `"rejected_bbox_size"` — bbox 尺寸不合规
+  - `"retained_by_lock"` — 因锁定状态而保留
+
+#### Scenario: reason 字段包含子项分
+
+- **WHEN** 产生 `"player_reconnected_from_lost"` 事件
+- **THEN** `reason` 字段 SHALL 包含各分项分数，格式如 `"position=0.82 motion=0.65 appearance=0.43 side=0.90 bbox=0.70"`

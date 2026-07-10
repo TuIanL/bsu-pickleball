@@ -42,15 +42,49 @@ The backend SHALL provide a replaceable `MultiObjectTracker` that accepts curren
 - **THEN** it can satisfy the same detection-in and track-out interface without changing projection, metrics, or pipeline result schemas
 
 ### Requirement: Footpoint estimation
-The backend SHALL provide a `FootpointEstimator` that estimates the player's image-space ground contact point from each tracked person bbox using bbox bottom-center for the MVP.
+
+后端 SHALL 提供 `FootpointEstimator`，从每帧跟踪球员框和可选姿态关键点估计图像空间地面接触点。估计 SHALL 采用 hybrid 策略：优先双踝中点、其次单踝、再膝外推，最后 fallback 到 bbox 底边中点；当 bbox 底边接近画面底部时 SHALL 降低基于 bbox 的估计置信度。
 
 #### Scenario: Bbox bottom center is estimated
-- **WHEN** the estimator receives bbox `[x1, y1, x2, y2]`
-- **THEN** it returns `image_footpoint` equal to `[(x1 + x2) / 2, y2]` with method `bbox_bottom_center`
+
+- **WHEN** 估计器接收 bbox `[x1, y1, x2, y2]` 且无姿态关键点可用
+- **AND** bbox y2 不接近画面底部（y2 <= frame_height * 0.94 或无 frame_shape）
+- **THEN** 返回 `image_footpoint` 等于 `[(x1 + x2) / 2, y2]`，method 为 `bbox_bottom_center`，confidence 为 0.7
+
+#### Scenario: 双踝关键点可用
+
+- **WHEN** 姿态关键点中左右踝（COCO 15/16）置信度均 >= 0.35
+- **THEN** 返回 method 为 `pose_ankle_midpoint`，confidence 为 min(左右踝置信度)
+- **AND** image_footpoint 为左右踝坐标均值
+
+#### Scenario: 单踝关键点可用
+
+- **WHEN** 仅一侧踝关键点置信度 >= 0.35
+- **THEN** 返回 method 为 `pose_ankle_single`，confidence 为该踝置信度
+- **AND** image_footpoint 为该踝坐标
+
+#### Scenario: 膝外推
+
+- **WHEN** 双膝关键点（COCO 13/14）置信度均 >= 0.4 且双踝均不可用
+- **THEN** 返回 method 为 `knee_extrapolated`，confidence 为 min(膝置信度) * 0.8
+- **AND** image_footpoint 基于膝中点向下外推计算
+
+#### Scenario: near-clip fallback
+
+- **WHEN** 无姿态关键点可用，且 bbox y2 > frame_height * 0.94
+- **THEN** 返回 method 为 `bbox_bottom_clipped`，confidence <= 0.35
+- **AND** image_footpoint 仍为 `[(x1 + x2) / 2, y2]`
+
+#### Scenario: 正常 bbox fallback
+
+- **WHEN** 无姿态关键点可用，且 bbox y2 <= frame_height * 0.94（或 frame_shape 为 None）
+- **THEN** 返回 method 为 `bbox_bottom_center`，confidence 为 0.7
+- **AND** image_footpoint 为 `[(x1 + x2) / 2, y2]`
 
 #### Scenario: Future footpoint strategy is selected
-- **WHEN** future pose or segmentation strategies are added
-- **THEN** the estimator interface can report `pose_ankle_average` or `segmentation_mask_bottom` without changing downstream projection output shape
+
+- **WHEN** 未来 pose 或 segmentation 策略被引入
+- **THEN** 估计器接口可以报告新的 method 值，而无需改变下游投影输出形状
 
 ### Requirement: Player footpoint projection
 The backend SHALL project tracked image footpoints through a CourtVision image-to-court homography into canonical pickleball court coordinates and emit frame-level player position records.
@@ -293,3 +327,41 @@ ROI-aware detection SHALL preserve source-frame coordinate semantics for trackin
 #### Scenario: 原始投影观测保留诊断价值
 - **WHEN** 分析结果包含处于跟踪容差内但标准球场边界外的投影观测
 - **THEN** tracking 或 player trajectory artifact 保留该观测的原始坐标，以便排查标定误差、脚点估计抖动或边界动作
+
+### Requirement: 空间门控三层区域
+
+系统 SHALL 基于已有 `PickleballCourtGeometry.court_bounds` 和 `PickleballCourtGeometry.tracking_bounds`，叠加自定义外扩，构建三层空间门控。
+
+```python
+# 所有值单位为英尺
+inside_court:
+  x: [0, 20], y: [0, 44]           # court_bounds（已有）
+
+near_court_area（新增）：
+  x: [-court_margin_x, 20+court_margin_x]
+  y: [-court_margin_y, 44+court_margin_y]
+  默认 court_margin_x=12, court_margin_y=12
+
+tracking_area：
+  x: [-4, 24], y: [-8, 52]         # tracking_bounds（已有）
+```
+
+#### Scenario: 新候选只能在 near_court_area 内初始化
+
+- **WHEN** 候选投影坐标在 near_court_area 之外（即 court_margin_ft 外）
+- **AND** 候选尚未被任何 player slot 锁定
+- **THEN** 候选 SHALL NOT 被用于初始化新的 player slot
+- **AND** 拒绝原因 SHALL 记录为 `rejected_outside_near_court_area`
+
+#### Scenario: 已锁定球员的候选使用 tracking_area
+
+- **WHEN** 候选已被某 LOCKED slot 关联
+- **AND** 候选投影坐标在 tracking_area 内
+- **THEN** 候选 SHALL 被接纳
+- **AND** 即使候选在 near_court_area 外但 tracking_area 内，仍被接纳
+
+#### Scenario: tracking_area 外的所有候选被拒绝
+
+- **WHEN** 候选投影坐标在 tracking_area 外
+- **THEN** 候选 SHALL 被拒绝
+- **AND** 拒绝原因 SHALL 记录为 `rejected_outside_tracking_area`

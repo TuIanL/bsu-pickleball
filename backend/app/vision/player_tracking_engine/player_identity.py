@@ -93,13 +93,16 @@ class PlayerIdentityManager:
         self.players: dict[str, PlayerState] = {}        # player_id -> 状态
         self.track_to_player: dict[int, str] = {}        # track_id -> player_id 映射
         self.diagnostics: list[PlayerIdentityDiagnostic] = []  # 诊断事件累积
+        self._current_hints: dict[int, str] = {}          # lock manager 提示
 
     def update(
         self,
         frame_index: int,
         positions: list[PlayerFramePosition],
         eligible_track_ids: set[int] | None = None,
+        track_identity_hints: dict[int, str] | None = None,
     ) -> list[PlayerTrajectorySample]:
+        self._current_hints = track_identity_hints or {}
         # 处理一帧：把有效位置转成观测，按资格过滤，再逐个分配到球员身份并产出轨迹样本。
         observations = [
             self._position_to_observation(position)
@@ -209,12 +212,19 @@ class PlayerIdentityManager:
         return sorted(points, key=lambda point: (point.timestamp_seconds, point.frame_index, point.track_id))
 
     def _assign_player(self, observation: PlayerObservation) -> PlayerState | None:
-        # 把一次观测分配到球员身份：1) 已有 track->player 映射直接复用；2) 还有空位则新建；
-        # 3) 否则在现有球员里找最佳候选（得分需超过阈值），否则返回 None。
+        # 1) 优先使用 lock manager 提供的 track_identity_hints
+        hinted_player_id = getattr(self, "_current_hints", {}).get(observation.track_id)
+        if hinted_player_id is not None and hinted_player_id in self.players:
+            player = self.players[hinted_player_id]
+            self.track_to_player[observation.track_id] = hinted_player_id
+            return player
+
+        # 2) 已有 track->player 映射直接复用
         player_id = self.track_to_player.get(observation.track_id)
         if player_id is not None and player_id in self.players:
             return self.players[player_id]
 
+        # 3) 还有空位则新建
         if len(self.players) < self.config.max_players:
             player_id = f"Player_{len(self.players) + 1}"
             player = PlayerState(player_id=player_id)
@@ -231,6 +241,7 @@ class PlayerIdentityManager:
             )
             return player
 
+        # 4) 否则在现有球员里找最佳候选
         player, score, reason = self._best_candidate(observation)
         if player is None or score < self.config.match_threshold:
             return None

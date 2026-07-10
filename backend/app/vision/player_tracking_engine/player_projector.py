@@ -48,6 +48,7 @@ class PlayerProjector:
         frame_index: int,
         timestamp: float,
         footpoints: Mapping[int, FootpointEstimate] | None = None,
+        frame_shape: tuple[int, int] | None = None,
     ) -> list[PlayerFramePosition]:
         # 把一帧内的多条轨迹投影成 PlayerFramePosition（含图像脚点、球场坐标、有效性）。
         positions: list[PlayerFramePosition] = []
@@ -55,7 +56,7 @@ class PlayerProjector:
         for track in tracks:
             # 优先使用外部传入的脚点估计；否则用默认估计器从 track 推算脚点。
             footpoint = footpoints.get(track.track_id) if footpoints is not None else None
-            footpoint = footpoint or self.footpoint_estimator.estimate(track)
+            footpoint = footpoint or self.footpoint_estimator.estimate(track, frame_shape=frame_shape)
             # 用单应矩阵把图像脚点映射到球场坐标（英尺）。
             court_x, court_y = image_to_court(footpoint.image_footpoint, homography)
             court_position = [float(court_x), float(court_y)]
@@ -85,6 +86,7 @@ class PlayerProjector:
                     is_inside_tracking_area=is_inside_tracking,
                     projection_status=status,
                     projection_confidence=footpoint.confidence,
+                    footpoint_metadata=footpoint.metadata,
                 )
             )
 

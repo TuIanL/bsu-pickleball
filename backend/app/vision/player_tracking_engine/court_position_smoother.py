@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 @dataclass
 class SmoothState:
-    track_id: int
+    key: str = ""
     smoothed_x: float = 0.0
     smoothed_y: float = 0.0
     last_frame: int = -1
@@ -32,7 +32,7 @@ class CourtPositionSmoother:
         self.alpha = alpha
         self.max_speed_ft_s = max_speed_ft_s
         self.max_gap_frames = max_gap_frames
-        self._states: dict[int, SmoothState] = {}
+        self._states: dict[str, SmoothState] = {}
 
     def update(
         self,
@@ -42,22 +42,23 @@ class CourtPositionSmoother:
         y_ft: float,
         timestamp: float,
         confidence: float | None = None,
+        identity_id: str | None = None,
     ) -> CourtPositionResult:
         _ = confidence
-        state = self._states.get(track_id)
+        key = identity_id if identity_id else f"track_{track_id}"
+
+        state = self._states.get(key)
         if state is None:
-            state = SmoothState(track_id=track_id, smoothed_x=x_ft, smoothed_y=y_ft, last_frame=frame_index, last_timestamp=timestamp, active=True)
-            self._states[track_id] = state
+            state = SmoothState(key=key, smoothed_x=x_ft, smoothed_y=y_ft, last_frame=frame_index, last_timestamp=timestamp, active=True)
+            self._states[key] = state
             return CourtPositionResult(x=x_ft, y=y_ft, smoothing_status="smoothed", raw_x=x_ft, raw_y=y_ft)
 
-        # Outlier detection
         if self._is_outlier(state, x_ft, y_ft, timestamp):
             state.outlier_count += 1
             state.last_frame = frame_index
             state.last_timestamp = timestamp
             return CourtPositionResult(x=state.smoothed_x, y=state.smoothed_y, smoothing_status="outlier_clamped", raw_x=x_ft, raw_y=y_ft)
 
-        # Gap handling
         gap = frame_index - state.last_frame - 1
         if gap > 0:
             if gap > self.max_gap_frames:
@@ -73,7 +74,6 @@ class CourtPositionSmoother:
             state.last_timestamp = timestamp
             return CourtPositionResult(x=state.smoothed_x, y=state.smoothed_y, smoothing_status="gap_hold", raw_x=x_ft, raw_y=y_ft)
 
-        # EMA smoothing
         state.smoothed_x = self.alpha * x_ft + (1.0 - self.alpha) * state.smoothed_x
         state.smoothed_y = self.alpha * y_ft + (1.0 - self.alpha) * state.smoothed_y
         state.last_frame = frame_index
@@ -90,8 +90,15 @@ class CourtPositionSmoother:
         speed = math.sqrt(dx * dx + dy * dy) / dt
         return speed > self.max_speed_ft_s
 
-    def reset_track(self, track_id: int) -> None:
-        self._states.pop(track_id, None)
+    def reset_track(self, track_id: int | None = None) -> None:
+        if track_id is not None:
+            key = f"track_{track_id}"
+            self._states.pop(key, None)
+        else:
+            self.reset_all()
+
+    def reset_identity(self, identity_id: str) -> None:
+        self._states.pop(identity_id, None)
 
     def reset_all(self) -> None:
         self._states.clear()

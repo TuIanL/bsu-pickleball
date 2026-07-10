@@ -74,3 +74,61 @@ TBD - created by archiving change add-court-aware-attention-player-selection. Up
 - **WHEN** selection mode 从 attention 回退到规则增强
 - **THEN** 诊断记录 fallback reason，且最终分析任务仍可完成
 
+### Requirement: PrimaryPlayerSelector 降级为建议器
+
+`PrimaryPlayerSelector.select()` SHALL 保持不变，继续作为候选排序器运行，但下游 SHALL 不再将其输出作为硬门控。调用方 SHALL 将其输出视为建议集合而非授权集合。
+
+#### Scenario: select() 仍然返回 top 4 建议
+
+- **WHEN** `PrimaryPlayerSelector.select()` 被调用
+- **THEN** 返回结果 SHALL 为 `list[PrimaryPlayerSelection]`，长度为 0 到 4
+- **AND** 结果按 `(score, rolling_confidence, confidence)` 降序排列
+
+#### Scenario: select() 不负责身份持久性
+
+- **WHEN** 已锁定球员 `Player_3` 的当前 track 本帧未进入 top 4
+- **THEN** `select()` SHALL 不将 `Player_3` 的 track 包含在结果中
+- **AND** 这 SHALL 不导致 `Player_3` 身份被释放（由 `PlayerLockManager` 负责）
+
+### Requirement: Bootstrap 阶段（动态窗口）
+
+bootstrap 使用动态窗口：有最短帧数和最长帧数，任意候选满足条件即提前锁定，不必等窗口完全结束。
+
+#### Scenario: bootstrap 阶段收集候选（最短窗口内）
+
+- **WHEN** `frame_index < bootstrap_min_frames`（默认 60）
+- **THEN** 系统 SHALL 收集所有在 near_court_area 内的 tracklet 统计信息
+- **AND** SHALL NOT 立即分配 player_1~player_4
+
+#### Scenario: 候选满足条件即提前锁定，不等窗口结束
+
+- **WHEN** `frame_index >= bootstrap_min_frames` 且未达 `bootstrap_max_frames`
+- **AND** 某候选连续 `lock_min_hits` 帧在 near_court_area 内且置信度 ≥ `bootstrap_min_conf`
+- **THEN** 该候选 SHALL 立即锁定（transition to LOCKED）
+- **AND** 未锁定 slot SHALL 继续 SEARCHING 直到 `bootstrap_max_frames`
+
+#### Scenario: bootstrap 最大窗口后强制选出主球员
+
+- **WHEN** `frame_index == bootstrap_max_frames`（默认 180）
+- **THEN** 系统 SHALL 从所有收集的候选 tracklet 中选出最多 `target_player_count` 个
+- **AND** 未满额空 slot SHALL 保持 SEARCHING
+- **AND** 后续帧中出现新候选时 SHALL 尝试填入空位
+
+#### Scenario: bootstrap 不足 target_player_count 人
+
+- **WHEN** bootstrap 结束后收集到 2 个符合资格的候选（target=4）
+- **THEN** 系统 SHALL 将 2 个候选分配为 Player_1、Player_2 并设为 LOCKED
+- **AND** Player_3、Player_4 SHALL 保持 SEARCHING
+- **AND** 后续帧中出现新候选时 SHALL 尝试填入空位
+
+#### Scenario: bootstrap 期间 candidate 必须靠近球场
+
+- **WHEN** bootstrap 期间候选投影坐标不在 near_court_area 内
+- **THEN** 候选 SHALL NOT 被纳入 bootstrap 统计
+
+#### Scenario: side_hint 仅作提示不绑死身份
+
+- **WHEN** bootstrap 结束分配 identity_id
+- **THEN** `side_hint` SHALL 基于预期球场位置设置（near_left / near_right / far_left / far_right）
+- **AND** 后续球员换位/走位时 `identity_id` SHALL 保持不变，`side_hint` SHALL 允许更新
+
