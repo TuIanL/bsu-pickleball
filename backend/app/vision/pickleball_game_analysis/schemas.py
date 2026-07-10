@@ -19,6 +19,14 @@ from typing import Any
 Point2D = tuple[float, float]
 
 
+class BallTrackState(Enum):
+    """球轨迹锁定状态机四状态。"""
+    SEARCHING = "searching"
+    TENTATIVE = "tentative"
+    LOCKED = "locked"
+    LOST = "lost"
+
+
 @dataclass(frozen=True)
 class BallCandidate:
     """
@@ -41,6 +49,31 @@ class BallCandidate:
     def image_xy(self) -> Point2D:
         """方便属性：把 x / y 打包成 (x, y) 元组，供距离计算等使用。"""
         return (float(self.image_x), float(self.image_y))
+
+
+@dataclass(frozen=True)
+class BallCandidateDebug:
+    """单个候选球的调试决策信息。"""
+
+    candidate_id: str
+    bbox: tuple[float, float, float, float] | None
+    raw_confidence: float
+    final_score: float
+    distance_to_prediction: float | None
+    jump_distance: float | None
+    passed_physics_gate: bool
+    rejection_reason: str | None
+
+
+@dataclass(frozen=True)
+class BallFrameDebug:
+    """单帧球追踪的完整调试信息（存入 BallFrameSample.diagnostics）。"""
+
+    track_state: str
+    predicted_position: Point2D | None
+    candidates: list = field(default_factory=list)
+    accepted_candidate_id: str | None = None
+    overall_decision: str = ""
 
 
 @dataclass(frozen=True)
@@ -67,6 +100,9 @@ class BallFrameSample:
     reject_reason: str | None = None     # 拒绝原因（accepted=False 时有意义）
     source: str = "detector"             # 数据来源标签
     in_bounds: bool | None = None        # 投影后的球场坐标是否在界内（可空）
+    track_state: str | None = None           # 当前帧轨迹锁定状态
+    predicted_position: Point2D | None = None  # 预测位置（LOCKED/LOST 缺失时输出）
+    overall_decision: str | None = None      # 最终决策标签
     diagnostics: dict[str, Any] = field(default_factory=dict)  # 调试信息
 
 

@@ -1,17 +1,25 @@
-"""Ball candidate filtering and trajectory continuity tracking."""
+"""Ball candidate filtering and trajectory continuity tracking with state-aware locking and physics gating."""
 
 from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import hypot
+from typing import Any
 
 import numpy as np
 
 from app.vision.pickleball_game_analysis.ball_detector_protocol import BallDetectorProtocol
 from app.vision.pickleball_game_analysis.court_adapter import BallCourtAdapter
-from app.vision.pickleball_game_analysis.schemas import BallCandidate, BallFrameSample, Point2D
+from app.vision.pickleball_game_analysis.schemas import (
+    BallCandidate,
+    BallCandidateDebug,
+    BallFrameDebug,
+    BallFrameSample,
+    BallTrackState,
+    Point2D,
+)
 
 
 @dataclass(frozen=True)
@@ -20,22 +28,51 @@ class BallTrackerConfig:
     球跟踪器超参数（全部带默认值，可调）。
 
     思路：先用"框尺寸/长宽比/ROI"过滤掉明显不是球的候选，
-    再用"轨迹连续性"（距离门限、预测门限、最大缺失帧）从剩余候选里挑最可信的一个。
+    再用"轨迹连续性"（动态距离门限、预测门限、最大缺失帧）从剩余候选里挑最可信的一个。
     """
 
-    confidence: float = 0.18                  # 调用检测器时的置信度阈值
-    trajectory_length: int = 30              # 保留的最近有效点数量（滑动窗口）
-    max_jump_pixels: float = 220.0           # 与上一个有效点的最大跳变（像素），超出视为不连续
-    prediction_gate_pixels: float = 260.0    # 与预测位置的偏差门限（像素），超出视为不连续
-    max_missing_frames: int = 5              # 允许连续缺失多少帧（超过则清空最后有效位置）
-    roi_padding_ratio: float = 0.08          # ROI 边距的放宽比例（在给定 ROI 外再扩一点）
-    max_box_area_ratio: float = 0.004        # 框面积占整帧比例上限（过大不像球）
-    max_aspect_ratio: float = 4.0            # 框宽高比上限（过长不像球）
-    court_bounds_margin_ft: float = 2.0      # 投影到球场后允许越界的容差（英尺）
-    stationary_window_frames: int = 30        # 静态误报检测窗口
-    stationary_radius_pixels: float = 5.0     # 窗口内都落在该半径内则视为固定物
-    stationary_blacklist_frames: int = 60     # 静止候选跨帧累计帧数，达到后加入永久黑名单
-    stationary_blacklist_grid_px: int = 5     # 静止黑名单坐标离散化精度（像素）
+    confidence: float = 0.18
+    trajectory_length: int = 30
+    max_jump_pixels: float = 220.0
+    prediction_gate_pixels: float = 260.0
+    max_missing_frames: int = 5
+    roi_padding_ratio: float = 0.08
+    max_box_area_ratio: float = 0.004
+    max_aspect_ratio: float = 4.0
+    court_bounds_margin_ft: float = 2.0
+    stationary_window_frames: int = 30
+    stationary_radius_pixels: float = 5.0
+    stationary_blacklist_frames: int = 60
+    stationary_blacklist_grid_px: int = 5
+
+    # Track lock state machine
+    tentative_min_hits: int = 2
+    lock_min_hits: int = 4
+    max_missing_frames_locked: int = 10
+
+    # Smoothed prediction
+    min_prediction_points: int = 3
+
+    # Dynamic physics gate
+    base_gate_pixels: float = 60.0
+    speed_factor: float = 1.5
+    missing_factor: float = 30.0
+    min_gate_pixels: float = 50.0
+    max_gate_pixels: float = 600.0
+
+    # Player motion context
+    player_motion_min_pixels: float = 15.0
+
+    # State-aware scoring weights
+    searching_confidence_weight: float = 1000.0
+    searching_distance_weight: float = 1.4
+    tentative_confidence_weight: float = 700.0
+    tentative_distance_weight: float = 2.0
+    locked_confidence_weight: float = 300.0
+    locked_distance_weight: float = 3.0
+    lost_confidence_weight: float = 300.0
+    lost_distance_weight: float = 3.0
+    lost_gate_multiplier: float = 1.5
 
 
 class BallTracker:
@@ -47,17 +84,18 @@ class BallTracker:
         config: BallTrackerConfig | None = None,
         court_adapter: BallCourtAdapter | None = None,
     ) -> None:
-        self.detector = detector                      # 底层球检测器（满足 BallDetectorProtocol）
-        self.config = config or BallTrackerConfig()   # 超参数
-        self.court_adapter = court_adapter or BallCourtAdapter()  # 图像→球场投影器
-        self.trajectory: deque[Point2D] = deque(maxlen=self.config.trajectory_length)  # 最近有效点队列
+        self.detector = detector
+        self.config = config or BallTrackerConfig()
+        self.court_adapter = court_adapter or BallCourtAdapter()
+        self.trajectory: deque[Point2D] = deque(maxlen=self.config.trajectory_length)
         self.selected_history: deque[Point2D] = deque(maxlen=max(1, self.config.stationary_window_frames))
-        self.last_valid_position: Point2D | None = None  # 最近一个被接受的位置
-        self.missing_frames = 0                       # 连续未检测到球的帧数
-        # 静止黑名单：离散化坐标 → 累计被检测到的帧计数
+        self.last_valid_position: Point2D | None = None
+        self.missing_frames = 0
         self._stationary_blacklist: dict[tuple[int, int], int] = {}
-        # 永久黑名单：已达到阈值的静止位置
         self._stationary_blacklist_positions: set[tuple[int, int]] = set()
+        self.track_state: BallTrackState = BallTrackState.SEARCHING
+        self._lock_hits: int = 0
+        self._cached_frame_height: float = 0.0
 
     def update(
         self,
@@ -66,27 +104,27 @@ class BallTracker:
         timestamp_sec: float,
         roi_corners: tuple[tuple[int, int], tuple[int, int]] | None = None,
         homography: Sequence[Sequence[float]] | None = None,
+        player_motion_pixels: float | None = None,
     ) -> BallFrameSample:
-        """
-        处理一帧，返回该帧的球采样结果 BallFrameSample。
-
-        流程：
-          1. 调用检测器得到原始候选；
-          2. 过滤（框尺寸/长宽比/ROI）得到候选列表；
-          3. 从候选里挑一个最可信的；
-          4. 若没候选或挑出的点"不连续"，记为未接受；
-          5. 通过连续性检查后，投影到球场坐标并记为有效点。
-        """
+        self._cached_frame_height = float(frame.shape[0])
         raw_candidates = self.detector.detect(frame, conf=self.config.confidence)
-        candidates, reject_reasons = self._extract_candidates(raw_candidates, frame.shape, roi_corners)
-        # 对所有过滤后候选做静止坐标投票，更新黑名单
+        candidates, extract_reasons = self._extract_candidates(raw_candidates, frame.shape, roi_corners)
         self._update_stationary_blacklist(candidates)
-        selected = self._select_candidate(candidates)
-        # 情况 A：过滤后没有候选
+
+        predicted_pos = self._predict_next_position() if self.trajectory else None
+
+        # State-aware candidate selection
+        selected, overall_decision, select_reason = self._select_candidate(candidates)
+
+        # Build per-candidate debug info
+        candidate_debugs = self._build_candidate_debugs(candidates, selected, predicted_pos)
+
+        # Case A: No candidate selected
         if selected is None:
             self._record_missing_detection()
-            reason = reject_reasons[0] if reject_reasons else "no_candidates"
-            return self._sample(
+            self._update_track_state(False)
+            reason = select_reason or (extract_reasons[0] if extract_reasons else "no_candidates")
+            return self._build_sample(
                 frame_index=frame_index,
                 timestamp_sec=timestamp_sec,
                 image_xy=None,
@@ -97,16 +135,21 @@ class BallTracker:
                 candidate_count=len(candidates),
                 reject_reason=reason,
                 in_bounds=None,
+                predicted_pos=predicted_pos,
+                overall_decision=overall_decision,
+                candidate_debugs=candidate_debugs,
+                accepted_candidate_id=None,
             )
 
         point = selected.image_xy
         self._record_selected_candidate(point)
-        # 静止黑名单检查：若该位置已被标记为静止物，优先拒绝
-        # 但若候选与上一有效点连续（跳变/预测均在门限内），则覆盖黑名单允许接受
+
+        # Stationary blacklist check
         blacklist_reason = self._stationary_blacklist_reject_reason(point)
         if blacklist_reason is not None:
             self._record_missing_detection()
-            return self._sample(
+            self._update_track_state(False)
+            return self._build_sample(
                 frame_index=frame_index,
                 timestamp_sec=timestamp_sec,
                 image_xy=point,
@@ -117,11 +160,40 @@ class BallTracker:
                 candidate_count=len(candidates),
                 reject_reason=blacklist_reason,
                 in_bounds=None,
+                predicted_pos=predicted_pos,
+                overall_decision="rejected",
+                candidate_debugs=candidate_debugs,
+                accepted_candidate_id=None,
             )
+
+        # Player-motion-aware static false-positive check (runs first to capture context)
+        pm_static_reason = self._player_motion_static_reject_reason(point, player_motion_pixels)
+        if pm_static_reason is not None:
+            self._record_missing_detection()
+            self._update_track_state(False)
+            return self._build_sample(
+                frame_index=frame_index,
+                timestamp_sec=timestamp_sec,
+                image_xy=point,
+                court_xy=None,
+                confidence=selected.confidence,
+                visible=True,
+                accepted=False,
+                candidate_count=len(candidates),
+                reject_reason=pm_static_reason,
+                in_bounds=None,
+                predicted_pos=predicted_pos,
+                overall_decision="rejected",
+                candidate_debugs=candidate_debugs,
+                accepted_candidate_id=None,
+            )
+
+        # Short-term stationary candidate check (generic, no player context)
         stationary_reason = self._stationary_reject_reason()
         if stationary_reason is not None:
             self._record_missing_detection()
-            return self._sample(
+            self._update_track_state(False)
+            return self._build_sample(
                 frame_index=frame_index,
                 timestamp_sec=timestamp_sec,
                 image_xy=point,
@@ -132,13 +204,18 @@ class BallTracker:
                 candidate_count=len(candidates),
                 reject_reason=stationary_reason,
                 in_bounds=None,
+                predicted_pos=predicted_pos,
+                overall_decision="rejected",
+                candidate_debugs=candidate_debugs,
+                accepted_candidate_id=None,
             )
 
-        # 情况 B：有候选，但与已有轨迹不连续（跳变过大 / 偏离预测）
-        reject_reason = self._continuity_reject_reason(point)
-        if reject_reason is not None:
+        # Continuity check (now uses dynamic gate)
+        continuity_reason = self._continuity_reject_reason(point)
+        if continuity_reason is not None:
             self._record_missing_detection()
-            return self._sample(
+            self._update_track_state(False)
+            return self._build_sample(
                 frame_index=frame_index,
                 timestamp_sec=timestamp_sec,
                 image_xy=point,
@@ -147,16 +224,21 @@ class BallTracker:
                 visible=True,
                 accepted=False,
                 candidate_count=len(candidates),
-                reject_reason=reject_reason,
+                reject_reason=continuity_reason,
                 in_bounds=None,
+                predicted_pos=predicted_pos,
+                overall_decision="rejected",
+                candidate_debugs=candidate_debugs,
+                accepted_candidate_id=None,
             )
 
-        # 情况 C：通过连续性检查 → 投影并记录为有效点
+        # Court bounds check
         projection = self.court_adapter.project(point, homography)
-        bounds_reject_reason = self._court_bounds_reject_reason(projection.court_xy)
-        if bounds_reject_reason is not None:
+        bounds_reason = self._court_bounds_reject_reason(projection.court_xy)
+        if bounds_reason is not None:
             self._record_missing_detection()
-            return self._sample(
+            self._update_track_state(False)
+            return self._build_sample(
                 frame_index=frame_index,
                 timestamp_sec=timestamp_sec,
                 image_xy=point,
@@ -165,13 +247,18 @@ class BallTracker:
                 visible=True,
                 accepted=False,
                 candidate_count=len(candidates),
-                reject_reason=bounds_reject_reason,
+                reject_reason=bounds_reason,
                 in_bounds=projection.in_bounds,
-                diagnostics={"court_projection": projection.detail},
+                predicted_pos=predicted_pos,
+                overall_decision="rejected",
+                candidate_debugs=candidate_debugs,
+                accepted_candidate_id=None,
             )
 
+        # Accepted! Record valid point and update track state
         self._append_valid_point(point)
-        return self._sample(
+        self._update_track_state(True)
+        return self._build_sample(
             frame_index=frame_index,
             timestamp_sec=timestamp_sec,
             image_xy=point,
@@ -182,7 +269,10 @@ class BallTracker:
             candidate_count=len(candidates),
             reject_reason=None,
             in_bounds=projection.in_bounds,
-            diagnostics={"court_projection": projection.detail},
+            predicted_pos=predicted_pos,
+            overall_decision="accepted",
+            candidate_debugs=candidate_debugs,
+            accepted_candidate_id=str(selected.image_xy),
         )
 
     def clear(self) -> None:
@@ -191,8 +281,12 @@ class BallTracker:
         self.selected_history.clear()
         self.last_valid_position = None
         self.missing_frames = 0
+        self._lock_hits = 0
+        self.track_state = BallTrackState.SEARCHING
         self._stationary_blacklist.clear()
         self._stationary_blacklist_positions.clear()
+
+    # ── candidate extraction ──────────────────────────────────────
 
     def _extract_candidates(
         self,
@@ -200,11 +294,6 @@ class BallTracker:
         frame_shape: Sequence[int],
         roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
     ) -> tuple[list[BallCandidate], list[str]]:
-        """
-        候选过滤：按"框尺寸 / 长宽比 / 是否在 ROI 内"筛掉不像球的候选。
-
-        返回：(过滤后的候选列表, 各被拒原因列表)。
-        """
         filtered: list[BallCandidate] = []
         reject_reasons: list[str] = []
         frame_area = max(1.0, float(frame_shape[0] * frame_shape[1]))
@@ -214,23 +303,18 @@ class BallTracker:
             height = candidate.height
             area_ratio = candidate.area_ratio
             aspect_ratio = candidate.aspect_ratio
-            # 若检测器给了宽高，先做有效性与比例计算
             if width is not None and height is not None:
                 if width <= 0 or height <= 0:
                     reject_reasons.append("invalid_box")
                     continue
-                # 缺失比例信息时，按宽高现算
                 area_ratio = area_ratio if area_ratio is not None else (float(width) * float(height)) / frame_area
                 aspect_ratio = aspect_ratio if aspect_ratio is not None else max(float(width) / float(height), float(height) / float(width))
-            # 框占整帧面积过大 → 不像球
             if area_ratio is not None and area_ratio > self.config.max_box_area_ratio:
                 reject_reasons.append("box_too_large")
                 continue
-            # 长宽比过大（过扁/过长）→ 不像球
             if aspect_ratio is not None and aspect_ratio > self.config.max_aspect_ratio:
                 reject_reasons.append("aspect_ratio")
                 continue
-            # 不在给定 ROI 内 → 排除
             if not self._point_in_roi(candidate.image_xy, roi_corners):
                 reject_reasons.append("outside_roi")
                 continue
@@ -248,66 +332,174 @@ class BallTracker:
             )
         return filtered, reject_reasons
 
-    def _select_candidate(self, candidates: Sequence[BallCandidate]) -> BallCandidate | None:
-        """
-        从过滤后的候选里挑一个最可信的。
+    # ── candidate selection ───────────────────────────────────────
 
-        规则：
-          - 若还没有轨迹历史，直接选置信度最高的；
-          - 否则基于"置信度 - 与预测位置的距离 - 框大小惩罚"综合打分，取最高分。
-        """
+    def _select_candidate(self, candidates: Sequence[BallCandidate]) -> tuple[BallCandidate | None, str, str]:
         if not candidates:
-            return None
-        if not self.trajectory:
-            return max(candidates, key=lambda item: item.confidence)
+            return None, "missing_no_candidates", ""
+
+        if self.track_state == BallTrackState.SEARCHING:
+            return max(candidates, key=lambda c: c.confidence), "accepted", ""
+
         predicted = self._predict_next_position()
 
-        def score(candidate: BallCandidate) -> float:
-            distance = self._distance(candidate.image_xy, predicted)
-            size_penalty = float(candidate.area_ratio or 0.0) * 4000.0
-            return candidate.confidence * 1000.0 - distance * 1.4 - size_penalty
+        if self.track_state in (BallTrackState.LOCKED, BallTrackState.LOST):
+            gate = self._compute_dynamic_gate()
+            if self.track_state == BallTrackState.LOST:
+                gate *= self.config.lost_gate_multiplier
+            sorted_candidates = sorted(candidates, key=lambda c: self._score_candidate(c, predicted), reverse=True)
+            for c in sorted_candidates:
+                if self._distance(c.image_xy, predicted) <= gate:
+                    return c, "accepted", ""
+            return None, "missing_predicted_only", "no_candidate_passed_physics_gate"
 
-        return max(candidates, key=score)
+        return max(candidates, key=lambda c: self._score_candidate(c, predicted)), "accepted", ""
 
-    def _point_in_roi(
-        self,
-        point: Point2D,
-        roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
-    ) -> bool:
-        """
-        判断点是否在 ROI（感兴趣区域）内。
+    def _score_candidate(self, candidate: BallCandidate, predicted: Point2D) -> float:
+        distance = self._distance(candidate.image_xy, predicted)
+        size_penalty = float(candidate.area_ratio or 0.0) * 4000.0
 
-        若未提供 ROI 则视为"全部允许"；否则在两个对角点构成的矩形基础上，
-        按 roi_padding_ratio 向外放宽一点（避免边缘误杀）。
-        """
-        if roi_corners is None:
-            return True
-        x1, y1 = roi_corners[0]
-        x2, y2 = roi_corners[1]
-        padding = int(max(abs(x2 - x1), abs(y2 - y1)) * self.config.roi_padding_ratio)
-        left, right = sorted((x1, x2))
-        top, bottom = sorted((y1, y2))
-        return (left - padding) <= point[0] <= (right + padding) and (top - padding) <= point[1] <= (bottom + padding)
+        if self.track_state == BallTrackState.LOCKED:
+            conf_w = self.config.locked_confidence_weight
+            dist_w = self.config.locked_distance_weight
+        elif self.track_state == BallTrackState.LOST:
+            conf_w = self.config.lost_confidence_weight
+            dist_w = self.config.lost_distance_weight
+        elif self.track_state == BallTrackState.TENTATIVE:
+            conf_w = self.config.tentative_confidence_weight
+            dist_w = self.config.tentative_distance_weight
+        else:
+            conf_w = self.config.searching_confidence_weight
+            dist_w = self.config.searching_distance_weight
+
+        return candidate.confidence * conf_w - distance * dist_w - size_penalty
+
+    # ── prediction ────────────────────────────────────────────────
+
+    def _predict_next_position(self) -> Point2D:
+        if len(self.trajectory) < 2:
+            if self.trajectory:
+                return self.trajectory[-1]
+            return self.last_valid_position or (0.0, 0.0)
+
+        if len(self.trajectory) < self.config.min_prediction_points:
+            return self.trajectory[-1]
+
+        n = min(len(self.trajectory), self.config.min_prediction_points)
+        recent = list(self.trajectory)[-n:]
+
+        dx_total = 0.0
+        dy_total = 0.0
+        count = 0
+        for i in range(1, len(recent)):
+            dx_total += recent[i][0] - recent[i - 1][0]
+            dy_total += recent[i][1] - recent[i - 1][1]
+            count += 1
+
+        if count == 0:
+            return self.trajectory[-1]
+
+        avg_dx = dx_total / count
+        avg_dy = dy_total / count
+        multiplier = min(max(1, self.missing_frames + 1), 3)
+
+        last_x, last_y = self.trajectory[-1]
+        return (last_x + avg_dx * multiplier, last_y + avg_dy * multiplier)
+
+    # ── dynamic physics gate ──────────────────────────────────────
+
+    def _compute_dynamic_gate(self) -> float:
+        recent_speed = self._compute_recent_speed()
+        speed_component = (
+            self.config.speed_factor * recent_speed
+            if len(self.trajectory) >= self.config.min_prediction_points
+            else 0.0
+        )
+        missing_component = self.config.missing_factor * min(self.missing_frames, 5)
+        raw_gate = (
+            self.config.base_gate_pixels
+            + speed_component
+            + missing_component
+            + self._perspective_adjustment()
+        )
+        return max(self.config.min_gate_pixels, min(self.config.max_gate_pixels, raw_gate))
+
+    def _compute_recent_speed(self) -> float:
+        if len(self.trajectory) < 2:
+            return 0.0
+        n = min(len(self.trajectory), self.config.min_prediction_points)
+        recent = list(self.trajectory)[-n:]
+        total_dist = 0.0
+        for i in range(1, len(recent)):
+            total_dist += self._distance(recent[i], recent[i - 1])
+        return total_dist / (len(recent) - 1)
+
+    def _perspective_adjustment(self) -> float:
+        if self._cached_frame_height <= 0:
+            return 0.0
+        predicted = self._predict_next_position()
+        y_fraction = predicted[1] / self._cached_frame_height
+        if y_fraction > 0.6:
+            return 20.0
+        if y_fraction < 0.4:
+            return -10.0
+        return 0.0
+
+    # ── state machine ─────────────────────────────────────────────
+
+    def _update_track_state(self, found: bool) -> None:
+        if found:
+            self._lock_hits += 1
+            if self.track_state == BallTrackState.SEARCHING and self._lock_hits >= self.config.tentative_min_hits:
+                self.track_state = BallTrackState.TENTATIVE
+            elif self.track_state == BallTrackState.TENTATIVE and self._lock_hits >= self.config.lock_min_hits:
+                self.track_state = BallTrackState.LOCKED
+            elif self.track_state == BallTrackState.LOST:
+                self.track_state = BallTrackState.LOCKED
+        else:
+            self._lock_hits = 0
+            if self.track_state in (BallTrackState.LOCKED, BallTrackState.TENTATIVE):
+                self.track_state = BallTrackState.LOST
+            elif self.track_state == BallTrackState.LOST:
+                if self.missing_frames > self.config.max_missing_frames_locked:
+                    self.track_state = BallTrackState.SEARCHING
+
+    # ── missing detection ─────────────────────────────────────────
+
+    def _record_missing_detection(self) -> None:
+        self.missing_frames += 1
+        max_allowed = (
+            self.config.max_missing_frames_locked
+            if self.track_state in (BallTrackState.LOCKED, BallTrackState.LOST)
+            else self.config.max_missing_frames
+        )
+        if self.missing_frames > max_allowed:
+            self.last_valid_position = None
+
+    def _append_valid_point(self, point: Point2D) -> None:
+        self.trajectory.append(point)
+        self.last_valid_position = point
+        self.missing_frames = 0
+
+    # ── continuity / gate checks ──────────────────────────────────
 
     def _continuity_reject_reason(self, point: Point2D) -> str | None:
-        """
-        连续性检查：返回拒绝原因（若连续）或 None（若连续良好）。
-
-        仅在"连续缺失帧数未超上限"时才检查；否则放宽（认为轨迹刚断了，先不拒）。
-        判据：
-          - 与上一个有效点跳变过大（>max_jump_pixels）→ "jump_distance"；
-          - 与预测位置偏差过大（>prediction_gate_pixels）→ "prediction_gate"。
-        """
         if not self.trajectory:
             return None
-        strict_gate = self.missing_frames <= self.config.max_missing_frames
+        max_missing = (
+            self.config.max_missing_frames_locked
+            if self.track_state in (BallTrackState.LOCKED, BallTrackState.LOST, BallTrackState.TENTATIVE)
+            else self.config.max_missing_frames
+        )
+        strict_gate = self.missing_frames <= max_missing
         if not strict_gate:
             return None
+        dynamic_gate = self._compute_dynamic_gate()
         jump_distance = self._distance(point, self.trajectory[-1])
-        if jump_distance > self.config.max_jump_pixels:
+        if jump_distance > dynamic_gate:
             return "jump_distance"
         predicted_distance = self._distance(point, self._predict_next_position())
-        if predicted_distance > self.config.prediction_gate_pixels:
+        if predicted_distance > dynamic_gate:
             return "prediction_gate"
         return None
 
@@ -321,6 +513,8 @@ class BallTracker:
             return None
         return "projected_outside_court"
 
+    # ── stationary suppression ────────────────────────────────────
+
     def _record_selected_candidate(self, point: Point2D) -> None:
         self.selected_history.append(point)
 
@@ -328,23 +522,33 @@ class BallTracker:
         if len(self.selected_history) < max(1, self.config.stationary_window_frames):
             return None
         points = list(self.selected_history)
-        center_x = sum(point[0] for point in points) / len(points)
-        center_y = sum(point[1] for point in points) / len(points)
-        max_radius = max(self._distance(point, (center_x, center_y)) for point in points)
+        center_x = sum(p[0] for p in points) / len(points)
+        center_y = sum(p[1] for p in points) / len(points)
+        max_radius = max(self._distance(p, (center_x, center_y)) for p in points)
         if max_radius <= self.config.stationary_radius_pixels:
             return "stationary_candidate"
         return None
 
-    def _update_stationary_blacklist(self, candidates: Sequence[BallCandidate]) -> None:
-        """对所有过滤后候选做静止坐标投票，达到阈值的加入永久黑名单。
+    def _player_motion_static_reject_reason(self, point: Point2D, player_motion_pixels: float | None) -> str | None:
+        if player_motion_pixels is None:
+            return None
+        if player_motion_pixels < self.config.player_motion_min_pixels:
+            return None
+        if len(self.selected_history) < max(1, self.config.stationary_window_frames):
+            return None
+        points = list(self.selected_history)
+        center_x = sum(p[0] for p in points) / len(points)
+        center_y = sum(p[1] for p in points) / len(points)
+        max_radius = max(self._distance(p, (center_x, center_y)) for p in points)
+        if max_radius <= self.config.stationary_radius_pixels:
+            return "static_false_positive"
+        return None
 
-        算法：将每个候选的图像坐标按 stationary_blacklist_grid_px 精度离散化，
-        累加每帧的检测计数。连续被检测帧数达到 stationary_blacklist_frames 时，
-        该位置被加入永久黑名单。
-        """
+    # ── stationary blacklist ──────────────────────────────────────
+
+    def _update_stationary_blacklist(self, candidates: Sequence[BallCandidate]) -> None:
         grid = self.config.stationary_blacklist_grid_px
         threshold = self.config.stationary_blacklist_frames
-        # 对本帧出现的坐标做离散化并递增计数
         for candidate in candidates:
             grid_x = int(candidate.image_x / grid) * grid
             grid_y = int(candidate.image_y / grid) * grid
@@ -354,71 +558,148 @@ class BallTracker:
                 self._stationary_blacklist_positions.add(key)
 
     def _is_blacklisted(self, point: Point2D) -> bool:
-        """检查某个坐标是否落入已知静止黑名单区域。"""
         grid = self.config.stationary_blacklist_grid_px
         grid_x = int(point[0] / grid) * grid
         grid_y = int(point[1] / grid) * grid
         return (grid_x, grid_y) in self._stationary_blacklist_positions
 
     def _stationary_blacklist_reject_reason(self, point: Point2D) -> str | None:
-        """检查被黑名单标记的候选是否应被拒绝。
-
-        若候选位置落入静止黑名单，默认应拒绝。
-        但若该候选通过了连续性检查（与上一个有效点有明显位移且距离/预测偏差均在门限内），
-        则覆盖黑名单——因为真球恰好经过先前被静止物占据的位置时不应被误杀。
-        """
         if not self._is_blacklisted(point):
             return None
-        # 若轨迹为空，直接拒绝（无历史参考，无法做连续性覆盖判断）
         if not self.trajectory:
             return "stationary_blacklisted"
         jump_distance = self._distance(point, self.trajectory[-1])
-        # 若候选点距离上一个有效点很近（静止特征），不覆盖黑名单
-        # 使用 2 倍静止半径作为判定，避免静止候选自我绕过黑名单
         if jump_distance < self.config.stationary_radius_pixels * 2:
             return "stationary_blacklisted"
-        strict_gate = self.missing_frames <= self.config.max_missing_frames
+        max_missing = (
+            self.config.max_missing_frames_locked
+            if self.track_state in (BallTrackState.LOCKED, BallTrackState.LOST, BallTrackState.TENTATIVE)
+            else self.config.max_missing_frames
+        )
+        strict_gate = self.missing_frames <= max_missing
         if not strict_gate:
             return "stationary_blacklisted"
-        if jump_distance > self.config.max_jump_pixels:
+        dynamic_gate = self._compute_dynamic_gate()
+        if jump_distance > dynamic_gate:
             return "stationary_blacklisted"
         predicted_distance = self._distance(point, self._predict_next_position())
-        if predicted_distance > self.config.prediction_gate_pixels:
+        if predicted_distance > dynamic_gate:
             return "stationary_blacklisted"
-        # 通过连续性检查 + 有显著位移 → 覆盖黑名单，允许接受该候选
         return None
 
-    def _predict_next_position(self) -> Point2D:
-        """
-        用最近两个有效点做"匀速外推"，预测球的下一帧位置。
+    # ── ROI ───────────────────────────────────────────────────────
 
-        若轨迹点不足 2 个，则退回到最近一个有效点本身。
-        """
-        if len(self.trajectory) < 2:
-            return self.trajectory[-1]
-        prev_x, prev_y = self.trajectory[-2]
-        last_x, last_y = self.trajectory[-1]
-        return (last_x + (last_x - prev_x), last_y + (last_y - prev_y))
+    def _point_in_roi(
+        self,
+        point: Point2D,
+        roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
+    ) -> bool:
+        if roi_corners is None:
+            return True
+        x1, y1 = roi_corners[0]
+        x2, y2 = roi_corners[1]
+        padding = int(max(abs(x2 - x1), abs(y2 - y1)) * self.config.roi_padding_ratio)
+        left, right = sorted((x1, x2))
+        top, bottom = sorted((y1, y2))
+        return (left - padding) <= point[0] <= (right + padding) and (top - padding) <= point[1] <= (bottom + padding)
 
-    def _append_valid_point(self, point: Point2D) -> None:
-        """记录一个被接受的有效点：加入轨迹队列、更新最后有效位置、清零缺失计数。"""
-        self.trajectory.append(point)
-        self.last_valid_position = point
-        self.missing_frames = 0
+    # ── debug metadata ────────────────────────────────────────────
 
-    def _record_missing_detection(self) -> None:
-        """记录一次"未检测到球"：缺失计数 +1；超过上限则清空最后有效位置（避免用陈旧点做预测）。"""
-        self.missing_frames += 1
-        if self.missing_frames > self.config.max_missing_frames:
-            self.last_valid_position = None
+    def _build_candidate_debugs(
+        self,
+        candidates: Sequence[BallCandidate],
+        selected: BallCandidate | None,
+        predicted: Point2D | None,
+    ) -> list[BallCandidateDebug]:
+        result: list[BallCandidateDebug] = []
+        predicted = predicted or (0.0, 0.0)
+        dynamic_gate = self._compute_dynamic_gate()
+        for i, c in enumerate(candidates):
+            cid = f"candidate_{i + 1}"
+            dist_to_pred = self._distance(c.image_xy, predicted) if predicted else None
+            jump_dist = self._distance(c.image_xy, self.trajectory[-1]) if self.trajectory else None
+            passed_gate = dist_to_pred is not None and dist_to_pred <= dynamic_gate
+            rejection_reason: str | None = None
+            if not passed_gate and self.track_state in (BallTrackState.LOCKED, BallTrackState.LOST):
+                rejection_reason = "physics_gate_rejected"
+            elif selected is not None and c is selected:
+                rejection_reason = None
+            elif not passed_gate:
+                rejection_reason = "too_far_from_prediction"
+            result.append(
+                BallCandidateDebug(
+                    candidate_id=cid,
+                    bbox=(c.image_x, c.image_y, float(c.width or 0), float(c.height or 0)),
+                    raw_confidence=c.confidence,
+                    final_score=self._score_candidate(c, predicted),
+                    distance_to_prediction=dist_to_pred,
+                    jump_distance=jump_dist,
+                    passed_physics_gate=passed_gate,
+                    rejection_reason=rejection_reason,
+                )
+            )
+        if selected is not None and result:
+            for r in result:
+                if str((r.bbox[0], r.bbox[1])) == str(selected.image_xy):
+                    pass
+        return result
+
+    def _build_debug_dict(
+        self,
+        predicted_pos: Point2D | None,
+        candidate_debugs: list[BallCandidateDebug],
+        accepted_candidate_id: str | None,
+        overall_decision: str,
+    ) -> dict[str, Any]:
+        debug = BallFrameDebug(
+            track_state=self.track_state.value,
+            predicted_position=predicted_pos,
+            candidates=candidate_debugs,
+            accepted_candidate_id=accepted_candidate_id,
+            overall_decision=overall_decision,
+        )
+        return {"ball_frame_debug": debug}
+
+    # ── helpers ───────────────────────────────────────────────────
 
     @staticmethod
     def _distance(point_a: Point2D, point_b: Point2D) -> float:
-        """两点之间的欧氏距离（像素）。"""
         return float(hypot(point_a[0] - point_b[0], point_a[1] - point_b[1]))
 
-    @staticmethod
-    def _sample(**kwargs: object) -> BallFrameSample:
-        """构造 BallFrameSample 的小工具：把可选的 diagnostics 单独取出组装。"""
-        diagnostics = kwargs.pop("diagnostics", None) or {}
-        return BallFrameSample(**kwargs, diagnostics=diagnostics)  # type: ignore[arg-type]
+    def _build_sample(
+        self,
+        *,
+        frame_index: int,
+        timestamp_sec: float,
+        image_xy: Point2D | None,
+        court_xy: Point2D | None,
+        confidence: float | None,
+        visible: bool,
+        accepted: bool,
+        candidate_count: int,
+        reject_reason: str | None,
+        in_bounds: bool | None,
+        predicted_pos: Point2D | None,
+        overall_decision: str,
+        candidate_debugs: list[BallCandidateDebug],
+        accepted_candidate_id: str | None,
+    ) -> BallFrameSample:
+        diagnostic_kwargs: dict[str, Any] = {"court_projection": ""}
+        debug = self._build_debug_dict(predicted_pos, candidate_debugs, accepted_candidate_id, overall_decision)
+        diagnostic_kwargs.update(debug)
+        return BallFrameSample(
+            frame_index=frame_index,
+            timestamp_sec=timestamp_sec,
+            image_xy=image_xy,
+            court_xy=court_xy,
+            confidence=confidence,
+            visible=visible,
+            accepted=accepted,
+            candidate_count=candidate_count,
+            reject_reason=reject_reason,
+            in_bounds=in_bounds,
+            track_state=self.track_state.value,
+            predicted_position=predicted_pos,
+            overall_decision=overall_decision,
+            diagnostics=diagnostic_kwargs,
+        )

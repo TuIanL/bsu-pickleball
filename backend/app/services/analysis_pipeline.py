@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import logging
 import csv
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from math import hypot
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -64,6 +66,8 @@ from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstim
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
+from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
+from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
@@ -81,8 +85,12 @@ from app.vision.pickleball_game_analysis.detection_writer import (
 )
 from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceEvent, TrajectoryPoint
 from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner
+from app.vision.pickleball_game_analysis.calibration_diagnostics import CalibrationDiagnostics
+from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisualizer
 from app.vision.pickleball_game_analysis.overlay_video_writer import OverlayVideoWriter
 from app.vision.pickleball_game_analysis.position_visualizer import PositionVisualizer
+from app.vision.pickleball_game_analysis.projection_debug_writer import ProjectionDebugWriter
+from app.vision.pickleball_game_analysis.projection_debug_overlay_writer import ProjectionDebugOverlayWriter
 from app.vision.pickleball_game_analysis.visualization_data_builder import PositionVisualizationDataBuilder
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     VisualizationConfig,
@@ -101,6 +109,12 @@ from app.vision.detectors.ball_adapter import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes"}
+
+
 # 进度回调类型：每完成一个阶段就调用一次
 ProgressCallback = Callable[[PipelineStageResult], None]
 
@@ -201,6 +215,7 @@ class _TrackingRunOutput:
     court_view_roi: CourtViewRoiArtifact | None = None
     ball_run_output: _BallRunOutput | None = None
     player_multitarget_detections: list[MultiTargetDetection] = field(default_factory=list)
+    calibration_diagnostics_path: str | None = None
 
 
 class AnalysisPipeline:
@@ -869,6 +884,8 @@ class AnalysisPipeline:
                 player_trajectory_url=player_trajectory_url,
                 court_view_roi_json_path=court_view_roi_path,
                 court_view_roi_url=court_view_roi_url,
+                calibration_diagnostics_json_path=run_output.calibration_diagnostics_path,
+                calibration_diagnostics_url=f"/api/analysis/jobs/{job_id}/artifacts/calibration-diagnostics" if run_output.calibration_diagnostics_path else None,
                 source_video_url=source_video_url,
                 tracking_overlay_status=tracking_overlay_status,
                 tracking_overlay_detail=tracking_overlay_detail,
@@ -1362,6 +1379,43 @@ class AnalysisPipeline:
         )
         roi_filtered_detection_count = 0
         full_frame_fallback_count = 0
+
+        calibration_diagnostics_path: str | None = None
+        calibration_quality: str | None = None
+        if calibration_keypoints and frame_width > 0 and frame_height > 0:
+            try:
+                image_points = self._calibration_image_points(calibration_keypoints)
+                court_points = [(kp.court.x, kp.court.y) for kp in calibration_keypoints]
+                if image_points and len(image_points) >= 4 and len(court_points) >= 4:
+                    diagnostics = CalibrationDiagnostics(
+                        homography=homography,
+                        image_points=image_points,
+                        court_points=court_points,
+                        frame_shape=(frame_width, frame_height),
+                    )
+                    diag_result = diagnostics.diagnose()
+                    calibration_quality = diag_result.calibration_quality
+                    diag_path = self.storage.calibration_diagnostics_json_path(job_id)
+                    diagnostics.write_artifact(diag_path, job_id)
+                    calibration_diagnostics_path = str(diag_path)
+            except Exception:
+                pass
+
+        debug_writer: ProjectionDebugWriter | None = None
+        debug_minimap: MinimapVisualizer | None = None
+        debug_overlay: ProjectionDebugOverlayWriter | None = None
+        debug_path = self.storage.outputs_dir / job_id / "projection_debug.jsonl"
+        debug_writer = ProjectionDebugWriter(debug_path)
+        debug_writer.open()
+        debug_minimap = MinimapVisualizer()
+        debug_overlay_path = self.storage.outputs_dir / job_id / "projection_debug_overlay.mp4"
+        debug_overlay = ProjectionDebugOverlayWriter(
+            debug_overlay_path,
+            fps=fps if fps > 0 else 30.0,
+            width=frame_width,
+            height=frame_height,
+        )
+
         last_processed_frame_index: int | None = None
         last_processed_timestamp: float | None = None
         processed_frame_count = 0
@@ -1395,6 +1449,28 @@ class AnalysisPipeline:
                 smoothing_window=self.settings.player_identity_smoothing_window,
             )
         )
+        # 球员锁定管理器（维护四名主球员的身份锁定状态）
+        player_lock_manager = PlayerLockManager(
+            PlayerLockConfig(
+                target_player_count=self.settings.player_lock_target_player_count,
+                bootstrap_min_frames=self.settings.player_lock_bootstrap_min_frames,
+                bootstrap_max_frames=self.settings.player_lock_bootstrap_max_frames,
+                min_observed_frames=self.settings.player_lock_min_observed_frames,
+                lock_min_hits=self.settings.player_lock_lock_min_hits,
+                plausible_min_hits=self.settings.player_lock_plausible_min_hits,
+                lost_grace_frames=self.settings.player_lock_lost_grace_frames,
+                lost_max_frames_locked=self.settings.player_lock_lost_max_frames_locked,
+                locked_conf=self.settings.player_lock_locked_conf,
+                tentative_conf=self.settings.player_lock_tentative_conf,
+                searching_conf=self.settings.player_lock_searching_conf,
+                reconnect_threshold=self.settings.player_lock_reconnect_threshold,
+                court_margin_ft=self.settings.player_lock_court_margin_ft,
+                max_reconnect_distance_ft=self.settings.player_lock_max_reconnect_distance_ft,
+                bootstrap_court_margin_ft=self.settings.player_lock_bootstrap_court_margin_ft,
+                lost_reconnect_court_margin_ft=self.settings.player_lock_lost_reconnect_court_margin_ft,
+                enable_appearance_score=self.settings.player_lock_enable_appearance_score,
+            )
+        )
         from app.vision.pickleball_game_analysis.ball_tracker import BallTrackerConfig
 
         selection_diagnostics = []
@@ -1419,6 +1495,8 @@ class AnalysisPipeline:
             ),
         )
         player_multitarget_detections: list[MultiTargetDetection] = []
+
+        _prev_player_centroids: dict[str, tuple[float, float]] = {}
 
         frame_index = 0
         try:
@@ -1461,7 +1539,7 @@ class AnalysisPipeline:
                 # 3) 跟踪：把本帧检测关联到已有轨迹
                 tracks = tracker.update(detections)
                 # 4) 估算每个轨迹的脚点（画面坐标）
-                footpoints = {track.track_id: self.footpoint_estimator.estimate(track) for track in tracks}
+                footpoints = {track.track_id: self.footpoint_estimator.estimate(track, frame_shape=(frame_width, frame_height)) for track in tracks}
                 # 5) 投影：脚点 + 单应矩阵 → 球场坐标
                 frame_positions = self.projector.project(
                     tracks=tracks,
@@ -1469,6 +1547,7 @@ class AnalysisPipeline:
                     frame_index=frame_index,
                     timestamp=timestamp,
                     footpoints=footpoints,
+                    frame_shape=(frame_width, frame_height),
                 )
                 # 5b) 对投影后的球场坐标做时间平滑（降低抖动和异常跳变）
                 for pos in frame_positions:
@@ -1482,18 +1561,53 @@ class AnalysisPipeline:
                             confidence=pos.confidence,
                         )
                         pos.court_position = [result.x, result.y]
-                # 6) 选主球员
-                primary_player_track_ids = {
-                    selection.track_id
-                    for selection in self.primary_player_selector.select(
-                        tracks=tracks,
-                        positions=frame_positions,
-                        frame_width=frame_width,
-                        frame_height=frame_height,
-                    )
-                }
+                # 5c) 投影调试日志写入（每帧每个球员一行 JSONL）
+                if debug_writer is not None and debug_minimap is not None:
+                    for pos in frame_positions:
+                        raw = pos.court_position
+                        smoothed = pos.court_position
+                        px = None
+                        if raw and len(raw) >= 2:
+                            px = debug_minimap.court_to_pixel(raw[0], raw[1])
+                        fp_method = pos.footpoint_method or "unknown"
+                        near_bottom = False
+                        clip_suspected = False
+                        if hasattr(pos, 'footpoint_metadata') and pos.footpoint_metadata:
+                            near_bottom = pos.footpoint_metadata.get('near_frame_bottom', False)
+                            clip_suspected = pos.footpoint_metadata.get('bbox_clip_suspected', False)
+                        debug_writer.write_frame(
+                            frame_index=frame_index,
+                            track_id=pos.track_id,
+                            bbox=pos.bbox,
+                            image_footpoint=pos.image_footpoint,
+                            footpoint_method=fp_method,
+                            footpoint_confidence=pos.projection_confidence,
+                            court_position_raw=raw if raw else [0, 0],
+                            court_position_smoothed=smoothed if smoothed else [0, 0],
+                            projection_status=pos.projection_status or "unknown",
+                            minimap_pixel=px,
+                            calibration_quality=calibration_quality,
+                            near_frame_bottom=near_bottom,
+                            bbox_clip_suspected=clip_suspected,
+                        )
+                # 6) 选主球员（建议集合，不再作为硬门控）
+                primary_selections = self.primary_player_selector.select(
+                    tracks=tracks,
+                    positions=frame_positions,
+                    frame_width=frame_width,
+                    frame_height=frame_height,
+                )
+                suggested_track_ids = {selection.track_id for selection in primary_selections}
                 selection_diagnostics.extend(self.primary_player_selector.last_diagnostics)
                 selection_training_samples = self.primary_player_selector.last_training_samples
+                # 6b) 球员锁定管理：产生并联合格的 track_id 集合
+                lock_update = player_lock_manager.update(
+                    frame_index=frame_index,
+                    positions=frame_positions,
+                    suggestions=primary_selections,
+                    frame=frame,
+                )
+                eligible_track_ids = lock_update.eligible_track_ids | suggested_track_ids
                 # 7) 把轨迹整理成"帧检测"格式（只保留主球员对应的轨迹）
                 frame_detections = self._tracks_to_frame_detections(
                     tracks=tracks,
@@ -1501,13 +1615,14 @@ class AnalysisPipeline:
                     timestamp=timestamp,
                     frame_width=frame_width,
                     frame_height=frame_height,
-                    eligible_track_ids=primary_player_track_ids,
+                    eligible_track_ids=eligible_track_ids,
                 )
                 # 8) 身份管理：把本帧位置对应到稳定 player_id
                 player_samples = identity_manager.update(
                     frame_index=frame_index,
                     positions=frame_positions,
-                    eligible_track_ids=primary_player_track_ids,
+                    eligible_track_ids=eligible_track_ids,
+                    track_identity_hints=lock_update.track_identity_hints,
                 )
                 player_by_track = {
                     sample.track_id: sample.player_id
@@ -1549,6 +1664,25 @@ class AnalysisPipeline:
                         logger.debug("Skipping player detection for shared detections artifact: %s", exc)
                 all_tracks.extend(tracks)
                 positions.extend(frame_positions)
+                # 计算球员帧间位移（用于球追踪的静止误检抑制）
+                player_motion_pixels: float | None = None
+                if frame_detections:
+                    current_centroids: dict[str, tuple[float, float]] = {}
+                    for det in frame_detections:
+                        if det.track_id is not None:
+                            x1, y1, x2, y2 = det.bbox
+                            current_centroids[det.track_id] = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+                    if _prev_player_centroids and current_centroids:
+                        max_displacement = 0.0
+                        for track_id, (cx, cy) in current_centroids.items():
+                            if track_id in _prev_player_centroids:
+                                px, py = _prev_player_centroids[track_id]
+                                disp = hypot(cx - px, cy - py)
+                                if disp > max_displacement:
+                                    max_displacement = disp
+                        if max_displacement > 0:
+                            player_motion_pixels = max_displacement
+                    _prev_player_centroids = current_centroids
                 # 球检测（可选）：提取至 _process_ball_frame()，保持单视频循环
                 if ball_ctx.tracker is not None:
                     self._process_ball_frame(
@@ -1559,6 +1693,7 @@ class AnalysisPipeline:
                         homography=homography,
                         frame_width=frame_width,
                         frame_height=frame_height,
+                        player_motion_pixels=player_motion_pixels,
                     )
                 # 9) 姿态估计（可选）
                 if self.pose_estimator is not None and frame_detections and pose_error is None:
@@ -1604,9 +1739,16 @@ class AnalysisPipeline:
                         frame_count or "unknown",
                     )
 
+                if debug_overlay is not None and frame_positions:
+                    debug_overlay.write_frame(frame, frame_index, frame_positions)
+
                 frame_index += 1
         finally:
             capture.release()
+            if debug_writer is not None:
+                debug_writer.close()
+            if debug_overlay is not None:
+                debug_overlay.close()
         court_view_state.finish(last_processed_frame_index, last_processed_timestamp)
 
         logger.info(
@@ -1728,6 +1870,7 @@ class AnalysisPipeline:
             court_view_roi=court_view_roi_artifact,
             ball_run_output=ball_run_output,
             player_multitarget_detections=player_multitarget_detections,
+            calibration_diagnostics_path=calibration_diagnostics_path,
         )
 
     @staticmethod
@@ -1740,6 +1883,7 @@ class AnalysisPipeline:
         homography: list[list[float]],
         frame_width: int,
         frame_height: int,
+        player_motion_pixels: float | None = None,
     ) -> None:
         """逐帧球检测处理，封装 try/except 和 context.tracker 降级逻辑。
 
@@ -1755,6 +1899,7 @@ class AnalysisPipeline:
                 timestamp_sec=timestamp,
                 roi_corners=None,
                 homography=homography,
+                player_motion_pixels=player_motion_pixels,
             )
             context.samples.append(ball_sample)
             if ball_sample.image_xy is not None and ball_sample.accepted:
