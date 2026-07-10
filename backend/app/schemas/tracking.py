@@ -71,6 +71,14 @@ PlayerSelectionMode = Literal["rule", "attention", "fallback"]
 # - uncertain：无法确定
 PlayerCandidateLabel = Literal["target_player", "neighbor_court_player", "spectator", "uncertain"]
 
+# 球员锁定状态枚举：
+# - searching：初始状态，寻找候选
+# - tentative：观察中，未完全信任
+# - locked：已锁定，低置信度保留
+# - lost：暂时丢失，等待重连
+# - inactive：手动释放或长期不活跃
+PlayerLockState = Literal["searching", "tentative", "locked", "lost", "inactive"]
+
 
 def _validate_point(values: list[float], label: str) -> list[float]:
     """校验一个二维点（[x, y]）是否合法。
@@ -242,6 +250,8 @@ class FootpointEstimate(BaseModel):
     method: FootpointMethod = "bbox_bottom_center"
     # 脚点估计的可信度（0~1），仅 hybrid/pose 方法有值，bbox 时为 None
     confidence: float | None = Field(default=None, ge=0, le=1)
+    # 附加元数据（near_frame_bottom, bbox_clip_suspected 等）
+    metadata: dict[str, bool] | None = Field(default=None)
 
     @field_validator("image_footpoint")
     @classmethod
@@ -283,6 +293,8 @@ class PlayerFramePosition(BaseModel):
     projection_status: ProjectionStatus = "inside_court"
     # 投影可信度（0~1）
     projection_confidence: float | None = Field(default=None, ge=0, le=1)
+    # 脚点估计器附加元数据（near_frame_bottom, bbox_clip_suspected 等）
+    footpoint_metadata: dict[str, bool] | None = Field(default=None)
 
     @field_validator("bbox")
     @classmethod
@@ -559,8 +571,18 @@ class PlayerIdentityDiagnostic(BaseModel):
 
     frame_index: int = Field(ge=0)
     # 事件类型：created=新建 / assigned=分配 / reconnected=重连 /
-    #           lost=丢失 / inactive=停用 / unmatched=未匹配 / filtered=被过滤
-    event: Literal["created", "assigned", "reconnected", "lost", "inactive", "unmatched", "filtered"]
+    #           lost=丢失 / inactive=停用 / unmatched=未匹配 / filtered=被过滤 /
+    #           player_locked=球员锁定 / player_reconnected_from_lost=丢失后重连 /
+    #           player_reset_after_prolonged_loss=长时间丢失后重置 /
+    #           player_slot_filled=空位填充 / rejected_low_conf_unlocked=未锁定低置信度拒绝 /
+    #           rejected_outside_near_court=超出近场范围 / rejected_outside_tracking=超出跟踪范围 /
+    #           rejected_bbox_size=框尺寸不合规 / retained_by_lock=因锁定保留
+    event: Literal[
+        "created", "assigned", "reconnected", "lost", "inactive", "unmatched", "filtered",
+        "player_locked", "player_reconnected_from_lost", "player_reset_after_prolonged_loss",
+        "player_slot_filled", "rejected_low_conf_unlocked", "rejected_outside_near_court",
+        "rejected_outside_tracking", "rejected_bbox_size", "retained_by_lock",
+    ]
     player_id: Optional[str] = None
     track_id: Optional[int] = None
     # 该事件的评分（可选）

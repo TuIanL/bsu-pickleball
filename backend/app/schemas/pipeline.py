@@ -84,6 +84,8 @@ class AnalysisArtifacts(BaseModel):
     court_view_roi_json_path: Optional[str] = None
     court_view_roi_url: Optional[str] = None
     source_video_url: Optional[str] = None
+    calibration_diagnostics_json_path: Optional[str] = None
+    calibration_diagnostics_url: Optional[str] = None
     # 下面是各产物的状态/说明（用于前端判断某个 overlay 是否可用）
     tracking_overlay_status: Optional[str] = None
     tracking_overlay_detail: Optional[str] = None

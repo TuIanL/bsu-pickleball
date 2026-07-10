@@ -195,6 +195,7 @@ def read_analysis_artifact(
         "serve-clips-manifest",                   # 发球片段清单
         "serve-debug-overlay",                    # 发球调试叠加视频
         "court-view-roi",                         # 场地视角 ROI（感兴趣区域）
+        "calibration-diagnostics",                # 标定质量诊断
     ],
 ) -> JSONResponse | FileResponse | PlainTextResponse:
     """
@@ -247,6 +248,8 @@ def read_analysis_artifact(
         path = _STORAGE.serve_clips_manifest_json_path(job_id)
     elif artifact_name == "court-view-roi":
         path = _STORAGE.court_view_roi_json_path(job_id)
+    elif artifact_name == "calibration-diagnostics":
+        path = _STORAGE.calibration_diagnostics_json_path(job_id)
     else:
         # 上面没显式列出的（如 serve-debug-overlay）走这个兜底分支
         path = _STORAGE.serve_debug_overlay_video_path(job_id)

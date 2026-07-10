@@ -128,6 +128,9 @@ class StorageService:
         # 跟踪结果 JSON（每个 job 一个独立子目录）
         return self.outputs_dir / job_id / "tracking_result.json"
 
+    def calibration_diagnostics_json_path(self, job_id: str) -> Path:
+        return self.outputs_dir / job_id / "calibration_diagnostics.json"
+
     def tracking_overlay_json_path(self, job_id: str) -> Path:
         # 检测叠加（每一帧检测框）JSON
         return self.outputs_dir / job_id / "tracking_overlay.json"

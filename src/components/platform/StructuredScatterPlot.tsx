@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { courtToSvg, courtSvgDefs } from "../../utils/courtGeometry";
+import {
+  trackingToSvg,
+  TRACKING_VIEWBOX_WIDTH,
+  TRACKING_VIEWBOX_HEIGHT,
+  COURT_WIDTH_FT,
+  COURT_LENGTH_FT,
+} from "../../utils/courtGeometry";
 import type { StructuredVisualizationData } from "../../types/report";
 
 const BALL_COLOR = "#3B82F6";
@@ -41,7 +47,16 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
     return all;
   });
 
-  const defs = courtSvgDefs();
+  const viewBox = `0 0 ${TRACKING_VIEWBOX_WIDTH} ${TRACKING_VIEWBOX_HEIGHT}`;
+
+  const courtTl = trackingToSvg(0, 0);
+  const courtBr = trackingToSvg(COURT_WIDTH_FT, COURT_LENGTH_FT);
+  const netLeft = trackingToSvg(0, COURT_LENGTH_FT / 2);
+  const netRight = trackingToSvg(COURT_WIDTH_FT, COURT_LENGTH_FT / 2);
+  const kitchenTopFar = trackingToSvg(0, 7);
+  const kitchenTopNear = trackingToSvg(COURT_WIDTH_FT, 7);
+  const kitchenBottomFar = trackingToSvg(0, COURT_LENGTH_FT - 7);
+  const kitchenBottomNear = trackingToSvg(COURT_WIDTH_FT, COURT_LENGTH_FT - 7);
 
   function toggleLayer(key: string) {
     setVisibleLayers((prev) => {
@@ -54,24 +69,35 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
 
   return (
     <div className="relative">
-      <svg viewBox={defs.viewBox} className="w-full bg-white" style={{ aspectRatio: "200/440" }}>
+      <svg viewBox={viewBox} className="w-full bg-white" style={{ aspectRatio: `${TRACKING_VIEWBOX_WIDTH}/${TRACKING_VIEWBOX_HEIGHT}` }}>
         <rect
-          x={defs.courtOutline.x}
-          y={defs.courtOutline.y}
-          width={defs.courtOutline.width}
-          height={defs.courtOutline.height}
+          x={0}
+          y={0}
+          width={TRACKING_VIEWBOX_WIDTH}
+          height={TRACKING_VIEWBOX_HEIGHT}
+          fill="#FAFBFA"
+          stroke="#BCCFBB"
+          strokeWidth={0.8}
+          strokeDasharray="4,2"
+          rx={2}
+        />
+        <rect
+          x={courtTl.x}
+          y={courtTl.y}
+          width={courtBr.x - courtTl.x}
+          height={courtBr.y - courtTl.y}
           fill="#F5FAF1"
           stroke="#14241B"
           strokeWidth={1}
           rx={2}
         />
-        <line x1={defs.net.x1} y1={defs.net.y1} x2={defs.net.x2} y2={defs.net.y2} stroke="#14241B" strokeWidth={1.5} strokeDasharray="4,3" />
-        <line x1={defs.kitchenTop.x1} y1={defs.kitchenTop.y1} x2={defs.kitchenTop.x2} y2={defs.kitchenTop.y2} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
-        <line x1={defs.kitchenBottom.x1} y1={defs.kitchenBottom.y1} x2={defs.kitchenBottom.x2} y2={defs.kitchenBottom.y2} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
+        <line x1={netLeft.x} y1={netLeft.y} x2={netRight.x} y2={netRight.y} stroke="#14241B" strokeWidth={1.5} strokeDasharray="4,3" />
+        <line x1={kitchenTopFar.x} y1={kitchenTopFar.y} x2={kitchenTopNear.x} y2={kitchenTopNear.y} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
+        <line x1={kitchenBottomFar.x} y1={kitchenBottomFar.y} x2={kitchenBottomNear.x} y2={kitchenBottomNear.y} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
         {data.scatter_plots.players.map((player) => {
           if (!visibleLayers.has(`player-${player.id}`)) return null;
           return player.points.map((pt, i) => {
-            const svg = courtToSvg(pt[0], pt[1]);
+            const svg = trackingToSvg(pt[0], pt[1]);
             return (
               <circle
                 key={`p-${player.id}-${i}`}
@@ -86,7 +112,7 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
         })}
         {visibleLayers.has("ball") &&
           data.scatter_plots.ball.map((pt, i) => {
-            const svg = courtToSvg(pt[0], pt[1]);
+            const svg = trackingToSvg(pt[0], pt[1]);
             return (
               <circle
                 key={`b-${i}`}
@@ -100,7 +126,7 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
           })}
         {visibleLayers.has("bounces") &&
           data.scatter_plots.bounces.map((pt, i) => {
-            const svg = courtToSvg(pt[0], pt[1]);
+            const svg = trackingToSvg(pt[0], pt[1]);
             return (
               <g key={`bo-${i}`}>
                 <line

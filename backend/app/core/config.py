@@ -86,6 +86,9 @@ class Settings(BaseModel):
     enable_analysis_overlay_video: bool = True            # 是否生成分析叠加视频
     enable_position_visualizations: bool = True           # 是否生成位置可视化图
     visualization_language: str = "zh-CN"                 # 可视化文字语言
+    enable_projection_debug_jsonl: bool = False           # 是否生成逐帧投影诊断 JSONL
+    enable_projection_debug_overlay: bool = False         # 是否生成投影诊断叠加视频
+    near_clip_threshold: float = 0.94                     # bbox 底边裁切检测阈值（画面高度比例）
 
     # ---- 球员身份跟踪（跨帧保持同一人身份）----
     player_identity_max_players: int = 4                   # 最多追踪人数
@@ -97,6 +100,25 @@ class Settings(BaseModel):
     player_identity_max_speed_mps: float = 7.0            # 最大速度（米/秒，过滤异常跳变）
     player_identity_court_buffer_m: float = 0.75          # 球场缓冲距离（米）
     player_identity_smoothing_window: int = 5             # 平滑窗口帧数
+
+    # ---- 球员锁定（跨帧保持 player_1~player_4 身份稳定性）----
+    player_lock_target_player_count: int = 4              # 主球员目标数量（singles=2, doubles=4）
+    player_lock_bootstrap_min_frames: int = 60            # bootstrap 最短收集帧数
+    player_lock_bootstrap_max_frames: int = 180           # bootstrap 最长收集帧数
+    player_lock_min_observed_frames: int = 8              # 候选最少出现帧数
+    player_lock_lock_min_hits: int = 5                    # 锁定所需连续命中帧数
+    player_lock_plausible_min_hits: int = 3               # 进入 tentative 所需连续帧数
+    player_lock_lost_grace_frames: int = 3                # 从 locked 到 lost 的容错帧数
+    player_lock_lost_max_frames_locked: int = 300         # lost 状态最长容忍帧数
+    player_lock_locked_conf: float = 0.06                 # locked 状态最低置信度
+    player_lock_tentative_conf: float = 0.12              # tentative 状态最低置信度
+    player_lock_searching_conf: float = 0.20              # searching 状态最低置信度
+    player_lock_reconnect_threshold: float = 0.45         # 重连评分阈值
+    player_lock_court_margin_ft: float = 12.0             # 近场区域外扩边距（英尺）
+    player_lock_max_reconnect_distance_ft: float = 15.0   # 重连最大距离（英尺）
+    player_lock_bootstrap_court_margin_ft: float = 12.0   # bootstrap 期间球场外扩（英尺）
+    player_lock_lost_reconnect_court_margin_ft: float = 20.0  # lost 重连球场外扩（英尺）
+    player_lock_enable_appearance_score: bool = False     # 是否启用人脸/外观特征重连评分
 
     # ---- 场地线检测（用于自动标定）----
     court_line_model_path: str | None = None              # 场地线分割模型路径
@@ -293,6 +315,11 @@ def get_settings() -> Settings:
         enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true").lower()
         in {"1", "true", "yes"},
         visualization_language=os.getenv("PICKLEBALL_VISUALIZATION_LANGUAGE", "zh-CN"),
+        enable_projection_debug_jsonl=os.getenv("PICKLEBALL_ENABLE_PROJECTION_DEBUG_JSONL", "false").lower()
+        in {"1", "true", "yes"},
+        enable_projection_debug_overlay=os.getenv("PICKLEBALL_ENABLE_PROJECTION_DEBUG_OVERLAY", "false").lower()
+        in {"1", "true", "yes"},
+        near_clip_threshold=float(os.getenv("PICKLEBALL_NEAR_CLIP_THRESHOLD", "0.94")),
         player_identity_max_players=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_PLAYERS", "4"))),
         player_identity_lost_buffer_frames=max(
             1,
@@ -317,6 +344,24 @@ def get_settings() -> Settings:
         player_identity_max_speed_mps=float(os.getenv("PICKLEBALL_PLAYER_IDENTITY_MAX_SPEED_MPS", "7.0")),
         player_identity_court_buffer_m=float(os.getenv("PICKLEBALL_PLAYER_IDENTITY_COURT_BUFFER_M", "0.75")),
         player_identity_smoothing_window=max(1, int(os.getenv("PICKLEBALL_PLAYER_IDENTITY_SMOOTHING_WINDOW", "5"))),
+        # ---- 球员锁定配置 ----
+        player_lock_target_player_count=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_TARGET_PLAYER_COUNT", "4"))),
+        player_lock_bootstrap_min_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MIN_FRAMES", "60"))),
+        player_lock_bootstrap_max_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MAX_FRAMES", "180"))),
+        player_lock_min_observed_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_MIN_OBSERVED_FRAMES", "8"))),
+        player_lock_lock_min_hits=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOCK_MIN_HITS", "5"))),
+        player_lock_plausible_min_hits=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_PLAUSIBLE_MIN_HITS", "3"))),
+        player_lock_lost_grace_frames=max(0, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_GRACE_FRAMES", "3"))),
+        player_lock_lost_max_frames_locked=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_MAX_FRAMES_LOCKED", "300"))),
+        player_lock_locked_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_LOCKED_CONF", "0.06")),
+        player_lock_tentative_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_TENTATIVE_CONF", "0.12")),
+        player_lock_searching_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_SEARCHING_CONF", "0.20")),
+        player_lock_reconnect_threshold=_clamp_float(os.getenv("PICKLEBALL_PLAYER_LOCK_RECONNECT_THRESHOLD", "0.45"), 0.0, 1.0),
+        player_lock_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_COURT_MARGIN_FT", "12.0")),
+        player_lock_max_reconnect_distance_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_MAX_RECONNECT_DISTANCE_FT", "15.0")),
+        player_lock_bootstrap_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_COURT_MARGIN_FT", "12.0")),
+        player_lock_lost_reconnect_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_RECONNECT_COURT_MARGIN_FT", "20.0")),
+        player_lock_enable_appearance_score=os.getenv("PICKLEBALL_PLAYER_LOCK_ENABLE_APPEARANCE_SCORE", "false").lower() in {"1", "true", "yes"},
         court_line_model_path=os.getenv("PICKLEBALL_COURT_LINE_MODEL_PATH")
         or _first_existing_path(model_dir, ["court-line/best.pt", "court-line/court-line-seg.pt"]),
         court_line_device=os.getenv("PICKLEBALL_COURT_LINE_DEVICE") or None,
