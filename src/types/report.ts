@@ -59,7 +59,8 @@ export type AppPath =
   | `/analysis/${string}/reports/${ReportType}`
   | "/training"
   | "/hardware"
-  | `/reports/${ReportType}`;
+  | `/reports/${ReportType}`
+  | `/recording/${string}`;
 
 export type InsightTone = "advantage" | "risk" | "error" | "training";
 

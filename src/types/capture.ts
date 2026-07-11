@@ -52,6 +52,8 @@ export type NormalizedCaptureStopResult = {
 
 export type CaptureRuntimeState =
   | { phase: "idle" }
+  | { phase: "hydrating" }
+  | { phase: "hydration_failed"; error: string }
   | { phase: "starting"; intent: CaptureStartIntent }
   | { phase: "recording"; session: UnifiedCaptureSession }
   | { phase: "stopping"; session: UnifiedCaptureSession; operationError?: string }

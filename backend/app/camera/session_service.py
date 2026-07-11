@@ -488,6 +488,15 @@ class SessionService:
                 except Exception as exc:
                     logger.warning("删除录制视频文件失败: %s", exc)
 
+        # 兜底：对 failed 录制（video_path 可能为空），尝试按 output_path 清理
+        output_path = self._output_path(session_id, session.camera_id)
+        if output_path.exists():
+            try:
+                output_path.unlink()
+                logger.info("已删除录制输出文件: %s", output_path)
+            except Exception as exc:
+                logger.warning("删除录制输出文件失败: %s", exc)
+
         # 清除活跃录制锁（如果是当前活跃的）
         self._clear_active(session.camera_id)
 

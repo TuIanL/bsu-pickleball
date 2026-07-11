@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Camera, CheckCircle2, Clock, MapPin, Play, PlusCircle,
+  Camera, CheckCircle2, Clock, Loader2, MapPin, Play, PlusCircle,
   RefreshCw, Square, Trash2, Upload, Users, Wifi, WifiOff, X,
 } from "lucide-react";
 import type { AppPath, FieldSession, CameraInfo, ProbeResult, RecordingSession, SyncRecordingSession, SessionTimelineEvent, CaptureStopResult } from "../types/report";
@@ -10,6 +10,7 @@ import {
   getCameraPreviewUrl, cancelRecording, cancelSyncRecording,
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
+import { MiniTimeline } from "../components/MiniTimeline";
 import { useCameraSetup } from "../hooks/useCameraSetup";
 import { useCapturePreflight } from "../hooks/useCapturePreflight";
 import { useLiveCoding } from "../hooks/useLiveCoding";
@@ -53,8 +54,10 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const liveCoding = useLiveCoding({
     fieldSessionId: sessionId,
     captureTakeId: runtime.captureTakeId,
+    captureMode: fieldSession?.capture_mode ?? "practice",
     phase: runtime.phase,
     elapsedMs: runtime.elapsedMs,
+    startedAt: runtime.session?.startedAt,
   });
 
   // ── 页面协调 ──
@@ -97,8 +100,27 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
 
   useEffect(() => { loadFieldSession(); }, [loadFieldSession]);
 
-  // ── 加载中 ──
-  if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><p className="text-slate-400">加载中…</p></div>;
+  // ── Runtime 恢复后同步摄像头选择 ──
+  useEffect(() => {
+    if (runtime.phase !== "recording" || !runtime.session) return;
+    for (const track of runtime.session.tracks) {
+      if (track.slot === "single") {
+        cameraSetup.setSelectedCameraId(track.cameraId);
+      } else if (track.slot === "cam_1" || track.slot === "cam_2") {
+        cameraSetup.selectSlot(track.slot, track.cameraId);
+      }
+    }
+  }, [runtime.phase, runtime.session?.sourceSessionId]);
+
+  // ── 加载中 / Hydrating ──
+  if (loading || runtime.isHydrating) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh] gap-3">
+        <Loader2 size={20} className="animate-spin text-slate-400" />
+        <p className="text-slate-400">{loading ? "加载中…" : "检测活跃录制…"}</p>
+      </div>
+    );
+  }
   if (!fieldSession) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
@@ -208,16 +230,18 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className={`w-3 h-3 rounded-full ${runtime.phase === "recording" ? "bg-[#FF4D4F] animate-pulse" : runtime.phase === "stopping" || runtime.phase === "recovering" ? "bg-[#E8A838]" : "bg-slate-300"}`} />
+            <div className={`w-3 h-3 rounded-full ${runtime.phase === "recording" ? "bg-[#FF4D4F] animate-pulse" : runtime.phase === "stopping" || runtime.phase === "recovering" ? "bg-[#E8A838]" : runtime.phase === "hydrating" ? "bg-[#3B82F6]" : runtime.phase === "hydration_failed" ? "bg-[#FF4D4F]" : "bg-slate-300"}`} />
             <span className="text-sm font-bold text-[#14241B]">
               {runtime.phase === "idle" ? "就绪" :
                runtime.phase === "starting" ? "启动中…" :
+               runtime.phase === "hydrating" ? "检测恢复中…" :
                runtime.phase === "recording" ? `录制中 ${elapsedDisplay}` :
                runtime.phase === "stopping" ? "停止中…" :
-               runtime.phase === "recovering" ? "恢复中…" :
+               runtime.phase === "recovering" ? (runtime.recoveryTimedOut ? "恢复超时" : "恢复中…") :
                runtime.phase === "completed" || runtime.phase === "partial" ? `已完成 ${elapsedDisplay}` :
                runtime.phase === "failed" ? "失败" :
-               runtime.phase === "canceled" ? "已取消" : "就绪"}
+               runtime.phase === "canceled" ? "已取消" :
+               runtime.phase === "hydration_failed" ? "恢复失败" : "就绪"}
             </span>
           </div>
           <div className="flex gap-2">
@@ -234,13 +258,29 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
                 <button className="flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition" onClick={handleCancel} type="button">取消</button>
               </>
             )}
-            {runtime.phase === "recovering" && (
+            {runtime.phase === "recovering" && !runtime.recoveryTimedOut && (
               <button className="flex items-center gap-2 rounded-xl bg-[#3B82F6] px-5 py-2.5 text-white font-bold" onClick={() => runtime.recover()} type="button">
                 <RefreshCw size={16} />重试恢复
               </button>
             )}
+            {runtime.phase === "recovering" && runtime.recoveryTimedOut && (
+              <>
+                <button className="flex items-center gap-2 rounded-xl bg-[#FF4D4F] px-5 py-2.5 text-white font-bold" onClick={handleStop} type="button">
+                  <Square size={16} fill="currentColor" />再次停止
+                </button>
+                <button className="flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition" onClick={handleCancel} type="button">取消录制</button>
+              </>
+            )}
+            {runtime.phase === "hydration_failed" && (
+              <button className="flex items-center gap-2 rounded-xl bg-[#3B82F6] px-5 py-2.5 text-white font-bold" onClick={() => runtime.hydrate()} type="button">
+                <RefreshCw size={16} />重试
+              </button>
+            )}
           </div>
         </div>
+        {runtime.phase === "hydration_failed" && runtime.hydrationError && (
+          <p className="text-xs text-[#FF4D4F] mt-2">{runtime.hydrationError}</p>
+        )}
         {runtime.error && <p className="text-xs text-[#FF4D4F] mt-2">{runtime.error}</p>}
       </div>
 
@@ -274,18 +314,19 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       </div>
 
       {/* Live Coding */}
-      {runtime.phase === "recording" && (
+      {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering") && (
         <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
           <div className="flex flex-wrap gap-2">
             {liveCoding.quickEvents.map(event => {
               const colorMap: Record<string, string> = {
-                game_start: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
-                game_end: "bg-slate-50 border-slate-300 text-slate-500",
-                score_update: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E]",
-                side_change: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7]",
-                timeout_start: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
-                custom_marker: "bg-slate-50 border-slate-300 text-slate-500",
-                session_note: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
+                start_set: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
+                start_game: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
+                start_next_rally: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E]",
+                end_rally: "bg-slate-50 border-slate-300 text-slate-500",
+                start_timeout: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
+                change_side: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7]",
+                add_note: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
+                undo: "bg-red-50 border-red-300 text-red-500",
               };
               return (
                 <button
@@ -306,17 +347,18 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       )}
 
       {/* MiniTimeline */}
-      {runtime.phase === "recording" && (
+      {runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering" ? (
         <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-          <div className="flex gap-2">
-            {liveCoding.timelineEvents.slice(-20).map(evt => (
-              <div key={evt.id} className="text-xs bg-slate-100 px-2 py-1 rounded" title={evt.note}>
-                {formatElapsed(evt.timestamp_ms)}
-              </div>
-            ))}
-          </div>
+          <MiniTimeline
+            segments={liveCoding.segments}
+            events={liveCoding.timelineEvents}
+            liveState={liveCoding.liveCodingState}
+            totalDurationMs={runtime.elapsedMs}
+            elapsedMs={runtime.elapsedMs}
+            showDurationHint={runtime.phase === "recording"}
+          />
         </div>
-      )}
+      ) : null}
 
       {/* 完成面板 */}
       {runtime.isStopped && runtime.result && (

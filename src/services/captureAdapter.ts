@@ -1,7 +1,17 @@
 /** Session Adapter —— RecordingSession / SyncRecordingSession → UnifiedCaptureSession */
-import type { RecordingSession, SyncRecordingSession } from "../types/report";
+import type { RecordingSession, SyncRecordingSession, CaptureTakeSummary } from "../types/report";
 import type { UnifiedCaptureSession, CaptureTrackRuntime, NormalizedCaptureStopResult } from "../types/capture";
 import type { CaptureStopResult } from "../types/report";
+
+export function phaseFromStopStatus(
+  status: NormalizedCaptureStopResult["status"],
+): "completed" | "partial" | "failed" {
+  switch (status) {
+    case "completed": return "completed";
+    case "partial": return "partial";
+    default: return "failed";
+  }
+}
 
 export function adaptRecordingSession(s: RecordingSession): UnifiedCaptureSession {
   if (!s.started_at) throw new Error("RecordingSession 缺少 started_at");
@@ -93,5 +103,70 @@ export function normalizeCaptureStopResult(result: CaptureStopResult): Normalize
     defaultAnalysisVideoId: result.default_analysis_video_id ?? undefined,
     analysisBlockedReason: result.analysis_blocked_reason ?? undefined,
     warnings: result.warnings ?? [],
+  };
+}
+
+export function normalizeRecoveredSingleResult(
+  session: RecordingSession,
+  take: CaptureTakeSummary,
+): NormalizedCaptureStopResult {
+  const status = take.status === "partial" ? "partial" : take.status === "completed" ? "completed" : "failed";
+  const durationMs = take.duration_ms ?? (session.duration_sec ?? 0) * 1000;
+  return {
+    captureTakeId: take.id,
+    fieldSessionId: session.field_session_id ?? "",
+    status,
+    tracks: [{
+      trackId: session.session_id,
+      slot: "single",
+      cameraId: session.camera_id,
+      analysisRole: "default",
+      status: status === "failed" ? "failed" : "completed",
+      videoId: session.video_id,
+      durationMs,
+      fragmentCount: 1,
+      restartCount: 0,
+    }],
+    analysisAvailable: Boolean(session.video_id),
+    defaultAnalysisTrackId: session.session_id,
+    defaultAnalysisVideoId: session.video_id,
+    warnings: [],
+  };
+}
+
+export function normalizeRecoveredDualResult(
+  session: SyncRecordingSession,
+  take: CaptureTakeSummary,
+): NormalizedCaptureStopResult {
+  const status = take.status === "partial" ? "partial" : take.status === "completed" ? "completed" : "failed";
+  const durationMs = take.duration_ms ?? (session.duration_sec ?? 0) * 1000;
+  const slots = session.camera_slots ?? {};
+  const tracks = Object.entries(slots).map(([slotName, slotInfo]) => {
+    const isCam1 = slotName === "cam_1";
+    const vid = isCam1
+      ? (session.default_analysis_video_id ?? session.registered_video_ids?.cam_1)
+      : session.registered_video_ids?.cam_2;
+    return {
+      trackId: `${session.session_id}_${slotName}`,
+      slot: slotName,
+      cameraId: typeof slotInfo === "string" ? slotInfo : slotInfo.camera_id,
+      analysisRole: (isCam1 ? "default" : "supplementary") as "default" | "supplementary",
+      status: vid ? "completed" : "partial",
+      videoId: vid,
+      durationMs,
+      fragmentCount: session.segments?.length ?? 1,
+      restartCount: session.total_restarts ?? 0,
+    };
+  });
+
+  return {
+    captureTakeId: take.id,
+    fieldSessionId: session.field_session_id ?? "",
+    status,
+    tracks,
+    analysisAvailable: Boolean(session.default_analysis_video_id),
+    defaultAnalysisTrackId: tracks.find(t => t.analysisRole === "default")?.trackId,
+    defaultAnalysisVideoId: session.default_analysis_video_id,
+    warnings: [],
   };
 }

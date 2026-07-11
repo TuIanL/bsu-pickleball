@@ -12,6 +12,10 @@ interface FieldSessionGroupCardProps {
   onRefresh: () => void;
   onPlay: (session: RecordingSession) => void;
   onDeleteFieldSession?: (session: FieldSession) => void;
+  selectedRecordingIds?: Set<string>;
+  onToggleSelectRecording?: (sessionId: string) => void;
+  selectedFieldSession?: boolean;
+  onToggleSelectFieldSession?: () => void;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -40,6 +44,10 @@ export function FieldSessionGroupCard({
   onRefresh,
   onPlay,
   onDeleteFieldSession,
+  selectedRecordingIds,
+  onToggleSelectRecording,
+  selectedFieldSession = false,
+  onToggleSelectFieldSession,
 }: FieldSessionGroupCardProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -52,13 +60,23 @@ export function FieldSessionGroupCard({
   );
 
   return (
-    <section className="overflow-hidden rounded-3xl border border-[#DDE9D6] bg-white/80 shadow-sm">
+    <section className={`overflow-hidden rounded-3xl border bg-white/80 shadow-sm ${selectedFieldSession ? "border-[#22C55E]/50 ring-1 ring-[#22C55E]/20" : "border-[#DDE9D6]"}`}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-[#F5FAF1]"
         aria-expanded={expanded}
       >
+        {!isUncategorized && onToggleSelectFieldSession && (
+          <span onClick={(e) => { e.stopPropagation(); onToggleSelectFieldSession(); }}>
+            <input
+              type="checkbox"
+              checked={selectedFieldSession}
+              className="size-4 accent-[#22C55E] cursor-pointer"
+              onChange={() => {}}
+            />
+          </span>
+        )}
         <span className="text-[#168A34]">
           {expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
         </span>
@@ -116,6 +134,9 @@ export function FieldSessionGroupCard({
                 onNavigate={onNavigate}
                 onRefresh={onRefresh}
                 onPlay={onPlay}
+                selectable={session.status !== "recording"}
+                selected={selectedRecordingIds?.has(session.session_id) ?? false}
+                onToggleSelect={onToggleSelectRecording}
               />
             ))
           )}

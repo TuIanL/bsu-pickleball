@@ -14,6 +14,7 @@ interface TimelineProps {
   totalDurationMs: number;
   elapsedMs: number;
   showDurationHint?: boolean;
+  staticMode?: boolean;
 }
 
 const TRACK_HEIGHT = 26;
@@ -52,10 +53,14 @@ export function deriveNonPlayRanges(events: SessionTimelineEvent[], elapsedMs: n
   return ranges;
 }
 
-export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, showDurationHint }: TimelineProps) {
+export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, showDurationHint, staticMode = false }: TimelineProps) {
   const [smoothElapsedMs, setSmoothElapsedMs] = useState(elapsedMs);
   const anchorRef = useRef({ elapsedMs, at: performance.now() });
   useEffect(() => {
+    if (staticMode) {
+      setSmoothElapsedMs(elapsedMs);
+      return;
+    }
     anchorRef.current = { elapsedMs, at: performance.now() };
     let frame = 0;
     const tick = () => {
@@ -64,8 +69,8 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [elapsedMs]);
-  const displayElapsedMs = Math.max(elapsedMs, smoothElapsedMs);
+  }, [elapsedMs, staticMode]);
+  const displayElapsedMs = staticMode ? elapsedMs : Math.max(elapsedMs, smoothElapsedMs);
   const viewDuration = 90000;
   const windowStart = Math.max(0, displayElapsedMs - viewDuration);
   const scale = (ms: number) => `${Math.max(0, Math.min(100, ((ms - windowStart) / viewDuration) * 100))}%`;
@@ -142,7 +147,7 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
           );
         })}
 
-        {/* Instant markers (side_change, session_note) */}
+        {/* Instant markers */}
         {instantMarkers.length > 0 && (
           <div className="absolute inset-0 pointer-events-none" style={{ top: 0 }}>
             {instantMarkers.map((evt) => {
@@ -184,8 +189,8 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
           </div>
         )}
 
-        {/* Playhead */}
-        {displayElapsedMs > 0 && (
+        {/* Playhead — 前 100ms 不渲染，避免指针从 0 位置走入 */}
+        {displayElapsedMs > 100 && (
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
             style={{ left: scale(displayElapsedMs) }}

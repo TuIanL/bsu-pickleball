@@ -3,13 +3,17 @@ import { useReducer, useState, useEffect, useCallback, useRef } from "react";
 import type {
   CaptureRuntimeState, CaptureStartIntent, UnifiedCaptureSession, NormalizedCaptureStopResult, CaptureMode,
 } from "../types/capture";
-import { adaptRecordingSession, adaptSyncRecordingSession, normalizeCaptureStopResult } from "../services/captureAdapter";
+import {
+  adaptRecordingSession, adaptSyncRecordingSession, normalizeCaptureStopResult,
+  normalizeRecoveredSingleResult, normalizeRecoveredDualResult, phaseFromStopStatus,
+} from "../services/captureAdapter";
 import {
   startRecording, stopRecording, cancelRecording,
   startSyncRecording, stopSyncRecording, cancelSyncRecording,
-  getRecording, getSyncRecording,
+  getRecording, getSyncRecording, getCaptureTake,
+  listRecordings, listSyncRecordings,
 } from "../services/analysisClient";
-import type { RecordingStartRequest, SyncStartRequest } from "../types/report";
+import type { RecordingStartRequest, SyncStartRequest, CaptureTakeSummary } from "../types/report";
 
 // ── Reducer ──────────────────────────────────────────────────────
 
@@ -24,10 +28,25 @@ export type RuntimeAction =
   | { type: "CANCEL_REQUESTED" }
   | { type: "CANCELED"; session: UnifiedCaptureSession }
   | { type: "FAILED"; session: UnifiedCaptureSession | null; error: string }
-  | { type: "RESET" };
+  | { type: "RESET" }
+  // ── Hydration actions ──
+  | { type: "HYDRATE_REQUESTED" }
+  | { type: "ACTIVE_SESSION_FOUND"; session: UnifiedCaptureSession }
+  | { type: "NO_ACTIVE_SESSION" }
+  | { type: "HYDRATE_FAILED"; error: string };
 
 function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction): CaptureRuntimeState {
   switch (action.type) {
+    // ── Hydration ──
+    case "HYDRATE_REQUESTED":
+      return { phase: "hydrating" };
+    case "ACTIVE_SESSION_FOUND":
+      return { phase: "recording", session: action.session };
+    case "NO_ACTIVE_SESSION":
+      return { phase: "idle" };
+    case "HYDRATE_FAILED":
+      return { phase: "hydration_failed", error: action.error };
+    // ── Start ──
     case "START":
       return { phase: "starting", intent: action.intent };
     case "STARTED":
@@ -35,7 +54,7 @@ function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction
     case "START_FAILED":
       return { phase: "failed", session: null, result: null, error: action.error };
     case "STOP_REQUESTED":
-      if (state.phase !== "recording") return state;
+      if (state.phase !== "recording" && state.phase !== "recovering") return state;
       return { phase: "stopping", session: state.session, operationError: undefined };
     case "STOP_SUCCEEDED":
       return {
@@ -47,14 +66,14 @@ function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction
       if (state.phase !== "stopping" && state.phase !== "recording") return state;
       return { phase: "recovering", session: state.session, operationError: action.error };
     case "RECOVERED": {
-      const rPhase = action.result ? (action.result.status === "partial" ? "partial" as const : "completed" as const) : "failed" as const;
+      const rPhase = action.result ? phaseFromStopStatus(action.result.status) : "failed" as const;
       if (rPhase === "failed") {
-        return { phase: "failed", session: action.session, result: action.result ?? null, error: "恢复后状态未知" };
+        return { phase: "failed", session: action.session, result: action.result ?? null, error: action.result?.warnings?.[0] ?? "恢复后状态未知" };
       }
       return { phase: rPhase, session: action.session, result: action.result! };
     }
     case "CANCEL_REQUESTED":
-      if (state.phase !== "recording" && state.phase !== "stopping") return state;
+      if (state.phase !== "recording" && state.phase !== "stopping" && state.phase !== "recovering") return state;
       return state;
     case "CANCELED":
       if (state.phase !== "stopping" && state.phase !== "recording" && state.phase !== "recovering") return state;
@@ -76,9 +95,18 @@ type UseCaptureRuntimeOptions = {
 };
 
 export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: UseCaptureRuntimeOptions) {
-  const [state, dispatch] = useReducer(captureRuntimeReducer, { phase: "idle" });
+  const [state, dispatch] = useReducer(captureRuntimeReducer, { phase: "hydrating" });
   const [elapsedMs, setElapsedMs] = useState(0);
   const clockRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hydrationStartedRef = useRef<string | null>(null);
+  const [recoveryAttemptCount, setRecoveryAttemptCount] = useState(0);
+  const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);
+  const recoveryRef = useRef({
+    startedAt: 0,
+    attemptCount: 0,
+    inFlight: false,
+    timer: null as ReturnType<typeof setTimeout> | null,
+  });
 
   const startClock = useCallback((startedAt: string) => {
     clockRef.current = setInterval(() => {
@@ -129,6 +157,61 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     return () => clearInterval(timer);
   }, [state.phase, (state as any).session?.sourceSessionId]);
 
+  // ── Hydration: 页面重进时发现活跃录制 ──
+  const hydrate = useCallback(async () => {
+    if (!fieldSessionId) return;
+    dispatch({ type: "HYDRATE_REQUESTED" });
+
+    try {
+      const [singleSessions, dualSessions] = await Promise.all([
+        listRecordings({ field_session_id: fieldSessionId, status: "recording" }).catch(() => []),
+        listSyncRecordings({ field_session_id: fieldSessionId, status: "recording" }).catch(() => []),
+      ]);
+
+      const candidates: UnifiedCaptureSession[] = [
+        ...singleSessions.map(adaptRecordingSession),
+        ...dualSessions.map(adaptSyncRecordingSession),
+      ];
+
+      if (candidates.length === 0) {
+        dispatch({ type: "NO_ACTIVE_SESSION" });
+        return;
+      }
+
+      if (candidates.length > 1) {
+        dispatch({
+          type: "HYDRATE_FAILED",
+          error: "当前采集任务存在多个活跃录制会话，请先检查服务端录制状态。",
+        });
+        return;
+      }
+
+      const session = candidates[0];
+
+      if (!session.captureTakeId) {
+        dispatch({
+          type: "HYDRATE_FAILED",
+          error: "找到了活跃录制，但缺少 CaptureTake，无法恢复实时事件标注。",
+        });
+        return;
+      }
+
+      dispatch({ type: "ACTIVE_SESSION_FOUND", session });
+    } catch (error) {
+      dispatch({
+        type: "HYDRATE_FAILED",
+        error: error instanceof Error ? error.message : "查询活跃录制失败",
+      });
+    }
+  }, [fieldSessionId]);
+
+  // Hydration Effect
+  useEffect(() => {
+    if (!fieldSessionId || hydrationStartedRef.current === fieldSessionId) return;
+    hydrationStartedRef.current = fieldSessionId;
+    void hydrate();
+  }, [fieldSessionId, hydrate]);
+
   const start = useCallback(async (intent: CaptureStartIntent) => {
     dispatch({ type: "START", intent });
 
@@ -178,7 +261,11 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
   }, [fieldSessionId, onFieldSessionStarted]);
 
   const stop = useCallback(async () => {
-    if (state.phase !== "recording") return;
+    if (state.phase !== "recording" && state.phase !== "recovering") return;
+    if (state.phase === "recovering" && recoveryRef.current.timer) {
+      clearTimeout(recoveryRef.current.timer);
+      recoveryRef.current.timer = null;
+    }
     dispatch({ type: "STOP_REQUESTED" });
 
     try {
@@ -210,47 +297,120 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
       const sid = state.session.sourceSessionId;
       const mode = state.session.mode;
 
-      let session: UnifiedCaptureSession;
-      let result: NormalizedCaptureStopResult | undefined;
-
       if (mode === "single") {
         const s = await getRecording(sid);
         if (!s) throw new Error("无法获取录制状态");
-        session = adaptRecordingSession(s);
-        if (s.status === "completed" || s.status === "failed") {
-          result = {
-            captureTakeId: session.captureTakeId,
-            fieldSessionId,
-            status: s.status,
-            tracks: [],
-            analysisAvailable: false,
-            warnings: ["从服务器恢复"],
-          };
+        const session = adaptRecordingSession(s);
+
+        if (s.status === "recording") {
+          recoveryRef.current.attemptCount++;
+          setRecoveryAttemptCount(recoveryRef.current.attemptCount);
+          return;
         }
+
+        const takeId = s.capture_take_id;
+        let take: CaptureTakeSummary | null = null;
+        if (takeId) {
+          try { take = await getCaptureTake(takeId); } catch { /* ignore */ }
+        }
+
+        const result = take
+          ? normalizeRecoveredSingleResult(s, take)
+          : {
+              captureTakeId: session.captureTakeId,
+              fieldSessionId,
+              status: s.status as "completed" | "partial" | "failed",
+              tracks: [],
+              analysisAvailable: false,
+              warnings: takeId ? ["服务器未返回 CaptureTake"] : [],
+            };
+        dispatch({ type: "RECOVERED", session, result });
       } else {
         const s = await getSyncRecording(sid);
         if (!s) throw new Error("无法获取录制状态");
-        session = adaptSyncRecordingSession(s);
-        if (s.status === "completed" || s.status === "failed") {
-          result = {
-            captureTakeId: session.captureTakeId,
-            fieldSessionId,
-            status: s.status,
-            tracks: [],
-            analysisAvailable: false,
-            warnings: ["从服务器恢复"],
-          };
-        }
-      }
+        const session = adaptSyncRecordingSession(s);
 
-      dispatch({ type: "RECOVERED", session, result });
+        if (s.status === "recording") {
+          recoveryRef.current.attemptCount++;
+          setRecoveryAttemptCount(recoveryRef.current.attemptCount);
+          return;
+        }
+
+        const takeId = s.capture_take_id;
+        let take: CaptureTakeSummary | null = null;
+        if (takeId) {
+          try { take = await getCaptureTake(takeId); } catch { /* ignore */ }
+        }
+
+        const result = take
+          ? normalizeRecoveredDualResult(s, take)
+          : {
+              captureTakeId: session.captureTakeId,
+              fieldSessionId,
+              status: s.status as "completed" | "partial" | "failed",
+              tracks: [],
+              analysisAvailable: false,
+              warnings: takeId ? ["服务器未返回 CaptureTake"] : [],
+            };
+        dispatch({ type: "RECOVERED", session, result });
+      }
     } catch (e: any) {
-      dispatch({ type: "FAILED", session: state.session, error: e?.message ?? "恢复失败" });
+      recoveryRef.current.attemptCount++;
+      setRecoveryAttemptCount(recoveryRef.current.attemptCount);
+      dispatch({ type: "STOP_RESULT_UNKNOWN", error: e?.message ?? "恢复查询失败" });
     }
   }, [state.phase, fieldSessionId, (state as any).session]);
 
+  // ── Auto-recovery: recovering 状态下自动查询服务器 ──
+  useEffect(() => {
+    if (state.phase !== "recovering") {
+      recoveryRef.current.timer = null;
+      setRecoveryTimedOut(false);
+      return;
+    }
+
+    if (recoveryRef.current.startedAt === 0) {
+      recoveryRef.current.startedAt = Date.now();
+      recoveryRef.current.attemptCount = 0;
+      setRecoveryAttemptCount(0);
+      setRecoveryTimedOut(false);
+    }
+
+    const scheduleNext = (delayMs: number) => {
+      recoveryRef.current.timer = setTimeout(async () => {
+        if (recoveryRef.current.inFlight) return;
+        recoveryRef.current.inFlight = true;
+        try {
+          await recover();
+        } finally {
+          recoveryRef.current.inFlight = false;
+        }
+      }, delayMs);
+    };
+
+    const elapsed = Date.now() - recoveryRef.current.startedAt;
+    if (elapsed > 30000) {
+      setRecoveryTimedOut(true);
+      return;
+    }
+
+    const delay = recoveryRef.current.attemptCount === 0 ? 500 : 3000;
+    scheduleNext(delay);
+
+    return () => {
+      if (recoveryRef.current.timer) {
+        clearTimeout(recoveryRef.current.timer);
+        recoveryRef.current.timer = null;
+      }
+    };
+  }, [state.phase, recover]);
+
   const cancel = useCallback(async () => {
-    if (state.phase !== "recording" && state.phase !== "stopping") return;
+    if (state.phase !== "recording" && state.phase !== "stopping" && state.phase !== "recovering") return;
+    if (state.phase === "recovering" && recoveryRef.current.timer) {
+      clearTimeout(recoveryRef.current.timer);
+      recoveryRef.current.timer = null;
+    }
     dispatch({ type: "CANCEL_REQUESTED" });
 
     try {
@@ -285,20 +445,31 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     return null;
   })();
 
+  const hydrationError = state.phase === "hydration_failed" ? state.error : "";
+
+  const operationError = state.phase === "recovering"
+    ? (state as any).operationError ?? ""
+    : "";
+
   return {
     phase: state.phase,
     session: (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "completed" || state.phase === "partial")
       ? state.session : (state.phase === "canceled" ? state.session : null),
     result: (state.phase === "completed" || state.phase === "partial" || state.phase === "failed") ? state.result : null,
-    error: state.phase === "failed" || state.phase === "recovering" ? (state as any).error ?? "" : "",
+    error: state.phase === "failed" ? (state as any).error ?? "" : operationError,
     elapsedMs,
     captureTakeId,
     isRecording: state.phase === "recording" || state.phase === "stopping",
     isStopped: state.phase === "completed" || state.phase === "partial" || state.phase === "failed" || state.phase === "canceled",
+    isHydrating: state.phase === "hydrating",
+    hydrationError,
+    recoveryTimedOut,
+    recoveryAttemptCount,
     start,
     stop,
     cancel,
     recover,
+    hydrate,
     reset,
   };
 }

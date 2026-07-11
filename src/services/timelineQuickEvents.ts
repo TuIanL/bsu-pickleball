@@ -1,46 +1,59 @@
 /**
- * 快捷时间线事件映射 —— 按 capture_mode 生成稳定的 event_type、label、note 和 payload_json。
+ * 快捷时间线事件映射 —— 按 capture_mode 生成稳定的按钮定义。
+ * type 字段直接使用 CodingActionType，便于 Outbox 发送；
+ * 通过 ACTION_TO_EVENT_TYPE 映射为 TimelineEventType 用于直接 API。
  */
-import type { TimelineEventType, TimelineEventSource } from "../types/report";
+import type { TimelineEventType, TimelineEventSource, CodingActionType } from "../types/report";
 
 export interface QuickEventDef {
-  type: TimelineEventType;
+  type: CodingActionType;
   source: TimelineEventSource;
   label: string;
   note: string;
   payload: Record<string, unknown>;
 }
 
+export const ACTION_TO_EVENT_TYPE: Record<string, TimelineEventType> = {
+  start_set: "set_start",
+  start_game: "game_start",
+  start_next_rally: "rally_start",
+  end_rally: "rally_end",
+  change_side: "side_change",
+  add_note: "add_note",
+  undo: "custom_marker",
+  toggle_non_play: "non_play_start",
+  end_game: "game_end",
+  end_set: "set_end",
+};
+
 // —— 比赛模式快捷事件 ——
 export const MATCH_QUICK_EVENTS: QuickEventDef[] = [
-  { type: "game_start", source: "manual", label: "局开始", note: "", payload: {} },
-  { type: "game_end", source: "manual", label: "局结束", note: "", payload: {} },
-  { type: "score_update", source: "manual", label: "比分更新", note: "", payload: { score_a: 0, score_b: 0 } },
-  { type: "score_correction", source: "manual", label: "比分修正", note: "", payload: { score_a: 0, score_b: 0 } },
-  { type: "side_change", source: "manual", label: "换边", note: "", payload: {} },
-  { type: "non_play_start", source: "manual", label: "非比赛开始", note: "", payload: {} },
-  { type: "non_play_end", source: "manual", label: "非比赛结束", note: "", payload: {} },
-  { type: "session_note", source: "manual", label: "备注", note: "", payload: {} },
-  { type: "custom_marker", source: "manual", label: "自定义标记", note: "", payload: {} },
+  { type: "start_set", source: "manual", label: "盘开始", note: "新的一盘开始", payload: {} },
+  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: {} },
+  { type: "start_next_rally", source: "manual", label: "开始下一分", note: "开始新的一分", payload: {} },
+  { type: "end_rally", source: "manual", label: "结束当前分", note: "结束当前进行的分", payload: {} },
+  { type: "start_timeout", source: "manual", label: "战术暂停", note: "进入战术暂停", payload: {} },
+  { type: "change_side", source: "manual", label: "换边", note: "双方交换场地", payload: {} },
+  { type: "add_note", source: "manual", label: "重点标记", note: "标记重要时刻", payload: { highlight: true } },
+  { type: "undo", source: "manual", label: "撤销", note: "撤销上一步操作", payload: {} },
 ];
 
 // —— 练习模式快捷事件 ——
 export const PRACTICE_QUICK_EVENTS: QuickEventDef[] = [
-  { type: "drill_start", source: "manual", label: "练习开始", note: "", payload: {} },
-  { type: "drill_end", source: "manual", label: "练习结束", note: "", payload: {} },
-  { type: "non_play_start", source: "manual", label: "非练习开始", note: "", payload: {} },
-  { type: "non_play_end", source: "manual", label: "非练习结束", note: "", payload: {} },
-  { type: "session_note", source: "manual", label: "重点片段", note: "", payload: { highlight: true } },
-  { type: "custom_marker", source: "manual", label: "自定义标记", note: "", payload: {} },
+  { type: "add_note", source: "manual", label: "练习开始", note: "drill_start", payload: {} },
+  { type: "add_note", source: "manual", label: "练习结束", note: "drill_end", payload: {} },
+  { type: "toggle_non_play", source: "manual", label: "非练习", note: "", payload: {} },
+  { type: "add_note", source: "manual", label: "重点片段", note: "", payload: { highlight: true } },
+  { type: "add_note", source: "manual", label: "自定义标记", note: "", payload: {} },
 ];
 
 // —— 工程模式快捷事件 ——
 export const ENGINEERING_QUICK_EVENTS: QuickEventDef[] = [
-  { type: "session_note", source: "manual", label: "画面异常", note: "", payload: { issue: "visual_anomaly" } },
-  { type: "session_note", source: "manual", label: "模型误检", note: "", payload: { issue: "false_detection" } },
-  { type: "session_note", source: "manual", label: "遮挡严重", note: "", payload: { issue: "occlusion" } },
-  { type: "session_note", source: "manual", label: "重点调试", note: "", payload: { debug: true } },
-  { type: "custom_marker", source: "manual", label: "自定义标记", note: "", payload: {} },
+  { type: "add_note", source: "manual", label: "画面异常", note: "", payload: { issue: "visual_anomaly" } },
+  { type: "add_note", source: "manual", label: "模型误检", note: "", payload: { issue: "false_detection" } },
+  { type: "add_note", source: "manual", label: "遮挡严重", note: "", payload: { issue: "occlusion" } },
+  { type: "add_note", source: "manual", label: "重点调试", note: "", payload: { debug: true } },
+  { type: "add_note", source: "manual", label: "自定义标记", note: "", payload: {} },
 ];
 
 export function quickEventsForMode(captureMode: string): QuickEventDef[] {
@@ -55,3 +68,4 @@ export function quickEventsForMode(captureMode: string): QuickEventDef[] {
       return PRACTICE_QUICK_EVENTS;
   }
 }
+

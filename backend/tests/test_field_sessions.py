@@ -259,6 +259,66 @@ def test_recording_start_without_field_session_still_works(client, monkeypatch):
     assert body["match_format"] == "doubles"
 
 
+def test_stop_recording_returns_complete_capture_stop_result(client, monkeypatch):
+    created = _create_field_session(client, court_name="stop测试")
+    _register_camera(client)
+    now = datetime.now(timezone.utc)
+
+    monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
+    monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
+    monkeypatch.setattr(recording_service_module.session_service._recorder, "start", lambda **kwargs: None)
+
+    start_resp = client.post(
+        "/api/recordings/start",
+        json={"camera_id": "cam-a", "field_session_id": created["id"], "court_name": "", "auto_analyze_after_stop": True},
+    )
+    assert start_resp.status_code == 201
+    session_id = start_resp.json()["session_id"]
+
+    monkeypatch.setattr(recording_service_module.session_service, "stop_session", lambda sid: type("FakeSession", (), {
+        "session_id": sid,
+        "capture_take_id": "take_test_001",
+        "video_id": "vid_test_001",
+        "duration_sec": 45.0,
+        "status": "completed",
+        "camera_id": "cam-a",
+        "field_session_id": created["id"],
+        "auto_analysis_job_id": "job_test_001",
+    })())
+
+    class FakeTake:
+        id = "take_test_001"
+        field_session_id = created["id"]
+        capture_mode = type("cm", (), {"value": "match"})()
+        source_session_type = type("sst", (), {"value": "recording"})()
+        source_session_id = session_id
+        status = type("st", (), {"value": "completed"})()
+        started_at = now
+        ended_at = now
+        duration_ms = 45000
+        revision = 1
+
+    fake_db = type("FakeDB", (), {"close": lambda self: None})()
+    monkeypatch.setattr("app.api.routes_recording.get_session_factory", lambda: lambda: fake_db)
+
+    monkeypatch.setattr(
+        "app.services.capture_take_service.get_capture_take",
+        lambda db, tid: FakeTake(),
+    )
+
+    response = client.post(f"/api/recordings/{session_id}/stop")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["capture_take"] is not None
+    assert body["capture_take"]["id"] == "take_test_001"
+    assert len(body["tracks"]) == 1
+    assert body["tracks"][0]["slot"] == "cam_1"
+    assert body["tracks"][0]["camera_id"] == "cam-a"
+    assert body["default_analysis_video_id"] == "vid_test_001"
+    assert body["analysis_available"] is True
+    assert body["tracks"][0]["video_id"] == "vid_test_001"
+
+
 def test_recording_list_filters_by_field_session(client):
     field_session = _create_field_session(client)
     now = datetime.now(timezone.utc)

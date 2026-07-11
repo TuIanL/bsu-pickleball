@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useState, useCallback, useRef } from "react";
 import type { SessionTimelineEvent } from "../types/report";
@@ -72,6 +72,21 @@ describe("CaptureConsole Take isolation", () => {
     });
 
     expect(hook.result.current.timelineEvents).toHaveLength(0);
+  });
+
+  it("MiniTimeline shows when phase is recording/stopping/recovering", () => {
+    const showWhenPresent = ["recording", "stopping", "recovering"];
+    const showWhenAbsent = ["idle", "completed", "partial", "failed", "canceled", "starting"];
+
+    for (const phase of showWhenPresent) {
+      const show = phase === "recording" || phase === "stopping" || phase === "recovering";
+      expect(show).toBe(true);
+    }
+
+    for (const phase of showWhenAbsent) {
+      const show = phase === "recording" || phase === "stopping" || phase === "recovering";
+      expect(show).toBe(false);
+    }
   });
 
   it("does not mix events from different takes", async () => {

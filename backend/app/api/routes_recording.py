@@ -21,6 +21,8 @@ from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResult
 from app.camera.ffmpeg_utils import check_ffmpeg_available
 # 录制会话服务：真正管理录制生命周期（开始/停止/取消/查询）的对象
 from app.camera.session_service import session_service
+# 数据库会话工厂，用于停止时查询 CaptureTake
+from app.database import get_session_factory
 
 # 创建路由表，前缀 /api/recordings
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])

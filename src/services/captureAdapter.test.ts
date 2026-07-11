@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { adaptRecordingSession, adaptSyncRecordingSession, normalizeCaptureStopResult } from "../services/captureAdapter";
-import type { RecordingSession, SyncRecordingSession, CaptureStopResult } from "../types/report";
+import { adaptRecordingSession, adaptSyncRecordingSession, normalizeCaptureStopResult, normalizeRecoveredSingleResult, normalizeRecoveredDualResult, phaseFromStopStatus } from "../services/captureAdapter";
+import type { RecordingSession, SyncRecordingSession, CaptureStopResult, CaptureTakeSummary } from "../types/report";
 
 describe("captureAdapter", () => {
   it("adaptRecordingSession maps fields correctly", () => {
@@ -79,5 +79,103 @@ describe("captureAdapter", () => {
     expect(n.tracks[0].restartCount).toBe(1);
     expect(n.analysisAvailable).toBe(true);
     expect(n.defaultAnalysisVideoId).toBe("v1");
+  });
+
+  describe("phaseFromStopStatus", () => {
+    it("maps completed", () => {
+      expect(phaseFromStopStatus("completed")).toBe("completed");
+    });
+    it("maps partial", () => {
+      expect(phaseFromStopStatus("partial")).toBe("partial");
+    });
+    it("maps failed", () => {
+      expect(phaseFromStopStatus("failed")).toBe("failed");
+    });
+    it("maps unknown to failed", () => {
+      expect(phaseFromStopStatus("unknown" as any)).toBe("failed");
+    });
+  });
+
+  describe("normalizeRecoveredSingleResult", () => {
+    const session = {
+      session_id: "rec_001",
+      camera_id: "cam_a",
+      status: "completed",
+      duration_sec: 45,
+      video_id: "vid_001",
+      field_session_id: "fs_001",
+    } as unknown as RecordingSession;
+
+    it("restores videoId and durationMs from completed take", () => {
+      const take = { id: "take_001", status: "completed", duration_ms: 45000 } as CaptureTakeSummary;
+      const r = normalizeRecoveredSingleResult(session, take);
+      expect(r.captureTakeId).toBe("take_001");
+      expect(r.status).toBe("completed");
+      expect(r.tracks).toHaveLength(1);
+      expect(r.tracks[0].videoId).toBe("vid_001");
+      expect(r.tracks[0].durationMs).toBe(45000);
+      expect(r.tracks[0].cameraId).toBe("cam_a");
+      expect(r.analysisAvailable).toBe(true);
+      expect(r.defaultAnalysisVideoId).toBe("vid_001");
+    });
+
+    it("maps partial take status", () => {
+      const take = { id: "take_002", status: "partial" } as CaptureTakeSummary;
+      const r = normalizeRecoveredSingleResult(session, take);
+      expect(r.status).toBe("partial");
+    });
+
+    it("maps failed take status", () => {
+      const take = { id: "take_003", status: "failed" } as CaptureTakeSummary;
+      const r = normalizeRecoveredSingleResult(session, take);
+      expect(r.status).toBe("failed");
+    });
+
+    it("sets analysisAvailable false when video_id missing", () => {
+      const s = { ...session, video_id: undefined } as unknown as RecordingSession;
+      const take = { id: "take_004", status: "completed" } as CaptureTakeSummary;
+      const r = normalizeRecoveredSingleResult(s, take);
+      expect(r.analysisAvailable).toBe(false);
+      expect(r.defaultAnalysisVideoId).toBeUndefined();
+    });
+  });
+
+  describe("normalizeRecoveredDualResult", () => {
+    const session = {
+      session_id: "sync_001",
+      status: "completed",
+      duration_sec: 60,
+      field_session_id: "fs_001",
+      default_analysis_video_id: "vid_cam1",
+      registered_video_ids: { cam_1: "vid_cam1", cam_2: "vid_cam2" },
+      camera_slots: {
+        cam_1: { camera_id: "cam_a", role: "cam_1", camera_angle: "baseline_high", stream_url_snapshot: "" },
+        cam_2: { camera_id: "cam_b", role: "cam_2", camera_angle: "baseline_high", stream_url_snapshot: "" },
+      },
+      segments: [{ segment_index: 1, status: "completed", files: [], restart_count: 0 }],
+      total_restarts: 2,
+    } as unknown as SyncRecordingSession;
+
+    it("restores both tracks with videoIds", () => {
+      const take = { id: "take_dual_001", status: "completed", duration_ms: 60000 } as CaptureTakeSummary;
+      const r = normalizeRecoveredDualResult(session, take);
+      expect(r.status).toBe("completed");
+      expect(r.tracks).toHaveLength(2);
+      expect(r.tracks[0].slot).toBe("cam_1");
+      expect(r.tracks[0].videoId).toBe("vid_cam1");
+      expect(r.tracks[0].analysisRole).toBe("default");
+      expect(r.tracks[1].slot).toBe("cam_2");
+      expect(r.tracks[1].videoId).toBe("vid_cam2");
+      expect(r.tracks[1].analysisRole).toBe("supplementary");
+      expect(r.analysisAvailable).toBe(true);
+      expect(r.defaultAnalysisVideoId).toBe("vid_cam1");
+      expect(r.tracks[0].restartCount).toBe(2);
+    });
+
+    it("maps partial take status to partial", () => {
+      const take = { id: "take_dual_002", status: "partial" } as CaptureTakeSummary;
+      const r = normalizeRecoveredDualResult(session, take);
+      expect(r.status).toBe("partial");
+    });
   });
 });

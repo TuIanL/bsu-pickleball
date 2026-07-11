@@ -11,6 +11,7 @@ import {
   Dumbbell,
   Edit3,
   Gauge,
+  LayoutDashboard,
   LineChart,
   Play,
   PlusCircle,
@@ -32,6 +33,7 @@ import { CaptureHomePage } from "./pages/CaptureHomePage";
 import { CaptureWizardPage } from "./pages/CaptureWizardPage";
 import CaptureConsolePage from "./pages/CaptureConsolePage";
 import { SegmentManagerPage } from "./pages/SegmentManagerPage";
+import { RecordingWorkspacePage } from "./pages/RecordingWorkspacePage";
 import { TasksPage } from "./pages/TasksPage";
 import { AppShell } from "./components/platform/AppShell";
 import { MetricCard } from "./components/platform/MetricCard";
@@ -148,7 +150,7 @@ import {
 } from "./services/analysisDiagnostics";
 import { buildCourtTrackSummaries, type CourtTrackSummary } from "./services/courtProjectionTracks";
 import { adaptPipelineResultToReport, isPipelineResult } from "./services/pipelineReportAdapter";
-import { quickEventsForMode, type QuickEventDef } from "./services/timelineQuickEvents";
+import { quickEventsForMode, ACTION_TO_EVENT_TYPE, type QuickEventDef } from "./services/timelineQuickEvents";
 
 // 定义路由状态类型，用于管理应用内的页面导航
 type RouteState =
@@ -169,7 +171,8 @@ type RouteState =
   | { name: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string }
   | { name: "camera-hub"; path: "/camera" } // 保留，旧路由兼容
   | { name: "training"; path: "/training" }
-  | { name: "hardware"; path: "/hardware" };
+  | { name: "hardware"; path: "/hardware" }
+  | { name: "recordingWorkspace"; path: `/recording/${string}`; sessionId: string };
 
 const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
 
@@ -247,6 +250,13 @@ function parsePath(pathname: string): RouteState {
   if (captureConsoleMatch) {
     const [, sessionId] = captureConsoleMatch;
     return { name: "captureConsole", path: `/capture/${sessionId}`, sessionId };
+  }
+
+  // /recording/:sessionId 录制工作台
+  const recordingMatch = pathname.match(/^\/recording\/(.+)$/);
+  if (recordingMatch) {
+    const [, sessionId] = recordingMatch;
+    return { name: "recordingWorkspace", path: `/recording/${sessionId}`, sessionId };
   }
 
   // === 旧路由（保留兼容） ===
@@ -393,6 +403,8 @@ function App() {
         return <TrainingPage onNavigate={navigate} />;
       case "hardware":
         return <HardwarePage onNavigate={navigate} />;
+      case "recordingWorkspace":
+        return <RecordingWorkspacePage sessionId={route.sessionId} onNavigate={navigate} />;
       case "landing":
       default:
         return <LandingPage onNavigate={navigate} />;
@@ -473,6 +485,18 @@ function AnalysisTasksPage({
   const [recordings, setRecordings] = useState<RecordingSession[]>([]);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [fieldSessions, setFieldSessions] = useState<FieldSession[]>([]);
+  const [selectedRecordingIds, setSelectedRecordingIds] = useState<Set<string>>(() => new Set());
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [batchDeleteResult, setBatchDeleteResult] = useState<{
+    deleted: number; blocked: number; failed: number;
+  } | null>(null);
+
+  // ── Field Session 批量删除 ──
+  const [selectedFieldSessionIds, setSelectedFieldSessionIds] = useState<Set<string>>(() => new Set());
+  const [isFieldSessionBatchDeleting, setIsFieldSessionBatchDeleting] = useState(false);
+  const [fieldSessionBatchResult, setFieldSessionBatchResult] = useState<{
+    deleted: number; blocked: number; failed: number;
+  } | null>(null);
 
   // 双摄同步录制
   const [syncRecordings, setSyncRecordings] = useState<SyncRecordingSession[]>([]);
@@ -512,6 +536,116 @@ function AnalysisTasksPage({
       const msg = e instanceof Error ? e.message : "删除失败，请刷新后重试";
       alert(msg);
     }
+  };
+
+  // ── 录制视频批量删除 ──
+  const handleToggleSelectRecording = (sessionId: string) => {
+    setSelectedRecordingIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  };
+
+  const handleSelectAllRecordings = () => {
+    const deletableIds = recordings
+      .filter(r => r.status !== "recording")
+      .map(r => r.session_id);
+    if (deletableIds.length > 0 && deletableIds.every(id => selectedRecordingIds.has(id))) {
+      setSelectedRecordingIds(new Set());
+    } else {
+      setSelectedRecordingIds(new Set(deletableIds));
+    }
+  };
+
+  const handleBatchDeleteRecordings = async () => {
+    const ids = [...selectedRecordingIds];
+    if (!ids.length || isBatchDeleting) return;
+    if (!window.confirm(`确定批量删除 ${ids.length} 个录制记录吗？此操作不可撤销。`)) return;
+
+    setIsBatchDeleting(true);
+    setBatchDeleteResult(null);
+
+    const results = await Promise.allSettled(ids.map(id => deleteRecording(id)));
+    let deleted = 0, blocked = 0, failed = 0;
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        if (r.value.status === "deleted") deleted++;
+        else if (r.value.status === "blocked") blocked++;
+        else failed++;
+      } else {
+        failed++;
+      }
+    }
+
+    setBatchDeleteResult({ deleted, blocked, failed });
+    setSelectedRecordingIds(new Set());
+    setIsBatchDeleting(false);
+    void loadRecordings();
+    void loadFieldSessions();
+  };
+
+  // ── Field Session 批量删除与清理 ──
+  const handleToggleSelectFieldSession = (fsId: string) => {
+    setSelectedFieldSessionIds(prev => {
+      const next = new Set(prev);
+      if (next.has(fsId)) next.delete(fsId);
+      else next.add(fsId);
+      return next;
+    });
+  };
+
+  const handleBatchDeleteFieldSessions = async () => {
+    const ids = [...selectedFieldSessionIds];
+    if (!ids.length || isFieldSessionBatchDeleting) return;
+    if (!window.confirm(`确定批量删除 ${ids.length} 个采集任务吗？\n注意：包含录制视频的采集任务将无法删除，请先删除录制。`)) return;
+
+    setIsFieldSessionBatchDeleting(true);
+    setFieldSessionBatchResult(null);
+
+    const results = await Promise.allSettled(ids.map(id => deleteFieldSession(id)));
+    let deleted = 0, blocked = 0, failed = 0;
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        if (r.value.status === "deleted") deleted++;
+        else if (r.value.status === "blocked") blocked++;
+        else failed++;
+      } else failed++;
+    }
+
+    setFieldSessionBatchResult({ deleted, blocked, failed });
+    setSelectedFieldSessionIds(new Set());
+    setIsFieldSessionBatchDeleting(false);
+    void loadFieldSessions();
+    void loadRecordings();
+  };
+
+  const handleCleanEmptyFieldSessions = async () => {
+    const emptyGroups = recordingGroups.filter(g => g.recordings.length === 0 && g.fieldSession);
+    if (emptyGroups.length === 0) {
+      alert("当前没有空的采集任务");
+      return;
+    }
+    if (!window.confirm(`确定清理 ${emptyGroups.length} 个没有录制视频的采集任务吗？此操作不可撤销。`)) return;
+
+    setIsFieldSessionBatchDeleting(true);
+    setFieldSessionBatchResult(null);
+
+    const results = await Promise.allSettled(emptyGroups.map(g => deleteFieldSession(g.fieldSession!.id)));
+    let deleted = 0, blocked = 0, failed = 0;
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        if (r.value.status === "deleted") deleted++;
+        else if (r.value.status === "blocked") blocked++;
+        else failed++;
+      } else failed++;
+    }
+
+    setFieldSessionBatchResult({ deleted, blocked, failed });
+    setIsFieldSessionBatchDeleting(false);
+    void loadFieldSessions();
+    void loadRecordings();
   };
 
   const loadRecordings = useCallback(async () => {
@@ -934,6 +1068,112 @@ function AnalysisTasksPage({
             </section>
           ) : (
             <section className="mt-6 grid gap-4">
+              {/* 批量删除工具栏 */}
+              <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <label className="inline-flex items-center gap-3 text-sm font-bold text-[#14241B]">
+                  <input
+                    checked={recordings.filter(r => r.status !== "recording").length > 0
+                      && recordings.filter(r => r.status !== "recording").every(r => selectedRecordingIds.has(r.session_id))}
+                    className="size-4 accent-[#22C55E]"
+                    disabled={!recordings.some(r => r.status !== "recording") || isBatchDeleting}
+                    onChange={handleSelectAllRecordings}
+                    type="checkbox"
+                  />
+                  已选 {selectedRecordingIds.size} / {recordings.filter(r => r.status !== "recording").length} 个可删除录制
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="quiet-button px-4 py-2.5"
+                    disabled={!selectedRecordingIds.size || isBatchDeleting}
+                    onClick={() => setSelectedRecordingIds(new Set())}
+                    type="button"
+                  >
+                    清空选择
+                  </button>
+                  <button
+                    className="green-button px-4 py-2.5"
+                    disabled={!selectedRecordingIds.size || isBatchDeleting}
+                    onClick={handleBatchDeleteRecordings}
+                    type="button"
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                    {isBatchDeleting ? "删除中" : "批量删除"}
+                  </button>
+                </div>
+              </div>
+
+              {/* 删除结果提示（录制） */}
+              {batchDeleteResult && (
+                <div className={`rounded-2xl p-4 text-sm ${batchDeleteResult.blocked + batchDeleteResult.failed > 0 ? "border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 text-[#C92A2A]" : "border border-[#22C55E]/25 bg-[#22C55E]/8 text-[#168A34]"}`}>
+                  <p className="font-bold">{batchDeleteResult.blocked + batchDeleteResult.failed > 0 ? "批量删除完成，部分任务未删除" : "批量删除完成"}</p>
+                  <p className="mt-1 text-xs">
+                    已删除 {batchDeleteResult.deleted} 个录制。
+                    {batchDeleteResult.blocked > 0 && ` ${batchDeleteResult.blocked} 个受保护（录制中）。`}
+                    {batchDeleteResult.failed > 0 && ` ${batchDeleteResult.failed} 个删除失败。`}
+                  </p>
+                </div>
+              )}
+
+              {/* 采集任务操作工具栏 */}
+              <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3 text-sm font-bold text-[#14241B]">
+                  <input
+                    checked={fieldSessions.length > 0 && fieldSessions.every(fs => selectedFieldSessionIds.has(fs.id))}
+                    className="size-4 accent-[#22C55E]"
+                    disabled={!fieldSessions.length || isFieldSessionBatchDeleting}
+                    onChange={() => {
+                      if (fieldSessions.every(fs => selectedFieldSessionIds.has(fs.id))) {
+                        setSelectedFieldSessionIds(new Set());
+                      } else {
+                        setSelectedFieldSessionIds(new Set(fieldSessions.map(fs => fs.id)));
+                      }
+                    }}
+                    type="checkbox"
+                  />
+                  已选 {selectedFieldSessionIds.size} / {fieldSessions.length} 个采集任务
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="quiet-button px-4 py-2.5"
+                    disabled={!selectedFieldSessionIds.size || isFieldSessionBatchDeleting}
+                    onClick={() => setSelectedFieldSessionIds(new Set())}
+                    type="button"
+                  >
+                    清空选择
+                  </button>
+                  <button
+                    className="green-button px-4 py-2.5"
+                    disabled={!selectedFieldSessionIds.size || isFieldSessionBatchDeleting}
+                    onClick={handleBatchDeleteFieldSessions}
+                    type="button"
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                    {isFieldSessionBatchDeleting ? "删除中" : "批量删除采集任务"}
+                  </button>
+                  <button
+                    className="quiet-button px-4 py-2.5"
+                    disabled={isFieldSessionBatchDeleting}
+                    onClick={handleCleanEmptyFieldSessions}
+                    type="button"
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                    清理空采集任务
+                  </button>
+                </div>
+              </div>
+
+              {/* 删除结果提示（采集任务） */}
+              {fieldSessionBatchResult && (
+                <div className={`rounded-2xl p-4 text-sm ${fieldSessionBatchResult.blocked + fieldSessionBatchResult.failed > 0 ? "border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 text-[#C92A2A]" : "border border-[#22C55E]/25 bg-[#22C55E]/8 text-[#168A34]"}`}>
+                  <p className="font-bold">{fieldSessionBatchResult.blocked + fieldSessionBatchResult.failed > 0 ? "批量删除完成，部分采集任务未删除" : "批量删除完成"}</p>
+                  <p className="mt-1 text-xs">
+                    已删除 {fieldSessionBatchResult.deleted} 个采集任务。
+                    {fieldSessionBatchResult.blocked > 0 && ` ${fieldSessionBatchResult.blocked} 个受保护（有录制视频）。`}
+                    {fieldSessionBatchResult.failed > 0 && ` ${fieldSessionBatchResult.failed} 个删除失败。`}
+                  </p>
+                </div>
+              )}
+
               {recordingGroups.map((group) => (
                 <FieldSessionGroupCard
                   key={group.fieldSession?.id ?? "uncategorized"}
@@ -943,6 +1183,10 @@ function AnalysisTasksPage({
                   onRefresh={() => { void loadRecordings(); void loadFieldSessions(); }}
                   onPlay={handlePlaySession}
                   onDeleteFieldSession={handleDeleteFieldSession}
+                  selectedRecordingIds={selectedRecordingIds}
+                  onToggleSelectRecording={handleToggleSelectRecording}
+                  selectedFieldSession={group.fieldSession ? selectedFieldSessionIds.has(group.fieldSession.id) : false}
+                  onToggleSelectFieldSession={group.fieldSession ? () => handleToggleSelectFieldSession(group.fieldSession!.id) : undefined}
                 />
               ))}
             </section>
@@ -4415,9 +4659,10 @@ function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const handleCreateQuickEvent = async (def: QuickEventDef) => {
     if (!selectedFieldSession) return;
     const recordingSessionId = activeSession?.session_id;
+    const eventType = ACTION_TO_EVENT_TYPE[def.type] ?? "custom_marker";
     try {
       const payload: TimelineEventCreate = {
-        event_type: def.type,
+        event_type: eventType,
         source: def.source,
         label: def.label,
         note: def.note,
@@ -5353,6 +5598,11 @@ function SyncRecordingTaskCard({
         {canPlay && (
           <button className="quiet-button px-3 py-2 text-xs" onClick={() => onPlay(session)} type="button">
             <Play size={12} className="inline mr-1" />查看双路视频
+          </button>
+        )}
+        {session.status === "completed" && (
+          <button className="quiet-button px-3 py-2 text-xs" onClick={() => onNavigate(`/recording/${session.session_id}`)} type="button">
+            <LayoutDashboard size={12} className="inline mr-1" />工作台
           </button>
         )}
         {cam1VideoId && session.status === "completed" && (
