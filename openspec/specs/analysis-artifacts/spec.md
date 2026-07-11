@@ -41,13 +41,26 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 - **AND** 新增 artifact 字段 MUST 允许为 `null`
 - **AND** 现有 tracking、pose、serve、player trajectory 和 court-view ROI 字段 MUST 不被移除或重命名
 
+#### Scenario: Completed result can reference player render trajectory artifact
+
+- **WHEN** 分析任务生成 `player_render_trajectory.json`
+- **THEN** `AnalysisPipelineResult.artifacts` MUST 包含 `player_render_trajectory_url` 字段
+- **AND** MUST 包含 `player_render_trajectory_status` 字段
+- **AND** MUST 包含 `player_render_trajectory_detail` 字段
+
+#### Scenario: Completed result remains compatible without render trajectory
+
+- **WHEN** 分析任务未生成 `player_render_trajectory.json`
+- **THEN** `player_render_trajectory_url` MUST 允许为 null
+- **AND** 现有 artifact 字段 MUST 不被移除或重命名
+
 ### Requirement: Artifact API accepts new artifact names
 
 系统 SHALL 在 `GET /api/analysis/jobs/{job_id}/artifacts/{artifact_name}` 中接受新增 artifact name，并按照产物类型返回合适响应。
 
 #### Scenario: Read generated JSON artifact
 
-- **WHEN** 客户端请求已存在的 `ball-overlay`、`ball-trajectory`、`cleaned-ball-trajectory`、`bounce-events`、`position-heatmaps` 或 `position-scatter-plots`
+- **WHEN** 客户端请求已存在的 `ball-overlay`、`ball-trajectory`、`cleaned-ball-trajectory`、`bounce-events`、`position-heatmaps`、`position-scatter-plots` 或 `player-render-trajectories`
 - **THEN** API MUST 返回 200
 - **AND** 响应 MUST 是 JSON
 
@@ -331,3 +344,12 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 - **WHEN** 球检测未启用、无标定、无视频或依赖缺失
 - **THEN** 缺失的 artifact 字段 SHALL 为 null 或携带 skipped/unavailable 状态
 - **AND** 已生成的 tracking、pose、serve 等 artifact MUST 不受影响
+
+### Requirement: Deterministic render trajectory artifact path
+
+系统 SHALL 为 `player_render_trajectory.json` 提供确定性的本地存储路径。
+
+#### Scenario: Resolve render trajectory artifact path
+
+- **WHEN** 后端为任务 `job-123` 解析 render trajectory artifact 路径
+- **THEN** `player-render-trajectories` MUST 映射到 `outputs/job-123/player_render_trajectory.json`

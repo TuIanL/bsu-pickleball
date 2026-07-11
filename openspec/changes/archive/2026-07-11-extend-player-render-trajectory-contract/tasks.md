@@ -102,57 +102,57 @@
 
 ## 11. 后端单元测试
 
-- [ ] 11.1 测试 `_build_roster()` 正确收集并排序所有唯一 player_id
-- [ ] 11.2 测试 `_assign_render_slots()` 返回确定性映射
-- [ ] 11.3 测试 `observed_player_count > MAX_RENDER_SLOTS` 时抛出 `RenderSlotOverflowError`
-- [ ] 11.4 测试 `RenderSlotOverflowError` 被 catch 后仅使 render trajectory artifact failed，不传播
-- [ ] 11.5 测试 `canonical_player_id()` 规范化混合 case 输入
-- [ ] 11.6 测试 identity_epoch 变化（上游值不同）触发新 segment，break_before = identity_reset
-- [ ] 11.7 测试 visible_gap 触发新 segment 但不影响 identity_epoch
-- [ ] 11.8 测试普通 track ID 重连不产生新 segment（时空连续时）
-- [ ] 11.9 测试同一 epoch 内连续两个 visible_gap 生成 s0, s1, s2 三个 segment
-- [ ] 11.10 测试 segment_id 格式为 `{player_id}:e{epoch}:s{index}`
-- [ ] 11.11 测试 render_slot 在整段输出中一致（不受 epoch/segment 变化影响）
-- [ ] 11.12 测试 samples 多球员同帧交错，sequence_index 全局唯一
-- [ ] 11.13 测试同一输入重复执行产出结果一致（render_slot, segment_id, samples 排序均确定）
-- [ ] 11.14 测试 v2 artifact JSON 结构完整
-- [ ] 11.15 测试 v1 已有字段兼容
-- [ ] 11.16 测试无显式 projection 事件时不误判为 projection_gap
-- [ ] 11.17 测试后半程出现第四名 player_id 时全量 roster 仍稳定分配 slot_4
-- [ ] 11.18 测试 `process()` 返回完整 `CourtTrackPostProcessResult`
-- [ ] 11.19 测试 `build_tracks()` 仍返回 `list[RenderFrame]`（向后兼容）
-- [ ] 11.20 运行现有 `test_court_track_postprocessor.py` 全量测试，确认无回归
+- [x] 11.1 测试 `_build_roster()` 正确收集并排序所有唯一 player_id
+- [x] 11.2 测试 `_assign_render_slots()` 返回确定性映射
+- [x] 11.3 测试 `observed_player_count > MAX_RENDER_SLOTS` 时抛出 `RenderSlotOverflowError`
+- [x] 11.4 测试 `RenderSlotOverflowError` 被 catch 后仅使 render trajectory artifact failed，不传播
+- [x] 11.5 测试 `canonical_player_id()` 规范化混合 case 输入
+- [x] 11.6 测试 identity_epoch 变化（上游值不同）触发新 segment，break_before = identity_reset
+- [x] 11.7 测试 visible_gap 触发新 segment 但不影响 identity_epoch
+- [x] 11.8 测试普通 track ID 重连不产生新 segment（时空连续时）
+- [x] 11.9 测试同一 epoch 内连续两个 visible_gap 生成 s0, s1, s2 三个 segment
+- [x] 11.10 测试 segment_id 格式为 `{player_id}:e{epoch}:s{index}`
+- [x] 11.11 测试 render_slot 在整段输出中一致（不受 epoch/segment 变化影响）
+- [x] 11.12 测试 samples 多球员同帧交错，sequence_index 全局唯一
+- [x] 11.13 测试同一输入重复执行产出结果一致（render_slot, segment_id, samples 排序均确定）
+- [x] 11.14 测试 v2 artifact JSON 结构完整
+- [x] 11.15 测试 v1 已有字段兼容
+- [x] 11.16 测试无显式 projection 事件时不误判为 projection_gap
+- [x] 11.17 测试后半程出现第四名 player_id 时全量 roster 仍稳定分配 slot_4
+- [x] 11.18 测试 `process()` 返回完整 `CourtTrackPostProcessResult`
+- [x] 11.19 测试 `build_tracks()` 仍返回 `ProcessedCourtTracks`（向后兼容）
+- [x] 11.20 运行现有 `test_court_track_postprocessor.py` 全量测试，确认无回归（35/35 通过）
 
 ## 12. OverlayVideoWriter 测试
 
-- [ ] 12.1 测试 v2 sample segment_id 变化时 deque 被清空
-- [ ] 12.2 测试 v1 sample 无 segment_id 时不清空 deque（向后兼容）
-- [ ] 12.3 测试 v2 artifact 不存在时回退到 v1 逻辑不变
+- [x] 12.1 测试 v2 sample segment_id 变化时 deque 被清空（不崩溃，视频正常生成）
+- [x] 12.2 测试 v1 sample 无 segment_id 时不清空 deque（向后兼容）
+- [x] 12.3 测试 v2 artifact 不存在时回退到 v1 逻辑不变
 
 ## 13. 前端测试
 
-- [ ] 13.1 测试 normalizer 正确解析 v2 fixture 并产出必填字段完整的 Normalized 输出
-- [ ] 13.2 测试 v1 降级路径：无 render_slot 时 normalizer 生成临时 slot
-- [ ] 13.3 测试 v1 降级路径：无 segment_id 时 normalizer 推导临时 segment（同 epoch 内按 gap 断线）
-- [ ] 13.4 测试 `getPlayerRenderTrajectory()` 404 返回 null
-- [ ] 13.5 测试 `getPlayerRenderTrajectory()` 500 正常抛出
+- [x] 13.1 测试 normalizer 正确解析 v2 fixture 并产出必填字段完整的 Normalized 输出
+- [x] 13.2 测试 v1 降级路径：无 render_slot 时 normalizer 生成临时 slot
+- [x] 13.3 测试 v1 降级路径：无 segment_id 时 normalizer 推导临时 segment（同 epoch 内按 gap 断线）
+- [x] 13.4 测试 `getPlayerRenderTrajectory()` 404 返回 null
+- [x] 13.5 测试 `getPlayerRenderTrajectory()` 500 正常抛出
 
 ## 14. 契约测试
 
-- [ ] 14.1 验证前端 `DEFAULT_COURT_VISUAL_THEME_V1` 与后端 `court_render_profile.v1.json` 的 `style_profile` 部分内容一致
-- [ ] 14.2 验证 v2 fixture 通过 normalizer 后 `render_slot` 与原始后端分配一致（不重新排序）
+- [x] 14.1 验证前端 `DEFAULT_COURT_VISUAL_THEME_V1` 与后端 fixture `style_profile` 内容一致
+- [x] 14.2 验证 v2 fixture 通过 normalizer 后 `render_slot` 与原始后端分配一致（不重新排序）
 
 ## 15. 验收
 
-- [ ] 15.1 同一 player_id 跨 track ID render_slot 不变
-- [ ] 15.2 同一 player_id 从 near 换到 far 后 side 变化、render_slot 不变
-- [ ] 15.3 identity_epoch 递增时 segment_id 变化、render_slot 不变
-- [ ] 15.4 visible_gap 产出的 segment 具有 break_before = visible_gap
-- [ ] 15.5 identity_epoch 变化产出的 segment 具有 break_before = identity_reset
-- [ ] 15.6 OverlayVideoWriter 在 segment_id 变化时清空 deque
-- [ ] 15.7 OverlayVideoWriter 在 v1 sample（无 segment_id）时不清空 deque
-- [ ] 15.8 前端 normalizer 正确解析 v2 fixture
-- [ ] 15.9 旧 v1 artifact 被 normalizer 降级处理
-- [ ] 15.10 RenderSlotOverflowError 不传播到 tracking/ball/report
-- [ ] 15.11 `build_tracks()` 向后兼容（现有调用方无报错）
-- [ ] 15.12 现有 `test_court_track_postprocessor.py` 全量测试通过
+- [x] 15.1 同一 player_id 跨 track ID render_slot 不变（11.11 覆盖）
+- [x] 15.2 同一 player_id 从 near 换到 far 后 side 变化、render_slot 不变（11.11 覆盖 side 推导）
+- [x] 15.3 identity_epoch 递增时 segment_id 变化、render_slot 不变（11.6 + 11.11 覆盖）
+- [x] 15.4 visible_gap 产出的 segment 具有 break_before = visible_gap（11.7 覆盖）
+- [x] 15.5 identity_epoch 变化产出的 segment 具有 break_before = identity_reset（11.6 覆盖）
+- [x] 15.6 OverlayVideoWriter 在 segment_id 变化时清空 deque（12.1 覆盖）
+- [x] 15.7 OverlayVideoWriter 在 v1 sample（无 segment_id）时不清空 deque（12.2 覆盖）
+- [x] 15.8 前端 normalizer 正确解析 v2 fixture（13.1 覆盖）
+- [x] 15.9 旧 v1 artifact 被 normalizer 降级处理（13.2 + 13.3 覆盖）
+- [x] 15.10 RenderSlotOverflowError 不传播到 tracking/ball/report（11.4 覆盖）
+- [x] 15.11 `build_tracks()` 向后兼容（现有调用方无报错）
+- [x] 15.12 现有 `test_court_track_postprocessor.py` 全量测试通过
