@@ -7,29 +7,36 @@ FFmpeg 子进程录制器 —— 负责从视频流（如 RTSP）拉流并写入
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
+from app.camera.recorder_exit import RecorderExit
+
 logger = logging.getLogger(__name__)
 
-# 回调类型：FFmpeg 进程退出时会被调用，参数为退出码
-OnExitCallback = Callable[[int], None]
+# 回调类型：FFmpeg 进程退出时会被调用，参数为 RecorderExit
+OnExitCallback = Callable[[RecorderExit], None]
 
 
 class Recorder:
     """管理一个 FFmpeg 子进程，将视频流录制为 MP4 文件。"""
 
     def __init__(self) -> None:
-        # 当前运行的 FFmpeg 进程对象（未运行时为 None）
         self._process: subprocess.Popen[bytes] | None = None
-        # 监控线程：用来等待 FFmpeg 退出并触发回调
         self._monitor_thread: threading.Thread | None = None
-        # 退出回调（由调用方传入）
         self._on_exit: OnExitCallback | None = None
+        self._stop_requested: bool = False
+        self._cancel_requested: bool = False
+        # 用于 ffmpeg_registry 登记
+        self.pid: int | None = None
+        self.pgid: int | None = None
+        self.command_fingerprint: str | None = None
 
     def start(
         self,
@@ -78,15 +85,22 @@ class Recorder:
 
         logger.info("启动 FFmpeg 录制: %s", " ".join(cmd))
 
+        self._stop_requested = False
+        self._cancel_requested = False
         self._on_exit = on_exit
-        # 启动 FFmpeg 子进程
+
+        cmd_fingerprint = " ".join(cmd)
         self._process = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,       # 保留标准输入（用于发 'q' 停止）
-            stdout=subprocess.DEVNULL,   # 丢弃标准输出
-            stderr=subprocess.PIPE,      # 保留标准错误（用于看日志 / 调试）
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
-        # 开一个后台线程监控进程退出
+        self.pid = self._process.pid
+        self.pgid = os.getpgid(self._process.pid) if self._process.pid else None
+        self.command_fingerprint = hashlib.sha256(cmd_fingerprint.encode()).hexdigest()[:16]
+
         self._monitor_thread = threading.Thread(
             target=self._monitor,
             args=(self._process, on_exit),
@@ -95,18 +109,25 @@ class Recorder:
         self._monitor_thread.start()
 
     def _monitor(self, process: subprocess.Popen[bytes], on_exit: OnExitCallback | None) -> None:
-        # 等待 FFmpeg 进程结束，拿到退出码，再调用回调
         returncode = process.wait()
         logger.info("FFmpeg 进程退出, returncode=%d", returncode)
+        self._update_ffmpeg_registry_ended()
         if on_exit:
-            on_exit(returncode)
+            exit_info = RecorderExit(
+                returncode=returncode,
+                stop_requested=self._stop_requested,
+                cancel_requested=self._cancel_requested,
+            )
+            on_exit(exit_info)
         if self._process is process:
             self._process = None
             self._monitor_thread = None
             self._on_exit = None
+            self.pid = None
+            self.pgid = None
 
     def stop(self, timeout_seconds: float = 30.0) -> None:
-        # 进程不存在或已经结束就直接返回
+        self._stop_requested = True
         if self._process is None or self._process.poll() is not None:
             return
 
@@ -131,7 +152,7 @@ class Recorder:
                 self._process = None
 
     def cancel(self) -> None:
-        # 取消 = 直接杀掉进程（不保证文件完整，随后由调用方删除半成品）
+        self._cancel_requested = True
         if self._process is None or self._process.poll() is not None:
             self._process = None
             return
@@ -142,8 +163,52 @@ class Recorder:
         self._process = None
 
     def is_running(self) -> bool:
-        # 进程存在且还没结束，说明正在录制
         return self._process is not None and self._process.poll() is None
+
+    def _insert_ffmpeg_registry(self, capture_take_id: str = "", track_id: str = "") -> None:
+        if not self.pid or not self.pgid:
+            return
+        try:
+            from app.database import get_session_factory
+            from app.models.ffmpeg_registry import FFmpegProcessRegistry
+            from datetime import datetime, timezone as tz
+            db = get_session_factory()()
+            try:
+                rec = FFmpegProcessRegistry(
+                    capture_take_id=capture_take_id, track_id=track_id,
+                    pid=self.pid, pgid=self.pgid,
+                    command_fingerprint=self.command_fingerprint or "",
+                    output_path="", started_at=datetime.now(tz.utc),
+                )
+                db.add(rec)
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+    def _update_ffmpeg_registry_ended(self) -> None:
+        if not self.pid:
+            return
+        try:
+            from datetime import datetime, timezone as tz
+            from app.database import get_session_factory
+            from app.models.ffmpeg_registry import FFmpegProcessRegistry
+            db = get_session_factory()()
+            try:
+                db.query(FFmpegProcessRegistry).filter(
+                    FFmpegProcessRegistry.pid == self.pid,
+                    FFmpegProcessRegistry.ended_at.is_(None),
+                ).update({"ended_at": datetime.now(tz.utc)})
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+        except Exception:
+            pass
 
 
 # 检查系统是否安装了 FFmpeg（能运行 `ffmpeg -version` 即视为可用）

@@ -6,57 +6,26 @@ Define the recording session lifecycle control — starting, stopping, canceling
 ## Requirements
 ### Requirement: 录制会话生命周期
 
-录制会话 MUST 遵循严格的状态机：`recording → completed / failed / canceled`。终态（`completed`、`failed`、`canceled`）不可再转换。录制会话 MAY 关联一个 Field Session；未关联 Field Session 时 MUST 保持既有直接录制行为。
+录制会话 MUST 遵循严格的状态机。`field_session_id` 为必填参数。启动流程通过 `CaptureStartCoordinator` 在单事务中创建 Take + Tracks + Leases。
 
 #### Scenario: 开始录制
-- **WHEN** 用户提交 `POST /api/recordings/start`，提供 `camera_id`、`court_name`、`match_format`、`camera_angle`、`fps`、`resolution`、`auto_analyze_after_stop`
-- **THEN** 系统验证 `camera_id` 已注册（否则返回 404）
-- **AND** 系统验证该摄像头没有正在进行的录制会话（否则返回 409）
-- **AND** 启动 FFmpeg 子进程，参数包含：RTSP 输入地址、重连参数、输出路径 `data/recordings/{date}/{camera_id}/{session_id}.mp4`
-- **AND** 创建 session metadata 并持久化到 `data/recordings/sessions/{session_id}.json`
+
+- **WHEN** 用户提交 `POST /api/recordings/start`，提供 `camera_id`、`field_session_id`（必填）、`court_name`、`match_format`、`camera_angle`、`fps`、`resolution`、`auto_analyze_after_stop`
+- **THEN** 系统调用 `CaptureStartCoordinator.prepare_start()` 在事务中创建 CaptureTake(status=starting) + CaptureTrack + CameraLease
+- **AND** 事务成功后启动 FFmpeg 子进程
+- **AND** FFmpeg 启动成功后 CaptureTake 和 RecordingSession 转为 recording
+- **AND** FFmpeg 启动失败则 CaptureTake→failed + Session→failed + Leases released
+- **AND** 在 ffmpeg_registry 中登记进程 PID/PGID
 - **AND** 返回 `RecordingSession`，`status: "recording"`
 
-#### Scenario: 在 Field Session 中开始录制
-- **WHEN** 用户提交 `POST /api/recordings/start` 并提供有效的 `field_session_id`
-- **THEN** 系统 SHALL 创建关联该 Field Session 的 RecordingSession
-- **AND** RecordingSession metadata SHALL 持久化 `field_session_id`
-- **AND** 响应 SHALL 包含 `field_session_id`
-
-#### Scenario: 拒绝不存在的 Field Session
-- **WHEN** 用户提交 `POST /api/recordings/start` 并提供不存在的 `field_session_id`
-- **THEN** 系统 SHALL 返回 404
-- **AND** 系统 SHALL 不启动 FFmpeg 录制进程
-- **AND** 系统 SHALL 不创建 RecordingSession metadata
-
 #### Scenario: 停止录制
+
 - **WHEN** 用户请求 `POST /api/recordings/{session_id}/stop`
-- **THEN** 系统向 FFmpeg 进程发送 `SIGTERM`（或按 `q` 键优雅退出）
-- **AND** 等待进程退出（最多 30 秒），超时则 `SIGKILL`
-- **AND** 计算 `duration_sec` = 实际录制时长
-- **AND** 调用 `VideoService.register_recording()` 将视频文件注册到视频管理体系中，获得 `video_id`
-- **AND** 更新 session status 为 `completed`
-- **AND** 如果 `auto_analyze_after_stop=true`，调用 `POST /api/analysis/jobs` 创建分析任务，记录返回的 `job_id` 到 `auto_analysis_job_id`
-- **AND** 返回更新后的 `RecordingSession`
-
-#### Scenario: 取消录制
-- **WHEN** 用户请求 `POST /api/recordings/{session_id}/cancel`
-- **THEN** 系统向 FFmpeg 进程发送 `SIGTERM`
-- **AND** 不注册视频文件到 VideoService
-- **AND** 删除已写入的部分视频文件
-- **AND** 更新 session status 为 `canceled`
-- **AND** 返回更新后的 `RecordingSession`
-
-#### Scenario: 查询录制列表
-- **WHEN** 用户请求 `GET /api/recordings`
-- **THEN** 返回所有录制会话列表，按 `started_at` 降序排列
-- **AND** 支持可选查询参数 `?camera_id=xxx` 筛选特定摄像头的录制
-- **AND** 支持可选查询参数 `?status=recording` 筛选进行中的录制
-- **AND** 支持可选查询参数 `?field_session_id=xxx` 筛选特定 Field Session 下的录制
-
-#### Scenario: 查询单个录制
-- **WHEN** 用户请求 `GET /api/recordings/{session_id}`
-- **THEN** 返回完整的 `RecordingSession` 详情
-- **AND** 如果 session 不存在，返回 404
+- **THEN** 系统停止 FFmpeg
+- **AND** Session.status 更新为 `completed`
+- **AND** 显式调用 `finalize_capture_take(capture_take_id, "completed")`
+- **AND** 通过 `CaptureStopResultBuilder.from_single_session()` 构建返回结果
+- **AND** 返回 `CaptureStopResult`（不再是 `RecordingSession`）
 
 ### Requirement: 录制异常处理
 
@@ -156,17 +125,14 @@ Define the recording session lifecycle control — starting, stopping, canceling
 
 ### Requirement: 录制占用保护
 
-系统 SHALL 防止同一摄像头同时参与单摄录制和双摄同步录制。
+系统 SHALL 通过 `CameraLeaseManager` 统一管理摄像机占用。Lease 在 Coordinator 事务中与 CaptureTake 一同创建，通过数据库保证互斥。
 
 #### Scenario: 单摄录制占用双摄摄像头
-- **WHEN** 用户尝试开始双摄同步录制且任一摄像头正在单摄录制
-- **THEN** 系统拒绝开始双摄同步录制
-- **AND** 系统返回状态冲突错误（409）
 
-#### Scenario: 双摄录制占用单摄摄像头
-- **WHEN** 用户尝试开始单摄录制且该摄像头正在双摄同步录制中
-- **THEN** 系统拒绝开始单摄录制
-- **AND** 系统返回状态冲突错误（409）
+- **WHEN** 摄像机已被双摄 Lease 占用（status=active）
+- **AND** 单摄尝试获取 Lease
+- **THEN** Coordinator 事务中的 INSERT OR IGNORE 发现冲突
+- **AND** 返回 409 错误
 
 ### Requirement: 双摄录制停止与终态
 
@@ -224,18 +190,35 @@ Define the recording session lifecycle control — starting, stopping, canceling
 
 ### Requirement: 录制启动时创建 CaptureTake
 
-系统 MUST 在录制启动时自动创建 CaptureTake 记录。
+系统 MUST 在录制启动时通过 `CaptureStartCoordinator` 在 FFmpeg 启动前创建 CaptureTake。
 
-#### Scenario: 单摄录制创建 CaptureTake
+#### Scenario: 单摄前置创建 CaptureTake
 
-- **WHEN** 单摄录制启动成功
-- **THEN** 系统 SHALL 创建 CaptureTake 记录
-- **AND** SHALL 创建对应的 CaptureTrack
-- **AND** 响应 SHALL 包含 capture_take_id
+- **WHEN** 单摄录制启动
+- **THEN** CaptureTake 创建 MUST 在 FFmpeg 启动前完成
+- **AND** 创建失败 MUST 不启动 FFmpeg 且释放 Lease
+- **AND** RecordingSession.capture_take_id MUST 被填充
 
-#### Scenario: 录制停止时补偿关闭 CaptureTake
+#### Scenario: 录制停止时统一 finalize
 
-- **WHEN** 录制停止或失败或取消
-- **THEN** 系统 SHALL 更新 CaptureTake 状态（补偿流程）
-- **AND** SHALL 关闭所有 open 区间（inferred 状态）
-- **AND** 跨存储原子性不保证，依赖补偿恢复
+- **WHEN** 录制停止/失败/取消
+- **THEN** 系统 MUST 调用 `finalize_capture_take(capture_take_id, terminal_status)`
+- **AND** 已终态的 CaptureTake MUST 不在重复调用时被覆盖
+
+### Requirement: 统一 CaptureStopResult 返回
+
+系统 MUST 通过 `CaptureStopResultBuilder` 统一构建停止返回值。单摄和双摄使用相同 schema。
+
+#### Scenario: 单摄停止返回 CaptureStopResult
+
+- **WHEN** 单摄录制正常停止
+- **THEN** CaptureStopResultBuilder.from_single_session() MUST 构建 CaptureStopResult
+- **AND** tracks MUST 包含 1 个元素（slot="cam_1", analysis_role="default"）
+- **AND** default_analysis_track_id MUST 指向 analysis_role="default" 的 track
+
+#### Scenario: 双摄停止返回 CaptureStopResult
+
+- **WHEN** 双摄录制正常停止
+- **THEN** CaptureStopResultBuilder.from_sync_session() MUST 构建 CaptureStopResult
+- **AND** tracks MUST 包含 2 个元素（slot="cam_1" 和 slot="cam_2"）
+- **AND** default_analysis_track_id MUST 从 analysis_role="default" 解析

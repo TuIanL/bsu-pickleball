@@ -149,6 +149,44 @@ def archive_capture_take(db: Session, take_id: str) -> CaptureTake | None:
     return take
 
 
+_TERMINAL_STATUSES = {
+    CaptureTakeStatus.completed,
+    CaptureTakeStatus.partial,
+    CaptureTakeStatus.failed,
+    CaptureTakeStatus.canceled,
+}
+
+
+def finalize_capture_take(
+    db: Session,
+    capture_take_id: str,
+    terminal_status: str,
+    ended_at: datetime | None = None,
+    duration_ms: int | None = None,
+) -> CaptureTake | None:
+    """幂等终态化：已终态的 Take 再次调用不覆盖。"""
+    take = get_capture_take(db, capture_take_id)
+    if take is None:
+        return None
+    if take.status in _TERMINAL_STATUSES:
+        return take
+
+    now = ended_at or datetime.now(timezone.utc)
+    try:
+        take.status = CaptureTakeStatus(terminal_status)
+    except ValueError:
+        return None
+    take.ended_at = now
+    if duration_ms is not None:
+        take.duration_ms = duration_ms
+    elif take.started_at:
+        started = _ensure_aware(take.started_at)
+        take.duration_ms = int((now - started).total_seconds() * 1000)
+    take.updated_at = datetime.now(timezone.utc)
+    db.flush()
+    return take
+
+
 def adapt_from_recording_session(
     db: Session,
     recording_session_id: str,

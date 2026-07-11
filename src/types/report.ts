@@ -351,6 +351,39 @@ export interface SyncStopResponse {
   analysis_blocked_reason?: string;
 }
 
+export interface CaptureTrackStopResult {
+  track_id: string;
+  slot: string;
+  camera_id: string;
+  analysis_role: string;
+  status: string;
+  video_id?: string;
+  duration_ms?: number;
+  fragment_count: number;
+  restart_count: number;
+}
+
+export interface CaptureStopResult {
+  capture_take?: {
+    id: string;
+    field_session_id: string;
+    capture_mode: string;
+    source_session_type: string;
+    source_session_id: string;
+    status: string;
+    started_at: string;
+    ended_at?: string;
+    duration_ms?: number;
+    revision: number;
+  };
+  tracks: CaptureTrackStopResult[];
+  analysis_available: boolean;
+  default_analysis_track_id?: string;
+  default_analysis_video_id?: string;
+  analysis_blocked_reason?: string;
+  warnings: string[];
+}
+
 export interface FieldSession {
   id: string;
   title: string;

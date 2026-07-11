@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,16 +27,31 @@ logger = logging.getLogger(__name__)
 
 # 内存缓存：session_id -> RecordingSession
 SESSIONS: dict[str, RecordingSession] = {}
-# 全局唯一的录制器对象（同一时刻只录一路）
-_RECORDER = Recorder()
 # 当前正在录制的摄像头 id 与会话 id（全局变量，保证"一个摄像头同时只录一路"）
 _ACTIVE_CAMERA: str | None = None
 _ACTIVE_SESSION_ID: str | None = None
 
 
+def _default_recorder_factory():
+    return Recorder()
+
+
 class SessionService:
-    def __init__(self, storage: StorageService | None = None) -> None:
+    def __init__(
+        self,
+        storage: StorageService | None = None,
+        recorder_factory=None,
+        lease_manager=None,
+        coordinator=None,
+        cleanup_service=None,
+    ) -> None:
         self._storage = storage or StorageService()
+        self._recorder_factory = recorder_factory or _default_recorder_factory
+        self._lease_manager = lease_manager
+        self._coordinator = coordinator
+        self._cleanup_service = cleanup_service
+        self._recorder = self._recorder_factory()
+        self._heartbeat_threads: dict[str, threading.Thread] = {}
 
     @property
     def sessions_dir(self) -> Path:
@@ -129,14 +146,14 @@ class SessionService:
         )
 
         # 启动 FFmpeg 录制；on_exit 回调在进程退出时触发（用于标记失败）
-        _RECORDER.start(
+        self._recorder.start(
             stream_url=camera.stream_url,
             output_path=output_path,
             username=camera.username,
             password=camera.password,
             fps=request.fps,
             resolution=request.resolution,
-            on_exit=lambda code: self._on_recorder_exit(session_id, code),
+            on_exit=lambda exit_info: self._on_recorder_exit(session_id, exit_info),
         )
 
         # 记录当前活跃会话，并写入缓存与磁盘
@@ -145,8 +162,58 @@ class SessionService:
         SESSIONS[session_id] = session
         self._persist(session)
 
-        # 创建 CaptureTake 记录（补偿流程：失败不影响录制启动）
+        # 启动心跳线程 + ffmpeg_registry 登记
+        self._start_heartbeat(session_id)
+        if hasattr(self._recorder, '_insert_ffmpeg_registry'):
+            self._recorder._insert_ffmpeg_registry(
+                capture_take_id=getattr(session, "capture_take_id", "") or "",
+                track_id=session_id,
+            )
+
+        # 使用 Coordinator 或 fallback 创建 CaptureTake
         if field_session_id:
+            self._create_or_link_capture_take(
+                session_id=session_id,
+                field_session_id=field_session_id,
+                camera_id=request.camera_id,
+                capture_mode="single",
+                source_session_type="recording",
+            )
+
+        logger.info("录制会话已开始: %s (camera=%s)", session_id, request.camera_id)
+        return session
+
+    def _create_or_link_capture_take(
+        self,
+        session_id: str,
+        field_session_id: str,
+        camera_id: str,
+        capture_mode: str,
+        source_session_type: str,
+    ) -> None:
+        """使用 Coordinator 或 fallback 创建 CaptureTake。"""
+        if self._coordinator:
+            from app.services.capture_start_coordinator import CaptureTrackSpec
+            spec = CaptureTrackSpec(slot="cam_1", camera_id=camera_id, analysis_role="default")
+            try:
+                prepared = self._coordinator.prepare_start(
+                    source_session_type=source_session_type,
+                    source_session_id=session_id,
+                    field_session_id=field_session_id,
+                    capture_mode=capture_mode,
+                    tracks=[spec],
+                )
+                session = SESSIONS.get(session_id)
+                if session:
+                    SESSIONS[session_id] = session.model_copy(
+                        update={"capture_take_id": prepared.capture_take_id}
+                    )
+                self._coordinator.activate(prepared.capture_take_id)
+            except Exception as exc:
+                logger.error("CaptureStartCoordinator 创建 CaptureTake 失败: %s", exc)
+                raise RuntimeError(f"创建 CaptureTake 失败: {exc}")
+        else:
+            # Fallback: 原有直连数据库逻辑
             try:
                 from app.database import get_session_factory
                 from app.services import capture_take_service, capture_track_service
@@ -155,23 +222,25 @@ class SessionService:
                     take = capture_take_service.create_capture_take(
                         db,
                         field_session_id=field_session_id,
-                        capture_mode="single",
-                        source_session_type="recording",
+                        capture_mode=capture_mode,
+                        source_session_type=source_session_type,
                         source_session_id=session_id,
                     )
                     capture_track_service.create_track(
                         db,
                         capture_take_id=take.id,
-                        camera_id=request.camera_id,
+                        camera_id=camera_id,
                         role="primary",
                         offset_ms=0,
                         offset_source="measured",
                         sync_quality="good",
                     )
                     db.commit()
-                    # 把 capture_take_id 注入 Session 响应
-                    session = session.model_copy(update={"capture_take_id": take.id})
-                    SESSIONS[session_id] = session
+                    session = SESSIONS.get(session_id)
+                    if session:
+                        SESSIONS[session_id] = session.model_copy(
+                            update={"capture_take_id": take.id}
+                        )
                 except Exception as exc:
                     db.rollback()
                     logger.warning("创建 CaptureTake 失败（录制不受影响）: %s", exc)
@@ -180,8 +249,24 @@ class SessionService:
             except Exception as exc:
                 logger.warning("连接数据库创建 CaptureTake 失败: %s", exc)
 
-        logger.info("录制会话已开始: %s (camera=%s)", session_id, request.camera_id)
-        return session
+    def _start_heartbeat(self, session_id: str) -> None:
+        if not self._lease_manager:
+            return
+        def _beat():
+            while True:
+                time.sleep(10)
+                s = SESSIONS.get(session_id)
+                if not s or s.status != "recording":
+                    break
+                try:
+                    tid = getattr(s, "capture_take_id", None)
+                    if tid:
+                        self._lease_manager.heartbeat(tid)
+                except Exception:
+                    pass
+        t = threading.Thread(target=_beat, daemon=True)
+        self._heartbeat_threads[session_id] = t
+        t.start()
 
     def stop_session(self, session_id: str) -> RecordingSession:
         # 先从缓存取，缓存没有再从磁盘加载
@@ -202,7 +287,7 @@ class SessionService:
             raise RuntimeError(f"录制会话 {session_id} 状态为 {session.status}，无法停止")
 
         # 优雅停止 FFmpeg
-        _RECORDER.stop()
+        self._recorder.stop()
         stopped_at = datetime.now(timezone.utc)
         duration = (stopped_at - session.started_at).total_seconds()
 
@@ -252,6 +337,8 @@ class SessionService:
         self._persist(session)
         self._clear_active(session.camera_id)
 
+        self._finalize_capture_take_on_stop(session, "completed")
+
         logger.info("录制会话已停止: %s (duration=%.1fs)", session_id, duration)
         return session
 
@@ -273,7 +360,7 @@ class SessionService:
             raise RuntimeError(f"录制会话 {session_id} 状态为 {session.status}，无法取消")
 
         # 直接杀掉 FFmpeg（取消 = 放弃本次录制）
-        _RECORDER.cancel()
+        self._recorder.cancel()
         stopped_at = datetime.now(timezone.utc)
         duration = (stopped_at - session.started_at).total_seconds()
 
@@ -296,7 +383,7 @@ class SessionService:
         self._clear_active(session.camera_id)
 
         # 补偿流程：关闭 CaptureTake 和 open segments
-        self._try_close_capture_take(session)
+        self._try_close_capture_take(session, "canceled")
 
         logger.info("录制会话已取消: %s", session_id)
         return session
@@ -308,9 +395,24 @@ class SessionService:
         if session is None:
             return {"session_id": session_id, "status": "not_found", "detail": "录制会话不存在"}
 
-        # 正在录制中的不允许删除
         if session.status == "recording":
             return {"session_id": session_id, "status": "blocked", "detail": "录制进行中，无法删除"}
+
+        # 优先使用 CleanupService
+        take_id = getattr(session, "capture_take_id", None)
+        if take_id and getattr(self, "_cleanup_service", None):
+            json_path = str(self._session_path(session_id))
+            result = self._cleanup_service.delete_take(
+                take_id,
+                delete_media=True,
+                session_json_path=json_path,
+                video_path=getattr(session, "video_path", None),
+            )
+            SESSIONS.pop(session_id, None)
+            self._clear_active(session.camera_id)
+            return {"session_id": session_id, **result}
+
+        # Fallback: 原有内联清理逻辑
 
         # 级联删除关联的 DB 记录
         take_id = session.capture_take_id
@@ -409,26 +511,40 @@ class SessionService:
 
         return result
 
-    def _on_recorder_exit(self, session_id: str, returncode: int) -> None:
-        # FFmpeg 进程退出回调：只有仍在 recording 且异常退出（非 0）才标记为 failed
+    def _on_recorder_exit(self, session_id: str, exit_info) -> None:
+        from app.camera.recorder_exit import RecorderExit
         session = SESSIONS.get(session_id)
         if session is None or session.status != "recording":
             return
 
-        if returncode != 0:
-            logger.error("录制会话 %s FFmpeg 异常退出, returncode=%d", session_id, returncode)
+        if isinstance(exit_info, RecorderExit):
+            if exit_info.stop_requested or exit_info.cancel_requested:
+                logger.info("录制会话 %s FFmpeg 已由用户请求退出, returncode=%d",
+                            session_id, exit_info.returncode)
+                return
+            logger.error("录制会话 %s FFmpeg 意外退出, returncode=%d",
+                          session_id, exit_info.returncode)
             session = session.model_copy(update={
                 "status": "failed",
                 "stopped_at": datetime.now(timezone.utc),
                 "duration_sec": (datetime.now(timezone.utc) - session.started_at).total_seconds(),
-                "error_message": f"FFmpeg 进程异常退出, returncode={returncode}",
+                "error_message": f"FFmpeg 意外退出, returncode={exit_info.returncode}",
             })
+        else:
+            returncode = exit_info
+            if returncode != 0:
+                logger.error("录制会话 %s FFmpeg 异常退出, returncode=%d", session_id, returncode)
+                session = session.model_copy(update={
+                    "status": "failed",
+                    "stopped_at": datetime.now(timezone.utc),
+                    "duration_sec": (datetime.now(timezone.utc) - session.started_at).total_seconds(),
+                    "error_message": f"FFmpeg 进程异常退出, returncode={returncode}",
+                })
         SESSIONS[session_id] = session
         self._persist(session)
         self._clear_active(session.camera_id)
 
-        # 补偿流程：关闭 CaptureTake 和 open segments
-        self._try_close_capture_take(session)
+        self._try_close_capture_take(session, "failed")
 
     def _clear_active(self, camera_id: str) -> None:
         # 清空该摄像头的"活跃会话"记录（允许它再次开始录制）
@@ -437,8 +553,17 @@ class SessionService:
             _ACTIVE_CAMERA = None
             _ACTIVE_SESSION_ID = None
 
-    def _try_close_capture_take(self, session: RecordingSession) -> None:
-        """补偿流程：关闭关联的 CaptureTake 和 open segments。"""
+    def _finalize_capture_take_on_stop(self, session, terminal_status: str) -> None:
+        """停止/取消时显式 finalize CaptureTake。"""
+        take_id = session.capture_take_id
+        if not take_id:
+            return
+        duration_ms = int((session.duration_sec or 0) * 1000)
+        self._try_close_capture_take(session, terminal_status, duration_ms)
+
+    def _try_close_capture_take(self, session, terminal_status: str = "completed",
+                                 duration_ms: int = 0) -> None:
+        """关闭关联的 CaptureTake 和 open segments（幂等）。"""
         take_id = session.capture_take_id
         if not take_id:
             return
@@ -447,18 +572,21 @@ class SessionService:
             from app.services import capture_take_service, capture_segment_service
             db = get_session_factory()()
             try:
-                capture_take_service.complete_capture_take(db, take_id)
-                end_ms = int((session.duration_sec or 0) * 1000)
-                if end_ms > 0:
-                    capture_segment_service.close_all_open_for_take(db, take_id, end_ms)
+                ended = session.stopped_at or datetime.now(timezone.utc)
+                capture_take_service.finalize_capture_take(
+                    db, take_id, terminal_status,
+                    ended_at=ended, duration_ms=duration_ms,
+                )
+                if duration_ms > 0:
+                    capture_segment_service.close_all_open_for_take(db, take_id, duration_ms)
                 db.commit()
             except Exception as exc:
                 db.rollback()
-                logger.warning("关闭 CaptureTake %s 失败: %s", take_id, exc)
+                logger.warning("finalize CaptureTake %s 失败: %s", take_id, exc)
             finally:
                 db.close()
         except Exception as exc:
-            logger.warning("关闭 CaptureTake 数据库连接失败: %s", exc)
+            logger.warning("finalize CaptureTake 数据库连接失败: %s", exc)
 
     def _persist(self, session: RecordingSession) -> None:
         # 把会话写入磁盘 JSON

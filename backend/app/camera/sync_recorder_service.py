@@ -493,9 +493,19 @@ class SyncRecorder:
 class SyncRecordingService:
     """双摄同步录制服务，管理会话生命周期、持久化、摄像头占用。"""
 
-    def __init__(self) -> None:
-        self._recorder = SyncRecorder()
-        self._segments: list[SyncSegment] = []  # 累积分段信息
+    def __init__(
+        self,
+        sync_recorder_factory=None,
+        lease_manager=None,
+        coordinator=None,
+        cleanup_service=None,
+    ) -> None:
+        self._sync_recorder_factory = sync_recorder_factory
+        self._recorder = (sync_recorder_factory() if sync_recorder_factory else SyncRecorder())
+        self._lease_manager = lease_manager
+        self._coordinator = coordinator
+        self._cleanup_service = cleanup_service
+        self._segments: list[SyncSegment] = []
 
     # ── 摄像头占用检查 ────────────────────────────────────────────
 
@@ -673,7 +683,7 @@ class SyncRecordingService:
             if s and s.status == "recording":
                 self._complete_session(session_id)
 
-        self._recorder = SyncRecorder()
+        self._recorder = self._sync_recorder_factory() if self._sync_recorder_factory else SyncRecorder()
         self._recorder.on_segment_start = on_segment_start
         self._recorder.on_segment_end = on_segment_end
         self._recorder.on_stream_error = on_stream_error
@@ -695,6 +705,38 @@ class SyncRecordingService:
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
+
+        # 创建 CaptureTake（补偿流程：失败不影响录制启动）
+        if field_session_id:
+            try:
+                from app.database import get_session_factory
+                from app.services import capture_take_service, capture_track_service
+                from app.models.capture_track import CaptureTrackSlot, AnalysisRole
+                db = get_session_factory()()
+                try:
+                    take = capture_take_service.create_capture_take(
+                        db, field_session_id=field_session_id,
+                        capture_mode="dual", source_session_type="sync_recording",
+                        source_session_id=session_id,
+                    )
+                    capture_track_service.create_track(
+                        db, capture_take_id=take.id, camera_id=request.cam_1_id,
+                        role="primary",
+                    )
+                    capture_track_service.create_track(
+                        db, capture_take_id=take.id, camera_id=request.cam_2_id,
+                        role="secondary",
+                    )
+                    db.commit()
+                    session = session.model_copy(update={"capture_take_id": take.id})
+                    SYNC_SESSIONS[session_id] = session
+                except Exception as exc:
+                    db.rollback()
+                    logger.warning("创建双摄 CaptureTake 失败（录制不受影响）: %s", exc)
+                finally:
+                    db.close()
+            except Exception as exc:
+                logger.warning("连接数据库创建双摄 CaptureTake 失败: %s", exc)
 
         logger.info("双摄同步录制会话已开始: %s", session_id)
         return session
@@ -736,6 +778,8 @@ class SyncRecordingService:
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
 
+        self._finalize_capture_take(session, "completed")
+
         logger.info("双摄同步录制已停止: %s (duration=%.1fs, analysis_available=%s)",
                      session_id, duration, analysis_available)
 
@@ -745,6 +789,32 @@ class SyncRecordingService:
             analysis_available=analysis_available,
             analysis_blocked_reason=analysis_blocked_reason,
         )
+
+    def _finalize_capture_take(self, session, terminal_status: str) -> None:
+        take_id = getattr(session, "capture_take_id", None)
+        if not take_id:
+            return
+        try:
+            from app.database import get_session_factory
+            from app.services import capture_take_service, capture_segment_service
+            db = get_session_factory()()
+            try:
+                duration_ms = int((session.duration_sec or 0) * 1000)
+                ended = session.stopped_at or datetime.now(timezone.utc)
+                capture_take_service.finalize_capture_take(
+                    db, take_id, terminal_status,
+                    ended_at=ended, duration_ms=duration_ms,
+                )
+                if duration_ms > 0:
+                    capture_segment_service.close_all_open_for_take(db, take_id, duration_ms)
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning("finalize 双摄 CaptureTake %s 失败: %s", take_id, exc)
+            finally:
+                db.close()
+        except Exception as exc:
+            logger.warning("finalize 双摄 CaptureTake 连接失败: %s", exc)
 
     def _complete_session(self, session_id: str) -> None:
         """录制器自动退出后完成会话"""
@@ -771,6 +841,8 @@ class SyncRecordingService:
         _ACTIVE_SYNC_SESSION_ID = None
         _ACTIVE_SYNC_CAMERAS.clear()
         logger.warning("双摄同步录制会话自动结束(异常): %s", session_id)
+
+        self._finalize_capture_take(session, "failed")
 
     def _register_session_videos(
         self,
@@ -969,6 +1041,8 @@ class SyncRecordingService:
         _ACTIVE_SYNC_SESSION_ID = None
         _ACTIVE_SYNC_CAMERAS.clear()
 
+        self._finalize_capture_take(session, "canceled")
+
         logger.info("双摄同步录制已取消: %s", session_id)
         return session
 
@@ -982,6 +1056,28 @@ class SyncRecordingService:
         if session.status == "recording":
             return {"session_id": session_id, "status": "blocked",
                     "detail": "录制进行中，无法删除"}
+
+        # 优先使用 CleanupService
+        take_id = getattr(session, "capture_take_id", None)
+        if take_id and getattr(self, "_cleanup_service", None):
+            json_path = str(self._session_path(session_id))
+            output_dir = str(self._output_dir(session_id))
+            result = self._cleanup_service.delete_take(
+                take_id,
+                delete_media=True,
+                session_json_path=json_path,
+                output_dir=output_dir,
+            )
+            SYNC_SESSIONS.pop(session_id, None)
+            for slot in ("cam_1", "cam_2"):
+                slot_info = session.camera_slots.get(slot) if hasattr(session, 'camera_slots') and session.camera_slots else None
+                cam_id = getattr(slot_info, "camera_id", None) if slot_info else None
+                if cam_id:
+                    global _ACTIVE_SYNC_CAMERAS
+                    _ACTIVE_SYNC_CAMERAS.discard(cam_id)
+            return {"session_id": session_id, **result}
+
+        # Fallback: 原有内联清理逻辑
 
         # 清理视频文件/输出目录
         output_dir = self._output_dir(session_id)

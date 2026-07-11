@@ -1,23 +1,29 @@
-## ADDED Requirements
+# dual-camera-sync-recording Specification
+
+## Requirements
 
 ### Requirement: 双摄同步录制会话
+
 系统 SHALL 提供双摄同步录制会话，用一次开始和一次停止操作同时管理两个已注册摄像头。两个摄像头均为平等机位，slot key 为 `cam_1` 和 `cam_2`，默认机位角度均为 `baseline_high`。
 
 #### Scenario: 开始双摄同步录制
+
 - **WHEN** 用户为 `cam_1` 和 `cam_2` 两个机位槽位选择了不同的已注册摄像头并点击开始同步录制
-- **THEN** 系统创建一个双摄同步录制会话
+- **THEN** 系统 MUST 调用 `CameraLeaseManager.acquire([cam_1_id, cam_2_id])` 在同一事务中原子获取两路租约（否则返回 409）
+- **AND** 系统 MUST 调用 `CaptureTakeProvisioner.provision(capture_mode="dual", tracks=[{slot:"cam_1"}, {slot:"cam_2"}])` 创建 CaptureTake + 2 CaptureTrack
 - **AND** 系统为两路摄像头同时启动 FFmpeg 录制进程
-- **AND** 系统记录会话 ID、Field Session ID、两个摄像头 ID、槽位、开始时间和输出目录
+- **AND** 系统 MUST 在 `ffmpeg_registry` 中为每路 FFmpeg 登记进程 PID
+- **AND** SyncRecordingSession.capture_take_id MUST 被正确填充
 
-#### Scenario: 缺少任一机位时禁止开始
-- **WHEN** 用户只选择了一个机位或两个机位选择了同一个摄像头并点击开始同步录制
-- **THEN** 系统 MUST 拒绝开始录制
-- **AND** 系统返回可展示的错误信息说明需要两个不同摄像头
+#### Scenario: 用户停止录制
 
-#### Scenario: 摄像头被占用时禁止开始
-- **WHEN** 任一被选摄像头已有活跃单摄或双摄录制会话
-- **THEN** 系统 MUST 拒绝开始双摄同步录制
-- **AND** 系统不得启动任何新的 FFmpeg 录制进程
+- **WHEN** 用户停止正在进行的双摄同步录制会话
+- **THEN** 系统终止两路 FFmpeg 进程
+- **AND** 系统等待录制线程退出
+- **AND** 系统将会话状态更新为 completed
+- **AND** 系统记录停止时间、总时长和已保存分段
+- **AND** 系统 MUST 调用 `finalize_capture_take(session_id, "completed")` 关闭 CaptureTake 和 open CaptureSegment
+- **AND** 系统 MUST 调用 `CameraLeaseManager.release(capture_take_id)` 释放两路租约
 
 ### Requirement: 同步分段与异常重启
 系统 SHALL 以同步分段方式保存两路视频，并在任一路异常或分段结束时同步重启所有路。
@@ -58,18 +64,21 @@
 - **AND** 系统包含失败机位、摄像头 ID 和最近 FFmpeg 错误摘要
 
 ### Requirement: 默认分析视频登记
-系统 SHALL 在双摄录制完成后使 `cam_1` 视频能够进入现有单视频分析流程（作为默认分析视频），并保留 `cam_2` 素材引用。
+
+系统 SHALL 在双摄录制完成后使 `cam_1` 视频能够进入现有单视频分析流程（作为默认分析视频），并保留 `cam_2` 素材引用。`default_analysis_track_id` 由 CaptureTake 显式记录，不硬编码 cam_1。
 
 #### Scenario: 双摄录制完成后登记默认分析视频
+
 - **WHEN** 双摄同步录制会话完成且 `cam_1` 存在可用视频产物
 - **THEN** 系统将 `cam_1` 的合并视频登记为 `default_analysis_video_id`
+- **AND** 系统通过 `default_analysis_track_id` 解析分析入口（不硬编码 cam_1）
 - **AND** 系统保留 `cam_2` 的分段文件路径作为关联素材
 
-#### Scenario: 默认分析视频无法登记
-- **WHEN** 双摄同步录制完成但 `cam_1` 视频无法登记到现有视频系统
-- **THEN** 系统仍 SHALL 保留双摄录制会话和文件路径
-- **AND** 系统在会话中记录错误信息
-- **AND** 前端不得展示不可用的创建分析入口
+#### Scenario: 用户可指定非 cam_1 为分析入口（未来）
+
+- **WHEN** 未来版本中用户选择 cam_2 作为分析视频
+- **THEN** `default_analysis_track_id` 应指向 cam_2 的 track
+- **AND** 分析流程从 `default_analysis_track_id` 解析 video_id，不修改已有逻辑
 
 ### Requirement: 短录测试首帧展示
 
@@ -119,18 +128,33 @@
 
 ### Requirement: 双摄录制创建 CaptureTake
 
-系统 MUST 在双摄录制启动时自动创建 CaptureTake 记录，支持事件打点。
+系统 MUST 在双摄录制启动时通过 `CaptureTakeProvisioner` 前置创建 CaptureTake 记录。创建失败 MUST NOT 启动 FFmpeg。
 
-#### Scenario: 双摄录制创建 CaptureTake
+#### Scenario: 双摄录制前置创建 CaptureTake
 
-- **WHEN** 双摄同步录制启动成功
-- **THEN** 系统 SHALL 创建 CaptureTake
-- **AND** SHALL 为每个摄像头创建 CaptureTrack（含 offset_source/sync_quality）
-- **AND** 响应 SHALL 包含 capture_take_id
+- **WHEN** 双摄同步录制启动且两路 Lease 已获取
+- **THEN** 系统 MUST 调用 `CaptureTakeProvisioner.provision()` 创建 CaptureTake + 2 CaptureTrack
+- **AND** 创建必须在 FFmpeg 启动之前完成
+- **AND** 创建失败时 MUST 释放两路 CameraLease 并返回错误
+- **AND** SyncRecordingSession.capture_take_id MUST 被正确填充
+- **AND** 前端 Live Coding MUST 可正常初始化
 
-#### Scenario: 双摄事件打点
+### Requirement: 双摄停止返回统一 CaptureStopResult
 
-- **WHEN** 用户处于双摄录制状态
-- **THEN** 前端 SHALL 显示事件打点按钮
-- **AND** 事件 SHALL 关联 CaptureTake
-- **AND** timestamp_ms SHALL 相对 CaptureTake 开始时间
+系统 MUST 在双摄停止后返回 `CaptureStopResult`，与单摄使用相同 schema。两路轨道信息通过 tracks 数组表达。
+
+#### Scenario: 双摄停止返回 CaptureStopResult
+
+- **WHEN** 用户停止双摄同步录制
+- **THEN** 系统 MUST 返回 `CaptureStopResult`（不再是 `SyncStopResponse`）
+- **AND** `tracks` MUST 包含两个元素（cam_1 和 cam_2）
+- **AND** 每个 track 包含 fragment_count 和 restart_count
+- **AND** `default_analysis_track_id` MUST 指向 cam_1 对应的 track
+
+#### Scenario: 双摄部分成功返回 partial
+
+- **WHEN** 双摄录制停止时 cam_2 的视频合并失败
+- **THEN** cam_1 的 track.status MUST 为 `"completed"`
+- **AND** cam_2 的 track.status MUST 为 `"failed"`
+- **AND** `analysis_available` MUST 为 true（cam_1 可用）
+- **AND** `warnings` MUST 包含 cam_2 的失败信息

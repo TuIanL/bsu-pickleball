@@ -203,7 +203,7 @@ def test_recording_start_links_field_session_and_inherits_context(client, monkey
 
     monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
     monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
-    monkeypatch.setattr(recording_service_module._RECORDER, "start", lambda **kwargs: starts.append(kwargs))
+    monkeypatch.setattr(recording_service_module.session_service._recorder, "start", lambda **kwargs: starts.append(kwargs))
 
     response = client.post(
         "/api/recordings/start",
@@ -224,7 +224,7 @@ def test_recording_start_with_missing_field_session_returns_404_without_starting
 
     monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
     monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
-    monkeypatch.setattr(recording_service_module._RECORDER, "start", lambda **kwargs: starts.append(kwargs))
+    monkeypatch.setattr(recording_service_module.session_service._recorder, "start", lambda **kwargs: starts.append(kwargs))
 
     response = client.post(
         "/api/recordings/start",
@@ -240,7 +240,7 @@ def test_recording_start_without_field_session_still_works(client, monkeypatch):
 
     monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
     monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
-    monkeypatch.setattr(recording_service_module._RECORDER, "start", lambda **kwargs: None)
+    monkeypatch.setattr(recording_service_module.session_service._recorder, "start", lambda **kwargs: None)
 
     response = client.post(
         "/api/recordings/start",

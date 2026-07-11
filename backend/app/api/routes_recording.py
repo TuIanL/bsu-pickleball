@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest
+from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 # 检查当前系统是否安装了 FFmpeg 这个外部工具
 from app.camera.recorder import check_ffmpeg_available
 # 录制会话服务：真正管理录制生命周期（开始/停止/取消/查询）的对象
@@ -61,18 +62,25 @@ def start_recording(payload: RecordingStartRequest) -> RecordingSession:
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@router.post("/{session_id}/stop", response_model=RecordingSession)
-def stop_recording(session_id: str) -> RecordingSession:
-    """
-    停止录制
-
-    正常结束录制并保存文件。可能的错误：
-    - 会话不存在          → 404
-    - 当前状态不允许停止  → 400（请求有误）
-    """
+@router.post("/{session_id}/stop", response_model=CaptureStopResult)
+def stop_recording(session_id: str) -> CaptureStopResult:
     _check_ffmpeg()
     try:
-        return session_service.stop_session(session_id)
+        session = session_service.stop_session(session_id)
+        take = None
+        tid = getattr(session, "capture_take_id", None)
+        if tid:
+            db = get_session_factory()()
+            try:
+                from app.services.capture_take_service import get_capture_take
+                take = get_capture_take(db, tid)
+            finally:
+                db.close()
+        return CaptureStopResultBuilder.from_single_session(
+            session, capture_take=take,
+            video_id=getattr(session, "video_id", None),
+            duration_ms=int((getattr(session, "duration_sec", 0) or 0) * 1000),
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:

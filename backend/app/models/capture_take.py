@@ -12,8 +12,10 @@ from app.database import Base
 
 
 class CaptureTakeStatus(str, enum.Enum):
+    starting = "starting"
     recording = "recording"
     completed = "completed"
+    partial = "partial"
     failed = "failed"
     canceled = "canceled"
 

@@ -16,6 +16,16 @@ class TrackRole(str, enum.Enum):
     secondary = "secondary"
 
 
+class CaptureTrackSlot(str, enum.Enum):
+    cam_1 = "cam_1"
+    cam_2 = "cam_2"
+
+
+class AnalysisRole(str, enum.Enum):
+    default = "default"
+    supplementary = "supplementary"
+
+
 class OffsetSource(str, enum.Enum):
     measured = "measured"
     assumed = "assumed"
@@ -31,7 +41,7 @@ class SyncQuality(str, enum.Enum):
 class CaptureTrack(Base):
     __tablename__ = "capture_tracks"
     __table_args__ = (
-        UniqueConstraint("capture_take_id", "role", name="uq_track_take_role"),
+        UniqueConstraint("capture_take_id", "slot", name="uq_track_take_slot"),
         Index("idx_track_take", "capture_take_id"),
     )
 
@@ -41,6 +51,12 @@ class CaptureTrack(Base):
     )
     camera_id: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[TrackRole] = mapped_column(Enum(TrackRole), nullable=False)
+    slot: Mapped[CaptureTrackSlot] = mapped_column(
+        Enum(CaptureTrackSlot), nullable=False, default=CaptureTrackSlot.cam_1
+    )
+    analysis_role: Mapped[AnalysisRole] = mapped_column(
+        Enum(AnalysisRole), nullable=False, default=AnalysisRole.default
+    )
     video_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     offset_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     offset_source: Mapped[OffsetSource] = mapped_column(

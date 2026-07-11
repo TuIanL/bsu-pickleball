@@ -68,6 +68,17 @@ def startup_workers() -> None:
     init_db()
     start_analysis_worker()
     recover_zombie_jobs()
+    _cleanup_stale_leases()
+
+
+def _cleanup_stale_leases() -> None:
+    try:
+        from app.database import get_session_factory
+        from app.camera.camera_lease_service import CameraLeaseManager
+        mgr = CameraLeaseManager(get_session_factory)
+        mgr.cleanup_stale_leases()
+    except Exception:
+        pass
 
 
 @app.on_event("shutdown")

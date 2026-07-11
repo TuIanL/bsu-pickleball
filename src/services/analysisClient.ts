@@ -683,6 +683,7 @@ import type {
   FieldSessionCreate,
   FieldSessionDeleteResult,
   ProbeResult,
+  CaptureStopResult,
   RecordingSession,
   RecordingStartRequest,
   SessionTimelineEvent,
@@ -726,8 +727,8 @@ export async function startRecording(request: RecordingStartRequest): Promise<Re
   });
 }
 
-export async function stopRecording(sessionId: string): Promise<RecordingSession> {
-  return requestJson<RecordingSession>(`/api/recordings/${sessionId}/stop`, {
+export async function stopRecording(sessionId: string): Promise<CaptureStopResult> {
+  return requestJson<CaptureStopResult>(`/api/recordings/${sessionId}/stop`, {
     method: "POST",
   });
 }
@@ -770,8 +771,8 @@ export async function startSyncRecording(request: SyncStartRequest): Promise<Syn
   });
 }
 
-export async function stopSyncRecording(sessionId: string): Promise<SyncStopResponse> {
-  return requestJson<SyncStopResponse>(`/api/sync-recordings/${sessionId}/stop`, {
+export async function stopSyncRecording(sessionId: string): Promise<CaptureStopResult> {
+  return requestJson<CaptureStopResult>(`/api/sync-recordings/${sessionId}/stop`, {
     method: "POST",
   });
 }

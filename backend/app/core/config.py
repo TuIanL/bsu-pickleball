@@ -147,6 +147,7 @@ class Settings(BaseModel):
     job_stage_timeout_seconds: int = 0                     # 单个阶段超时秒数（0=不限制）
     job_max_retries: int = 1                               # 任务失败最大重试次数
     job_zombie_timeout_seconds: int = 120                  # 僵尸任务判定阈值（秒，启动时超此时间未更新的 running 任务标为 failed）
+    capture_take_late_event_grace_minutes: int = 5         # CaptureTake 完成后允许补传事件的宽限期（分钟）
 
     # ---- 发球（serve）检测相关 ----
     serve_baseline_margin_ft: float = 6.0                  # 发球基线边距（英尺）
@@ -443,6 +444,7 @@ def get_settings() -> Settings:
         job_stage_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_STAGE_TIMEOUT_SECONDS", "0"))),
         job_max_retries=max(0, int(os.getenv("PICKLEBALL_JOB_MAX_RETRIES", "1"))),
         job_zombie_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_ZOMBIE_TIMEOUT_SECONDS", "120"))),
+        capture_take_late_event_grace_minutes=max(0, int(os.getenv("PICKLEBALL_CAPTURE_TAKE_LATE_EVENT_GRACE_MINUTES", "5"))),
         serve_baseline_margin_ft=float(os.getenv("PICKLEBALL_SERVE_BASELINE_MARGIN_FT", "6.0")),
         serve_pre_still_window_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_WINDOW_SECONDS", "1.5")),
         serve_pre_still_gap_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_GAP_SECONDS", "0.2")),

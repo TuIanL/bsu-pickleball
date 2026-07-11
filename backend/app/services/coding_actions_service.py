@@ -43,7 +43,24 @@ def execute_coding_action(
     take = capture_take_service.get_capture_take(db, capture_take_id)
     if take is None:
         raise ValueError(f"CaptureTake {capture_take_id} 不存在")
-    if take.status != CaptureTakeStatus.recording:
+
+    # 允许 recording 或 completed (宽限期内) 接收事件
+    from datetime import datetime, timedelta, timezone
+    try:
+        from app.core.config import get_settings
+        _GRACE_MINUTES = get_settings().capture_take_late_event_grace_minutes
+    except Exception:
+        _GRACE_MINUTES = 5
+    if take.status == CaptureTakeStatus.completed:
+        if take.ended_at is None:
+            raise ValueError(f"CaptureTake {capture_take_id} 已完成但缺少 ended_at")
+        grace_deadline = take.ended_at.replace(tzinfo=timezone.utc) if take.ended_at.tzinfo is None else take.ended_at
+        grace_deadline = grace_deadline + timedelta(minutes=_GRACE_MINUTES)
+        if datetime.now(timezone.utc) > grace_deadline:
+            raise ValueError(f"CaptureTake {capture_take_id} 已完成且超出补传宽限期")
+        if not (0 <= timestamp_ms <= (take.duration_ms or 0)):
+            raise ValueError(f"timestamp_ms {timestamp_ms} 超出录制时长范围")
+    elif take.status != CaptureTakeStatus.recording:
         raise ValueError(f"CaptureTake {capture_take_id} 不在录制中")
 
     # 幂等检查
@@ -157,12 +174,21 @@ def _apply_action(
         result_json=result_json,
     )
 
-    return _with_snapshot(db, take, {
+    result = _with_snapshot(db, take, {
         "revision": new_revision,
         "created_events": created_events,
         "updated_segments": updated_segments,
         "live_state": state_svc.state_to_dict(state),
     })
+
+    # 迟到事件：completed take 收到事件后重投影时间线
+    if take.status == CaptureTakeStatus.completed:
+        try:
+            reproject_coding_timeline(db, capture_take_id)
+        except Exception:
+            pass
+
+    return result
 
 
 # ── Action handlers ──
@@ -589,3 +615,115 @@ def _segment_to_dict(seg) -> dict:
         "ordinal": seg.ordinal, "start_ms": seg.start_ms, "end_ms": seg.end_ms,
         "status": seg.status.value, "label": seg.label,
     }
+
+
+def reproject_coding_timeline(db, capture_take_id: str) -> None:
+    """
+    重放全部 CodingAction，重建 TimelineEvent 和 CaptureSegment 派生投影。
+    用于迟到事件补传后修正时间线。
+    """
+    take = capture_take_service.get_capture_take(db, capture_take_id)
+    if take is None:
+        return
+
+    actions = coding_svc.list_actions_for_take(db, capture_take_id)
+    actions.sort(key=lambda a: (a.timestamp_ms, a.sequence_number or 0))
+
+    # 删除旧的 TimelineEvent 和 CaptureSegment 投影
+    from app.models.timeline_event import SessionTimelineEvent
+    from app.models.capture_segment import CaptureSegment
+    db.query(SessionTimelineEvent).filter(
+        SessionTimelineEvent.capture_take_id == capture_take_id
+    ).delete()
+    db.query(CaptureSegment).filter(
+        CaptureSegment.capture_take_id == capture_take_id
+    ).delete()
+    db.flush()
+
+    # 按序重放
+    for action in actions:
+        try:
+            _apply_action_to_timeline(db, take, action)
+        except Exception:
+            pass
+
+    # 裁剪仍 open 的 segment 到 duration_ms
+    duration_ms = take.duration_ms or 0
+    if duration_ms > 0:
+        open_segs = db.query(CaptureSegment).filter(
+            CaptureSegment.capture_take_id == capture_take_id,
+            CaptureSegment.end_ms.is_(None),
+        ).all()
+        for seg in open_segs:
+            seg.end_ms = duration_ms
+        db.flush()
+
+
+def _apply_action_to_timeline(db, take, action):
+    """将单个 CodingAction 应用到 Timeline/Segment。"""
+    from app.models.timeline_event import SessionTimelineEvent, TimelineEventSource
+    from app.models.capture_segment import CaptureSegment, SegmentStatus
+
+    payload = action.payload or {}
+    event_type = _action_to_event_type(action.action)
+
+    event = SessionTimelineEvent(
+        field_session_id=take.field_session_id,
+        capture_take_id=take.id,
+        recording_session_id=take.source_session_id,
+        event_type=event_type,
+        source=TimelineEventSource.manual,
+        timestamp_ms=action.timestamp_ms,
+        note=payload.get("note", ""),
+        payload_json=payload,
+    )
+    db.add(event)
+    db.flush()
+
+    if action.action in ("start_game", "start_set", "start_next_rally", "start_rally",
+                         "end_rally", "end_game", "end_set"):
+        _update_segments_from_action(db, take, action)
+
+
+def _action_to_event_type(action: str) -> str:
+    mapping = {
+        "start_set": "set_start", "end_set": "set_end",
+        "start_game": "game_start", "end_game": "game_end",
+        "start_next_rally": "rally_start", "start_rally": "rally_start",
+        "end_rally": "rally_end",
+        "toggle_non_play": "non_play_start",
+        "change_side": "side_change",
+        "add_note": "custom_marker",
+        "undo": "custom_marker",
+    }
+    return mapping.get(action, "custom_marker")
+
+
+def _update_segments_from_action(db, take, action):
+    from app.models.capture_segment import CaptureSegment, SegmentStatus
+    from uuid import uuid4
+
+    payload = action.payload or {}
+    now_ms = action.timestamp_ms
+
+    if action.action in ("start_set", "start_game", "start_next_rally", "start_rally"):
+        seg_type = "rally" if "rally" in action.action else ("game" if "game" in action.action else "set")
+        ordinal = payload.get("ordinal", 0)
+        seg = CaptureSegment(
+            id=f"seg_{uuid4().hex[:12]}",
+            capture_take_id=take.id,
+            segment_type=seg_type,
+            ordinal=ordinal,
+            start_ms=now_ms,
+            status=SegmentStatus.inferred,
+        )
+        db.add(seg)
+    elif action.action in ("end_rally", "end_game", "end_set"):
+        seg_type = "rally" if "rally" in action.action else ("game" if "game" in action.action else "set")
+        segs = db.query(CaptureSegment).filter(
+            CaptureSegment.capture_take_id == take.id,
+            CaptureSegment.end_ms.is_(None),
+            CaptureSegment.segment_type == seg_type,
+        ).order_by(CaptureSegment.start_ms.desc()).all()
+        if segs:
+            segs[0].end_ms = now_ms

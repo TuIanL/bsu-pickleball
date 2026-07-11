@@ -16,7 +16,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import type { AppPath, CameraInfo, FieldSession, ProbeResult, RecordingSession, RecordingStartRequest, SessionTimelineEvent, TimelineEventCreate, SyncRecordingSession, SyncTestResult, SyncStopResponse } from "../types/report";
+import type { AppPath, CameraInfo, FieldSession, ProbeResult, RecordingSession, RecordingStartRequest, SessionTimelineEvent, TimelineEventCreate, SyncRecordingSession, SyncTestResult, SyncStopResponse, CaptureStopResult } from "../types/report";
 import {
   getFieldSession,
   updateFieldSession,
@@ -109,6 +109,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   const captureTakeIdRef = useRef<string | null>(null);
   const liveCodingStateRef = useRef<LiveCodingState | null>(null);
   const [drainConfirm, setDrainConfirm] = useState<{ unsynced: number } | null>(null);
+  const [outboxHealth, setOutboxHealth] = useState<"synced" | "pending" | "offline">("synced");
 
   // ── 双摄同步录制状态 ──
   const isDualMode = fieldSession?.camera_setup === "dual";
@@ -123,7 +124,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   const [slotSelecting, setSlotSelecting] = useState<"cam_1" | "cam_2" | null>(null);
   const [dualTestResult, setDualTestResult] = useState<SyncTestResult | null>(null);
   const [activeSyncSession, setActiveSyncSession] = useState<SyncRecordingSession | null>(null);
-  const [dualStopResponse, setDualStopResponse] = useState<SyncStopResponse | null>(null);
+  const [dualStopResponse, setDualStopResponse] = useState<CaptureStopResult | null>(null);
   const [dualElapsedSec, setDualElapsedSec] = useState(0);
   const [dualSegmentIndex, setDualSegmentIndex] = useState(0);
   const dualElapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -255,10 +256,12 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
           setActiveSyncSession(session);
           setDualState("stopped");
           setDualStopResponse({
-            session,
-            default_analysis_video_id: session.default_analysis_video_id,
+            capture_take: undefined,
+            tracks: [],
             analysis_available: !!session.default_analysis_video_id,
+            default_analysis_video_id: session.default_analysis_video_id,
             analysis_blocked_reason: session.error_message ?? undefined,
+            warnings: [],
           });
         } else if (session) {
           setActiveSyncSession(session);
@@ -398,14 +401,14 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   const handleStopRecording = async () => {
     if (!activeRecording) return;
     try {
-      if (outboxSenderRef.current) {
-        const { unsynced } = await outboxSenderRef.current.drain();
-        if (unsynced > 0) {
-          setDrainConfirm({ unsynced });
-          return;
-        }
-      }
+      outboxSenderRef.current?.freeze();
       await performStopRecording();
+      if (outboxSenderRef.current) {
+        outboxSenderRef.current.flushWithDeadline(3000).then(() => {
+          const pending = getPendingItems(activeRecording.capture_take_id ?? "");
+          setOutboxHealth(pending.length > 0 ? "pending" : "synced");
+        });
+      }
     } catch { /* ignore */ }
   };
 
@@ -414,7 +417,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
     try {
       setPreviewStatus("loading");
       const stopped = await stopRecording(activeRecording.session_id);
-      setCompletedRecording(stopped);
+      setCompletedRecording(stopped as unknown as RecordingSession);
       setConsoleState("stopped");
       setActiveRecording(null);
       outboxSenderRef.current?.stop();
@@ -501,19 +504,17 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   const handleDualStopRecording = async () => {
     if (!activeSyncSession) return;
     try {
-      if (outboxSenderRef.current) {
-        const { unsynced } = await outboxSenderRef.current.drain();
-        if (unsynced > 0) {
-          setDrainConfirm({ unsynced });
-          return;
-        }
-      }
+      outboxSenderRef.current?.freeze();
       const response = await stopSyncRecording(activeSyncSession.session_id);
       setDualState("stopped");
       setDualStopResponse(response);
-      setActiveSyncSession(response.session);
+      setActiveSyncSession(null);
       outboxSenderRef.current?.stop();
       outboxSenderRef.current = null;
+      if (activeSyncSession.capture_take_id) {
+        const pending = getPendingItems(activeSyncSession.capture_take_id);
+        setOutboxHealth(pending.length > 0 ? "pending" : "synced");
+      }
     } catch { /* ignore */ }
   };
 
@@ -987,6 +988,9 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
               <div className="rounded-xl bg-[#22C55E]/10 p-4 text-center">
                 <CheckCircle2 size={24} className="mx-auto text-[#168A34] mb-2" />
                 <p className="text-sm font-bold text-[#168A34]">录制已完成</p>
+                {outboxHealth === "pending" && (
+                  <p className="text-xs text-amber-600 mt-1">有事件待同步，可稍后重试</p>
+                )}
               </div>
             )}
             {consoleState === "recording" && (
@@ -1062,8 +1066,8 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
               <h3 className="text-lg font-black text-[#14241B]">双摄同步录制已完成</h3>
               <div className="mt-2 flex flex-wrap gap-3 text-sm text-slate-600">
                 <span>时长：{formatElapsed(dualElapsedSec)}</span>
-                <span>分段数：{dualStopResponse.session.segments?.length ?? 0}</span>
-                <span>重启次数：{dualStopResponse.session.total_restarts ?? 0}</span>
+                <span>分段数：{dualStopResponse.tracks[0]?.fragment_count ?? 0}</span>
+                <span>重启次数：{dualStopResponse.tracks[0]?.restart_count ?? 0}</span>
                 <span>
                   底线机位 A：{cameras.find(c => c.camera_id === selectedSlots.cam_1)?.name ?? selectedSlots.cam_1}
                 </span>
@@ -1085,7 +1089,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
             {dualStopResponse.analysis_available && dualStopResponse.default_analysis_video_id ? (
               <button
                 className="green-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-                onClick={() => onNavigate(`/upload?videoId=${dualStopResponse.default_analysis_video_id}&source=recording&sessionId=${dualStopResponse.session.session_id}&fps=${dualStopResponse.session.fps}`)}
+                onClick={() => onNavigate(`/upload?videoId=${dualStopResponse.default_analysis_video_id}&source=recording&sessionId=${activeSyncSession?.session_id ?? ""}&fps=${activeSyncSession?.fps ?? 60}`)}
                 type="button"
               >
                 <Upload size={16} /> 创建分析任务

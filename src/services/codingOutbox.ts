@@ -125,6 +125,7 @@ export function createOutboxSender(
   let _sending = false;
   let _stopped = false;
   let _draining = false;
+  let _frozen = false;
 
   async function flush() {
     if (_sending) return;
@@ -240,6 +241,9 @@ export function createOutboxSender(
     flush,
     drain,
     stop: () => { _stopped = true; },
+    freeze: () => { _frozen = true; },
+    isFrozen: () => _frozen,
+    flushWithDeadline: (timeoutMs: number) => flushWithTimeout(timeoutMs),
   };
 }
 

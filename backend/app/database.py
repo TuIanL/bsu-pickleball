@@ -76,6 +76,8 @@ def init_db() -> None:
     import app.models.capture_segment  # noqa: F401
     import app.models.segment_edit_operation  # noqa: F401
     import app.models.analysis_batch  # noqa: F401
+    import app.models.camera_lease  # noqa: F401
+    import app.models.ffmpeg_registry  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。

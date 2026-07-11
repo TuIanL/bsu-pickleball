@@ -20,6 +20,7 @@ from app.camera.models import (
     SyncTestRequest,
     SyncTestResult,
 )
+from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 from app.camera.recorder import check_ffmpeg_available
 from app.camera.sync_recorder_service import sync_recording_service
 
@@ -56,17 +57,32 @@ def start_sync_recording(payload: SyncStartRequest) -> SyncRecordingSession:
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@router.post("/{session_id}/stop", response_model=SyncStopResponse)
-def stop_sync_recording(session_id: str) -> SyncStopResponse:
-    """
-    停止双摄同步录制
-
-    终止所有 FFmpeg 进程，合并主机位 .ts 分段并注册视频。
-    返回停止后的完整会话状态、primary_video_id 和分析可用性。
-    """
+@router.post("/{session_id}/stop", response_model=CaptureStopResult)
+def stop_sync_recording(session_id: str) -> CaptureStopResult:
     _check_ffmpeg()
     try:
-        return sync_recording_service.stop_session(session_id)
+        response = sync_recording_service.stop_session(session_id)
+        session = response.session
+        take = None
+        tid = getattr(session, "capture_take_id", None)
+        if tid:
+            from app.database import get_session_factory
+            from app.services.capture_take_service import get_capture_take
+            db = get_session_factory()()
+            try:
+                take = get_capture_take(db, tid)
+            finally:
+                db.close()
+        cam_slots = getattr(session, "camera_slots", {}) or {}
+        cam_1_vid = cam_2_vid = None
+        for slot_name in ("cam_1", "cam_2"):
+            slot_info = cam_slots.get(slot_name) if isinstance(cam_slots, dict) else getattr(cam_slots, slot_name, None)
+            cid = getattr(slot_info, "camera_id", None) if slot_info else None
+        return CaptureStopResultBuilder.from_sync_session(
+            session, capture_take=take,
+            cam_1_video_id=getattr(response, "default_analysis_video_id", None),
+            warnings=[] if response.analysis_available else [response.analysis_blocked_reason or "分析不可用"],
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
