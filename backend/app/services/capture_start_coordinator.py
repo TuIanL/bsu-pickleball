@@ -10,9 +10,17 @@ from app.models.capture_take import CaptureMode, CaptureTakeStatus, SourceSessio
 
 @dataclass
 class CaptureTrackSpec:
-    slot: str  # "cam_1" | "cam_2"
+    slot: str
     camera_id: str
-    analysis_role: str = "default"  # "default" | "supplementary"
+    analysis_role: str = "default"
+
+
+@dataclass(frozen=True)
+class PreparedTrack:
+    capture_track_id: str
+    slot: str
+    camera_id: str
+    analysis_role: str
 
 
 @dataclass
@@ -22,7 +30,7 @@ class PreparedCapture:
     capture_mode: str
     source_session_type: str
     source_session_id: str
-    tracks: list[CaptureTrackSpec] = field(default_factory=list)
+    tracks: list[PreparedTrack] = field(default_factory=list)
 
 
 class CaptureStartCoordinator:
@@ -61,9 +69,11 @@ class CaptureStartCoordinator:
             )
             db.add(take)
 
+            prepared_tracks: list[PreparedTrack] = []
             for spec in tracks:
+                track_id = self._generate_track_id(take_id, spec.slot)
                 track = CaptureTrack(
-                    id=self._generate_track_id(take_id, spec.slot),
+                    id=track_id,
                     capture_take_id=take_id,
                     camera_id=spec.camera_id,
                     role=TrackRole.primary if spec.analysis_role == "default" else TrackRole.secondary,
@@ -71,6 +81,12 @@ class CaptureStartCoordinator:
                     analysis_role=AnalysisRole(spec.analysis_role),
                 )
                 db.add(track)
+                prepared_tracks.append(PreparedTrack(
+                    capture_track_id=track_id,
+                    slot=spec.slot,
+                    camera_id=spec.camera_id,
+                    analysis_role=spec.analysis_role,
+                ))
 
             db.commit()
         except Exception:
@@ -100,7 +116,7 @@ class CaptureStartCoordinator:
             capture_mode=capture_mode,
             source_session_type=source_session_type,
             source_session_id=source_session_id,
-            tracks=tracks,
+            tracks=prepared_tracks,
         )
 
     def activate(self, capture_take_id: str) -> None:

@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest
 from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 # 检查当前系统是否安装了 FFmpeg 这个外部工具
-from app.camera.recorder import check_ffmpeg_available
+from app.camera.ffmpeg_utils import check_ffmpeg_available
 # 录制会话服务：真正管理录制生命周期（开始/停止/取消/查询）的对象
 from app.camera.session_service import session_service
 

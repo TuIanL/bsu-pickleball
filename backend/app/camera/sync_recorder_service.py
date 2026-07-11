@@ -506,6 +506,8 @@ class SyncRecordingService:
         self._coordinator = coordinator
         self._cleanup_service = cleanup_service
         self._segments: list[SyncSegment] = []
+        self._use_track_recorder = False
+        self._active_coordinator = None
 
     # ── 摄像头占用检查 ────────────────────────────────────────────
 
@@ -585,6 +587,10 @@ class SyncRecordingService:
     def start_session(self, request: SyncStartRequest) -> SyncRecordingSession:
         """开始双摄同步录制"""
         global _ACTIVE_SYNC_SESSION_ID, _ACTIVE_SYNC_CAMERAS
+
+        if getattr(self, "_use_track_recorder", False) and request.field_session_id:
+            s, _ = self._start_with_track_recorder(request)
+            return s
 
         # 检查 FFmpeg
         if not check_ffmpeg_available():
@@ -744,6 +750,12 @@ class SyncRecordingService:
     def stop_session(self, session_id: str) -> SyncStopResponse:
         """停止双摄同步录制"""
         global _ACTIVE_SYNC_SESSION_ID, _ACTIVE_SYNC_CAMERAS
+
+        if self._active_coordinator is not None:
+            coord = self._active_coordinator
+            self._active_coordinator = None
+            s = self._stop_with_track_recorder(session_id, coord)
+            return SyncStopResponse(session=s, analysis_available=False)
 
         session = self.get_session(session_id)
         if session is None:
@@ -1044,6 +1056,134 @@ class SyncRecordingService:
         self._finalize_capture_take(session, "canceled")
 
         logger.info("双摄同步录制已取消: %s", session_id)
+        return session
+
+    # ── TrackRecorder v2 集成 ─────────────────────────────────────
+
+    def _start_with_track_recorder(self, request: SyncStartRequest):
+        """使用 TrackRecorder × 2 + StrictSyncPolicy 启动双摄。"""
+        from app.services.capture_start_coordinator import CaptureTrackSpec
+        from app.camera.recording_policy import StrictSyncPolicy
+        from app.camera.capture_runtime_coordinator import CaptureRuntimeCoordinator, TrackRuntimeInfo
+
+        cam_1 = camera_registry.get(request.cam_1_id)
+        cam_2 = camera_registry.get(request.cam_2_id)
+        if not cam_1 or not cam_2:
+            raise ValueError("摄像头不存在")
+
+        field_session_id = request.field_session_id
+        if not field_session_id:
+            raise ValueError("field_session_id 不可为空")
+        court_name = request.court_name or ""
+        match_format = request.match_format or "doubles"
+        if field_session_id and not court_name:
+            from app.database import get_session_factory
+            from app.services.field_session_service import get_field_session
+            db = get_session_factory()()
+            try:
+                fs = get_field_session(db, field_session_id)
+                if fs:
+                    court_name = fs.court_name
+                    if request.match_format is None:
+                        match_format = fs.match_format.value
+            finally:
+                db.close()
+
+        session_id = self._generate_session_id()
+        output_dir = self._output_dir(session_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        prep = self._coordinator.prepare_start(
+            source_session_type="sync_recording",
+            source_session_id=session_id,
+            field_session_id=field_session_id,
+            capture_mode="dual",
+            tracks=[
+                CaptureTrackSpec(slot="cam_1", camera_id=request.cam_1_id, analysis_role="default"),
+                CaptureTrackSpec(slot="cam_2", camera_id=request.cam_2_id, analysis_role="supplementary"),
+            ],
+        )
+
+        coord = CaptureRuntimeCoordinator()
+        coord.start_tracks(
+            take_id=prep.capture_take_id,
+            tracks_info=[
+                TrackRuntimeInfo(track_id=prep.tracks[0].capture_track_id, slot="cam_1",
+                                 camera_id=request.cam_1_id, analysis_role="default",
+                                 stream_url=cam_1.stream_url, output_dir=str(output_dir)),
+                TrackRuntimeInfo(track_id=prep.tracks[1].capture_track_id, slot="cam_2",
+                                 camera_id=request.cam_2_id, analysis_role="supplementary",
+                                 stream_url=cam_2.stream_url, output_dir=str(output_dir)),
+            ],
+            policy=StrictSyncPolicy(),
+        )
+
+        session = SyncRecordingSession(
+            session_id=session_id, field_session_id=field_session_id,
+            status="recording", capture_take_id=prep.capture_take_id,
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id=request.cam_1_id,
+                                          camera_angle=request.cam_1_angle or "baseline_high",
+                                          stream_url_snapshot=cam_1.stream_url),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id=request.cam_2_id,
+                                          camera_angle=request.cam_2_angle or "baseline_high",
+                                          stream_url_snapshot=cam_2.stream_url),
+            },
+            output_dir=str(output_dir), court_name=court_name,
+            match_format=match_format, fps=request.fps,
+            resolution=request.resolution,
+            auto_analyze_after_stop=request.auto_analyze_after_stop,
+            started_at=datetime.now(timezone.utc),
+        )
+
+        global _ACTIVE_SYNC_SESSION_ID, _ACTIVE_SYNC_CAMERAS
+        _ACTIVE_SYNC_SESSION_ID = session_id
+        _ACTIVE_SYNC_CAMERAS = {request.cam_1_id, request.cam_2_id}
+
+        SYNC_SESSIONS[session_id] = session
+        self._persist(session)
+        self._active_coordinator = coord
+        self._coordinator.activate(prep.capture_take_id)
+
+        return session, prep
+
+    def _stop_with_track_recorder(self, session_id: str, coordinator):
+        from app.camera.capture_finalizer import CaptureFinalizer
+        from app.camera.capture_completion_service import CaptureCompletionService
+
+        session = SYNC_SESSIONS.get(session_id)
+        if not session:
+            raise ValueError(f"会话 {session_id} 不存在")
+
+        frags, outcome = coordinator.stop_tracks()
+        fin = CaptureFinalizer()
+        comp = CaptureCompletionService()
+
+        by_track: dict[str, list[dict]] = {}
+        for f in frags:
+            tid = f["track_id"]
+            by_track.setdefault(tid, []).append(f)
+
+        take_id = getattr(session, "capture_take_id", "") or ""
+        decision = comp.finalize_and_decide(
+            capture_take_id=take_id, outcome=outcome,
+            finalizer=fin, fragment_infos_by_track=by_track,
+        )
+
+        stopped_at = datetime.now(timezone.utc)
+        duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
+        session = session.model_copy(update={
+            "status": decision.terminal_status,
+            "stopped_at": stopped_at, "duration_sec": duration,
+            "default_analysis_video_id": decision.default_analysis_video_id,
+        })
+        SYNC_SESSIONS[session_id] = session
+        self._persist(session)
+
+        global _ACTIVE_SYNC_SESSION_ID, _ACTIVE_SYNC_CAMERAS
+        _ACTIVE_SYNC_SESSION_ID = None
+        _ACTIVE_SYNC_CAMERAS.clear()
+
         return session
 
     # ── 删除 ──────────────────────────────────────────────────────

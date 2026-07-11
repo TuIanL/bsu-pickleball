@@ -20,7 +20,8 @@ from pathlib import Path
 
 from app.camera.camera_registry import camera_registry
 from app.camera.models import RecordingSession, RecordingStartRequest
-from app.camera.recorder import Recorder, check_ffmpeg_available
+from app.camera.recorder import Recorder
+from app.camera.ffmpeg_utils import check_ffmpeg_available
 from app.services.storage_service import StorageService
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ class SessionService:
         self._cleanup_service = cleanup_service
         self._recorder = self._recorder_factory()
         self._heartbeat_threads: dict[str, threading.Thread] = {}
+        self._use_track_recorder = False
+        self._active_coordinator = None
 
     @property
     def sessions_dir(self) -> Path:
@@ -86,6 +89,10 @@ class SessionService:
 
     def start_session(self, request: RecordingStartRequest) -> RecordingSession:
         global _ACTIVE_CAMERA, _ACTIVE_SESSION_ID
+
+        if getattr(self, "_use_track_recorder", False) and request.field_session_id:
+            session, _ = self.start_with_track_recorder(request)
+            return session
 
         # 前置检查：FFmpeg 是否可用
         if not check_ffmpeg_available():
@@ -269,6 +276,11 @@ class SessionService:
         t.start()
 
     def stop_session(self, session_id: str) -> RecordingSession:
+        if self._active_coordinator is not None:
+            coord = self._active_coordinator
+            self._active_coordinator = None
+            return self.stop_with_track_recorder(session_id, coord)
+
         # 先从缓存取，缓存没有再从磁盘加载
         session = SESSIONS.get(session_id)
         if session is None:
@@ -642,6 +654,107 @@ def _map_camera_angle(angle: str) -> str:
         "side": "sideline",
     }
     return mapping.get(angle, "unknown")
+
+    # ── TrackRecorder 集成扩展点（渐进迁移，不替换现有代码）──
+
+    def start_with_track_recorder(self, request: RecordingStartRequest):
+        """使用 TrackRecorder + Coordinator + Finalizer 启动单摄录制。"""
+        from app.services.capture_start_coordinator import CaptureTrackSpec
+        from app.camera.recording_policy import SingleTrackRestartPolicy
+        from app.camera.capture_runtime_coordinator import CaptureRuntimeCoordinator, TrackRuntimeInfo
+
+        # 复用现有校验和上下文继承
+        if not check_ffmpeg_available():
+            raise RuntimeError("FFmpeg 不可用")
+        camera = camera_registry.get(request.camera_id)
+        if camera is None:
+            raise ValueError(f"摄像头 {request.camera_id} 不存在")
+
+        field_session_id = request.field_session_id
+        if not field_session_id:
+            raise ValueError("field_session_id 不可为空")
+
+        session_id = self._generate_session_id()
+        prep = self._coordinator.prepare_start(
+            source_session_type="recording",
+            source_session_id=session_id,
+            field_session_id=field_session_id,
+            capture_mode="single",
+            tracks=[CaptureTrackSpec(slot="cam_1", camera_id=request.camera_id, analysis_role="default")],
+        )
+
+        coord = CaptureRuntimeCoordinator()
+        output_dir = str(self._output_path(session_id, request.camera_id).parent)
+        coord.start_tracks(
+            take_id=prep.capture_take_id,
+            tracks_info=[TrackRuntimeInfo(
+                track_id=prep.tracks[0].capture_track_id,
+                slot="cam_1", camera_id=request.camera_id,
+                analysis_role="default",
+                stream_url=camera.stream_url,
+                output_dir=output_dir,
+            )],
+            policy=SingleTrackRestartPolicy(),
+        )
+
+        session = RecordingSession(
+            session_id=session_id, camera_id=request.camera_id,
+            field_session_id=field_session_id,
+            capture_take_id=prep.capture_take_id,
+            court_name=request.court_name or "",
+            match_format=request.match_format or "doubles",
+            camera_angle=request.camera_angle or "baseline_high",
+            fps=request.fps, resolution=request.resolution,
+            auto_analyze_after_stop=request.auto_analyze_after_stop,
+            status="recording", started_at=datetime.now(timezone.utc),
+        )
+
+        global _ACTIVE_CAMERA, _ACTIVE_SESSION_ID
+        _ACTIVE_CAMERA = request.camera_id
+        _ACTIVE_SESSION_ID = session_id
+        SESSIONS[session_id] = session
+        self._persist(session)
+        self._coordinator.activate(prep.capture_take_id)
+
+        self._active_coordinator = coord
+        return session, coord
+
+    def stop_with_track_recorder(self, session_id: str, coordinator):
+        """使用 TrackRecorder + Finalizer 停止单摄录制。"""
+        from app.camera.capture_finalizer import CaptureFinalizer
+        from app.camera.capture_completion_service import CaptureCompletionService
+
+        session = SESSIONS.get(session_id)
+        if not session:
+            raise ValueError(f"会话 {session_id} 不存在")
+
+        frags, outcome = coordinator.stop_tracks()
+        fin = CaptureFinalizer()
+        comp = CaptureCompletionService()
+
+        by_track: dict[str, list[dict]] = {}
+        for f in frags:
+            tid = f["track_id"]
+            by_track.setdefault(tid, []).append(f)
+
+        take_id = getattr(session, "capture_take_id", "") or ""
+        decision = comp.finalize_and_decide(
+            capture_take_id=take_id,
+            outcome=outcome, finalizer=fin, fragment_infos_by_track=by_track)
+
+        stopped_at = datetime.now(timezone.utc)
+        duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
+        session = session.model_copy(update={
+            "status": decision.terminal_status,
+            "stopped_at": stopped_at,
+            "duration_sec": duration,
+            "video_id": decision.default_analysis_video_id,
+        })
+        SESSIONS[session_id] = session
+        self._persist(session)
+        self._clear_active(session.camera_id)
+
+        return session
 
 
 # 全局单例：整个程序共用一个会话服务

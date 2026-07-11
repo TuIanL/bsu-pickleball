@@ -92,7 +92,11 @@ class CaptureCleanupService:
         from app.models.capture_track import CaptureTrack
         from app.models.capture_coding_action import CaptureCodingAction
         from app.models.capture_segment import CaptureSegment
+        from app.models.track_timeline_span import TrackTimelineSpan
+        from app.models.track_finalization import TrackFinalization
+        from app.models.media_fragment import MediaFragment
 
+        # 按外键依赖顺序删除
         db.query(SessionTimelineEvent).filter(
             SessionTimelineEvent.capture_take_id == capture_take_id
         ).delete()
@@ -102,17 +106,42 @@ class CaptureCleanupService:
         db.query(CaptureCodingAction).filter(
             CaptureCodingAction.capture_take_id == capture_take_id
         ).delete()
+
+        # TimelineSpan → Finalization → Fragment → Track
+        track_ids = [t[0] for t in db.query(CaptureTrack.id).filter(
+            CaptureTrack.capture_take_id == capture_take_id
+        ).all()]
+        for tid in track_ids:
+            final_ids = [f[0] for f in db.query(TrackFinalization.id).filter(
+                TrackFinalization.capture_track_id == tid
+            ).all()]
+            for fid in final_ids:
+                db.query(TrackTimelineSpan).filter(
+                    TrackTimelineSpan.track_finalization_id == fid
+                ).delete()
+            db.query(TrackFinalization).filter(
+                TrackFinalization.capture_track_id == tid
+            ).delete()
+            db.query(MediaFragment).filter(
+                MediaFragment.capture_track_id == tid
+            ).delete()
+
         db.query(CaptureTrack).filter(
             CaptureTrack.capture_take_id == capture_take_id
         ).delete()
 
     def _delete_media_files(self, video_path: str | None, output_dir: str | None) -> None:
         import shutil
+        import glob
         if output_dir:
             out = Path(output_dir)
             if out.exists():
                 try:
-                    shutil.rmtree(out)
+                    # 删除 TS 片段 + concat manifest + 临时/最终 MP4
+                    for pattern in ["*.ts", "*.concat.txt", "*.finalizing", "*.mp4"]:
+                        for f in out.glob(pattern):
+                            f.unlink(missing_ok=True)
+                    shutil.rmtree(out, ignore_errors=True)
                 except Exception as exc:
                     logger.warning("删除输出目录失败: %s", exc)
         if video_path:

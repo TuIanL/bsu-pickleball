@@ -21,7 +21,7 @@ from app.camera.models import (
     SyncTestResult,
 )
 from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
-from app.camera.recorder import check_ffmpeg_available
+from app.camera.ffmpeg_utils import check_ffmpeg_available
 from app.camera.sync_recorder_service import sync_recording_service
 
 router = APIRouter(prefix="/api/sync-recordings", tags=["sync-recordings"])

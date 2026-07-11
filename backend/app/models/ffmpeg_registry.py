@@ -26,3 +26,6 @@ class FFmpegProcessRegistry(Base):
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    fragment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    return_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)

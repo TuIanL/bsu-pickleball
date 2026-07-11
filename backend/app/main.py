@@ -79,6 +79,11 @@ def _cleanup_stale_leases() -> None:
         mgr.cleanup_stale_leases()
     except Exception:
         pass
+    try:
+        from app.camera.capture_recovery import recover_orphan_recordings
+        recover_orphan_recordings()
+    except Exception:
+        pass
 
 
 @app.on_event("shutdown")
