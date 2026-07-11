@@ -18,14 +18,14 @@ import type {
   StructuredVisualizationData,
   VisualizationManifest,
   VideoUploadResponse,
-  type RawPlayerRenderTrajectory,
-  type CodingActionRequest,
-  type CodingActionResponse,
-  type LiveCodingState,
-  type CaptureTakeSummary,
-  type CaptureSegmentSummary,
-  type AnalysisBatchCreateResponse,
-  type AnalysisBatchDetail,
+  RawPlayerRenderTrajectory,
+  CodingActionRequest,
+  CodingActionResponse,
+  LiveCodingState,
+  CaptureTakeSummary,
+  CaptureSegmentSummary,
+  AnalysisBatchCreateResponse,
+  AnalysisBatchDetail,
 } from "../types/report";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
@@ -890,6 +890,7 @@ export async function listTimelineEvents(
   if (params?.event_type) sp.set("event_type", params.event_type);
   if (params?.source) sp.set("source", params.source);
   if (params?.recording_session_id) sp.set("recording_session_id", params.recording_session_id);
+  if (params?.capture_take_id) sp.set("capture_take_id", params.capture_take_id);
   if (params?.from_ms !== undefined) sp.set("from_ms", String(params.from_ms));
   if (params?.to_ms !== undefined) sp.set("to_ms", String(params.to_ms));
   const q = sp.toString();

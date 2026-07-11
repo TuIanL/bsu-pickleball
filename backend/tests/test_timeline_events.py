@@ -346,7 +346,8 @@ def test_timestamp_explicit_value_preserved(client):
 
 # ---- 5.4 Field Session 删除保护测试 ----
 
-def test_delete_field_session_blocked_by_timeline_events(client):
+def test_delete_field_session_with_events_no_video_succeeds(client):
+    """无视频的采集任务即使有时间线事件也应能删除（级联清理）。"""
     fs = _create_field_session(client)
     _create_timeline_event(client, fs["id"])
 
@@ -354,12 +355,12 @@ def test_delete_field_session_blocked_by_timeline_events(client):
     assert client.post(f"/api/field-sessions/{fs['id']}/complete").status_code == 200
 
     response = client.delete(f"/api/field-sessions/{fs['id']}")
-    assert response.status_code == 409
-    assert "时间线事件" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleted"
 
-    # Field Session 仍然存在
+    # Field Session 已被删除
     get_resp = client.get(f"/api/field-sessions/{fs['id']}")
-    assert get_resp.status_code == 200
+    assert get_resp.status_code == 404
 
 
 def test_delete_field_session_without_events_succeeds(client):

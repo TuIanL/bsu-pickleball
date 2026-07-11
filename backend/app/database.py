@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import create_engine, Engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker, DeclarativeBase
 
 from app.core.config import get_settings
@@ -78,6 +78,13 @@ def init_db() -> None:
     import app.models.analysis_batch  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
+    # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
+    columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
+    with engine.begin() as connection:
+        if "match_phase" not in columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN match_phase VARCHAR(32) NOT NULL DEFAULT 'idle'"))
+        if "intermission_kind" not in columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN intermission_kind VARCHAR(32)"))
 
 
 def get_db() -> Session:

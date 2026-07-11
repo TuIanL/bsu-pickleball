@@ -26,7 +26,8 @@ from app.services.field_session_service import (
     delete_field_session,
 )
 from app.camera.session_service import session_service
-from app.services.timeline_event_service import count_events_for_field_session
+from app.camera.sync_recorder_service import sync_recording_service
+from app.models.field_session import FieldSessionStatus
 
 router = APIRouter(prefix="/api/field-sessions", tags=["field-sessions"])
 
@@ -107,21 +108,39 @@ def archive(field_session_id: str, db: Session = Depends(get_db)) -> FieldSessio
 
 @router.delete("/{field_session_id}", response_model=FieldSessionDeleteResult)
 def delete(field_session_id: str, db: Session = Depends(get_db)) -> FieldSessionDeleteResult:
-    """删除空的 Field Session。已有录制、时间线事件或进行中的任务会被保护。"""
-    recording_count = len(session_service.list_sessions(field_session_id=field_session_id))
-    timeline_event_count = count_events_for_field_session(db, field_session_id)
+    """删除 Field Session。有视频的录制会被保护，无视频的孤立数据将级联清理。"""
+    from app.models.field_session import FieldSession
+    from pathlib import Path
 
-    # 先检查时间线事件保护（在任何 db commit 之前）
-    if timeline_event_count > 0:
+    fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
+    if fs is None:
+        raise HTTPException(status_code=404, detail=f"Field Session {field_session_id} 不存在")
+    if fs.status == FieldSessionStatus.live:
+        raise HTTPException(status_code=409, detail="采集任务进行中，无法删除")
+
+    # 收集关联录制
+    recordings = session_service.list_sessions(field_session_id=field_session_id)
+    sync_recordings = sync_recording_service.list_sessions(field_session_id=field_session_id)
+
+    # 检查是否存在有视频的录制
+    has_video = any(
+        r.video_id or (r.video_path and Path(r.video_path).exists())
+        for r in recordings
+    ) or any(
+        s.registered_video_ids
+        for s in sync_recordings
+    )
+
+    if has_video:
         raise HTTPException(
             status_code=409,
-            detail=f"采集任务下已有 {timeline_event_count} 条时间线事件，无法删除",
+            detail="采集任务下存在已录制视频，请先删除视频再删除任务",
         )
 
-    result = delete_field_session(db, field_session_id, recording_count=recording_count)
-    if result["status"] == "not_found":
-        raise HTTPException(status_code=404, detail=result["detail"])
-    if result["status"] == "blocked":
-        raise HTTPException(status_code=409, detail=result["detail"])
+    # 无视频 → 级联删除
+    from app.services.field_session_service import cascade_delete_field_session
+    cascade_delete_field_session(db, field_session_id, recordings, sync_recordings)
 
-    return FieldSessionDeleteResult(**result)
+    return FieldSessionDeleteResult(
+        id=field_session_id, status="deleted", detail="采集任务已删除"
+    )

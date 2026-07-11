@@ -134,22 +134,9 @@ def run_sync_test(payload: SyncTestRequest) -> SyncTestResult:
 @router.delete("/{session_id}")
 def delete_sync_recording(session_id: str) -> dict:
     """删除终态同步录制会话"""
-    session = sync_recording_service.get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"同步录制会话 {session_id} 不存在")
-    if session.status == "recording":
-        raise HTTPException(status_code=409, detail="录制进行中，无法删除")
-
-    import os as _os
-    path = sync_recording_service._session_path(session_id)
-    if path.exists():
-        try:
-            _os.remove(path)
-        except Exception:
-            pass
-
-    from app.camera.models import SyncRecordingSession as SRS
-    global_vars = __import__("app.camera.sync_recording_service", fromlist=[""])
-    global_vars.SYNC_SESSIONS.pop(session_id, None)
-
-    return {"session_id": session_id, "status": "deleted", "detail": "同步录制会话已删除"}
+    result = sync_recording_service.delete_session(session_id)
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail=result["detail"])
+    if result["status"] == "blocked":
+        raise HTTPException(status_code=409, detail=result["detail"])
+    return result

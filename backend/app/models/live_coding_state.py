@@ -21,6 +21,8 @@ class LiveCodingState(Base):
     game_ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rally_ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     non_play: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    match_phase: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
+    intermission_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     current_set_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     current_game_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

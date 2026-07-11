@@ -233,11 +233,21 @@ assert r['live_state']['game_ordinal'] == 1
 r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i03", expected_revision=2, timestamp_ms=3000)
 assert r['live_state']['rally_ordinal'] == 1
 
-r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i04", expected_revision=3, timestamp_ms=5000)
+r = execute_coding_action(db, tid, action="end_rally", client_action_id="i04_end", expected_revision=3, timestamp_ms=5000)
+assert r['live_state']['non_play'] == True
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i04", expected_revision=4, timestamp_ms=6000)
 assert r['live_state']['rally_ordinal'] == 2  # 自动关闭第1分
 
-r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i05", expected_revision=4, timestamp_ms=8000)
+r = execute_coding_action(db, tid, action="end_rally", client_action_id="i05_end", expected_revision=5, timestamp_ms=8000)
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i05", expected_revision=6, timestamp_ms=9000)
 assert r['live_state']['rally_ordinal'] == 3
+ok()
+
+test("暂停和换边写入间歇原因")
+r = execute_coding_action(db, tid, action="start_timeout", client_action_id="timeout", expected_revision=7, timestamp_ms=10000)
+assert r["live_state"]["intermission_kind"] == "timeout"
+r = execute_coding_action(db, tid, action="change_side", client_action_id="side", expected_revision=8, timestamp_ms=11000)
+assert r["live_state"]["intermission_kind"] == "side_change"
 ok()
 
 test("区间数")
@@ -246,7 +256,7 @@ assert len(segs) >= 5, f"期望 >=5 个区间，实际 {len(segs)}"; ok()
 
 # 幂等性
 test("幂等: 相同 client_action_id")
-r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i03", expected_revision=5, timestamp_ms=10000)
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="i03", expected_revision=9, timestamp_ms=12000)
 assert r.get("duplicate") == True; ok()
 
 test("幂等: 不同 payload 应拒绝")
@@ -267,8 +277,9 @@ assert "error" in r and r["error"] == "revision_conflict"; ok()
 
 # undo
 test("undo: undo 最后一个 action")
-r = execute_coding_action(db, tid, action="undo", client_action_id="i_undo", expected_revision=5, timestamp_ms=11000)
-assert r['live_state']['rally_ordinal'] < 3; ok()
+r = execute_coding_action(db, tid, action="undo", client_action_id="i_undo", expected_revision=9, timestamp_ms=13000)
+assert r['live_state']['rally_ordinal'] == 3
+assert r['live_state']['intermission_kind'] == "timeout"; ok()
 
 test("undo: 多次 undo 最终抛错")
 undo_failed = False

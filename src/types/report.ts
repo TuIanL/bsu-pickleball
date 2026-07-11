@@ -402,7 +402,8 @@ export type TimelineEventType =
   | "timeout_end"
   | "drill_start"
   | "drill_end"
-  | "custom_marker";
+  | "custom_marker"
+  | "add_note";
 
 export type TimelineEventSource = "manual" | "algorithm" | "corrected";
 export type TimelineEventPayload = Record<string, unknown>;
@@ -460,7 +461,10 @@ export interface TimelineEventListParams {
 export type CodingActionType =
   | "start_set" | "start_game" | "start_next_rally"
   | "end_rally" | "end_game" | "end_set"
-  | "toggle_non_play" | "change_side" | "add_note" | "undo";
+  | "toggle_non_play" | "start_timeout" | "change_side" | "add_note" | "undo";
+
+export type MatchPhase = "idle" | "rally_active" | "intermission";
+export type IntermissionKind = "between_rallies" | "timeout" | "side_change";
 
 export interface CodingActionRequest {
   action: CodingActionType;
@@ -477,6 +481,8 @@ export interface LiveCodingState {
   game_ordinal: number;
   rally_ordinal: number;
   non_play: boolean;
+  match_phase?: MatchPhase;
+  intermission_kind?: IntermissionKind;
   current_set_segment_id?: string;
   current_game_segment_id?: string;
   current_rally_segment_id?: string;
@@ -487,6 +493,8 @@ export interface CodingActionResponse {
   created_events: Record<string, unknown>[];
   updated_segments: Record<string, unknown>[];
   live_state: LiveCodingState;
+  timeline_events?: SessionTimelineEvent[];
+  segments?: CaptureSegmentSummary[];
   duplicate?: boolean;
 }
 

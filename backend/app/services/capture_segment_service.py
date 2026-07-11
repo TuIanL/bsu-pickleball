@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.capture_segment import CaptureSegment, SegmentType, SegmentStatus, SegmentSource
+from app.models.capture_segment import CaptureSegment, SegmentType, SegmentStatus, SegmentSource, EditStatus
 
 # 区间 ID 前缀
 _ID_PREFIX = "sg"
@@ -73,6 +73,7 @@ def get_open_segments_for_take(
         .filter(
             CaptureSegment.capture_take_id == capture_take_id,
             CaptureSegment.status == SegmentStatus.open,
+            CaptureSegment.edit_status == EditStatus.active,
         )
         .order_by(CaptureSegment.segment_type.asc())
         .all()
@@ -89,6 +90,7 @@ def get_open_segment_by_type(
             CaptureSegment.capture_take_id == capture_take_id,
             CaptureSegment.segment_type == SegmentType(segment_type),
             CaptureSegment.status == SegmentStatus.open,
+            CaptureSegment.edit_status == EditStatus.active,
         )
         .first()
     )
@@ -101,7 +103,8 @@ def list_segments(
     segment_type: str | None = None,
 ) -> list[CaptureSegment]:
     q = db.query(CaptureSegment).filter(
-        CaptureSegment.capture_take_id == capture_take_id
+        CaptureSegment.capture_take_id == capture_take_id,
+        CaptureSegment.edit_status == EditStatus.active,
     )
     if segment_type:
         try:

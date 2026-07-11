@@ -504,6 +504,16 @@ function AnalysisTasksPage({
     }
   };
 
+  const handleDeleteFieldSession = async (session: FieldSession) => {
+    try {
+      await deleteFieldSession(session.id);
+      await Promise.all([loadFieldSessions(), loadRecordings()]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "删除失败，请刷新后重试";
+      alert(msg);
+    }
+  };
+
   const loadRecordings = useCallback(async () => {
     setRecordingsLoading(true);
     try {
@@ -932,6 +942,7 @@ function AnalysisTasksPage({
                   onNavigate={onNavigate}
                   onRefresh={() => { void loadRecordings(); void loadFieldSessions(); }}
                   onPlay={handlePlaySession}
+                  onDeleteFieldSession={handleDeleteFieldSession}
                 />
               ))}
             </section>

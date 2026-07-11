@@ -29,6 +29,8 @@ class CodingActionResponse(BaseModel):
     created_events: list[dict[str, Any]]
     updated_segments: list[dict[str, Any]]
     live_state: dict[str, Any]
+    timeline_events: list[dict[str, Any]] = Field(default_factory=list)
+    segments: list[dict[str, Any]] = Field(default_factory=list)
     duplicate: bool = False
 
     model_config = {"from_attributes": False}
@@ -41,6 +43,8 @@ class LiveCodingStateResponse(BaseModel):
     game_ordinal: int
     rally_ordinal: int
     non_play: bool
+    match_phase: str = "idle"
+    intermission_kind: Optional[str] = None
     current_set_segment_id: Optional[str] = None
     current_game_segment_id: Optional[str] = None
     current_rally_segment_id: Optional[str] = None

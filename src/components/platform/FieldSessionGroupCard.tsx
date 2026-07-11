@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import type { AppPath, FieldSession, RecordingSession } from "../../types/report";
 import { RecordingTaskCard } from "./RecordingTaskCard";
 
@@ -11,6 +11,7 @@ interface FieldSessionGroupCardProps {
   onNavigate: NavigateFn;
   onRefresh: () => void;
   onPlay: (session: RecordingSession) => void;
+  onDeleteFieldSession?: (session: FieldSession) => void;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -38,6 +39,7 @@ export function FieldSessionGroupCard({
   onNavigate,
   onRefresh,
   onPlay,
+  onDeleteFieldSession,
 }: FieldSessionGroupCardProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -85,6 +87,21 @@ export function FieldSessionGroupCard({
         <span className="shrink-0 rounded-full bg-[#17231D] px-3 py-1 text-xs font-black text-white">
           {recordings.length} 条
         </span>
+        {!isUncategorized && (
+          <button
+            type="button"
+            className="shrink-0 rounded-lg px-2 py-1 text-xs text-[#C92A2A] hover:bg-red-50 transition"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (fieldSession && onDeleteFieldSession) {
+                if (!window.confirm(`确定删除采集任务「${fieldSession.title || fieldSession.id}」吗？`)) return;
+                onDeleteFieldSession(fieldSession);
+              }
+            }}
+          >
+            <Trash2 size={12} className="inline mr-1" />删除
+          </button>
+        )}
       </button>
 
       {expanded && (

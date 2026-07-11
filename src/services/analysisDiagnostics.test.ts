@@ -76,7 +76,7 @@ describe("analysis diagnostics", () => {
     const notice = automaticCalibrationNotice(response, "ready", null);
 
     expect(notice?.title).toBe("自动识别已就绪");
-    expect(notice?.detailItems).toContainEqual(["整体置信度", "82%"]);
+    expect(notice?.detailItems).toContainEqual(["综合置信度", "82%"]);
     expect(notice?.detailItems).toContainEqual(["Mask 面积占比", "12%"]);
     expect(notice?.detailItems).toContainEqual(["选中帧", "#42 · 1.40s"]);
     expect(notice?.detailItems).toContainEqual(["重投影误差", "0.123 ft · ok"]);

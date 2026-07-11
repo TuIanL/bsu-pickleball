@@ -312,6 +312,47 @@ class SessionService:
         if session.status == "recording":
             return {"session_id": session_id, "status": "blocked", "detail": "录制进行中，无法删除"}
 
+        # 级联删除关联的 DB 记录
+        take_id = session.capture_take_id
+        if take_id:
+            try:
+                from app.database import get_session_factory
+                from app.models.timeline_event import SessionTimelineEvent
+                from app.models.capture_track import CaptureTrack
+                from app.models.capture_coding_action import CaptureCodingAction
+                from app.models.capture_segment import CaptureSegment
+                from app.models.capture_take import CaptureTake
+
+                db = get_session_factory()()
+                try:
+                    # 按外键依赖顺序：先删引用方，再删被引用方
+                    db.query(SessionTimelineEvent).filter(
+                        SessionTimelineEvent.capture_take_id == take_id
+                    ).delete()
+                    db.query(SessionTimelineEvent).filter(
+                        SessionTimelineEvent.recording_session_id == session_id
+                    ).delete()
+                    db.query(CaptureTrack).filter(
+                        CaptureTrack.capture_take_id == take_id
+                    ).delete()
+                    db.query(CaptureCodingAction).filter(
+                        CaptureCodingAction.capture_take_id == take_id
+                    ).delete()
+                    db.query(CaptureSegment).filter(
+                        CaptureSegment.capture_take_id == take_id
+                    ).delete()
+                    db.query(CaptureTake).filter(
+                        CaptureTake.id == take_id
+                    ).delete()
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    logger.warning("级联删除录制 DB 记录失败: %s", exc)
+                finally:
+                    db.close()
+            except Exception as exc:
+                logger.warning("连接数据库级联删除失败: %s", exc)
+
         # 从内存缓存清除
         SESSIONS.pop(session_id, None)
 
@@ -322,6 +363,16 @@ class SessionService:
                 session_path.unlink()
             except Exception as exc:
                 logger.warning("删除录制会话文件失败: %s", exc)
+
+        # 删除录制的视频文件
+        if session.video_path:
+            video = Path(session.video_path)
+            if video.exists():
+                try:
+                    video.unlink()
+                    logger.info("已删除录制视频文件: %s", video)
+                except Exception as exc:
+                    logger.warning("删除录制视频文件失败: %s", exc)
 
         # 清除活跃录制锁（如果是当前活跃的）
         self._clear_active(session.camera_id)

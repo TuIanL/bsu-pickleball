@@ -197,8 +197,8 @@ class CourtTrackPostProcessor:
             if not obs_list:
                 continue
 
-            segment_index = 0
             for epoch, epoch_obs in _group_by_epoch(obs_list).items():
+                segment_index = 0
                 segments_raw = self._split_into_raw_segments(epoch_obs, fps, frame_events.get(player_id, set()))
                 for seg_obs in segments_raw:
                     seg_obs.sort(key=lambda o: o.frame_index)

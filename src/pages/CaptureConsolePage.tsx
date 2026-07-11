@@ -39,9 +39,9 @@ import {
   getActiveSyncRecording,
 } from "../services/analysisClient";
 import { quickEventsForMode, type QuickEventDef } from "../services/timelineQuickEvents";
-import { createOutboxItem, enqueueItem, createOutboxSender, MATCH_QUICK_EVENTS, type CodingOutboxItem } from "../services/codingOutbox";
-import { getLiveCodingState, executeCodingAction, listSegments, type LiveCodingState, type CaptureSegmentSummary } from "../services/analysisClient";
-import type { CodingActionType } from "../types/report";
+import { createOutboxItem, enqueueItem, createOutboxSender, getPendingItems, retryBlockedItems, MATCH_QUICK_EVENTS, type CodingOutboxItem } from "../services/codingOutbox";
+import { getLiveCodingState, executeCodingAction, listSegments } from "../services/analysisClient";
+import type { CodingActionType, CodingActionResponse, LiveCodingState, CaptureSegmentSummary } from "../types/report";
 import { MiniTimeline } from "../components/MiniTimeline";
 
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
@@ -105,6 +105,10 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
   const outboxSenderRef = useRef<ReturnType<typeof createOutboxSender> | null>(null);
   const lastActionTimeRef = useRef<number>(0);
+  const revisionRef = useRef(0);
+  const captureTakeIdRef = useRef<string | null>(null);
+  const liveCodingStateRef = useRef<LiveCodingState | null>(null);
+  const [drainConfirm, setDrainConfirm] = useState<{ unsynced: number } | null>(null);
 
   // ── 双摄同步录制状态 ──
   const isDualMode = fieldSession?.camera_setup === "dual";
@@ -164,19 +168,20 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
 
   // ====== 加载时间线事件 ======
   const loadTimelineEvents = useCallback(async () => {
+    if (!captureTakeId) return;
+    const takeId = captureTakeId;
     try {
-      const events = await listTimelineEvents(sessionId);
-      setTimelineEvents(events);
-    } catch {
-      setTimelineEvents([]);
-    }
-  }, [sessionId]);
+      const events = await listTimelineEvents(sessionId, { capture_take_id: takeId });
+      if (captureTakeIdRef.current === takeId) setTimelineEvents(events);
+    } catch { /* ignore */ }
+  }, [sessionId, captureTakeId]);
 
   const loadSegmentsData = useCallback(async () => {
     if (!captureTakeId) return;
+    const takeId = captureTakeId;
     try {
-      const segs = await listSegments(captureTakeId);
-      setSegments(segs ?? []);
+      const segs = await listSegments(takeId);
+      if (captureTakeIdRef.current === takeId) setSegments(segs ?? []);
     } catch { /* ignore */ }
   }, [captureTakeId]);
 
@@ -264,6 +269,14 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
     return () => clearInterval(timer);
   }, [dualState, activeSyncSession?.session_id]);
 
+  // 组件卸载时清理 sender
+  useEffect(() => {
+    return () => {
+      outboxSenderRef.current?.stop();
+      outboxSenderRef.current = null;
+    };
+  }, []);
+
   // ====== 操作函数 ======
   const handleProbe = async (cameraId: string) => {
     try {
@@ -288,6 +301,67 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
       await loadCameras();
     } catch { /* ignore */ }
   };
+
+  // ── 实时编码辅助函数 ──
+  const applyCodingResponse = useCallback((response: CodingActionResponse) => {
+    revisionRef.current = response.revision;
+
+    const state = {
+      ...response.live_state,
+      revision: response.revision,
+    };
+
+    liveCodingStateRef.current = state;
+    setLiveCodingState(state);
+
+    if (response.timeline_events) setTimelineEvents(response.timeline_events);
+    if (response.segments) setSegments(response.segments);
+    if (response.duplicate) return;
+
+    if (response.created_events?.length) {
+      setTimelineEvents((prev) => upsertById(prev, response.created_events as unknown as SessionTimelineEvent[]));
+    }
+    if (response.updated_segments?.length) {
+      setSegments((prev) => upsertById(prev, response.updated_segments as unknown as CaptureSegmentSummary[]));
+    }
+  }, []);
+
+  const initializeLiveCoding = useCallback(async (takeId: string) => {
+    setCaptureTakeId(takeId);
+    captureTakeIdRef.current = takeId;
+    setTimelineEvents([]);
+    setSegments([]);
+
+    try {
+      const state = await getLiveCodingState(takeId);
+      revisionRef.current = state.revision;
+      liveCodingStateRef.current = state;
+      setLiveCodingState(state);
+    } catch (err) {
+      revisionRef.current = 0;
+      liveCodingStateRef.current = null;
+      setLiveCodingState(null);
+    }
+
+    outboxSenderRef.current?.stop();
+    outboxSenderRef.current = createOutboxSender(
+      takeId,
+      () => revisionRef.current,
+      setOutboxItems,
+      applyCodingResponse,
+    );
+
+    setOutboxItems(getPendingItems(takeId));
+    await outboxSenderRef.current.flush();
+  }, [applyCodingResponse]);
+
+  function upsertById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+    const map = new Map(existing.map((item) => [item.id, item]));
+    for (const item of incoming) {
+      map.set(item.id, item);
+    }
+    return Array.from(map.values());
+  }
 
   const handleStartRecording = async () => {
     if (!selectedCameraId) return;
@@ -316,11 +390,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
 
       // 设置 capture_take_id 并初始化 outbox
       if (recording.capture_take_id) {
-        setCaptureTakeId(recording.capture_take_id);
-        try {
-          const state = await getLiveCodingState(recording.capture_take_id);
-          setLiveCodingState(state);
-        } catch { /* live-state 可能暂不存在，稍后初始化 */ }
+        await initializeLiveCoding(recording.capture_take_id);
       }
     } catch { /* ignore */ }
   };
@@ -328,13 +398,36 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
   const handleStopRecording = async () => {
     if (!activeRecording) return;
     try {
+      if (outboxSenderRef.current) {
+        const { unsynced } = await outboxSenderRef.current.drain();
+        if (unsynced > 0) {
+          setDrainConfirm({ unsynced });
+          return;
+        }
+      }
+      await performStopRecording();
+    } catch { /* ignore */ }
+  };
+
+  const performStopRecording = async () => {
+    if (!activeRecording) return;
+    try {
       setPreviewStatus("loading");
       const stopped = await stopRecording(activeRecording.session_id);
       setCompletedRecording(stopped);
       setConsoleState("stopped");
       setActiveRecording(null);
-      setPreviewKey((k) => k + 1); // 恢复预览
+      outboxSenderRef.current?.stop();
+      outboxSenderRef.current = null;
+      setPreviewKey((k) => k + 1);
     } catch { /* ignore */ }
+  };
+
+  const handleDrainConfirm = async (force: boolean) => {
+    setDrainConfirm(null);
+    if (force) {
+      await performStopRecording();
+    }
   };
 
   const handleAddTimelineEvent = async (event: QuickEventDef) => {
@@ -348,26 +441,6 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
 
     const timestampMs = elapsedSec * 1000;
     const action = (event.type ?? "add_note") as CodingActionType;
-
-    // 乐观更新 liveCodingState
-    if (liveCodingState) {
-      const optimistic = { ...liveCodingState };
-      if (action === "start_next_rally" && !optimistic.non_play) {
-        optimistic.rally_ordinal += 1;
-      } else if (action === "start_game") {
-        optimistic.game_ordinal += 1;
-        optimistic.rally_ordinal = 0;
-      } else if (action === "start_set") {
-        optimistic.set_ordinal += 1;
-        optimistic.game_ordinal = 0;
-        optimistic.rally_ordinal = 0;
-      } else if (action === "toggle_non_play") {
-        optimistic.non_play = !optimistic.non_play;
-      } else if (action === "undo") {
-        optimistic.rally_ordinal = Math.max(0, optimistic.rally_ordinal - 1);
-      }
-      setLiveCodingState(optimistic);
-    }
 
     const item = createOutboxItem(takeId, action, timestampMs, event.payload);
     enqueueItem(item);
@@ -419,16 +492,28 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
       setDualState("recording");
       setDualElapsedSec(0);
       setDualSegmentIndex(0);
+      if (session.capture_take_id) {
+        await initializeLiveCoding(session.capture_take_id);
+      }
     } catch { /* ignore */ }
   };
 
   const handleDualStopRecording = async () => {
     if (!activeSyncSession) return;
     try {
+      if (outboxSenderRef.current) {
+        const { unsynced } = await outboxSenderRef.current.drain();
+        if (unsynced > 0) {
+          setDrainConfirm({ unsynced });
+          return;
+        }
+      }
       const response = await stopSyncRecording(activeSyncSession.session_id);
       setDualState("stopped");
       setDualStopResponse(response);
       setActiveSyncSession(response.session);
+      outboxSenderRef.current?.stop();
+      outboxSenderRef.current = null;
     } catch { /* ignore */ }
   };
 
@@ -647,6 +732,20 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
                 录制中 {formatElapsed(elapsedSec)}
               </div>
             )}
+            </div>
+          )}
+
+          {/* 时间线（位于预览正下方） */}
+          {(consoleState === "recording" || dualState === "recording" || segments.length > 0 || timelineEvents.length > 0) && (
+            <div className="-mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-3 bg-white border-t border-[#DDE9D6]">
+              <MiniTimeline
+                segments={segments}
+                events={timelineEvents}
+                liveState={liveCodingState}
+                totalDurationMs={Math.max(elapsedSec * 1000, dualElapsedSec * 1000, 60000)}
+                elapsedMs={Math.max(elapsedSec, dualElapsedSec) * 1000}
+                showDurationHint={elapsedSec < 60}
+              />
             </div>
           )}
         </div>
@@ -1007,6 +1106,32 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
         </div>
       )}
 
+      {/* drain 确认弹窗 */}
+      {drainConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6 max-w-sm w-full mx-4 shadow-xl">
+            <h3 className="text-sm font-bold text-[#14241B] mb-2">仍有 {drainConfirm.unsynced} 个事件未同步</h3>
+            <p className="text-xs text-slate-500 mb-4">部分事件尚未发送到服务器，停止录制后这些事件将丢失。</p>
+            <div className="flex gap-3">
+              <button
+                className="flex-1 rounded-xl border border-slate-300 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50 transition"
+                onClick={() => setDrainConfirm(null)}
+                type="button"
+              >
+                取消停止
+              </button>
+              <button
+                className="flex-1 rounded-xl bg-[#FF4D4F] py-2.5 text-sm font-bold text-white hover:bg-[#E04344] transition"
+                onClick={() => handleDrainConfirm(true)}
+                type="button"
+              >
+                仍然停止
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 录制中：实时编码控制台 */}
       {(consoleState === "recording" || dualState === "recording") && (
         <div className="mt-6 space-y-4">
@@ -1018,7 +1143,7 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
                 <span className="text-[#F97316]">第{liveCodingState.set_ordinal || "?"}盘</span>
                 <span className="text-[#3B82F6]">第{liveCodingState.game_ordinal || "?"}局</span>
                 <span className="text-[#22C55E]">第{liveCodingState.rally_ordinal || "?"}分</span>
-                {liveCodingState.non_play && <span className="text-[#6B7280]">（非比赛）</span>}
+                {liveCodingState.match_phase === "intermission" && <span className="text-[#6B7280]">（{liveCodingState.intermission_kind === "timeout" ? "战术暂停" : liveCodingState.intermission_kind === "side_change" ? "换边间歇" : "赛间间歇"}）</span>}
                 <span className="text-xs text-slate-400 ml-auto">rev.{liveCodingState.revision}</span>
               </div>
             </div>
@@ -1034,23 +1159,23 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
                   start_game: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6] hover:bg-[#3B82F6] hover:text-white",
                   start_next_rally: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E] hover:bg-[#22C55E] hover:text-white",
                   end_rally: "bg-slate-50 border-slate-300 text-slate-500 hover:bg-slate-500 hover:text-white",
-                  toggle_non_play: "bg-slate-50 border-slate-400 text-slate-500 hover:bg-slate-500 hover:text-white",
+                  start_timeout: "bg-slate-50 border-slate-500 text-slate-600 hover:bg-slate-600 hover:text-white",
                   change_side: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7] hover:bg-[#A855F7] hover:text-white",
                   add_note: "bg-slate-50 border-slate-300 text-slate-500 hover:bg-slate-500 hover:text-white",
                   undo: "bg-[#FEF2F2] border-[#EF4444] text-[#EF4444] hover:bg-[#EF4444] hover:text-white",
                 };
                 const keyMap: Record<string, string> = {
                   start_set: "1", start_game: "2", start_next_rally: "3",
-                  toggle_non_play: "4", change_side: "5", add_note: "H", undo: "⌫",
-                  end_rally: "",
+                  end_rally: "4", change_side: "5", start_timeout: "6", add_note: "H", undo: "⌫",
                 };
                 const colorClass = colorMap[event.type] ?? "";
                 return (
                   <button
                     key={event.type}
                     className={`rounded-xl border px-3 py-2 text-xs font-bold transition ${colorClass}`}
-                    onClick={() => handleAddTimelineEvent(event)}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleAddTimelineEvent(event); }}
+                    onClick={() => handleAddTimelineEvent(event as QuickEventDef)}
+                    disabled={(event.type === "start_next_rally" && liveCodingState?.match_phase === "rally_active") || (event.type === "end_rally" && liveCodingState?.match_phase !== "rally_active")}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAddTimelineEvent(event as QuickEventDef); }}
                     type="button"
                     title={event.note}
                   >
@@ -1061,20 +1186,47 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
             </div>
           </div>
 
-          {/* Outbox 状态 */}
-          {outboxItems.filter((i) => i.status !== "synced").length > 0 && (
-            <div className="rounded-2xl border border-[#FEF3C7] bg-[#FFFBEB] p-3">
-              <h4 className="text-xs font-bold text-[#92400E] mb-1">同步状态</h4>
-              <div className="text-xs text-[#92400E] space-y-0.5">
-                {outboxItems.filter((i) => i.status !== "synced").slice(0, 5).map((item) => (
-                  <div key={item.clientActionId} className="flex items-center gap-2">
-                    <span>{item.action === "start_next_rally" ? "下一分" : item.action}</span>
-                    <span className="opacity-60">{item.status === "sending" ? "⟳" : item.status === "failed" ? "✗" : item.status === "blocked" ? "⊘" : "⏳"}</span>
+          {/* Outbox 同步状态 */}
+          {(() => {
+            const unsynced = outboxItems.filter((i) => i.status !== "synced");
+            const pending = unsynced.filter(i => i.status === "pending").length;
+            const sending = unsynced.filter(i => i.status === "sending").length;
+            const failed = unsynced.filter(i => i.status === "failed").length;
+            const blocked = unsynced.filter(i => i.status === "blocked").length;
+            if (unsynced.length === 0) return null;
+            return (
+              <div className="rounded-2xl border border-[#FEF3C7] bg-[#FFFBEB] p-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-[#92400E]">同步状态</h4>
+                  <span className="text-xs text-[#92400E]">
+                    {sending > 0 && `发送中 ${sending} `}
+                    {pending > 0 && `待发 ${pending} `}
+                    {failed > 0 && `失败 ${failed} `}
+                    {blocked > 0 && `阻塞 ${blocked} `}
+                  </span>
+                </div>
+                {blocked > 0 && (
+                  <div className="mt-2 text-xs text-[#92400E] space-y-1">
+                    <p>事件状态已发生变化，部分操作未自动重试以避免重复创建。</p>
+                    <button
+                      className="text-[#2F80ED] font-bold hover:underline"
+                      onClick={() => {
+                        const takeId = captureTakeId ?? activeRecording?.capture_take_id;
+                        if (takeId) {
+                          retryBlockedItems(takeId);
+                          setOutboxItems(getPendingItems(takeId));
+                          outboxSenderRef.current?.flush();
+                        }
+                      }}
+                      type="button"
+                    >
+                      确认重新执行
+                    </button>
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* 事件时间线列表 */}
           <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
@@ -1104,18 +1256,6 @@ export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: strin
         </div>
       )}
 
-      {/* 多轨时间线 */}
-      {(segments.length > 0 || timelineEvents.length > 0) && (
-        <MiniTimeline
-          segments={segments}
-          events={timelineEvents}
-          liveState={liveCodingState}
-          totalDurationMs={Math.max(elapsedSec * 1000, 60000)}
-          elapsedMs={elapsedSec * 1000}
-        />
-      )}
-    </div>
-      )}
 
       {/* 设备抽屉 */}
       {drawerOpen && (

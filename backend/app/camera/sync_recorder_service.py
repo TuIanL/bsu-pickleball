@@ -972,6 +972,69 @@ class SyncRecordingService:
         logger.info("双摄同步录制已取消: %s", session_id)
         return session
 
+    # ── 删除 ──────────────────────────────────────────────────────
+
+    def delete_session(self, session_id: str) -> dict:
+        session = self.get_session(session_id)
+        if session is None:
+            return {"session_id": session_id, "status": "not_found",
+                    "detail": "同步录制会话不存在"}
+        if session.status == "recording":
+            return {"session_id": session_id, "status": "blocked",
+                    "detail": "录制进行中，无法删除"}
+
+        # 清理视频文件/输出目录
+        output_dir = self._output_dir(session_id)
+        if output_dir.exists():
+            import shutil
+            shutil.rmtree(output_dir)
+
+        # 清理与会话关联的其他视频路径
+        for path_str in session.associated_video_paths:
+            p = Path(path_str)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+
+        # 清理 DB 记录（按 recording_session_id）
+        try:
+            from app.database import get_session_factory
+            from app.models.timeline_event import SessionTimelineEvent
+            db = get_session_factory()()
+            try:
+                db.query(SessionTimelineEvent).filter(
+                    SessionTimelineEvent.recording_session_id == session_id
+                ).delete()
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning("级联删除同步录制 DB 记录失败: %s", exc)
+            finally:
+                db.close()
+        except Exception as exc:
+            logger.warning("连接数据库级联删除失败: %s", exc)
+
+        # 删除会话 JSON
+        path = self._session_path(session_id)
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+        # 从内存缓存移除
+        SYNC_SESSIONS.pop(session_id, None)
+        for slot in ("cam_1", "cam_2"):
+            cam_id = session.camera_slots.get(slot, "").camera_id if session.camera_slots.get(slot) else None
+            if cam_id:
+                _ACTIVE_SYNC_CAMERAS.discard(cam_id)
+
+        logger.info("同步录制会话已删除: %s", session_id)
+        return {"session_id": session_id, "status": "deleted",
+                "detail": "同步录制会话已删除"}
+
     # ── 查询接口 ──────────────────────────────────────────────────
 
     def get_session(self, session_id: str) -> SyncRecordingSession | None:

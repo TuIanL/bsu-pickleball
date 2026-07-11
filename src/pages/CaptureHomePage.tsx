@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Camera,
+  CheckCircle2,
   Clock,
   MapPin,
   PlusCircle,
+  Trash2,
   Users,
 } from "lucide-react";
 import type { AppPath } from "../types/report";
 import type { FieldSession } from "../types/report";
-import { listFieldSessions } from "../services/analysisClient";
+import { completeFieldSession, deleteFieldSession, listFieldSessions } from "../services/analysisClient";
 
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
@@ -52,6 +54,29 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
       setLoading(false);
     }
   }, []);
+
+  const handleComplete = async (e: React.MouseEvent, id: string, title: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`确定完成采集任务「${title || id}」吗？完成后将无法继续录制。`)) return;
+    try {
+      await completeFieldSession(id);
+      await loadSessions();
+    } catch {
+      alert("完成任务失败，请刷新后重试");
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, id: string, title: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`确定删除采集任务「${title || id}」吗？`)) return;
+    try {
+      await deleteFieldSession(id);
+      await loadSessions();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "删除失败，请刷新后重试";
+      alert(msg);
+    }
+  };
 
   useEffect(() => {
     void loadSessions();
@@ -130,6 +155,22 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
                   <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusStyle[session.status] ?? "bg-slate-100 text-slate-500"}`}>
                     {statusLabel[session.status] ?? session.status}
                   </span>
+                  {session.status === "live" && (
+                    <button
+                      className="quiet-button px-2 py-1 text-xs text-[#168A34] opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => handleComplete(e, session.id, session.title)}
+                      type="button"
+                    >
+                      <CheckCircle2 size={12} className="inline mr-1" />完成任务
+                    </button>
+                  )}
+                  <button
+                    className="quiet-button px-2 py-1 text-xs text-[#C92A2A] opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => handleDelete(e, session.id, session.title)}
+                    type="button"
+                  >
+                    <Trash2 size={12} className="inline mr-1" />删除
+                  </button>
                 </div>
               </button>
             ))}

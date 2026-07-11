@@ -172,6 +172,59 @@ def test_overlay_writer_generates_video_with_ball_and_bounce_points(tmp_path):
     assert output.stat().st_size > 0
 
 
+def test_overlay_writer_with_segment_id_changes_deque(tmp_path):
+    """12.1: player_points with different segment_ids does not crash; output generated."""
+    source = _make_video(tmp_path / "source-seg.avi")
+    output = tmp_path / "seg_out.mp4"
+    points = [
+        VisualizationPoint(10, 22, frame_index=0, label="P1", segment_id="s0"),
+        VisualizationPoint(11, 23, frame_index=1, label="P1", segment_id="s1"),
+        VisualizationPoint(12, 24, frame_index=2, label="P1", segment_id="s1"),
+    ]
+    result = OverlayVideoWriter(
+        VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)
+    ).write(
+        source_video_path=source,
+        output_path=output,
+        player_points=points,
+    )
+    assert result.status == "available"
+    assert output.exists()
+    assert output.stat().st_size > 0
+
+
+def test_overlay_writer_without_segment_id_backward_compat(tmp_path):
+    """12.2: player_points without segment_id (v1 style) works without crashes."""
+    source = _make_video(tmp_path / "source-v1.avi")
+    output = tmp_path / "v1_out.mp4"
+    points = [
+        VisualizationPoint(10, 22, frame_index=0, label="P1"),
+        VisualizationPoint(11, 23, frame_index=1, label="P1"),
+        VisualizationPoint(12, 24, frame_index=2, label="P1"),
+    ]
+    result = OverlayVideoWriter(
+        VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)
+    ).write(
+        source_video_path=source,
+        output_path=output,
+        player_points=points,
+    )
+    assert result.status == "available"
+    assert output.exists()
+
+
+def test_overlay_writer_fallback_no_render_track(tmp_path):
+    """12.3: No player_points (v2 artifact missing) falls back to time-based filtering."""
+    source = _make_video(tmp_path / "source-fallback.avi")
+    output = tmp_path / "fallback_out.mp4"
+    result = OverlayVideoWriter().write(
+        source_video_path=source,
+        output_path=output,
+    )
+    assert result.status == "available"
+    assert output.exists()
+
+
 def test_overlay_writer_reports_unavailable_source(tmp_path):
     result = OverlayVideoWriter().write(source_video_path=tmp_path / "missing.mp4", output_path=tmp_path / "out.mp4")
 

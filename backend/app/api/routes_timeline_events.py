@@ -116,8 +116,9 @@ def update(
 @router.delete(
     "/api/timeline-events/{event_id}",
     status_code=204,
+    response_model=None,
 )
-def delete(event_id: str, db: Session = Depends(get_db)) -> None:
+def delete(event_id: str, db: Session = Depends(get_db)):
     """删除时间线事件。"""
     deleted = delete_timeline_event(db, event_id)
     if not deleted:

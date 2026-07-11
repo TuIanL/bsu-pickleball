@@ -26,6 +26,7 @@ def init_state(db: Session, capture_take_id: str) -> LiveCodingState:
         game_ordinal=0,
         rally_ordinal=0,
         non_play=False,
+        match_phase="idle",
         updated_at=now,
     )
     db.add(state)
@@ -43,6 +44,8 @@ def upsert_state(
     game_ordinal: int,
     rally_ordinal: int,
     non_play: bool = False,
+    match_phase: str | None = None,
+    intermission_kind: str | None = None,
     current_set_segment_id: str | None = None,
     current_game_segment_id: str | None = None,
     current_rally_segment_id: str | None = None,
@@ -57,6 +60,8 @@ def upsert_state(
             game_ordinal=game_ordinal,
             rally_ordinal=rally_ordinal,
             non_play=non_play,
+            match_phase=match_phase or ("intermission" if non_play else "idle"),
+            intermission_kind=intermission_kind,
             current_set_segment_id=current_set_segment_id,
             current_game_segment_id=current_game_segment_id,
             current_rally_segment_id=current_rally_segment_id,
@@ -69,6 +74,8 @@ def upsert_state(
         state.game_ordinal = game_ordinal
         state.rally_ordinal = rally_ordinal
         state.non_play = non_play
+        state.match_phase = match_phase or ("intermission" if non_play else "idle")
+        state.intermission_kind = intermission_kind
         state.current_set_segment_id = current_set_segment_id
         state.current_game_segment_id = current_game_segment_id
         state.current_rally_segment_id = current_rally_segment_id
@@ -85,6 +92,8 @@ def state_to_dict(state: LiveCodingState) -> dict:
         "game_ordinal": state.game_ordinal,
         "rally_ordinal": state.rally_ordinal,
         "non_play": state.non_play,
+        "match_phase": getattr(state, "match_phase", "intermission" if state.non_play else "idle"),
+        "intermission_kind": getattr(state, "intermission_kind", None),
         "current_set_segment_id": state.current_set_segment_id,
         "current_game_segment_id": state.current_game_segment_id,
         "current_rally_segment_id": state.current_rally_segment_id,

@@ -72,6 +72,8 @@ def get_live_state(
         game_ordinal=state.game_ordinal,
         rally_ordinal=state.rally_ordinal,
         non_play=state.non_play,
+        match_phase=getattr(state, "match_phase", "intermission" if state.non_play else "idle"),
+        intermission_kind=getattr(state, "intermission_kind", None),
         current_set_segment_id=state.current_set_segment_id,
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=state.current_rally_segment_id,
