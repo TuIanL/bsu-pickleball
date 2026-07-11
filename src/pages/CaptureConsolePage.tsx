@@ -1,1555 +1,398 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Camera,
-  CheckCircle2,
-  Clock,
-  MapPin,
-  Pause,
-  Play,
-  PlusCircle,
-  RefreshCw,
-  Square,
-  Trash2,
-  Upload,
-  Users,
-  Wifi,
-  WifiOff,
-  X,
+  Camera, CheckCircle2, Clock, MapPin, Play, PlusCircle,
+  RefreshCw, Square, Trash2, Upload, Users, Wifi, WifiOff, X,
 } from "lucide-react";
-import type { AppPath, CameraInfo, FieldSession, ProbeResult, RecordingSession, RecordingStartRequest, SessionTimelineEvent, TimelineEventCreate, SyncRecordingSession, SyncTestResult, SyncStopResponse, CaptureStopResult } from "../types/report";
+import type { AppPath, FieldSession, CameraInfo, ProbeResult, RecordingSession, SyncRecordingSession, SessionTimelineEvent, CaptureStopResult } from "../types/report";
 import {
-  getFieldSession,
-  updateFieldSession,
-  startFieldSession,
-  completeFieldSession,
-  listCameras,
-  createCamera,
-  deleteCamera,
-  probeCamera,
-  startRecording,
-  stopRecording,
-  listTimelineEvents,
-  createTimelineEvent,
-  listRecordings,
-  getCameraPreviewUrl,
-  startSyncRecording,
-  stopSyncRecording,
-  cancelSyncRecording,
-  runSyncTest,
-  getActiveSyncRecording,
+  getFieldSession, startFieldSession, completeFieldSession,
+  listCameras, createCamera, deleteCamera, probeCamera,
+  getCameraPreviewUrl, cancelRecording, cancelSyncRecording,
 } from "../services/analysisClient";
-import { quickEventsForMode, type QuickEventDef } from "../services/timelineQuickEvents";
-import { createOutboxItem, enqueueItem, createOutboxSender, getPendingItems, retryBlockedItems, MATCH_QUICK_EVENTS, type CodingOutboxItem } from "../services/codingOutbox";
-import { getLiveCodingState, executeCodingAction, listSegments } from "../services/analysisClient";
-import type { CodingActionType, CodingActionResponse, LiveCodingState, CaptureSegmentSummary } from "../types/report";
-import { MiniTimeline } from "../components/MiniTimeline";
+import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
+import { useCameraSetup } from "../hooks/useCameraSetup";
+import { useCapturePreflight } from "../hooks/useCapturePreflight";
+import { useLiveCoding } from "../hooks/useLiveCoding";
 
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
-type ConsoleState = "preview" | "recording" | "stopped";
-type DualConsoleState = "setup" | "testing" | "recording" | "stopped";
 
 const captureModeLabel: Record<string, string> = {
-  practice: "自由练习",
-  match: "记分比赛",
-  engineering: "工程测试",
+  practice: "自由练习", match: "记分比赛", engineering: "工程测试",
 };
 
-const matchFormatLabel: Record<string, string> = {
-  singles: "单打",
-  doubles: "双打",
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+type CaptureConsolePageProps = {
+  sessionId: string;
+  onNavigate: NavigateFn;
 };
 
-const statusLabel: Record<string, string> = {
-  planned: "待开始",
-  live: "进行中",
-  completed: "已完成",
-  archived: "已归档",
-};
-
-export function CaptureConsolePage({ sessionId, onNavigate }: { sessionId: string; onNavigate: NavigateFn }) {
-  // Field Session 数据
+export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureConsolePageProps) {
   const [fieldSession, setFieldSession] = useState<FieldSession | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // 控制台状态
-  const [consoleState, setConsoleState] = useState<ConsoleState>("preview");
-  const [activeRecording, setActiveRecording] = useState<RecordingSession | null>(null);
-  const [completedRecording, setCompletedRecording] = useState<RecordingSession | null>(null);
-  const [elapsedSec, setElapsedSec] = useState(0);
-  const elapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // 摄像头与预览
-  const [cameras, setCameras] = useState<CameraInfo[]>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState("");
-  const [previewStatus, setPreviewStatus] = useState<"idle" | "loading" | "displaying" | "failed">("idle");
-  const [previewKey, setPreviewKey] = useState(0);
-  const previewUrl = useMemo(() => getCameraPreviewUrl(selectedCameraId || undefined), [selectedCameraId]);
-
-  // 设备抽屉
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
-  const [drawerTab, setDrawerTab] = useState<"list" | "register">("list");
-  const [newCameraForm, setNewCameraForm] = useState({ camera_id: "", name: "", stream_url: "", protocol: "rtsp" as const });
-
-  // 时间线事件
-  const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
-
-  // analysisIntent（从 sessionStorage 恢复）
   const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");
   const [recordingFps, setRecordingFps] = useState<number>(60);
 
-  // ── 实时编码状态 ──
-  const [captureTakeId, setCaptureTakeId] = useState<string | null>(null);
-  const [liveCodingState, setLiveCodingState] = useState<LiveCodingState | null>(null);
-  const [outboxItems, setOutboxItems] = useState<CodingOutboxItem[]>([]);
-  const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
-  const outboxSenderRef = useRef<ReturnType<typeof createOutboxSender> | null>(null);
-  const lastActionTimeRef = useRef<number>(0);
-  const revisionRef = useRef(0);
-  const captureTakeIdRef = useRef<string | null>(null);
-  const liveCodingStateRef = useRef<LiveCodingState | null>(null);
-  const [drainConfirm, setDrainConfirm] = useState<{ unsynced: number } | null>(null);
-  const [outboxHealth, setOutboxHealth] = useState<"synced" | "pending" | "offline">("synced");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [previewKey, setPreviewKey] = useState(0);
+  const [drawerTab, setDrawerTab] = useState<"list" | "register">("list");
+  const [newCameraForm, setNewCameraForm] = useState({ camera_id: "", name: "", stream_url: "", protocol: "rtsp" as const });
 
-  // ── 双摄同步录制状态 ──
   const isDualMode = fieldSession?.camera_setup === "dual";
-  const [dualState, setDualState] = useState<DualConsoleState>("setup");
-  const [selectedSlots, setSelectedSlots] = useState<{ cam_1: string; cam_2: string }>(() => {
-    try {
-      const stored = sessionStorage.getItem(`capture.slots.${sessionId}`);
-      if (stored) return JSON.parse(stored);
-    } catch { /* ignore */ }
-    return { cam_1: "", cam_2: "" };
-  });
-  const [slotSelecting, setSlotSelecting] = useState<"cam_1" | "cam_2" | null>(null);
-  const [dualTestResult, setDualTestResult] = useState<SyncTestResult | null>(null);
-  const [activeSyncSession, setActiveSyncSession] = useState<SyncRecordingSession | null>(null);
-  const [dualStopResponse, setDualStopResponse] = useState<CaptureStopResult | null>(null);
-  const [dualElapsedSec, setDualElapsedSec] = useState(0);
-  const [dualSegmentIndex, setDualSegmentIndex] = useState(0);
-  const dualElapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mode = isDualMode ? "dual" as const : "single" as const;
 
-  // ====== 加载 Field Session ======
+  // ── Hooks ──
+  const runtime = useCaptureRuntime({ fieldSessionId: sessionId, onFieldSessionStarted: setFieldSession });
+  const cameraSetup = useCameraSetup({ sessionId, mode });
+  const preflight = useCapturePreflight({ mode, slots: isDualMode ? cameraSetup.selectedSlots : undefined });
+  const liveCoding = useLiveCoding({
+    fieldSessionId: sessionId,
+    captureTakeId: runtime.captureTakeId,
+    phase: runtime.phase,
+    elapsedMs: runtime.elapsedMs,
+  });
+
+  // ── 页面协调 ──
+  const handleStart = async () => {
+    if (!cameraSetup.startIntent) return;
+    await runtime.start({ ...cameraSetup.startIntent, fps: recordingFps, autoAnalyze: analysisIntent === "auto_analyze" });
+  };
+
+  const handleStop = async () => {
+    liveCoding.freeze();
+    const promise = runtime.stop();
+    void liveCoding.flushWithDeadline(3000);
+    await promise;
+    setPreviewKey(k => k + 1);
+  };
+
+  const handleCancel = async () => { await runtime.cancel(); };
+  const handleReset = () => runtime.reset();
+
+  const canStart = runtime.phase === "idle" && cameraSetup.isReady && preflight.preflightState.status !== "running";
+
+  // ── 初始加载 ──
   const loadFieldSession = useCallback(async () => {
     try {
       const fs = await getFieldSession(sessionId);
       setFieldSession(fs);
-
-      // 恢复 analysisIntent
-      try {
-        const stored = sessionStorage.getItem(`capture.analysisIntent.${sessionId}`);
-        if (stored) setAnalysisIntent(stored);
-      } catch { /* ignore */ }
-
-      // 恢复双摄槽位选择
-      try {
-        const slots = sessionStorage.getItem(`capture.slots.${sessionId}`);
-        if (slots) setSelectedSlots(JSON.parse(slots));
-      } catch { /* ignore */ }
-
-      // 恢复 selectedCameraId
-      try {
-        const camId = sessionStorage.getItem(`capture.selectedCameraId.${sessionId}`);
-        if (camId) setSelectedCameraId(camId);
-      } catch { /* ignore */ }
-    } catch {
-      setFieldSession(null);
-    } finally {
-      setLoading(false);
-    }
+      const saved = sessionStorage.getItem(`capture.analysisIntent.${sessionId}`);
+      if (saved) setAnalysisIntent(saved);
+      const slots = sessionStorage.getItem(`capture.slots.${sessionId}`);
+      if (slots) {
+        const p = JSON.parse(slots);
+        if (p.cam_1) cameraSetup.selectSlot("cam_1", p.cam_1);
+        if (p.cam_2) cameraSetup.selectSlot("cam_2", p.cam_2);
+      }
+      const cid = sessionStorage.getItem(`capture.selectedCameraId.${sessionId}`);
+      if (cid) cameraSetup.setSelectedCameraId(cid);
+    } catch { setFieldSession(null); }
+    finally { setLoading(false); }
   }, [sessionId]);
 
-  // ====== 加载摄像头列表 ======
-  const loadCameras = useCallback(async () => {
-    try {
-      const cam = await listCameras();
-      setCameras(cam);
-    } catch { /* ignore */ }
-  }, []);
+  useEffect(() => { loadFieldSession(); }, [loadFieldSession]);
 
-  // ====== 加载时间线事件 ======
-  const loadTimelineEvents = useCallback(async () => {
-    if (!captureTakeId) return;
-    const takeId = captureTakeId;
-    try {
-      const events = await listTimelineEvents(sessionId, { capture_take_id: takeId });
-      if (captureTakeIdRef.current === takeId) setTimelineEvents(events);
-    } catch { /* ignore */ }
-  }, [sessionId, captureTakeId]);
-
-  const loadSegmentsData = useCallback(async () => {
-    if (!captureTakeId) return;
-    const takeId = captureTakeId;
-    try {
-      const segs = await listSegments(takeId);
-      if (captureTakeIdRef.current === takeId) setSegments(segs ?? []);
-    } catch { /* ignore */ }
-  }, [captureTakeId]);
-
-  useEffect(() => {
-    void loadFieldSession();
-    void loadCameras();
-    void loadTimelineEvents();
-  }, [loadFieldSession, loadCameras, loadTimelineEvents]);
-
-  // 摄像头切换时重置预览
-  useEffect(() => {
-    if (!selectedCameraId) {
-      setPreviewStatus("idle");
-    } else {
-      setPreviewStatus("loading");
-      setPreviewKey((k) => k + 1);
-    }
-  }, [selectedCameraId]);
-
-  // 录制计时器 + 定期刷新事件/segments
-  useEffect(() => {
-    if (consoleState === "recording") {
-      elapsedTimer.current = setInterval(() => {
-        setElapsedSec((s) => s + 1);
-      }, 1000);
-      const pollTimer = setInterval(() => {
-        loadTimelineEvents();
-        void loadSegmentsData();
-      }, 5000);
-      return () => {
-        clearInterval(pollTimer);
-        if (elapsedTimer.current) clearInterval(elapsedTimer.current);
-      };
-    } else {
-      if (elapsedTimer.current) clearInterval(elapsedTimer.current);
-    }
-    return () => {
-      if (elapsedTimer.current) clearInterval(elapsedTimer.current);
-    };
-  }, [consoleState, loadTimelineEvents, loadSegmentsData]);
-
-  // 双摄录制计时器 + 已选槽位持久化
-  useEffect(() => {
-    if (dualState === "recording") {
-      dualElapsedTimer.current = setInterval(() => {
-        setDualElapsedSec((s) => s + 1);
-      }, 1000);
-    } else {
-      if (dualElapsedTimer.current) clearInterval(dualElapsedTimer.current);
-    }
-    return () => {
-      if (dualElapsedTimer.current) clearInterval(dualElapsedTimer.current);
-    };
-  }, [dualState]);
-
-  // 持久化槽位选择
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(`capture.slots.${sessionId}`, JSON.stringify(selectedSlots));
-    } catch { /* ignore */ }
-  }, [selectedSlots, sessionId]);
-
-  // 双摄录制中轮询会话状态
-  useEffect(() => {
-    if (dualState !== "recording" || !activeSyncSession) return;
-    const timer = setInterval(async () => {
-      try {
-        const session = await getActiveSyncRecording();
-        if (session && session.status !== "recording") {
-          // 录制已结束（可能异常退出）
-          setActiveSyncSession(session);
-          setDualState("stopped");
-          setDualStopResponse({
-            capture_take: undefined,
-            tracks: [],
-            analysis_available: !!session.default_analysis_video_id,
-            default_analysis_video_id: session.default_analysis_video_id,
-            analysis_blocked_reason: session.error_message ?? undefined,
-            warnings: [],
-          });
-        } else if (session) {
-          setActiveSyncSession(session);
-          setDualSegmentIndex(session.segments.length);
-        }
-      } catch { /* polling error - ignore */ }
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [dualState, activeSyncSession?.session_id]);
-
-  // 组件卸载时清理 sender
-  useEffect(() => {
-    return () => {
-      outboxSenderRef.current?.stop();
-      outboxSenderRef.current = null;
-    };
-  }, []);
-
-  // ====== 操作函数 ======
-  const handleProbe = async (cameraId: string) => {
-    try {
-      const result = await probeCamera(cameraId);
-      setProbeResults((prev) => ({ ...prev, [cameraId]: result }));
-    } catch { /* ignore */ }
-  };
-
-  const handleDeleteCamera = async (cameraId: string) => {
-    try {
-      await deleteCamera(cameraId);
-      setCameras((prev) => prev.filter((c) => c.camera_id !== cameraId));
-      if (selectedCameraId === cameraId) setSelectedCameraId("");
-    } catch { /* ignore */ }
-  };
-
-  const handleRegisterCamera = async () => {
-    try {
-      await createCamera(newCameraForm);
-      setNewCameraForm({ camera_id: "", name: "", stream_url: "", protocol: "rtsp" });
-      setDrawerTab("list");
-      await loadCameras();
-    } catch { /* ignore */ }
-  };
-
-  // ── 实时编码辅助函数 ──
-  const applyCodingResponse = useCallback((response: CodingActionResponse) => {
-    revisionRef.current = response.revision;
-
-    const state = {
-      ...response.live_state,
-      revision: response.revision,
-    };
-
-    liveCodingStateRef.current = state;
-    setLiveCodingState(state);
-
-    if (response.timeline_events) setTimelineEvents(response.timeline_events);
-    if (response.segments) setSegments(response.segments);
-    if (response.duplicate) return;
-
-    if (response.created_events?.length) {
-      setTimelineEvents((prev) => upsertById(prev, response.created_events as unknown as SessionTimelineEvent[]));
-    }
-    if (response.updated_segments?.length) {
-      setSegments((prev) => upsertById(prev, response.updated_segments as unknown as CaptureSegmentSummary[]));
-    }
-  }, []);
-
-  const initializeLiveCoding = useCallback(async (takeId: string) => {
-    setCaptureTakeId(takeId);
-    captureTakeIdRef.current = takeId;
-    setTimelineEvents([]);
-    setSegments([]);
-
-    try {
-      const state = await getLiveCodingState(takeId);
-      revisionRef.current = state.revision;
-      liveCodingStateRef.current = state;
-      setLiveCodingState(state);
-    } catch (err) {
-      revisionRef.current = 0;
-      liveCodingStateRef.current = null;
-      setLiveCodingState(null);
-    }
-
-    outboxSenderRef.current?.stop();
-    outboxSenderRef.current = createOutboxSender(
-      takeId,
-      () => revisionRef.current,
-      setOutboxItems,
-      applyCodingResponse,
-    );
-
-    setOutboxItems(getPendingItems(takeId));
-    await outboxSenderRef.current.flush();
-  }, [applyCodingResponse]);
-
-  function upsertById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
-    const map = new Map(existing.map((item) => [item.id, item]));
-    for (const item of incoming) {
-      map.set(item.id, item);
-    }
-    return Array.from(map.values());
-  }
-
-  const handleStartRecording = async () => {
-    if (!selectedCameraId) return;
-
-    try {
-      // 先 startFieldSession
-      if (fieldSession && fieldSession.status !== "live") {
-        const updated = await startFieldSession(sessionId);
-        setFieldSession(updated);
-      }
-
-      const payload: RecordingStartRequest = {
-        camera_id: selectedCameraId,
-        field_session_id: sessionId,
-        court_name: fieldSession?.court_name || "",
-        match_format: (fieldSession?.match_format || "doubles") as "singles" | "doubles",
-        fps: recordingFps,
-        auto_analyze_after_stop: analysisIntent === "auto_analyze",
-      };
-
-      const recording = await startRecording(payload);
-      setActiveRecording(recording);
-      setConsoleState("recording");
-      setElapsedSec(0);
-      setPreviewStatus("idle");
-
-      // 设置 capture_take_id 并初始化 outbox
-      if (recording.capture_take_id) {
-        await initializeLiveCoding(recording.capture_take_id);
-      }
-    } catch { /* ignore */ }
-  };
-
-  const handleStopRecording = async () => {
-    if (!activeRecording) return;
-    try {
-      outboxSenderRef.current?.freeze();
-      await performStopRecording();
-      if (outboxSenderRef.current) {
-        outboxSenderRef.current.flushWithDeadline(3000).then(() => {
-          const pending = getPendingItems(activeRecording.capture_take_id ?? "");
-          setOutboxHealth(pending.length > 0 ? "pending" : "synced");
-        });
-      }
-    } catch { /* ignore */ }
-  };
-
-  const performStopRecording = async () => {
-    if (!activeRecording) return;
-    try {
-      setPreviewStatus("loading");
-      const stopped = await stopRecording(activeRecording.session_id);
-      setCompletedRecording(stopped as unknown as RecordingSession);
-      setConsoleState("stopped");
-      setActiveRecording(null);
-      outboxSenderRef.current?.stop();
-      outboxSenderRef.current = null;
-      setPreviewKey((k) => k + 1);
-    } catch { /* ignore */ }
-  };
-
-  const handleDrainConfirm = async (force: boolean) => {
-    setDrainConfirm(null);
-    if (force) {
-      await performStopRecording();
-    }
-  };
-
-  const handleAddTimelineEvent = async (event: QuickEventDef) => {
-    const takeId = captureTakeId ?? activeRecording?.capture_take_id;
-    if (!takeId) return;
-
-    // 误双击抑制：400ms
-    const now = Date.now();
-    if (now - lastActionTimeRef.current < 400) return;
-    lastActionTimeRef.current = now;
-
-    const timestampMs = elapsedSec * 1000;
-    const action = (event.type ?? "add_note") as CodingActionType;
-
-    const item = createOutboxItem(takeId, action, timestampMs, event.payload);
-    enqueueItem(item);
-    setOutboxItems((prev) => [...prev, item]);
-    outboxSenderRef.current?.flush();
-  };
-
-  const handleCloseComplete = () => {
-    setConsoleState("preview");
-    setCompletedRecording(null);
-    setPreviewKey((k) => k + 1);
-  };
-
-  // ── 双摄操作函数 ──
-  const handleDualTest = async () => {
-    if (!selectedSlots.cam_1 || !selectedSlots.cam_2) return;
-    setDualState("testing");
-    try {
-      const result = await runSyncTest({
-        cam_1_id: selectedSlots.cam_1,
-        cam_2_id: selectedSlots.cam_2,
-        duration: 5,
-      });
-      setDualTestResult(result);
-    } catch { /* ignore */ }
-    setDualState("setup");
-  };
-
-  const handleDualStartRecording = async () => {
-    if (!selectedSlots.cam_1 || !selectedSlots.cam_2) return;
-    try {
-      if (fieldSession && fieldSession.status !== "live") {
-        const updated = await startFieldSession(sessionId);
-        setFieldSession(updated);
-      }
-
-      const session = await startSyncRecording({
-        cam_1_id: selectedSlots.cam_1,
-        cam_2_id: selectedSlots.cam_2,
-        field_session_id: sessionId,
-        court_name: fieldSession?.court_name || "",
-        match_format: (fieldSession?.match_format || "doubles") as "singles" | "doubles",
-        cam_1_angle: "baseline_high",
-        cam_2_angle: "baseline_high",
-        fps: recordingFps,
-        auto_analyze_after_stop: analysisIntent === "auto_analyze",
-      });
-      setActiveSyncSession(session);
-      setDualState("recording");
-      setDualElapsedSec(0);
-      setDualSegmentIndex(0);
-      if (session.capture_take_id) {
-        await initializeLiveCoding(session.capture_take_id);
-      }
-    } catch { /* ignore */ }
-  };
-
-  const handleDualStopRecording = async () => {
-    if (!activeSyncSession) return;
-    try {
-      outboxSenderRef.current?.freeze();
-      const response = await stopSyncRecording(activeSyncSession.session_id);
-      setDualState("stopped");
-      setDualStopResponse(response);
-      setActiveSyncSession(null);
-      outboxSenderRef.current?.stop();
-      outboxSenderRef.current = null;
-      if (activeSyncSession.capture_take_id) {
-        const pending = getPendingItems(activeSyncSession.capture_take_id);
-        setOutboxHealth(pending.length > 0 ? "pending" : "synced");
-      }
-    } catch { /* ignore */ }
-  };
-
-  const handleDualCloseComplete = () => {
-    setDualState("setup");
-    setDualStopResponse(null);
-    setActiveSyncSession(null);
-    setDualTestResult(null);
-  };
-
-  const formatElapsed = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  };
-
-  const formatMs = (ms: number) => {
-    const totalSec = Math.floor(ms / 1000);
-    return formatElapsed(totalSec);
-  };
-
-  const quickEvents = useMemo(
-    () => quickEventsForMode(fieldSession?.capture_mode || "practice"),
-    [fieldSession?.capture_mode],
-  );
-
-  const currentCamera = cameras.find((c) => c.camera_id === selectedCameraId);
-  const isOnline = selectedCameraId ? (probeResults[selectedCameraId]?.online ?? null) : null;
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <p className="text-slate-400">加载采集任务…</p>
-      </div>
-    );
-  }
-
+  // ── 加载中 ──
+  if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><p className="text-slate-400">加载中…</p></div>;
   if (!fieldSession) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <p className="text-slate-500">采集任务未找到</p>
-        <button className="quiet-button px-4 py-2" onClick={() => onNavigate("/capture")} type="button">
-          返回采集任务列表
-        </button>
+        <button className="quiet-button px-4 py-2" onClick={() => onNavigate("/capture")} type="button">返回采集任务列表</button>
       </div>
     );
   }
 
+  const elapsedDisplay = formatElapsed(runtime.elapsedMs);
+
+  // ── 摄像机选择区域 ──
+  const renderCameraSelector = () => {
+    if (mode === "single") {
+      return (
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-slate-500">选择摄像头</label>
+          <select
+            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            value={cameraSetup.selectedCameraId}
+            onChange={e => cameraSetup.setSelectedCameraId(e.target.value)}
+            disabled={runtime.isRecording}
+          >
+            <option value="">-- 选择摄像头 --</option>
+            {cameraSetup.cameras.map(c => (
+              <option key={c.camera_id} value={c.camera_id}>{c.name ?? c.camera_id}</option>
+            ))}
+          </select>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-3">
+        {(["cam_1", "cam_2"] as const).map(slot => (
+          <div key={slot} className="space-y-1">
+            <label className="text-xs font-bold text-slate-500">{slot === "cam_1" ? "底线机位 A" : "底线机位 B"}</label>
+            <button
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-left"
+              onClick={() => cameraSetup.setSlotSelecting(slot)}
+              disabled={runtime.isRecording}
+              type="button"
+            >
+              {cameraSetup.selectedSlots[slot]
+                ? (cameraSetup.cameras.find(c => c.camera_id === cameraSetup.selectedSlots[slot])?.name ?? cameraSetup.selectedSlots[slot])
+                : `选择 ${slot === "cam_1" ? "A" : "B"} 机位摄像头`}
+            </button>
+          </div>
+        ))}
+        {/* Slot 选择弹窗 */}
+        {cameraSetup.slotSelecting && (
+          <div className="rounded-xl border border-slate-200 p-3 space-y-1 max-h-48 overflow-y-auto">
+            {cameraSetup.cameras.filter(c => c.camera_id !== cameraSetup.selectedSlots[cameraSetup.slotSelecting === "cam_1" ? "cam_2" : "cam_1"]).map(c => (
+              <button
+                key={c.camera_id}
+                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-slate-100 text-sm"
+                onClick={() => cameraSetup.selectSlot(cameraSetup.slotSelecting!, c.camera_id)}
+                type="button"
+              >
+                {c.name ?? c.camera_id}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* 预检 */}
+        {isDualMode && (
+          <button
+            className="w-full rounded-xl border border-[#3B82F6] text-[#3B82F6] px-3 py-2 text-sm font-bold hover:bg-[#EFF6FF] transition disabled:opacity-50"
+            onClick={preflight.runTest}
+            disabled={!cameraSetup.isReady || preflight.preflightState.status === "running" || runtime.isRecording}
+            type="button"
+          >
+            {preflight.preflightState.status === "running" ? <RefreshCw size={14} className="inline animate-spin mr-1" /> : null}
+            {preflight.preflightState.status === "running" ? "测试中…" : "短录测试"}
+          </button>
+        )}
+        {preflight.preflightState.status === "passed" && (
+          <p className="text-xs text-[#22C55E]">测试通过</p>
+        )}
+        {preflight.preflightState.status === "failed" && (
+          <p className="text-xs text-[#FF4D4F]">测试失败: {preflight.preflightState.error}</p>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="mx-auto max-w-[1480px] px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
-      {/* 顶部信息栏 */}
-      <div className="flex flex-wrap items-center gap-4 mb-6">
-        <button className="quiet-button p-2" onClick={() => onNavigate("/capture")} type="button" title="返回">
-          <ArrowLeft2 size={18} />
-        </button>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-black text-[#14241B] truncate">
-            {fieldSession.title || "采集控制台"}
-          </h1>
-          <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-            {fieldSession.court_name && (
-              <span className="inline-flex items-center gap-1"><MapPin size={14} /> {fieldSession.court_name}</span>
-            )}
-            <span className="inline-flex items-center gap-1">
-              {captureModeLabel[fieldSession.capture_mode] ?? fieldSession.capture_mode}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Users size={14} /> {matchFormatLabel[fieldSession.match_format] ?? fieldSession.match_format}
-            </span>
-            <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-              fieldSession.status === "live"
-                ? "bg-[#22C55E]/12 text-[#168A34]"
-                : "bg-slate-100 text-slate-500"
-            }`}>
-              {statusLabel[fieldSession.status] ?? fieldSession.status}
-            </span>
-          </div>
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+      {/* 头部 */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-black text-[#14241B]">{fieldSession.title || "现场采集"}</h1>
+          <p className="text-sm text-slate-500">{fieldSession.court_name} · {captureModeLabel[fieldSession.capture_mode] ?? fieldSession.capture_mode}</p>
         </div>
-      </div>
-
-      {/* 主体：左预览 + 右控制 */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        {/* 左侧预览区 */}
-        <div className="space-y-4">
-
-          {/* === 双摄双路预览 === */}
-          {isDualMode ? (
-            <div className="grid grid-cols-2 gap-3">
-              {/* 底线机位 A */}
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-[#2F80ED] font-bold">
-                  <Camera size={12} /> 底线机位 A
-                  {selectedSlots.cam_1 && probeResults[selectedSlots.cam_1]?.online === true && (
-                    <Wifi size={10} className="text-[#22C55E]" />
-                  )}
-                </div>
-                <div className="relative aspect-video rounded-xl border border-[#DDE9D6] bg-[#0F172A] overflow-hidden">
-                  {selectedSlots.cam_1 && getCameraPreviewUrl(selectedSlots.cam_1) && dualState !== "recording" ? (
-                    <img
-                      key={`dual-preview-cam1-${previewKey}`}
-                      src={getCameraPreviewUrl(selectedSlots.cam_1)}
-                      alt="底线机位 A 预览"
-                      className="h-full w-full object-contain"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                        (e.target as HTMLImageElement).nextElementSibling?.classList.remove("hidden");
-                      }}
-                    />
-                  ) : null}
-                  {(!selectedSlots.cam_1 || dualState === "recording") && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                      <Camera size={24} className="text-white/30" />
-                      <p className="text-white/50 text-xs">
-                        {dualState === "recording" ? "录制中" : "未选择摄像头"}
-                      </p>
-                    </div>
-                  )}
-                  <div className="hidden absolute inset-0 flex items-center justify-center bg-[#0F172A]">
-                    <p className="text-white/50 text-xs">预览加载失败</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* 底线机位 B */}
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-[#168A34] font-bold">
-                  <Camera size={12} /> 底线机位 B
-                  {selectedSlots.cam_2 && probeResults[selectedSlots.cam_2]?.online === true && (
-                    <Wifi size={10} className="text-[#22C55E]" />
-                  )}
-                </div>
-                <div className="relative aspect-video rounded-xl border border-[#DDE9D6] bg-[#0F172A] overflow-hidden">
-                  {selectedSlots.cam_2 && getCameraPreviewUrl(selectedSlots.cam_2) && dualState !== "recording" ? (
-                    <img
-                      key={`dual-preview-cam2-${previewKey}`}
-                      src={getCameraPreviewUrl(selectedSlots.cam_2)}
-                      alt="底线机位 B 预览"
-                      className="h-full w-full object-contain"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                        (e.target as HTMLImageElement).nextElementSibling?.classList.remove("hidden");
-                      }}
-                    />
-                  ) : null}
-                  {(!selectedSlots.cam_2 || dualState === "recording") && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                      <Camera size={24} className="text-white/30" />
-                      <p className="text-white/50 text-xs">
-                        {dualState === "recording" ? "录制中" : "未选择摄像头"}
-                      </p>
-                    </div>
-                  )}
-                  <div className="hidden absolute inset-0 flex items-center justify-center bg-[#0F172A]">
-                    <p className="text-white/50 text-xs">预览加载失败</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* 录制中指示 */}
-              {dualState === "recording" && (
-                <div className="col-span-2 flex items-center justify-center gap-2 rounded-full bg-[#FF4D4F]/90 px-3 py-1.5 text-white text-sm font-bold">
-                  <span className="grid size-2 rounded-full bg-white animate-pulse" />
-                  录制中 {formatElapsed(dualElapsedSec)}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="relative aspect-video rounded-2xl border border-[#DDE9D6] bg-[#0F172A] overflow-hidden">
-              {/* 单摄预览 */}
-            {previewStatus === "loading" && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <RefreshCw size={24} className="animate-spin text-white/50" />
-              </div>
-            )}
-            {previewStatus === "failed" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                <WifiOff size={32} className="text-white/40" />
-                <p className="text-white/60 text-sm">无法加载预览</p>
-                <button
-                  className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white font-medium hover:bg-white/20"
-                  onClick={() => { setPreviewStatus("loading"); setPreviewKey((k) => k + 1); }}
-                  type="button"
-                >
-                  重试
-                </button>
-              </div>
-            )}
-            {!selectedCameraId && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-                <Camera size={40} className="text-white/30" />
-                <p className="text-white/50 text-sm">请在右侧设备区选择摄像头</p>
-                <button
-                  className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white font-medium hover:bg-white/20"
-                  onClick={() => setDrawerOpen(true)}
-                  type="button"
-                >
-                  选择摄像头
-                </button>
-              </div>
-            )}
-            {selectedCameraId && previewUrl && previewStatus !== "failed" && (
-              <img
-                key={previewKey}
-                src={previewUrl}
-                alt="摄像头预览"
-                className="h-full w-full object-contain"
-                onLoad={() => setPreviewStatus("displaying")}
-                onError={() => setPreviewStatus("failed")}
-              />
-            )}
-
-            {/* 录制中指示 */}
-            {consoleState === "recording" && (
-              <div className="absolute top-4 left-4 flex items-center gap-2 rounded-full bg-[#FF4D4F]/90 px-3 py-1.5 text-white text-sm font-bold">
-                <span className="grid size-2 rounded-full bg-white animate-pulse" />
-                录制中 {formatElapsed(elapsedSec)}
-              </div>
-            )}
-            </div>
-          )}
-
-          {/* 时间线（位于预览正下方） */}
-          {(consoleState === "recording" || dualState === "recording" || segments.length > 0 || timelineEvents.length > 0) && (
-            <div className="-mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-3 bg-white border-t border-[#DDE9D6]">
-              <MiniTimeline
-                segments={segments}
-                events={timelineEvents}
-                liveState={liveCodingState}
-                totalDurationMs={Math.max(elapsedSec * 1000, dualElapsedSec * 1000, 60000)}
-                elapsedMs={Math.max(elapsedSec, dualElapsedSec) * 1000}
-                showDurationHint={elapsedSec < 60}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* 右侧：设备状态 + 录制控制 */}
-        <div className="space-y-4">
-          {isDualMode ? (
-            <>
-              {/* === 双摄控制台 === */}
-              {/* 机位槽位卡片 */}
-              <div className="sport-card p-4">
-                <h3 className="text-sm font-bold text-[#14241B] mb-3">双摄机位</h3>
-
-                {/* 底线机位 A */}
-                <SlotCard
-                  role="cam_1"
-                  label="底线机位 A"
-                  cameraId={selectedSlots.cam_1}
-                  cameras={cameras}
-                  probeResults={probeResults}
-                  onSelect={() => { setSlotSelecting("cam_1"); setDrawerOpen(true); }}
-                  onProbe={handleProbe}
-                />
-
-                {/* 底线机位 B */}
-                <SlotCard
-                  role="cam_2"
-                  label="底线机位 B"
-                  cameraId={selectedSlots.cam_2}
-                  cameras={cameras}
-                  probeResults={probeResults}
-                  onSelect={() => { setSlotSelecting("cam_2"); setDrawerOpen(true); }}
-                  onProbe={handleProbe}
-                />
-              </div>
-
-              {/* 双摄录制控制 */}
-              <div className="sport-card p-4">
-                <h3 className="text-sm font-bold text-[#14241B] mb-3">同步录制控制</h3>
-                <label className="mb-3 block text-xs font-bold text-slate-500">
-                  视频帧率
-                  <select
-                    className="field-input mt-1"
-                    disabled={dualState !== "setup"}
-                    onChange={(event) => setRecordingFps(Number(event.target.value))}
-                    value={recordingFps}
-                  >
-                    {[24, 25, 30, 50, 60].map((fps) => (
-                      <option key={fps} value={fps}>{fps} fps</option>
-                    ))}
-                  </select>
-                </label>
-
-                {/* 短录测试 */}
-                {(dualState === "setup" || dualState === "testing") && (
-                  <div className="mb-3">
-                    <button
-                      className="w-full rounded-xl border border-[#2F80ED]/30 bg-[#2F80ED]/5 py-2.5 text-sm font-bold text-[#2F80ED] hover:bg-[#2F80ED]/10 transition disabled:opacity-40"
-                      onClick={handleDualTest}
-                      disabled={!selectedSlots.cam_1 || !selectedSlots.cam_2 || dualState === "testing"}
-                      type="button"
-                    >
-                      <RefreshCw size={14} className={`inline mr-1 ${dualState === "testing" ? "animate-spin" : ""}`} />
-                      {dualState === "testing" ? "测试中…" : "短录测试 (5秒)"}
-                    </button>
-                    {dualTestResult && (
-                      <TestResultCard result={dualTestResult} />
-                    )}
-                  </div>
-                )}
-
-                {/* 开始录制按钮 */}
-                {dualState === "setup" && (
-                  <button
-                    className="green-button w-full flex items-center justify-center gap-2 py-3"
-                    onClick={handleDualStartRecording}
-                    disabled={!selectedSlots.cam_1 || !selectedSlots.cam_2}
-                    type="button"
-                  >
-                    <Play size={18} fill="currentColor" />
-                    开始同步录制
-                  </button>
-                )}
-
-                {/* 录制中 */}
-                {dualState === "recording" && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-center gap-2 rounded-xl bg-[#FF4D4F]/10 py-2 px-3">
-                      <span className="grid size-2 rounded-full bg-[#FF4D4F] animate-pulse" />
-                      <span className="text-sm font-bold text-[#FF4D4F]">
-                        同步录制中 {formatElapsed(dualElapsedSec)}
-                      </span>
-                    </div>
-                    {activeSyncSession && (
-                      <div className="text-xs text-slate-500 space-y-1 px-1">
-                        <div className="flex justify-between">
-                          <span>当前分段</span>
-                          <span className="font-bold">{dualSegmentIndex || 1}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>已保存分段</span>
-                          <span className="font-bold">{activeSyncSession.segments?.length ?? 0}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>重启次数</span>
-                          <span className="font-bold">{activeSyncSession.total_restarts}</span>
-                        </div>
-                        {activeSyncSession.error_message && (
-                          <p className="text-[#FF4D4F] truncate">错误: {activeSyncSession.error_message}</p>
-                        )}
-                      </div>
-                    )}
-                    <button
-                      className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#FF4D4F] text-white font-bold hover:bg-[#E04344] transition"
-                      onClick={handleDualStopRecording}
-                      type="button"
-                    >
-                      <Square size={18} fill="currentColor" />
-                      停止录制
-                    </button>
-                  </div>
-                )}
-
-                {/* 录制完成 */}
-                {dualState === "stopped" && dualStopResponse && (
-                  <div className="rounded-xl bg-[#22C55E]/10 p-4 text-center space-y-2">
-                    <CheckCircle2 size={24} className="mx-auto text-[#168A34]" />
-                    <p className="text-sm font-bold text-[#168A34]">同步录制已完成</p>
-                    <div className="text-xs text-slate-600 space-y-1">
-                      <p>时长: {formatElapsed(dualElapsedSec)}</p>
-                      {dualStopResponse.analysis_available ? (
-                        <p className="text-[#168A34]">分析就绪</p>
-                      ) : (
-                        <p className="text-[#E8A838]">{dualStopResponse.analysis_blocked_reason ?? "分析不可用"}</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-          {/* 设备状态区 */}
-          <div className="sport-card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-[#14241B]">设备状态</h3>
-            </div>
-            {currentCamera ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  {isOnline === true ? (
-                    <Wifi size={14} className="text-[#22C55E]" />
-                  ) : isOnline === false ? (
-                    <WifiOff size={14} className="text-[#FF4D4F]" />
-                  ) : (
-                    <WifiOff size={14} className="text-slate-300" />
-                  )}
-                  <span className="text-sm font-bold text-[#14241B]">{currentCamera.name}</span>
-                  <span className={`rounded px-2 py-0.5 text-xs font-bold ${
-                    isOnline === true
-                      ? "bg-[#22C55E]/12 text-[#168A34]"
-                      : isOnline === false
-                        ? "bg-[#FF4D4F]/12 text-[#C92A2A]"
-                        : "bg-slate-100 text-slate-400"
-                  }`}>
-                    {isOnline === true ? "已连接" : isOnline === false ? "离线" : "未检测"}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 truncate">{currentCamera.stream_url}</p>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    className="text-xs font-medium text-[#2F80ED] hover:underline"
-                    onClick={() => handleProbe(selectedCameraId)}
-                    type="button"
-                  >
-                    <RefreshCw size={12} className="inline mr-1" />重新探测
-                  </button>
-                  <button
-                    className="text-xs font-medium text-slate-500 hover:underline"
-                    onClick={() => setDrawerOpen(true)}
-                    type="button"
-                  >
-                    更换摄像头
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="py-3 text-center">
-                <p className="text-sm text-slate-400 mb-2">未选择摄像头</p>
-                <button
-                  className="text-sm font-bold text-[#2F80ED] hover:underline"
-                  onClick={() => setDrawerOpen(true)}
-                  type="button"
-                >
-                  选择摄像头
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* 录制控制区 */}
-          <div className="sport-card p-4">
-            <h3 className="text-sm font-bold text-[#14241B] mb-3">录制控制</h3>
-            <label className="mb-3 block text-xs font-bold text-slate-500">
-              视频帧率
-              <select
-                className="field-input mt-1"
-                disabled={consoleState !== "preview"}
-                onChange={(event) => setRecordingFps(Number(event.target.value))}
-                value={recordingFps}
-              >
-                {[24, 25, 30, 50, 60].map((fps) => (
-                  <option key={fps} value={fps}>{fps} fps</option>
-                ))}
-              </select>
-            </label>
-            {consoleState === "preview" && (
-              <button
-                className="green-button w-full flex items-center justify-center gap-2 py-3"
-                onClick={handleStartRecording}
-                disabled={!selectedCameraId}
-                type="button"
-              >
-                <Play size={18} fill="currentColor" />
-                开始录制
-              </button>
-            )}
-            {consoleState === "recording" && (
-              <button
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#FF4D4F] text-white font-bold hover:bg-[#E04344] transition"
-                onClick={handleStopRecording}
-                type="button"
-              >
-                <Square size={18} fill="currentColor" />
-                停止录制
-              </button>
-            )}
-            {consoleState === "stopped" && (
-              <div className="rounded-xl bg-[#22C55E]/10 p-4 text-center">
-                <CheckCircle2 size={24} className="mx-auto text-[#168A34] mb-2" />
-                <p className="text-sm font-bold text-[#168A34]">录制已完成</p>
-                {outboxHealth === "pending" && (
-                  <p className="text-xs text-amber-600 mt-1">有事件待同步，可稍后重试</p>
-                )}
-              </div>
-            )}
-            {consoleState === "recording" && (
-              <p className="text-xs text-slate-400 text-center mt-2">录制期间预览已暂停</p>
-            )}
-          </div>
-            </>
+        <div className="flex gap-2">
+          <button className="quiet-button px-3 py-1.5 text-sm" onClick={() => setDrawerOpen(!drawerOpen)} type="button">
+            <Camera size={16} className="inline mr-1" />设备
+          </button>
+          {runtime.isStopped && (
+            <button className="quiet-button px-3 py-1.5 text-sm" onClick={handleReset} type="button">
+              新录制
+            </button>
           )}
         </div>
       </div>
 
-      {/* 录制完成面板 */}
-      {consoleState === "stopped" && completedRecording && (
-        <div className="mt-6 rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/8 p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <h3 className="text-lg font-black text-[#14241B]">录制已完成</h3>
-              <div className="mt-2 flex flex-wrap gap-3 text-sm text-slate-600">
-                <span>时长：{formatElapsed(elapsedSec)}</span>
-                <span>摄像头：{currentCamera?.name || selectedCameraId}</span>
-                <span>场地：{fieldSession.court_name || "—"}</span>
-              </div>
-            </div>
-            <button
-              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100"
-              onClick={handleCloseComplete}
-              type="button"
-            >
-              <X size={18} />
-            </button>
+      {/* 控制栏 */}
+      <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`w-3 h-3 rounded-full ${runtime.phase === "recording" ? "bg-[#FF4D4F] animate-pulse" : runtime.phase === "stopping" || runtime.phase === "recovering" ? "bg-[#E8A838]" : "bg-slate-300"}`} />
+            <span className="text-sm font-bold text-[#14241B]">
+              {runtime.phase === "idle" ? "就绪" :
+               runtime.phase === "starting" ? "启动中…" :
+               runtime.phase === "recording" ? `录制中 ${elapsedDisplay}` :
+               runtime.phase === "stopping" ? "停止中…" :
+               runtime.phase === "recovering" ? "恢复中…" :
+               runtime.phase === "completed" || runtime.phase === "partial" ? `已完成 ${elapsedDisplay}` :
+               runtime.phase === "failed" ? "失败" :
+               runtime.phase === "canceled" ? "已取消" : "就绪"}
+            </span>
           </div>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            {analysisIntent === "auto_analyze" && completedRecording.auto_analysis_job_id ? (
+          <div className="flex gap-2">
+            {runtime.phase === "idle" && (
+              <button className="flex items-center gap-2 rounded-xl bg-[#22C55E] px-5 py-2.5 text-white font-bold hover:bg-[#168A34] transition disabled:opacity-50" onClick={handleStart} disabled={!canStart} type="button">
+                <Play size={16} fill="currentColor" />开始录制
+              </button>
+            )}
+            {(runtime.phase === "recording" || runtime.phase === "stopping") && (
               <>
+                <button className="flex items-center gap-2 rounded-xl bg-[#FF4D4F] px-5 py-2.5 text-white font-bold hover:bg-[#E04344] transition" onClick={handleStop} type="button">
+                  <Square size={16} fill="currentColor" />停止
+                </button>
+                <button className="flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition" onClick={handleCancel} type="button">取消</button>
+              </>
+            )}
+            {runtime.phase === "recovering" && (
+              <button className="flex items-center gap-2 rounded-xl bg-[#3B82F6] px-5 py-2.5 text-white font-bold" onClick={() => runtime.recover()} type="button">
+                <RefreshCw size={16} />重试恢复
+              </button>
+            )}
+          </div>
+        </div>
+        {runtime.error && <p className="text-xs text-[#FF4D4F] mt-2">{runtime.error}</p>}
+      </div>
+
+      {/* 预览 + 设置 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <div className={`grid ${cameraSetup.previewTracks.length === 1 ? "grid-cols-1" : "grid-cols-2"} gap-4`}>
+            {cameraSetup.previewTracks.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 aspect-video flex items-center justify-center">
+                <p className="text-slate-400 text-sm">选择摄像头后显示预览</p>
+              </div>
+            ) : cameraSetup.previewTracks.map(track => (
+              <div key={track.slot} className="rounded-2xl border border-slate-200 bg-black aspect-video overflow-hidden relative">
+                <img
+                  key={previewKey}
+                  src={getCameraPreviewUrl(track.cameraId) ?? ""}
+                  className="w-full h-full object-contain"
+                  alt={track.slot}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+                <span className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded">
+                  {track.slot === "single" ? "单摄" : track.slot === "cam_1" ? "机位 A" : "机位 B"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-4">
+          {renderCameraSelector()}
+        </div>
+      </div>
+
+      {/* Live Coding */}
+      {runtime.phase === "recording" && (
+        <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+          <div className="flex flex-wrap gap-2">
+            {liveCoding.quickEvents.map(event => {
+              const colorMap: Record<string, string> = {
+                game_start: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
+                game_end: "bg-slate-50 border-slate-300 text-slate-500",
+                score_update: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E]",
+                side_change: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7]",
+                timeout_start: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
+                custom_marker: "bg-slate-50 border-slate-300 text-slate-500",
+                session_note: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
+              };
+              return (
                 <button
-                  className="green-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-                  onClick={() => onNavigate(`/analysis/${completedRecording.auto_analysis_job_id}`)}
+                  key={event.type}
+                  className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${colorMap[event.type] ?? "bg-slate-50 border-slate-300 text-slate-500"}`}
+                  onClick={() => liveCoding.addTimelineEvent(event)}
                   type="button"
                 >
-                  <SparklesIcon size={16} /> 查看分析进度
+                  {event.label}
                 </button>
-              </>
-            ) : (
-              <>
-                {analysisIntent !== "save_only" && completedRecording.video_id && (
-                  <button
-                    className="green-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-                    onClick={() => onNavigate(`/upload?videoId=${completedRecording.video_id}&source=recording&sessionId=${completedRecording.session_id}&fps=${completedRecording.fps}`)}
-                    type="button"
-                  >
-                    <Upload size={16} /> 创建分析任务
-                  </button>
-                )}
-              </>
-            )}
-            <button
-              className="quiet-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-              onClick={handleCloseComplete}
-              type="button"
-            >
-              <Play size={16} fill="currentColor" /> 继续采集
-            </button>
+              );
+            })}
           </div>
+          {liveCoding.outboxHealth === "pending" && (
+            <p className="text-xs text-amber-600 mt-2">有 {liveCoding.outboxItems.filter(i => i.status !== "synced").length} 条事件待同步</p>
+          )}
         </div>
       )}
 
-      {/* 双摄录制完成面板 */}
-      {dualState === "stopped" && dualStopResponse && (
-        <div className="mt-6 rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/8 p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <h3 className="text-lg font-black text-[#14241B]">双摄同步录制已完成</h3>
-              <div className="mt-2 flex flex-wrap gap-3 text-sm text-slate-600">
-                <span>时长：{formatElapsed(dualElapsedSec)}</span>
-                <span>分段数：{dualStopResponse.tracks[0]?.fragment_count ?? 0}</span>
-                <span>重启次数：{dualStopResponse.tracks[0]?.restart_count ?? 0}</span>
-                <span>
-                  底线机位 A：{cameras.find(c => c.camera_id === selectedSlots.cam_1)?.name ?? selectedSlots.cam_1}
-                </span>
-                <span>
-                  底线机位 B：{cameras.find(c => c.camera_id === selectedSlots.cam_2)?.name ?? selectedSlots.cam_2}
-                </span>
+      {/* MiniTimeline */}
+      {runtime.phase === "recording" && (
+        <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+          <div className="flex gap-2">
+            {liveCoding.timelineEvents.slice(-20).map(evt => (
+              <div key={evt.id} className="text-xs bg-slate-100 px-2 py-1 rounded" title={evt.note}>
+                {formatElapsed(evt.timestamp_ms)}
               </div>
-            </div>
-            <button
-              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100"
-              onClick={handleDualCloseComplete}
-              type="button"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            {dualStopResponse.analysis_available && dualStopResponse.default_analysis_video_id ? (
-              <button
-                className="green-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-                onClick={() => onNavigate(`/upload?videoId=${dualStopResponse.default_analysis_video_id}&source=recording&sessionId=${activeSyncSession?.session_id ?? ""}&fps=${activeSyncSession?.fps ?? 60}`)}
-                type="button"
-              >
-                <Upload size={16} /> 创建分析任务
-              </button>
-            ) : (
-              <p className="text-sm text-[#E8A838] py-2">
-                分析不可用：{dualStopResponse.analysis_blocked_reason ?? "未知原因"}
-              </p>
-            )}
-            <button
-              className="quiet-button inline-flex items-center gap-2 px-4 py-2.5 text-sm"
-              onClick={handleDualCloseComplete}
-              type="button"
-            >
-              <Play size={16} fill="currentColor" /> 开始新录制
-            </button>
+            ))}
           </div>
         </div>
       )}
 
-      {/* drain 确认弹窗 */}
-      {drainConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6 max-w-sm w-full mx-4 shadow-xl">
-            <h3 className="text-sm font-bold text-[#14241B] mb-2">仍有 {drainConfirm.unsynced} 个事件未同步</h3>
-            <p className="text-xs text-slate-500 mb-4">部分事件尚未发送到服务器，停止录制后这些事件将丢失。</p>
-            <div className="flex gap-3">
-              <button
-                className="flex-1 rounded-xl border border-slate-300 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50 transition"
-                onClick={() => setDrainConfirm(null)}
-                type="button"
-              >
-                取消停止
-              </button>
-              <button
-                className="flex-1 rounded-xl bg-[#FF4D4F] py-2.5 text-sm font-bold text-white hover:bg-[#E04344] transition"
-                onClick={() => handleDrainConfirm(true)}
-                type="button"
-              >
-                仍然停止
-              </button>
+      {/* 完成面板 */}
+      {runtime.isStopped && runtime.result && (
+        <div className="rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/8 p-6 space-y-3">
+          <h3 className="text-lg font-black text-[#14241B]">
+            {runtime.phase === "completed" ? "录制已完成" : runtime.phase === "partial" ? "录制部分完成" : "录制结束"}
+          </h3>
+          {runtime.result.tracks.map(track => (
+            <div key={track.trackId ?? track.slot} className="text-sm text-slate-600">
+              {track.slot}: {track.status} | {track.durationMs ? formatElapsed(track.durationMs) : ""} | 片段 {track.fragmentCount}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* 录制中：实时编码控制台 */}
-      {(consoleState === "recording" || dualState === "recording") && (
-        <div className="mt-6 space-y-4">
-          {/* 当前结构 */}
-          {liveCodingState && (
-            <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-              <div className="flex items-center gap-4 text-sm font-bold text-[#14241B]">
-                <span>当前：</span>
-                <span className="text-[#F97316]">第{liveCodingState.set_ordinal || "?"}盘</span>
-                <span className="text-[#3B82F6]">第{liveCodingState.game_ordinal || "?"}局</span>
-                <span className="text-[#22C55E]">第{liveCodingState.rally_ordinal || "?"}分</span>
-                {liveCodingState.match_phase === "intermission" && <span className="text-[#6B7280]">（{liveCodingState.intermission_kind === "timeout" ? "战术暂停" : liveCodingState.intermission_kind === "side_change" ? "换边间歇" : "赛间间歇"}）</span>}
-                <span className="text-xs text-slate-400 ml-auto">rev.{liveCodingState.revision}</span>
-              </div>
+          ))}
+          {runtime.result.analysisAvailable && runtime.result.defaultAnalysisVideoId && (
+            <button
+              className="rounded-xl bg-[#22C55E] px-4 py-2 text-sm font-bold text-white"
+              onClick={() => onNavigate(`/upload?videoId=${runtime.result!.defaultAnalysisVideoId}&source=recording&sessionId=${runtime.session?.sourceSessionId ?? sessionId}&fps=${runtime.session?.fps ?? 60}`)}
+              type="button"
+            >
+              创建分析任务
+            </button>
+          )}
+          {!runtime.result.analysisAvailable && runtime.result.analysisBlockedReason && (
+            <p className="text-sm text-[#E8A838]">分析不可用：{runtime.result.analysisBlockedReason}</p>
+          )}
+          {liveCoding.outboxHealth === "pending" && (
+            <div className="flex items-center gap-2 text-amber-600 text-sm">
+              <span>有事件待同步</span>
+              <button onClick={liveCoding.retrySync} className="underline text-xs" type="button">重新同步</button>
             </div>
           )}
-
-          {/* 事件按钮 */}
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-            <h3 className="text-sm font-bold text-[#14241B] mb-3">实时编码</h3>
-            <div className="flex flex-wrap gap-2">
-              {MATCH_QUICK_EVENTS.map((event) => {
-                const colorMap: Record<string, string> = {
-                  start_set: "bg-[#FFF7ED] border-[#F97316] text-[#F97316] hover:bg-[#F97316] hover:text-white",
-                  start_game: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6] hover:bg-[#3B82F6] hover:text-white",
-                  start_next_rally: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E] hover:bg-[#22C55E] hover:text-white",
-                  end_rally: "bg-slate-50 border-slate-300 text-slate-500 hover:bg-slate-500 hover:text-white",
-                  start_timeout: "bg-slate-50 border-slate-500 text-slate-600 hover:bg-slate-600 hover:text-white",
-                  change_side: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7] hover:bg-[#A855F7] hover:text-white",
-                  add_note: "bg-slate-50 border-slate-300 text-slate-500 hover:bg-slate-500 hover:text-white",
-                  undo: "bg-[#FEF2F2] border-[#EF4444] text-[#EF4444] hover:bg-[#EF4444] hover:text-white",
-                };
-                const keyMap: Record<string, string> = {
-                  start_set: "1", start_game: "2", start_next_rally: "3",
-                  end_rally: "4", change_side: "5", start_timeout: "6", add_note: "H", undo: "⌫",
-                };
-                const colorClass = colorMap[event.type] ?? "";
-                return (
-                  <button
-                    key={event.type}
-                    className={`rounded-xl border px-3 py-2 text-xs font-bold transition ${colorClass}`}
-                    onClick={() => handleAddTimelineEvent(event as QuickEventDef)}
-                    disabled={(event.type === "start_next_rally" && liveCodingState?.match_phase === "rally_active") || (event.type === "end_rally" && liveCodingState?.match_phase !== "rally_active")}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleAddTimelineEvent(event as QuickEventDef); }}
-                    type="button"
-                    title={event.note}
-                  >
-                    {event.label}{keyMap[event.type] ? ` [${keyMap[event.type]}]` : ""}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Outbox 同步状态 */}
-          {(() => {
-            const unsynced = outboxItems.filter((i) => i.status !== "synced");
-            const pending = unsynced.filter(i => i.status === "pending").length;
-            const sending = unsynced.filter(i => i.status === "sending").length;
-            const failed = unsynced.filter(i => i.status === "failed").length;
-            const blocked = unsynced.filter(i => i.status === "blocked").length;
-            if (unsynced.length === 0) return null;
-            return (
-              <div className="rounded-2xl border border-[#FEF3C7] bg-[#FFFBEB] p-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-[#92400E]">同步状态</h4>
-                  <span className="text-xs text-[#92400E]">
-                    {sending > 0 && `发送中 ${sending} `}
-                    {pending > 0 && `待发 ${pending} `}
-                    {failed > 0 && `失败 ${failed} `}
-                    {blocked > 0 && `阻塞 ${blocked} `}
-                  </span>
-                </div>
-                {blocked > 0 && (
-                  <div className="mt-2 text-xs text-[#92400E] space-y-1">
-                    <p>事件状态已发生变化，部分操作未自动重试以避免重复创建。</p>
-                    <button
-                      className="text-[#2F80ED] font-bold hover:underline"
-                      onClick={() => {
-                        const takeId = captureTakeId ?? activeRecording?.capture_take_id;
-                        if (takeId) {
-                          retryBlockedItems(takeId);
-                          setOutboxItems(getPendingItems(takeId));
-                          outboxSenderRef.current?.flush();
-                        }
-                      }}
-                      type="button"
-                    >
-                      确认重新执行
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          {/* 事件时间线列表 */}
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-            <h3 className="text-sm font-bold text-[#14241B] mb-3">
-              最近事件
-              <span className="ml-2 text-xs font-normal text-slate-400">
-                {timelineEvents.length} 条
-              </span>
-            </h3>
-            <div className="max-h-48 overflow-y-auto space-y-1">
-              {timelineEvents.slice(-15).reverse().map((event) => (
-                <div
-                  key={event.id}
-                  className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-1.5 text-xs"
-                >
-                  <span className="font-bold text-slate-600">{event.label || event.event_type}</span>
-                  <span className="ml-2 text-slate-400 tabular-nums">
-                    {formatMs(event.timestamp_ms)}
-                  </span>
-                  {event.note && (
-                    <span className="ml-2 truncate text-slate-400">{event.note}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
+          {runtime.result.warnings.length > 0 && runtime.result.warnings.map((w, i) => (
+            <p key={i} className="text-xs text-[#E8A838]">⚠ {w}</p>
+          ))}
         </div>
       )}
-
 
       {/* 设备抽屉 */}
       {drawerOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-            onClick={() => setDrawerOpen(false)}
-          />
-          <div className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-md bg-white shadow-2xl overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-[#DDE9D6] p-4 flex items-center justify-between">
-              <h2 className="text-lg font-black text-[#14241B]">设备管理</h2>
-              <button className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100" onClick={() => setDrawerOpen(false)} type="button">
-                <X size={20} />
+        <div className="fixed inset-y-0 right-0 w-96 bg-white border-l border-slate-200 shadow-xl z-50 p-6 overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-black text-[#14241B]">设备管理</h3>
+            <button onClick={() => setDrawerOpen(false)} type="button"><X size={20} /></button>
+          </div>
+          <div className="flex gap-2 mb-4">
+            <button className={`px-3 py-1.5 rounded-lg text-sm font-bold ${drawerTab === "list" ? "bg-[#14241B] text-white" : "bg-slate-100"}`} onClick={() => setDrawerTab("list")} type="button">列表</button>
+            <button className={`px-3 py-1.5 rounded-lg text-sm font-bold ${drawerTab === "register" ? "bg-[#14241B] text-white" : "bg-slate-100"}`} onClick={() => setDrawerTab("register")} type="button">注册</button>
+          </div>
+          {drawerTab === "list" ? (
+            <div className="space-y-2">
+              {cameraSetup.cameras.map(c => (
+                <div key={c.camera_id} className="flex items-center justify-between rounded-xl border border-slate-200 p-3">
+                  <div className="text-sm">
+                    <p className="font-bold">{c.name ?? c.camera_id}</p>
+                    <p className="text-xs text-slate-500">{c.stream_url}</p>
+                  </div>
+                  <div className="flex gap-1">
+                    <button className="p-1.5 rounded-lg hover:bg-slate-100" onClick={() => cameraSetup.runProbe(c.camera_id)} type="button"><Wifi size={14} /></button>
+                  </div>
+                </div>
+              ))}
+              <button className="w-full rounded-xl border border-dashed border-slate-300 py-2 text-sm text-slate-500 hover:bg-slate-50" onClick={() => setDrawerTab("register")} type="button">
+                <PlusCircle size={14} className="inline mr-1" />注册新设备
               </button>
             </div>
-
-            <div className="p-4">
-              {/* Tab 切换 */}
-              <div className="flex gap-2 mb-4">
-                <button
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold ${drawerTab === "list" ? "bg-[#17231D] text-white" : "bg-slate-100 text-slate-500"}`}
-                  onClick={() => setDrawerTab("list")}
-                  type="button"
-                >
-                  已注册摄像头
-                </button>
-                <button
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold ${drawerTab === "register" ? "bg-[#17231D] text-white" : "bg-slate-100 text-slate-500"}`}
-                  onClick={() => setDrawerTab("register")}
-                  type="button"
-                >
-                  <PlusCircle size={14} className="inline mr-1" />注册新摄像头
-                </button>
-              </div>
-
-              {drawerTab === "list" && (
-                <div className="space-y-2">
-                  {cameras.length === 0 ? (
-                    <p className="text-sm text-slate-400 py-4 text-center">还没有注册摄像头</p>
-                  ) : (
-                    cameras.map((cam) => {
-                      const probe = probeResults[cam.camera_id];
-                      const isCurrent = cam.camera_id === selectedCameraId;
-                      return (
-                        <div
-                          key={cam.camera_id}
-                          className={`rounded-xl border p-3 text-left ${isCurrent ? "border-[#2F80ED]/40 bg-[#2F80ED]/6" : slotSelecting && cam.camera_id === selectedSlots[slotSelecting] ? "border-[#2F80ED]/40 bg-[#2F80ED]/6" : "border-[#DDE9D6]"}`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="min-w-0 flex-1">
-                              <span className="text-sm font-bold text-[#14241B]">{cam.name}</span>
-                              {isCurrent && (
-                                <span className="ml-2 rounded px-1.5 py-0.5 text-xs bg-[#2F80ED]/10 text-[#2F80ED] font-bold">当前</span>
-                              )}
-                              {slotSelecting && cam.camera_id === selectedSlots[slotSelecting] && (
-                                <span className="ml-2 rounded px-1.5 py-0.5 text-xs bg-[#2F80ED]/10 text-[#2F80ED] font-bold">
-                                  {slotSelecting === "cam_1" ? "底线机位 A" : "底线机位 B"}
-                                </span>
-                              )}
-                              <p className="text-xs text-slate-400 truncate">{cam.camera_id} · {cam.protocol}</p>
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              {probe?.online === true && <Wifi size={12} className="text-[#22C55E]" />}
-                              {probe?.online === false && <WifiOff size={12} className="text-[#FF4D4F]" />}
-                            </div>
-                          </div>
-                          <div className="flex gap-2 mt-2">
-                            {!isCurrent && (
-                              <button
-                                className="text-xs font-medium text-[#2F80ED] hover:underline"
-                                onClick={() => {
-                                  if (slotSelecting) {
-                                    const otherSlot = slotSelecting === "cam_1" ? "cam_2" : "cam_1";
-                                    if (selectedSlots[otherSlot] === cam.camera_id) return; // 阻止同一摄像头双选
-                                    setSelectedSlots((prev) => ({ ...prev, [slotSelecting]: cam.camera_id }));
-                                    setSlotSelecting(null);
-                                  } else {
-                                    setSelectedCameraId(cam.camera_id);
-                                  }
-                                  setDrawerOpen(false);
-                                }}
-                                type="button"
-                              >
-                                {slotSelecting ? `设为${slotSelecting === "cam_1" ? "底线机位 A" : "底线机位 B"}` : "选择"}
-                              </button>
-                            )}
-                            <button
-                              className="text-xs font-medium text-slate-500 hover:underline"
-                              onClick={() => handleProbe(cam.camera_id)}
-                              type="button"
-                            >
-                              <RefreshCw size={10} className="inline mr-1" />探测
-                            </button>
-                            <button
-                              className="text-xs font-medium text-[#FF4D4F] hover:underline"
-                              onClick={() => handleDeleteCamera(cam.camera_id)}
-                              type="button"
-                            >
-                              <Trash2 size={10} className="inline mr-1" />删除
-                            </button>
-                          </div>
-                          {probe && (
-                            <p className="mt-1 text-xs text-slate-400">
-                              {probe.online ? `在线 · ${probe.resolution ?? "—"} · ${probe.latency_ms != null ? `${probe.latency_ms}ms` : "—"}` : `离线 · ${probe.error_message ?? ""}`}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
-
-              {drawerTab === "register" && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">摄像头 ID</label>
-                    <input
-                      className="field-input w-full"
-                      value={newCameraForm.camera_id}
-                      onChange={(e) => setNewCameraForm((f) => ({ ...f, camera_id: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">名称</label>
-                    <input
-                      className="field-input w-full"
-                      value={newCameraForm.name}
-                      onChange={(e) => setNewCameraForm((f) => ({ ...f, name: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">流地址</label>
-                    <input
-                      className="field-input w-full"
-                      placeholder="rtsp://192.168.1.100:8554/live"
-                      value={newCameraForm.stream_url}
-                      onChange={(e) => setNewCameraForm((f) => ({ ...f, stream_url: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">协议</label>
-                    <select
-                      className="field-input w-full"
-                      value={newCameraForm.protocol}
-                      onChange={(e) => setNewCameraForm((f) => ({ ...f, protocol: e.target.value as "rtsp" }))}
-                    >
-                      <option value="rtsp">RTSP</option>
-                      <option value="rtmp">RTMP</option>
-                      <option value="http">HTTP</option>
-                    </select>
-                  </div>
-                  <button
-                    className="green-button w-full py-2.5 text-sm"
-                    onClick={handleRegisterCamera}
-                    disabled={!newCameraForm.camera_id || !newCameraForm.stream_url}
-                    type="button"
-                  >
-                    注册
-                  </button>
-                </div>
-              )}
+          ) : (
+            <div className="space-y-3">
+              <input className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="摄像头 ID" value={newCameraForm.camera_id} onChange={e => setNewCameraForm(f => ({ ...f, camera_id: e.target.value }))} />
+              <input className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="名称" value={newCameraForm.name} onChange={e => setNewCameraForm(f => ({ ...f, name: e.target.value }))} />
+              <input className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="RTSP 地址" value={newCameraForm.stream_url} onChange={e => setNewCameraForm(f => ({ ...f, stream_url: e.target.value }))} />
+              <button className="w-full rounded-xl bg-[#22C55E] py-2.5 text-sm font-bold text-white" onClick={async () => {
+                try { await createCamera(newCameraForm as any); cameraSetup.loadCameras(); setDrawerTab("list"); } catch { /* ignore */ }
+              }} type="button">注册</button>
             </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// 内联组件
-
-// ── 双摄子组件 ──
-function SlotCard({
-  role,
-  label,
-  cameraId,
-  cameras,
-  probeResults,
-  onSelect,
-  onProbe,
-}: {
-  role: "cam_1" | "cam_2";
-  label: string;
-  cameraId: string;
-  cameras: CameraInfo[];
-  probeResults: Record<string, ProbeResult>;
-  onSelect: () => void;
-  onProbe: (id: string) => void;
-}) {
-  const camera = cameras.find((c) => c.camera_id === cameraId);
-  const probe = cameraId ? probeResults[cameraId] : undefined;
-  const isOnline = probe?.online;
-
-  return (
-    <div className={`rounded-xl border p-3 mb-2 ${role === "cam_1" ? "border-[#2F80ED]/30 bg-[#2F80ED]/4" : "border-green-200/50 bg-green-50/40"}`}>
-      <div className="flex items-center justify-between mb-1">
-        <span className={`text-xs font-bold ${role === "cam_1" ? "text-[#2F80ED]" : "text-[#168A34]"}`}>
-          {label}
-        </span>
-        <button
-          className="text-xs text-slate-400 hover:text-slate-600"
-          onClick={onSelect}
-          type="button"
-        >
-          {camera ? "更换" : "选择"}
-        </button>
-      </div>
-      {camera ? (
-        <div>
-          <div className="flex items-center gap-2">
-            {isOnline === true ? (
-              <Wifi size={12} className="text-[#22C55E]" />
-            ) : (
-              <WifiOff size={12} className="text-slate-300" />
-            )}
-            <span className="text-sm font-bold text-[#14241B]">{camera.name}</span>
-          </div>
-          <div className="flex gap-2 mt-1">
-            <button
-              className="text-xs text-[#2F80ED] hover:underline"
-              onClick={() => onProbe(cameraId)}
-              type="button"
-            >
-              <RefreshCw size={10} className="inline mr-0.5" />探测
-            </button>
-            {probe && (
-              <span className="text-xs text-slate-400">
-                {probe.online ? `在线 · ${probe.resolution ?? "—"}` : "离线"}
-              </span>
-            )}
-          </div>
-        </div>
-      ) : (
-        <p className="text-xs text-slate-400">未分配摄像头</p>
-      )}
-    </div>
-  );
-}
-
-function TestResultCard({ result }: { result: SyncTestResult }) {
-  return (
-    <div className="mt-3 rounded-lg border border-[#DDE9D6] bg-white p-3 text-xs space-y-2">
-      <div className="flex items-center gap-2">
-        <span className={`rounded-full px-2 py-0.5 font-bold ${result.success ? "bg-[#22C55E]/12 text-[#168A34]" : "bg-[#FF4D4F]/12 text-[#C92A2A]"}`}>
-          {result.success ? "测试通过" : "测试失败"}
-        </span>
-        <span className="text-slate-400">时长 {result.duration_sec}s</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-slate-600">
-        <div>
-          <p className="font-bold">底线机位 A</p>
-          <p>{result.cam_1_online ? "在线" : "离线"}</p>
-          <p>{result.cam_1_file_size > 0 ? `${(result.cam_1_file_size / 1024).toFixed(1)}KB` : "空文件"}</p>
-          {result.cam_1_error && <p className="text-[#FF4D4F] truncate">{result.cam_1_error}</p>}
-          {result.cam_1_first_frame_url ? (
-            <img src={result.cam_1_first_frame_url} alt="底线机位 A 首帧" className="mt-1 w-full rounded aspect-video object-cover border border-[#DDE9D6]" />
-          ) : (
-            result.cam_1_first_frame_exists === false && <p className="text-slate-400">首帧不可用</p>
           )}
         </div>
-        <div>
-          <p className="font-bold">底线机位 B</p>
-          <p>{result.cam_2_online ? "在线" : "离线"}</p>
-          <p>{result.cam_2_file_size > 0 ? `${(result.cam_2_file_size / 1024).toFixed(1)}KB` : "空文件"}</p>
-          {result.cam_2_error && <p className="text-[#FF4D4F] truncate">{result.cam_2_error}</p>}
-          {result.cam_2_first_frame_url ? (
-            <img src={result.cam_2_first_frame_url} alt="底线机位 B 首帧" className="mt-1 w-full rounded aspect-video object-cover border border-[#DDE9D6]" />
-          ) : (
-            result.cam_2_first_frame_exists === false && <p className="text-slate-400">首帧不可用</p>
-          )}
-        </div>
-      </div>
+      )}
     </div>
-  );
-}
-
-function ArrowLeft2({ size = 24, ...props }: { size?: number; [key: string]: unknown }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M19 12H5M12 19l-7-7 7-7" />
-    </svg>
-  );
-}
-
-function SparklesIcon({ size = 24, ...props }: { size?: number; [key: string]: unknown }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5z" />
-      <path d="M18 14l.7 2.5L21 17.2l-2.3.7-.7 2.3-.7-2.3L15 17.2l2.3-.7z" />
-    </svg>
   );
 }

@@ -135,15 +135,22 @@ TBD - created by syncing change redesign-product-entry-and-capture-console.
 
 ### Requirement: 采集控制台内录制状态机
 
-系统 SHALL 在采集控制台内部用「preview → recording → stopped」三状态驱动 UI。停止录制后 `capturePhase` 和 `outboxHealth` 为正交状态，Outbox 未同步不阻塞媒体完成。
+系统 SHALL 在采集控制台内部使用统一的 `CaptureRuntimeState` 判别联合驱动 UI（含 `canceled` 和 `recovering`），替代原有的 `preview → recording → stopped`（单摄）和 `setup → testing → recording → stopped`（双摄）两套并行状态机。
 
-#### Scenario: 录制停止状态
+#### Scenario: 录制状态统一
 
-- **WHEN** 控制台处于 stopped 状态
-- **THEN** 系统展示录制完成面板（覆盖在预览区上或作为独立区块）
-- **AND** `capturePhase` MAY 为 `"completed"` 同时 `outboxHealth` MAY 为 `"pending"`
-- **AND** 面板展示未同步事件数量提示（如果有）
-- **AND** 用户操作后面板可关闭，状态回到 preview
+- **WHEN** runtime.phase 为 recording
+- **THEN** 统一的录制中指示器（不区分单摄/双摄）
+- **AND** 统一的停止按钮（不区分 handleStopRecording / handleDualStopRecording）
+- **AND** 统一的 Live Coding 面板
+- **AND** 统一的 elapsedMs 计时器
+
+#### Scenario: 完成面板统一且保留上下文
+
+- **WHEN** runtime.phase 为 completed 或 partial
+- **THEN** 统一的完成面板，从 runtime.result + runtime.session 读取
+- **AND** 可访问 fps、auto_analysis_job_id、摄像机名称（不仅仅是 tracks）
+- **AND** 不再需要 isDualMode 分支
 
 ### Requirement: 采集任务与录制的关系
 
@@ -165,26 +172,13 @@ TBD - created by syncing change redesign-product-entry-and-capture-console.
 
 ### Requirement: 双摄采集控制台
 
-系统 SHALL 在 Field Session 的 `camera_setup` 为 `dual` 时展示双摄采集控制台，而不是单摄控制台。双摄模式下预览区展示两路并排实时画面。
+系统 SHALL 在 Field Session 的 `camera_setup` 为 `dual` 时展示双摄像头选择界面。预览区通过 `previewTracks[]` 统一渲染。
 
-#### Scenario: 进入双摄采集控制台
-- **WHEN** 用户进入一个 `camera_setup` 为 `dual` 的采集任务
-- **THEN** 系统展示两个机位槽位：底线机位 A（`cam_1`）和底线机位 B（`cam_2`）
-- **AND** 每个槽位展示已选摄像头、连接状态、更换操作
-- **AND** 预览区展示两路并排 MJPEG 实时画面，各由一个 `<img>` 标签加载对应摄像头的预览流
-- **AND** 每个预览画面上方叠加摄像头名称标签和在线状态指示
-- **AND** 系统展示双摄同步录制控制区
+#### Scenario: 预览区根据轨道数自适应
 
-#### Scenario: 双摄机位未准备完成
-- **WHEN** 任一机位槽位未选择摄像头
-- **THEN** 该槽位对应的预览区展示「未选择摄像头」占位提示
-- **AND** 系统禁用同步开始录制按钮
-
-#### Scenario: 双摄录制中显示同步状态
-- **WHEN** 双摄同步录制会话处于 recording 状态
-- **THEN** 系统显示录制时长、当前分段编号、已保存分段数和重启次数
-- **AND** 系统继续显示场边事件标记和时间线
-- **AND** 系统暂停双路实时预览以避免占用录制资源
+- **WHEN** tracks.length 为 1 → grid-cols-1
+- **WHEN** tracks.length 为 2 → grid-cols-2
+- **AND** 不区分单摄和双摄的独立 JSX 分支
 
 ### Requirement: 双摄录制完成面板
 
@@ -238,3 +232,21 @@ TBD - created by syncing change redesign-product-entry-and-capture-console.
 - **THEN** capturePhase MUST 为 `completed`
 - **AND** outboxHealth MUST 为 `synced`
 - **AND** 面板 MUST 不显示同步相关提示
+
+### Requirement: useCaptureRuntime 替代分散的录制 handler
+
+系统 MUST 提供 `useCaptureRuntime` Hook 作为录制生命周期唯一入口。页面使用协调层（freeze → stop → flushWithDeadline）。
+
+#### Scenario: 停止流程由页面协调
+
+- **WHEN** 页面需要停止录制
+- **THEN** 页面协调层 MUST 先 liveCoding.freeze()
+- **AND** MUST 立即 runtime.stop()（媒体优先）
+- **AND** 同时 flushWithDeadline(3000)（best-effort）
+- **AND** MUST NOT 存在 handleStopRecording / handleDualStopRecording
+
+#### Scenario: 使用 session-specific polling
+
+- **WHEN** 录制中轮询状态
+- **THEN** 系统 MUST 使用 `getRecording(sourceSessionId)` 或 `getSyncRecording(sourceSessionId)`
+- **AND** MUST NOT 使用 `/api/sync-recordings/active`

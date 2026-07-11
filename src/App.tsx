@@ -30,7 +30,7 @@ import { LandingPage } from "./pages/LandingPage";
 import { UploadModePage } from "./pages/UploadModePage";
 import { CaptureHomePage } from "./pages/CaptureHomePage";
 import { CaptureWizardPage } from "./pages/CaptureWizardPage";
-import { CaptureConsolePage } from "./pages/CaptureConsolePage";
+import CaptureConsolePage from "./pages/CaptureConsolePage";
 import { SegmentManagerPage } from "./pages/SegmentManagerPage";
 import { TasksPage } from "./pages/TasksPage";
 import { AppShell } from "./components/platform/AppShell";
