@@ -84,6 +84,8 @@ class AnalysisUploadMetadata(BaseModel):
     level: str                      # 水平/级别
     camera_id: Optional[str] = None
     recording_session_id: Optional[str] = None
+    capture_take_id: Optional[str] = None
+    session_dir: Optional[str] = None
 
 
 class AnalysisPipelineOptions(BaseModel):

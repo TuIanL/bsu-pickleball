@@ -20,11 +20,14 @@ export type UnifiedCaptureSession = {
   tracks: CaptureTrackRuntime[];
   cameraDisplayNames: Record<string, string>;
   autoAnalysisJobId?: string;
+  storageRoot?: string;
+  sessionDir?: string;
+  storageStatus?: string;
 };
 
 export type CaptureStartIntent =
-  | { mode: "single"; cameraId: string; fps: number; autoAnalyze: boolean }
-  | { mode: "dual"; slots: { cam_1: string; cam_2: string }; fps: number; autoAnalyze: boolean };
+  | { mode: "single"; cameraId: string; fps: number; autoAnalyze: boolean; storageRoot?: string }
+  | { mode: "dual"; slots: { cam_1: string; cam_2: string }; fps: number; autoAnalyze: boolean; storageRoot?: string };
 
 export type NormalizedTrackStopResult = {
   trackId: string;

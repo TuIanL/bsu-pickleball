@@ -70,6 +70,7 @@ class RecordingStartRequest(BaseModel):
     fps: int = Field(default=60, ge=1, le=60)  # 帧率，限制 1~60
     resolution: str = "1920x1080"           # 录制分辨率
     auto_analyze_after_stop: bool = True    # 停止后是否自动创建分析任务
+    storage_root: Optional[str] = None      # 本次录制临时使用的本地存储根目录
 
 
 # 录制会话：一次录制的完整记录（会持久化到磁盘）
@@ -92,6 +93,9 @@ class RecordingSession(BaseModel):
     auto_analysis_job_id: Optional[str] = None   # 自动创建的分析任务 id
     error_message: Optional[str] = None          # 失败时的错误信息
     capture_take_id: Optional[str] = None         # 关联的 CaptureTake ID
+    storage_root: Optional[str] = None
+    session_dir: Optional[str] = None
+    storage_status: str = "available"
 
 
 # 删除录制会话的结果
@@ -138,6 +142,7 @@ class SyncStartRequest(BaseModel):
     fps: int = Field(default=60, ge=1, le=60)
     resolution: str = "1920x1080"
     auto_analyze_after_stop: bool = True
+    storage_root: Optional[str] = None
 
     # 临时兼容旧字段：允许前端使用 primary_camera_id / secondary_camera_id
     @model_validator(mode="before")
@@ -168,6 +173,8 @@ class SyncSegmentFile(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     error_message: Optional[str] = None
+    input_start_time: Optional[float] = None  # FFmpeg 读取 RTSP 输入时的共同时间基起点
+    media_start_time_sec: Optional[float] = None  # 输出文件首帧在媒体时间轴中的时间
 
 
 class SyncSegment(BaseModel):
@@ -222,6 +229,9 @@ class SyncRecordingSession(BaseModel):
     error_message: Optional[str] = None
     total_restarts: int = 0
     capture_take_id: Optional[str] = None
+    storage_root: Optional[str] = None
+    session_dir: Optional[str] = None
+    storage_status: str = "available"
 
 
 class SyncTestRequest(BaseModel):

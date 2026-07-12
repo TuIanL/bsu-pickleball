@@ -40,6 +40,7 @@ class Settings(BaseModel):
     recordings_dir: Path = Path("data/recordings")       # 录制视频目录
     cameras_dir: Path = Path("data/cameras")             # 摄像头配置目录
     tmp_dir: Path = Path("data/tmp")                     # 临时文件目录
+    capture_min_free_space_bytes: int = 1024 * 1024 * 1024  # 录制开始前至少保留 1 GiB 空间
     model_dir: Path = Path("../models")                  # 模型权重所在目录（相对项目根）
 
     # ---- 人体检测模型 ----
@@ -478,6 +479,7 @@ def get_settings() -> Settings:
         in {"1", "true", "yes"},
         detection_roi_padding_ratio=max(0.0, float(os.getenv("PICKLEBALL_DETECTION_ROI_PADDING_RATIO", "0.15"))),
         detection_roi_min_padding_px=max(0, int(os.getenv("PICKLEBALL_DETECTION_ROI_MIN_PADDING_PX", "24"))),
+        capture_min_free_space_bytes=max(0, int(os.getenv("PICKLEBALL_CAPTURE_MIN_FREE_SPACE_BYTES", str(1024 * 1024 * 1024)))),
         # CORS 来源：把环境变量里逗号分隔的字符串拆成列表；未设置则用默认值
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins

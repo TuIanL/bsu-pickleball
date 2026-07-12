@@ -16,6 +16,7 @@ from app.api.routes_coding_actions import router as coding_actions_router
 from app.api.routes_segment_editing import router as segment_editing_router
 from app.api.routes_segment_editing import router2 as analysis_batch_router
 from app.api.routes_video import router as video_router
+from app.api.routes_storage import router as storage_router
 # 导入配置和日志设置
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -45,6 +46,7 @@ app.add_middleware(
 
 # 注册各个功能模块的路由
 app.include_router(video_router)
+app.include_router(storage_router)
 app.include_router(calibration_router)
 app.include_router(manual_calibration_router)
 app.include_router(camera_router)

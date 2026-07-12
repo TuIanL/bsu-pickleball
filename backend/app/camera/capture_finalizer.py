@@ -61,7 +61,11 @@ class CaptureFinalizer:
 
         finalization_id = self._create_finalization_record(capture_track_id, manifest_hash)
 
-        output_path = Path(f"data/recordings/finalized/{capture_track_id}.mp4")
+        fragment_parent = Path(valid[0]["file_path"]).parent
+        if fragment_parent.name == "fragments":
+            output_path = fragment_parent.parent / "media" / f"{capture_track_id}.mp4"
+        else:
+            output_path = Path(f"data/recordings/finalized/{capture_track_id}.mp4")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = Path(str(output_path) + ".finalizing")
 

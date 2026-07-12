@@ -49,6 +49,10 @@ def create(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    if payload.capture_take_id:
+        from app.services.capture_archive_service import snapshot_capture_timeline
+        snapshot_capture_timeline(db, payload.capture_take_id)
+
     return TimelineEventDetail.model_validate(event)
 
 
@@ -110,6 +114,9 @@ def update(
     event = update_timeline_event(db, event_id, payload.model_dump(exclude_unset=True))
     if event is None:
         raise HTTPException(status_code=404, detail=f"Timeline Event {event_id} 不存在")
+    if event.capture_take_id:
+        from app.services.capture_archive_service import snapshot_capture_timeline
+        snapshot_capture_timeline(db, event.capture_take_id)
     return TimelineEventDetail.model_validate(event)
 
 
@@ -120,6 +127,10 @@ def update(
 )
 def delete(event_id: str, db: Session = Depends(get_db)):
     """删除时间线事件。"""
+    existing = get_timeline_event(db, event_id)
     deleted = delete_timeline_event(db, event_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Timeline Event {event_id} 不存在")
+    if existing and existing.capture_take_id:
+        from app.services.capture_archive_service import snapshot_capture_timeline
+        snapshot_capture_timeline(db, existing.capture_take_id)

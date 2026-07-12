@@ -728,6 +728,27 @@ export async function probeCamera(cameraId: string): Promise<ProbeResult> {
   });
 }
 
+export type StorageLocation = {
+  canceled: boolean;
+  storage_root: string;
+  captures_root?: string;
+};
+
+export async function getDefaultStorageLocation(): Promise<{ storage_root: string; source: "default" }> {
+  return requestJson<{ storage_root: string; source: "default" }>("/api/storage/default");
+}
+
+export async function pickStorageLocation(): Promise<StorageLocation> {
+  return requestJson<StorageLocation>("/api/storage/pick", { method: "POST" });
+}
+
+export async function validateStorageLocation(path: string): Promise<{ storage_root: string; captures_root: string }> {
+  return requestJson<{ storage_root: string; captures_root: string }>("/api/storage/validate", {
+    body: JSON.stringify({ path }),
+    method: "POST",
+  });
+}
+
 export async function startRecording(request: RecordingStartRequest): Promise<RecordingSession> {
   return requestJson<RecordingSession>("/api/recordings/start", {
     body: JSON.stringify(request),

@@ -234,6 +234,7 @@ export interface RecordingStartRequest {
   fps?: number;
   resolution?: string;
   auto_analyze_after_stop?: boolean;
+  storage_root?: string;
 }
 
 export interface RecordingSession {
@@ -255,6 +256,9 @@ export interface RecordingSession {
   auto_analysis_job_id?: string;
   error_message?: string;
   capture_take_id?: string;
+  storage_root?: string;
+  session_dir?: string;
+  storage_status?: string;
 }
 
 export type SyncRecordingStatus = "recording" | "completed" | "failed" | "canceled";
@@ -301,6 +305,7 @@ export interface SyncStartRequest {
   fps?: number;
   resolution?: string;
   auto_analyze_after_stop?: boolean;
+  storage_root?: string;
 }
 
 export interface SyncTestRequest {
@@ -348,6 +353,9 @@ export interface SyncRecordingSession {
   error_message?: string;
   total_restarts: number;
   capture_take_id?: string;
+  storage_root?: string;
+  session_dir?: string;
+  storage_status?: string;
 }
 
 export interface SyncStopResponse {

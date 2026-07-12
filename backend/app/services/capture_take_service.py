@@ -56,6 +56,8 @@ def create_capture_take(
     capture_mode: str,
     source_session_type: str,
     source_session_id: str,
+    storage_root: str | None = None,
+    session_dir: str | None = None,
 ) -> CaptureTake:
     now = datetime.now(timezone.utc)
     take = CaptureTake(
@@ -64,6 +66,8 @@ def create_capture_take(
         capture_mode=CaptureMode(capture_mode),
         source_session_type=SourceSessionType(source_session_type),
         source_session_id=source_session_id,
+        storage_root=storage_root,
+        session_dir=session_dir,
         status=CaptureTakeStatus.recording,
         started_at=now,
         created_at=now,
@@ -73,6 +77,23 @@ def create_capture_take(
     db.flush()
 
     initialize_capture_take_timeline(db, take)
+    return take
+
+
+def set_capture_take_storage(
+    db: Session,
+    take_id: str,
+    *,
+    storage_root: str,
+    session_dir: str,
+    storage_status: str = "available",
+) -> CaptureTake | None:
+    take = get_capture_take(db, take_id)
+    if take is None:
+        return None
+    take.storage_root = storage_root
+    take.session_dir = session_dir
+    take.storage_status = storage_status
     return take
 
 

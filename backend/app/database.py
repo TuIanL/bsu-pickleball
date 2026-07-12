@@ -60,8 +60,29 @@ def get_session_factory() -> sessionmaker[Session]:
     global _SessionFactory
     if _SessionFactory is not None:
         return _SessionFactory
-    _SessionFactory = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    engine = get_engine()
+    _ensure_capture_storage_columns(engine)
+    _SessionFactory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     return _SessionFactory
+
+
+def _ensure_capture_storage_columns(engine: Engine) -> None:
+    """Keep existing local SQLite files usable before Alembic is run."""
+    if not inspect(engine).has_table("capture_takes"):
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("capture_takes")}
+    track_columns = {column["name"] for column in inspect(engine).get_columns("capture_tracks")} if inspect(engine).has_table("capture_tracks") else set()
+    with engine.begin() as connection:
+        if "storage_root" not in columns:
+            connection.execute(text("ALTER TABLE capture_takes ADD COLUMN storage_root VARCHAR(1024)"))
+        if "session_dir" not in columns:
+            connection.execute(text("ALTER TABLE capture_takes ADD COLUMN session_dir VARCHAR(1024)"))
+        if "storage_status" not in columns:
+            connection.execute(text("ALTER TABLE capture_takes ADD COLUMN storage_status VARCHAR(32) NOT NULL DEFAULT 'available'"))
+        if "slot" not in track_columns:
+            connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN slot VARCHAR(16) NOT NULL DEFAULT 'cam_1'"))
+        if "analysis_role" not in track_columns:
+            connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN analysis_role VARCHAR(32) NOT NULL DEFAULT 'default'"))
 
 
 def init_db() -> None:
@@ -83,8 +104,10 @@ def init_db() -> None:
     import app.models.track_timeline_span  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
+    _ensure_capture_storage_columns(engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
     columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
+    take_columns = {column["name"] for column in inspect(engine).get_columns("capture_takes")}
     with engine.begin() as connection:
         if "match_phase" not in columns:
             connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN match_phase VARCHAR(32) NOT NULL DEFAULT 'idle'"))

@@ -54,6 +54,9 @@ def execute_action(
             "live_state": result["live_state"],
         })
 
+    from app.services.capture_archive_service import snapshot_capture_timeline
+    snapshot_capture_timeline(db, capture_take_id)
+
     return CodingActionResponse(**result)
 
 

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Camera, CheckCircle2, Clock, Loader2, MapPin, Pencil, Play, PlusCircle,
+  Camera, CheckCircle2, Clock, FolderOpen, Loader2, MapPin, Pencil, Play, PlusCircle,
   RefreshCw, Square, Trash2, Upload, Users, Wifi, WifiOff, X,
 } from "lucide-react";
 import type { AppPath, FieldSession, CameraInfo, ProbeResult, RecordingSession, SyncRecordingSession, SessionTimelineEvent, CaptureStopResult } from "../types/report";
 import {
   getFieldSession, startFieldSession, completeFieldSession,
   listCameras, createCamera, deleteCamera, probeCamera, updateCamera,
-  getCameraPreviewUrl, cancelRecording, cancelSyncRecording,
+  getCameraPreviewUrl, cancelRecording, cancelSyncRecording, pickStorageLocation,
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
 import { MiniTimeline } from "../components/MiniTimeline";
@@ -38,6 +38,8 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const [loading, setLoading] = useState(true);
   const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");
   const [recordingFps, setRecordingFps] = useState<number>(60);
+  const [storageRoot, setStorageRoot] = useState<string>("");
+  const [storagePickerBusy, setStoragePickerBusy] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
@@ -66,7 +68,20 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   // ── 页面协调 ──
   const handleStart = async () => {
     if (!cameraSetup.startIntent) return;
-    await runtime.start({ ...cameraSetup.startIntent, fps: recordingFps, autoAnalyze: analysisIntent === "auto_analyze" });
+    await runtime.start({ ...cameraSetup.startIntent, storageRoot: storageRoot || undefined, fps: recordingFps, autoAnalyze: analysisIntent === "auto_analyze" });
+  };
+
+  const handlePickStorage = async () => {
+    if (runtime.isRecording || storagePickerBusy) return;
+    setStoragePickerBusy(true);
+    try {
+      const result = await pickStorageLocation();
+      if (!result.canceled) setStorageRoot(result.storage_root);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "无法打开本地目录选择器");
+    } finally {
+      setStoragePickerBusy(false);
+    }
   };
 
   const handleStop = async () => {
@@ -78,7 +93,10 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   };
 
   const handleCancel = async () => { await runtime.cancel(); };
-  const handleReset = () => runtime.reset();
+  const handleReset = () => {
+    setStorageRoot("");
+    runtime.reset();
+  };
 
   const handleDeleteCamera = async (camera: CameraInfo) => {
     if (runtime.isRecording) return;
@@ -339,6 +357,28 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         {runtime.error && <p className="text-xs text-[#FF4D4F] mt-2">{runtime.error}</p>}
       </div>
 
+      <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-[#14241B]">录制保存位置</p>
+            <p className="mt-1 truncate text-xs text-slate-500" title={storageRoot || "当前标准位置"}>
+              {storageRoot || "当前标准位置"}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {storageRoot && !runtime.isRecording && (
+              <button className="quiet-button px-3 py-2 text-sm" onClick={() => setStorageRoot("")} type="button">
+                恢复默认
+              </button>
+            )}
+            <button className="quiet-button flex items-center gap-2 px-3 py-2 text-sm" disabled={runtime.isRecording || storagePickerBusy} onClick={() => void handlePickStorage()} type="button">
+              <FolderOpen size={16} />{storagePickerBusy ? "选择中…" : "选择位置"}
+            </button>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">仅对下一次录制生效；重新进入本页面时恢复标准位置。</p>
+      </div>
+
       {/* 预览 + 设置 */}
       <div className={isDualMode ? "space-y-3" : "grid grid-cols-1 gap-6 lg:grid-cols-3"}>
         {isDualMode && (
@@ -448,6 +488,11 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
           <h3 className="text-lg font-black text-[#14241B]">
             {runtime.phase === "completed" ? "录制已完成" : runtime.phase === "partial" ? "录制部分完成" : "录制结束"}
           </h3>
+          {runtime.session?.sessionDir && (
+            <p className="text-xs text-slate-500" title={runtime.session.sessionDir}>
+              会话目录：{runtime.session.sessionDir}
+            </p>
+          )}
           {runtime.result.tracks.map(track => (
             <div key={track.trackId ?? track.slot} className="text-sm text-slate-600">
               {track.slot}: {track.status} | {track.durationMs ? formatElapsed(track.durationMs) : ""} | 片段 {track.fragmentCount}

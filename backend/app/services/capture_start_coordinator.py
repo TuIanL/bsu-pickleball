@@ -46,6 +46,8 @@ class CaptureStartCoordinator:
         field_session_id: str,
         capture_mode: str,
         tracks: list[CaptureTrackSpec],
+        storage_root: str | None = None,
+        session_dir: str | None = None,
     ) -> PreparedCapture:
         """在单事务中创建 CaptureTake + N CaptureTrack + N CameraLease。"""
         from app.database import get_session_factory
@@ -64,6 +66,8 @@ class CaptureStartCoordinator:
                 capture_mode=CaptureMode(capture_mode),
                 source_session_type=SourceSessionType(source_session_type),
                 source_session_id=source_session_id,
+                storage_root=storage_root,
+                session_dir=session_dir,
                 status=CaptureTakeStatus.starting,
                 started_at=datetime.now(timezone.utc),
             )

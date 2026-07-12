@@ -31,6 +31,9 @@ export function adaptRecordingSession(s: RecordingSession): UnifiedCaptureSessio
     }] : [],
     cameraDisplayNames: {},
     autoAnalysisJobId: s.auto_analysis_job_id ?? undefined,
+    storageRoot: s.storage_root,
+    sessionDir: s.session_dir,
+    storageStatus: s.storage_status,
   };
 }
 
@@ -60,6 +63,9 @@ export function adaptSyncRecordingSession(s: SyncRecordingSession): UnifiedCaptu
     status: mapStatus(s.status),
     tracks,
     cameraDisplayNames: {},
+    storageRoot: s.storage_root,
+    sessionDir: s.session_dir,
+    storageStatus: s.storage_status,
     };
 }
 

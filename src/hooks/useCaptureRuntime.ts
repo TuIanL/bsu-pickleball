@@ -235,6 +235,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
           fps: intent.fps,
           resolution: "1920x1080",
           auto_analyze_after_stop: intent.autoAnalyze,
+          storage_root: intent.storageRoot || undefined,
         };
         const s = await startRecording(req);
         const refreshed = s.capture_take_id ? s : await getRecording(s.session_id).catch(() => s);
@@ -251,6 +252,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
           fps: intent.fps,
           resolution: "1920x1080",
           auto_analyze_after_stop: intent.autoAnalyze,
+          storage_root: intent.storageRoot || undefined,
         };
         const s = await startSyncRecording(req);
         // The legacy dual-camera path creates the Take as a compensating step;

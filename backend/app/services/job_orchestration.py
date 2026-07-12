@@ -768,6 +768,9 @@ class AnalysisWorkerRuntime:
 
             def run_pipeline() -> AnalysisPipelineResult:
                 # 调用流水线（兼容旧版本：没有 cancellation_token 参数时退化为不带它调用）。
+                if job.metadata.session_dir:
+                    from app.services.storage_service import StorageService
+                    StorageService.register_capture_job(job.id, job.metadata.session_dir)
                 pipeline = self.pipeline_factory()
                 match_context = build_match_context(
                     job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Camera, List, Loader2, Play } from "lucide-react";
 import type { AppPath, RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
 import type { CaptureSegmentSummary } from "../types/report";
@@ -106,6 +106,11 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
   const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
   const [playbackErrors, setPlaybackErrors] = useState<Record<string, boolean>>({});
   const [videoTimeMs, setVideoTimeMs] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const video1Ref = useRef<HTMLVideoElement | null>(null);
+  const video2Ref = useRef<HTMLVideoElement | null>(null);
+  const syncingRef = useRef(false);
+  const bufferingRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -181,8 +186,60 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
     setPlaybackErrors(prev => ({ ...prev, [key]: true }));
   }, []);
 
-  const handleTimeUpdate = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
-    setVideoTimeMs(Math.floor(e.currentTarget.currentTime * 1000));
+  const handleTimeUpdate = useCallback(() => {
+    setVideoTimeMs(Math.floor(video1Ref.current!.currentTime * 1000));
+  }, []);
+
+  const getOtherVideo = (source: string) =>
+    source === "cam_1" ? video2Ref.current : video1Ref.current;
+
+  const handleCamPlay = useCallback((source: string) => {
+    if (syncingRef.current) return;
+    setIsPlaying(true);
+    bufferingRef.current = {};
+    syncingRef.current = true;
+    getOtherVideo(source)?.play();
+    syncingRef.current = false;
+  }, []);
+
+  const handleCamPause = useCallback((source: string) => {
+    bufferingRef.current = {};
+    if (syncingRef.current) return;
+    setIsPlaying(false);
+    syncingRef.current = true;
+    getOtherVideo(source)?.pause();
+    syncingRef.current = false;
+  }, []);
+
+  const handleCamSeeked = useCallback((source: string) => {
+    if (syncingRef.current) return;
+    const srcEl = source === "cam_1" ? video1Ref.current : video2Ref.current;
+    const otherEl = getOtherVideo(source);
+    if (srcEl && otherEl && Math.abs(srcEl.currentTime - otherEl.currentTime) > 0.3) {
+      syncingRef.current = true;
+      otherEl.currentTime = srcEl.currentTime;
+      syncingRef.current = false;
+    }
+  }, []);
+
+  const handleCamWaiting = useCallback((source: string) => {
+    bufferingRef.current[source] = true;
+    syncingRef.current = true;
+    video1Ref.current?.pause();
+    video2Ref.current?.pause();
+    syncingRef.current = false;
+    setIsPlaying(false);
+  }, []);
+
+  const handleCamPlaying = useCallback((source: string) => {
+    if (!bufferingRef.current[source]) return;
+    bufferingRef.current[source] = false;
+    if (Object.values(bufferingRef.current).some(Boolean)) return;
+    syncingRef.current = true;
+    video1Ref.current?.play();
+    video2Ref.current?.play();
+    syncingRef.current = false;
+    setIsPlaying(true);
   }, []);
 
   // ── Loading ──
@@ -243,12 +300,18 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
         <div className="rounded-2xl border border-[#DDE9D6] bg-black aspect-video overflow-hidden relative">
           {cam1VideoId && !playbackErrors.cam_1 ? (
               <video
+                ref={video1Ref}
                 key={`cam1-${sessionId}`}
                 className="w-full h-full object-contain"
                 controls
                 src={getVideoStreamUrl(cam1VideoId)}
                 onError={() => handlePlaybackError("cam_1")}
                 onTimeUpdate={handleTimeUpdate}
+                onPlay={() => handleCamPlay("cam_1")}
+                onPause={() => handleCamPause("cam_1")}
+                onSeeked={() => handleCamSeeked("cam_1")}
+                onWaiting={() => handleCamWaiting("cam_1")}
+                onPlaying={() => handleCamPlaying("cam_1")}
               />
           ) : (
             <div className="flex items-center justify-center h-full">
@@ -265,12 +328,17 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
           <div className="rounded-2xl border border-[#DDE9D6] bg-black aspect-video overflow-hidden relative">
             {cam2VideoId && !playbackErrors.cam_2 ? (
               <video
+                ref={video2Ref}
                 key={`cam2-${sessionId}`}
                 className="w-full h-full object-contain"
                 controls
                 src={getVideoStreamUrl(cam2VideoId)}
                 onError={() => handlePlaybackError("cam_2")}
-                onTimeUpdate={handleTimeUpdate}
+                onPlay={() => handleCamPlay("cam_2")}
+                onPause={() => handleCamPause("cam_2")}
+                onSeeked={() => handleCamSeeked("cam_2")}
+                onWaiting={() => handleCamWaiting("cam_2")}
+                onPlaying={() => handleCamPlaying("cam_2")}
               />
             ) : (
               <div className="flex items-center justify-center h-full">
@@ -297,6 +365,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
             totalDurationMs={elapsedMs}
             elapsedMs={videoTimeMs}
             staticMode
+            playing={isPlaying}
           />
         </div>
       )}

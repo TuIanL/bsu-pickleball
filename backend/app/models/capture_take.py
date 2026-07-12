@@ -51,6 +51,9 @@ class CaptureTake(Base):
         Enum(SourceSessionType), nullable=False
     )
     source_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    storage_root: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    session_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    storage_status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
 
     status: Mapped[CaptureTakeStatus] = mapped_column(
         Enum(CaptureTakeStatus), nullable=False, default=CaptureTakeStatus.recording

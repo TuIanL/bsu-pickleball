@@ -15,6 +15,7 @@ interface TimelineProps {
   elapsedMs: number;
   showDurationHint?: boolean;
   staticMode?: boolean;
+  playing?: boolean;
 }
 
 const TRACK_HEIGHT = 26;
@@ -55,13 +56,21 @@ export function deriveNonPlayRanges(events: SessionTimelineEvent[], elapsedMs: n
   return ranges;
 }
 
-export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, showDurationHint, staticMode = false }: TimelineProps) {
+export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, showDurationHint, staticMode = false, playing = false }: TimelineProps) {
   const [smoothElapsedMs, setSmoothElapsedMs] = useState(elapsedMs);
   const anchorRef = useRef({ elapsedMs, at: performance.now() });
   useEffect(() => {
     if (staticMode) {
       setSmoothElapsedMs(elapsedMs);
-      return;
+      if (!playing) return;
+      anchorRef.current = { elapsedMs, at: performance.now() };
+      let frame = 0;
+      const tick = () => {
+        setSmoothElapsedMs(anchorRef.current.elapsedMs + (performance.now() - anchorRef.current.at));
+        frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
+      return () => cancelAnimationFrame(frame);
     }
     anchorRef.current = { elapsedMs, at: performance.now() };
     let frame = 0;
@@ -71,8 +80,8 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [elapsedMs, staticMode]);
-  const displayElapsedMs = staticMode ? elapsedMs : Math.max(elapsedMs, smoothElapsedMs);
+  }, [elapsedMs, staticMode, playing]);
+  const displayElapsedMs = staticMode ? smoothElapsedMs : Math.max(elapsedMs, smoothElapsedMs);
   // Keep a small amount of room to the right of the playhead. Without this,
   // events created just after the latest elapsed tick are all clamped to 100%.
   const latestContentMs = Math.max(

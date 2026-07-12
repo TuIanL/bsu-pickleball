@@ -40,6 +40,28 @@ class TestSyncRecorderUnit:
         assert recorder.processes == []
         assert recorder.segment_index == 1
 
+    def test_common_overlap_alignment_uses_same_frame_count(self):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        session = SyncRecordingSession(
+            session_id="sync_alignment",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            segments=[SyncSegment(segment_index=1, files=[
+                SyncSegmentFile(camera_id="174", role="cam_1", file_path="174.ts", media_duration_sec=28.633333, input_start_time=100.118133),
+                SyncSegmentFile(camera_id="175", role="cam_2", file_path="175.ts", media_duration_sec=28.616667, input_start_time=100.0),
+            ])],
+            fps=60,
+        )
+
+        alignment = SyncRecordingService._compute_sync_alignment(session)
+
+        assert alignment["cam_1"] == (0.0, 1709)
+        assert alignment["cam_2"] == pytest.approx((7 / 60, 1709))
+
     def test_sync_recorder_cannot_start_twice(self):
         """验证不能重复启动录制（模拟状态检查）"""
         from app.camera.sync_recorder_service import SyncRecorder
@@ -50,6 +72,30 @@ class TestSyncRecorderUnit:
                 stream_configs={},
                 output_dir="/tmp/test",
             )
+
+    def test_common_overlap_quantizes_network_alignment_to_source_frames(self):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        session = SyncRecordingSession(
+            session_id="sync_media_alignment",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            segments=[SyncSegment(segment_index=1, files=[
+                SyncSegmentFile(camera_id="174", role="cam_1", file_path="174.ts", media_duration_sec=18.65,
+                                input_start_time=100.035, media_start_time_sec=1.4),
+                SyncSegmentFile(camera_id="175", role="cam_2", file_path="175.ts", media_duration_sec=18.75,
+                                input_start_time=100.0, media_start_time_sec=1.4),
+            ])],
+            fps=60,
+        )
+
+        alignment = SyncRecordingService._compute_sync_alignment(session)
+
+        assert alignment["cam_1"] == (0.0, 1119)
+        assert alignment["cam_2"] == pytest.approx((2 / 60, 1119))
 
     def test_sync_recorder_stop_when_not_recording(self):
         """验证未录制时停止不报错"""
