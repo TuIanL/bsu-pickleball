@@ -87,6 +87,19 @@ class CameraRegistry:
         CAMERAS.pop(camera_id, None)
         return self._storage.delete_path(path)
 
+    def update(self, camera_id: str, new_camera_id: str, name: str) -> CameraInfo | None:
+        camera = self.get(camera_id)
+        if camera is None:
+            return None
+
+        updated = camera.model_copy(update={"camera_id": new_camera_id, "name": name})
+        if new_camera_id != camera_id:
+            self._storage.delete_path(self._camera_path(camera_id))
+        self._storage.write_json(self._camera_path(new_camera_id), updated.model_dump(mode="json"))
+        CAMERAS.pop(camera_id, None)
+        CAMERAS[new_camera_id] = updated
+        return updated
+
     def exists(self, camera_id: str) -> bool:
         # 用 get 判断是否存在
         return self.get(camera_id) is not None

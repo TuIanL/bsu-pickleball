@@ -30,7 +30,23 @@ function closeSegmentsByType(segments: CaptureSegmentSummary[], types: string[],
   return result;
 }
 
-function makeSegment(segType: string, startMs: number, label: string, ordinal: number): CaptureSegmentSummary {
+function findLatestSegment(
+  segments: CaptureSegmentSummary[],
+  predicate: (segment: CaptureSegmentSummary) => boolean,
+): CaptureSegmentSummary | undefined {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    if (predicate(segments[index])) return segments[index];
+  }
+  return undefined;
+}
+
+function makeSegment(
+  segType: string,
+  startMs: number,
+  label: string,
+  ordinal: number,
+  parentSegmentId?: string,
+): CaptureSegmentSummary {
   return {
     id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     segment_type: segType as "set" | "game" | "rally",
@@ -42,6 +58,7 @@ function makeSegment(segType: string, startMs: number, label: string, ordinal: n
     edit_version: 0,
     edit_status: "active",
     is_highlight: false,
+    parent_segment_id: parentSegmentId,
   };
 }
 
@@ -87,16 +104,21 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     if (response.live_state) {
       setLiveCodingState({ ...response.live_state, revision: response.revision });
     }
-    if (response.created_events?.length) {
+    if (Array.isArray(response.timeline_events)) {
+      setTimelineEvents(response.timeline_events as SessionTimelineEvent[]);
+    } else if (response.created_events?.length) {
       setTimelineEvents(prev => upsertById(prev, response.created_events as SessionTimelineEvent[]));
     }
-    if (response.updated_segments?.length) {
+    if (Array.isArray(response.segments)) {
+      setSegments(response.segments as CaptureSegmentSummary[]);
+    } else if (response.updated_segments?.length) {
       setSegments(prev => upsertById(prev, response.updated_segments as CaptureSegmentSummary[]));
     }
   }, []);
 
   // 加载 Timeline Events：仅在有 captureTakeId 时加载，避免混入历史事件
   useEffect(() => {
+    setTimelineEvents([]);
     if (!fieldSessionId || !captureTakeId) return;
     listTimelineEvents(fieldSessionId, { capture_take_id: captureTakeId } as any)
       .then(setTimelineEvents)
@@ -237,7 +259,14 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       case "start_game": {
         setSegments(prev => {
           let next = closeSegmentsByType(prev, ["rally", "game"], timestampMs);
-          next = [...next, makeSegment("game", timestampMs, event.label, prev.filter(s => s.segment_type === "game").length + 1)];
+          let activeSet = findLatestSegment(next, s => s.segment_type === "set" && s.status === "open");
+          if (!activeSet) {
+            const setOrdinal = next.filter(s => s.segment_type === "set").length + 1;
+            activeSet = makeSegment("set", timestampMs, `第${setOrdinal}盘`, setOrdinal);
+            next = [...next, activeSet];
+          }
+          const gameOrdinal = next.filter(s => s.segment_type === "game" && s.parent_segment_id === activeSet.id).length + 1;
+          next = [...next, makeSegment("game", timestampMs, `第${gameOrdinal}局`, gameOrdinal, activeSet.id)];
           return next;
         });
         break;
@@ -245,7 +274,24 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       case "start_next_rally": {
         setSegments(prev => {
           let next = closeSegmentsByType(prev, ["rally"], timestampMs);
-          next = [...next, makeSegment("rally", timestampMs, event.label, prev.filter(s => s.segment_type === "rally").length + 1)];
+          let activeSet = findLatestSegment(next, s => s.segment_type === "set" && s.status === "open");
+          if (!activeSet) {
+            const setOrdinal = next.filter(s => s.segment_type === "set").length + 1;
+            activeSet = makeSegment("set", timestampMs, `第${setOrdinal}盘`, setOrdinal);
+            next = [...next, activeSet];
+          }
+
+          let activeGame = findLatestSegment(next, s =>
+            s.segment_type === "game" && s.status === "open" && s.parent_segment_id === activeSet!.id,
+          );
+          if (!activeGame) {
+            const gameOrdinal = next.filter(s => s.segment_type === "game" && s.parent_segment_id === activeSet!.id).length + 1;
+            activeGame = makeSegment("game", timestampMs, `第${gameOrdinal}局`, gameOrdinal, activeSet.id);
+            next = [...next, activeGame];
+          }
+
+          const rallyOrdinal = next.filter(s => s.segment_type === "rally" && s.parent_segment_id === activeGame!.id).length + 1;
+          next = [...next, makeSegment("rally", timestampMs, `第${rallyOrdinal}分`, rallyOrdinal, activeGame.id)];
           return next;
         });
         await createEventLocal(fieldSessionId, {
@@ -259,6 +305,28 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       }
       case "end_rally": {
         setSegments(prev => closeSegmentsByType(prev, ["rally"], timestampMs));
+        await createEventLocal(fieldSessionId, {
+          event_type: "non_play_start",
+          source: event.source,
+          timestamp_ms: timestampMs,
+          note: "",
+          payload_json: { intermission_kind: "between_rallies" },
+        });
+        break;
+      }
+      case "end_game": {
+        setSegments(prev => closeSegmentsByType(prev, ["rally", "game"], timestampMs));
+        await createEventLocal(fieldSessionId, {
+          event_type: "non_play_start",
+          source: event.source,
+          timestamp_ms: timestampMs,
+          note: "",
+          payload_json: { intermission_kind: "between_rallies" },
+        });
+        break;
+      }
+      case "end_set": {
+        setSegments(prev => closeSegmentsByType(prev, ["rally", "game", "set"], timestampMs));
         await createEventLocal(fieldSessionId, {
           event_type: "non_play_start",
           source: event.source,

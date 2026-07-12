@@ -16,8 +16,12 @@ def get_state(db: Session, capture_take_id: str) -> LiveCodingState | None:
     ).first()
 
 
-# 初始化实时编码状态（所有序号归零，non_play 为 False）
+# 初始化实时编码状态；已存在时直接返回，避免重复创建。
 def init_state(db: Session, capture_take_id: str) -> LiveCodingState:
+    existing = get_state(db, capture_take_id)
+    if existing is not None:
+        return existing
+
     now = datetime.now(timezone.utc)
     state = LiveCodingState(
         capture_take_id=capture_take_id,

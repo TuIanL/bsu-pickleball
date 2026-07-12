@@ -36,6 +36,11 @@ class CameraCreateRequest(BaseModel):
     password: Optional[str] = None
 
 
+class CameraUpdateRequest(BaseModel):
+    camera_id: str
+    name: str
+
+
 # 删除摄像头的响应：只返回是否删除成功
 class CameraDeleteResponse(BaseModel):
     deleted: bool
@@ -156,6 +161,10 @@ class SyncSegmentFile(BaseModel):
     role: CameraSlotRole
     file_path: str
     file_size: int = 0
+    packet_count: int = 0
+    media_duration_sec: float = 0.0
+    effective_fps: float = 0.0
+    ffmpeg_log_path: Optional[str] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     error_message: Optional[str] = None

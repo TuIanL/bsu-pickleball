@@ -209,6 +209,11 @@ export interface CameraCreateRequest {
   password?: string;
 }
 
+export interface CameraUpdateRequest {
+  camera_id: string;
+  name: string;
+}
+
 export interface ProbeResult {
   camera_id: string;
   online: boolean;

@@ -237,7 +237,8 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
           auto_analyze_after_stop: intent.autoAnalyze,
         };
         const s = await startRecording(req);
-        session = adaptRecordingSession(s);
+        const refreshed = s.capture_take_id ? s : await getRecording(s.session_id).catch(() => s);
+        session = adaptRecordingSession(refreshed);
       } else {
         const req: SyncStartRequest = {
           cam_1_id: intent.slots.cam_1,
@@ -252,7 +253,11 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
           auto_analyze_after_stop: intent.autoAnalyze,
         };
         const s = await startSyncRecording(req);
-        session = adaptSyncRecordingSession(s);
+        // The legacy dual-camera path creates the Take as a compensating step;
+        // re-read the session before enabling live coding if the first response
+        // did not yet include its capture_take_id.
+        const refreshed = s.capture_take_id ? s : await getSyncRecording(s.session_id).catch(() => s);
+        session = adaptSyncRecordingSession(refreshed);
       }
       dispatch({ type: "STARTED", session });
     } catch (e: any) {

@@ -187,8 +187,14 @@ class SessionService:
                 source_session_type="recording",
             )
 
+        # _create_or_link_capture_take 更新了 SESSIONS 缓存中的 capture_take_id，
+        # 使用缓存中的最新对象（含 capture_take_id）返回并持久化
+        updated = SESSIONS[session_id]
+        if updated is not session:
+            self._persist(updated)
+
         logger.info("录制会话已开始: %s (camera=%s)", session_id, request.camera_id)
-        return session
+        return updated
 
     def _create_or_link_capture_take(
         self,
@@ -702,6 +708,7 @@ def _map_camera_angle(angle: str) -> str:
                 analysis_role="default",
                 stream_url=camera.stream_url,
                 output_dir=output_dir,
+                fps=request.fps,
             )],
             policy=SingleTrackRestartPolicy(),
         )

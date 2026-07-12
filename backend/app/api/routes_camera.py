@@ -16,7 +16,7 @@ from starlette.responses import StreamingResponse
 # 摄像头登记中心：负责在内存/文件里维护一份"已登记摄像头"的清单
 from app.camera.camera_registry import camera_registry
 # 摄像头相关的数据模型（请求/响应格式）
-from app.camera.models import CameraCreateRequest, CameraDeleteResponse, CameraInfo, ProbeResult
+from app.camera.models import CameraCreateRequest, CameraDeleteResponse, CameraInfo, CameraUpdateRequest, ProbeResult
 # 预览服务：将摄像头流转换为 MJPEG over HTTP
 from app.camera.preview_service import preview_frames
 # 连接探测工具：尝试连上摄像头，返回能否播放、分辨率、帧率等信息
@@ -73,6 +73,28 @@ def create_camera(payload: CameraCreateRequest) -> CameraInfo:
     )
     # 返回时同样脱敏
     return _sanitize(camera)
+
+
+@router.patch("/{camera_id}", response_model=CameraInfo)
+def update_camera(camera_id: str, payload: CameraUpdateRequest) -> CameraInfo:
+    """修改摄像头 ID 和显示名称。"""
+    from app.camera.session_service import session_service
+    from app.camera.sync_recorder_service import sync_recording_service
+
+    camera = camera_registry.get(camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
+    if not payload.camera_id.strip() or not payload.name.strip():
+        raise HTTPException(status_code=422, detail="摄像头 ID 和名称不能为空")
+    if payload.camera_id != camera_id and camera_registry.exists(payload.camera_id):
+        raise HTTPException(status_code=409, detail=f"摄像头 {payload.camera_id} 已存在")
+    if session_service.find_active_session(camera_id) is not None or sync_recording_service.is_camera_in_sync_recording(camera_id):
+        raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 正在录制中，无法修改")
+
+    updated = camera_registry.update(camera_id, payload.camera_id.strip(), payload.name.strip())
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
+    return _sanitize(updated)
 
 
 @router.delete("/{camera_id}", response_model=CameraDeleteResponse)

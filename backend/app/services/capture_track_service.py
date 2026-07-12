@@ -6,7 +6,14 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.capture_track import CaptureTrack, TrackRole, OffsetSource, SyncQuality
+from app.models.capture_track import (
+    AnalysisRole,
+    CaptureTrack,
+    CaptureTrackSlot,
+    OffsetSource,
+    SyncQuality,
+    TrackRole,
+)
 
 # 轨道 ID 前缀
 _ID_PREFIX = "tr"
@@ -24,6 +31,8 @@ def create_track(
     capture_take_id: str,
     camera_id: str,
     role: str,
+    slot: str = "cam_1",
+    analysis_role: str = "default",
     video_id: str | None = None,
     offset_ms: int = 0,
     offset_source: str = "assumed",
@@ -34,6 +43,8 @@ def create_track(
         capture_take_id=capture_take_id,
         camera_id=camera_id,
         role=TrackRole(role),
+        slot=CaptureTrackSlot(slot),
+        analysis_role=AnalysisRole(analysis_role),
         video_id=video_id,
         offset_ms=offset_ms,
         offset_source=OffsetSource(offset_source),

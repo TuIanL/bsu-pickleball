@@ -233,6 +233,25 @@ class TestBehavioralBaseline:
 # ── 3.10-3.11: TrackRecorder 单测 ──────────────────────────────
 
 class TestTrackRecorderUnit:
+    def test_sync_command_uses_host_clock_and_constant_frame_rate(self, monkeypatch):
+        from app.camera.track_recorder import TrackRecorder, FragmentStartSpec
+
+        monkeypatch.setenv("PICKLEBALL_SYNC_VIDEO_ENCODER", "libx264")
+        spec = FragmentStartSpec(
+            capture_take_id="take_1", capture_track_id="track_1",
+            fragment_id="frag_1", camera_id="cam_a", stream_url="rtsp://test",
+            output_path=Path("/tmp/test.ts"), fragment_index=0, rotation_index=0,
+            take_start_offset_ms=0, fps=60, sync_to_host_clock=True,
+        )
+
+        cmd = TrackRecorder()._build_command(spec)
+
+        assert ["-use_wallclock_as_timestamps", "1"] == cmd[cmd.index("-use_wallclock_as_timestamps"):cmd.index("-use_wallclock_as_timestamps") + 2]
+        assert ["-vf", "fps=60"] == cmd[cmd.index("-vf"):cmd.index("-vf") + 2]
+        assert ["-fps_mode", "cfr"] == cmd[cmd.index("-fps_mode"):cmd.index("-fps_mode") + 2]
+        assert ["-c:v", "libx264"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
+        assert "copy" not in cmd
+
     def test_fragment_start_spec_creation(self):
         """3.10: FragmentStartSpec 正确构造"""
         from app.camera.track_recorder import FragmentStartSpec
@@ -370,6 +389,42 @@ class TestRecordingPolicy:
 # ── 5.7: Coordinator 单测 ─────────────────────────────────────
 
 class TestCoordinator:
+    def test_dual_track_launches_overlap(self):
+        """双摄首段的 FFmpeg 进程在同一软件同步点创建。"""
+        from app.camera.capture_runtime_coordinator import (
+            CaptureRuntimeCoordinator, TrackRuntimeInfo,
+        )
+        from app.camera.recording_policy import StrictSyncPolicy
+
+        active = 0
+        max_active = 0
+        active_lock = threading.Lock()
+
+        def delayed_popen(*args, **kwargs):
+            nonlocal active, max_active
+            with active_lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.03)
+                return _mock_popen(FakeProcess(exit_delay=0.1))
+            finally:
+                with active_lock:
+                    active -= 1
+
+        coord = CaptureRuntimeCoordinator()
+        with patch("subprocess.Popen", side_effect=delayed_popen):
+            coord.start_tracks(
+                take_id="take_1",
+                tracks_info=[
+                    TrackRuntimeInfo("track_1", "cam_1", "cam_a", "default", "rtsp://a", "/tmp/test"),
+                    TrackRuntimeInfo("track_2", "cam_2", "cam_b", "supplementary", "rtsp://b", "/tmp/test"),
+                ],
+                policy=StrictSyncPolicy(),
+            )
+
+        assert max_active == 2
+
     def test_start_tracks_creates_fragments(self):
         """5.7: Coordinator start_tracks 创建 Fragment"""
         from app.camera.capture_runtime_coordinator import (

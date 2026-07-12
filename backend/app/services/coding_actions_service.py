@@ -237,7 +237,9 @@ def _handle_start_set(
 
     state_svc.upsert_state(db, take.id, revision=take.revision,
                            set_ordinal=state.set_ordinal + 1, game_ordinal=0, rally_ordinal=0, match_phase="idle",
-                           current_set_segment_id=seg.id)
+                           current_set_segment_id=seg.id,
+                           current_game_segment_id=None,
+                           current_rally_segment_id=None)
     return events, segments
 
 
@@ -258,22 +260,29 @@ def _handle_start_game(
     events.extend(open_game_ev)
     segments.extend(open_game_sg)
 
-    # 缺 set 创建 inferred
-    if state.set_ordinal == 0:
+    current_set = seg_svc.get_segment(db, state.current_set_segment_id) if state.current_set_segment_id else None
+    if current_set is None or current_set.edit_status != EditStatus.active or current_set.status != SegmentStatus.open:
+        current_set = seg_svc.get_open_segment_by_type(db, take.id, "set")
+    if current_set is None:
         ev = event_svc._add_timeline_event(
             db, take.field_session_id, "set_start",
             capture_take_id=take.id, timestamp_ms=timestamp_ms, source="algorithm",
         )
         set_seg = seg_svc.create_segment(
             db, capture_take_id=take.id, segment_type="set",
-            ordinal=1, start_ms=timestamp_ms, start_event_id=ev.id,
-            label="第1盘", source="algorithm",
+            ordinal=state.set_ordinal + 1 if state.set_ordinal > 0 else 1,
+            start_ms=timestamp_ms, start_event_id=ev.id,
+            label=f"第{state.set_ordinal + 1 if state.set_ordinal > 0 else 1}盘", source="algorithm",
         )
-        seg_svc.close_segment(db, set_seg, end_ms=timestamp_ms, status="inferred", close_reason="inferred_parent")
-        state.set_ordinal = 1
+        state.set_ordinal = set_seg.ordinal
         state.current_set_segment_id = set_seg.id
+        state.game_ordinal = 0
+        state.rally_ordinal = 0
         events.append(_event_to_dict(ev))
         segments.append(_segment_to_dict(set_seg))
+    else:
+        state.current_set_segment_id = current_set.id
+        state.set_ordinal = current_set.ordinal
 
     event = event_svc._add_timeline_event(
         db, take.field_session_id, "game_start",
@@ -292,7 +301,8 @@ def _handle_start_game(
                            set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal + 1,
                            rally_ordinal=0, non_play=False, match_phase="idle",
                            current_game_segment_id=seg.id,
-                           current_set_segment_id=state.current_set_segment_id)
+                           current_set_segment_id=state.current_set_segment_id,
+                           current_rally_segment_id=None)
     return events, segments
 
 
@@ -305,40 +315,54 @@ def _handle_start_next_rally(
     if seg_svc.get_open_segment_by_type(db, take.id, "rally") is not None:
         raise ValueError("当前分尚未结束，请先结束当前分")
 
-    # 缺 game 创建 inferred
-    if state.game_ordinal == 0:
-        # 缺 set 创建 inferred
-        if state.set_ordinal == 0:
+    # A rally can be the first action in a game. Treat a closed/missing current
+    # game as absent even when game_ordinal still contains the previous game.
+    current_game = seg_svc.get_segment(db, state.current_game_segment_id) if state.current_game_segment_id else None
+    if current_game is None or current_game.edit_status != EditStatus.active or current_game.status != SegmentStatus.open:
+        current_game = seg_svc.get_open_segment_by_type(db, take.id, "game")
+    if current_game is None:
+        current_set = seg_svc.get_segment(db, state.current_set_segment_id) if state.current_set_segment_id else None
+        if current_set is None or current_set.edit_status != EditStatus.active or current_set.status != SegmentStatus.open:
+            current_set = seg_svc.get_open_segment_by_type(db, take.id, "set")
+        if current_set is None:
             ev = event_svc._add_timeline_event(
                 db, take.field_session_id, "set_start",
                 capture_take_id=take.id, timestamp_ms=timestamp_ms, source="algorithm",
             )
             set_seg = seg_svc.create_segment(
                 db, capture_take_id=take.id, segment_type="set",
-                ordinal=1, start_ms=timestamp_ms, start_event_id=ev.id,
-                label="第1盘", source="algorithm",
+                ordinal=state.set_ordinal + 1 if state.set_ordinal > 0 else 1,
+                start_ms=timestamp_ms, start_event_id=ev.id,
+                label=f"第{state.set_ordinal + 1 if state.set_ordinal > 0 else 1}盘", source="algorithm",
             )
-            seg_svc.close_segment(db, set_seg, end_ms=timestamp_ms, status="inferred", close_reason="inferred_parent")
-            state.set_ordinal = 1
+            state.set_ordinal = set_seg.ordinal
             state.current_set_segment_id = set_seg.id
+            state.game_ordinal = 0
+            state.rally_ordinal = 0
             events.append(_event_to_dict(ev))
             segments.append(_segment_to_dict(set_seg))
+        else:
+            state.current_set_segment_id = current_set.id
+            state.set_ordinal = current_set.ordinal
 
+        game_ordinal = state.game_ordinal + 1 if state.game_ordinal > 0 else 1
         ev = event_svc._add_timeline_event(
             db, take.field_session_id, "game_start",
             capture_take_id=take.id, timestamp_ms=timestamp_ms, source="algorithm",
         )
         game_seg = seg_svc.create_segment(
             db, capture_take_id=take.id, segment_type="game",
-            ordinal=1, start_ms=timestamp_ms, start_event_id=ev.id,
-            label="第1局", source="algorithm",
+            ordinal=game_ordinal, start_ms=timestamp_ms, start_event_id=ev.id,
+            label=f"第{game_ordinal}局", source="algorithm",
             parent_segment_id=state.current_set_segment_id,
         )
-        seg_svc.close_segment(db, game_seg, end_ms=timestamp_ms, status="inferred", close_reason="inferred_parent")
-        state.game_ordinal = 1
+        state.game_ordinal = game_ordinal
+        state.rally_ordinal = 0
         state.current_game_segment_id = game_seg.id
         events.append(_event_to_dict(ev))
         segments.append(_segment_to_dict(game_seg))
+    else:
+        state.current_game_segment_id = current_game.id
 
     if state.non_play:
         ev = event_svc._add_timeline_event(
@@ -394,10 +418,24 @@ def _handle_end_level(
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "rally")
         events.extend(ev); segments.extend(sg)
 
+    # Ending a game or set enters the same between-play intermission as ending
+    # a rally, so the timeline remains gray until the next start action.
+    if level in ("game", "set"):
+        intermission = event_svc._add_timeline_event(
+            db, take.field_session_id, "non_play_start",
+            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            payload_json={"intermission_kind": "between_rallies"},
+        )
+        events.append(_event_to_dict(intermission))
+
     state_svc.upsert_state(db, take.id, revision=take.revision, set_ordinal=state.set_ordinal,
-        game_ordinal=state.game_ordinal, rally_ordinal=state.rally_ordinal, non_play=False,
-        match_phase="idle", current_set_segment_id=state.current_set_segment_id,
-        current_game_segment_id=state.current_game_segment_id, current_rally_segment_id=None)
+        game_ordinal=state.game_ordinal, rally_ordinal=state.rally_ordinal,
+        non_play=level in ("game", "set"),
+        match_phase="intermission" if level in ("game", "set") else "idle",
+        intermission_kind="between_rallies" if level in ("game", "set") else None,
+        current_set_segment_id=None if level == "set" else state.current_set_segment_id,
+        current_game_segment_id=None if level in ("game", "set") else state.current_game_segment_id,
+        current_rally_segment_id=None)
     return events, segments
 
 
@@ -523,13 +561,30 @@ def _handle_undo(
         affected_segments = db.query(CaptureSegment).filter(
             CaptureSegment.capture_take_id == take.id
         ).all()
+        archived_segment_ids: set[str] = set()
         for segment in affected_segments:
             if segment.start_event_id in event_ids:
                 segment.edit_status = EditStatus.archived
+                archived_segment_ids.add(segment.id)
             elif segment.end_event_id in event_ids:
                 segment.end_event_id = None
                 segment.end_ms = None
                 segment.status = SegmentStatus.open
+
+        # A parent action can leave child segments behind (for example, a game
+        # action followed by rallies). Undoing the parent must remove that
+        # subtree as well, otherwise later actions can recreate ordinal 1.
+        changed = True
+        while changed:
+            changed = False
+            for segment in affected_segments:
+                if (
+                    segment.edit_status == EditStatus.active
+                    and segment.parent_segment_id in archived_segment_ids
+                ):
+                    segment.edit_status = EditStatus.archived
+                    archived_segment_ids.add(segment.id)
+                    changed = True
 
     events: list[dict] = []
 
@@ -549,7 +604,6 @@ def _handle_undo(
 def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingState) -> None:
     """Recompute the live snapshot from the surviving action projection after undo."""
     active_actions = [action for action in coding_svc.list_actions_for_take(db, take.id) if action.status.value == "executed"]
-    open_rally = seg_svc.get_open_segment_by_type(db, take.id, "rally")
     active_rallies = seg_svc.list_segments(db, take.id, segment_type="rally")
     active_events = event_svc.list_timeline_events(db, take.field_session_id, capture_take_id=take.id)
     starts = [event for event in active_events if event.event_type.value == "non_play_start"]
@@ -563,18 +617,34 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
             kind = json.loads(last_start.payload_json or "{}").get("intermission_kind", kind)
         except json.JSONDecodeError:
             pass
-    phase = "rally_active" if open_rally else "intermission" if active_intermission else "idle"
     active_sets = seg_svc.list_segments(db, take.id, segment_type="set")
     active_games = seg_svc.list_segments(db, take.id, segment_type="game")
+
+    def latest(items):
+        return max(items, key=lambda segment: (segment.start_ms, segment.created_at)) if items else None
+
+    current_set = latest(active_sets)
+    games_in_set = (
+        [segment for segment in active_games if segment.parent_segment_id == current_set.id]
+        if current_set else active_games
+    )
+    current_game = latest(games_in_set)
+    rallies_in_game = (
+        [segment for segment in active_rallies if segment.parent_segment_id == current_game.id]
+        if current_game else active_rallies
+    )
+    open_rallies = [segment for segment in rallies_in_game if segment.status == SegmentStatus.open]
+    open_rally = latest(open_rallies)
+    phase = "rally_active" if open_rally else "intermission" if active_intermission else "idle"
     state_svc.upsert_state(db, take.id, revision=take.revision,
-                           set_ordinal=max((segment.ordinal for segment in active_sets), default=0),
-                           game_ordinal=max((segment.ordinal for segment in active_games), default=0),
-                           rally_ordinal=max((segment.ordinal for segment in active_rallies), default=0),
+                           set_ordinal=current_set.ordinal if current_set else 0,
+                           game_ordinal=current_game.ordinal if current_game else 0,
+                           rally_ordinal=max((segment.ordinal for segment in rallies_in_game), default=0),
                            non_play=not bool(open_rally) and active_intermission,
                            match_phase=phase,
                            intermission_kind=kind if active_intermission and not open_rally else None,
-                           current_set_segment_id=state.current_set_segment_id,
-                           current_game_segment_id=state.current_game_segment_id,
+                           current_set_segment_id=current_set.id if current_set else None,
+                           current_game_segment_id=current_game.id if current_game else None,
                            current_rally_segment_id=open_rally.id if open_rally else None)
 
 

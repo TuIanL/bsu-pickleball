@@ -678,6 +678,7 @@ export async function getPlayerRenderTrajectory(jobId: string): Promise<RawPlaye
 // Camera API functions
 import type {
   CameraCreateRequest,
+  CameraUpdateRequest,
   CameraInfo,
   FieldSession,
   FieldSessionCreate,
@@ -705,6 +706,13 @@ export async function createCamera(request: CameraCreateRequest): Promise<Camera
   return requestJson<CameraInfo>("/api/cameras", {
     body: JSON.stringify(request),
     method: "POST",
+  });
+}
+
+export async function updateCamera(cameraId: string, request: CameraUpdateRequest): Promise<CameraInfo> {
+  return requestJson<CameraInfo>(`/api/cameras/${encodeURIComponent(cameraId)}`, {
+    body: JSON.stringify(request),
+    method: "PATCH",
   });
 }
 

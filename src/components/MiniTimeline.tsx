@@ -19,6 +19,8 @@ interface TimelineProps {
 
 const TRACK_HEIGHT = 26;
 const TRACK_GAP = 6;
+const VIEW_DURATION_MS = 90000;
+const PLAYHEAD_HEADROOM_MS = 5000;
 const TRACKS = [
   { key: "set", label: "盘", color: "#F97316" },
   { key: "game", label: "局", color: "#3B82F6" },
@@ -71,14 +73,34 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
     return () => cancelAnimationFrame(frame);
   }, [elapsedMs, staticMode]);
   const displayElapsedMs = staticMode ? elapsedMs : Math.max(elapsedMs, smoothElapsedMs);
-  const viewDuration = 90000;
-  const windowStart = Math.max(0, displayElapsedMs - viewDuration);
-  const scale = (ms: number) => `${Math.max(0, Math.min(100, ((ms - windowStart) / viewDuration) * 100))}%`;
+  // Keep a small amount of room to the right of the playhead. Without this,
+  // events created just after the latest elapsed tick are all clamped to 100%.
+  const latestContentMs = Math.max(
+    displayElapsedMs,
+    ...segments.flatMap((segment) => [segment.start_ms, segment.end_ms ?? 0]),
+    ...events.map((event) => event.timestamp_ms),
+  );
+  const windowEnd = Math.max(displayElapsedMs + PLAYHEAD_HEADROOM_MS, latestContentMs);
+  const windowStart = Math.max(0, windowEnd - VIEW_DURATION_MS);
+  const scale = (ms: number) => `${Math.max(0, Math.min(100, ((ms - windowStart) / VIEW_DURATION_MS) * 100))}%`;
 
   const segmentsByType: Record<string, CaptureSegmentSummary[]> = {};
   for (const seg of segments) {
     (segmentsByType[seg.segment_type] ??= []).push(seg);
   }
+
+  // Some older dual-camera takes persisted inferred parent segments with a
+  // zero-length end. The live state still identifies those parents as active,
+  // so extend them visually until the corresponding end action arrives.
+  const liveSegmentIds = new Set([
+    liveState?.current_set_segment_id,
+    liveState?.current_game_segment_id,
+    liveState?.current_rally_segment_id,
+  ].filter((id): id is string => Boolean(id)));
+  const hasLiveDescendant = (segmentId: string): boolean => segments.some(
+    (candidate) => candidate.parent_segment_id === segmentId
+      && (liveSegmentIds.has(candidate.id) || hasLiveDescendant(candidate.id)),
+  );
 
   const instantMarkers = useMemo(() => events.filter(
     (e) => e.event_type === "side_change" || (e.event_type === "session_note" || e.event_type === "add_note"),
@@ -103,10 +125,15 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
                 </span>
                 <div className="relative flex-1 h-5 bg-slate-100 rounded-md overflow-hidden">
                   {items.map((seg) => {
-                    const effectiveEndMs = seg.end_ms ?? Math.max(displayElapsedMs, seg.start_ms);
+                    const extendsToPlayhead = seg.status === "open"
+                      || liveSegmentIds.has(seg.id)
+                      || hasLiveDescendant(seg.id);
+                    const effectiveEndMs = extendsToPlayhead
+                      ? Math.max(displayElapsedMs, seg.start_ms)
+                      : (seg.end_ms ?? Math.max(displayElapsedMs, seg.start_ms));
                     const left = scale(seg.start_ms);
                     const width = `calc(${scale(effectiveEndMs)} - ${left})`;
-                    const isOpen = seg.status === "open";
+                    const isOpen = seg.status === "open" || extendsToPlayhead;
                     return (
                       <div
                         key={seg.id}
@@ -149,22 +176,20 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
 
         {/* Instant markers */}
         {instantMarkers.length > 0 && (
-          <div className="absolute inset-0 pointer-events-none" style={{ top: 0 }}>
+          <div className="absolute left-8 right-0 top-0 bottom-0 pointer-events-none">
             {instantMarkers.map((evt) => {
               if (evt.event_type === "side_change") {
                 return (
                   <div
                     key={evt.id}
-                    className="absolute"
+                    className="absolute top-0 bottom-0 w-px"
                     style={{ left: scale(evt.timestamp_ms), top: 0, height: TRACKS.length * (TRACK_HEIGHT + TRACK_GAP) }}
                   >
-                    <div className="flex flex-col items-center" style={{ marginTop: -2 }}>
-                      <div
-                        className="size-1 rotate-45"
-                        style={{ backgroundColor: "#A855F7", width: 6, height: 6 }}
-                      />
-                    </div>
-                    <div className="w-px flex-1 mx-auto" style={{ backgroundColor: "#A855F7", width: 1, minHeight: TRACKS.length * (TRACK_HEIGHT + TRACK_GAP) - 8 }} />
+                    <div
+                      className="absolute -top-1 -left-[2.5px] rotate-45"
+                      style={{ backgroundColor: "#A855F7", width: 6, height: 6 }}
+                    />
+                    <div className="h-full w-px" style={{ backgroundColor: "#A855F7" }} />
                   </div>
                 );
               }
@@ -191,11 +216,13 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
 
         {/* Playhead — 前 100ms 不渲染，避免指针从 0 位置走入 */}
         {displayElapsedMs > 100 && (
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
-            style={{ left: scale(displayElapsedMs) }}
-          >
-            <div className="absolute -top-1 -left-1 w-2.5 h-2.5 rounded-full bg-red-500" />
+          <div className="absolute left-8 right-0 top-0 bottom-0 pointer-events-none">
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
+              style={{ left: scale(displayElapsedMs) }}
+            >
+              <div className="absolute -top-1 -left-1 w-2.5 h-2.5 rounded-full bg-red-500" />
+            </div>
           </div>
         )}
       </div>
@@ -203,9 +230,9 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
       {/* Time labels */}
       <div className="flex justify-between text-[10px] text-slate-400 mt-2">
         <span>{formatDuration(windowStart)}</span>
-        <span>{formatDuration(windowStart + viewDuration / 2)}</span>
+        <span>{formatDuration(windowStart + VIEW_DURATION_MS / 2)}</span>
         <span className="flex items-center gap-1">
-          <span>{formatDuration(windowStart + viewDuration)}</span>
+          <span>{formatDuration(windowEnd)}</span>
         </span>
       </div>
     </div>

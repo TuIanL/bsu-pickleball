@@ -23,6 +23,31 @@ def _generate_id() -> str:
     return f"{_ID_PREFIX}_{uuid4().hex[:12]}"
 
 
+def initialize_capture_take_timeline(db: Session, take: CaptureTake) -> None:
+    """Create the initial non-play state/event for every recording take."""
+    from app.services import live_coding_state_service, timeline_event_service
+
+    live_coding_state_service.upsert_state(
+        db,
+        take.id,
+        revision=0,
+        set_ordinal=0,
+        game_ordinal=0,
+        rally_ordinal=0,
+        non_play=True,
+        match_phase="intermission",
+        intermission_kind="between_rallies",
+    )
+    timeline_event_service._add_timeline_event(
+        db,
+        take.field_session_id,
+        "non_play_start",
+        capture_take_id=take.id,
+        timestamp_ms=0,
+        payload_json={"intermission_kind": "between_rallies"},
+    )
+
+
 # 创建一条采集 take 记录（初始状态为 recording）
 def create_capture_take(
     db: Session,
@@ -46,6 +71,8 @@ def create_capture_take(
     )
     db.add(take)
     db.flush()
+
+    initialize_capture_take_timeline(db, take)
     return take
 
 

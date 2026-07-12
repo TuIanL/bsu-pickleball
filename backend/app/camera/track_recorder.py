@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import platform
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ class FragmentStartSpec:
     take_start_offset_ms: int
     fps: int = 60
     resolution: str = "1920x1080"
+    sync_to_host_clock: bool = False
 
 
 @dataclass
@@ -88,7 +90,8 @@ class TrackRecorder:
         self._registration_id: int = 0
 
     def start_fragment(self, spec: FragmentStartSpec,
-                       on_exit: Callable[[FragmentExit], None]) -> FragmentHandle:
+                       on_exit: Callable[[FragmentExit], None],
+                       launch_barrier: threading.Barrier | None = None) -> FragmentHandle:
         with self._lock:
             self._spec = spec
             self._fragment_id = spec.fragment_id
@@ -100,21 +103,14 @@ class TrackRecorder:
             output_path = spec.output_path
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            cmd = [
-                "ffmpeg",
-                "-rtsp_transport", "tcp",
-                "-timeout", "5000000",
-                "-fflags", "+genpts",
-                "-i", spec.stream_url,
-                "-map", "0:v:0",
-                "-an",
-                "-c", "copy",
-                "-f", "mpegts",
-                "-y",
-                str(output_path),
-            ]
+            cmd = self._build_command(spec)
             cmd_str = " ".join(cmd)
             self._fingerprint = hashlib.sha256(cmd_str.encode()).hexdigest()[:16]
+
+            # The coordinator releases all tracks together immediately before
+            # process creation, minimizing software-induced start skew.
+            if launch_barrier is not None:
+                launch_barrier.wait()
 
             self._process = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -144,6 +140,49 @@ class TrackRecorder:
             self._monitor_thread.start()
 
             return FragmentHandle(spec.fragment_id, self)
+
+    @staticmethod
+    def _sync_encoder() -> str:
+        configured = os.environ.get("PICKLEBALL_SYNC_VIDEO_ENCODER")
+        if configured:
+            return configured
+        return "h264_videotoolbox" if platform.system() == "Darwin" else "libx264"
+
+    def _build_command(self, spec: FragmentStartSpec) -> list[str]:
+        cmd = [
+            "ffmpeg",
+            "-rtsp_transport", "tcp",
+            "-timeout", "5000000",
+        ]
+        if spec.sync_to_host_clock:
+            encoder = self._sync_encoder()
+            cmd.extend([
+                # Timestamp each input frame on this host's shared clock, then
+                # make both outputs advance at the requested identical cadence.
+                "-use_wallclock_as_timestamps", "1",
+                "-fflags", "+genpts",
+                "-i", spec.stream_url,
+                "-map", "0:v:0",
+                "-an",
+                "-vf", f"fps={spec.fps}",
+                "-fps_mode", "cfr",
+                "-r", str(spec.fps),
+                "-c:v", encoder,
+            ])
+            if encoder == "libx264":
+                cmd.extend(["-preset", "veryfast", "-tune", "zerolatency", "-crf", "20"])
+            else:
+                cmd.extend(["-b:v", "12M"])
+        else:
+            cmd.extend([
+                "-fflags", "+genpts",
+                "-i", spec.stream_url,
+                "-map", "0:v:0",
+                "-an",
+                "-c", "copy",
+            ])
+        cmd.extend(["-f", "mpegts", "-y", str(spec.output_path)])
+        return cmd
 
     def _monitor(self) -> None:
         if not self._process:

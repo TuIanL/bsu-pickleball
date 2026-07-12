@@ -7,8 +7,11 @@
 
 import os
 import sys
+import json
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from pydantic import ValidationError
 
 
@@ -79,6 +82,74 @@ class TestSyncRecorderUnit:
         recorder = SyncRecorder()
         recorder._terminate_all_processes()  # 不应抛异常
 
+    def test_terminate_all_processes_signals_every_track_before_waiting(self):
+        """尾帧同步要求不能等待第一路退出后才终止第二路。"""
+        from app.camera.sync_recorder_service import SyncRecorder
+
+        order: list[str] = []
+        first_wait = True
+
+        class FakeProcess:
+            def __init__(self, name: str):
+                self.name = name
+                self.pid = 1
+                self.running = True
+
+            def poll(self):
+                return None if self.running else 0
+
+            def terminate(self):
+                order.append(f"terminate:{self.name}")
+
+            def wait(self, timeout=None):
+                nonlocal first_wait
+                if first_wait:
+                    assert order == ["terminate:cam_1", "terminate:cam_2"]
+                    first_wait = False
+                order.append(f"wait:{self.name}")
+                self.running = False
+                return 0
+
+            def kill(self):
+                self.running = False
+
+        recorder = SyncRecorder()
+        recorder.processes = [FakeProcess("cam_1"), FakeProcess("cam_2")]
+        recorder._terminate_all_processes()
+
+        assert order[:2] == ["terminate:cam_1", "terminate:cam_2"]
+
+    def test_dual_command_uses_shared_clock_and_constant_frame_rate(self, monkeypatch):
+        """默认双摄路径不得保留两个独立相机的时间戳。"""
+        from app.camera.sync_recorder_service import SyncRecorder
+
+        monkeypatch.setenv("PICKLEBALL_SYNC_VIDEO_ENCODER", "libx264")
+        recorder = SyncRecorder()
+        recorder.fps = 60
+        cmd = recorder._build_record_command("rtsp://camera/live", "/tmp/cam.ts", duration=5)
+
+        assert ["-timeout", "5000000"] == cmd[cmd.index("-timeout"):cmd.index("-timeout") + 2]
+        assert ["-use_wallclock_as_timestamps", "1"] == cmd[cmd.index("-use_wallclock_as_timestamps"):cmd.index("-use_wallclock_as_timestamps") + 2]
+        assert ["-fflags", "+genpts"] == cmd[cmd.index("-fflags"):cmd.index("-fflags") + 2]
+        assert ["-map", "0:v:0"] == cmd[cmd.index("-map"):cmd.index("-map") + 2]
+        assert ["-vf", "fps=60"] == cmd[cmd.index("-vf"):cmd.index("-vf") + 2]
+        assert ["-fps_mode", "cfr"] == cmd[cmd.index("-fps_mode"):cmd.index("-fps_mode") + 2]
+        assert ["-c:v", "libx264"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
+        assert "copy" not in cmd
+
+    def test_probe_media_diagnostics_calculates_effective_fps(self, tmp_path):
+        """诊断必须以实际包数/媒体时长衡量帧率，不能相信 TS 声明帧率。"""
+        from app.camera.sync_recorder_service import _probe_media_diagnostics
+
+        video = tmp_path / "sample.ts"
+        video.write_bytes(b"media")
+        payload = {"streams": [{"nb_read_packets": "300"}], "format": {"duration": "10.0"}}
+        with patch("app.camera.sync_recorder_service.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+            packets, duration, effective_fps = _probe_media_diagnostics(str(video))
+
+        assert (packets, duration, effective_fps) == (300, 10.0, 30.0)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SyncRecordingService 单元测试
@@ -119,6 +190,40 @@ class TestSyncRecordingService:
         # 清理状态后查询
         result = sync_recording_service.list_sessions()
         assert isinstance(result, list)
+
+    def test_cancel_session_removes_recording_output(self, tmp_path):
+        """取消双摄录制必须丢弃所有已写入的媒体片段。"""
+        from app.camera import sync_recorder_service as module
+        from app.camera.models import SyncRecordingSession
+
+        class FakeRecorder:
+            stopped = False
+
+            def stop_recording(self):
+                self.stopped = True
+
+        recorder = FakeRecorder()
+        service = module.SyncRecordingService(sync_recorder_factory=lambda: recorder)
+        output_dir = tmp_path / "sync_cancelled"
+        output_dir.mkdir()
+        (output_dir / "cam_1_s1.ts").write_bytes(b"partial-media")
+        session = SyncRecordingSession(
+            session_id="sync_cancel_cleanup",
+            status="recording",
+            camera_slots={},
+            output_dir=str(output_dir),
+        )
+        module.SYNC_SESSIONS[session.session_id] = session
+
+        try:
+            with patch.object(service, "_persist"), patch.object(service, "_finalize_capture_take"):
+                cancelled = service.cancel_session(session.session_id)
+
+            assert cancelled.status == "canceled"
+            assert recorder.stopped is True
+            assert not output_dir.exists()
+        finally:
+            module.SYNC_SESSIONS.pop(session.session_id, None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

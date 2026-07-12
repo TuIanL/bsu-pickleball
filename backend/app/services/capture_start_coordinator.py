@@ -68,6 +68,9 @@ class CaptureStartCoordinator:
                 started_at=datetime.now(timezone.utc),
             )
             db.add(take)
+            db.flush()
+            from app.services.capture_take_service import initialize_capture_take_timeline
+            initialize_capture_take_timeline(db, take)
 
             prepared_tracks: list[PreparedTrack] = []
             for spec in tracks:

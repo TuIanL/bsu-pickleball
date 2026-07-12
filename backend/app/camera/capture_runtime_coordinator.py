@@ -38,11 +38,14 @@ class TrackRuntimeInfo:
     analysis_role: str
     stream_url: str
     output_dir: str
+    fps: int = 60
+    sync_to_host_clock: bool = False
     fragment_index: int = 0
     rotation_index: int = 0
     restart_count: int = 0
     is_running: bool = False
     current_fragment_id: str = ""
+    current_fragment_start_offset_ms: int = 0
 
 
 class CaptureRuntimeCoordinator:
@@ -69,16 +72,17 @@ class CaptureRuntimeCoordinator:
 
         for info in tracks_info:
             self._tracks[info.track_id] = info
-            recorder = TrackRecorder()
-            self._recorders[info.track_id] = recorder
+            self._recorders[info.track_id] = TrackRecorder()
 
-            handle = self._start_fragment_for_track(info.track_id)
-            if handle:
-                self._handles[info.track_id] = handle
+        self._start_fragments_together([info.track_id for info in tracks_info])
 
         threading.Thread(target=self._event_loop, daemon=True).start()
 
-    def _start_fragment_for_track(self, track_id: str) -> FragmentHandle | None:
+    def _start_fragment_for_track(
+        self,
+        track_id: str,
+        launch_barrier: threading.Barrier | None = None,
+    ) -> FragmentHandle | None:
         info = self._tracks[track_id]
         recorder = self._recorders[track_id]
 
@@ -110,13 +114,57 @@ class CaptureRuntimeCoordinator:
             fragment_index=info.fragment_index,
             rotation_index=info.rotation_index,
             take_start_offset_ms=take_start_offset,
+            fps=info.fps,
+            sync_to_host_clock=info.sync_to_host_clock,
         )
 
         info.current_fragment_id = fid
+        info.current_fragment_start_offset_ms = take_start_offset
         info.is_running = True
 
-        handle = recorder.start_fragment(spec, lambda exit_info: self._on_fragment_exit(track_id, exit_info))
+        handle = recorder.start_fragment(
+            spec,
+            lambda exit_info: self._on_fragment_exit(track_id, exit_info),
+            launch_barrier=launch_barrier,
+        )
         return handle
+
+    def _start_fragments_together(self, track_ids: list[str]) -> None:
+        """Launch a group of FFmpeg processes at one software synchronization point."""
+        if not track_ids:
+            return
+        if len(track_ids) == 1:
+            handle = self._start_fragment_for_track(track_ids[0])
+            if handle:
+                self._handles[track_ids[0]] = handle
+            return
+
+        barrier = threading.Barrier(len(track_ids))
+        handles: dict[str, FragmentHandle] = {}
+        failures: list[tuple[str, Exception]] = []
+        result_lock = threading.Lock()
+
+        def start_one(track_id: str) -> None:
+            try:
+                handle = self._start_fragment_for_track(track_id, barrier)
+                if handle:
+                    with result_lock:
+                        handles[track_id] = handle
+            except Exception as exc:
+                barrier.abort()
+                with result_lock:
+                    failures.append((track_id, exc))
+
+        workers = [threading.Thread(target=start_one, args=(track_id,)) for track_id in track_ids]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        if failures:
+            failed_track, error = failures[0]
+            raise RuntimeError(f"failed to start track {failed_track}") from error
+        self._handles.update(handles)
 
     def _on_fragment_exit(self, track_id: str, exit_info: FragmentExit) -> None:
         info = self._tracks.get(track_id)
@@ -179,6 +227,7 @@ class CaptureRuntimeCoordinator:
             if self._stopping:
                 return
             self._increment_rotation()
+            restartable_track_ids: list[str] = []
             for tid in action.track_ids:
                 info = self._tracks.get(tid)
                 if info:
@@ -190,7 +239,8 @@ class CaptureRuntimeCoordinator:
                             self._outcome.primary_track_lost = True
                         self._outcome.unavailable_track_ids.append(tid)
                         continue
-                    self._start_fragment_for_track(tid)
+                    restartable_track_ids.append(tid)
+            self._start_fragments_together(restartable_track_ids)
         elif action.type == CoordinatorActionType.RESTART_FAILED_TRACK:
             if action.delay_seconds > 0:
                 time.sleep(action.delay_seconds)
@@ -208,11 +258,21 @@ class CaptureRuntimeCoordinator:
                     self._start_fragment_for_track(tid)
 
     def _stop_all_recorders(self) -> None:
-        for tid, handle in list(self._handles.items()):
+        self._request_stops_together(list(self._handles.values()), "coordinator_stop_all")
+
+    @staticmethod
+    def _request_stops_together(handles: list[FragmentHandle], reason: str) -> None:
+        def request_stop(handle: FragmentHandle) -> None:
             try:
-                handle.request_stop("coordinator_stop_all")
+                handle.request_stop(reason)
             except Exception:
                 pass
+
+        workers = [threading.Thread(target=request_stop, args=(handle,)) for handle in handles]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
 
     def _increment_rotation(self) -> None:
         for info in self._tracks.values():
@@ -222,11 +282,7 @@ class CaptureRuntimeCoordinator:
         self._stopping = True
         self._outcome.stopped_by_user = True
 
-        for handle in list(self._handles.values()):
-            try:
-                handle.request_stop("user_stopped")
-            except Exception:
-                pass
+        self._request_stops_together(list(self._handles.values()), "user_stopped")
 
         fragments = []
         for tid, handle in list(self._handles.items()):
@@ -243,7 +299,7 @@ class CaptureRuntimeCoordinator:
                     "fragment_index": info.fragment_index,
                     "rotation_index": info.rotation_index,
                     "restart_count": info.restart_count,
-                    "take_start_offset_ms": result.take_end_offset_ms,
+                    "take_start_offset_ms": self._tracks[tid].current_fragment_start_offset_ms,
                 })
             except Exception as e:
                 logger.warning("stop track %s failed: %s", tid, e)

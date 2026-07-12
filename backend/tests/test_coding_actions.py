@@ -54,6 +54,14 @@ test("创建")
 take = get_capture_take(db, tid)
 assert take is not None and take.status.value == "recording"; ok()
 
+test("初始为非比赛时间")
+from app.services.live_coding_state_service import get_state
+from app.services.timeline_event_service import list_timeline_events
+state = get_state(db, tid)
+events = list_timeline_events(db, fid, capture_take_id=tid)
+assert state is not None and state.non_play is True
+assert any(event.event_type.value == "non_play_start" and event.timestamp_ms == 0 for event in events); ok()
+
 test("按 source 查询")
 t2 = get_capture_take_by_source(db, "recording", take.source_session_id)
 assert t2 is not None and t2.id == tid; ok()
@@ -290,6 +298,69 @@ try:
 except (ValueError, Exception):
     undo_failed = True
 ok()
+
+db.rollback(); db.close()
+
+# ── Undo 回退开放分段 ──
+print("\nUndo 开放分段回退测试")
+db = fresh_db()
+tid, fid = setup_take(db)
+
+test("撤销开始下一分会移除开放分段")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="undo_rally_start", expected_revision=0, timestamp_ms=1000)
+assert seg_svc.get_open_segment_by_type(db, tid, "rally") is not None
+undo_result = execute_coding_action(db, tid, action="undo", client_action_id="undo_rally", expected_revision=r["revision"], timestamp_ms=1500)
+assert seg_svc.get_open_segment_by_type(db, tid, "rally") is None
+assert seg_svc.list_segments(db, tid, segment_type="game") == []
+next_result = execute_coding_action(db, tid, action="start_next_rally", client_action_id="undo_rally_restart", expected_revision=undo_result["revision"], timestamp_ms=2000)
+assert next_result["live_state"]["game_ordinal"] == 1
+assert [segment["ordinal"] for segment in next_result["segments"] if segment["segment_type"] == "game"] == [1]; ok()
+
+db.rollback(); db.close()
+
+# ── 结束局/盘进入非比赛时间 ──
+print("\n结束局盘非比赛状态测试")
+db = fresh_db()
+tid, fid = setup_take(db)
+
+test("结束局进入非比赛时间")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="level_rally", expected_revision=0, timestamp_ms=1000)
+r = execute_coding_action(db, tid, action="end_game", client_action_id="level_game_end", expected_revision=r["revision"], timestamp_ms=2000)
+assert r["live_state"]["non_play"] is True and r["live_state"]["match_phase"] == "intermission"
+assert any(event["event_type"] == "non_play_start" and event["timestamp_ms"] == 2000 for event in r["timeline_events"]); ok()
+
+test("结束盘保持非比赛时间")
+r = execute_coding_action(db, tid, action="end_set", client_action_id="level_set_end", expected_revision=r["revision"], timestamp_ms=3000)
+assert r["live_state"]["non_play"] is True and r["live_state"]["match_phase"] == "intermission"; ok()
+
+db.rollback(); db.close()
+
+# ── 分开始自动补齐当前盘的局 ──
+print("\n分开始自动补局测试")
+db = fresh_db()
+tid, fid = setup_take(db)
+
+test("第二盘无局时分开始自动创建第1局")
+r = execute_coding_action(db, tid, action="start_set", client_action_id="auto_set_1", expected_revision=0, timestamp_ms=1000)
+r = execute_coding_action(db, tid, action="start_set", client_action_id="auto_set_2", expected_revision=r["revision"], timestamp_ms=2000)
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="auto_rally_1", expected_revision=r["revision"], timestamp_ms=3000)
+assert r["live_state"]["set_ordinal"] == 2 and r["live_state"]["game_ordinal"] == 1
+assert all(
+    segment["status"] == "open"
+    for segment in r["segments"]
+    if segment["segment_type"] in ("set", "game") and segment["start_ms"] == 3000
+)
+assert [segment["ordinal"] for segment in r["segments"] if segment["segment_type"] == "game"] == [1]; ok()
+
+test("结束局后分开始自动创建下一局")
+r = execute_coding_action(db, tid, action="end_game", client_action_id="auto_game_end", expected_revision=r["revision"], timestamp_ms=4000)
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="auto_rally_2", expected_revision=r["revision"], timestamp_ms=5000)
+assert r["live_state"]["game_ordinal"] == 2 and r["live_state"]["rally_ordinal"] == 1; ok()
+
+test("结束盘后分开始自动创建下一盘第一局")
+r = execute_coding_action(db, tid, action="end_set", client_action_id="auto_set_end", expected_revision=r["revision"], timestamp_ms=6000)
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="auto_rally_3", expected_revision=r["revision"], timestamp_ms=7000)
+assert r["live_state"]["set_ordinal"] == 3 and r["live_state"]["game_ordinal"] == 1; ok()
 
 db.rollback(); db.close()
 

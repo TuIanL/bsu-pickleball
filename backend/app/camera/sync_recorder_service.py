@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
+import platform
 import subprocess
 import threading
 import time
@@ -117,6 +119,36 @@ def _parse_ip_from_url(url: str) -> str:
         return "unknown"
 
 
+def _probe_media_diagnostics(video_file: str) -> tuple[int, float, float]:
+    """返回视频包数、媒体时长和由两者推导出的实际帧率。"""
+    if not os.path.exists(video_file):
+        return 0, 0.0, 0.0
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
+                "-show_entries", "stream=nb_read_packets:format=duration",
+                "-of", "json", video_file,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return 0, 0.0, 0.0
+
+        payload = json.loads(result.stdout or "{}")
+        packet_count = int((payload.get("streams") or [{}])[0].get("nb_read_packets") or 0)
+        duration_sec = float((payload.get("format") or {}).get("duration") or 0.0)
+        effective_fps = packet_count / duration_sec if duration_sec > 0 else 0.0
+        return packet_count, duration_sec, effective_fps
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+        logger.warning("媒体诊断失败 %s: %s", video_file, exc)
+        return 0, 0.0, 0.0
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SyncRecorder —— 双摄同步录制引擎
 # ═══════════════════════════════════════════════════════════════════════════
@@ -133,6 +165,7 @@ class SyncRecorder:
 
     def __init__(self) -> None:
         self.processes: list[subprocess.Popen[bytes]] = []
+        self._processes_lock = threading.Lock()
         self.is_recording = False
         self.main_recording_thread: threading.Thread | None = None
         self.segment_index = 1
@@ -165,25 +198,52 @@ class SyncRecorder:
             return config
         return config, "cam_1" if index == 0 else "cam_2"
 
-    def _record_segment_for_stream(
-        self, url: str, camera_id: str, role: CameraSlotRole, duration: int | None,
-    ) -> SyncSegmentFile:
-        """录制单个 RTSP 流的一个分段。"""
-        ffmpeg_path = _get_ffmpeg_path()
-        output_filename = self._get_stream_output_name(url, camera_id, self.segment_index)
-        output_file = os.path.join(self.session_dir, output_filename)
+    @staticmethod
+    def _sync_encoder() -> str:
+        configured = os.environ.get("PICKLEBALL_SYNC_VIDEO_ENCODER")
+        if configured:
+            return configured
+        return "h264_videotoolbox" if platform.system() == "Darwin" else "libx264"
 
+    def _build_record_command(self, url: str, output_file: str, duration: int | None) -> list[str]:
+        """构建以本机共同时间基输出恒定帧率的双摄录制命令。"""
+        encoder = self._sync_encoder()
         cmd = [
-            ffmpeg_path,
+            _get_ffmpeg_path(),
             "-y",
             "-rtsp_transport", "tcp",
+            "-timeout", "5000000",
+            # Do not preserve the independent camera clocks. Both FFmpeg
+            # processes timestamp received frames against this host's clock.
+            "-use_wallclock_as_timestamps", "1",
+            "-fflags", "+genpts",
             "-i", url,
-            "-c", "copy",
+            "-map", "0:v:0",
+            "-an",
+            "-vf", f"fps={self.fps}",
+            "-fps_mode", "cfr",
+            "-r", str(self.fps),
+            "-c:v", encoder,
             "-f", "mpegts",
         ]
+        if encoder == "libx264":
+            cmd.extend(["-preset", "veryfast", "-tune", "zerolatency", "-crf", "20"])
+        else:
+            cmd.extend(["-b:v", "12M"])
         if duration:
             cmd.extend(["-t", str(duration)])
         cmd.append(output_file)
+        return cmd
+
+    def _record_segment_for_stream(
+        self, url: str, camera_id: str, role: CameraSlotRole, duration: int | None,
+        launch_barrier: threading.Barrier | None = None,
+    ) -> SyncSegmentFile:
+        """录制单个 RTSP 流的一个分段。"""
+        output_filename = self._get_stream_output_name(url, camera_id, self.segment_index)
+        output_file = os.path.join(self.session_dir, output_filename)
+        log_file = f"{output_file}.ffmpeg.log"
+        cmd = self._build_record_command(url, output_file, duration)
 
         logger.debug("[%s] FFmpeg cmd: %s", camera_id, " ".join(cmd))
 
@@ -192,31 +252,33 @@ class SyncRecorder:
         error_msg: str | None = None
 
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            self.processes.append(process)
+            with open(log_file, "wb") as ffmpeg_log:
+                if launch_barrier is not None:
+                    launch_barrier.wait()
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=ffmpeg_log,
+                    start_new_session=True,
+                )
+                with self._processes_lock:
+                    self.processes.append(process)
 
-            # 监控进程直到退出或停止信号
-            while process.poll() is None and not self.stop_event.is_set():
-                time.sleep(0.5)
+                # 停止请求由控制线程终止进程；此处仍等待其退出，避免读取未落盘文件。
+                while process.poll() is None:
+                    time.sleep(0.2)
 
-            return_code = process.poll()
-            ended_at = datetime.now(timezone.utc)
+                return_code = process.returncode
+                ended_at = datetime.now(timezone.utc)
 
-            is_failure = return_code is not None and return_code != 0
+                is_failure = return_code is not None and return_code != 0 and not self.stop_event.is_set()
 
-            if is_failure:
-                _, stderr_data = process.communicate()
-                error_msg = f"FFmpeg exit code {return_code}"
-                if stderr_data:
-                    error_msg += ": " + stderr_data.decode("utf-8", errors="ignore")[-200:]
-                logger.error("🚨 [%s] 分段 %d 录制异常: %s", camera_id, self.segment_index, error_msg)
-                self.failure_event.set()
-            else:
-                logger.info("✅ [%s] 分段 %d 录制完成", camera_id, self.segment_index)
+                if is_failure:
+                    error_msg = f"FFmpeg exit code {return_code}; see {log_file}"
+                    logger.error("🚨 [%s] 分段 %d 录制异常: %s", camera_id, self.segment_index, error_msg)
+                    self.failure_event.set()
+                else:
+                    logger.info("✅ [%s] 分段 %d 录制完成", camera_id, self.segment_index)
 
         except Exception as e:
             logger.exception("🔥 [%s] 录制异常: %s", camera_id, e)
@@ -224,8 +286,10 @@ class SyncRecorder:
             self.failure_event.set()
             ended_at = datetime.now(timezone.utc)
         finally:
-            if process is not None and process in self.processes:
-                self.processes.remove(process)
+            if process is not None:
+                with self._processes_lock:
+                    if process in self.processes:
+                        self.processes.remove(process)
 
         # 提取首帧尾帧
         if os.path.exists(output_file):
@@ -234,30 +298,56 @@ class SyncRecorder:
         file_size = os.path.getsize(output_file) if os.path.exists(output_file) else 0
         if file_size == 0:
             error_msg = error_msg or "输出文件为空"
+        packet_count, media_duration_sec, effective_fps = _probe_media_diagnostics(output_file)
+        logger.info(
+            "[%s] 分段 %d 诊断: packets=%d duration=%.3fs effective_fps=%.2f target_fps=%d",
+            camera_id, self.segment_index, packet_count, media_duration_sec, effective_fps, self.fps,
+        )
 
         return SyncSegmentFile(
             camera_id=camera_id,
             role=role,
             file_path=output_file,
             file_size=file_size,
+            packet_count=packet_count,
+            media_duration_sec=media_duration_sec,
+            effective_fps=effective_fps,
+            ffmpeg_log_path=log_file,
             started_at=started_at,
             ended_at=ended_at or datetime.now(timezone.utc),
             error_message=error_msg,
         )
 
     def _terminate_all_processes(self) -> None:
-        """强制终止所有 FFmpeg 进程"""
-        if not self.processes:
+        """同时终止所有 FFmpeg 进程，避免串行等待拉开尾帧。"""
+        with self._processes_lock:
+            processes = list(self.processes)
+        if not processes:
             return
         logger.info("正在终止所有 FFmpeg 进程...")
-        for process in list(self.processes):
-            if process.poll() is None:
+        running = [process for process in processes if process.poll() is None]
+
+        # Signal every stream before waiting for any one of them to flush.
+        # Waiting inside this loop previously let the later stream keep writing
+        # for roughly one encoder flush interval (about 0.2 seconds here).
+        for process in running:
+            try:
                 process.terminate()
+            except OSError:
+                pass
+
+        for process in running:
+            if process.poll() is None:
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     process.kill()
-        self.processes = []
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        logger.warning("FFmpeg process %s did not exit after SIGKILL", process.pid)
+        with self._processes_lock:
+            self.processes = [process for process in self.processes if process.poll() is None]
 
     def _record_multiple_streams_sync(
         self,
@@ -281,11 +371,12 @@ class SyncRecorder:
             # 为每个流创建录制线程
             results: dict[str, SyncSegmentFile] = {}
             results_lock = threading.Lock()
+            launch_barrier = threading.Barrier(len(stream_urls)) if len(stream_urls) > 1 else None
 
             for index, (camera_id, config) in enumerate(stream_urls.items()):
                 stream_url, role = self._normalize_stream_config(camera_id, config, index)
                 def _record_with_result(cid: str, surl: str, slot_role: CameraSlotRole) -> None:
-                    result = self._record_segment_for_stream(surl, cid, slot_role, duration)
+                    result = self._record_segment_for_stream(surl, cid, slot_role, duration, launch_barrier)
                     with results_lock:
                         results[cid] = result
 
@@ -401,11 +492,12 @@ class SyncRecorder:
 
         results: dict[str, SyncSegmentFile] = {}
         results_lock = threading.Lock()
+        launch_barrier = threading.Barrier(len(stream_configs)) if len(stream_configs) > 1 else None
 
         for index, (camera_id, config) in enumerate(stream_configs.items()):
             stream_url, role = self._normalize_stream_config(camera_id, config, index)
             def _record_with_result(cid: str, surl: str, slot_role: CameraSlotRole) -> None:
-                result = self._record_segment_for_stream(surl, cid, slot_role, duration)
+                result = self._record_segment_for_stream(surl, cid, slot_role, duration, launch_barrier)
                 with results_lock:
                     results[cid] = result
 
@@ -664,6 +756,40 @@ class SyncRecordingService:
             started_at=datetime.now(timezone.utc),
         )
 
+        # 标记任务必须先于实际媒体录制创建，避免前端已进入录制态但没有
+        # capture_take_id，导致关键事件只能停留在本地临时状态。
+        if field_session_id:
+            try:
+                from app.database import get_session_factory
+                from app.services import capture_take_service, capture_track_service
+
+                db = get_session_factory()()
+                try:
+                    take = capture_take_service.create_capture_take(
+                        db, field_session_id=field_session_id,
+                        capture_mode="dual", source_session_type="sync_recording",
+                        source_session_id=session_id,
+                    )
+                    capture_track_service.create_track(
+                        db, capture_take_id=take.id, camera_id=request.cam_1_id,
+                        role="primary", slot="cam_1", analysis_role="default",
+                    )
+                    capture_track_service.create_track(
+                        db, capture_take_id=take.id, camera_id=request.cam_2_id,
+                        role="secondary", slot="cam_2", analysis_role="supplementary",
+                    )
+                    db.commit()
+                    session = session.model_copy(update={"capture_take_id": take.id})
+                except Exception:
+                    db.rollback()
+                    raise
+                finally:
+                    db.close()
+            except Exception as exc:
+                import shutil
+                shutil.rmtree(output_dir, ignore_errors=True)
+                raise RuntimeError(f"创建双摄录制标记任务失败，未启动录制: {exc}") from exc
+
         # 记录活跃状态
         _ACTIVE_SYNC_SESSION_ID = session_id
         _ACTIVE_SYNC_CAMERAS = {request.cam_1_id, request.cam_2_id}
@@ -711,38 +837,6 @@ class SyncRecordingService:
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
-
-        # 创建 CaptureTake（补偿流程：失败不影响录制启动）
-        if field_session_id:
-            try:
-                from app.database import get_session_factory
-                from app.services import capture_take_service, capture_track_service
-                from app.models.capture_track import CaptureTrackSlot, AnalysisRole
-                db = get_session_factory()()
-                try:
-                    take = capture_take_service.create_capture_take(
-                        db, field_session_id=field_session_id,
-                        capture_mode="dual", source_session_type="sync_recording",
-                        source_session_id=session_id,
-                    )
-                    capture_track_service.create_track(
-                        db, capture_take_id=take.id, camera_id=request.cam_1_id,
-                        role="primary",
-                    )
-                    capture_track_service.create_track(
-                        db, capture_take_id=take.id, camera_id=request.cam_2_id,
-                        role="secondary",
-                    )
-                    db.commit()
-                    session = session.model_copy(update={"capture_take_id": take.id})
-                    SYNC_SESSIONS[session_id] = session
-                except Exception as exc:
-                    db.rollback()
-                    logger.warning("创建双摄 CaptureTake 失败（录制不受影响）: %s", exc)
-                finally:
-                    db.close()
-            except Exception as exc:
-                logger.warning("连接数据库创建双摄 CaptureTake 失败: %s", exc)
 
         logger.info("双摄同步录制会话已开始: %s", session_id)
         return session
@@ -1036,7 +1130,13 @@ class SyncRecordingService:
         if session.status != "recording":
             raise RuntimeError(f"会话 {session_id} 状态为 {session.status}，无法取消")
 
-        self._recorder.stop_recording()
+        # TrackRecorder 和旧版 SyncRecorder 都必须先完全停止，才可以删除片段。
+        coordinator = self._active_coordinator
+        self._active_coordinator = None
+        if coordinator is not None:
+            coordinator.stop_tracks()
+        else:
+            self._recorder.stop_recording()
         stopped_at = datetime.now(timezone.utc)
         duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
 
@@ -1054,6 +1154,10 @@ class SyncRecordingService:
         _ACTIVE_SYNC_CAMERAS.clear()
 
         self._finalize_capture_take(session, "canceled")
+
+        # “取消”表示放弃这次录制：所有双摄片段、合并视频和临时文件均不保留。
+        import shutil
+        shutil.rmtree(Path(session.output_dir), ignore_errors=True)
 
         logger.info("双摄同步录制已取消: %s", session_id)
         return session
@@ -1110,10 +1214,12 @@ class SyncRecordingService:
             tracks_info=[
                 TrackRuntimeInfo(track_id=prep.tracks[0].capture_track_id, slot="cam_1",
                                  camera_id=request.cam_1_id, analysis_role="default",
-                                 stream_url=cam_1.stream_url, output_dir=str(output_dir)),
+                                 stream_url=cam_1.stream_url, output_dir=str(output_dir),
+                                 fps=request.fps, sync_to_host_clock=True),
                 TrackRuntimeInfo(track_id=prep.tracks[1].capture_track_id, slot="cam_2",
                                  camera_id=request.cam_2_id, analysis_role="supplementary",
-                                 stream_url=cam_2.stream_url, output_dir=str(output_dir)),
+                                 stream_url=cam_2.stream_url, output_dir=str(output_dir),
+                                 fps=request.fps, sync_to_host_clock=True),
             ],
             policy=StrictSyncPolicy(),
         )

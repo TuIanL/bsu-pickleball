@@ -12,6 +12,8 @@ type UseCameraSetupOptions = {
 export function useCameraSetup({ sessionId, mode }: UseCameraSetupOptions) {
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
   const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
+  const [probeLoading, setProbeLoading] = useState<Record<string, boolean>>({});
+  const [probeErrors, setProbeErrors] = useState<Record<string, string>>({});
 
   // 单摄
   const [selectedCameraId, setSelectedCameraId] = useState("");
@@ -41,10 +43,23 @@ export function useCameraSetup({ sessionId, mode }: UseCameraSetupOptions) {
   }, [sessionId]);
 
   const runProbe = useCallback(async (cameraId: string) => {
+    setProbeLoading(prev => ({ ...prev, [cameraId]: true }));
+    setProbeErrors(prev => {
+      const next = { ...prev };
+      delete next[cameraId];
+      return next;
+    });
     try {
       const r = await probeCamera(cameraId);
       setProbeResults(prev => ({ ...prev, [cameraId]: r }));
-    } catch { /* ignore */ }
+    } catch (e) {
+      setProbeErrors(prev => ({
+        ...prev,
+        [cameraId]: e instanceof Error ? e.message : "检测请求失败",
+      }));
+    } finally {
+      setProbeLoading(prev => ({ ...prev, [cameraId]: false }));
+    }
   }, []);
 
   const previewTracks: CaptureTrackRuntime[] = mode === "single"
@@ -65,7 +80,7 @@ export function useCameraSetup({ sessionId, mode }: UseCameraSetupOptions) {
 
   return {
     cameras, setCameras, loadCameras,
-    probeResults, runProbe,
+    probeResults, probeLoading, probeErrors, runProbe,
     selectedCameraId, setSelectedCameraId,
     selectedSlots, selectSlot, slotSelecting, setSlotSelecting,
     previewTracks, startIntent, isReady,
