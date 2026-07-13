@@ -15,6 +15,7 @@ import { useCameraSetup } from "../hooks/useCameraSetup";
 import { useCapturePreflight } from "../hooks/useCapturePreflight";
 import { useLiveCoding } from "../hooks/useLiveCoding";
 
+/** 导航跳转函数签名 */
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 const captureModeLabel: Record<string, string> = {
@@ -28,26 +29,27 @@ function formatElapsed(ms: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+/** 录制控制台页面 Props */
 type CaptureConsolePageProps = {
-  sessionId: string;
-  onNavigate: NavigateFn;
+  sessionId: string;       // 场次 ID
+  onNavigate: NavigateFn;  // 路由跳转
 };
 
 export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureConsolePageProps) {
-  const [fieldSession, setFieldSession] = useState<FieldSession | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");
-  const [recordingFps, setRecordingFps] = useState<number>(60);
-  const [storageRoot, setStorageRoot] = useState<string>("");
-  const [storagePickerBusy, setStoragePickerBusy] = useState(false);
+  const [fieldSession, setFieldSession] = useState<FieldSession | null>(null);  // 场次信息
+  const [loading, setLoading] = useState(true);                                  // 初始加载中
+  const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");  // 分析策略
+  const [recordingFps, setRecordingFps] = useState<number>(60);                  // 录制帧率
+  const [storageRoot, setStorageRoot] = useState<string>("");                    // 自定义存储目录
+  const [storagePickerBusy, setStoragePickerBusy] = useState(false);             // 目录选择器中
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [previewKey, setPreviewKey] = useState(0);
-  const [drawerTab, setDrawerTab] = useState<"list" | "register">("list");
+  const [drawerOpen, setDrawerOpen] = useState(false);                           // 设备抽屉打开
+  const [previewKey, setPreviewKey] = useState(0);                               // 预览图刷新 key
+  const [drawerTab, setDrawerTab] = useState<"list" | "register">("list");       // 设备列表/注册标签
   const [newCameraForm, setNewCameraForm] = useState({ camera_id: "", name: "", stream_url: "", protocol: "rtsp" as const });
-  const [editingCameraId, setEditingCameraId] = useState<string | null>(null);
+  const [editingCameraId, setEditingCameraId] = useState<string | null>(null);    // 正在编辑的摄像头 ID
   const [editingCameraForm, setEditingCameraForm] = useState({ camera_id: "", name: "" });
-  const [savingCamera, setSavingCamera] = useState(false);
+  const [savingCamera, setSavingCamera] = useState(false);                        // 正在保存摄像头
 
   const isDualMode = fieldSession?.camera_setup === "dual";
   const mode = isDualMode ? "dual" as const : "single" as const;

@@ -31,6 +31,7 @@ def _col_exists(table: str, col: str) -> bool:
 
 
 def upgrade() -> None:
+    # 创建拍摄片段表
     if not _table_exists("capture_takes"):
         op.create_table(
             "capture_takes",
@@ -51,10 +52,12 @@ def upgrade() -> None:
             sa.CheckConstraint("duration_ms IS NULL OR duration_ms >= 0", name="ck_take_duration_nonneg"),
             sa.CheckConstraint("revision >= 0", name="ck_take_revision_nonneg"),
         )
+        # 拍摄片段索引
         op.create_index("idx_take_field_session", "capture_takes", ["field_session_id", "started_at"])
         op.create_index("idx_take_status", "capture_takes", ["status"])
         op.create_index(op.f("ix_capture_takes_field_session_id"), "capture_takes", ["field_session_id"], unique=False)
 
+    # 创建拍摄轨道表
     if not _table_exists("capture_tracks"):
         op.create_table(
             "capture_tracks",
@@ -71,6 +74,7 @@ def upgrade() -> None:
         )
         op.create_index("idx_track_take", "capture_tracks", ["capture_take_id"])
 
+    # 创建编码操作表
     if not _table_exists("capture_coding_actions"):
         op.create_table(
             "capture_coding_actions",
@@ -93,6 +97,7 @@ def upgrade() -> None:
         )
         op.create_index("idx_coding_take_revision", "capture_coding_actions", ["capture_take_id", "revision_before"])
 
+    # 创建实时编码状态表
     if not _table_exists("live_coding_states"):
         op.create_table(
             "live_coding_states",
@@ -108,6 +113,7 @@ def upgrade() -> None:
             sa.Column("updated_at", sa.DateTime(), nullable=False),
         )
 
+    # 创建片段表
     if not _table_exists("capture_segments"):
         op.create_table(
             "capture_segments",
@@ -132,21 +138,25 @@ def upgrade() -> None:
         op.create_index("idx_segment_take_type", "capture_segments", ["capture_take_id", "segment_type", "start_ms"])
         op.create_index("idx_segment_parent", "capture_segments", ["parent_segment_id"])
 
+    # 为时间线事件表添加拍摄片段关联
     if not _col_exists("session_timeline_events", "capture_take_id"):
         op.add_column("session_timeline_events", sa.Column("capture_take_id", sa.String(length=64), nullable=True))
         op.create_index(op.f("ix_session_timeline_events_capture_take_id"), "session_timeline_events", ["capture_take_id"], unique=False)
 
+    # 为时间线事件表添加撤销标记
     if not _col_exists("session_timeline_events", "is_undone"):
         op.add_column("session_timeline_events", sa.Column("is_undone", sa.Boolean(), nullable=False, server_default=sa.text("0")))
 
 
 def downgrade() -> None:
+    # 回滚：移除时间线事件新增字段
     if _col_exists("session_timeline_events", "is_undone"):
         op.drop_column("session_timeline_events", "is_undone")
     if _col_exists("session_timeline_events", "capture_take_id"):
         op.drop_index(op.f("ix_session_timeline_events_capture_take_id"), table_name="session_timeline_events")
         op.drop_column("session_timeline_events", "capture_take_id")
 
+    # 回滚：按依赖顺序删除所有新建表
     for table in ["capture_segments", "live_coding_states", "capture_coding_actions", "capture_tracks", "capture_takes"]:
         if _table_exists(table):
             op.drop_table(table)

@@ -4,16 +4,17 @@ import type { CameraInfo, ProbeResult } from "../types/report";
 import type { CaptureStartIntent, CaptureTrackRuntime } from "../types/capture";
 import { listCameras, probeCamera } from "../services/analysisClient";
 
+/** useCameraSetup 配置参数 */
 type UseCameraSetupOptions = {
-  sessionId: string;
-  mode: "single" | "dual";
+  sessionId: string;        // 场次 ID（用于持久化插槽选择）
+  mode: "single" | "dual";  // 单摄 / 双摄
 };
 
 export function useCameraSetup({ sessionId, mode }: UseCameraSetupOptions) {
-  const [cameras, setCameras] = useState<CameraInfo[]>([]);
-  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
-  const [probeLoading, setProbeLoading] = useState<Record<string, boolean>>({});
-  const [probeErrors, setProbeErrors] = useState<Record<string, string>>({});
+  const [cameras, setCameras] = useState<CameraInfo[]>([]);                    // 摄像头列表
+  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});   // 检测结果
+  const [probeLoading, setProbeLoading] = useState<Record<string, boolean>>({});        // 检测中
+  const [probeErrors, setProbeErrors] = useState<Record<string, string>>({});           // 检测错误
 
   // 单摄
   const [selectedCameraId, setSelectedCameraId] = useState("");
@@ -79,10 +80,10 @@ export function useCameraSetup({ sessionId, mode }: UseCameraSetupOptions) {
     : !!(selectedSlots.cam_1 && selectedSlots.cam_2 && selectedSlots.cam_1 !== selectedSlots.cam_2);
 
   return {
-    cameras, setCameras, loadCameras,
-    probeResults, probeLoading, probeErrors, runProbe,
-    selectedCameraId, setSelectedCameraId,
-    selectedSlots, selectSlot, slotSelecting, setSlotSelecting,
-    previewTracks, startIntent, isReady,
+    cameras, setCameras, loadCameras,                // 摄像头列表与加载
+    probeResults, probeLoading, probeErrors, runProbe,  // 连接检测
+    selectedCameraId, setSelectedCameraId,            // 单摄选择
+    selectedSlots, selectSlot, slotSelecting, setSlotSelecting,  // 双摄槽位
+    previewTracks, startIntent, isReady,              // 预览轨道 / 启动意图 / 是否就绪
   };
 }

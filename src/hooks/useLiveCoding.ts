@@ -10,15 +10,17 @@ import {
 } from "../services/codingOutbox";
 import { quickEventsForMode, ACTION_TO_EVENT_TYPE, type QuickEventDef } from "../services/timelineQuickEvents";
 
+/** useLiveCoding 配置参数 */
 type UseLiveCodingOptions = {
-  fieldSessionId: string;
-  captureTakeId: string | null;
-  captureMode: string;
-  phase: string;
-  elapsedMs: number;
-  startedAt?: string;
+  fieldSessionId: string;             // 场次 ID
+  captureTakeId: string | null;       // CaptureTake ID（有值时走 Outbox）
+  captureMode: string;                // 采集模式（match / practice / engineering）
+  phase: string;                      // 录制阶段
+  elapsedMs: number;                  // 已录制毫秒数
+  startedAt?: string;                 // 录制开始时间 ISO 字符串
 };
 
+/** 关闭指定类型的开放段 */
 function closeSegmentsByType(segments: CaptureSegmentSummary[], types: string[], endMs: number): CaptureSegmentSummary[] {
   const result = [...segments];
   for (let i = result.length - 1; i >= 0; i--) {
@@ -30,6 +32,7 @@ function closeSegmentsByType(segments: CaptureSegmentSummary[], types: string[],
   return result;
 }
 
+/** 从后往前查找最新的符合条件的段 */
 function findLatestSegment(
   segments: CaptureSegmentSummary[],
   predicate: (segment: CaptureSegmentSummary) => boolean,
@@ -63,11 +66,11 @@ function makeSegment(
 }
 
 export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phase, elapsedMs, startedAt }: UseLiveCodingOptions) {
-  const [liveCodingState, setLiveCodingState] = useState<LiveCodingState | null>(null);
-  const [outboxItems, setOutboxItems] = useState<CodingOutboxItem[]>([]);
-  const [outboxHealth, setOutboxHealth] = useState<"synced" | "pending" | "offline">("synced");
-  const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
-  const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
+  const [liveCodingState, setLiveCodingState] = useState<LiveCodingState | null>(null);   // 服务端编码状态
+  const [outboxItems, setOutboxItems] = useState<CodingOutboxItem[]>([]);                  // Outbox 队列
+  const [outboxHealth, setOutboxHealth] = useState<"synced" | "pending" | "offline">("synced");  // Outbox 健康状态
+  const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);                   // 段列表
+  const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);        // 时间线事件
 
   const outboxSenderRef = useRef<ReturnType<typeof createOutboxSender> | null>(null);
   const revisionRef = useRef(0);

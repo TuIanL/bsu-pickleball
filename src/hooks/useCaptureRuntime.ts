@@ -17,6 +17,7 @@ import type { RecordingStartRequest, SyncStartRequest, CaptureTakeSummary } from
 
 // ── Reducer ──────────────────────────────────────────────────────
 
+/** 状态机动作（启动 / 停止 / 恢复 / 取消 / 重置 / 初始化） */
 export type RuntimeAction =
   | { type: "START"; intent: CaptureStartIntent }
   | { type: "STARTED"; session: UnifiedCaptureSession }
@@ -89,18 +90,19 @@ function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction
 
 // ── Hook ─────────────────────────────────────────────────────────
 
+/** useCaptureRuntime 配置参数 */
 type UseCaptureRuntimeOptions = {
-  fieldSessionId: string;
-  onFieldSessionStarted?: (fs: any) => void;
+  fieldSessionId: string;                         // 场次 ID
+  onFieldSessionStarted?: (fs: any) => void;      // 启动录制成功后回调
 };
 
 export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: UseCaptureRuntimeOptions) {
   const [state, dispatch] = useReducer(captureRuntimeReducer, { phase: "hydrating" });
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const clockRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const hydrationStartedRef = useRef<string | null>(null);
-  const [recoveryAttemptCount, setRecoveryAttemptCount] = useState(0);
-  const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);             // 已录制毫秒数
+  const clockRef = useRef<ReturnType<typeof setInterval> | null>(null);  // 计时器引用
+  const hydrationStartedRef = useRef<string | null>(null);   // 避免重复初始化
+  const [recoveryAttemptCount, setRecoveryAttemptCount] = useState(0);  // 恢复重试次数
+  const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);      // 恢复是否超时
   const recoveryRef = useRef({
     startedAt: 0,
     attemptCount: 0,
@@ -459,25 +461,25 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     : "";
 
   return {
-    phase: state.phase,
+    phase: state.phase,                                // 当前阶段
     session: (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "completed" || state.phase === "partial")
       ? state.session : (state.phase === "canceled" ? state.session : null),
     result: (state.phase === "completed" || state.phase === "partial" || state.phase === "failed") ? state.result : null,
     error: state.phase === "failed" ? (state as any).error ?? "" : operationError,
-    elapsedMs,
-    captureTakeId,
+    elapsedMs,                                         // 已录制毫秒数
+    captureTakeId,                                     // 当前 CaptureTake ID
     isRecording: state.phase === "recording" || state.phase === "stopping",
     isStopped: state.phase === "completed" || state.phase === "partial" || state.phase === "failed" || state.phase === "canceled",
     isHydrating: state.phase === "hydrating",
     hydrationError,
     recoveryTimedOut,
     recoveryAttemptCount,
-    start,
-    stop,
-    cancel,
-    recover,
-    hydrate,
-    reset,
+    start,                                             // 启动录制
+    stop,                                              // 停止录制
+    cancel,                                            // 取消录制
+    recover,                                           // 手动恢复
+    hydrate,                                           // 手动初始化
+    reset,                                             // 重置为空闲
   };
 }
 

@@ -224,6 +224,16 @@ class TestSyncRecordingService:
         assert "sync-recordings" in str(path)
         assert "sync_20260708_120000" in str(path)
 
+    def test_custom_dual_capture_directories_are_unique(self, tmp_path):
+        from app.camera.sync_recorder_service import sync_recording_service
+
+        first = sync_recording_service._output_dir("sync_first", str(tmp_path), "take_first")
+        second = sync_recording_service._output_dir("sync_second", str(tmp_path), "take_second")
+        assert first != second
+        assert first.parent.parent.name == "captures"
+        assert second.parent.parent.name == "captures"
+        assert first.exists() and second.exists()
+
     def test_get_nonexistent_session(self):
         """验证查询不存在会话返回 None"""
         from app.camera.sync_recorder_service import sync_recording_service
@@ -268,6 +278,43 @@ class TestSyncRecordingService:
             assert cancelled.status == "canceled"
             assert recorder.stopped is True
             assert not output_dir.exists()
+        finally:
+            module.SYNC_SESSIONS.pop(session.session_id, None)
+
+    def test_storage_failure_stops_dual_recording_and_preserves_session(self, tmp_path):
+        from app.camera import sync_recorder_service as module
+        from app.camera.models import SyncRecordingSession
+
+        class FakeRecorder:
+            stopped = False
+
+            def stop_recording(self):
+                self.stopped = True
+
+        recorder = FakeRecorder()
+        service = module.SyncRecordingService(sync_recorder_factory=lambda: recorder)
+        output_dir = tmp_path / "dual_failure"
+        output_dir.mkdir()
+        session = SyncRecordingSession(
+            session_id="sync_storage_failure",
+            status="recording",
+            camera_slots={},
+            output_dir=str(output_dir),
+            session_dir=str(output_dir),
+        )
+        module.SYNC_SESSIONS[session.session_id] = session
+        try:
+            with patch.object(module, "capture_storage_is_available", return_value=False), \
+                 patch.object(service, "_persist"), \
+                 patch.object(service, "_finalize_capture_take"):
+                service._recorder = recorder
+                service._handle_storage_failure(session.session_id, "介质不可访问")
+
+            failed = module.SYNC_SESSIONS[session.session_id]
+            assert recorder.stopped is True
+            assert failed.status == "failed"
+            assert failed.storage_status == "failed"
+            assert "介质不可访问" in (failed.error_message or "")
         finally:
             module.SYNC_SESSIONS.pop(session.session_id, None)
 

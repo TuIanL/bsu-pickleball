@@ -768,7 +768,10 @@ class AnalysisWorkerRuntime:
 
             def run_pipeline() -> AnalysisPipelineResult:
                 # 调用流水线（兼容旧版本：没有 cancellation_token 参数时退化为不带它调用）。
-                if job.metadata.session_dir:
+                if job.metadata.capture_take_id:
+                    from app.services.storage_service import StorageService
+                    StorageService.register_capture_job_from_take(job.id, job.metadata.capture_take_id)
+                elif job.metadata.session_dir:
                     from app.services.storage_service import StorageService
                     StorageService.register_capture_job(job.id, job.metadata.session_dir)
                 pipeline = self.pipeline_factory()

@@ -23,6 +23,7 @@ def _generate_id() -> str:
     return f"{_ID_PREFIX}_{uuid4().hex[:12]}"
 
 
+# 初始化采集 take 的时间线：创建初始 non_play 状态和事件
 def initialize_capture_take_timeline(db: Session, take: CaptureTake) -> None:
     """Create the initial non-play state/event for every recording take."""
     from app.services import live_coding_state_service, timeline_event_service
@@ -80,6 +81,7 @@ def create_capture_take(
     return take
 
 
+# 设置采集 take 的存储路径和状态
 def set_capture_take_storage(
     db: Session,
     take_id: str,
@@ -205,6 +207,7 @@ _TERMINAL_STATUSES = {
 }
 
 
+# 幂等终态化：将采集 take 置为终态（已终态的不再覆盖）
 def finalize_capture_take(
     db: Session,
     capture_take_id: str,
@@ -235,6 +238,7 @@ def finalize_capture_take(
     return take
 
 
+# 从旧版 RecordingSession 适配创建 CaptureTake（渐进迁移用）
 def adapt_from_recording_session(
     db: Session,
     recording_session_id: str,

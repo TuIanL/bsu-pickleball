@@ -27,6 +27,7 @@ def execute_action(
     request: CodingActionRequest,
     db: Session = Depends(get_db),
 ) -> CodingActionResponse:
+    """执行编码动作（开始/结束集、局、回合等），验证 revision 并生成时间轴快照。"""
     try:
         result = coding_actions_service.execute_coding_action(
             db,
@@ -65,6 +66,7 @@ def get_live_state(
     capture_take_id: str,
     db: Session = Depends(get_db),
 ) -> LiveCodingStateResponse:
+    """获取指定录制的最新实时编码状态（revision、集/局/回合序号等）。"""
     state = state_svc.get_state(db, capture_take_id)
     if state is None:
         raise HTTPException(status_code=404, detail="LiveCodingState 不存在")
@@ -88,6 +90,7 @@ def get_capture_take_detail(
     capture_take_id: str,
     db: Session = Depends(get_db),
 ) -> CaptureTakeSummary:
+    """获取录制摘要信息（模式、来源、状态、时长、revision 等）。"""
     take = capture_take_service.get_capture_take(db, capture_take_id)
     if take is None:
         raise HTTPException(status_code=404, detail="CaptureTake 不存在")
@@ -111,6 +114,7 @@ def list_segments(
     segment_type: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    """列出录制下的所有分段（集/局/回合），可按 segment_type 过滤。"""
     segs = seg_svc.list_segments(db, capture_take_id, segment_type=segment_type)
     return [
         {

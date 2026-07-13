@@ -17,12 +17,14 @@ from app.core.config import Settings, get_settings
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+# 采集存储相关异常，当录制位置不可用时抛出
 class CaptureStorageError(ValueError):
     """Raised when a requested capture location cannot be used safely."""
 
 
 @dataclass(frozen=True)
 class CaptureStoragePlan:
+    # 采集存储规划：包含根目录、捕获目录、会话目录及所有子目录路径
     storage_root: Path
     captures_root: Path
     take_dir: Path
@@ -34,9 +36,11 @@ class CaptureStoragePlan:
 
     @property
     def logical_session_dir(self) -> str:
+        # 返回采集会话目录的字符串路径
         return str(self.take_dir)
 
 
+# 根据会话目录路径构造存储规划
 def capture_storage_plan_from_dir(session_dir: str | os.PathLike[str]) -> CaptureStoragePlan:
     take_dir = _absolute(Path(session_dir))
     captures_root = take_dir.parent.parent
@@ -53,14 +57,17 @@ def capture_storage_plan_from_dir(session_dir: str | os.PathLike[str]) -> Captur
     )
 
 
+# 将路径转换为绝对路径并展开用户目录（~）
 def _absolute(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
 
+# 判断路径是否为有效的采集会话目录（父目录符合日期格式且祖父目录名为 captures）
 def _is_take_dir(path: Path) -> bool:
     return bool(_DATE_RE.match(path.parent.name)) and path.parent.parent.name == "captures"
 
 
+# 规范化存储根目录，返回 (根目录, captures 目录) 元组
 def normalize_storage_root(storage_root: str | os.PathLike[str] | None, settings: Settings | None = None) -> tuple[Path, Path]:
     settings = settings or get_settings()
     selected = _absolute(Path(storage_root) if storage_root else settings.resolved_recordings_dir)
@@ -76,6 +83,7 @@ def normalize_storage_root(storage_root: str | os.PathLike[str] | None, settings
     return root, captures_root
 
 
+# 检查目录是否可写，不可写则抛出 CaptureStorageError
 def _check_writable_directory(path: Path) -> None:
     try:
         path.mkdir(parents=True, exist_ok=True)
@@ -85,6 +93,7 @@ def _check_writable_directory(path: Path) -> None:
         raise CaptureStorageError(f"录制位置不可写：{path} ({exc})") from exc
 
 
+# 验证存储根目录：检查可写性及剩余空间是否充足
 def validate_storage_root(
     storage_root: str | os.PathLike[str] | None,
     *,
@@ -107,6 +116,7 @@ def validate_storage_root(
     return root, captures_root
 
 
+# 创建采集会话的完整存储规划：验证根目录、生成日期目录及所有子目录
 def create_capture_storage_plan(
     capture_take_id: str,
     storage_root: str | os.PathLike[str] | None,
@@ -143,6 +153,7 @@ def create_capture_storage_plan(
     )
 
 
+# 原子写入 JSON 文件：先写入临时文件再重命名为目标路径
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.tmp")
@@ -150,12 +161,14 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temp_path, path)
 
 
+# 写入采集会话元数据（清单 manifest + 会话信息 session）
 def write_capture_metadata(plan: CaptureStoragePlan, *, manifest: dict[str, Any], session: dict[str, Any] | None = None) -> None:
     write_json_atomic(plan.take_dir / "manifest.json", manifest)
     if session is not None:
         write_json_atomic(plan.metadata_dir / "recording_session.json", session)
 
 
+# 检查采集会话目录是否可用（存在且可写）
 def capture_storage_is_available(session_dir: str | None) -> bool:
     if not session_dir:
         return True

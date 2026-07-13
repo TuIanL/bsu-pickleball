@@ -27,6 +27,7 @@ from app.camera.sync_recorder_service import sync_recording_service
 router = APIRouter(prefix="/api/sync-recordings", tags=["sync-recordings"])
 
 
+# 检查 FFmpeg 是否可用，不可用时抛出 503 异常
 def _check_ffmpeg() -> None:
     if not check_ffmpeg_available():
         raise HTTPException(
@@ -59,6 +60,7 @@ def start_sync_recording(payload: SyncStartRequest) -> SyncRecordingSession:
 
 @router.post("/{session_id}/stop", response_model=CaptureStopResult)
 def stop_sync_recording(session_id: str) -> CaptureStopResult:
+    """停止双摄同步录制并返回合并结果，含分析视频 ID 与警告信息。"""
     _check_ffmpeg()
     try:
         response = sync_recording_service.stop_session(session_id)

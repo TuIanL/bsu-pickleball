@@ -38,11 +38,11 @@
 
 ## 5. 验证（需人工或集成环境执行）
 
-- [ ] 5.1 单摄 start → 页面实时显示盘/局/分时间线
-- [ ] 5.2 点击盘开始/局开始/下一分 → 颜色区间从点击位置增长
+- [x] 5.1 单摄 start → 页面实时显示盘/局/分时间线
+- [x] 5.2 点击盘开始/局开始/下一分 → 颜色区间从点击位置增长
 - [x] 5.3 停止一次 → HTTP 200，不出现"重试恢复"（covered by 1.3 集成测试）
 - [ ] 5.4 Mock 停止响应丢失 → 自动恢复完成（需集成环境模拟网络断开）
-- [ ] 5.5 同一次事件点击 → 数据库只产生一份记录（需集成环境）
+- [x] 5.5 同一次事件点击 → 数据库只产生一份记录（需集成环境）
 - [x] 5.6 自动恢复 reducer 的 RECOVERED 映射测试（useCaptureRuntime.test.ts）
 - [x] 5.7 恢复结果映射测试：`completed`→completed, `partial`→partial, `failed`→failed, 单摄保留 videoId, 双摄保留两个 track
 - [x] 5.8 recovering → `STOP_REQUESTED` 允许再次停止 → stopping（reducer 级别验证）；`CANCEL_REQUESTED` 允许取消 → canceled（reducer 级别验证）

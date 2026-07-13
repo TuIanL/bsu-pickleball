@@ -47,7 +47,7 @@ def get_engine() -> Engine:
 
 
 def reset_database_state() -> None:
-    """Reset cached database objects; intended for tests that swap database paths."""
+    """重置缓存的数据库对象，用于测试中切换数据库路径。"""
     global _engine, _SessionFactory
     if _engine is not None:
         _engine.dispose()
@@ -67,7 +67,7 @@ def get_session_factory() -> sessionmaker[Session]:
 
 
 def _ensure_capture_storage_columns(engine: Engine) -> None:
-    """Keep existing local SQLite files usable before Alembic is run."""
+    """在 Alembic 迁移运行前，为本地已有 SQLite 表补齐缺少的列。"""
     if not inspect(engine).has_table("capture_takes"):
         return
     columns = {column["name"] for column in inspect(engine).get_columns("capture_takes")}

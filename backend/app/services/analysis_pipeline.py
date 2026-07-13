@@ -992,6 +992,7 @@ class AnalysisPipeline:
             match_context=match_ctx,
             observed_player_count=len({t.player_id for t in tracks if t.player_id}),
         )
+        result = self.storage.publicize_pipeline_result(result)
         self._write_result(result)
         return result
 
@@ -2800,7 +2801,7 @@ class AnalysisPipeline:
         stages: list[PipelineStageResult] | None = None,
     ) -> AnalysisPipelineResult:
         # 内部：构造一个"失败"的最终结果。
-        return AnalysisPipelineResult(
+        result = AnalysisPipelineResult(
             job_id=job_id,
             video_id=video_id,
             calibration_id=calibration_id,
@@ -2812,6 +2813,7 @@ class AnalysisPipeline:
             artifacts=AnalysisArtifacts(result_json_path=str(self.storage.output_json_path(job_id))),
             message=message,
         )
+        return self.storage.publicize_pipeline_result(result)
 
     @staticmethod
     def _stage(stage_id: str, label: str, status: str, detail: str) -> PipelineStageResult:

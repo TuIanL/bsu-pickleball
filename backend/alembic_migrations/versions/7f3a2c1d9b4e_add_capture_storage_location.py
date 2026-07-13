@@ -18,10 +18,11 @@ def _col_exists(table: str, column: str) -> bool:
 
 
 def upgrade() -> None:
+    # 为 capture_takes 表添加存储位置相关字段
     for column, type_ in (
-        ("storage_root", sa.String(1024)),
-        ("session_dir", sa.String(1024)),
-        ("storage_status", sa.String(32)),
+        ("storage_root", sa.String(1024)),  # 存储根目录
+        ("session_dir", sa.String(1024)),   # 会话目录
+        ("storage_status", sa.String(32)),  # 存储状态
     ):
         if not _col_exists("capture_takes", column):
             op.add_column(
@@ -31,6 +32,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 回滚：移除存储位置字段
     for column in ("storage_status", "session_dir", "storage_root"):
         if _col_exists("capture_takes", column):
             op.drop_column("capture_takes", column)

@@ -64,11 +64,68 @@ class StorageService:
         cls._capture_job_roots[job_id] = root
 
     @classmethod
+    def register_capture_job_from_take(cls, job_id: str, capture_take_id: str) -> Path | None:
+        """Restore a capture job's artifact root from the SQLite CaptureTake index."""
+        try:
+            from app.database import get_session_factory
+            from app.models.capture_take import CaptureTake
+
+            db = get_session_factory()()
+            try:
+                take = db.query(CaptureTake).filter(CaptureTake.id == capture_take_id).first()
+                if not take or not take.session_dir:
+                    return None
+                cls.register_capture_job(job_id, take.session_dir)
+                return cls._capture_job_roots[job_id]
+            finally:
+                db.close()
+        except Exception:
+            return None
+
+    @classmethod
     def unregister_capture_job(cls, job_id: str) -> None:
         cls._capture_job_roots.pop(job_id, None)
 
+    @classmethod
+    def capture_job_root(cls, job_id: str) -> Path | None:
+        return cls._capture_job_roots.get(job_id)
+
+    def resolve_capture_job_root(self, job_id: str, capture_take_id: str | None = None) -> Path | None:
+        root = self._capture_job_roots.get(job_id)
+        if root:
+            return root
+        if capture_take_id:
+            return self.register_capture_job_from_take(job_id, capture_take_id)
+        return None
+
     def _job_artifact_root(self, job_id: str) -> Path:
         return self._capture_job_roots.get(job_id, self.outputs_dir / job_id)
+
+    def logical_artifact_reference(self, job_id: str, path: str | Path | None) -> str | None:
+        """Return a stable logical reference without exposing a local absolute path."""
+        if path is None:
+            return None
+        root = self.capture_job_root(job_id)
+        if root is None:
+            return str(path)
+        candidate = Path(path).expanduser().resolve(strict=False)
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            return str(path)
+        return f"analysis/{job_id}/{relative.as_posix()}"
+
+    def publicize_pipeline_result(self, result):
+        """Replace capture artifact filesystem paths with logical references."""
+        from app.schemas.pipeline import AnalysisArtifacts
+
+        if self.capture_job_root(result.job_id) is None:
+            return result
+        fields = result.artifacts.model_dump()
+        for name, value in fields.items():
+            if name.endswith("_path") and value:
+                fields[name] = self.logical_artifact_reference(result.job_id, value)
+        return result.model_copy(update={"artifacts": AnalysisArtifacts.model_validate(fields)})
 
     def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> Path:
         # 原子写 JSON：先写临时文件，再用 os.replace 整体替换，

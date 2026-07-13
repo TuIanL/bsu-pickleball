@@ -17,6 +17,7 @@ from app.services.capture_storage_service import capture_storage_plan_from_dir, 
 logger = logging.getLogger(__name__)
 
 
+# 将时间线事件模型转换为可序列化的字典
 def _event_payload(event: SessionTimelineEvent) -> dict[str, Any]:
     try:
         payload = json.loads(event.payload_json or "{}")
@@ -38,6 +39,7 @@ def _event_payload(event: SessionTimelineEvent) -> dict[str, Any]:
     }
 
 
+# 将采集 take 的时间线数据（事件、片段、实时状态）快照到磁盘 JSON 文件
 def snapshot_capture_timeline(db: Session, capture_take_id: str) -> bool:
     take = db.query(CaptureTake).filter(CaptureTake.id == capture_take_id).first()
     if take is None or not take.session_dir:

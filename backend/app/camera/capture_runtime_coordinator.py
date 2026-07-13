@@ -23,47 +23,51 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CaptureRuntimeOutcome:
-    stopped_by_user: bool = False
-    primary_track_lost: bool = False
-    unavailable_track_ids: list[str] = field(default_factory=list)
-    restart_budget_exhausted: bool = False
-    runtime_warnings: list[str] = field(default_factory=list)
+    """录制运行期最终结果汇总"""
+    stopped_by_user: bool = False              # 是否由用户主动停止
+    primary_track_lost: bool = False           # 主轨道是否丢失
+    unavailable_track_ids: list[str] = field(default_factory=list)  # 不可用轨道列表
+    restart_budget_exhausted: bool = False     # 重启预算是否耗尽
+    runtime_warnings: list[str] = field(default_factory=list)       # 运行时警告列表
 
 
 @dataclass
 class TrackRuntimeInfo:
+    """单条轨道的运行时配置与状态"""
     track_id: str
-    slot: str
-    camera_id: str
-    analysis_role: str
-    stream_url: str
-    output_dir: str
+    slot: str                        # 机位槽位：cam_1 / cam_2
+    camera_id: str                   # 摄像头 ID
+    analysis_role: str               # 分析角色：default / supplementary
+    stream_url: str                  # RTSP 流地址
+    output_dir: str                  # 输出目录
     fps: int = 60
-    sync_to_host_clock: bool = False
-    fragment_index: int = 0
-    rotation_index: int = 0
-    restart_count: int = 0
-    is_running: bool = False
-    current_fragment_id: str = ""
-    current_fragment_start_offset_ms: int = 0
+    sync_to_host_clock: bool = False # 是否使用本机时钟同步
+    fragment_index: int = 0          # 当前分段序号
+    rotation_index: int = 0          # 轮转序号（重启后递增）
+    restart_count: int = 0           # 累计重启次数
+    is_running: bool = False         # 当前是否正在录制
+    current_fragment_id: str = ""    # 当前分段 ID
+    current_fragment_start_offset_ms: int = 0  # 当前分段在录制时间轴中的起始偏移
 
 
 class CaptureRuntimeCoordinator:
+    """运行期轨道协调器：管理多个 TrackRecorder 实例，根据故障策略自动恢复"""
     def __init__(self, fragment_repo=None, clock=None):
-        self._fragment_repo = fragment_repo
-        self._clock = clock
-        self._tracks: dict[str, TrackRuntimeInfo] = {}
-        self._recorders: dict[str, TrackRecorder] = {}
-        self._handles: dict[str, FragmentHandle] = {}
-        self._event_queue: queue.Queue[TrackRuntimeEvent] = queue.Queue()
-        self._policy: RecordingPolicy | None = None
-        self._stopping = False
-        self._outcome = CaptureRuntimeOutcome()
-        self._take_id = ""
-        self._started_at_ms: int = 0
+        self._fragment_repo = fragment_repo      # 片段仓储（可选）
+        self._clock = clock                      # 时钟源（可选）
+        self._tracks: dict[str, TrackRuntimeInfo] = {}    # 轨道 ID -> 运行时信息
+        self._recorders: dict[str, TrackRecorder] = {}    # 轨道 ID -> TrackRecorder
+        self._handles: dict[str, FragmentHandle] = {}     # 轨道 ID -> 当前分段句柄
+        self._event_queue: queue.Queue[TrackRuntimeEvent] = queue.Queue()  # 事件队列
+        self._policy: RecordingPolicy | None = None       # 故障恢复策略
+        self._stopping = False                # 是否正在停止
+        self._outcome = CaptureRuntimeOutcome()           # 最终结果
+        self._take_id = ""                    # CaptureTake ID
+        self._started_at_ms: int = 0          # 启动时的单调时钟（毫秒）
 
     def start_tracks(self, take_id: str, tracks_info: list[TrackRuntimeInfo],
                      policy: RecordingPolicy) -> None:
+        """启动所有轨道的录制，注册故障策略并启动事件循环"""
         self._take_id = take_id
         self._policy = policy
         self._stopping = False
@@ -83,6 +87,7 @@ class CaptureRuntimeCoordinator:
         track_id: str,
         launch_barrier: threading.Barrier | None = None,
     ) -> FragmentHandle | None:
+        """为指定轨道启动一个新的 FFmpeg 分段录制"""
         info = self._tracks[track_id]
         recorder = self._recorders[track_id]
 
@@ -167,6 +172,7 @@ class CaptureRuntimeCoordinator:
         self._handles.update(handles)
 
     def _on_fragment_exit(self, track_id: str, exit_info: FragmentExit) -> None:
+        """回调：某个轨道的分段退出后，构造事件放入事件队列"""
         info = self._tracks.get(track_id)
         if not info:
             return
@@ -184,6 +190,7 @@ class CaptureRuntimeCoordinator:
         self._event_queue.put(event)
 
     def _event_loop(self) -> None:
+        """后台事件循环：从队列取出事件，调用策略决策并执行动作"""
         while not self._stopping:
             try:
                 event = self._event_queue.get(timeout=1)
@@ -205,6 +212,7 @@ class CaptureRuntimeCoordinator:
                 self._execute_action(action)
 
     def _build_snapshot(self) -> CaptureRuntimeSnapshot:
+        """构建当前所有轨道的状态快照供策略使用"""
         states = {}
         for tid, info in self._tracks.items():
             states[tid] = TrackRuntimeState(
@@ -218,6 +226,7 @@ class CaptureRuntimeCoordinator:
         return CaptureRuntimeSnapshot(primary_track_id=primary, track_states=states)
 
     def _execute_action(self, action) -> None:
+        """执行策略决策出的单个动作（停止全部 / 重启全部 / 重启失败轨道）"""
         if action.type == CoordinatorActionType.STOP_ALL:
             self._stop_all_recorders()
         elif action.type == CoordinatorActionType.RESTART_ALL:
@@ -258,10 +267,12 @@ class CaptureRuntimeCoordinator:
                     self._start_fragment_for_track(tid)
 
     def _stop_all_recorders(self) -> None:
+        """并行停止所有录制器"""
         self._request_stops_together(list(self._handles.values()), "coordinator_stop_all")
 
     @staticmethod
     def _request_stops_together(handles: list[FragmentHandle], reason: str) -> None:
+        """并行向所有句柄发送停止请求"""
         def request_stop(handle: FragmentHandle) -> None:
             try:
                 handle.request_stop(reason)
@@ -275,10 +286,12 @@ class CaptureRuntimeCoordinator:
             worker.join()
 
     def _increment_rotation(self) -> None:
+        """递增所有轨道的轮转序号（重启后文件不覆盖）"""
         for info in self._tracks.values():
             info.rotation_index += 1
 
     def stop_tracks(self) -> tuple[list[dict], CaptureRuntimeOutcome]:
+        """停止所有轨道录制，返回分段信息列表和最终结果"""
         self._stopping = True
         self._outcome.stopped_by_user = True
 

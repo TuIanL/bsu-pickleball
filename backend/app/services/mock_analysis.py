@@ -354,6 +354,10 @@ def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
     if cached is not None:
         return cached
 
+    job = get_mock_job(job_id)
+    if job is not None:
+        _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
+
     path = _STORAGE.output_json_path(job_id)
     if not path.exists():
         return None
@@ -374,6 +378,8 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
     # 活跃中的任务不允许删除
     if job.status in ACTIVE_COMPAT_STATUSES:
         return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="Active analysis jobs cannot be deleted")
+
+    _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
 
     with _LOCK:
         JOBS.pop(job_id, None)

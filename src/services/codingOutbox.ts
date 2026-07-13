@@ -8,24 +8,27 @@ import type { CodingActionRequest, CodingActionType, CodingActionResponse } from
 const OUTBOX_KEY = "pre-pickleball-coding-outbox";
 const DRAIN_TIMEOUT_MS = 10000;
 
+/** Outbox 队列中的一条待发送动作 */
 export interface CodingOutboxItem {
-  clientActionId: string;
-  captureTakeId: string;
-  sequenceNumber: number;
-  action: CodingActionType;
-  timestampMs: number;
-  clientOccurredAt: string;
-  payload: Record<string, unknown>;
-  status: "pending" | "sending" | "synced" | "blocked" | "failed";
-  retryCount: number;
-  lastError?: string;
-  createdAt: number;
+  clientActionId: string;          // 客户端生成的动作 ID（幂等键）
+  captureTakeId: string;           // 所属 CaptureTake
+  sequenceNumber: number;          // 序号（递增，用于检测冲突）
+  action: CodingActionType;        // 动作类型
+  timestampMs: number;             // 动作时间戳（毫秒）
+  clientOccurredAt: string;        // 客户端发生时间 ISO 字符串
+  payload: Record<string, unknown>;     // 附加载荷
+  status: "pending" | "sending" | "synced" | "blocked" | "failed";  // 发送状态
+  retryCount: number;              // 重试次数
+  lastError?: string;              // 最近一次错误
+  createdAt: number;               // 创建时间戳
 }
 
+/** 生成客户端唯一动作 ID */
 function generateActionId(): string {
   return `ac_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 从 localStorage 加载全部 Outbox */
 function loadOutbox(): CodingOutboxItem[] {
   try {
     const raw = localStorage.getItem(OUTBOX_KEY);
@@ -35,12 +38,14 @@ function loadOutbox(): CodingOutboxItem[] {
   }
 }
 
+/** 持久化 Outbox 到 localStorage */
 function saveOutbox(items: CodingOutboxItem[]): void {
   try {
     localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
   } catch { /* ignore */ }
 }
 
+/** 计算该 CaptureTake 的下一个序号 */
 function nextSequenceNumber(captureTakeId: string): number {
   const items = loadOutbox();
   const takeItems = items.filter(i => i.captureTakeId === captureTakeId);
@@ -48,6 +53,7 @@ function nextSequenceNumber(captureTakeId: string): number {
   return maxSeq + 1;
 }
 
+/** 创建一条新的 Outbox 待发送项 */
 export function createOutboxItem(
   captureTakeId: string,
   action: CodingActionType,
@@ -68,18 +74,21 @@ export function createOutboxItem(
   };
 }
 
+/** 入队一条待发送项 */
 export function enqueueItem(item: CodingOutboxItem): void {
   const items = loadOutbox();
   items.push(item);
   saveOutbox(items);
 }
 
+/** 获取该 CaptureTake 下所有未同步的项，按序号排序 */
 export function getPendingItems(captureTakeId: string): CodingOutboxItem[] {
   return loadOutbox().filter(
     (i) => i.captureTakeId === captureTakeId && i.status !== "synced",
   ).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
 }
 
+/** 局部更新一条 Outbox 项 */
 function updateItem(clientActionId: string, patch: Partial<CodingOutboxItem>): void {
   const items = loadOutbox();
   const idx = items.findIndex((i) => i.clientActionId === clientActionId);
@@ -89,6 +98,7 @@ function updateItem(clientActionId: string, patch: Partial<CodingOutboxItem>): v
   }
 }
 
+/** 将被阻断的项重置为待发送状态 */
 export function retryBlockedItems(captureTakeId: string): void {
   const items = loadOutbox();
   let changed = false;
@@ -101,6 +111,7 @@ export function retryBlockedItems(captureTakeId: string): void {
   if (changed) saveOutbox(items);
 }
 
+/** 阻断该序号之后的所有待发送项（revision 冲突处理） */
 function blockAllSubsequentItems(captureTakeId: string, fromSequence: number): void {
   const items = loadOutbox();
   let changed = false;

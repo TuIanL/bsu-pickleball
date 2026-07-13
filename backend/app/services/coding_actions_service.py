@@ -30,6 +30,7 @@ VALID_ACTIONS = frozenset({
 # ── 主入口 ──
 
 
+# 执行编码动作命令：校验状态、幂等检查、revision 冲突检测，分发到具体处理器
 def execute_coding_action(
     db: Session,
     capture_take_id: str,
@@ -100,10 +101,12 @@ def execute_coding_action(
 # ── 内部 action 处理 ──
 
 
+# 返回空状态字典（默认值）
 def _empty_state() -> dict:
     return {"revision": 0, "set_ordinal": 0, "game_ordinal": 0, "rally_ordinal": 0, "non_play": False}
 
 
+# 确保 take 存在状态快照，不存在则初始化
 def _ensure_state(db: Session, take: CaptureTake) -> LiveCodingState:
     state = state_svc.get_state(db, take.id)
     if state is None:
@@ -111,6 +114,7 @@ def _ensure_state(db: Session, take: CaptureTake) -> LiveCodingState:
     return state
 
 
+# 核心分发：根据 action 类型调用对应处理器，更新 revision 并持久化结果
 def _apply_action(
     db: Session,
     take: CaptureTake,
@@ -217,6 +221,7 @@ def _close_all_open(
     return events, segments
 
 
+# 处理开始新盘：关闭所有未关闭层级，创建 set 区间，更新状态
 def _handle_start_set(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
 ) -> tuple[list[dict], list[dict]]:
@@ -243,6 +248,7 @@ def _handle_start_set(
     return events, segments
 
 
+# 处理开始新局：关闭 intermission 与 rally，确保 set 存在，创建 game 区间
 def _handle_start_game(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
 ) -> tuple[list[dict], list[dict]]:
@@ -306,6 +312,7 @@ def _handle_start_game(
     return events, segments
 
 
+# 处理开始新分：确保 game 与 set 存在（必要时自动创建），关闭 intermission，创建 rally 区间
 def _handle_start_next_rally(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
 ) -> tuple[list[dict], list[dict]]:
@@ -395,6 +402,7 @@ def _handle_start_next_rally(
     return events, segments
 
 
+# 处理结束层级（game/set）：关闭下级所有 open 区间，更新状态进入 intermission
 def _handle_end_level(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int, level: str
 ) -> tuple[list[dict], list[dict]]:
@@ -439,6 +447,7 @@ def _handle_end_level(
     return events, segments
 
 
+# 处理切换非比赛状态：开启时关闭 rally，关闭时结束 intermission
 def _handle_toggle_non_play(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
 ) -> tuple[list[dict], list[dict]]:
@@ -477,6 +486,7 @@ def _handle_toggle_non_play(
     return events, segments
 
 
+# 处理交换场地：先结束当前 rally，再记录 side_change 事件
 def _handle_change_side(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
 ) -> tuple[list[dict], list[dict]]:
@@ -488,6 +498,7 @@ def _handle_change_side(
     return [_event_to_dict(event), *events], segments
 
 
+# 处理结束分：关闭 open rally，开启 intermission（含 kind 标记）
 def _handle_end_rally(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int, kind: str
 ) -> tuple[list[dict], list[dict]]:
@@ -506,6 +517,7 @@ def _handle_end_rally(
     return events, segments
 
 
+# 关闭 intermission：若处于非比赛状态则记录 non_play_end 事件
 def _close_intermission(db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int) -> list[dict]:
     if not state.non_play:
         return []
@@ -518,6 +530,7 @@ def _close_intermission(db: Session, take: CaptureTake, state: LiveCodingState, 
     return [_event_to_dict(event)]
 
 
+# 在结果中附加时间线事件与区间快照
 def _with_snapshot(db: Session, take: CaptureTake, result: dict) -> dict:
     events = event_svc.list_timeline_events(db, take.field_session_id, capture_take_id=take.id)
     segments = seg_svc.list_segments(db, take.id)
@@ -526,6 +539,7 @@ def _with_snapshot(db: Session, take: CaptureTake, result: dict) -> dict:
     return result
 
 
+# 处理添加笔记：创建 timeline 笔记事件
 def _handle_add_note(
     db: Session, take: CaptureTake, timestamp_ms: int, payload: dict
 ) -> tuple[list[dict], list[dict]]:
@@ -539,6 +553,7 @@ def _handle_add_note(
     return [_event_to_dict(event)], []
 
 
+# 处理撤销：找到最近可撤销动作，恢复事件与区间，重建状态投影
 def _handle_undo(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int, undo_action: CaptureCodingAction
 ) -> tuple[list[dict], list[dict]]:
@@ -601,8 +616,8 @@ def _handle_undo(
     return events, [_segment_to_dict(segment) for segment in seg_svc.list_segments(db, take.id)]
 
 
+# 从剩余有效动作中重算实时状态快照（用于撤销后重建）
 def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingState) -> None:
-    """Recompute the live snapshot from the surviving action projection after undo."""
     active_actions = [action for action in coding_svc.list_actions_for_take(db, take.id) if action.status.value == "executed"]
     active_rallies = seg_svc.list_segments(db, take.id, segment_type="rally")
     active_events = event_svc.list_timeline_events(db, take.field_session_id, capture_take_id=take.id)
@@ -651,6 +666,7 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
 # ── 辅助 ──
 
 
+# 按类型关闭某层级的 open 区间（如关闭 open rally）
 def _close_open_by_type(
     db: Session, take: CaptureTake, timestamp_ms: int, segment_type: str
 ) -> tuple[list[dict], list[dict]]:
@@ -667,6 +683,7 @@ def _close_open_by_type(
     return [_event_to_dict(event)], [_segment_to_dict(seg)]
 
 
+# 将 TimelineEvent 对象转换为字典
 def _event_to_dict(ev) -> dict:
     try:
         payload = json.loads(ev.payload_json or "{}")
@@ -679,6 +696,7 @@ def _event_to_dict(ev) -> dict:
     }
 
 
+# 将 CaptureSegment 对象转换为字典
 def _segment_to_dict(seg) -> dict:
     return {
         "id": seg.id, "segment_type": seg.segment_type.value,
@@ -755,6 +773,7 @@ def _apply_action_to_timeline(db, take, action):
         _update_segments_from_action(db, take, action)
 
 
+# 将 action 类型映射为 timeline 事件类型
 def _action_to_event_type(action: str) -> str:
     mapping = {
         "start_set": "set_start", "end_set": "set_end",
@@ -769,6 +788,7 @@ def _action_to_event_type(action: str) -> str:
     return mapping.get(action, "custom_marker")
 
 
+# 根据动作类型创建或关闭 CaptureSegment（用于重放投影）
 def _update_segments_from_action(db, take, action):
     from app.models.capture_segment import CaptureSegment, SegmentStatus
     from uuid import uuid4

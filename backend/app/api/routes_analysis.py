@@ -143,13 +143,15 @@ def read_analysis_result(job_id: str) -> Union[AnalysisPipelineResult, AnalysisJ
     否则返回任务当前状态，让前端据此继续等待或提示失败。
     返回值类型用 Union 表示：可能是"结果"也可能是"状态摘要"。
     """
-    result = get_pipeline_result(job_id)
-    if result is not None:
-        return result
-
     job = get_mock_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
+
+    _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
+
+    result = get_pipeline_result(job_id)
+    if result is not None:
+        return result
 
     return job
 
@@ -209,6 +211,8 @@ def read_analysis_artifact(
     job = get_mock_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
+
+    _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
 
     # 下面一大段 if / elif 就是：根据 artifact 名称，
     # 用存储服务（_STORAGE）拼出对应的磁盘文件路径。

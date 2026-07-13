@@ -1,33 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CaptureSegmentSummary, SessionTimelineEvent, LiveCodingState } from "../types/report";
 
+/** 非比赛时间段范围 */
 interface TimelineRange {
-  startMs: number;
-  endMs: number;
-  kind: "between_rallies" | "timeout" | "side_change";
+  startMs: number;                                      // 开始毫秒
+  endMs: number;                                        // 结束毫秒
+  kind: "between_rallies" | "timeout" | "side_change";  // 间歇类型
 }
 
+/** MiniTimeline 组件 Props */
 interface TimelineProps {
-  segments: CaptureSegmentSummary[];
-  events: SessionTimelineEvent[];
-  liveState: LiveCodingState | null;
-  totalDurationMs: number;
-  elapsedMs: number;
-  showDurationHint?: boolean;
-  staticMode?: boolean;
-  playing?: boolean;
+  segments: CaptureSegmentSummary[];  // 段列表（盘 / 局 / 分）
+  events: SessionTimelineEvent[];     // 时间线事件
+  liveState: LiveCodingState | null;  // 实时编码状态
+  totalDurationMs: number;            // 总时长
+  elapsedMs: number;                  // 已播放毫秒
+  showDurationHint?: boolean;         // 是否显示时长提示
+  staticMode?: boolean;               // 静态模式
+  playing?: boolean;                  // 是否正在播放
 }
 
-const TRACK_HEIGHT = 26;
-const TRACK_GAP = 6;
-const VIEW_DURATION_MS = 90000;
-const PLAYHEAD_HEADROOM_MS = 5000;
+const TRACK_HEIGHT = 26;          // 每条轨道高度
+const TRACK_GAP = 6;              // 轨道间距
+const VIEW_DURATION_MS = 90000;   // 可视窗口时长（秒）
+const PLAYHEAD_HEADROOM_MS = 5000;// 指针右侧预留空间
 const TRACKS = [
   { key: "set", label: "盘", color: "#F97316" },
   { key: "game", label: "局", color: "#3B82F6" },
   { key: "rally", label: "分", color: "#22C55E" },
 ] as const;
 
+/** 从事件列表推导非比赛时间段（换边 / 暂停 / 分间） */
 export function deriveNonPlayRanges(events: SessionTimelineEvent[], elapsedMs: number): TimelineRange[] {
   const sorted = [...events].filter(e => e.event_type === "non_play_start" || e.event_type === "non_play_end")
     .sort((a, b) => a.timestamp_ms - b.timestamp_ms);
@@ -56,9 +59,11 @@ export function deriveNonPlayRanges(events: SessionTimelineEvent[], elapsedMs: n
   return ranges;
 }
 
+/** 时间线可视化组件 —— 展示盘 / 局 / 分三段轨道 + 播放指针 + 事件标记 */
 export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, showDurationHint, staticMode = false, playing = false }: TimelineProps) {
   const [smoothElapsedMs, setSmoothElapsedMs] = useState(elapsedMs);
   const anchorRef = useRef({ elapsedMs, at: performance.now() });
+  // 平滑动画更新 elapsed 值
   useEffect(() => {
     if (staticMode) {
       setSmoothElapsedMs(elapsedMs);
@@ -82,8 +87,7 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
     return () => cancelAnimationFrame(frame);
   }, [elapsedMs, staticMode, playing]);
   const displayElapsedMs = staticMode ? smoothElapsedMs : Math.max(elapsedMs, smoothElapsedMs);
-  // Keep a small amount of room to the right of the playhead. Without this,
-  // events created just after the latest elapsed tick are all clamped to 100%.
+  // 指针右侧预留空间，避免刚创建的事件被钳制在 100%
   const latestContentMs = Math.max(
     displayElapsedMs,
     ...segments.flatMap((segment) => [segment.start_ms, segment.end_ms ?? 0]),
@@ -91,16 +95,17 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
   );
   const windowEnd = Math.max(displayElapsedMs + PLAYHEAD_HEADROOM_MS, latestContentMs);
   const windowStart = Math.max(0, windowEnd - VIEW_DURATION_MS);
+  // 毫秒 → 百分比位置映射
   const scale = (ms: number) => `${Math.max(0, Math.min(100, ((ms - windowStart) / VIEW_DURATION_MS) * 100))}%`;
 
+  // 按段类型（set / game / rally）分组
   const segmentsByType: Record<string, CaptureSegmentSummary[]> = {};
   for (const seg of segments) {
     (segmentsByType[seg.segment_type] ??= []).push(seg);
   }
 
-  // Some older dual-camera takes persisted inferred parent segments with a
-  // zero-length end. The live state still identifies those parents as active,
-  // so extend them visually until the corresponding end action arrives.
+  // 旧版双摄数据中的推断父段可能结束时间为 0，
+  // 但 live state 仍然标记为活跃，需延伸显示到对应结束动作到达
   const liveSegmentIds = new Set([
     liveState?.current_set_segment_id,
     liveState?.current_game_segment_id,
@@ -248,6 +253,7 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
   );
 }
 
+/** 格式化毫秒为 m:ss 显示 */
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);

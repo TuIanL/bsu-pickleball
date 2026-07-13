@@ -11,10 +11,20 @@ TBD - created by syncing change unify-single-dual-capture-controller.
 
 #### Scenario: 恢复网络不确定性
 
+**变更**：进入 `recovering` 后增加自动恢复机制，无需用户手动点击；恢复结果保留完整媒体和分析入口。
+
+**修改前**：`recovering` 仅显示"重试恢复"按钮等待用户手动操作。`recover()` 恢复时构造的结果固定为空 `tracks`、`analysisAvailable: false`，丢失视频与分析入口。
+
+**修改后**：
 - **WHEN** 用户点击停止且 stop API 返回前网络断开
 - **THEN** runtime phase MUST 进入 `recovering`（不是 `failed`）
 - **AND** 系统 MUST 按 sourceSessionId 查询服务器确认最终状态
-- **AND** 确认后 MUST 进入 `completed`、`partial` 或 `failed`
+- **AND** 系统 SHALL 在进入 recovering 后 500ms 启动第一次查询
+- **AND** 系统 SHALL 使用 `recoveryRef` 控制查询状态（查询次数、飞行中标志、定时器引用）
+- **AND** 查询成功且终态为 `completed/partial/failed` 时 SHALL 自动进入对应终态
+- **AND** 查询结果为 `recording` 时 SHALL 保持 recovering，每 3 秒继续查询
+- **AND** 查询发生网络错误时 SHALL 保持 recovering，更新 `operationError`，不进入 `failed`
+- **AND** 超过 30 秒后 SHALL 停止自动高频轮询，仍保持 recovering，显示"再次停止"和"取消录制"
 
 #### Scenario: 用户主动取消进入 canceled
 
@@ -36,7 +46,7 @@ TBD - created by syncing change unify-single-dual-capture-controller.
 
 ### Requirement: 统一 elapsedMs 从服务器时间派生
 
-系统 MUST 使用 `Date.parse(session.startedAt)` 派生 `elapsedMs`，停止后从 `result.capture_take.duration_ms` 读取。
+系统 MUST 使用 `Date.parse(session.startedAt)` 派生 `elapsedMs`，停止后从结果的 track duration 读取。
 
 #### Scenario: 录制中 250ms 刷新
 
@@ -44,11 +54,16 @@ TBD - created by syncing change unify-single-dual-capture-controller.
 - **THEN** 系统 MUST 每 250ms 刷新 clockNow
 - **AND** elapsedMs MUST = clockNow - Date.parse(session.startedAt)
 
-#### Scenario: 停止后从 result 读取时长
+#### Scenario: 停止后从 track duration 读取时长
 
 - **WHEN** phase 为 completed 或 partial
-- **THEN** elapsedMs MUST 从 result.capture_take.duration_ms 读取
+- **THEN** elapsedMs MUST 从 result.tracks[0]?.durationMs 读取
 - **AND** MUST NOT 使用时钟计算
+
+#### Scenario: RECOVERED 后从 track duration 读取
+
+- **WHEN** phase 为 recovered
+- **THEN** 系统 SHALL 更新 elapsedMs 为 result.tracks[0]?.durationMs ?? 0
 
 ### Requirement: 统一 start/stop/cancel 接口
 
@@ -91,12 +106,21 @@ Runtime Hook MUST NOT 直接调用 `freeze()` 或 `flushWithDeadline()`。Outbox
 - **WHEN** mode 为 dual 且 phase 为 recording
 - **THEN** 系统 MUST 调用 `getSyncRecording(sourceSessionId)` 轮询状态
 
-### Requirement: 删除空 CaptureStopResult 伪造
+### Requirement: 恢复结果完整性
 
-异常恢复 MUST NOT 伪造空的 `CaptureStopResult`（tracks: []）。异常时 MUST 读取真实 session + take，或进入 recovering/failed。
+**变更**：恢复时联合 Source Session 和 CaptureTake 构造完整结果。
+
+**修改前**：恢复时仅使用 `sourceSession.status` 映射为 `completed`，结果对象固定为 `tracks: []`、`analysisAvailable: false`。
+
+**修改后**：系统 SHALL 联合 Source Session 和 CaptureTake 恢复完整停止结果。
+- 系统 SHALL 查询 Source Session 获取媒体信息（`video_id`、`duration_sec`、`camera_id`）
+- 系统 SHALL 查询 CaptureTake 获取业务终态（`completed/partial/failed`）
+- 系统 SHALL 使用 CaptureTake 的 `status` 决定终态（而非 Source Session 的 `status`）
+- `normalizeRecoveredSingleResult` SHALL 从单摄 Session 恢复 `videoId`、`durationMs`、`tracks`、`analysisAvailable`
+- `normalizeRecoveredDualResult` SHALL 从双摄 Session 恢复 `registered_video_ids`、`default_analysis_video_id`、`camera_slots`
 
 #### Scenario: 双摄异常结束不伪造完成结果
 
 - **WHEN** 双摄轮询发现 session 异常退出
-- **THEN** 系统 MUST 读取真实 session 状态
+- **THEN** 系统 MUST 读取真实 session 和 take 状态
 - **AND** MUST NOT dispatch 空 CaptureStopResult

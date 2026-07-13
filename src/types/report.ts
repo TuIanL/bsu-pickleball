@@ -1,9 +1,15 @@
+// ── 通用基础类型 ──
+
+/** 趋势方向 */
 export type TrendDirection = "up" | "down" | "steady";
 
+/** 球场模式 */
 export type CourtMode = "movement";
 
+/** 报告类型 */
 export type ReportType = "movement" | "diagnosis";
 
+/** 分析任务状态 */
 export type AnalysisJobStatus =
   | "uploaded"
   | "queued"
@@ -12,6 +18,7 @@ export type AnalysisJobStatus =
   | "completed"
   | "canceled";
 
+/** 规范化分析状态 */
 export type AnalysisCanonicalStatus =
   | "queued"
   | "running"
@@ -19,6 +26,7 @@ export type AnalysisCanonicalStatus =
   | "failed"
   | "canceled";
 
+/** 分析阶段 ID */
 export type AnalysisStageId =
   | "upload"
   | "queue"
@@ -34,14 +42,17 @@ export type AnalysisStageId =
   | "report"
   | string;
 
+/** 摄像头角度 */
 export type CameraAngle =
   | "baseline"
   | "sideline"
   | "elevated"
   | "unknown";
 
+/** 比赛形式 */
 export type MatchFormat = "singles" | "doubles";
 
+/** 应用路由路径 */
 export type AppPath =
   | "/"
   | "/upload"
@@ -62,6 +73,7 @@ export type AppPath =
   | `/reports/${ReportType}`
   | `/recording/${string}`;
 
+/** 洞察语气 */
 export type InsightTone = "advantage" | "risk" | "error" | "training";
 
 export type ShotType =
@@ -82,8 +94,12 @@ export type ShotResult =
   | "中性"
   | "建立优势";
 
+// ── 报告/分析基础结构 ──
+
+/** 质量等级 */
 export type QualityBand = "high" | "medium" | "low";
 
+/** 单项指标 */
 export interface Metric {
   id: string;
   label: string;
@@ -93,37 +109,42 @@ export interface Metric {
   direction: TrendDirection;
 }
 
+/** 球场落点 */
 export interface CourtPoint {
   id: string;
-  x: number;
-  y: number;
-  intensity: number;
+  x: number;           // X 坐标
+  y: number;           // Y 坐标
+  intensity: number;   // 密度强度
   label: string;
 }
 
+/** 球场路线 */
 export interface CourtRoute {
   id: string;
-  from: CourtPoint;
-  to: CourtPoint;
+  from: CourtPoint;  // 起点
+  to: CourtPoint;    // 终点
   label: string;
   result: "得分" | "受迫回球" | "失误" | "相持";
 }
 
+/** 移动点 */
 export interface MovementPoint {
   x: number;
   y: number;
 }
 
+/** 回合 */
 export interface Rally {
   id: string;
   title: string;
   duration: string;
-  shots: number;
-  pattern: string;
-  result: string;
-  observation: string;
+  shots: number;          // 拍数
+  pattern: string;        // 模式
+  result: string;         // 结果
+  observation: string;    // 观察说明
 }
 
+/** 报告会话 */
 export interface ReportSession {
   athlete: string;
   venue: string;
@@ -132,9 +153,9 @@ export interface ReportSession {
   reportId: string;
   summary: string;
   metrics: Metric[];
-  landingPoints: CourtPoint[];
-  routes: CourtRoute[];
-  movementPath: MovementPoint[];
+  landingPoints: CourtPoint[];   // 落点
+  routes: CourtRoute[];          // 路线
+  movementPath: MovementPoint[]; // 移动轨迹
   rallies: Rally[];
 }
 
@@ -223,8 +244,12 @@ export interface ProbeResult {
   error_message?: string;
 }
 
+// ── 单摄录制相关 ──
+
+/** 单摄录制会话状态 */
 export type RecordingSessionStatus = "recording" | "completed" | "failed" | "canceled";
 
+/** 单摄录制启动请求 */
 export interface RecordingStartRequest {
   camera_id: string;
   field_session_id?: string;
@@ -237,6 +262,7 @@ export interface RecordingStartRequest {
   storage_root?: string;
 }
 
+/** 单摄录制会话 */
 export interface RecordingSession {
   session_id: string;
   camera_id: string;
@@ -261,12 +287,18 @@ export interface RecordingSession {
   storage_status?: string;
 }
 
+// ── 双摄同步录制相关 ──
+
+/** 双摄同步录制状态 */
 export type SyncRecordingStatus = "recording" | "completed" | "failed" | "canceled";
 
+/** 同步片段状态 */
 export type SyncSegmentStatus = "recording" | "completed" | "failed";
 
+/** 摄像头槽位角色 */
 export type CameraSlotRole = "cam_1" | "cam_2";
 
+/** 摄像头槽位配置 */
 export interface CameraSlotConfig {
   role: CameraSlotRole;
   camera_id: string;
@@ -332,13 +364,14 @@ export interface SyncTestResult {
   test_completed_at?: string;
 }
 
+/** 双摄同步录制会话（后端格式） */
 export interface SyncRecordingSession {
   session_id: string;
   field_session_id?: string;
   status: SyncRecordingStatus;
-  camera_slots: Record<string, CameraSlotConfig>;
-  segments: SyncSegment[];
-  output_dir: string;
+  camera_slots: Record<string, CameraSlotConfig>;  // 摄像头槽位配置
+  segments: SyncSegment[];                          // 片段列表
+  output_dir: string;                               // 输出目录
   default_analysis_video_id?: string;
   registered_video_ids?: Partial<Record<CameraSlotRole, string>>;
   associated_video_paths: string[];
@@ -351,7 +384,7 @@ export interface SyncRecordingSession {
   stopped_at?: string;
   duration_sec?: number;
   error_message?: string;
-  total_restarts: number;
+  total_restarts: number;                           // 总重启次数
   capture_take_id?: string;
   storage_root?: string;
   session_dir?: string;
@@ -365,6 +398,7 @@ export interface SyncStopResponse {
   analysis_blocked_reason?: string;
 }
 
+/** CaptureTake 轨道停止结果（后端格式） */
 export interface CaptureTrackStopResult {
   track_id: string;
   slot: string;
@@ -377,6 +411,7 @@ export interface CaptureTrackStopResult {
   restart_count: number;
 }
 
+/** CaptureTake 停止结果（后端格式） */
 export interface CaptureStopResult {
   capture_take?: {
     id: string;
@@ -398,14 +433,17 @@ export interface CaptureStopResult {
   warnings: string[];
 }
 
+// ── 场次（FieldSession） ──
+
+/** 采集场次 */
 export interface FieldSession {
   id: string;
   title: string;
   venue: string;
   court_name: string;
-  capture_mode: string;
+  capture_mode: string;   // 采集模式
   match_format: string;
-  camera_setup: string;
+  camera_setup: string;   // 摄像头配置
   status: string;
   notes: string;
   started_at?: string;
@@ -414,6 +452,7 @@ export interface FieldSession {
   updated_at: string;
 }
 
+/** 创建场次请求 */
 export interface FieldSessionCreate {
   title?: string;
   venue?: string;
@@ -424,6 +463,7 @@ export interface FieldSessionCreate {
   notes?: string;
 }
 
+/** 场次删除结果 */
 export interface FieldSessionDeleteResult {
   id: string;
   status: "deleted" | "blocked" | "not_found";
@@ -505,36 +545,42 @@ export interface TimelineEventListParams {
 
 // ── CaptureTake & Coding Actions ──
 
+/** 编码动作类型 */
 export type CodingActionType =
   | "start_set" | "start_game" | "start_next_rally"
   | "end_rally" | "end_game" | "end_set"
   | "toggle_non_play" | "start_timeout" | "change_side" | "add_note" | "undo";
 
+/** 比赛阶段 */
 export type MatchPhase = "idle" | "rally_active" | "intermission";
+/** 间歇类型 */
 export type IntermissionKind = "between_rallies" | "timeout" | "side_change";
 
+/** 编码动作请求 */
 export interface CodingActionRequest {
   action: CodingActionType;
   timestamp_ms?: number;
   client_occurred_at?: string;
-  client_action_id: string;
-  expected_revision: number;
+  client_action_id: string;         // 客户端幂等 ID
+  expected_revision: number;        // 期望修订号（冲突检测）
   payload?: Record<string, unknown>;
 }
 
+/** 实时编码状态（服务端返回） */
 export interface LiveCodingState {
   revision: number;
-  set_ordinal: number;
-  game_ordinal: number;
-  rally_ordinal: number;
-  non_play: boolean;
+  set_ordinal: number;              // 当前盘序号
+  game_ordinal: number;             // 当前局序号
+  rally_ordinal: number;            // 当前分序号
+  non_play: boolean;                // 是否非比赛状态
   match_phase?: MatchPhase;
   intermission_kind?: IntermissionKind;
-  current_set_segment_id?: string;
-  current_game_segment_id?: string;
-  current_rally_segment_id?: string;
+  current_set_segment_id?: string;  // 当前盘段 ID
+  current_game_segment_id?: string; // 当前局段 ID
+  current_rally_segment_id?: string;// 当前分段 ID
 }
 
+/** 编码动作响应 */
 export interface CodingActionResponse {
   revision: number;
   created_events: Record<string, unknown>[];
@@ -1273,6 +1319,9 @@ export interface ReportDefinition {
   trainingLink: string;
 }
 
+// ── 完整分析报告 ──
+
+/** 分析报告（聚合所有可视化数据） */
 export interface AnalysisReport {
   version: "analysis-report-v1";
   source: "demo" | "job";

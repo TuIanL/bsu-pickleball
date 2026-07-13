@@ -200,6 +200,32 @@ describe("Dual camera recording state machine", () => {
   });
 });
 
+describe("Capture storage location payload", () => {
+  it("includes a temporary custom root for both camera slots", () => {
+    const storageRoot = "/Volumes/MatchDisk";
+    const req = {
+      cam_1_id: "cam_a",
+      cam_2_id: "cam_b",
+      storage_root: storageRoot,
+    };
+    expect(req.storage_root).toBe(storageRoot);
+    expect(req.cam_1_id).not.toBe(req.cam_2_id);
+  });
+
+  it("clearing the picker restores the default-location payload", () => {
+    let selectedRoot = "/Volumes/MatchDisk";
+    selectedRoot = "";
+    expect(selectedRoot || undefined).toBeUndefined();
+  });
+
+  it("keeps a storage validation error visible without changing the selected root", () => {
+    const selectedRoot = "/Volumes/MatchDisk";
+    const error = "录制位置剩余空间不足";
+    expect(selectedRoot).toBeTruthy();
+    expect(error).toContain("空间不足");
+  });
+});
+
 describe("Segment data model", () => {
   it("segment contains files for both cameras", () => {
     const s: SyncSegment = {

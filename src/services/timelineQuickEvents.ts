@@ -5,12 +5,13 @@
  */
 import type { TimelineEventType, TimelineEventSource, CodingActionType } from "../types/report";
 
+/** 快捷事件按钮定义 */
 export interface QuickEventDef {
-  type: CodingActionType;
-  source: TimelineEventSource;
-  label: string;
-  note: string;
-  payload: Record<string, unknown>;
+  type: CodingActionType;       // 动作类型
+  source: TimelineEventSource;  // 事件来源
+  label: string;                // 按钮显示文本
+  note: string;                 // 备注
+  payload: Record<string, unknown>;  // 附加载荷
 }
 
 export const ACTION_TO_EVENT_TYPE: Record<string, TimelineEventType> = {

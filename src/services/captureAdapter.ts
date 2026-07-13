@@ -3,6 +3,7 @@ import type { RecordingSession, SyncRecordingSession, CaptureTakeSummary } from 
 import type { UnifiedCaptureSession, CaptureTrackRuntime, NormalizedCaptureStopResult } from "../types/capture";
 import type { CaptureStopResult } from "../types/report";
 
+/** 根据停止结果状态推导最终阶段 */
 export function phaseFromStopStatus(
   status: NormalizedCaptureStopResult["status"],
 ): "completed" | "partial" | "failed" {
@@ -13,6 +14,7 @@ export function phaseFromStopStatus(
   }
 }
 
+/** 将后端单摄会话适配为统一前端格式 */
 export function adaptRecordingSession(s: RecordingSession): UnifiedCaptureSession {
   if (!s.started_at) throw new Error("RecordingSession 缺少 started_at");
 
@@ -37,6 +39,7 @@ export function adaptRecordingSession(s: RecordingSession): UnifiedCaptureSessio
   };
 }
 
+/** 将后端双摄同步会话适配为统一前端格式 */
 export function adaptSyncRecordingSession(s: SyncRecordingSession): UnifiedCaptureSession {
   if (!s.started_at) throw new Error("SyncRecordingSession 缺少 started_at");
 
@@ -69,6 +72,7 @@ export function adaptSyncRecordingSession(s: SyncRecordingSession): UnifiedCaptu
     };
 }
 
+/** 后端状态 → 前端统一状态映射 */
 function mapStatus(s: string): UnifiedCaptureSession["status"] {
   const m: Record<string, UnifiedCaptureSession["status"]> = {
     recording: "recording", completed: "completed",
@@ -77,6 +81,7 @@ function mapStatus(s: string): UnifiedCaptureSession["status"] {
   return m[s] ?? "recording";
 }
 
+/** 将后端 API 返回的停止结果归一化为前端统一格式 */
 export function normalizeCaptureStopResult(result: CaptureStopResult): NormalizedCaptureStopResult {
   if (!result.capture_take?.id) {
     return {
@@ -112,6 +117,7 @@ export function normalizeCaptureStopResult(result: CaptureStopResult): Normalize
   };
 }
 
+/** 恢复单摄停止结果（页面刷新后从后端重建） */
 export function normalizeRecoveredSingleResult(
   session: RecordingSession,
   take: CaptureTakeSummary,
@@ -140,6 +146,7 @@ export function normalizeRecoveredSingleResult(
   };
 }
 
+/** 恢复双摄停止结果（页面刷新后从后端重建） */
 export function normalizeRecoveredDualResult(
   session: SyncRecordingSession,
   take: CaptureTakeSummary,
