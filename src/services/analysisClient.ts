@@ -949,6 +949,10 @@ export async function getCaptureTake(takeId: string): Promise<CaptureTakeSummary
   return requestJson<CaptureTakeSummary>(`/api/capture-takes/${takeId}`);
 }
 
+export async function getMergeStatus(takeId: string): Promise<{ status: string; detail?: string }> {
+  return requestJson(`/api/capture-takes/${takeId}/finalization-status`);
+}
+
 export async function getLiveCodingState(takeId: string): Promise<LiveCodingState> {
   return requestJson<LiveCodingState>(`/api/capture-takes/${takeId}/live-state`);
 }

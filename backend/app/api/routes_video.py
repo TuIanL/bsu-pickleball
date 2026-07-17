@@ -97,6 +97,17 @@ def stream_video(video_id: str) -> FileResponse:
     if not path.exists():
         # 元数据在，但磁盘上的文件丢失了（比如被误删）
         raise HTTPException(status_code=404, detail="Video file not found")
+
+    # 如果是 .ts 文件，尝试返回同目录下的 *._merged.mp4（浏览器支持 MP4 但不支持 TS）
+    if path.suffix.lower() == ".ts":
+        merged = path.parent / f"{path.stem}_merged.mp4"
+        if merged.exists():
+            return FileResponse(
+                merged,
+                media_type="video/mp4",
+                filename=merged.name,
+            )
+
     # 用 FileResponse 把文件作为 HTTP 响应发回去
     # - path：文件路径
     # - media_type：告诉浏览器这是什么类型的文件（如 video/mp4）

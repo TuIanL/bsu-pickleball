@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, ForeignKey
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -24,6 +24,14 @@ class LiveCodingState(Base):
     non_play: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)         # 是否为非比赛时段
     match_phase: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")  # 比赛阶段（idle/playing/break 等）
     intermission_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)       # 间歇类型（如 timeout/break）
+
+    # ── 计分相关字段 ──
+    server_team: Mapped[str | None] = mapped_column(String(8), nullable=True)              # 当前发球方（"A" / "B" / None）
+    score_a: Mapped[int] = mapped_column(Integer, nullable=False, default=0)                # A 方当前盘内得分
+    score_b: Mapped[int] = mapped_column(Integer, nullable=False, default=0)                # B 方当前盘内得分
+    scoring_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="none")   # 计分模式（"side_out_singles_v1" / "manual" / "none"）
+    scoring_ruleset_version: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 规则版本（历史记录归属）
+    recent_results: Mapped[str] = mapped_column(Text, nullable=False, default="[]")          # 最近 10 分结果 JSON 数组
 
     current_set_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 当前盘区间ID
     current_game_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True) # 当前局区间ID

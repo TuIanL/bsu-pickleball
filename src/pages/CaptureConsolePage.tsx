@@ -11,6 +11,7 @@ import {
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
 import { MiniTimeline } from "../components/MiniTimeline";
+import { ScoreBoard } from "../components/ScoreBoard";
 import { useCameraSetup } from "../hooks/useCameraSetup";
 import { useCapturePreflight } from "../hooks/useCapturePreflight";
 import { useLiveCoding } from "../hooks/useLiveCoding";
@@ -86,11 +87,53 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     }
   };
 
+  // ── 键盘快捷键 ──
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (runtime.phase !== "recording") return;
+    const target = e.target as HTMLElement;
+    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
+    const key = e.key;
+    const quickEvents = liveCoding.quickEvents;
+    const findAndTrigger = (type: string) => {
+      const ev = quickEvents.find(q => q.type === type);
+      if (ev) liveCoding.addTimelineEvent(ev);
+    };
+    if (key === "1") findAndTrigger("start_set");
+    else if (key === "2") findAndTrigger("start_game");
+    else if (key === "3") findAndTrigger("start_next_rally");
+    else if (key === "4") findAndTrigger("rally_result_a");
+    else if (key === "5") findAndTrigger("rally_result_b");
+    else if (key === "6") findAndTrigger("rally_replay");
+    else if (key === "7") findAndTrigger("change_side");
+    else if (key === "8") findAndTrigger("start_timeout");
+    else if (key.toUpperCase() === "H") findAndTrigger("add_note");
+    else if (key === "Backspace") findAndTrigger("undo");
+  }, [runtime.phase, liveCoding.quickEvents, liveCoding.addTimelineEvent]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
+
   const handleStop = async () => {
     liveCoding.freeze();
-    const promise = runtime.stop();
+    const stopPromise = runtime.stop();
     void liveCoding.flushWithDeadline(3000);
-    await promise;
+
+    // 10 秒超时兜底，防止 API 卡死前端
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), 10000)
+    );
+
+    const result = await Promise.race([stopPromise, timeoutPromise]);
+    // 如果超时先到，stopPromise 还在跑，API 回来后会自己 dispatch
+    // 超时后页面显示"恢复中"，useCaptureRuntime 的自动轮询会处理
+
+    // 启动合并状态轮询
+    const takeId = runtime.captureTakeId;
+    if (takeId) {
+      pollMergeStatus(takeId);
+    }
     setPreviewKey(k => k + 1);
   };
 
@@ -186,6 +229,40 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       }
     }
   }, [runtime.phase, runtime.session?.sourceSessionId]);
+
+  const scoringMode = liveCoding.liveCodingState?.scoring_mode ?? "none";
+  const isMatchSingles = fieldSession?.capture_mode === "match" && scoringMode === "side_out_singles_v1";
+  const [pendingInitialServer, setPendingInitialServer] = useState<boolean>(false);
+  const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  const mergePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 停止后轮询合并状态
+  const pollMergeStatus = useCallback(async (takeId: string) => {
+    if (mergePollRef.current) return;
+    mergePollRef.current = setInterval(async () => {
+      try {
+        const { getMergeStatus } = await import("../services/analysisClient");
+        const status = await getMergeStatus(takeId);
+        setMergeStatus(status.status);
+        if (status.status === "completed" || status.status === "failed") {
+          if (mergePollRef.current) {
+            clearInterval(mergePollRef.current);
+            mergePollRef.current = null;
+          }
+        }
+      } catch {
+        // 轮询失败不处理
+      }
+    }, 2000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (mergePollRef.current) {
+        clearInterval(mergePollRef.current);
+      }
+    };
+  }, []);
 
   // ── 加载中 / Hydrating ──
   if (loading || runtime.isHydrating) {
@@ -381,7 +458,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         <p className="mt-2 text-xs text-slate-400">仅对下一次录制生效；重新进入本页面时恢复标准位置。</p>
       </div>
 
-      {/* 预览 + 设置 */}
+      {/* 预览 + 计分板 */}
       <div className={isDualMode ? "space-y-3" : "grid grid-cols-1 gap-6 lg:grid-cols-3"}>
         {isDualMode && (
           <div className="rounded-xl border border-[#DDE9D6] bg-white px-3 py-2">
@@ -413,13 +490,41 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         {!isDualMode && <div className="space-y-4">
           {renderCameraSelector()}
         </div>}
+        {/* 计分板 sidebar */}
+        {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering" || runtime.phase === "completed" || runtime.phase === "partial") && (
+          <div className="lg:col-span-1">
+            <ScoreBoard
+              liveState={liveCoding.liveCodingState}
+              openRallyExists={liveCoding.liveCodingState?.current_rally_segment_id != null}
+              showInitialServerSelector={pendingInitialServer}
+              onInitialServerSelect={(server) => {
+                setPendingInitialServer(false);
+                const gameEvent = liveCoding.quickEvents.find((e: { type: string }) => e.type === "start_game");
+                if (gameEvent) {
+                  liveCoding.addTimelineEvent({
+                    ...gameEvent,
+                    payload: { initial_server_team: server },
+                  });
+                }
+              }}
+            />
+            {liveCoding.outboxHealth === "pending" && (
+              <p className="text-xs text-amber-600 mt-2">有 {liveCoding.outboxItems.filter(i => i.status !== "synced").length} 条事件待同步</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Live Coding */}
       {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering") && (
         <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+          {liveCoding.quickEvents.length > 0 && !isMatchSingles && (
+            <p className="text-xs text-slate-500 mb-2">当前模式 (match singles)：使用结果按钮记录比分</p>
+          )}
           <div className="flex flex-wrap gap-2">
-            {liveCoding.quickEvents.map(event => {
+            {(isMatchSingles ? liveCoding.quickEvents : liveCoding.quickEvents.filter(
+              e => e.type !== "rally_result_a" && e.type !== "rally_result_b" && e.type !== "rally_replay"
+            )).map(event => {
               const liveSegmentIds = new Set([
                 liveCoding.liveCodingState?.current_set_segment_id,
                 liveCoding.liveCodingState?.current_game_segment_id,
@@ -437,10 +542,13 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
                 buttonEvent = { ...event, type: "end_set", label: "盘结束", note: "结束当前的一盘" };
               } else if (event.type === "start_game" && hasOpenSegment("game")) {
                 buttonEvent = { ...event, type: "end_game", label: "局结束", note: "结束当前的一局" };
-              } else if (event.type === "start_next_rally" && hasOpenSegment("rally")) {
+              } else if (event.type === "start_next_rally" && hasOpenSegment("rally") && !isMatchSingles) {
                 buttonEvent = { ...event, type: "end_rally", label: "分结束", note: "结束当前的一分" };
               }
               const colorMap: Record<string, string> = {
+                rally_result_a: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E]",
+                rally_result_b: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
+                rally_replay: "bg-slate-50 border-slate-300 text-slate-500",
                 start_set: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
                 end_set: "bg-slate-50 border-[#F97316] text-[#F97316]",
                 start_game: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
@@ -452,11 +560,20 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
                 add_note: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
                 undo: "bg-red-50 border-red-300 text-red-500",
               };
+              const isPending = liveCoding.outboxItems.some(
+                i => i.status === "pending" && i.actionType === event.type
+              );
               return (
                 <button
                   key={event.type}
-                  className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${colorMap[buttonEvent.type] ?? "bg-slate-50 border-slate-300 text-slate-500"}`}
-                  onClick={() => liveCoding.addTimelineEvent(buttonEvent)}
+                  className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${colorMap[buttonEvent.type] ?? "bg-slate-50 border-slate-300 text-slate-500"} ${isPending ? "opacity-50 cursor-wait" : ""}`}
+                  onClick={() => {
+                    if (buttonEvent.type === "start_game" && isMatchSingles) {
+                      setPendingInitialServer(true);
+                    }
+                    liveCoding.addTimelineEvent(buttonEvent);
+                  }}
+                  disabled={isPending}
                   type="button"
                 >
                   {buttonEvent.label}
@@ -483,6 +600,16 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
           />
         </div>
       ) : null}
+
+      {/* 合并状态提示 */}
+      {mergeStatus && mergeStatus !== "completed" && (
+        <div className="rounded-xl border border-[#E8A838]/30 bg-[#FFF7ED] p-3 text-sm">
+          {mergeStatus === "not_started" && "⏳ 等待合并…"}
+          {mergeStatus === "pending" && "⏳ 视频合并已提交后台…"}
+          {mergeStatus === "merging" && "⏳ 视频合并中…"}
+          {mergeStatus === "failed" && "❌ 视频合并失败，可尝试重新合并"}
+        </div>
+      )}
 
       {/* 完成面板 */}
       {runtime.isStopped && runtime.result && (

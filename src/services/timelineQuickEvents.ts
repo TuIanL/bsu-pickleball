@@ -19,6 +19,9 @@ export const ACTION_TO_EVENT_TYPE: Record<string, TimelineEventType> = {
   start_game: "game_start",
   start_next_rally: "rally_start",
   end_rally: "rally_end",
+  rally_result_a: "rally_end",
+  rally_result_b: "rally_end",
+  rally_replay: "rally_end",
   change_side: "side_change",
   add_note: "add_note",
   undo: "custom_marker",
@@ -27,10 +30,13 @@ export const ACTION_TO_EVENT_TYPE: Record<string, TimelineEventType> = {
   end_set: "set_end",
 };
 
-// —— 比赛模式快捷事件 ——
+// —— 比赛模式快捷事件（含计分结果按钮） ——
 export const MATCH_QUICK_EVENTS: QuickEventDef[] = [
+  { type: "rally_result_a", source: "manual", label: "A方胜", note: "", payload: {} },
+  { type: "rally_result_b", source: "manual", label: "B方胜", note: "", payload: {} },
+  { type: "rally_replay", source: "manual", label: "重打", note: "", payload: {} },
   { type: "start_set", source: "manual", label: "盘开始", note: "新的一盘开始", payload: {} },
-  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: {} },
+  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: { initial_server_team: "A" } },
   { type: "start_next_rally", source: "manual", label: "分开始", note: "开始新的一分", payload: {} },
   { type: "start_timeout", source: "manual", label: "战术暂停", note: "进入战术暂停", payload: {} },
   { type: "change_side", source: "manual", label: "换边", note: "双方交换场地", payload: {} },

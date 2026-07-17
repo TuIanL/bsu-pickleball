@@ -24,7 +24,9 @@ def _generate_id() -> str:
 
 
 # 初始化采集 take 的时间线：创建初始 non_play 状态和事件
-def initialize_capture_take_timeline(db: Session, take: CaptureTake) -> None:
+def initialize_capture_take_timeline(db: Session, take: CaptureTake, *,
+                                      scoring_mode: str = "none",
+                                      scoring_ruleset_version: str | None = None) -> None:
     """Create the initial non-play state/event for every recording take."""
     from app.services import live_coding_state_service, timeline_event_service
 
@@ -38,6 +40,8 @@ def initialize_capture_take_timeline(db: Session, take: CaptureTake) -> None:
         non_play=True,
         match_phase="intermission",
         intermission_kind="between_rallies",
+        scoring_mode=scoring_mode,
+        scoring_ruleset_version=scoring_ruleset_version,
     )
     timeline_event_service._add_timeline_event(
         db,
@@ -77,7 +81,22 @@ def create_capture_take(
     db.add(take)
     db.flush()
 
-    initialize_capture_take_timeline(db, take)
+    # 根据场次的 match_format 设置计分模式
+    from app.models.field_session import FieldSession
+    fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
+    if fs and fs.match_format == "singles":
+        scoring_mode = "side_out_singles_v1"
+        scoring_ruleset_version = "side_out_singles_v1"
+    elif fs and fs.match_format == "doubles":
+        scoring_mode = "manual"
+        scoring_ruleset_version = "manual"
+    else:
+        scoring_mode = "none"
+        scoring_ruleset_version = None
+
+    initialize_capture_take_timeline(db, take,
+                                     scoring_mode=scoring_mode,
+                                     scoring_ruleset_version=scoring_ruleset_version)
     return take
 
 

@@ -18,6 +18,7 @@ from app.services import capture_coding_action_service as coding_svc
 from app.services import live_coding_state_service as state_svc
 from app.services import capture_segment_service as seg_svc
 from app.services import timeline_event_service as event_svc
+from app.services.scoring_fsm import ScoringState, ScoringAction, reduce_scoring_state
 
 # ── 公开 action 列表 ──
 
@@ -25,6 +26,7 @@ VALID_ACTIONS = frozenset({
     "start_set", "start_game", "start_next_rally",
     "end_rally", "end_game", "end_set",
     "toggle_non_play", "start_timeout", "change_side", "add_note", "undo",
+    "rally_result_a", "rally_result_b", "rally_replay", "correct_score",
 })
 
 # ── 主入口 ──
@@ -103,7 +105,9 @@ def execute_coding_action(
 
 # 返回空状态字典（默认值）
 def _empty_state() -> dict:
-    return {"revision": 0, "set_ordinal": 0, "game_ordinal": 0, "rally_ordinal": 0, "non_play": False}
+    return {"revision": 0, "set_ordinal": 0, "game_ordinal": 0, "rally_ordinal": 0, "non_play": False,
+            "score_a": 0, "score_b": 0, "server_team": None, "scoring_mode": "none",
+            "scoring_ruleset_version": None, "recent_results": []}
 
 
 # 确保 take 存在状态快照，不存在则初始化
@@ -142,7 +146,7 @@ def _apply_action(
     if action == "start_set":
         created_events, updated_segments = _handle_start_set(db, take, state, timestamp_ms)
     elif action == "start_game":
-        created_events, updated_segments = _handle_start_game(db, take, state, timestamp_ms)
+        created_events, updated_segments = _handle_start_game(db, take, state, timestamp_ms, payload)
     elif action == "start_next_rally":
         created_events, updated_segments = _handle_start_next_rally(db, take, state, timestamp_ms)
     elif action == "end_rally":
@@ -161,6 +165,13 @@ def _apply_action(
         created_events, updated_segments = _handle_add_note(db, take, timestamp_ms, payload)
     elif action == "undo":
         created_events, updated_segments = _handle_undo(db, take, state, timestamp_ms, action_record)
+    elif action in ("rally_result_a", "rally_result_b"):
+        winner = "A" if action == "rally_result_a" else "B"
+        created_events, updated_segments = _handle_rally_result(db, take, state, timestamp_ms, winner=winner, validity="valid")
+    elif action == "rally_replay":
+        created_events, updated_segments = _handle_rally_result(db, take, state, timestamp_ms, winner=None, validity="replay")
+    elif action == "correct_score":
+        created_events, updated_segments = _handle_correct_score(db, take, state, timestamp_ms, payload)
 
     new_revision = take.revision + 1
     take.revision = new_revision
@@ -248,9 +259,10 @@ def _handle_start_set(
     return events, segments
 
 
-# 处理开始新局：关闭 intermission 与 rally，确保 set 存在，创建 game 区间
+# 处理开始新局：关闭 intermission 与 rally，确保 set 存在，创建 game 区间，重置比分
 def _handle_start_game(
-    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
+    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
+    payload: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     events: list[dict] = []
     segments: list[dict] = []
@@ -303,12 +315,16 @@ def _handle_start_game(
     events.append(_event_to_dict(event))
     segments.append(_segment_to_dict(seg))
 
+    initial_server = (payload or {}).get("initial_server_team") or state.server_team or "A"
     state_svc.upsert_state(db, take.id, revision=take.revision,
                            set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal + 1,
                            rally_ordinal=0, non_play=False, match_phase="idle",
                            current_game_segment_id=seg.id,
                            current_set_segment_id=state.current_set_segment_id,
-                           current_rally_segment_id=None)
+                           current_rally_segment_id=None,
+                           server_team=initial_server,
+                           score_a=0, score_b=0,
+                           recent_results=[])
     return events, segments
 
 
@@ -486,7 +502,7 @@ def _handle_toggle_non_play(
     return events, segments
 
 
-# 处理交换场地：先结束当前 rally，再记录 side_change 事件
+# 处理交换场地：先结束当前 rally，再记录 side_change 事件，不改变比分和发球权
 def _handle_change_side(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
 ) -> tuple[list[dict], list[dict]]:
@@ -495,6 +511,15 @@ def _handle_change_side(
         db, take.field_session_id, "side_change",
         capture_take_id=take.id, timestamp_ms=timestamp_ms,
     )
+    # 重写 upsert 确保比分和发球权不变
+    state_svc.upsert_state(db, take.id, revision=take.revision,
+        set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal, non_play=True,
+        match_phase="intermission", intermission_kind="side_change",
+        current_set_segment_id=state.current_set_segment_id,
+        current_game_segment_id=state.current_game_segment_id,
+        current_rally_segment_id=None,
+        server_team=state.server_team, score_a=state.score_a, score_b=state.score_b)
     return [_event_to_dict(event), *events], segments
 
 
@@ -537,6 +562,131 @@ def _with_snapshot(db: Session, take: CaptureTake, result: dict) -> dict:
     result["timeline_events"] = [_event_to_dict(event) for event in events]
     result["segments"] = [_segment_to_dict(segment) for segment in segments]
     return result
+
+
+# 处理回合结果（A胜 / B胜 / 重打）：关 rally + 写事件 + FSM + recent_results
+def _handle_rally_result(
+    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
+    *, winner: str | None, validity: str,
+) -> tuple[list[dict], list[dict]]:
+    # 无 open rally 时 no-op（与 end_rally 行为一致）
+    events, segments = _close_open_by_type(db, take, timestamp_ms, "rally")
+    if not events and not segments:
+        return events, segments
+
+    # rally_end 事件带结果 — 更新 DB 记录
+    rally_end_payload = {"winner": winner, "validity": validity, "reason": ""}
+    from app.models.timeline_event import SessionTimelineEvent
+    for ev_dict in events:
+        if ev_dict.get("event_type") == "rally_end":
+            ev_db = db.query(SessionTimelineEvent).filter(SessionTimelineEvent.id == ev_dict["id"]).first()
+            if ev_db is not None:
+                ev_db.payload_json = json.dumps(rally_end_payload, ensure_ascii=False)
+                ev_dict["payload_json"] = rally_end_payload
+            break
+
+    # FSM
+    if getattr(state, "scoring_mode", "none") in ("side_out_singles_v1",):
+        current_state = ScoringState(
+            server_team=getattr(state, "server_team", None),
+            score_a=getattr(state, "score_a", 0),
+            score_b=getattr(state, "score_b", 0),
+        )
+        act = ScoringAction(
+            type="rally_result",
+            winner=winner,
+            validity=validity,
+        )
+        new_state = reduce_scoring_state(current_state, act)
+        state.server_team = new_state.server_team
+        state.score_a = new_state.score_a
+        state.score_b = new_state.score_b
+
+    # recent_results
+    try:
+        recent = json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or [])
+    except (json.JSONDecodeError, TypeError):
+        recent = []
+    recent.append({"winner": winner, "validity": validity})
+    if len(recent) > 10:
+        recent = recent[-10:]
+
+    # 关 intermission + 开 non_play
+    if state.non_play:
+        end = event_svc._add_timeline_event(db, take.field_session_id, "non_play_end",
+            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"})
+        events.append(_event_to_dict(end))
+    start_np = event_svc._add_timeline_event(db, take.field_session_id, "non_play_start",
+        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        payload_json={"intermission_kind": "between_rallies"})
+    events.append(_event_to_dict(start_np))
+
+    state_svc.upsert_state(db, take.id, revision=take.revision,
+        set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal, non_play=True,
+        match_phase="intermission", intermission_kind="between_rallies",
+        current_set_segment_id=state.current_set_segment_id,
+        current_game_segment_id=state.current_game_segment_id,
+        current_rally_segment_id=None,
+        server_team=state.server_team, score_a=state.score_a, score_b=state.score_b,
+        recent_results=recent)
+    return events, segments
+
+
+# 处理比分修正：注入锚点，不操作段
+def _handle_correct_score(
+    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
+    payload: dict,
+) -> tuple[list[dict], list[dict]]:
+    score_a = payload.get("score_a")
+    score_b = payload.get("score_b")
+    server_team = payload.get("server_team")
+    reason = payload.get("reason", "")
+
+    if score_a is None or score_b is None or server_team is None:
+        raise ValueError("correct_score 需要 score_a、score_b、server_team")
+    if score_a < 0 or score_b < 0:
+        raise ValueError("比分不能为负")
+    if server_team not in ("A", "B"):
+        raise ValueError("server_team 必须为 A 或 B")
+
+    # 记录修正事件的 before/after
+    score_before = {"a": state.score_a, "b": state.score_b, "server_team": state.server_team}
+    score_after = {"a": score_a, "b": score_b, "server_team": server_team}
+
+    ev = event_svc._add_timeline_event(
+        db, take.field_session_id, "score_correction",
+        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        source="corrected",
+        payload_json={
+            "score_before": score_before,
+            "score_after": score_after,
+            "reason": reason,
+        },
+    )
+
+    # 更新 state（不涉及段）
+    state.server_team = server_team
+    state.score_a = score_a
+    state.score_b = score_b
+
+    state_svc.upsert_state(db, take.id, revision=take.revision,
+        set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal, non_play=state.non_play,
+        match_phase=state.match_phase, intermission_kind=state.intermission_kind,
+        current_set_segment_id=state.current_set_segment_id,
+        current_game_segment_id=state.current_game_segment_id,
+        current_rally_segment_id=state.current_rally_segment_id,
+        server_team=server_team, score_a=score_a, score_b=score_b)
+    return [_event_to_dict(ev)], []
+
+
+def _find_last_event(events: list[dict], event_type: str) -> dict | None:
+    for ev in reversed(events):
+        if ev.get("event_type") == event_type:
+            return ev
+    return None
 
 
 # 处理添加笔记：创建 timeline 笔记事件
@@ -612,13 +762,13 @@ def _handle_undo(
     events.append(_event_to_dict(undo_event))
 
     _rebuild_projection_state(db, take, state)
-    rebuilt = state_svc.get_state(db, take.id)
     return events, [_segment_to_dict(segment) for segment in seg_svc.list_segments(db, take.id)]
 
 
 # 从剩余有效动作中重算实时状态快照（用于撤销后重建）
 def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingState) -> None:
-    active_actions = [action for action in coding_svc.list_actions_for_take(db, take.id) if action.status.value == "executed"]
+    active_actions = [a for a in coding_svc.list_actions_for_take(db, take.id) if a.status.value == "executed"]
+    active_actions.sort(key=lambda a: (a.revision_before, a.created_at))
     active_rallies = seg_svc.list_segments(db, take.id, segment_type="rally")
     active_events = event_svc.list_timeline_events(db, take.field_session_id, capture_take_id=take.id)
     starts = [event for event in active_events if event.event_type.value == "non_play_start"]
@@ -651,6 +801,36 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
     open_rallies = [segment for segment in rallies_in_game if segment.status == SegmentStatus.open]
     open_rally = latest(open_rallies)
     phase = "rally_active" if open_rally else "intermission" if active_intermission else "idle"
+
+    # ── 使用 FSM reducer 重建比分状态 ──
+    scoring_state = ScoringState(server_team=None, score_a=0, score_b=0)
+    recent_results: list[dict] = []
+    for act in active_actions:
+        if act.action_type == "start_game":
+            p = json.loads(act.payload_json or "{}") if isinstance(act.payload_json, str) else (act.payload_json or {})
+            scoring_state = ScoringState(
+                server_team=p.get("initial_server_team", scoring_state.server_team),
+                score_a=0, score_b=0,
+            )
+            recent_results = []
+        elif act.action_type in ("rally_result_a", "rally_result_b"):
+            winner = "A" if act.action_type == "rally_result_a" else "B"
+            scoring_state = reduce_scoring_state(scoring_state, ScoringAction(type="rally_result", winner=winner, validity="valid"))
+            recent_results.append({"winner": winner, "validity": "valid"})
+        elif act.action_type == "rally_replay":
+            scoring_state = reduce_scoring_state(scoring_state, ScoringAction(type="rally_result", validity="replay"))
+            recent_results.append({"winner": None, "validity": "replay"})
+        elif act.action_type == "correct_score":
+            p = json.loads(act.payload_json or "{}") if isinstance(act.payload_json, str) else (act.payload_json or {})
+            scoring_state = ScoringState(
+                server_team=p.get("server_team", scoring_state.server_team),
+                score_a=p.get("score_a", scoring_state.score_a),
+                score_b=p.get("score_b", scoring_state.score_b),
+            )
+
+    if len(recent_results) > 10:
+        recent_results = recent_results[-10:]
+
     state_svc.upsert_state(db, take.id, revision=take.revision,
                            set_ordinal=current_set.ordinal if current_set else 0,
                            game_ordinal=current_game.ordinal if current_game else 0,
@@ -660,7 +840,11 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
                            intermission_kind=kind if active_intermission and not open_rally else None,
                            current_set_segment_id=current_set.id if current_set else None,
                            current_game_segment_id=current_game.id if current_game else None,
-                           current_rally_segment_id=open_rally.id if open_rally else None)
+                           current_rally_segment_id=open_rally.id if open_rally else None,
+                           server_team=scoring_state.server_team,
+                           score_a=scoring_state.score_a,
+                           score_b=scoring_state.score_b,
+                           recent_results=recent_results)
 
 
 # ── 辅助 ──
@@ -715,7 +899,7 @@ def reproject_coding_timeline(db, capture_take_id: str) -> None:
         return
 
     actions = coding_svc.list_actions_for_take(db, capture_take_id)
-    actions.sort(key=lambda a: (a.timestamp_ms, a.sequence_number or 0))
+    actions.sort(key=lambda a: (a.revision_before, a.created_at))
 
     # 删除旧的 TimelineEvent 和 CaptureSegment 投影
     from app.models.timeline_event import SessionTimelineEvent

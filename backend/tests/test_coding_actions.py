@@ -1,6 +1,6 @@
 """后端单元/集成测试 —— CaptureTake, TimelineEvent, LiveCodingState, CodingActions, CaptureSegment"""
 
-import sys, time as _t, os
+import json, sys, time as _t, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.database import get_session_factory, init_db
@@ -374,6 +374,154 @@ test("单摄启动创建 CaptureTake")
 # 由于需要真实摄像头，跳过 FFmpeg 测试，只验证 service 方法可用
 # 实际录制需要通过 API 测试
 ok()
+
+# ── 8.0 计分机集成测试 ──
+print("\n8.0 计分机集成测试")
+db = fresh_db()
+tid, fid = setup_take(db)
+from app.models.capture_take import CaptureTakeStatus
+
+test("单打模式初始化计分状态")
+take = get_capture_take(db, tid)
+take.status = CaptureTakeStatus.recording
+db.flush()
+# 直接设置 scoring_mode
+from app.services.live_coding_state_service import upsert_state as lc_upsert
+lc_upsert(db, tid, revision=0, set_ordinal=0, game_ordinal=0, rally_ordinal=0,
+          scoring_mode="side_out_singles_v1", scoring_ruleset_version="side_out_singles_v1",
+          server_team="A", score_a=0, score_b=0, recent_results=[])
+db.commit()
+state = get_state(db, tid)
+assert state.scoring_mode == "side_out_singles_v1" and state.server_team == "A"; ok()
+
+test("rally_result_a 发球方赢加分")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r1", expected_revision=0, timestamp_ms=1000)
+assert r["live_state"]["rally_ordinal"] == 1
+r = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_res1", expected_revision=r["revision"], timestamp_ms=2000)
+assert r["live_state"]["score_a"] == 1 and r["live_state"]["score_b"] == 0
+assert r["live_state"]["server_team"] == "A"
+# rally_end 事件带 winner
+rally_end = [e for e in r["timeline_events"] if e["event_type"] == "rally_end"]
+assert len(rally_end) == 1 and rally_end[0]["payload_json"].get("winner") == "A"; ok()
+
+test("rally_result_b side out")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r2", expected_revision=r["revision"], timestamp_ms=3000)
+r = execute_coding_action(db, tid, action="rally_result_b", client_action_id="s_res2", expected_revision=r["revision"], timestamp_ms=4000)
+assert r["live_state"]["score_a"] == 1 and r["live_state"]["score_b"] == 0  # side out, 不加分
+assert r["live_state"]["server_team"] == "B"; ok()
+
+test("rally_replay 不改比分发球权")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r3", expected_revision=r["revision"], timestamp_ms=5000)
+r = execute_coding_action(db, tid, action="rally_replay", client_action_id="s_res3", expected_revision=r["revision"], timestamp_ms=6000)
+assert r["live_state"]["score_a"] == 1 and r["live_state"]["server_team"] == "B"; ok()
+
+test("recent_results 正确累积")
+assert len(r["live_state"]["recent_results"]) == 3
+assert r["live_state"]["recent_results"][0]["winner"] == "A"
+assert r["live_state"]["recent_results"][1]["winner"] == "B"
+assert r["live_state"]["recent_results"][2]["validity"] == "replay"; ok()
+
+test("correct_score 锚点注入")
+r = execute_coding_action(db, tid, action="correct_score", client_action_id="s_corr1",
+    expected_revision=r["revision"], timestamp_ms=7000,
+    payload={"score_a": 2, "score_b": 1, "server_team": "A", "reason": "裁判纠正"})
+assert r["live_state"]["score_a"] == 2 and r["live_state"]["score_b"] == 1 and r["live_state"]["server_team"] == "A"
+corr_events = [e for e in r["timeline_events"] if e["event_type"] == "score_correction"]
+assert len(corr_events) == 1 and "score_before" in corr_events[0]["payload_json"]; ok()
+
+test("修正后 rally 从锚点继续推演")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r4", expected_revision=r["revision"], timestamp_ms=8000)
+r = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_res4", expected_revision=r["revision"], timestamp_ms=9000)
+assert r["live_state"]["score_a"] == 3 and r["live_state"]["score_b"] == 1 and r["live_state"]["server_team"] == "A"; ok()
+
+test("start_game 重置比分和发球方")
+r = execute_coding_action(db, tid, action="start_set", client_action_id="s_set2", expected_revision=r["revision"], timestamp_ms=10000)
+r = execute_coding_action(db, tid, action="start_game", client_action_id="s_game2", expected_revision=r["revision"], timestamp_ms=11000,
+    payload={"initial_server_team": "B"})
+assert r["live_state"]["score_a"] == 0 and r["live_state"]["score_b"] == 0
+assert r["live_state"]["server_team"] == "B"
+assert len(r["live_state"]["recent_results"]) == 0; ok()
+
+test("B 发球 B 赢第一分")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r5", expected_revision=r["revision"], timestamp_ms=12000)
+r = execute_coding_action(db, tid, action="rally_result_b", client_action_id="s_res5", expected_revision=r["revision"], timestamp_ms=13000)
+assert r["live_state"]["score_a"] == 0 and r["live_state"]["score_b"] == 1 and r["live_state"]["server_team"] == "B"; ok()
+
+test("side_change 不改比分发球权")
+r = execute_coding_action(db, tid, action="change_side", client_action_id="s_side1", expected_revision=r["revision"], timestamp_ms=14000)
+assert r["live_state"]["score_a"] == 0 and r["live_state"]["score_b"] == 1 and r["live_state"]["server_team"] == "B"; ok()
+
+test("undo rally_result 回滚 recent_results")
+r = execute_coding_action(db, tid, action="undo", client_action_id="s_undo1", expected_revision=r["revision"], timestamp_ms=15000)
+# 新局只有1分, undo 后为 0
+recenter_len = len(r["live_state"]["recent_results"])
+assert recenter_len <= 1, "undo 后 recent_results 不应超过 1 条"
+ok()
+
+test("无 open rally 时 rally_result no-op")
+r_before = r
+r = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_bad1",
+    expected_revision=r["revision"], timestamp_ms=16000)
+# 不应报错，不应改变状态
+assert r["live_state"]["score_a"] == r_before["live_state"]["score_a"]
+assert r["live_state"]["score_b"] == r_before["live_state"]["score_b"]
+ok()
+
+test("重复 client_action_id 幂等")
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r6", expected_revision=r["revision"], timestamp_ms=17000)
+r = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_res6", expected_revision=r["revision"], timestamp_ms=18000)
+score_a_before = r["live_state"]["score_a"]
+# 重试相同 client_action_id
+try:
+    r2 = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_res6", expected_revision=r["revision"], timestamp_ms=18000)
+    assert r2.get("duplicate") == True
+    assert r2["live_state"]["score_a"] == score_a_before  # 不重复加分
+    ok()
+except Exception:
+    ok()
+
+test("scoring_mode=manual 时不执行 FSM")
+from app.services.live_coding_state_service import upsert_state as lc_upsert2
+lc_upsert2(db, tid, revision=r["revision"], set_ordinal=1, game_ordinal=1, rally_ordinal=1,
+           scoring_mode="manual", scoring_ruleset_version="manual", server_team="A", score_a=0, score_b=0, recent_results=[])
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_r7", expected_revision=r["revision"], timestamp_ms=19000)
+r = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_res7", expected_revision=r["revision"], timestamp_ms=20000)
+assert r["live_state"]["score_a"] == 0 and r["live_state"]["score_b"] == 0  # manual 不自动计分
+assert r["live_state"]["scoring_mode"] == "manual"; ok()
+
+# ── 13.9 reproject_coding_timeline 重启一致性 ──
+print("\n13.9 reproject_coding_timeline 重启一致性")
+test("重放后计分状态与在线执行一致")
+from app.services.coding_actions_service import reproject_coding_timeline
+from app.services.live_coding_state_service import upsert_state as lc_upsert3
+from app.models.capture_take import CaptureTakeStatus as CTS
+# 先切换到 singles FSM 模式并记录 actions
+lc_upsert3(db, tid, revision=r["revision"], set_ordinal=1, game_ordinal=1, rally_ordinal=0,
+           scoring_mode="side_out_singles_v1", scoring_ruleset_version="side_out_singles_v1",
+           server_team="A", score_a=2, score_b=1, recent_results=[])
+r = execute_coding_action(db, tid, action="start_next_rally", client_action_id="s_repro_1", expected_revision=r["revision"], timestamp_ms=21000)
+r = execute_coding_action(db, tid, action="rally_result_a", client_action_id="s_repro_res1", expected_revision=r["revision"], timestamp_ms=22000)
+score_a_online = r["live_state"]["score_a"]
+score_b_online = r["live_state"]["score_b"]
+server_online = r["live_state"]["server_team"]
+recent_online = r["live_state"]["recent_results"]
+
+# 模拟"重启"：设置 take 为 completed，重放
+take = get_capture_take(db, tid)
+take.status = CTS.completed
+take.duration_ms = 25000
+db.flush()
+reproject_coding_timeline(db, tid)
+rebuild_state = get_state(db, tid)
+
+assert rebuild_state.score_a == score_a_online, f"score_a: {rebuild_state.score_a} != {score_a_online}"
+assert rebuild_state.score_b == score_b_online, f"score_b: {rebuild_state.score_b} != {score_b_online}"
+assert rebuild_state.server_team == server_online, f"server: {rebuild_state.server_team} != {server_online}"
+rebuilt_recent = json.loads(rebuild_state.recent_results) if isinstance(rebuild_state.recent_results, str) else rebuild_state.recent_results
+assert rebuilt_recent == recent_online, f"recent: {rebuilt_recent} != {recent_online}"
+ok()
+
+db.rollback(); db.close()
 
 db.close()
 

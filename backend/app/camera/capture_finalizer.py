@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import subprocess
+import threading
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
@@ -16,6 +17,25 @@ from app.models.track_finalization import TrackFinalization, FinalizationStatus
 from app.models.track_timeline_span import TrackTimelineSpan
 
 logger = logging.getLogger(__name__)
+
+# 后台合并任务状态跟踪
+_merge_tasks: dict[str, dict] = {}
+_merge_lock = threading.Lock()
+
+
+def get_merge_status(capture_take_id: str) -> dict | None:
+    with _merge_lock:
+        return _merge_tasks.get(capture_take_id)
+
+
+def set_merge_status(capture_take_id: str, status: str, detail: str = "", result: dict | None = None) -> None:
+    with _merge_lock:
+        _merge_tasks[capture_take_id] = {
+            "capture_take_id": capture_take_id,
+            "status": status,
+            "detail": detail,
+            "result": result,
+        }
 
 
 @dataclass
@@ -29,11 +49,13 @@ class TrackFinalizationResult:
 
 
 class CaptureFinalizer:
-    def __init__(self, finalizer_timeout: int = 60):
+    def __init__(self, finalizer_timeout: int = 600):
         self._timeout = finalizer_timeout
 
     def finalize_track(self, capture_track_id: str,
-                       fragment_infos: list[dict]) -> TrackFinalizationResult:
+                       fragment_infos: list[dict],
+                       async_mode: bool = False,
+                       capture_take_id: str | None = None) -> TrackFinalizationResult:
         valid = []
         for f in fragment_infos:
             path = f.get("file_path", "")
@@ -48,6 +70,21 @@ class CaptureFinalizer:
             )
 
         valid.sort(key=lambda f: f.get("fragment_index", 0))
+
+        if async_mode and capture_take_id:
+            set_merge_status(capture_take_id, "pending", "合并已提交后台")
+            t = threading.Thread(
+                target=self._finalize_track_async,
+                args=(capture_track_id, valid, capture_take_id),
+                daemon=True,
+            )
+            t.start()
+            return TrackFinalizationResult(
+                capture_track_id=capture_track_id,
+                status="pending", fragment_count=len(valid),
+                warnings=["合并已在后台进行"],
+            )
+
         manifest_hash = self._compute_manifest_hash(valid)
 
         existing = self._find_existing_finalization(capture_track_id, manifest_hash)
@@ -107,6 +144,57 @@ class CaptureFinalizer:
                 concat_file.unlink(missing_ok=True)
             if temp_path.exists():
                 temp_path.unlink(missing_ok=True)
+
+    def _finalize_track_async(self, capture_track_id: str, valid: list[dict], capture_take_id: str) -> None:
+        """后台执行完整的合并且更新全局状态"""
+        try:
+            set_merge_status(capture_take_id, "merging", "合并中…")
+            manifest_hash = self._compute_manifest_hash(valid)
+            existing = self._find_existing_finalization(capture_track_id, manifest_hash)
+            if existing and existing.status == FinalizationStatus.completed:
+                set_merge_status(capture_take_id, "completed", "已复用已有合并", {
+                    "video_id": existing.video_id, "output_path": existing.output_path})
+                return
+
+            finalization_id = self._create_finalization_record(capture_track_id, manifest_hash)
+            fragment_parent = Path(valid[0]["file_path"]).parent
+            if fragment_parent.name == "fragments":
+                output_path = fragment_parent.parent / "media" / f"{capture_track_id}.mp4"
+            else:
+                output_path = Path(f"data/recordings/finalized/{capture_track_id}.mp4")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = Path(str(output_path) + ".finalizing")
+            concat_file = temp_path.with_suffix(".concat.txt")
+            try:
+                self._write_concat_manifest(concat_file, valid)
+                success = self._run_concat(concat_file, temp_path)
+                if not success:
+                    self._mark_finalization_failed(finalization_id, "concat failed")
+                    set_merge_status(capture_take_id, "failed", "合并失败")
+                    return
+
+                if not self._validate_output(temp_path):
+                    self._mark_finalization_failed(finalization_id, "ffprobe validation failed")
+                    set_merge_status(capture_take_id, "failed", "输出校验失败")
+                    return
+
+                os.replace(temp_path, output_path)
+                video_id = self._register_video(output_path, capture_track_id)
+                self._generate_timeline_spans(finalization_id, valid)
+                self._mark_finalization_completed(finalization_id, str(output_path), video_id)
+                set_merge_status(capture_take_id, "completed", "合并完成", {
+                    "video_id": video_id, "output_path": str(output_path)})
+            except Exception as e:
+                logger.exception("后台合并失败: %s", e)
+                set_merge_status(capture_take_id, "failed", f"合并异常: {e}")
+            finally:
+                if concat_file.exists():
+                    concat_file.unlink(missing_ok=True)
+                if temp_path.exists():
+                    temp_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.exception("后台合并整体异常: %s", e)
+            set_merge_status(capture_take_id, "failed", f"后台合并异常: {e}")
 
     def _compute_manifest_hash(self, fragments: list[dict]) -> str:
         data = "".join(f"{f.get('file_path')}:{f.get('fragment_index')}" for f in fragments)

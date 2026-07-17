@@ -80,8 +80,9 @@ class CaptureCompletionService:
         fragment_infos_by_track: dict[str, list[dict]],
     ) -> CompletionDecision:
         results = []
+        async_mode = len(fragment_infos_by_track) > 0
         for track_id, frags in fragment_infos_by_track.items():
-            r = finalizer.finalize_track(track_id, frags)
+            r = finalizer.finalize_track(track_id, frags, async_mode=True, capture_take_id=capture_take_id)
             results.append(r)
 
         decision = self.decide(outcome, results)

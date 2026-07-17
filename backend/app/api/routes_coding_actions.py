@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.camera.capture_finalizer import get_merge_status
 from app.schemas.coding_actions import (
     CodingActionRequest,
     CodingActionResponse,
@@ -106,6 +107,15 @@ def get_capture_take_detail(
         duration_ms=take.duration_ms,
         revision=take.revision,
     )
+
+
+@router.get("/{capture_take_id}/finalization-status")
+def get_finalization_status(capture_take_id: str):
+    """查询后台合并进度。"""
+    status = get_merge_status(capture_take_id)
+    if status is None:
+        return {"capture_take_id": capture_take_id, "status": "not_started"}
+    return status
 
 
 @router.get("/{capture_take_id}/segments")

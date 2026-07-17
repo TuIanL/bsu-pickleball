@@ -490,7 +490,8 @@ export type TimelineEventType =
   | "drill_start"
   | "drill_end"
   | "custom_marker"
-  | "add_note";
+  | "add_note"
+  | "score_correction";
 
 export type TimelineEventSource = "manual" | "algorithm" | "corrected";
 export type TimelineEventPayload = Record<string, unknown>;
@@ -549,7 +550,8 @@ export interface TimelineEventListParams {
 export type CodingActionType =
   | "start_set" | "start_game" | "start_next_rally"
   | "end_rally" | "end_game" | "end_set"
-  | "toggle_non_play" | "start_timeout" | "change_side" | "add_note" | "undo";
+  | "toggle_non_play" | "start_timeout" | "change_side" | "add_note" | "undo"
+  | "rally_result_a" | "rally_result_b" | "rally_replay" | "correct_score";
 
 /** 比赛阶段 */
 export type MatchPhase = "idle" | "rally_active" | "intermission";
@@ -578,6 +580,12 @@ export interface LiveCodingState {
   current_set_segment_id?: string;  // 当前盘段 ID
   current_game_segment_id?: string; // 当前局段 ID
   current_rally_segment_id?: string;// 当前分段 ID
+  server_team?: "A" | "B" | null;  // 当前发球方
+  score_a: number;                  // A 方得分
+  score_b: number;                  // B 方得分
+  scoring_mode: string;             // 计分模式
+  scoring_ruleset_version?: string; // 规则版本
+  recent_results: Array<{ winner: string | null; validity: string }>;  // 最近 N 分
 }
 
 /** 编码动作响应 */

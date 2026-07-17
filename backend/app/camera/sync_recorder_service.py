@@ -1253,8 +1253,14 @@ class SyncRecordingService:
         *, trim_start: float = 0.0, target_frames: int | None = None,
     ) -> str | None:
         """登记一个机位的视频到 VideoService"""
+        from app.camera.capture_finalizer import set_merge_status
+        take_id = getattr(session, "capture_take_id", None)
+
         try:
             from app.services.video_service import video_service, SUPPORTED_VIDEO_SUFFIXES
+
+            if take_id:
+                set_merge_status(take_id, "merging", f"合并 {slot.camera_id}…")
 
             # 转码/合并 .ts 分段为单个 MP4
             merged_path = self._merge_segments(
@@ -1267,6 +1273,8 @@ class SyncRecordingService:
 
             file_path = Path(merged_path) if merged_path else Path(file_paths[0])
             if not file_path.exists():
+                if take_id:
+                    set_merge_status(take_id, "failed", f"{slot.camera_id} 合并失败：输出文件不存在")
                 return None
 
             _extract_first_and_last_frames(str(file_path))
@@ -1281,10 +1289,62 @@ class SyncRecordingService:
                 original_filename=file_path.name,
                 file_size=file_size,
             )
+
+            if take_id:
+                is_merged = merged_path is not None and merged_path.endswith(".mp4")
+                if is_merged:
+                    set_merge_status(take_id, "completed", f"{slot.camera_id} 合并完成")
+                else:
+                    set_merge_status(take_id, "failed", f"{slot.camera_id} 合并失败，已降级为 .ts")
             return video_id
         except Exception as exc:
             logger.error("登记主机位视频失败: %s", exc)
+            if take_id:
+                set_merge_status(take_id, "failed", f"{slot.camera_id} 异常: {exc}")
             return None
+
+    def _find_keyframe_after(self, file_path: str, time_sec: float) -> float:
+        """查找指定时间之后最近的关键帧时间位置"""
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "error", "-select_streams", "v",
+                "-read_intervals", f"{time_sec}%+#1",
+                "-show_entries", "frame=key_frame,pts_time",
+                "-of", "csv=p=0", file_path,
+            ], capture_output=True, text=True, timeout=30)
+            for line in (result.stdout or "").strip().split("\n"):
+                if not line.strip():
+                    continue
+                parts = line.split(",")
+                if len(parts) >= 2 and parts[0].strip() == "1" and parts[1].strip():
+                    return float(parts[1].strip())
+            return time_sec
+        except Exception:
+            return time_sec
+
+    def _find_keyframe_before(self, file_path: str, time_sec: float) -> float:
+        """查找指定时间之前最近的关键帧时间位置"""
+        if time_sec <= 0:
+            return 0.0
+        try:
+            # 向前找 5 秒范围内的关键帧
+            start = max(0.0, time_sec - 5.0)
+            result = subprocess.run([
+                "ffprobe", "-v", "error", "-select_streams", "v",
+                "-read_intervals", f"{start}%{time_sec + 0.1}",
+                "-show_entries", "frame=key_frame,pts_time",
+                "-of", "csv=p=0", file_path,
+            ], capture_output=True, text=True, timeout=30)
+            last_kf = 0.0
+            for line in (result.stdout or "").strip().split("\n"):
+                if not line.strip():
+                    continue
+                parts = line.split(",")
+                if len(parts) >= 2 and parts[0].strip() == "1" and parts[1].strip() and float(parts[1].strip()) <= time_sec:
+                    last_kf = max(last_kf, float(parts[1].strip()))
+            return last_kf
+        except Exception:
+            return 0.0
 
     def _merge_segments(
         self,
@@ -1295,76 +1355,195 @@ class SyncRecordingService:
         target_frames: int | None = None,
         fps: int = 60,
     ) -> str | None:
-        """合并 .ts 分段为单个 MP4 文件"""
+        """合并 .ts 分段为单个 MP4 文件
+
+        精度策略：
+        - 无 trim 需求时：-c copy 秒级
+        - 有 trim 需求时：三段式（头重编码 + 主体 copy + 尾重编码），帧精确 <0.01s
+        """
         if not file_paths:
             return None
 
-        if len(file_paths) == 1:
-            # 单文件直接转码为 MP4
-            mp4_path = output_path.replace(".mp4", "") + ".mp4"
-            if target_frames is not None:
-                encoder = os.environ.get(
-                    "PICKLEBALL_SYNC_VIDEO_ENCODER",
-                    "h264_videotoolbox" if platform.system() == "Darwin" else "libx264",
-                )
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", file_paths[0],
-                    "-ss", f"{trim_start:.6f}",
-                    "-frames:v", str(target_frames),
-                    "-an", "-vf", f"fps={fps}",
-                    "-c:v", encoder,
-                    *( ["-preset", "veryfast"] if encoder == "libx264" else [] ),
-                    "-movflags", "+faststart",
-                    mp4_path,
-                ]
-            else:
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", file_paths[0],
-                    "-c", "copy",
-                    "-movflags", "+faststart",
-                    mp4_path,
-                ]
+        mp4_path = output_path.replace(".mp4", "") + ".mp4"
+        merge_timeout = 900
+
+        # 先解决多文件输入：concat 所有 TS 片段为一个临时文件
+        input_file = file_paths[0]
+        temp_concat = None
+        if len(file_paths) > 1:
+            temp_concat = output_path + ".merged.ts"
+            concat_file = output_path + ".concat.txt"
             try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
-                if os.path.exists(mp4_path):
+                with open(concat_file, "w", encoding="utf-8") as f:
+                    for fp in file_paths:
+                        f.write(f"file '{os.path.abspath(fp)}'\n")
+                subprocess.run([
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", concat_file, "-c", "copy", temp_concat,
+                ], capture_output=True, timeout=merge_timeout)
+                if not os.path.exists(temp_concat):
+                    return None
+                input_file = temp_concat
+            except Exception as e:
+                logger.warning("预合并TS分段失败: %s", e)
+                return None
+            finally:
+                if os.path.exists(concat_file):
+                    os.remove(concat_file)
+
+        need_trim = trim_start > 0.001 or target_frames is not None
+
+        if not need_trim:
+            # 无 trim，直接 -c copy（秒级）
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", input_file,
+                    "-c", "copy", "-movflags", "+faststart", mp4_path,
+                ], capture_output=True, timeout=merge_timeout)
+                if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
                     return mp4_path
             except Exception as e:
-                logger.warning("单文件转码MP4失败: %s", e)
-            return file_paths[0]
+                logger.warning("直接复制MP4失败: %s", e)
+                return input_file if not temp_concat else input_file
 
-        # 多文件合并
-        concat_file = output_path + ".concat.txt"
+        # --- 三段式精确裁剪 ---
+        encoder = os.environ.get(
+            "PICKLEBALL_SYNC_VIDEO_ENCODER",
+            "h264_videotoolbox" if platform.system() == "Darwin" else "libx264",
+        )
+        encoder_opts = ["-preset", "veryfast"] if encoder == "libx264" else []
+
+        total_duration = target_frames / max(fps, 1) if target_frames else 0
+        parts = []
+        temp_dir = Path(mp4_path).parent
+
         try:
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for fp in file_paths:
-                    f.write(f"file '{os.path.abspath(fp)}'\n")
+            # 1. 头段：精确跳过 trim_start
+            if trim_start > 0.001:
+                # 找到 trim_start 之后第一个关键帧位置
+                kf_after = self._find_keyframe_after(input_file, trim_start)
+                # 只重编码 trim_start ~ kf_after 这一段（约 1 GOP）
+                head_file = str(temp_dir / f"head_{uuid.uuid4().hex[:6]}.mp4")
+                head_duration = kf_after - trim_start
+                head_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{trim_start:.6f}", "-i", input_file,
+                    "-c:v", encoder, *encoder_opts,
+                    "-frames:v", max(1, int(head_duration * fps)),
+                    "-c:a", "copy",
+                    "-avoid_negative_ts", "make_zero",
+                    "-fflags", "+genpts",
+                    head_file,
+                ]
+                subprocess.run(head_cmd, capture_output=True, timeout=merge_timeout)
+                if os.path.exists(head_file) and os.path.getsize(head_file) > 0:
+                    parts.append(head_file)
+                    # 主体从 kf_after 开始 copy
+                    body_input = input_file
+                    body_start = kf_after
+                else:
+                    body_input = input_file
+                    body_start = trim_start
+            else:
+                body_input = input_file
+                body_start = 0.0
+                parts.append(input_file)
 
-            mp4_path = output_path.replace(".mp4", "") + ".mp4"
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", concat_file,
-                "-c", "copy",
-                "-movflags", "+faststart",
-                mp4_path,
-            ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
+            # 2. 尾段：精确截到 target_frames
+            if target_frames is not None:
+                kf_before_end = self._find_keyframe_before(body_input, total_duration)
+                tail_start = kf_before_end
+                tail_frames = target_frames - int(body_start * fps)
+                if tail_frames < 0:
+                    tail_frames = 0
 
-            if os.path.exists(mp4_path):
+                # 主体从 body_start copy 到 tail_start
+                if body_start < tail_start:
+                    body_file = str(temp_dir / f"body_{uuid.uuid4().hex[:6]}.ts")
+                    subprocess.run([
+                        "ffmpeg", "-y",
+                        "-ss", f"{body_start:.6f}", "-i", body_input,
+                        "-to", f"{tail_start - body_start:.6f}",
+                        "-c", "copy", body_file,
+                    ], capture_output=True, timeout=merge_timeout)
+                    if os.path.exists(body_file) and os.path.getsize(body_file) > 0:
+                        parts.append(body_file)
+
+                # 尾段重编码到精确帧数
+                if tail_frames > 0:
+                    tail_file = str(temp_dir / f"tail_{uuid.uuid4().hex[:6]}.mp4")
+                    subprocess.run([
+                        "ffmpeg", "-y",
+                        "-ss", f"{tail_start:.6f}", "-i", body_input,
+                        "-c:v", encoder, *encoder_opts,
+                        "-frames:v", tail_frames,
+                        "-c:a", "copy",
+                        "-avoid_negative_ts", "make_zero",
+                        "-fflags", "+genpts",
+                        tail_file,
+                    ], capture_output=True, timeout=merge_timeout)
+                    if os.path.exists(tail_file) and os.path.getsize(tail_file) > 0:
+                        parts.append(tail_file)
+            else:
+                # 无尾段要求，主体直到文件末尾
+                if body_start > 0:
+                    body_file = str(temp_dir / f"body_{uuid.uuid4().hex[:6]}.ts")
+                    subprocess.run([
+                        "ffmpeg", "-y",
+                        "-ss", f"{body_start:.6f}", "-i", body_input,
+                        "-c", "copy", body_file,
+                    ], capture_output=True, timeout=merge_timeout)
+                    if os.path.exists(body_file) and os.path.getsize(body_file) > 0:
+                        parts.append(body_file)
+                else:
+                    parts.append(body_input)
+
+            # 3. 合并所有段
+            if len(parts) == 0:
+                logger.warning("三段式裁剪未生成任何有效段")
+                return None
+
+            if len(parts) == 1:
+                # 只要一段，直接复制
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", parts[0],
+                    "-c", "copy", "-movflags", "+faststart", mp4_path,
+                ], capture_output=True, timeout=merge_timeout)
+            else:
+                concat = str(temp_dir / f"concat_{uuid.uuid4().hex[:6]}.txt")
+                with open(concat, "w") as f:
+                    for p in parts:
+                        f.write(f"file '{os.path.abspath(p)}'\n")
+                subprocess.run([
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", concat, "-c", "copy",
+                    "-movflags", "+faststart", mp4_path,
+                ], capture_output=True, timeout=merge_timeout)
+                if os.path.exists(concat):
+                    os.remove(concat)
+
+            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
                 return mp4_path
+
+            logger.warning("三段式裁剪最终输出不存在")
+            return None
+
         except Exception as e:
-            logger.warning("合并.ts分段失败: %s", e)
+            logger.warning("三段式裁剪失败: %s", e)
+            return None
         finally:
-            if os.path.exists(concat_file):
+            # 清理临时文件
+            for p in parts:
+                if p != input_file and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            if temp_concat and os.path.exists(temp_concat):
                 try:
-                    os.remove(concat_file)
+                    os.remove(temp_concat)
                 except Exception:
                     pass
-
-        return None
 
     def run_test(self, request: SyncTestRequest) -> SyncTestResult:
         """执行双摄短录测试"""

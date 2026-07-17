@@ -48,6 +48,12 @@ class LiveCodingStateResponse(BaseModel):
     current_set_segment_id: Optional[str] = None
     current_game_segment_id: Optional[str] = None
     current_rally_segment_id: Optional[str] = None
+    server_team: Optional[str] = None
+    score_a: int = 0
+    score_b: int = 0
+    scoring_mode: str = "none"
+    scoring_ruleset_version: Optional[str] = None
+    recent_results: list[dict] = []
 
     model_config = {"from_attributes": True}
 

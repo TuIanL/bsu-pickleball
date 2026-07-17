@@ -106,13 +106,24 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_capture_storage_columns(engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
-    columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
-    take_columns = {column["name"] for column in inspect(engine).get_columns("capture_takes")}
+    lcs_columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
     with engine.begin() as connection:
-        if "match_phase" not in columns:
+        if "match_phase" not in lcs_columns:
             connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN match_phase VARCHAR(32) NOT NULL DEFAULT 'idle'"))
-        if "intermission_kind" not in columns:
+        if "intermission_kind" not in lcs_columns:
             connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN intermission_kind VARCHAR(32)"))
+        if "server_team" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN server_team VARCHAR(8)"))
+        if "score_a" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN score_a INTEGER NOT NULL DEFAULT 0"))
+        if "score_b" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN score_b INTEGER NOT NULL DEFAULT 0"))
+        if "scoring_mode" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN scoring_mode VARCHAR(32) NOT NULL DEFAULT 'none'"))
+        if "scoring_ruleset_version" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN scoring_ruleset_version VARCHAR(64)"))
+        if "recent_results" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN recent_results TEXT NOT NULL DEFAULT '[]'"))
 
 
 def get_db() -> Session:
