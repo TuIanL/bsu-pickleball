@@ -61,9 +61,16 @@ export function FieldSessionGroupCard({
 
   return (
     <section className={`overflow-hidden rounded-3xl border bg-white/80 shadow-sm ${selectedFieldSession ? "border-[#22C55E]/50 ring-1 ring-[#22C55E]/20" : "border-[#DDE9D6]"}`}>
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
         className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-[#F5FAF1]"
         aria-expanded={expanded}
       >
@@ -120,7 +127,7 @@ export function FieldSessionGroupCard({
             <Trash2 size={12} className="inline mr-1" />删除
           </button>
         )}
-      </button>
+      </div>
 
       {expanded && (
         <div className="grid gap-3 border-t border-[#DDE9D6] bg-white/60 p-4">

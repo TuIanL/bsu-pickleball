@@ -58,6 +58,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <HardwarePage onNavigate={onNavigate} />;
       case "recordingWorkspace":
         return <RecordingWorkspacePage sessionId={route.sessionId} onNavigate={onNavigate} />;
+      case "workspace":
+        return <div style={{ padding: 24, color: "#98A2B3", fontSize: 14 }}>工作台（建设中）</div>;
       case "landing":
       default:
         return <LandingPage onNavigate={onNavigate} />;

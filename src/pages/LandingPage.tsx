@@ -36,23 +36,15 @@ export function LandingPage({ onNavigate }: { onNavigate: NavigateFn }) {
             上传已有比赛视频或连接摄像头现场录制，系统自动完成人员检测、姿态叠加、移动轨迹和球场热力图分析。
           </p>
 
-          {/* 双主入口按钮 */}
+          {/* CTA 入口 */}
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <button
-              className="green-button flex items-center gap-2 px-6 py-3.5 text-base"
-              onClick={() => onNavigate("/upload")}
-              type="button"
-            >
-              <Upload size={18} aria-hidden="true" />
-              上传已有视频
-            </button>
-            <button
-              className="quiet-button flex items-center gap-2 px-6 py-3.5 text-base"
+              className="green-button flex items-center gap-2 px-8 py-4 text-lg font-bold"
               onClick={() => onNavigate("/capture")}
               type="button"
             >
-              <Camera size={18} aria-hidden="true" />
-              进入现场录制
+              <Camera size={22} aria-hidden="true" />
+              进入开始使用
             </button>
           </div>
 

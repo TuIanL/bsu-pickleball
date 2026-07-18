@@ -17,6 +17,17 @@ from app.services.storage_service import StorageService
 
 # 全局内存缓存：camera_id -> CameraInfo
 CAMERAS: dict[str, CameraInfo] = {}
+VIRTUAL_CAMERA_ID = "virtual-test-camera"
+
+
+def _virtual_camera() -> CameraInfo:
+    return CameraInfo(
+        camera_id=VIRTUAL_CAMERA_ID,
+        name="测试摄像头（虚拟）",
+        stream_url="virtual://black",
+        protocol="http",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
 
 
 class CameraRegistry:
@@ -49,6 +60,8 @@ class CameraRegistry:
         return camera
 
     def get(self, camera_id: str) -> CameraInfo | None:
+        if camera_id == VIRTUAL_CAMERA_ID:
+            return _virtual_camera()
         # 先查内存缓存，命中直接返回
         cached = CAMERAS.get(camera_id)
         if cached is not None:
@@ -64,13 +77,9 @@ class CameraRegistry:
         return camera
 
     def list_all(self) -> list[CameraInfo]:
-        # 目录不存在就返回空列表
-        if not self.cameras_dir.exists():
-            return []
-
         result: list[CameraInfo] = []
         # 遍历目录下所有 .json，逐个解析成摄像头对象
-        for path in sorted(self.cameras_dir.glob("*.json")):
+        for path in sorted(self.cameras_dir.glob("*.json")) if self.cameras_dir.exists() else []:
             try:
                 data = self._storage.read_json(path)
                 camera = CameraInfo.model_validate(data)
@@ -79,6 +88,8 @@ class CameraRegistry:
             except Exception:
                 # 单个文件损坏不影响其他，跳过
                 pass
+        if not any(camera.camera_id == VIRTUAL_CAMERA_ID for camera in result):
+            result.insert(0, _virtual_camera())
         return result
 
     def delete(self, camera_id: str) -> bool:

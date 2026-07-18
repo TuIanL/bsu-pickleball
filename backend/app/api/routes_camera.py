@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from starlette.responses import StreamingResponse
 
 # 摄像头登记中心：负责在内存/文件里维护一份"已登记摄像头"的清单
-from app.camera.camera_registry import camera_registry
+from app.camera.camera_registry import VIRTUAL_CAMERA_ID, camera_registry
 # 摄像头相关的数据模型（请求/响应格式）
 from app.camera.models import CameraCreateRequest, CameraDeleteResponse, CameraInfo, CameraUpdateRequest, ProbeResult
 # 预览服务：将摄像头流转换为 MJPEG over HTTP
@@ -60,7 +60,7 @@ def create_camera(payload: CameraCreateRequest) -> CameraInfo:
     如果同名（同 camera_id）的摄像头已经存在，返回 409（冲突），
     要求用户先删除旧的再重新注册。
     """
-    if camera_registry.exists(payload.camera_id):
+    if payload.camera_id == VIRTUAL_CAMERA_ID or camera_registry.exists(payload.camera_id):
         raise HTTPException(status_code=409, detail=f"摄像头 {payload.camera_id} 已存在，请先删除再重新注册")
     # 把摄像头信息写入登记中心
     camera = camera_registry.create(
@@ -78,6 +78,8 @@ def create_camera(payload: CameraCreateRequest) -> CameraInfo:
 @router.patch("/{camera_id}", response_model=CameraInfo)
 def update_camera(camera_id: str, payload: CameraUpdateRequest) -> CameraInfo:
     """修改摄像头 ID 和显示名称。"""
+    if camera_id == VIRTUAL_CAMERA_ID:
+        raise HTTPException(status_code=409, detail="虚拟测试摄像头不可修改")
     from app.camera.session_service import session_service
     from app.camera.sync_recorder_service import sync_recording_service
 
@@ -105,6 +107,9 @@ def delete_camera(camera_id: str) -> CameraDeleteResponse:
     如果该摄像头正在录制（有进行中的录制会话），则不允许删除，返回 409，
     避免打断正在进行的录制。
     """
+    if camera_id == VIRTUAL_CAMERA_ID:
+        raise HTTPException(status_code=409, detail="虚拟测试摄像头不可删除")
+
     # 延迟导入：只在真正需要时才加载会话服务。
     # 这样写可以避开"模块 A 导入 B、B 又导入 A"造成的循环导入问题。
     from app.camera.session_service import session_service

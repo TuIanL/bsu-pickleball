@@ -1,5 +1,6 @@
 /** useCaptureRuntime —— 统一前端录制生命周期 Hook */
 import { useReducer, useState, useEffect, useCallback, useRef } from "react";
+import { computeCaptureElapsedMs } from "../components/capture/captureClock";
 import type {
   CaptureRuntimeState, CaptureStartIntent, UnifiedCaptureSession, NormalizedCaptureStopResult, CaptureMode,
 } from "../types/capture";
@@ -11,7 +12,7 @@ import {
   startRecording, stopRecording, cancelRecording,
   startSyncRecording, stopSyncRecording, cancelSyncRecording,
   getRecording, getSyncRecording, getCaptureTake,
-  listRecordings, listSyncRecordings,
+  listRecordings, listSyncRecordings, getFieldSession,
 } from "../services/analysisClient";
 import type { RecordingStartRequest, SyncStartRequest, CaptureTakeSummary } from "../types/report";
 
@@ -112,7 +113,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
 
   const startClock = useCallback((startedAt: string) => {
     clockRef.current = setInterval(() => {
-      setElapsedMs(Math.max(0, Date.now() - Date.parse(startedAt)));
+      setElapsedMs(computeCaptureElapsedMs(startedAt));
     }, 250);
   }, []);
 
@@ -221,7 +222,10 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
       if (onFieldSessionStarted) {
         try {
           const { startFieldSession } = await import("../services/analysisClient");
-          const fs = await startFieldSession(fieldSessionId);
+          const current = await getFieldSession(fieldSessionId);
+          const fs = current.status === "live"
+            ? current
+            : await startFieldSession(fieldSessionId);
           onFieldSessionStarted(fs);
         } catch { /* best-effort */ }
       }

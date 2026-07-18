@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -224,6 +224,32 @@ _TERMINAL_STATUSES = {
     CaptureTakeStatus.failed,
     CaptureTakeStatus.canceled,
 }
+
+
+# 活跃状态定义
+_ACTIVE_STATUSES = {
+    CaptureTakeStatus.starting,
+    CaptureTakeStatus.recording,
+}
+# 活跃超时：超过 3 小时仍为 starting/recording 视为陈旧，不再算活跃
+_ACTIVE_TIMEOUT_SEC = 3 * 3600
+
+
+def get_active_capture_take(db: Session) -> CaptureTake | None:
+    """查询当前活跃（starting/recording）的 CaptureTake，超时视为不活跃。"""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_ACTIVE_TIMEOUT_SEC)
+    return (
+        db.query(CaptureTake)
+        .filter(CaptureTake.status.in_(_ACTIVE_STATUSES))
+        .filter(CaptureTake.started_at >= cutoff)
+        .order_by(CaptureTake.started_at.desc())
+        .first()
+    )
+
+
+def has_active_capture_take(db: Session) -> bool:
+    """检查是否存在活跃的 CaptureTake（含超时判断）。"""
+    return get_active_capture_take(db) is not None
 
 
 # 幂等终态化：将采集 take 置为终态（已终态的不再覆盖）

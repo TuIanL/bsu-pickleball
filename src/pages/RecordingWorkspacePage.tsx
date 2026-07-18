@@ -109,8 +109,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
   const [isPlaying, setIsPlaying] = useState(false);
   const video1Ref = useRef<HTMLVideoElement | null>(null);
   const video2Ref = useRef<HTMLVideoElement | null>(null);
-  const syncingRef = useRef(false);
-  const bufferingRef = useRef<Record<string, boolean>>({});
+  const pendingSeekRef = useRef<{ source: string; target: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -187,59 +186,51 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
   }, []);
 
   const handleTimeUpdate = useCallback(() => {
-    setVideoTimeMs(Math.floor(video1Ref.current!.currentTime * 1000));
+    const master = video1Ref.current;
+    if (!master) return;
+    setVideoTimeMs(Math.floor(master.currentTime * 1000));
   }, []);
 
   const getOtherVideo = (source: string) =>
     source === "cam_1" ? video2Ref.current : video1Ref.current;
 
   const handleCamPlay = useCallback((source: string) => {
-    if (syncingRef.current) return;
     setIsPlaying(true);
-    bufferingRef.current = {};
-    syncingRef.current = true;
-    getOtherVideo(source)?.play();
-    syncingRef.current = false;
+    const sourceVideo = source === "cam_1" ? video1Ref.current : video2Ref.current;
+    const otherVideo = getOtherVideo(source);
+    if (!sourceVideo || !otherVideo) return;
+
+    // 原生 controls 已经启动了 sourceVideo；这里只把另一路对齐并启动，
+    // 不要再次调用 sourceVideo.play()，避免浏览器把一次点击变成重复播放命令。
+    if (Math.abs(sourceVideo.currentTime - otherVideo.currentTime) > 0.03) {
+      pendingSeekRef.current = { source: source === "cam_1" ? "cam_2" : "cam_1", target: sourceVideo.currentTime };
+      otherVideo.currentTime = sourceVideo.currentTime;
+    }
+    if (otherVideo.paused) void otherVideo.play().catch(() => {});
   }, []);
 
   const handleCamPause = useCallback((source: string) => {
-    bufferingRef.current = {};
-    if (syncingRef.current) return;
     setIsPlaying(false);
-    syncingRef.current = true;
-    getOtherVideo(source)?.pause();
-    syncingRef.current = false;
+    const otherVideo = getOtherVideo(source);
+    if (otherVideo && !otherVideo.paused) otherVideo.pause();
   }, []);
 
   const handleCamSeeked = useCallback((source: string) => {
-    if (syncingRef.current) return;
     const srcEl = source === "cam_1" ? video1Ref.current : video2Ref.current;
     const otherEl = getOtherVideo(source);
-    if (srcEl && otherEl && Math.abs(srcEl.currentTime - otherEl.currentTime) > 0.3) {
-      syncingRef.current = true;
-      otherEl.currentTime = srcEl.currentTime;
-      syncingRef.current = false;
+    if (!srcEl) return;
+    setVideoTimeMs(Math.floor(srcEl.currentTime * 1000));
+
+    // 忽略由另一条视频的校正动作触发的 seeked，避免 A -> B -> A 反复回写。
+    if (pendingSeekRef.current?.source === source) {
+      pendingSeekRef.current = null;
+      return;
     }
-  }, []);
 
-  const handleCamWaiting = useCallback((source: string) => {
-    bufferingRef.current[source] = true;
-    syncingRef.current = true;
-    video1Ref.current?.pause();
-    video2Ref.current?.pause();
-    syncingRef.current = false;
-    setIsPlaying(false);
-  }, []);
-
-  const handleCamPlaying = useCallback((source: string) => {
-    if (!bufferingRef.current[source]) return;
-    bufferingRef.current[source] = false;
-    if (Object.values(bufferingRef.current).some(Boolean)) return;
-    syncingRef.current = true;
-    video1Ref.current?.play();
-    video2Ref.current?.play();
-    syncingRef.current = false;
-    setIsPlaying(true);
+    if (otherEl && Math.abs(srcEl.currentTime - otherEl.currentTime) > 0.03) {
+      pendingSeekRef.current = { source: source === "cam_1" ? "cam_2" : "cam_1", target: srcEl.currentTime };
+      otherEl.currentTime = srcEl.currentTime;
+    }
   }, []);
 
   // ── Loading ──
@@ -304,14 +295,14 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
                 key={`cam1-${sessionId}`}
                 className="w-full h-full object-contain"
                 controls
+                preload="auto"
+                playsInline
                 src={getVideoStreamUrl(cam1VideoId)}
                 onError={() => handlePlaybackError("cam_1")}
                 onTimeUpdate={handleTimeUpdate}
                 onPlay={() => handleCamPlay("cam_1")}
                 onPause={() => handleCamPause("cam_1")}
                 onSeeked={() => handleCamSeeked("cam_1")}
-                onWaiting={() => handleCamWaiting("cam_1")}
-                onPlaying={() => handleCamPlaying("cam_1")}
               />
           ) : (
             <div className="flex items-center justify-center h-full">
@@ -332,13 +323,13 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
                 key={`cam2-${sessionId}`}
                 className="w-full h-full object-contain"
                 controls
+                preload="auto"
+                playsInline
                 src={getVideoStreamUrl(cam2VideoId)}
                 onError={() => handlePlaybackError("cam_2")}
                 onPlay={() => handleCamPlay("cam_2")}
                 onPause={() => handleCamPause("cam_2")}
                 onSeeked={() => handleCamSeeked("cam_2")}
-                onWaiting={() => handleCamWaiting("cam_2")}
-                onPlaying={() => handleCamPlaying("cam_2")}
               />
             ) : (
               <div className="flex items-center justify-center h-full">

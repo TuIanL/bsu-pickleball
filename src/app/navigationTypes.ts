@@ -1,8 +1,19 @@
 export type ReportType = "movement" | "diagnosis";
 
+export type AppShellMode = "landing" | "standard" | "capture";
+
+export type NavigationSection =
+  | "capture"
+  | "videos"
+  | "analysis"
+  | "reports"
+  | "devices"
+  | "settings";
+
 export type AppPath =
   | "/"
   | "/upload"
+  | "/workspace"
   | "/capture"
   | "/capture/new"
   | `/capture/${string}`
@@ -21,24 +32,25 @@ export type AppPath =
   | `/recording/${string}`;
 
 export type RouteState =
-  | { name: "landing"; path: "/" }
-  | { name: "upload"; path: "/upload"; videoId?: string; source?: string }
-  | { name: "captureHome"; path: "/capture" }
-  | { name: "captureNew"; path: "/capture/new" }
-  | { name: "captureConsole"; path: `/capture/${string}`; sessionId: string }
-  | { name: "segmentManager"; path: `/capture/${string}/takes/${string}/segments`; fieldSessionId: string; takeId: string }
-  | { name: "tasks"; path: "/tasks" }
-  | { name: "new-analysis"; path: "/analysis/new" }
-  | { name: "analysis-tasks"; path: "/analysis/tasks" }
-  | { name: "analysis-job"; path: `/analysis/${string}`; jobId: string }
-  | { name: "analysis-details"; path: `/analysis/${string}/details`; jobId: string }
-  | { name: "vision"; path: "/vision" }
-  | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string }
-  | { name: "report"; path: `/reports/${ReportType}`; reportType: ReportType }
-  | { name: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string }
-  | { name: "camera-hub"; path: "/camera" }
-  | { name: "training"; path: "/training" }
-  | { name: "hardware"; path: "/hardware" }
-  | { name: "recordingWorkspace"; path: `/recording/${string}`; sessionId: string };
+  | { name: "landing"; path: "/"; shellMode: "landing"; navigationSection: null }
+  | { name: "upload"; path: "/upload"; videoId?: string; source?: string; shellMode: "landing"; navigationSection: null }
+  | { name: "workspace"; path: "/workspace"; shellMode: "standard"; navigationSection: "capture" }
+  | { name: "captureHome"; path: "/capture"; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "captureNew"; path: "/capture/new"; shellMode: "standard"; navigationSection: "capture" }
+  | { name: "captureConsole"; path: `/capture/${string}`; sessionId: string; shellMode: "capture"; navigationSection: "capture" }
+  | { name: "segmentManager"; path: `/capture/${string}/takes/${string}/segments`; fieldSessionId: string; takeId: string; shellMode: "standard"; navigationSection: "capture" }
+  | { name: "tasks"; path: "/tasks"; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "new-analysis"; path: "/analysis/new"; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "analysis-tasks"; path: "/analysis/tasks"; shellMode: "standard"; navigationSection: "videos" }
+  | { name: "analysis-job"; path: `/analysis/${string}`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "analysis-details"; path: `/analysis/${string}/details`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "vision"; path: "/vision"; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "report"; path: `/reports/${ReportType}`; reportType: ReportType; shellMode: "standard"; navigationSection: "reports" }
+  | { name: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string; shellMode: "standard"; navigationSection: "reports" }
+  | { name: "camera-hub"; path: "/camera"; shellMode: "standard"; navigationSection: "devices" }
+  | { name: "training"; path: "/training"; shellMode: "standard"; navigationSection: "settings" }
+  | { name: "hardware"; path: "/hardware"; shellMode: "standard"; navigationSection: "settings" }
+  | { name: "recordingWorkspace"; path: `/recording/${string}`; sessionId: string; shellMode: "standard"; navigationSection: "videos" };
 
 export type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;

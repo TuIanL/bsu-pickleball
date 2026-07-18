@@ -106,6 +106,7 @@ def stream_video(video_id: str) -> FileResponse:
                 merged,
                 media_type="video/mp4",
                 filename=merged.name,
+                content_disposition_type="inline",
             )
 
     # 用 FileResponse 把文件作为 HTTP 响应发回去
@@ -116,4 +117,5 @@ def stream_video(video_id: str) -> FileResponse:
         path,
         media_type=video.content_type or "video/mp4",
         filename=video.original_filename,
+        content_disposition_type="inline",
     )

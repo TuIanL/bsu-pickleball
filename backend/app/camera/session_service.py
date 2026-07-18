@@ -258,6 +258,21 @@ class SessionService:
         session_dir: str | None = None,
     ) -> None:
         """使用 Coordinator 或 fallback 创建 CaptureTake。"""
+
+        # 活跃录制唯一性约束：全局最多一个 active CaptureTake
+        from app.services.capture_take_service import has_active_capture_take
+        try:
+            from app.database import get_session_factory
+            check_db = get_session_factory()()
+            try:
+                if has_active_capture_take(check_db):
+                    raise RuntimeError("系统已存在活跃录制，无法同时启动两个录制")
+            finally:
+                check_db.close()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.warning("检查活跃录制失败（跳过约束）: %s", exc)
         if self._coordinator:
             from app.services.capture_start_coordinator import CaptureTrackSpec
             spec = CaptureTrackSpec(slot="cam_1", camera_id=camera_id, analysis_role="default")
@@ -612,6 +627,33 @@ class SessionService:
                 try:
                     session = RecordingSession.model_validate(self._storage.read_json(path))
                     SESSIONS[session.session_id] = session
+
+                    # 自愈：session JSON 为 recording 但内存中无活跃进程 → 标记 failed
+                    if session.status == "recording" and self.find_active_session(session.camera_id) is None:
+                        session = session.model_copy(update={
+                            "status": "failed",
+                            "stopped_at": datetime.now(timezone.utc),
+                            "error_message": "服务中没有对应的活动录制进程，会话已恢复为失败状态",
+                        })
+                        self._persist(session)
+                        SESSIONS[session.session_id] = session
+                        if session.capture_take_id:
+                            try:
+                                from app.database import get_session_factory
+                                from app.services.capture_take_service import finalize_capture_take
+                                db = get_session_factory()()
+                                try:
+                                    finalize_capture_take(db, session.capture_take_id, "failed")
+                                    db.commit()
+                                    logger.info("自愈：单路 session %s CaptureTake %s 终态化为 failed",
+                                                session.session_id, session.capture_take_id)
+                                finally:
+                                    db.close()
+                            except Exception as exc:
+                                logger.warning("自愈：单路 CaptureTake %s 终态化失败: %s", session.capture_take_id, exc)
+                        else:
+                            logger.info("自愈：单路 session %s 已标记 failed（无 capture_take_id）", session.session_id)
+
                     # 按过滤条件跳过不匹配的
                     if camera_id and session.camera_id != camera_id:
                         continue

@@ -1,4 +1,4 @@
-import type { LiveCodingState } from "../types/report";
+import type { LiveCodingState, SessionTimelineEvent } from "../types/report";
 
 interface ScoreBoardProps {
   liveState: LiveCodingState | null;
@@ -6,11 +6,12 @@ interface ScoreBoardProps {
   onInitialServerSelect?: (server: "A" | "B") => void;
   showInitialServerSelector?: boolean;
   openRallyExists?: boolean;
+  timelineEvents?: SessionTimelineEvent[];
 }
 
 export function ScoreBoard({
   liveState, onCorrectScore, onInitialServerSelect,
-  showInitialServerSelector, openRallyExists,
+  showInitialServerSelector, openRallyExists, timelineEvents = [],
 }: ScoreBoardProps) {
   if (!liveState) return null;
 
@@ -31,10 +32,17 @@ export function ScoreBoard({
   return (
     <div className="space-y-3 rounded-xl border border-[#DDE9D6] bg-white p-4">
       {/* Header */}
-      <ScoreHeader setOrdinal={liveState.set_ordinal} gameOrdinal={liveState.game_ordinal} />
+      <ScoreHeader
+        setOrdinal={liveState.set_ordinal}
+        gameOrdinal={liveState.game_ordinal}
+        hasCurrentGame={Boolean(liveState.current_game_segment_id)}
+        hasCurrentSet={Boolean(liveState.current_set_segment_id)}
+      />
 
       {/* Score Display */}
       <ScoreDisplay scoreA={scoreA} scoreB={scoreB} server={server} />
+
+      <CompletedGameSummary events={timelineEvents} />
 
       {/* Recent Points */}
       <RecentPoints results={liveState.recent_results ?? []} openRallyExists={openRallyExists} />
@@ -47,10 +55,28 @@ export function ScoreBoard({
   );
 }
 
-function ScoreHeader({ setOrdinal, gameOrdinal }: { setOrdinal: number; gameOrdinal: number }) {
+function ScoreHeader({ setOrdinal, gameOrdinal, hasCurrentGame, hasCurrentSet }: { setOrdinal: number; gameOrdinal: number; hasCurrentGame: boolean; hasCurrentSet: boolean }) {
+  const visibleSet = setOrdinal + (setOrdinal > 0 && !hasCurrentSet ? 1 : 0);
+  const visibleGame = gameOrdinal + (gameOrdinal > 0 && !hasCurrentGame ? 1 : 0);
   return (
     <div className="text-xs font-bold text-slate-500">
-      {setOrdinal > 0 ? `盘 ${setOrdinal}` : ""} {gameOrdinal > 0 ? `· 局 ${gameOrdinal}` : ""}
+      {visibleSet > 0 ? `盘 ${visibleSet}` : ""} {visibleGame > 0 ? `· 局 ${visibleGame}` : ""}
+    </div>
+  );
+}
+
+function CompletedGameSummary({ events }: { events: SessionTimelineEvent[] }) {
+  const completed = events
+    .filter(event => event.event_type === "game_end" && event.payload_json?.score_a != null && event.payload_json?.score_b != null)
+    .slice(-1)[0];
+  if (!completed) return null;
+
+  const scoreA = Number(completed.payload_json.score_a);
+  const scoreB = Number(completed.payload_json.score_b);
+  const winner = completed.payload_json.winner === "A" ? "A 方胜" : completed.payload_json.winner === "B" ? "B 方胜" : "平局";
+  return (
+    <div className="rounded-lg bg-slate-50 px-3 py-2 text-center text-xs text-slate-500">
+      上一局：<strong className="text-slate-700">A {scoreA} : {scoreB} B</strong> · {winner}
     </div>
   );
 }

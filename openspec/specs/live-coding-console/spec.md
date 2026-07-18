@@ -312,3 +312,50 @@
 **修改前**：按钮点击 → 创建 Outbox item → enqueue → 直接调用 `createTimelineEvent` → Outbox sender flush。同一事件可能产生两条 DB 记录。
 
 **修改后**：按钮点击 → 创建 Outbox item → enqueue → Outbox sender 通过 `coding-actions` 接口发送 → 响应更新 `events`/`segments`/`liveState`。SHALL 不再直接调用 `POST /api/field-sessions/{id}/timeline-events`。
+
+### Requirement: 桌面端实时录制工作台层级
+
+实时录制实施页 SHALL 按标题栏、双机位预览、录制控制条、事件标注时间线和底部信息区的顺序组织主要内容。
+
+#### Scenario: 双摄桌面工作台
+
+- **WHEN** 用户打开双摄实时录制实施页
+- **THEN** 页面 SHALL 同时展示两个机位预览、录制状态、录制控制、事件按钮和时间线
+- **AND** 页面 SHALL 在 1024px 及以上视口不产生横向滚动
+
+#### Scenario: 单摄桌面工作台
+
+- **WHEN** 用户打开单摄实时录制实施页
+- **THEN** 页面 SHALL 展示一个主预览和与其对应的设备/比分上下文
+- **AND** 不得渲染空白的第二机位占位
+
+### Requirement: 真实运行指标展示
+
+工作台 SHALL 使用 CaptureTake 运行状态 API 展示存储容量、文件大小、码率、帧率和轨道健康状态；指标不可用时 SHALL 展示对应的采集或不可用状态。
+
+#### Scenario: 运行状态成功更新
+
+- **WHEN** 运行状态 API 返回 `ready` 指标
+- **THEN** 页面 SHALL 展示后端返回的数值和单位
+- **AND** 页面不得使用硬编码系统状态覆盖返回值
+
+#### Scenario: 运行状态请求失败
+
+- **WHEN** 运行状态轮询请求失败
+- **THEN** 页面 SHALL 保留最后一次成功快照
+- **AND** SHALL 显示状态更新失败及最后更新时间
+- **AND** 不得阻塞停止、取消或事件标注操作
+
+### Requirement: 系统状态真实性
+
+系统状态卡 SHALL 只展示后端能够确认的存储、录制轨道、双路同步和事件同步状态。
+
+#### Scenario: 没有音频链路
+
+- **WHEN** 当前录制链路没有音频编码
+- **THEN** 系统状态卡 SHALL 不展示“音频编码正常”或等价的虚假状态
+
+#### Scenario: 双摄局部故障
+
+- **WHEN** 一个轨道失败而另一个轨道仍可录制
+- **THEN** 页面 SHALL 展示整体状态和对应轨道的独立错误信息

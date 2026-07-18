@@ -5,6 +5,9 @@
  */
 import type { TimelineEventType, TimelineEventSource, CodingActionType } from "../types/report";
 
+/** 按钮分组 */
+export type QuickEventGroup = "hierarchy" | "match" | "auxiliary";
+
 /** 快捷事件按钮定义 */
 export interface QuickEventDef {
   type: CodingActionType;       // 动作类型
@@ -12,6 +15,7 @@ export interface QuickEventDef {
   label: string;                // 按钮显示文本
   note: string;                 // 备注
   payload: Record<string, unknown>;  // 附加载荷
+  group?: QuickEventGroup;      // 按钮分组
 }
 
 export const ACTION_TO_EVENT_TYPE: Record<string, TimelineEventType> = {
@@ -32,16 +36,16 @@ export const ACTION_TO_EVENT_TYPE: Record<string, TimelineEventType> = {
 
 // —— 比赛模式快捷事件（含计分结果按钮） ——
 export const MATCH_QUICK_EVENTS: QuickEventDef[] = [
-  { type: "rally_result_a", source: "manual", label: "A方胜", note: "", payload: {} },
-  { type: "rally_result_b", source: "manual", label: "B方胜", note: "", payload: {} },
-  { type: "rally_replay", source: "manual", label: "重打", note: "", payload: {} },
-  { type: "start_set", source: "manual", label: "盘开始", note: "新的一盘开始", payload: {} },
-  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: { initial_server_team: "A" } },
-  { type: "start_next_rally", source: "manual", label: "分开始", note: "开始新的一分", payload: {} },
-  { type: "start_timeout", source: "manual", label: "战术暂停", note: "进入战术暂停", payload: {} },
-  { type: "change_side", source: "manual", label: "换边", note: "双方交换场地", payload: {} },
-  { type: "add_note", source: "manual", label: "重点标记", note: "标记重要时刻", payload: { highlight: true } },
-  { type: "undo", source: "manual", label: "撤销", note: "撤销上一步操作", payload: {} },
+  { type: "rally_result_a", source: "manual", label: "A方胜", note: "", payload: {}, group: "match" },
+  { type: "rally_result_b", source: "manual", label: "B方胜", note: "", payload: {}, group: "match" },
+  { type: "rally_replay", source: "manual", label: "重打", note: "", payload: {}, group: "match" },
+  { type: "start_set", source: "manual", label: "盘开始", note: "新的一盘开始", payload: {}, group: "hierarchy" },
+  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: { initial_server_team: "A" }, group: "hierarchy" },
+  { type: "start_next_rally", source: "manual", label: "分开始", note: "开始新的一分", payload: {}, group: "hierarchy" },
+  { type: "start_timeout", source: "manual", label: "战术暂停", note: "进入战术暂停", payload: {}, group: "match" },
+  { type: "change_side", source: "manual", label: "换边", note: "双方交换场地", payload: {}, group: "match" },
+  { type: "add_note", source: "manual", label: "重点标记", note: "标记重要时刻", payload: { highlight: true }, group: "auxiliary" },
+  { type: "undo", source: "manual", label: "撤销", note: "撤销上一步操作", payload: {}, group: "auxiliary" },
 ];
 
 // —— 练习模式快捷事件 ——

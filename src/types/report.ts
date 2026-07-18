@@ -52,26 +52,13 @@ export type CameraAngle =
 /** 比赛形式 */
 export type MatchFormat = "singles" | "doubles";
 
-/** 应用路由路径 */
-export type AppPath =
-  | "/"
-  | "/upload"
-  | "/capture"
-  | "/capture/new"
-  | `/capture/${string}`
-  | "/tasks"
-  | "/vision"
-  | "/analysis/new"
-  | "/analysis/tasks"
-  | "/camera"
-  | `/analysis/${string}`
-  | `/analysis/${string}/details`
-  | `/analysis/${string}/vision`
-  | `/analysis/${string}/reports/${ReportType}`
-  | "/training"
-  | "/hardware"
-  | `/reports/${ReportType}`
-  | `/recording/${string}`;
+/**
+ * 应用路由路径。
+ * 单一权威定义位于 `src/app/navigationTypes.ts`；此处仅再导出以保持遗留导入兼容，
+ * 不得在此独立重复定义 `AppPath`，否则会与导航类型契约漂移。
+ */
+import type { AppPath, NavigateFn, RouteState } from "../app/navigationTypes";
+export type { AppPath, NavigateFn, RouteState };
 
 /** 洞察语气 */
 export type InsightTone = "advantage" | "risk" | "error" | "training";

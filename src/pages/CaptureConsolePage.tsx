@@ -10,11 +10,24 @@ import {
   getCameraPreviewUrl, cancelRecording, cancelSyncRecording, pickStorageLocation,
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
+import { useCaptureRuntimeStatus } from "../hooks/useCaptureRuntimeStatus";
 import { MiniTimeline } from "../components/MiniTimeline";
 import { ScoreBoard } from "../components/ScoreBoard";
 import { useCameraSetup } from "../hooks/useCameraSetup";
 import { useCapturePreflight } from "../hooks/useCapturePreflight";
 import { useLiveCoding } from "../hooks/useLiveCoding";
+import { CaptureWorkspaceLayout } from "../components/capture/CaptureWorkspaceLayout";
+import { CaptureWorkspaceHeader } from "../components/capture/CaptureWorkspaceHeader";
+import { CameraPreviewGrid, CameraPreviewCard } from "../components/capture/CameraPreviewCard";
+import { RecordingControlPanel } from "../components/capture/RecordingControlPanel";
+import { EventActionToolbar } from "../components/capture/EventActionToolbar";
+import { RecentEventsCard } from "../components/capture/RecentEventsCard";
+import { CompactScoreStrip } from "../components/capture/CompactScoreStrip";
+import { CameraInfoCard } from "../components/capture/CameraInfoCard";
+import { SystemStatusCard, adaptRuntimeMetric } from "../components/capture/SystemStatusCard";
+import { formatTimelineEventLabel } from "../components/capture/eventLabels";
+import type { TimelineWindowMode, TimelineDensity } from "../components/MiniTimeline";
+import type { RecordingControlViewModel } from "../components/capture/captureTypes";
 
 /** 导航跳转函数签名 */
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
@@ -28,6 +41,26 @@ function formatElapsed(ms: number): string {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+/** 格式化字节数为人类可读 */
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+/** 格式化码率（bps → Mbps） */
+function formatBitrate(bps: number | null | undefined): string {
+  if (bps == null) return "-";
+  const mbps = bps / 1_000_000;
+  return `${mbps.toFixed(2)} Mbps`;
 }
 
 /** 录制控制台页面 Props */
@@ -51,6 +84,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const [editingCameraId, setEditingCameraId] = useState<string | null>(null);    // 正在编辑的摄像头 ID
   const [editingCameraForm, setEditingCameraForm] = useState({ camera_id: "", name: "" });
   const [savingCamera, setSavingCamera] = useState(false);                        // 正在保存摄像头
+  const cameraSelectRef = useRef<HTMLSelectElement>(null);
 
   const isDualMode = fieldSession?.camera_setup === "dual";
   const mode = isDualMode ? "dual" as const : "single" as const;
@@ -66,6 +100,11 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     phase: runtime.phase,
     elapsedMs: runtime.elapsedMs,
     startedAt: runtime.session?.startedAt,
+  });
+  // 运行状态轮询：recording/stopping/recovering 阶段每 2s 拉取，终态停止
+  const runtimeStatus = useCaptureRuntimeStatus({
+    captureTakeId: runtime.captureTakeId,
+    phase: runtime.phase,
   });
 
   // ── 页面协调 ──
@@ -131,7 +170,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
 
     // 启动合并状态轮询
     const takeId = runtime.captureTakeId;
-    if (takeId) {
+    if (isDualMode && takeId) {
       pollMergeStatus(takeId);
     }
     setPreviewKey(k => k + 1);
@@ -197,6 +236,42 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
 
   const canStart = runtime.phase === "idle" && cameraSetup.isReady && preflight.preflightState.status !== "running";
 
+  // ── 运行状态派生 ViewModel ──
+  const rtSnapshot = runtimeStatus.state.snapshot;
+  const rtRecording = rtSnapshot?.recording;
+
+  // 录制控制条 ViewModel：从 runtime status 映射文件大小/帧率/码率
+  const recordingControlVm: RecordingControlViewModel = {
+    phase: runtime.phase,
+    elapsedMs: runtime.elapsedMs,
+    fileSize: rtRecording
+      ? adaptRuntimeMetric(rtRecording.fileSizeBytes, (v) => formatBytes(v))
+      : { state: "loading" },
+    fps: rtRecording
+      ? adaptRuntimeMetric(rtRecording.effectiveFps, (v) => `${v} fps`)
+      : { state: "loading" },
+    bitrate: rtRecording
+      ? adaptRuntimeMetric(rtRecording.avgBitrateBps, (v) => formatBitrate(v))
+      : { state: "loading" },
+  };
+
+  // 标题区存储摘要
+  const storageSummary = rtSnapshot?.storage
+    ? rtSnapshot.storage.state === "ready"
+      ? `剩余 ${formatBytes(rtSnapshot.storage.freeBytes)} / ${formatBytes(rtSnapshot.storage.totalBytes)}`
+      : rtSnapshot.storage.state === "error"
+        ? `存储异常：${rtSnapshot.storage.message ?? ""}`
+        : "存储容量读取中…"
+    : runtime.phase === "idle"
+      ? ""
+      : "存储容量读取中…";
+
+  // 预览分辨率/帧率（来自目标配置，非实测）
+  const previewResolution = rtRecording?.targetWidth && rtRecording?.targetHeight
+    ? `${rtRecording.targetWidth}x${rtRecording.targetHeight}`
+    : undefined;
+  const previewFps = rtRecording?.targetFps ?? undefined;
+
   // ── 初始加载 ──
   const loadFieldSession = useCallback(async () => {
     try {
@@ -234,6 +309,9 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const isMatchSingles = fieldSession?.capture_mode === "match" && scoringMode === "side_out_singles_v1";
   const [pendingInitialServer, setPendingInitialServer] = useState<boolean>(false);
   const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  const [mergeDetail, setMergeDetail] = useState<string | null>(null);
+  const [timelineWindow, setTimelineWindow] = useState<TimelineWindowMode>("full");
+  const [timelineDensity, setTimelineDensity] = useState<TimelineDensity>("compact");
   const mergePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 停止后轮询合并状态
@@ -244,6 +322,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         const { getMergeStatus } = await import("../services/analysisClient");
         const status = await getMergeStatus(takeId);
         setMergeStatus(status.status);
+        setMergeDetail(status.detail ?? null);
         if (status.status === "completed" || status.status === "failed") {
           if (mergePollRef.current) {
             clearInterval(mergePollRef.current);
@@ -282,8 +361,6 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     );
   }
 
-  const elapsedDisplay = formatElapsed(runtime.elapsedMs);
-
   // ── 摄像机选择区域 ──
   const renderCameraSelector = () => {
     if (mode === "single") {
@@ -291,6 +368,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         <div className="space-y-2">
           <label className="text-xs font-bold text-slate-500">选择摄像头</label>
           <select
+            ref={cameraSelectRef}
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
             value={cameraSetup.selectedCameraId}
             onChange={e => cameraSetup.setSelectedCameraId(e.target.value)}
@@ -358,238 +436,232 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     );
   };
 
+  const isRecording = runtime.phase === "recording";
+
   return (
-    <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-5">
-      {/* 头部 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-black text-[#14241B]">{fieldSession.title || "现场采集"}</h1>
-          <p className="text-sm text-slate-500">{fieldSession.court_name} · {captureModeLabel[fieldSession.capture_mode] ?? fieldSession.capture_mode}</p>
+    <CaptureWorkspaceLayout>
+      {/* 标题区：标题 + 场地/模式 + 录制状态 + 存储摘要 + 设备入口 */}
+      <div className="flex items-center justify-between rounded-xl px-4 py-2" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)", minHeight: 52 }}>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold truncate" style={{ color: "var(--capture-text-primary)" }}>{fieldSession.title || "现场采集"}</span>
+              {isRecording && (
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "var(--capture-brand-soft)", color: "var(--capture-brand-primary)" }}>
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" style={{ background: "var(--capture-status-recording)" }} />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ background: "var(--capture-status-recording)" }} />
+                  </span>
+                  录制中
+                </span>
+              )}
+            </div>
+            <p className="text-xs truncate" style={{ color: "var(--capture-text-muted)" }}>{fieldSession.court_name} · {captureModeLabel[fieldSession.capture_mode] ?? fieldSession.capture_mode}</p>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button className="quiet-button px-3 py-1.5 text-sm" onClick={() => setDrawerOpen(!drawerOpen)} type="button">
-            <Camera size={16} className="inline mr-1" />设备
+        <div className="flex items-center gap-3 shrink-0">
+          {storageSummary && (
+            <span className="text-xs truncate max-w-[220px]" style={{ color: "var(--capture-text-muted)" }} title={storageSummary}>
+              {storageSummary}
+            </span>
+          )}
+          <button className="rounded-lg px-2.5 py-1.5 text-xs transition" style={{ border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }} onClick={() => setDrawerOpen(!drawerOpen)} type="button" aria-label="设备管理">
+            <Camera size={14} className="inline mr-1" />设备
           </button>
           {runtime.isStopped && (
-            <button className="quiet-button px-3 py-1.5 text-sm" onClick={handleReset} type="button">
-              新录制
-            </button>
+            <button className="rounded-lg px-2.5 py-1.5 text-xs transition" style={{ border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }} onClick={handleReset} type="button">新录制</button>
           )}
         </div>
       </div>
 
-      {/* 控制栏 */}
-      <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className={`w-3 h-3 rounded-full ${runtime.phase === "recording" ? "bg-[#FF4D4F] animate-pulse" : runtime.phase === "stopping" || runtime.phase === "recovering" ? "bg-[#E8A838]" : runtime.phase === "hydrating" ? "bg-[#3B82F6]" : runtime.phase === "hydration_failed" ? "bg-[#FF4D4F]" : "bg-slate-300"}`} />
-            <span className="text-sm font-bold text-[#14241B]">
-              {runtime.phase === "idle" ? "就绪" :
-               runtime.phase === "starting" ? "启动中…" :
-               runtime.phase === "hydrating" ? "检测恢复中…" :
-               runtime.phase === "recording" ? `录制中 ${elapsedDisplay}` :
-               runtime.phase === "stopping" ? "停止中…" :
-               runtime.phase === "recovering" ? (runtime.recoveryTimedOut ? "恢复超时" : "恢复中…") :
-               runtime.phase === "completed" || runtime.phase === "partial" ? `已完成 ${elapsedDisplay}` :
-               runtime.phase === "failed" ? "失败" :
-               runtime.phase === "canceled" ? "已取消" :
-               runtime.phase === "hydration_failed" ? "恢复失败" : "就绪"}
-            </span>
+      {/* 录制控制条：时长 / 文件大小 / 帧率 / 码率 / 开始停止取消标记 */}
+      <RecordingControlPanel
+        vm={recordingControlVm}
+        canStart={canStart}
+        onStart={handleStart}
+        onStop={handleStop}
+        onMark={() => liveCoding.addTimelineEvent({ type: "add_note", payload: { highlight: true } } as any)}
+        onCancel={handleCancel}
+        error={runtime.error || undefined}
+        belowControls={
+          <div className="mt-2 space-y-2">
+            {isDualMode && mergeStatus && mergeStatus !== "completed" && (
+              <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "var(--capture-brand-soft)", border: "1px solid var(--capture-brand-primary)" }}>
+                {mergeStatus === "not_started" && "等待合并…"}
+                {mergeStatus === "pending" && "视频合并已提交后台…"}
+                {mergeStatus === "merging" && "视频合并中…"}
+                {mergeStatus === "failed" && "视频合并失败，可尝试重新合并"}
+                {mergeStatus === "failed" && mergeDetail && (
+                  <p className="mt-1 break-words text-xs opacity-80">{mergeDetail}</p>
+                )}
+              </div>
+            )}
+            {runtime.isStopped && runtime.result && (
+              <div className="rounded-xl p-5 space-y-3" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)", boxShadow: "var(--capture-shadow-card)" }}>
+                <h3 className="text-lg font-black" style={{ color: "var(--capture-text-primary)" }}>
+                  {runtime.phase === "completed" ? "录制已完成" : runtime.phase === "partial" ? "录制部分完成" : "录制结束"}
+                </h3>
+                {runtime.session?.sessionDir && (
+                  <p className="text-xs" style={{ color: "var(--capture-text-muted)" }} title={runtime.session.sessionDir}>会话目录：{runtime.session.sessionDir}</p>
+                )}
+                {runtime.result.tracks.map(track => (
+                  <div key={track.trackId ?? track.slot} className="text-sm" style={{ color: "var(--capture-text-secondary)" }}>
+                    {track.slot}: {track.status} | {track.durationMs ? formatElapsed(track.durationMs) : ""} | 片段 {track.fragmentCount}
+                  </div>
+                ))}
+                {runtime.result.analysisAvailable && runtime.result.defaultAnalysisVideoId && (
+                  <button className="rounded-lg px-4 py-2 text-sm font-bold text-white" style={{ background: "var(--capture-brand-primary)" }}
+                    onClick={() => onNavigate(`/upload?videoId=${runtime.result!.defaultAnalysisVideoId}&source=recording&sessionId=${runtime.session?.sourceSessionId ?? sessionId}&fps=${runtime.session?.fps ?? 60}`)} type="button">
+                    创建分析任务
+                  </button>
+                )}
+                {!runtime.result.analysisAvailable && runtime.result.analysisBlockedReason && (
+                  <p className="text-sm" style={{ color: "var(--capture-status-warning)" }}>分析不可用：{runtime.result.analysisBlockedReason}</p>
+                )}
+                {liveCoding.outboxHealth === "pending" && (
+                  <div className="flex items-center gap-2 text-sm" style={{ color: "var(--capture-status-warning)" }}>
+                    <span>有事件待同步</span>
+                    <button onClick={liveCoding.retrySync} className="underline text-xs" type="button">重新同步</button>
+                  </div>
+                )}
+                {runtime.result.warnings.length > 0 && runtime.result.warnings.map((w, i) => (
+                  <p key={i} className="text-xs" style={{ color: "var(--capture-status-warning)" }}>⚠ {w}</p>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="flex gap-2">
-            {runtime.phase === "idle" && (
-              <button className="flex items-center gap-2 rounded-xl bg-[#22C55E] px-5 py-2.5 text-white font-bold hover:bg-[#168A34] transition disabled:opacity-50" onClick={handleStart} disabled={!canStart} type="button">
-                <Play size={16} fill="currentColor" />开始录制
-              </button>
-            )}
-            {(runtime.phase === "recording" || runtime.phase === "stopping") && (
-              <>
-                <button className="flex items-center gap-2 rounded-xl bg-[#FF4D4F] px-5 py-2.5 text-white font-bold hover:bg-[#E04344] transition" onClick={handleStop} type="button">
-                  <Square size={16} fill="currentColor" />停止
-                </button>
-                <button className="flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition" onClick={handleCancel} type="button">取消</button>
-              </>
-            )}
-            {runtime.phase === "recovering" && !runtime.recoveryTimedOut && (
-              <button className="flex items-center gap-2 rounded-xl bg-[#3B82F6] px-5 py-2.5 text-white font-bold" onClick={() => runtime.recover()} type="button">
-                <RefreshCw size={16} />重试恢复
-              </button>
-            )}
-            {runtime.phase === "recovering" && runtime.recoveryTimedOut && (
-              <>
-                <button className="flex items-center gap-2 rounded-xl bg-[#FF4D4F] px-5 py-2.5 text-white font-bold" onClick={handleStop} type="button">
-                  <Square size={16} fill="currentColor" />再次停止
-                </button>
-                <button className="flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition" onClick={handleCancel} type="button">取消录制</button>
-              </>
-            )}
-            {runtime.phase === "hydration_failed" && (
-              <button className="flex items-center gap-2 rounded-xl bg-[#3B82F6] px-5 py-2.5 text-white font-bold" onClick={() => runtime.hydrate()} type="button">
-                <RefreshCw size={16} />重试
-              </button>
-            )}
-          </div>
-        </div>
-        {runtime.phase === "hydration_failed" && runtime.hydrationError && (
-          <p className="text-xs text-[#FF4D4F] mt-2">{runtime.hydrationError}</p>
-        )}
-        {runtime.error && <p className="text-xs text-[#FF4D4F] mt-2">{runtime.error}</p>}
-      </div>
+        }
+      />
 
-      <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-bold text-[#14241B]">录制保存位置</p>
-            <p className="mt-1 truncate text-xs text-slate-500" title={storageRoot || "当前标准位置"}>
-              {storageRoot || "当前标准位置"}
-            </p>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            {storageRoot && !runtime.isRecording && (
-              <button className="quiet-button px-3 py-2 text-sm" onClick={() => setStorageRoot("")} type="button">
-                恢复默认
-              </button>
-            )}
-            <button className="quiet-button flex items-center gap-2 px-3 py-2 text-sm" disabled={runtime.isRecording || storagePickerBusy} onClick={() => void handlePickStorage()} type="button">
-              <FolderOpen size={16} />{storagePickerBusy ? "选择中…" : "选择位置"}
-            </button>
-          </div>
+      {/* Runtime status 错误提示（不阻塞录制控制） */}
+      {runtimeStatus.state.error && runtimeStatus.state.snapshot && (
+        <div className="rounded-lg px-3 py-2 text-xs" style={{ background: "var(--capture-brand-soft)", border: "1px solid var(--capture-status-warning)", color: "var(--capture-status-warning)" }}>
+          运行状态更新失败：{runtimeStatus.state.error}（最后更新于 {runtimeStatus.state.lastSuccessAt ? new Date(runtimeStatus.state.lastSuccessAt).toLocaleTimeString() : "—"}）
         </div>
-        <p className="mt-2 text-xs text-slate-400">仅对下一次录制生效；重新进入本页面时恢复标准位置。</p>
-      </div>
+      )}
 
-      {/* 预览 + 计分板 */}
-      <div className={isDualMode ? "space-y-3" : "grid grid-cols-1 gap-6 lg:grid-cols-3"}>
-        {isDualMode && (
-          <div className="rounded-xl border border-[#DDE9D6] bg-white px-3 py-2">
+      {/* Main workspace: Single or Dual */}
+      {isDualMode ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-4">
+            {cameraSetup.previewTracks.map(track => {
+              const trackStatus = rtSnapshot?.tracks.find(t => t.slot === track.slot);
+              const previewState: "idle" | "connecting" | "ready" | "failed" =
+                trackStatus?.error ? "failed"
+                : trackStatus?.phase === "recording" || trackStatus?.phase === "starting" ? "ready"
+                : runtime.phase === "recording" ? "connecting"
+                : "ready";
+              return (
+                <div key={track.slot} style={{ maxHeight: 330 }}>
+                  <CameraPreviewCard
+                    vm={{
+                      slot: track.slot,
+                      cameraId: track.cameraId,
+                      label: track.slot === "cam_1" ? "机位 A" : "机位 B",
+                      previewUrl: getCameraPreviewUrl(track.cameraId) ?? "",
+                      resolution: previewResolution,
+                      fps: previewFps,
+                      status: previewState,
+                    }}
+                    previewKey={previewKey}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <div className="rounded-xl p-3" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)" }}>
             {renderCameraSelector()}
           </div>
-        )}
-        <div className={isDualMode ? "" : "lg:col-span-2"}>
-          <div className={`grid ${cameraSetup.previewTracks.length === 1 ? "grid-cols-1" : "grid-cols-1 md:grid-cols-2"} gap-3`}>
-            {cameraSetup.previewTracks.length === 0 ? (
-              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 aspect-video flex items-center justify-center">
-                <p className="text-slate-400 text-sm">选择摄像头后显示预览</p>
-              </div>
-            ) : cameraSetup.previewTracks.map(track => (
-              <div key={track.slot} className="relative aspect-video overflow-hidden rounded-xl border border-slate-200 bg-black">
-                <img
-                  key={previewKey}
-                  src={getCameraPreviewUrl(track.cameraId) ?? ""}
-                  className="w-full h-full object-contain"
-                  alt={track.slot}
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
-                <span className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded">
-                  {track.slot === "single" ? "单摄" : track.slot === "cam_1" ? "机位 A" : "机位 B"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-        {!isDualMode && <div className="space-y-4">
-          {renderCameraSelector()}
-        </div>}
-        {/* 计分板 sidebar */}
-        {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering" || runtime.phase === "completed" || runtime.phase === "partial") && (
-          <div className="lg:col-span-1">
-            <ScoreBoard
-              liveState={liveCoding.liveCodingState}
-              openRallyExists={liveCoding.liveCodingState?.current_rally_segment_id != null}
-              showInitialServerSelector={pendingInitialServer}
-              onInitialServerSelect={(server) => {
-                setPendingInitialServer(false);
-                const gameEvent = liveCoding.quickEvents.find((e: { type: string }) => e.type === "start_game");
-                if (gameEvent) {
-                  liveCoding.addTimelineEvent({
-                    ...gameEvent,
-                    payload: { initial_server_team: server },
-                  });
-                }
-              }}
-            />
-            {liveCoding.outboxHealth === "pending" && (
-              <p className="text-xs text-amber-600 mt-2">有 {liveCoding.outboxItems.filter(i => i.status !== "synced").length} 条事件待同步</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Live Coding */}
-      {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering") && (
-        <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-          {liveCoding.quickEvents.length > 0 && !isMatchSingles && (
-            <p className="text-xs text-slate-500 mb-2">当前模式 (match singles)：使用结果按钮记录比分</p>
+          {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering") && (
+            <CompactScoreStrip liveState={liveCoding.liveCodingState} />
           )}
-          <div className="flex flex-wrap gap-2">
-            {(isMatchSingles ? liveCoding.quickEvents : liveCoding.quickEvents.filter(
-              e => e.type !== "rally_result_a" && e.type !== "rally_result_b" && e.type !== "rally_replay"
-            )).map(event => {
+        </div>
+      ) : (
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <div style={{ height: "clamp(320px, 42vh, 430px)" }}>
+            <CameraPreviewCard
+              vm={cameraSetup.previewTracks.length > 0 ? {
+                slot: cameraSetup.previewTracks[0].slot,
+                cameraId: cameraSetup.previewTracks[0].cameraId,
+                label: "单摄",
+                previewUrl: getCameraPreviewUrl(cameraSetup.previewTracks[0].cameraId) ?? "",
+                resolution: previewResolution,
+                fps: previewFps,
+                status: "ready" as const,
+              } : { slot: "empty", cameraId: "", label: "预览", previewUrl: "", status: "idle" }}
+              previewKey={previewKey}
+              fillContainer
+            />
+          </div>
+          <aside className="flex flex-col gap-3 self-stretch">
+            <div className="rounded-xl p-3" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)" }}>
+              {renderCameraSelector()}
+            </div>
+            {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering") && (
+              <ScoreBoard
+                liveState={liveCoding.liveCodingState}
+                openRallyExists={liveCoding.liveCodingState?.current_rally_segment_id != null}
+                timelineEvents={liveCoding.timelineEvents}
+                showInitialServerSelector={pendingInitialServer}
+                onInitialServerSelect={(server) => {
+                  setPendingInitialServer(false);
+                  const gameEvent = liveCoding.quickEvents.find((e: { type: string }) => e.type === "start_game");
+                  if (gameEvent) liveCoding.addTimelineEvent({ ...gameEvent, payload: { initial_server_team: server } });
+                }}
+              />
+            )}
+            {cameraSetup.previewTracks.length > 0 && (
+              <CameraInfoCard
+                cameraId={cameraSetup.previewTracks[0].cameraId}
+                label="单摄"
+                resolution={previewResolution}
+                fps={previewFps}
+              />
+            )}
+          </aside>
+        </div>
+      )}
+
+      {/* Live Coding Panel */}
+      {isRecording && (
+        <div className="rounded-xl p-3 space-y-2" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)", boxShadow: "var(--capture-shadow-card)" }}>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold" style={{ color: "var(--capture-text-primary)" }}>事件标注时间线</h3>
+            <span className="text-[10px]" style={{ color: liveCoding.outboxHealth === "pending" ? "var(--capture-status-warning)" : "var(--capture-brand-primary)" }}>
+              {liveCoding.outboxHealth === "pending" ? "● 同步中" : "● 已同步"}
+            </span>
+          </div>
+          <EventActionToolbar
+            events={liveCoding.quickEvents.filter(
+              e => isMatchSingles || (e.type !== "rally_result_a" && e.type !== "rally_result_b" && e.type !== "rally_replay")
+            ).map(e => {
               const liveSegmentIds = new Set([
                 liveCoding.liveCodingState?.current_set_segment_id,
                 liveCoding.liveCodingState?.current_game_segment_id,
                 liveCoding.liveCodingState?.current_rally_segment_id,
               ].filter((id): id is string => Boolean(id)));
               const isActiveSegment = (segmentId: string): boolean => liveSegmentIds.has(segmentId)
-                || liveCoding.segments.some(segment =>
-                  segment.parent_segment_id === segmentId && isActiveSegment(segment.id));
-              const hasOpenSegment = (segmentType: "set" | "game" | "rally") =>
-                liveCoding.segments.some(segment =>
-                  segment.segment_type === segmentType
-                  && (segment.status === "open" || isActiveSegment(segment.id)));
-              let buttonEvent = event;
-              if (event.type === "start_set" && hasOpenSegment("set")) {
-                buttonEvent = { ...event, type: "end_set", label: "盘结束", note: "结束当前的一盘" };
-              } else if (event.type === "start_game" && hasOpenSegment("game")) {
-                buttonEvent = { ...event, type: "end_game", label: "局结束", note: "结束当前的一局" };
-              } else if (event.type === "start_next_rally" && hasOpenSegment("rally") && !isMatchSingles) {
-                buttonEvent = { ...event, type: "end_rally", label: "分结束", note: "结束当前的一分" };
-              }
-              const colorMap: Record<string, string> = {
-                rally_result_a: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E]",
-                rally_result_b: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
-                rally_replay: "bg-slate-50 border-slate-300 text-slate-500",
-                start_set: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
-                end_set: "bg-slate-50 border-[#F97316] text-[#F97316]",
-                start_game: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
-                end_game: "bg-slate-50 border-[#3B82F6] text-[#3B82F6]",
-                start_next_rally: "bg-[#F0FDF4] border-[#22C55E] text-[#22C55E]",
-                end_rally: "bg-slate-50 border-slate-300 text-slate-500",
-                start_timeout: "bg-[#FFF7ED] border-[#F97316] text-[#F97316]",
-                change_side: "bg-[#FAF5FF] border-[#A855F7] text-[#A855F7]",
-                add_note: "bg-[#EFF6FF] border-[#3B82F6] text-[#3B82F6]",
-                undo: "bg-red-50 border-red-300 text-red-500",
+                || liveCoding.segments.some(seg => seg.parent_segment_id === segmentId && isActiveSegment(seg.id));
+              const activeSegmentByType: Record<"set" | "game" | "rally", boolean> = {
+                set: Boolean(liveCoding.liveCodingState?.current_set_segment_id),
+                game: Boolean(liveCoding.liveCodingState?.current_game_segment_id),
+                rally: Boolean(liveCoding.liveCodingState?.current_rally_segment_id),
               };
-              const isPending = liveCoding.outboxItems.some(
-                i => i.status === "pending" && i.actionType === event.type
-              );
-              return (
-                <button
-                  key={event.type}
-                  className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${colorMap[buttonEvent.type] ?? "bg-slate-50 border-slate-300 text-slate-500"} ${isPending ? "opacity-50 cursor-wait" : ""}`}
-                  onClick={() => {
-                    if (buttonEvent.type === "start_game" && isMatchSingles) {
-                      setPendingInitialServer(true);
-                    }
-                    liveCoding.addTimelineEvent(buttonEvent);
-                  }}
-                  disabled={isPending}
-                  type="button"
-                >
-                  {buttonEvent.label}
-                </button>
-              );
+              const hasOpenSegment = (segType: "set" | "game" | "rally") => activeSegmentByType[segType]
+                || liveCoding.segments.some(seg => seg.segment_type === segType && (seg.status === "open" || isActiveSegment(seg.id)));
+              if (e.type === "start_set" && hasOpenSegment("set")) return { ...e, type: "end_set" as const, label: "盘结束", note: "结束当前的一盘" };
+              if (e.type === "start_game" && hasOpenSegment("game")) return { ...e, type: "end_game" as const, label: "局结束", note: "结束当前的一局" };
+              if (e.type === "start_next_rally" && hasOpenSegment("rally")) return { ...e, type: "end_rally" as const, label: "分结束", note: "结束当前的一分" };
+              return e;
             })}
-          </div>
-          {liveCoding.outboxHealth === "pending" && (
-            <p className="text-xs text-amber-600 mt-2">有 {liveCoding.outboxItems.filter(i => i.status !== "synced").length} 条事件待同步</p>
-          )}
-        </div>
-      )}
-
-      {/* MiniTimeline */}
-      {runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering" ? (
-        <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+            isPending={(type) => liveCoding.outboxItems.some(i =>
+              i.action === type && (i.status === "pending" || i.status === "sending")
+            )}
+            onAction={(event) => {
+              if (event.type === "start_game" && isMatchSingles) setPendingInitialServer(true);
+              liveCoding.addTimelineEvent(event as any);
+            }}
+          />
           <MiniTimeline
             segments={liveCoding.segments}
             events={liveCoding.timelineEvents}
@@ -597,92 +669,83 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
             totalDurationMs={runtime.elapsedMs}
             elapsedMs={runtime.elapsedMs}
             showDurationHint={runtime.phase === "recording"}
+            staticMode
+            playing={runtime.phase === "recording"}
+            compact
+            windowMode={timelineWindow}
+            onWindowModeChange={setTimelineWindow}
+            density={timelineDensity}
+            onDensityChange={setTimelineDensity}
           />
         </div>
-      ) : null}
-
-      {/* 合并状态提示 */}
-      {mergeStatus && mergeStatus !== "completed" && (
-        <div className="rounded-xl border border-[#E8A838]/30 bg-[#FFF7ED] p-3 text-sm">
-          {mergeStatus === "not_started" && "⏳ 等待合并…"}
-          {mergeStatus === "pending" && "⏳ 视频合并已提交后台…"}
-          {mergeStatus === "merging" && "⏳ 视频合并中…"}
-          {mergeStatus === "failed" && "❌ 视频合并失败，可尝试重新合并"}
-        </div>
       )}
 
-      {/* 完成面板 */}
-      {runtime.isStopped && runtime.result && (
-        <div className="rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/8 p-6 space-y-3">
-          <h3 className="text-lg font-black text-[#14241B]">
-            {runtime.phase === "completed" ? "录制已完成" : runtime.phase === "partial" ? "录制部分完成" : "录制结束"}
-          </h3>
-          {runtime.session?.sessionDir && (
-            <p className="text-xs text-slate-500" title={runtime.session.sessionDir}>
-              会话目录：{runtime.session.sessionDir}
-            </p>
-          )}
-          {runtime.result.tracks.map(track => (
-            <div key={track.trackId ?? track.slot} className="text-sm text-slate-600">
-              {track.slot}: {track.status} | {track.durationMs ? formatElapsed(track.durationMs) : ""} | 片段 {track.fragmentCount}
-            </div>
-          ))}
-          {runtime.result.analysisAvailable && runtime.result.defaultAnalysisVideoId && (
-            <button
-              className="rounded-xl bg-[#22C55E] px-4 py-2 text-sm font-bold text-white"
-              onClick={() => onNavigate(`/upload?videoId=${runtime.result!.defaultAnalysisVideoId}&source=recording&sessionId=${runtime.session?.sourceSessionId ?? sessionId}&fps=${runtime.session?.fps ?? 60}`)}
-              type="button"
-            >
-              创建分析任务
+      {/* Bottom row: 最近事件 / 系统状态 / 快捷操作 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <RecentEventsCard
+          events={liveCoding.timelineEvents.slice(-5).map(e => ({
+            id: e.id,
+            label: formatTimelineEventLabel(e, liveCoding.segments),
+            timestamp: formatElapsed(e.timestamp_ms),
+            type: e.event_type,
+          }))}
+        />
+        <SystemStatusCard
+          snapshot={runtimeStatus.state.snapshot}
+          isLoading={runtimeStatus.state.isLoading}
+          error={runtimeStatus.state.error}
+          lastSuccessAt={runtimeStatus.state.lastSuccessAt}
+        />
+        <div className="rounded-xl p-4" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)", boxShadow: "var(--capture-shadow-card)" }}>
+          <h3 className="text-sm font-bold mb-3" style={{ color: "var(--capture-text-primary)" }}>快捷操作</h3>
+          <div className="grid grid-cols-3 gap-2">
+            <button className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs transition" style={{ background: "var(--capture-surface-page)" }} onClick={() => liveCoding.addTimelineEvent({ type: "add_note", payload: { highlight: true } } as any)} type="button" aria-label="重点标记" disabled={!isRecording}>
+              <span style={{ color: "var(--capture-timeline-highlight)" }}>◆</span>
+              <span style={{ color: "var(--capture-text-secondary)" }}>重点标记</span>
             </button>
-          )}
-          {!runtime.result.analysisAvailable && runtime.result.analysisBlockedReason && (
-            <p className="text-sm text-[#E8A838]">分析不可用：{runtime.result.analysisBlockedReason}</p>
-          )}
-          {liveCoding.outboxHealth === "pending" && (
-            <div className="flex items-center gap-2 text-amber-600 text-sm">
-              <span>有事件待同步</span>
-              <button onClick={liveCoding.retrySync} className="underline text-xs" type="button">重新同步</button>
-            </div>
-          )}
-          {runtime.result.warnings.length > 0 && runtime.result.warnings.map((w, i) => (
-            <p key={i} className="text-xs text-[#E8A838]">⚠ {w}</p>
-          ))}
+            <button className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs transition" style={{ background: "var(--capture-surface-page)" }} onClick={() => {
+              cameraSelectRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+              cameraSelectRef.current?.focus();
+            }} type="button" aria-label="切换摄像头" disabled={runtime.isRecording}>
+              <RefreshCw size={16} style={{ color: "var(--capture-text-muted)" }} />
+              <span style={{ color: "var(--capture-text-secondary)" }}>切换摄像头</span>
+            </button>
+            <button className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs transition" style={{ background: "var(--capture-surface-page)" }} type="button" aria-label="快捷键">
+              <span style={{ color: "var(--capture-text-muted)" }}>⌨</span>
+              <span style={{ color: "var(--capture-text-secondary)" }}>快捷键</span>
+            </button>
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* 设备抽屉 */}
+      {/* Device drawer */}
       {drawerOpen && (
-        <div className="fixed inset-y-0 right-0 w-96 bg-white border-l border-slate-200 shadow-xl z-50 p-6 overflow-y-auto">
+        <div className="fixed inset-y-0 right-0 w-96 z-50 p-6 overflow-y-auto" style={{ background: "var(--capture-surface-card)", borderLeft: "1px solid var(--capture-border-default)", boxShadow: "var(--capture-shadow-card)" }}>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-black text-[#14241B]">设备管理</h3>
+            <h3 className="text-lg font-bold" style={{ color: "var(--capture-text-primary)" }}>设备管理</h3>
             <button onClick={() => setDrawerOpen(false)} type="button"><X size={20} /></button>
           </div>
           <div className="flex gap-2 mb-4">
-            <button className={`px-3 py-1.5 rounded-lg text-sm font-bold ${drawerTab === "list" ? "bg-[#14241B] text-white" : "bg-slate-100"}`} onClick={() => setDrawerTab("list")} type="button">列表</button>
-            <button className={`px-3 py-1.5 rounded-lg text-sm font-bold ${drawerTab === "register" ? "bg-[#14241B] text-white" : "bg-slate-100"}`} onClick={() => setDrawerTab("register")} type="button">注册</button>
+            <button className={`px-3 py-1.5 rounded-lg text-sm font-bold ${drawerTab === "list" ? "text-white" : ""}`}
+              style={drawerTab === "list" ? { background: "var(--capture-text-primary)" } : { background: "var(--capture-surface-page)" }}
+              onClick={() => setDrawerTab("list")} type="button">列表</button>
+            <button className={`px-3 py-1.5 rounded-lg text-sm font-bold ${drawerTab === "register" ? "text-white" : ""}`}
+              style={drawerTab === "register" ? { background: "var(--capture-text-primary)" } : { background: "var(--capture-surface-page)" }}
+              onClick={() => setDrawerTab("register")} type="button">注册</button>
           </div>
           {drawerTab === "list" ? (
             <div className="space-y-2">
               {cameraSetup.cameras.map(c => (
-                <div key={c.camera_id} className="flex items-center justify-between rounded-xl border border-slate-200 p-3">
+                <div key={c.camera_id} className="flex items-center justify-between rounded-xl p-3" style={{ border: "1px solid var(--capture-border-default)" }}>
                   {editingCameraId === c.camera_id ? (
                     <div className="w-full space-y-2">
-                      <input
-                        aria-label="摄像头 ID"
-                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
-                        value={editingCameraForm.camera_id}
-                        onChange={e => setEditingCameraForm(f => ({ ...f, camera_id: e.target.value }))}
-                      />
-                      <input
-                        aria-label="摄像头名称"
-                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
-                        value={editingCameraForm.name}
-                        onChange={e => setEditingCameraForm(f => ({ ...f, name: e.target.value }))}
-                      />
+                      <input aria-label="摄像头 ID" className="w-full rounded-lg px-2.5 py-1.5 text-sm" style={{ border: "1px solid var(--capture-border-default)" }}
+                        value={editingCameraForm.camera_id} onChange={e => setEditingCameraForm(f => ({ ...f, camera_id: e.target.value }))} />
+                      <input aria-label="摄像头名称" className="w-full rounded-lg px-2.5 py-1.5 text-sm" style={{ border: "1px solid var(--capture-border-default)" }}
+                        value={editingCameraForm.name} onChange={e => setEditingCameraForm(f => ({ ...f, name: e.target.value }))} />
                       <div className="flex justify-end gap-2">
-                        <button className="quiet-button px-2.5 py-1 text-xs" onClick={() => setEditingCameraId(null)} type="button">取消</button>
-                        <button className="green-button px-2.5 py-1 text-xs" disabled={savingCamera || runtime.isRecording} onClick={() => void handleUpdateCamera(c)} type="button">
+                        <button className="px-2.5 py-1 text-xs rounded-lg" style={{ border: "1px solid var(--capture-border-default)" }} onClick={() => setEditingCameraId(null)} type="button">取消</button>
+                        <button className="px-2.5 py-1 text-xs rounded-lg text-white" style={{ background: "var(--capture-brand-primary)" }} disabled={savingCamera || runtime.isRecording} onClick={() => void handleUpdateCamera(c)} type="button">
                           {savingCamera ? "保存中..." : "保存"}
                         </button>
                       </div>
@@ -690,54 +753,39 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
                   ) : (
                     <>
                       <div className="min-w-0 text-sm">
-                        <p className="font-bold truncate">{c.name ?? c.camera_id}</p>
-                        <p className="text-xs text-slate-500 truncate">ID：{c.camera_id}</p>
-                        <p className="text-xs text-slate-500 truncate">{c.stream_url}</p>
-                        {cameraSetup.probeLoading[c.camera_id] ? (
-                          <p className="mt-1 text-xs text-slate-400">正在检测连接...</p>
-                        ) : cameraSetup.probeResults[c.camera_id] ? (
-                          cameraSetup.probeResults[c.camera_id].online ? (
-                            <p className="mt-1 text-xs font-medium text-[#168A34]">
-                              可用{cameraSetup.probeResults[c.camera_id].resolution ? ` · ${cameraSetup.probeResults[c.camera_id].resolution}` : ""}{cameraSetup.probeResults[c.camera_id].latency_ms != null ? ` · ${cameraSetup.probeResults[c.camera_id].latency_ms}ms` : ""}
-                            </p>
-                          ) : (
-                            <p className="mt-1 text-xs font-medium text-[#C92A2A]">不可用：{cameraSetup.probeResults[c.camera_id].error_message || "无法读取视频流"}</p>
-                          )
-                        ) : cameraSetup.probeErrors[c.camera_id] ? (
-                          <p className="mt-1 text-xs font-medium text-[#C92A2A]">检测失败：{cameraSetup.probeErrors[c.camera_id]}</p>
+                        <p className="font-bold truncate" style={{ color: "var(--capture-text-primary)" }}>{c.name ?? c.camera_id}</p>
+                        <p className="text-xs" style={{ color: "var(--capture-text-muted)" }}>ID：{c.camera_id}</p>
+                        <p className="text-xs" style={{ color: "var(--capture-text-muted)" }}>{c.stream_url}</p>
+                        {cameraSetup.probeResults[c.camera_id]?.online ? (
+                          <p className="mt-1 text-xs font-medium" style={{ color: "var(--capture-brand-primary)" }}>
+                            可用{cameraSetup.probeResults[c.camera_id].resolution ? ` · ${cameraSetup.probeResults[c.camera_id].resolution}` : ""}
+                          </p>
                         ) : null}
                       </div>
                       <div className="flex shrink-0 gap-1">
-                        <button className="p-1.5 rounded-lg hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40" disabled={runtime.isRecording || cameraSetup.probeLoading[c.camera_id]} onClick={() => void cameraSetup.runProbe(c.camera_id)} title="检测连接是否可用" type="button">
-                          <Wifi size={14} />
-                        </button>
-                        <button className="p-1.5 rounded-lg hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40" disabled={runtime.isRecording} onClick={() => startEditingCamera(c)} title="修改设备 ID 和名称" type="button">
-                          <Pencil size={14} />
-                        </button>
-                        <button className="p-1.5 rounded-lg text-[#C92A2A] hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40" disabled={runtime.isRecording} onClick={() => void handleDeleteCamera(c)} title={runtime.isRecording ? "录制中无法删除设备" : "删除设备"} type="button">
-                          <Trash2 size={14} />
-                        </button>
+                        <button className="p-1.5 rounded-lg hover:bg-gray-100" disabled={runtime.isRecording} onClick={() => startEditingCamera(c)} type="button"><Pencil size={14} /></button>
+                        <button className="p-1.5 rounded-lg hover:bg-red-50" disabled={runtime.isRecording} onClick={() => void handleDeleteCamera(c)} type="button"><Trash2 size={14} /></button>
                       </div>
                     </>
                   )}
                 </div>
               ))}
-              <button className="w-full rounded-xl border border-dashed border-slate-300 py-2 text-sm text-slate-500 hover:bg-slate-50" onClick={() => setDrawerTab("register")} type="button">
+              <button className="w-full rounded-xl border py-2 text-sm" style={{ borderColor: "var(--capture-border-default)", color: "var(--capture-text-muted)" }} onClick={() => setDrawerTab("register")} type="button">
                 <PlusCircle size={14} className="inline mr-1" />注册新设备
               </button>
             </div>
           ) : (
             <div className="space-y-3">
-              <input className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="摄像头 ID" value={newCameraForm.camera_id} onChange={e => setNewCameraForm(f => ({ ...f, camera_id: e.target.value }))} />
-              <input className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="名称" value={newCameraForm.name} onChange={e => setNewCameraForm(f => ({ ...f, name: e.target.value }))} />
-              <input className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="RTSP 地址" value={newCameraForm.stream_url} onChange={e => setNewCameraForm(f => ({ ...f, stream_url: e.target.value }))} />
-              <button className="w-full rounded-xl bg-[#22C55E] py-2.5 text-sm font-bold text-white" onClick={async () => {
+              <input className="w-full rounded-xl px-3 py-2 text-sm" style={{ border: "1px solid var(--capture-border-default)" }} placeholder="摄像头 ID" value={newCameraForm.camera_id} onChange={e => setNewCameraForm(f => ({ ...f, camera_id: e.target.value }))} />
+              <input className="w-full rounded-xl px-3 py-2 text-sm" style={{ border: "1px solid var(--capture-border-default)" }} placeholder="名称" value={newCameraForm.name} onChange={e => setNewCameraForm(f => ({ ...f, name: e.target.value }))} />
+              <input className="w-full rounded-xl px-3 py-2 text-sm" style={{ border: "1px solid var(--capture-border-default)" }} placeholder="RTSP 地址" value={newCameraForm.stream_url} onChange={e => setNewCameraForm(f => ({ ...f, stream_url: e.target.value }))} />
+              <button className="w-full rounded-xl py-2.5 text-sm font-bold text-white" style={{ background: "var(--capture-brand-primary)" }} onClick={async () => {
                 try { await createCamera(newCameraForm as any); cameraSetup.loadCameras(); setDrawerTab("list"); } catch { /* ignore */ }
               }} type="button">注册</button>
             </div>
           )}
         </div>
       )}
-    </div>
+    </CaptureWorkspaceLayout>
   );
 }

@@ -442,6 +442,29 @@ def _handle_end_level(
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "rally")
         events.extend(ev); segments.extend(sg)
 
+    if level in ("game", "set"):
+        # 把刚结束的局比分写进 game_end，供计分板展示上一局结果。
+        # 下一局开始后当前比分会清零，但历史事件仍保留最终比分。
+        game_result = {
+            "score_a": state.score_a,
+            "score_b": state.score_b,
+            "winner": "A" if state.score_a > state.score_b else "B" if state.score_b > state.score_a else None,
+        }
+        from app.models.timeline_event import SessionTimelineEvent
+        for event_dict in events:
+            if event_dict.get("event_type") != "game_end":
+                continue
+            event_db = db.query(SessionTimelineEvent).filter(SessionTimelineEvent.id == event_dict["id"]).first()
+            if event_db is not None:
+                event_db.payload_json = json.dumps(game_result, ensure_ascii=False)
+            event_dict["payload_json"] = game_result
+
+    if level in ("game", "set"):
+        state.server_team = None
+        state.score_a = 0
+        state.score_b = 0
+        state.recent_results = "[]"
+
     # Ending a game or set enters the same between-play intermission as ending
     # a rally, so the timeline remains gray until the next start action.
     if level in ("game", "set"):
@@ -459,7 +482,11 @@ def _handle_end_level(
         intermission_kind="between_rallies" if level in ("game", "set") else None,
         current_set_segment_id=None if level == "set" else state.current_set_segment_id,
         current_game_segment_id=None if level in ("game", "set") else state.current_game_segment_id,
-        current_rally_segment_id=None)
+        current_rally_segment_id=None,
+        server_team=state.server_team,
+        score_a=state.score_a,
+        score_b=state.score_b,
+        recent_results=[] if level in ("game", "set") else None)
     return events, segments
 
 
@@ -782,8 +809,10 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
             kind = json.loads(last_start.payload_json or "{}").get("intermission_kind", kind)
         except json.JSONDecodeError:
             pass
-    active_sets = seg_svc.list_segments(db, take.id, segment_type="set")
-    active_games = seg_svc.list_segments(db, take.id, segment_type="game")
+    # 恢复状态时只把未关闭的层级视为当前层级；已结束的最后一局
+    # 仍通过 game_end 事件展示历史比分，不能继续作为当前局参与按钮状态判断。
+    active_sets = [s for s in seg_svc.list_segments(db, take.id, segment_type="set") if s.status == SegmentStatus.open]
+    active_games = [s for s in seg_svc.list_segments(db, take.id, segment_type="game") if s.status == SegmentStatus.open]
 
     def latest(items):
         return max(items, key=lambda segment: (segment.start_ms, segment.created_at)) if items else None
@@ -812,6 +841,11 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
                 server_team=p.get("initial_server_team", scoring_state.server_team),
                 score_a=0, score_b=0,
             )
+            recent_results = []
+        elif act.action_type in ("end_game", "end_set"):
+            # 局/盘结束后，下一局从 0:0 和未指定发球方开始；
+            # 最后一局比分由 game_end 事件的 payload 保留。
+            scoring_state = ScoringState(server_team=None, score_a=0, score_b=0)
             recent_results = []
         elif act.action_type in ("rally_result_a", "rally_result_b"):
             winner = "A" if act.action_type == "rally_result_a" else "B"

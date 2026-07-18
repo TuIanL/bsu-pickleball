@@ -16,12 +16,83 @@ from app.schemas.coding_actions import (
 )
 from app.services import coding_actions_service
 from app.services import capture_take_service
+from app.services import capture_runtime_status_service
+from app.models.field_session import FieldSession
+from app.schemas.capture_runtime_status import CaptureTakeRuntimeStatus
+from datetime import datetime, timezone
+
+def _ensure_utc(value: datetime | None) -> datetime | None:
+    """确保 datetime 带 UTC 时区信息。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 from app.services import live_coding_state_service as state_svc
 from app.services import capture_segment_service as seg_svc
 
 router = APIRouter(prefix="/api/capture-takes", tags=["capture-takes"])
 
 
+@router.get("/active")
+def get_active_capture_take(db: Session = Depends(get_db)):
+    """查询当前活跃录制（状态为 starting 或 recording），全局最多一个。"""
+    take = capture_take_service.get_active_capture_take(db)
+    if take is None:
+        return None
+
+    fs = db.query(FieldSession).filter(FieldSession.id == take.field_session_id).first()
+    started = _ensure_utc(take.started_at)
+    server_now = datetime.now(timezone.utc)
+
+    return {
+        "takeId": take.id,
+        "fieldSessionId": take.field_session_id,
+        "captureTakeId": take.id,
+        "sourceSessionId": take.source_session_id,
+        "sourceSessionType": take.source_session_type.value,
+        "startedAt": started.isoformat() if started else None,
+        "serverNow": server_now.isoformat(),
+        "status": take.status.value,
+        "title": fs.title if fs else None,
+        "courtName": fs.court_name if fs else None,
+        "captureMode": take.capture_mode.value,
+        "videoSpec": None,
+    }
+
+
+@router.post("/active/force-finalize")
+def force_finalize_active_capture_take(db: Session = Depends(get_db)):
+    """强制终态化当前活跃 CaptureTake（用于孤儿录制无法通过正常 cancel/stop 清理时）。"""
+    take = capture_take_service.get_active_capture_take(db)
+    if take is None:
+        return {"ok": True, "detail": "无活跃录制，无需清理"}
+
+    take_id = take.id
+    source_session_id = take.source_session_id
+    source_session_type = take.source_session_type.value
+
+    capture_take_service.finalize_capture_take(db, take_id, "failed")
+    db.commit()
+
+    # 尝试清理 source session（best-effort，孤儿 session 可能已不存在）
+    try:
+        if source_session_type == "sync_recording":
+            from app.camera.sync_recorder_service import sync_recording_service
+            try:
+                sync_recording_service.cancel_session(source_session_id)
+            except Exception:
+                pass
+        else:
+            from app.camera.session_service import session_service
+            try:
+                session_service.cancel_session(source_session_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return {"ok": True, "detail": f"已强制终止录制 {take_id}"}
 @router.post("/{capture_take_id}/coding-actions", response_model=CodingActionResponse)
 def execute_action(
     capture_take_id: str,
@@ -83,6 +154,12 @@ def get_live_state(
         current_set_segment_id=state.current_set_segment_id,
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=state.current_rally_segment_id,
+        server_team=getattr(state, "server_team", None),
+        score_a=getattr(state, "score_a", 0),
+        score_b=getattr(state, "score_b", 0),
+        scoring_mode=getattr(state, "scoring_mode", "none"),
+        scoring_ruleset_version=getattr(state, "scoring_ruleset_version", None),
+        recent_results=json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or []),
     )
 
 
@@ -95,6 +172,8 @@ def get_capture_take_detail(
     take = capture_take_service.get_capture_take(db, capture_take_id)
     if take is None:
         raise HTTPException(status_code=404, detail="CaptureTake 不存在")
+    started = _ensure_utc(take.started_at)
+    ended = _ensure_utc(take.ended_at)
     return CaptureTakeSummary(
         id=take.id,
         field_session_id=take.field_session_id,
@@ -102,8 +181,8 @@ def get_capture_take_detail(
         source_session_type=take.source_session_type.value,
         source_session_id=take.source_session_id,
         status=take.status.value,
-        started_at=take.started_at.isoformat() if take.started_at else "",
-        ended_at=take.ended_at.isoformat() if take.ended_at else None,
+        started_at=started.isoformat() if started else "",
+        ended_at=ended.isoformat() if ended else None,
         duration_ms=take.duration_ms,
         revision=take.revision,
     )
@@ -115,6 +194,30 @@ def get_finalization_status(capture_take_id: str):
     status = get_merge_status(capture_take_id)
     if status is None:
         return {"capture_take_id": capture_take_id, "status": "not_started"}
+    return status
+
+
+@router.get(
+    "/{capture_take_id}/runtime-status",
+    response_model=CaptureTakeRuntimeStatus,
+)
+def get_capture_take_runtime_status(
+    capture_take_id: str,
+    db: Session = Depends(get_db),
+) -> CaptureTakeRuntimeStatus:
+    """返回指定 CaptureTake 的运行状态快照，供录制工作台轮询消费。
+
+    快照包含 storage / recording / tracks / sync / updated_at 五个区域，
+    每个指标独立表达 ready/collecting/unavailable/error 可用性状态。
+
+    安全边界：仅通过 CaptureTake 记录的会话目录解析存储信息，
+    不接受任意客户端路径；CaptureTake 不存在时返回 404。
+    """
+    status = capture_runtime_status_service.get_capture_take_runtime_status(
+        db, capture_take_id,
+    )
+    if status is None:
+        raise HTTPException(status_code=404, detail="CaptureTake 不存在")
     return status
 
 

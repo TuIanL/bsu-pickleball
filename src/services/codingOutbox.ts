@@ -103,8 +103,10 @@ export function retryBlockedItems(captureTakeId: string): void {
   const items = loadOutbox();
   let changed = false;
   for (const item of items) {
-    if (item.captureTakeId === captureTakeId && item.status === "blocked") {
+    if (item.captureTakeId === captureTakeId && (item.status === "blocked" || item.status === "failed")) {
       item.status = "pending";
+      item.retryCount = 0;
+      item.lastError = undefined;
       changed = true;
     }
   }

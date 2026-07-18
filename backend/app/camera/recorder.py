@@ -64,24 +64,41 @@ class Recorder:
             if len(parsed) == 2:
                 url = f"{parsed[0]}://{username}:{password}@{parsed[1]}"
 
-        # 组装 FFmpeg 命令行参数。
-        # 单摄训练素材优先保留摄像头原始码流：重新编码 1080p/高帧率很容易
-        # 让本机 CPU 追不上，FFmpeg 随后用重复帧补齐恒定帧率，肉眼会看到
-        # 周期性卡顿。这里不再强制 -r/-vsync，而是让摄像头自己决定真实帧率。
-        cmd = [
-            "ffmpeg",
-            "-rtsp_transport", "tcp",          # RTSP 用 TCP 传输（比 UDP 更稳定）
-            "-timeout", "5000000",             # RTSP 建连/读包超时 5 秒
-            "-fflags", "+genpts",              # 输入时间戳不完整时生成连续 PTS
-            "-i", url,                         # 输入：视频流地址
-            "-map", "0:v:0",                   # 只录第一路视频
-            "-an",                              # 不录音频
-            "-c:v", "copy",                    # 不重编码，避免高帧率软件编码卡顿
-            "-fps_mode", "passthrough",        # 保留输入帧时间戳，不补帧/丢帧
-            "-movflags", "+faststart",         # MP4 moov atom 前置，支持快速打开
-            "-y",                              # 输出文件已存在则覆盖
-            str(output_path),                  # 输出文件路径
-        ]
+        # 虚拟测试摄像头使用 FFmpeg 的 lavfi 黑色视频源，按实时速度生成，
+        # 让本地可以完整测试录制计时、停止收尾和时间线，而不依赖真实设备。
+        if stream_url.startswith("virtual://"):
+            width, height = resolution.split("x", 1) if "x" in resolution else ("640", "360")
+            cmd = [
+                "ffmpeg",
+                "-re",
+                "-f", "lavfi",
+                "-i", f"color=c=black:s={width}x{height}:r={fps}",
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-y",
+                str(output_path),
+            ]
+        else:
+            # 单摄训练素材优先保留摄像头原始码流：重新编码 1080p/高帧率很容易
+            # 让本机 CPU 追不上，FFmpeg 随后用重复帧补齐恒定帧率，肉眼会看到
+            # 周期性卡顿。这里不再强制 -r/-vsync，而是让摄像头自己决定真实帧率。
+            cmd = [
+                "ffmpeg",
+                "-rtsp_transport", "tcp",
+                "-timeout", "5000000",
+                "-fflags", "+genpts",
+                "-i", url,
+                "-map", "0:v:0",
+                "-an",
+                "-c:v", "copy",
+                "-fps_mode", "passthrough",
+                "-movflags", "+faststart",
+                "-y",
+                str(output_path),
+            ]
 
         logger.info("启动 FFmpeg 录制: %s", " ".join(cmd))
 

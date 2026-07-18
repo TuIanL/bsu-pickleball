@@ -1,31 +1,61 @@
-import type { ReportType, RouteState } from "./navigationTypes";
+import type { AppShellMode, NavigationSection, ReportType, RouteState } from "./navigationTypes";
 
 export const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
 
+type RouteMeta = {
+  shellMode: AppShellMode;
+  navigationSection: NavigationSection | null;
+};
+
+const routeMeta = {
+  landing: { shellMode: "landing", navigationSection: null },
+  upload: { shellMode: "landing", navigationSection: null },
+  workspace: { shellMode: "standard", navigationSection: "capture" },
+  tasks: { shellMode: "standard", navigationSection: "analysis" },
+  captureHome: { shellMode: "standard", navigationSection: "analysis" },
+  captureNew: { shellMode: "standard", navigationSection: "capture" },
+  captureConsole: { shellMode: "capture", navigationSection: "capture" },
+  segmentManager: { shellMode: "standard", navigationSection: "capture" },
+  recordingWorkspace: { shellMode: "standard", navigationSection: "videos" },
+  "new-analysis": { shellMode: "standard", navigationSection: "analysis" },
+  "analysis-tasks": { shellMode: "standard", navigationSection: "videos" },
+  "analysis-job": { shellMode: "standard", navigationSection: "analysis" },
+  "analysis-details": { shellMode: "standard", navigationSection: "analysis" },
+  vision: { shellMode: "standard", navigationSection: "analysis" },
+  report: { shellMode: "standard", navigationSection: "reports" },
+  "camera-hub": { shellMode: "standard", navigationSection: "devices" },
+  training: { shellMode: "standard", navigationSection: "settings" },
+  hardware: { shellMode: "standard", navigationSection: "settings" },
+} as const satisfies Record<string, RouteMeta>;
+
 export function parsePath(pathname: string): RouteState {
   if (pathname === "/" || pathname === "") {
-    return { name: "landing", path: "/" };
+    return { name: "landing", path: "/", ...routeMeta.landing };
+  }
+
+  if (pathname === "/workspace") {
+    return { name: "workspace", path: "/workspace", ...routeMeta.workspace };
   }
 
   if (pathname === "/upload") {
-    return { name: "upload", path: "/upload" };
+    return { name: "upload", path: "/upload", ...routeMeta.upload };
   }
 
   if (pathname.startsWith("/upload?")) {
     const params = new URLSearchParams(pathname.slice("/upload?".length));
-    return { name: "upload", path: "/upload", videoId: params.get("videoId") ?? undefined, source: params.get("source") ?? undefined };
+    return { name: "upload", path: "/upload", ...routeMeta.upload, videoId: params.get("videoId") ?? undefined, source: params.get("source") ?? undefined };
   }
 
   if (pathname === "/tasks") {
-    return { name: "tasks", path: "/tasks" };
+    return { name: "tasks", path: "/tasks", ...routeMeta.tasks };
   }
 
   if (pathname === "/capture/new") {
-    return { name: "captureNew", path: "/capture/new" };
+    return { name: "captureNew", path: "/capture/new", ...routeMeta.captureNew };
   }
 
   if (pathname === "/capture") {
-    return { name: "captureHome", path: "/capture" };
+    return { name: "captureHome", path: "/capture", ...routeMeta.captureHome };
   }
 
   const captureConsoleMatch = pathname.match(/^\/capture\/(.+)$/);
@@ -35,33 +65,33 @@ export function parsePath(pathname: string): RouteState {
     : null;
   if (segmentManagerMatch) {
     const [, fieldSessionId, takeId] = segmentManagerMatch;
-    return { name: "segmentManager", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, fieldSessionId, takeId };
+    return { name: "segmentManager", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, fieldSessionId, takeId, ...routeMeta.segmentManager };
   }
 
   if (captureConsoleMatch) {
     const [, sessionId] = captureConsoleMatch;
-    return { name: "captureConsole", path: `/capture/${sessionId}`, sessionId };
+    return { name: "captureConsole", path: `/capture/${sessionId}`, sessionId, ...routeMeta.captureConsole };
   }
 
   const recordingMatch = pathname.match(/^\/recording\/(.+)$/);
   if (recordingMatch) {
     const [, sessionId] = recordingMatch;
-    return { name: "recordingWorkspace", path: `/recording/${sessionId}`, sessionId };
+    return { name: "recordingWorkspace", path: `/recording/${sessionId}`, sessionId, ...routeMeta.recordingWorkspace };
   }
 
   if (pathname === "/analysis/new" || pathname === "/upload") {
-    return { name: "new-analysis", path: "/analysis/new" };
+    return { name: "new-analysis", path: "/analysis/new", ...routeMeta["new-analysis"] };
   }
 
   if (pathname === "/analysis/tasks") {
-    return { name: "analysis-tasks", path: "/analysis/tasks" };
+    return { name: "analysis-tasks", path: "/analysis/tasks", ...routeMeta["analysis-tasks"] };
   }
 
   const analysisDetailsMatch = pathname.match(/^\/analysis\/([^/]+)\/details$/);
 
   if (analysisDetailsMatch) {
     const [, jobId] = analysisDetailsMatch;
-    return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
+    return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId, ...routeMeta["analysis-details"] };
   }
 
   const analysisReportMatch = pathname.match(/^\/analysis\/([^/]+)\/reports\/([^/]+)$/);
@@ -75,17 +105,18 @@ export function parsePath(pathname: string): RouteState {
         path: `/analysis/${jobId}/reports/${reportType as ReportType}`,
         reportType: reportType as ReportType,
         jobId,
+        ...routeMeta.report,
       };
     }
 
-    return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId };
+    return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId, ...routeMeta["analysis-details"] };
   }
 
   const analysisVisionMatch = pathname.match(/^\/analysis\/([^/]+)\/vision$/);
 
   if (analysisVisionMatch) {
     const [, jobId] = analysisVisionMatch;
-    return { name: "vision", path: `/analysis/${jobId}/vision`, jobId };
+    return { name: "vision", path: `/analysis/${jobId}/vision`, jobId, ...routeMeta.vision };
   }
 
   const analysisJobMatch = pathname.match(/^\/analysis\/([^/]+)$/);
@@ -93,38 +124,38 @@ export function parsePath(pathname: string): RouteState {
   if (analysisJobMatch) {
     const [, jobId] = analysisJobMatch;
     if (jobId === "tasks") {
-      return { name: "analysis-tasks", path: "/analysis/tasks" };
+      return { name: "analysis-tasks", path: "/analysis/tasks", ...routeMeta["analysis-tasks"] };
     }
-    return { name: "analysis-job", path: `/analysis/${jobId}`, jobId };
+    return { name: "analysis-job", path: `/analysis/${jobId}`, jobId, ...routeMeta["analysis-job"] };
   }
 
   if (pathname === "/camera") {
-    return { name: "camera-hub", path: "/camera" };
+    return { name: "camera-hub", path: "/camera", ...routeMeta["camera-hub"] };
   }
 
   if (pathname === "/vision") {
-    return { name: "vision", path: "/vision" };
+    return { name: "vision", path: "/vision", ...routeMeta.vision };
   }
 
   if (pathname === "/training") {
-    return { name: "training", path: "/training" };
+    return { name: "training", path: "/training", ...routeMeta.training };
   }
 
   if (pathname === "/hardware") {
-    return { name: "hardware", path: "/hardware" };
+    return { name: "hardware", path: "/hardware", ...routeMeta.hardware };
   }
 
   if (pathname.startsWith("/reports/")) {
     const reportType = pathname.replace("/reports/", "") as ReportType;
 
     if (supportedReportTypes.includes(reportType)) {
-      return { name: "report", path: `/reports/${reportType}`, reportType };
+      return { name: "report", path: `/reports/${reportType}`, reportType, ...routeMeta.report };
     }
 
-    return { name: "report", path: "/reports/movement", reportType: "movement" };
+    return { name: "report", path: "/reports/movement", reportType: "movement", ...routeMeta.report };
   }
 
-  return { name: "landing", path: "/" };
+  return { name: "landing", path: "/", ...routeMeta.landing };
 }
 
 export function parseLocation(pathname: string, search: string): RouteState {

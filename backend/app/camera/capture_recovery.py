@@ -7,6 +7,7 @@ import signal
 from datetime import datetime, timedelta, timezone
 
 from app.database import get_session_factory
+from app.models.capture_take import CaptureTake, CaptureTakeStatus
 from app.models.ffmpeg_registry import FFmpegProcessRegistry
 from app.models.media_fragment import MediaFragment, FragmentStatus
 from app.models.camera_lease import CameraLease, LeaseStatus
@@ -55,6 +56,24 @@ def recover_orphan_recordings() -> None:
         for lease in stale_leases:
             lease.status = LeaseStatus.released
             logger.info("释放过期 Lease camera=%s take=%s", lease.camera_id, lease.capture_take_id)
+
+        # 4. 终态化孤儿 CaptureTake：启动时任何仍为 starting/recording 的 Take 都是孤儿
+        from app.services.capture_take_service import finalize_capture_take
+        orphan_takes = db.query(CaptureTake).filter(
+            CaptureTake.status.in_([CaptureTakeStatus.starting, CaptureTakeStatus.recording]),
+        ).all()
+
+        fixed_count = 0
+        for take in orphan_takes:
+            try:
+                finalize_capture_take(db, take.id, "failed")
+                fixed_count += 1
+                logger.info("修复孤儿 CaptureTake %s (status=%s → failed)", take.id, take.status.value)
+            except Exception as exc:
+                logger.warning("修复孤儿 CaptureTake %s 失败: %s", take.id, exc)
+
+        if fixed_count > 0:
+            logger.info("启动恢复：共修复 %d 条孤儿 CaptureTake", fixed_count)
 
         db.commit()
     except Exception as e:

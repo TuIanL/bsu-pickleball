@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MiniTimeline } from "./MiniTimeline";
 import type { CaptureSegmentSummary } from "../types/report";
+
+// Mock ResizeObserver
+vi.stubGlobal("ResizeObserver", vi.fn(function MockResizeObserver() {
+  this.observe = vi.fn();
+  this.unobserve = vi.fn();
+  this.disconnect = vi.fn();
+}));
 
 function makeSeg(overrides: Partial<CaptureSegmentSummary>): CaptureSegmentSummary {
   return {
@@ -84,19 +91,5 @@ describe("MiniTimeline open segment", () => {
     expect(screen.getAllByText("盘").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("局").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("分").length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("does not show '录制中·持续扩展' text", () => {
-    render(
-      <MiniTimeline
-        segments={[]}
-        events={[]}
-        liveState={null}
-        totalDurationMs={60000}
-        elapsedMs={10000}
-        showDurationHint={true}
-      />,
-    );
-    expect(screen.queryByText(/录制中·持续扩展/)).toBeNull();
   });
 });

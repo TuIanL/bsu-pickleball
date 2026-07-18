@@ -62,6 +62,55 @@ class TestSyncRecorderUnit:
         assert alignment["cam_1"] == (0.0, 1709)
         assert alignment["cam_2"] == pytest.approx((7 / 60, 1709))
 
+    def test_merge_with_frame_alignment_does_not_concat_full_ts_with_tail_mp4(self, tmp_path):
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        source = tmp_path / "cam_1.ts"
+        output = tmp_path / "cam_1_merged.mp4"
+        source.write_bytes(b"ts")
+        commands = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append(cmd)
+            if cmd[-1] != "-":
+                Path(cmd[-1]).write_bytes(b"mp4")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("app.camera.sync_recorder_service.subprocess.run", side_effect=fake_run):
+            result = SyncRecordingService()._merge_segments(
+                [str(source)], str(output), trim_start=0.0, target_frames=120, fps=60,
+            )
+
+        assert result == str(output)
+        assert len(commands) == 2
+        assert commands[0][-1].startswith(str(output) + ".")
+        assert commands[0][-1].endswith(".part.mp4")
+        assert commands[0][commands[0].index("-frames:v") + 1] == "120"
+        assert "-f" not in commands[0]
+        assert commands[1][-1] == "-"
+
+    def test_merge_places_trim_after_input_for_frame_accurate_seek(self, tmp_path):
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        source = tmp_path / "cam_2.ts"
+        output = tmp_path / "cam_2_merged.mp4"
+        source.write_bytes(b"ts")
+        commands = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append(cmd)
+            if cmd[-1] != "-":
+                Path(cmd[-1]).write_bytes(b"mp4")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("app.camera.sync_recorder_service.subprocess.run", side_effect=fake_run):
+            SyncRecordingService()._merge_segments(
+                [str(source)], str(output), trim_start=5 / 60, target_frames=120, fps=60,
+            )
+
+        cmd = commands[0]
+        assert cmd.index("-i") < cmd.index("-ss")
+
     def test_sync_recorder_cannot_start_twice(self):
         """验证不能重复启动录制（模拟状态检查）"""
         from app.camera.sync_recorder_service import SyncRecorder

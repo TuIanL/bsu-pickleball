@@ -656,6 +656,7 @@ def test_video_upload_persists_metadata_after_cache_miss():
     stream_response = client.get(f"/api/videos/{video['id']}/stream")
 
     assert stream_response.status_code == 200
+    assert stream_response.headers["content-disposition"].startswith("inline;")
     assert stream_response.content == b"not-a-real-video"
 
 

@@ -27,6 +27,15 @@ async def probe_camera(camera_id: str, stream_url: str, username: str | None = N
 
 # 真正干活的同步函数（在线程里执行）
 def _probe_sync(camera_id: str, stream_url: str, username: str | None, password: str | None, timeout_seconds: float) -> ProbeResult:
+    if stream_url.startswith("virtual://"):
+        return ProbeResult(
+            camera_id=camera_id,
+            online=True,
+            latency_ms=0,
+            resolution="1920x1080",
+            detected_at=datetime.now(timezone.utc),
+        )
+
     import cv2
 
     url = stream_url

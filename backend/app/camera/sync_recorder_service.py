@@ -57,6 +57,16 @@ _INPUT_START_RE = re.compile(r"start:\s*([0-9]+(?:\.[0-9]+)?)")
 _RECORDING_STOP_TIMEOUT_SEC = 120
 
 
+def _duration_from_segments(segments: list[SyncSegment], fallback: float) -> float:
+    """Use captured media duration, excluding the time spent stopping FFmpeg."""
+    totals: dict[str, float] = {}
+    for segment in segments:
+        for media in segment.files:
+            if media.media_duration_sec > 0:
+                totals[media.camera_id] = totals.get(media.camera_id, 0.0) + media.media_duration_sec
+    return min(totals.values()) if totals else fallback
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════════════════════
@@ -301,6 +311,7 @@ class SyncRecorder:
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=ffmpeg_log,
+                    stdin=subprocess.PIPE,
                     start_new_session=True,
                 )
                 with self._processes_lock:
@@ -373,25 +384,35 @@ class SyncRecorder:
         logger.info("正在终止所有 FFmpeg 进程...")
         running = [process for process in processes if process.poll() is None]
 
-        # Signal every stream before waiting for any one of them to flush.
-        # Waiting inside this loop previously let the later stream keep writing
-        # for roughly one encoder flush interval (about 0.2 seconds here).
+        # Ask every FFmpeg process to finish its MPEG-TS trailer at the same
+        # instant. SIGTERM can interrupt each encoder at a different packet,
+        # which leaves the raw TS files with visibly different tail lengths.
         for process in running:
             try:
-                process.terminate()
-            except OSError:
+                stdin = getattr(process, "stdin", None)
+                if stdin is None:
+                    process.terminate()
+                    continue
+                stdin.write(b"q")
+                stdin.flush()
+            except (OSError, ValueError):
                 pass
 
         for process in running:
             if process.poll() is None:
                 try:
-                    process.wait(timeout=2)
+                    process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    # A stuck process still must not block the stop request.
+                    process.terminate()
                     try:
-                        process.wait(timeout=2)
+                        process.wait(timeout=3)
                     except subprocess.TimeoutExpired:
-                        logger.warning("FFmpeg process %s did not exit after SIGKILL", process.pid)
+                        process.kill()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            logger.warning("FFmpeg process %s did not exit after SIGKILL", process.pid)
         with self._processes_lock:
             self.processes = [process for process in self.processes if process.poll() is None]
 
@@ -655,6 +676,9 @@ class SyncRecordingService:
         self._active_coordinator = None
         self._storage_monitor_threads: dict[str, threading.Thread] = {}
         self._staging_dirs: dict[str, str] = {}
+        # stop_session() and list_sessions() can observe the same completed
+        # session concurrently. They must not share a .part.mp4 path.
+        self._video_registration_lock = threading.Lock()
 
     # ── 摄像头占用检查 ────────────────────────────────────────────
 
@@ -868,6 +892,21 @@ class SyncRecordingService:
             session_dir=str(plan.take_dir),
         )
 
+        # 活跃录制唯一性约束：全局最多一个 active CaptureTake
+        try:
+            from app.database import get_session_factory as _get_sf
+            from app.services.capture_take_service import has_active_capture_take
+            _check_db = _get_sf()()
+            try:
+                if has_active_capture_take(_check_db):
+                    raise RuntimeError("系统已存在活跃录制，无法同时启动两个录制")
+            finally:
+                _check_db.close()
+        except RuntimeError:
+            raise
+        except Exception as _exc:
+            logger.warning("检查活跃录制失败（跳过约束）: %s", _exc)
+
         # 标记任务必须先于实际媒体录制创建，避免前端已进入录制态但没有
         # capture_take_id，导致关键事件只能停留在本地临时状态。
         if field_session_id:
@@ -1031,7 +1070,8 @@ class SyncRecordingService:
         # 停止录制器
         self._recorder.stop_recording()
         stopped_at = datetime.now(timezone.utc)
-        duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
+        wall_duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
+        duration = _duration_from_segments(self._segments, wall_duration)
 
         # 更新会话
         session = session.model_copy(update={
@@ -1058,12 +1098,15 @@ class SyncRecordingService:
         _ACTIVE_SYNC_SESSION_ID = None
         _ACTIVE_SYNC_CAMERAS.clear()
 
+        # 先把采集生命周期标记为完成，让侧边栏和活跃录制探测立即停止；
+        # 视频封装属于停止后的媒体后处理，不应继续占用“录制中”状态。
+        self._finalize_capture_take(session, session.status)
+
         session, default_analysis_video_id, analysis_available, analysis_blocked_reason = self._register_session_videos(session)
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
 
-        self._finalize_capture_take(session, session.status)
         if session.session_dir:
             try:
                 write_capture_metadata(
@@ -1130,7 +1173,8 @@ class SyncRecordingService:
             return
 
         stopped_at = datetime.now(timezone.utc)
-        duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
+        wall_duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
+        duration = _duration_from_segments(self._segments, wall_duration)
 
         session = session.model_copy(update={
             "status": "failed",
@@ -1150,6 +1194,13 @@ class SyncRecordingService:
         self._finalize_capture_take(session, "failed")
 
     def _register_session_videos(
+        self,
+        session: SyncRecordingSession,
+    ) -> tuple[SyncRecordingSession, str | None, bool, str | None]:
+        with self._video_registration_lock:
+            return self._register_session_videos_unlocked(session)
+
+    def _register_session_videos_unlocked(
         self,
         session: SyncRecordingSession,
     ) -> tuple[SyncRecordingSession, str | None, bool, str | None]:
@@ -1359,13 +1410,46 @@ class SyncRecordingService:
 
         精度策略：
         - 无 trim 需求时：-c copy 秒级
-        - 有 trim 需求时：三段式（头重编码 + 主体 copy + 尾重编码），帧精确 <0.01s
+        - 有 trim 需求时：从共同起点重编码指定帧数，保证双摄时间范围一致
         """
         if not file_paths:
             return None
 
         mp4_path = output_path.replace(".mp4", "") + ".mp4"
         merge_timeout = 900
+
+        def is_decodable(path: str) -> bool:
+            """Reject MP4 files whose container exists but whose H.264 is damaged."""
+            try:
+                result = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-fflags", "+discardcorrupt",
+                     "-err_detect", "ignore_err", "-i", path,
+                     "-map", "0:v:0", "-f", "null", "-"],
+                    capture_output=True,
+                    text=True,
+                    timeout=merge_timeout,
+                )
+                if result.returncode != 0:
+                    logger.warning("合并输出解码校验失败: %s\n%s", path, (result.stderr or "")[-1200:])
+                    return False
+                return True
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning("合并输出解码校验异常: %s", exc)
+                return False
+
+        def run_ffmpeg(cmd: list[str], step: str) -> None:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=merge_timeout,
+            )
+            if result.returncode == 0:
+                return
+            detail = (result.stderr or result.stdout or "").strip()
+            detail = detail[-2000:] if detail else "无 FFmpeg 错误输出"
+            logger.error("双摄视频合并失败 [%s]: returncode=%s\n%s", step, result.returncode, detail)
+            raise RuntimeError(f"{step}失败: {detail}")
 
         # 先解决多文件输入：concat 所有 TS 片段为一个临时文件
         input_file = file_paths[0]
@@ -1377,16 +1461,13 @@ class SyncRecordingService:
                 with open(concat_file, "w", encoding="utf-8") as f:
                     for fp in file_paths:
                         f.write(f"file '{os.path.abspath(fp)}'\n")
-                subprocess.run([
+                run_ffmpeg([
                     "ffmpeg", "-y", "-f", "concat", "-safe", "0",
                     "-i", concat_file, "-c", "copy", temp_concat,
-                ], capture_output=True, timeout=merge_timeout)
+                ], "TS 分段预合并")
                 if not os.path.exists(temp_concat):
-                    return None
+                    raise RuntimeError("TS 分段预合并没有生成输出文件")
                 input_file = temp_concat
-            except Exception as e:
-                logger.warning("预合并TS分段失败: %s", e)
-                return None
             finally:
                 if os.path.exists(concat_file):
                     os.remove(concat_file)
@@ -1394,155 +1475,93 @@ class SyncRecordingService:
         need_trim = trim_start > 0.001 or target_frames is not None
 
         if not need_trim:
-            # 无 trim，直接 -c copy（秒级）
+            # 先尝试无损封装，但必须校验解码结果；部分摄像头 TS 的 NAL
+            # 边界在 MP4 中并不总是可靠，不能只用 ffprobe 的时长判断成功。
+            temp_mp4 = f"{mp4_path}.{uuid.uuid4().hex}.part.mp4"
             try:
-                subprocess.run([
+                run_ffmpeg([
                     "ffmpeg", "-y", "-i", input_file,
-                    "-c", "copy", "-movflags", "+faststart", mp4_path,
-                ], capture_output=True, timeout=merge_timeout)
-                if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
-                    return mp4_path
-            except Exception as e:
-                logger.warning("直接复制MP4失败: %s", e)
-                return input_file if not temp_concat else input_file
+                    "-map", "0:v:0", "-an", "-c", "copy",
+                    "-movflags", "+frag_keyframe+empty_moov+default_base_moof", temp_mp4,
+                ], "TS 转 MP4")
+                if not (os.path.exists(temp_mp4) and os.path.getsize(temp_mp4) > 0 and is_decodable(temp_mp4)):
+                    logger.warning("TS 无损封装输出不可解码，回退到 H.264 重编码: %s", input_file)
+                    Path(temp_mp4).unlink(missing_ok=True)
+                    run_ffmpeg([
+                        "ffmpeg", "-y", "-fflags", "+discardcorrupt", "-err_detect", "ignore_err",
+                        "-i", input_file,
+                        "-map", "0:v:0", "-an", "-c:v", "libx264",
+                        "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                        "-fps_mode", "cfr", "-r", str(max(fps, 1)),
+                        "-movflags", "+frag_keyframe+empty_moov+default_base_moof", temp_mp4,
+                    ], "TS 重编码并转 MP4")
+                if not (os.path.exists(temp_mp4) and os.path.getsize(temp_mp4) > 0 and is_decodable(temp_mp4)):
+                    raise RuntimeError("TS 转 MP4 输出无法解码")
+                os.replace(temp_mp4, mp4_path)
+                return mp4_path
+            finally:
+                if os.path.exists(temp_mp4):
+                    os.remove(temp_mp4)
+                if temp_concat and os.path.exists(temp_concat):
+                    try:
+                        os.remove(temp_concat)
+                    except OSError:
+                        pass
 
-        # --- 三段式精确裁剪 ---
+        # 有同步裁剪需求时，一次性从共同起点输出目标帧数。
+        # 旧逻辑会把完整 TS 和尾部 MP4 放进同一个 concat 清单，导致
+        # FFmpeg 输入格式不一致并稳定失败；这里不再拼接混合格式片段。
         encoder = os.environ.get(
             "PICKLEBALL_SYNC_VIDEO_ENCODER",
-            "h264_videotoolbox" if platform.system() == "Darwin" else "libx264",
+            "libx264",
         )
-        encoder_opts = ["-preset", "veryfast"] if encoder == "libx264" else []
-
-        total_duration = target_frames / max(fps, 1) if target_frames else 0
-        parts = []
-        temp_dir = Path(mp4_path).parent
-
+        encoder_opts = [
+            "-preset", "veryfast",
+            # 将摄像头常见的 full-range yuvj420p 转为 Finder/Quick Look
+            # 和浏览器都更稳定支持的标准 limited-range yuv420p。
+            "-vf", "scale=in_range=full:out_range=tv,format=yuv420p",
+            "-pix_fmt", "yuv420p",
+            "-color_range", "tv",
+            "-profile:v", "main",
+            "-level", "4.2",
+            "-fps_mode", "cfr",
+            "-video_track_timescale", "90000",
+        ] if encoder == "libx264" else []
+        cmd = [
+            "ffmpeg", "-y", "-fflags", "+discardcorrupt", "-err_detect", "ignore_err",
+            "-i", input_file,
+        ]
+        # 放在 -i 之后进行精确解码剪切。输入前的快速 seek 会跳到关键帧，
+        # 在 TS 片段中可能额外丢掉数帧，反而放大双摄首帧误差。
+        if trim_start > 0.001:
+            cmd.extend(["-ss", f"{trim_start:.6f}"])
+        cmd.extend(["-map", "0:v:0", "-an"])
+        if target_frames is not None:
+            cmd.extend(["-frames:v", str(max(1, target_frames))])
+        temp_mp4 = f"{mp4_path}.{uuid.uuid4().hex}.part.mp4"
+        cmd.extend([
+            "-c:v", encoder, *encoder_opts,
+            "-r", str(max(fps, 1)),
+            "-avoid_negative_ts", "make_zero",
+            "-fflags", "+genpts",
+            # Fragmented MP4 writes its moov metadata incrementally and avoids
+            # faststart's second pass, which can fail on damaged tail packets.
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            temp_mp4,
+        ])
         try:
-            # 1. 头段：精确跳过 trim_start
-            if trim_start > 0.001:
-                # 找到 trim_start 之后第一个关键帧位置
-                kf_after = self._find_keyframe_after(input_file, trim_start)
-                # 只重编码 trim_start ~ kf_after 这一段（约 1 GOP）
-                head_file = str(temp_dir / f"head_{uuid.uuid4().hex[:6]}.mp4")
-                head_duration = kf_after - trim_start
-                head_cmd = [
-                    "ffmpeg", "-y",
-                    "-ss", f"{trim_start:.6f}", "-i", input_file,
-                    "-c:v", encoder, *encoder_opts,
-                    "-frames:v", max(1, int(head_duration * fps)),
-                    "-c:a", "copy",
-                    "-avoid_negative_ts", "make_zero",
-                    "-fflags", "+genpts",
-                    head_file,
-                ]
-                subprocess.run(head_cmd, capture_output=True, timeout=merge_timeout)
-                if os.path.exists(head_file) and os.path.getsize(head_file) > 0:
-                    parts.append(head_file)
-                    # 主体从 kf_after 开始 copy
-                    body_input = input_file
-                    body_start = kf_after
-                else:
-                    body_input = input_file
-                    body_start = trim_start
-            else:
-                body_input = input_file
-                body_start = 0.0
-                parts.append(input_file)
-
-            # 2. 尾段：精确截到 target_frames
-            if target_frames is not None:
-                kf_before_end = self._find_keyframe_before(body_input, total_duration)
-                tail_start = kf_before_end
-                tail_frames = target_frames - int(body_start * fps)
-                if tail_frames < 0:
-                    tail_frames = 0
-
-                # 主体从 body_start copy 到 tail_start
-                if body_start < tail_start:
-                    body_file = str(temp_dir / f"body_{uuid.uuid4().hex[:6]}.ts")
-                    subprocess.run([
-                        "ffmpeg", "-y",
-                        "-ss", f"{body_start:.6f}", "-i", body_input,
-                        "-to", f"{tail_start - body_start:.6f}",
-                        "-c", "copy", body_file,
-                    ], capture_output=True, timeout=merge_timeout)
-                    if os.path.exists(body_file) and os.path.getsize(body_file) > 0:
-                        parts.append(body_file)
-
-                # 尾段重编码到精确帧数
-                if tail_frames > 0:
-                    tail_file = str(temp_dir / f"tail_{uuid.uuid4().hex[:6]}.mp4")
-                    subprocess.run([
-                        "ffmpeg", "-y",
-                        "-ss", f"{tail_start:.6f}", "-i", body_input,
-                        "-c:v", encoder, *encoder_opts,
-                        "-frames:v", tail_frames,
-                        "-c:a", "copy",
-                        "-avoid_negative_ts", "make_zero",
-                        "-fflags", "+genpts",
-                        tail_file,
-                    ], capture_output=True, timeout=merge_timeout)
-                    if os.path.exists(tail_file) and os.path.getsize(tail_file) > 0:
-                        parts.append(tail_file)
-            else:
-                # 无尾段要求，主体直到文件末尾
-                if body_start > 0:
-                    body_file = str(temp_dir / f"body_{uuid.uuid4().hex[:6]}.ts")
-                    subprocess.run([
-                        "ffmpeg", "-y",
-                        "-ss", f"{body_start:.6f}", "-i", body_input,
-                        "-c", "copy", body_file,
-                    ], capture_output=True, timeout=merge_timeout)
-                    if os.path.exists(body_file) and os.path.getsize(body_file) > 0:
-                        parts.append(body_file)
-                else:
-                    parts.append(body_input)
-
-            # 3. 合并所有段
-            if len(parts) == 0:
-                logger.warning("三段式裁剪未生成任何有效段")
-                return None
-
-            if len(parts) == 1:
-                # 只要一段，直接复制
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", parts[0],
-                    "-c", "copy", "-movflags", "+faststart", mp4_path,
-                ], capture_output=True, timeout=merge_timeout)
-            else:
-                concat = str(temp_dir / f"concat_{uuid.uuid4().hex[:6]}.txt")
-                with open(concat, "w") as f:
-                    for p in parts:
-                        f.write(f"file '{os.path.abspath(p)}'\n")
-                subprocess.run([
-                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                    "-i", concat, "-c", "copy",
-                    "-movflags", "+faststart", mp4_path,
-                ], capture_output=True, timeout=merge_timeout)
-                if os.path.exists(concat):
-                    os.remove(concat)
-
-            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
-                return mp4_path
-
-            logger.warning("三段式裁剪最终输出不存在")
-            return None
-
-        except Exception as e:
-            logger.warning("三段式裁剪失败: %s", e)
-            return None
+            run_ffmpeg(cmd, "同步裁剪并转 MP4")
+            if not (os.path.exists(temp_mp4) and os.path.getsize(temp_mp4) > 0 and is_decodable(temp_mp4)):
+                raise RuntimeError("同步裁剪并转 MP4 输出无法解码")
+            os.replace(temp_mp4, mp4_path)
+            return mp4_path
         finally:
-            # 清理临时文件
-            for p in parts:
-                if p != input_file and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+            if os.path.exists(temp_mp4):
+                os.remove(temp_mp4)
             if temp_concat and os.path.exists(temp_concat):
                 try:
                     os.remove(temp_concat)
-                except Exception:
+                except OSError:
                     pass
 
     def run_test(self, request: SyncTestRequest) -> SyncTestResult:
@@ -1844,11 +1863,15 @@ class SyncRecordingService:
     def get_session(self, session_id: str) -> SyncRecordingSession | None:
         cached = SYNC_SESSIONS.get(session_id)
         if cached:
-            if cached.status == "completed" and not cached.registered_video_ids and cached.segments:
+            if (cached.status == "completed"
+                    and len(cached.registered_video_ids) < len(cached.camera_slots)
+                    and cached.segments):
                 cached, _, _, _ = self._register_session_videos(cached)
             return cached
         loaded = self._load(session_id)
-        if loaded and loaded.status == "completed" and not loaded.registered_video_ids and loaded.segments:
+        if (loaded and loaded.status == "completed"
+                and len(loaded.registered_video_ids) < len(loaded.camera_slots)
+                and loaded.segments):
             loaded, _, _, _ = self._register_session_videos(loaded)
         return loaded
 
@@ -1873,7 +1896,21 @@ class SyncRecordingService:
                             "error_message": "服务中没有对应的活动录制进程，会话已恢复为失败状态",
                         })
                         self._persist(session)
-                    if session.status == "completed" and not session.registered_video_ids and session.segments:
+                        if getattr(session, "capture_take_id", None):
+                            try:
+                                from app.database import get_session_factory
+                                from app.services.capture_take_service import finalize_capture_take
+                                db = get_session_factory()()
+                                try:
+                                    finalize_capture_take(db, session.capture_take_id, "failed")
+                                    db.commit()
+                                finally:
+                                    db.close()
+                            except Exception:
+                                pass
+                    if (session.status == "completed"
+                            and len(session.registered_video_ids) < len(session.camera_slots)
+                            and session.segments):
                         session, _, _, _ = self._register_session_videos(session)
                     SYNC_SESSIONS[session.session_id] = session
                     if status and session.status != status:

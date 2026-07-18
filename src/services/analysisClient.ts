@@ -27,6 +27,7 @@ import type {
   AnalysisBatchCreateResponse,
   AnalysisBatchDetail,
 } from "../types/report";
+import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
@@ -957,6 +958,27 @@ export async function getLiveCodingState(takeId: string): Promise<LiveCodingStat
   return requestJson<LiveCodingState>(`/api/capture-takes/${takeId}/live-state`);
 }
 
+export async function getActiveCaptureTake(): Promise<{
+  takeId: string;
+  fieldSessionId: string;
+  captureTakeId: string;
+  startedAt: string;
+  serverNow: string;
+  status: string;
+  title: string | null;
+  courtName: string | null;
+  captureMode: string;
+  videoSpec: { width?: number; height?: number; fps?: number } | null;
+} | null> {
+  return requestJson(`/api/capture-takes/active`);
+}
+
+export async function forceFinalizeActiveCaptureTake(): Promise<{ ok: boolean; detail: string }> {
+  return requestJson<{ ok: boolean; detail: string }>(`/api/capture-takes/active/force-finalize`, {
+    method: "POST",
+  });
+}
+
 export async function executeCodingAction(
   takeId: string,
   request: CodingActionRequest,
@@ -975,6 +997,95 @@ export async function listSegments(
   if (segmentType) sp.set("segment_type", segmentType);
   const q = sp.toString();
   return requestJson<CaptureSegmentSummary[]>(`/api/capture-takes/${takeId}/segments${q ? `?${q}` : ""}`);
+}
+
+export async function getCaptureTakeRuntimeStatus(
+  takeId: string,
+): Promise<CaptureTakeRuntimeStatus> {
+  const raw = await requestJson<{
+    capture_take_id: string;
+    capture_mode: "single" | "dual";
+    storage: CaptureTakeRuntimeStatus["storage"] & {
+      total_bytes?: number | null;
+      used_bytes?: number | null;
+      free_bytes?: number | null;
+    };
+    recording: {
+      phase: string;
+      started_at?: string | null;
+      elapsed_ms?: number | null;
+      duration_ms?: number | null;
+      target_fps?: number | null;
+      target_width?: number | null;
+      target_height?: number | null;
+      file_size_bytes?: CaptureTakeRuntimeStatus["recording"]["fileSizeBytes"];
+      effective_fps?: CaptureTakeRuntimeStatus["recording"]["effectiveFps"];
+      avg_bitrate_bps?: CaptureTakeRuntimeStatus["recording"]["avgBitrateBps"];
+    };
+    tracks: Array<{
+      track_id: string;
+      slot: "cam_1" | "cam_2";
+      camera_id: string;
+      phase: string;
+      file_size_bytes: CaptureTakeRuntimeStatus["recording"]["fileSizeBytes"];
+      effective_fps: CaptureTakeRuntimeStatus["recording"]["effectiveFps"];
+      error?: string | null;
+    }>;
+    sync?: {
+      dual_sync: CaptureTakeRuntimeStatus["sync"] extends infer S
+        ? S extends { dualSync: infer D } ? D : never
+        : never;
+      dual_sync_quality?: "good" | "degraded" | "unknown" | null;
+      event_sync: CaptureTakeRuntimeStatus["sync"] extends infer S
+        ? S extends { eventSync: infer E } ? E : never
+        : never;
+      message?: string | null;
+    } | null;
+    updated_at: string;
+  }>(
+    `/api/capture-takes/${takeId}/runtime-status`,
+  );
+  return {
+    captureTakeId: raw.capture_take_id,
+    captureMode: raw.capture_mode,
+    storage: {
+      state: raw.storage.state,
+      totalBytes: raw.storage.total_bytes,
+      usedBytes: raw.storage.used_bytes,
+      freeBytes: raw.storage.free_bytes,
+      message: raw.storage.message,
+    },
+    recording: {
+      phase: raw.recording.phase,
+      startedAt: raw.recording.started_at,
+      elapsedMs: raw.recording.elapsed_ms,
+      durationMs: raw.recording.duration_ms,
+      targetFps: raw.recording.target_fps,
+      targetWidth: raw.recording.target_width,
+      targetHeight: raw.recording.target_height,
+      fileSizeBytes: raw.recording.file_size_bytes ?? { state: "collecting" },
+      effectiveFps: raw.recording.effective_fps ?? { state: "collecting" },
+      avgBitrateBps: raw.recording.avg_bitrate_bps ?? { state: "collecting" },
+    },
+    tracks: raw.tracks.map((track) => ({
+      trackId: track.track_id,
+      slot: track.slot,
+      cameraId: track.camera_id,
+      phase: track.phase,
+      fileSizeBytes: track.file_size_bytes,
+      effectiveFps: track.effective_fps,
+      error: track.error,
+    })),
+    sync: raw.sync
+      ? {
+          dualSync: raw.sync.dual_sync,
+          dualSyncQuality: raw.sync.dual_sync_quality,
+          eventSync: raw.sync.event_sync,
+          message: raw.sync.message,
+        }
+      : null,
+    updatedAt: raw.updated_at,
+  };
 }
 
 // ── Segment Editing API ──
