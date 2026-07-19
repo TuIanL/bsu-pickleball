@@ -198,7 +198,7 @@ describe("useCaptureRuntimeStatus", () => {
 
     const { result, rerender } = renderHook(
       ({ takeId, phase }) => useCaptureRuntimeStatus({ captureTakeId: takeId, phase }),
-      { initialProps: { takeId: null, phase: "idle" } },
+      { initialProps: { takeId: null as string | null, phase: "idle" as string } },
     );
 
     expect(result.current.state.snapshot).toBeNull();

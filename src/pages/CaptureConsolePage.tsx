@@ -7,7 +7,7 @@ import type { AppPath, FieldSession, CameraInfo, ProbeResult, RecordingSession, 
 import {
   getFieldSession, startFieldSession, completeFieldSession,
   listCameras, createCamera, deleteCamera, probeCamera, updateCamera,
-  getCameraPreviewUrl, cancelRecording, cancelSyncRecording, pickStorageLocation,
+  getCameraPreviewUrl, cancelRecording, cancelSyncRecording, getDefaultStorageLocation, pickStorageLocation,
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
 import { useCaptureRuntimeStatus } from "../hooks/useCaptureRuntimeStatus";
@@ -17,7 +17,6 @@ import { useCameraSetup } from "../hooks/useCameraSetup";
 import { useCapturePreflight } from "../hooks/useCapturePreflight";
 import { useLiveCoding } from "../hooks/useLiveCoding";
 import { CaptureWorkspaceLayout } from "../components/capture/CaptureWorkspaceLayout";
-import { CaptureWorkspaceHeader } from "../components/capture/CaptureWorkspaceHeader";
 import { CameraPreviewGrid, CameraPreviewCard } from "../components/capture/CameraPreviewCard";
 import { RecordingControlPanel } from "../components/capture/RecordingControlPanel";
 import { EventActionToolbar } from "../components/capture/EventActionToolbar";
@@ -75,6 +74,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");  // 分析策略
   const [recordingFps, setRecordingFps] = useState<number>(60);                  // 录制帧率
   const [storageRoot, setStorageRoot] = useState<string>("");                    // 自定义存储目录
+  const [defaultStorageRoot, setDefaultStorageRoot] = useState<string>("");      // 系统默认存储目录
   const [storagePickerBusy, setStoragePickerBusy] = useState(false);             // 目录选择器中
 
   const [drawerOpen, setDrawerOpen] = useState(false);                           // 设备抽屉打开
@@ -118,7 +118,10 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     setStoragePickerBusy(true);
     try {
       const result = await pickStorageLocation();
-      if (!result.canceled) setStorageRoot(result.storage_root);
+      if (!result.canceled) {
+        setStorageRoot(result.storage_root);
+        sessionStorage.setItem(`capture.storageRoot.${sessionId}`, result.storage_root);
+      }
     } catch (error) {
       alert(error instanceof Error ? error.message : "无法打开本地目录选择器");
     } finally {
@@ -178,8 +181,12 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
 
   const handleCancel = async () => { await runtime.cancel(); };
   const handleReset = () => {
-    setStorageRoot("");
     runtime.reset();
+  };
+
+  const handleUseDefaultStorage = () => {
+    setStorageRoot("");
+    sessionStorage.removeItem(`capture.storageRoot.${sessionId}`);
   };
 
   const handleDeleteCamera = async (camera: CameraInfo) => {
@@ -287,11 +294,19 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       }
       const cid = sessionStorage.getItem(`capture.selectedCameraId.${sessionId}`);
       if (cid) cameraSetup.setSelectedCameraId(cid);
+      const savedStorageRoot = sessionStorage.getItem(`capture.storageRoot.${sessionId}`);
+      if (savedStorageRoot) setStorageRoot(savedStorageRoot);
     } catch { setFieldSession(null); }
     finally { setLoading(false); }
   }, [sessionId]);
 
   useEffect(() => { loadFieldSession(); }, [loadFieldSession]);
+
+  useEffect(() => {
+    void getDefaultStorageLocation()
+      .then((result) => setDefaultStorageRoot(result.storage_root))
+      .catch(() => setDefaultStorageRoot(""));
+  }, []);
 
   // ── Runtime 恢复后同步摄像头选择 ──
   useEffect(() => {
@@ -437,6 +452,8 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   };
 
   const isRecording = runtime.phase === "recording";
+  const activeStorageRoot = storageRoot || defaultStorageRoot;
+  const storageLocationLabel = storageRoot ? "自定义位置" : "默认位置";
 
   return (
     <CaptureWorkspaceLayout>
@@ -465,6 +482,17 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
               {storageSummary}
             </span>
           )}
+          <button
+            className="rounded-lg p-1.5 transition disabled:opacity-50"
+            style={{ border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }}
+            onClick={() => void handlePickStorage()}
+            disabled={runtime.isRecording || storagePickerBusy}
+            type="button"
+            aria-label="选择录制保存位置"
+            title="选择录制保存位置"
+          >
+            {storagePickerBusy ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
+          </button>
           <button className="rounded-lg px-2.5 py-1.5 text-xs transition" style={{ border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }} onClick={() => setDrawerOpen(!drawerOpen)} type="button" aria-label="设备管理">
             <Camera size={14} className="inline mr-1" />设备
           </button>
@@ -485,6 +513,25 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         error={runtime.error || undefined}
         belowControls={
           <div className="mt-2 space-y-2">
+            <div className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-2" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)" }}>
+              <FolderOpen size={15} className="shrink-0" style={{ color: "var(--capture-text-muted)" }} />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold" style={{ color: "var(--capture-text-secondary)" }}>录制保存位置 · {storageLocationLabel}</p>
+                <p className="truncate text-xs" style={{ color: "var(--capture-text-muted)" }} title={activeStorageRoot}>{activeStorageRoot || "读取默认位置中…"}</p>
+              </div>
+              {storageRoot && (
+                <button className="shrink-0 text-xs" style={{ color: "var(--capture-text-secondary)" }} onClick={handleUseDefaultStorage} disabled={runtime.isRecording || storagePickerBusy} type="button">恢复默认</button>
+              )}
+              <button
+                className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs transition disabled:opacity-50"
+                style={{ border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }}
+                onClick={() => void handlePickStorage()}
+                disabled={runtime.isRecording || storagePickerBusy}
+                type="button"
+              >
+                {storagePickerBusy ? "打开中…" : "选择位置"}
+              </button>
+            </div>
             {isDualMode && mergeStatus && mergeStatus !== "completed" && (
               <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "var(--capture-brand-soft)", border: "1px solid var(--capture-brand-primary)" }}>
                 {mergeStatus === "not_started" && "等待合并…"}

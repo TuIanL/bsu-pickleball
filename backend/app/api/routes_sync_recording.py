@@ -107,6 +107,18 @@ def cancel_sync_recording(session_id: str) -> SyncRecordingSession:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{session_id}/merge", response_model=SyncRecordingSession, status_code=202)
+def merge_sync_recording(session_id: str) -> SyncRecordingSession:
+    """提交双摄任务的两路 MP4 合并，后台执行且不阻塞请求。"""
+    _check_ffmpeg()
+    try:
+        return sync_recording_service.request_merge(session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @router.get("", response_model=list[SyncRecordingSession])
 def list_sync_recordings(
     status: str | None = Query(default=None),

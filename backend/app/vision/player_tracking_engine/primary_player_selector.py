@@ -398,7 +398,7 @@ class PrimaryPlayerSelector:
             unknown_group.sort(key=lambda x: x.score, reverse=True)
             selected.extend(unknown_group[:remaining_slots])
         selected.sort(key=lambda x: x.score, reverse=True)
-        return selected[: near_quota + far_quota]
+        return selected[: min(self.max_subjects, near_quota + far_quota)]
 
     def _attention_select(self, features: list[PlayerTrackletFeature]) -> AttentionSelectionResult | None:
         # 尝试用 attention 适配器选择；未启用 / 无结果 / 置信度不足时回退规则分支。

@@ -6,7 +6,6 @@ import {
   retryBlockedItems,
   type CodingOutboxItem,
 } from "./codingOutbox";
-import type { CodingActionResponse } from "../types/report";
 
 // mock localStorage for node environment
 function mockLocalStorage() {
@@ -26,16 +25,6 @@ beforeEach(() => {
 });
 
 const TAKE_ID = "take_test_001";
-
-function mockResponse(overrides?: Partial<CodingActionResponse>): CodingActionResponse {
-  return {
-    revision: 1,
-    created_events: [],
-    updated_segments: [],
-    live_state: { revision: 1, set_ordinal: 0, game_ordinal: 0, rally_ordinal: 0, non_play: false },
-    ...overrides,
-  };
-}
 
 describe("codingOutbox sequenceNumber", () => {
   beforeEach(() => {

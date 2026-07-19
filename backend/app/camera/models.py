@@ -117,6 +117,7 @@ CameraSlotRole = Literal["cam_1", "cam_2"]
 
 # 双摄录制会话状态
 SyncRecordingStatus = Literal["recording", "completed", "failed", "canceled"]
+SyncMergeStatus = Literal["pending", "running", "completed", "failed"]
 
 # 分段状态
 SyncSegmentStatus = Literal["recording", "completed", "failed"]
@@ -232,6 +233,21 @@ class SyncRecordingSession(BaseModel):
     storage_root: Optional[str] = None
     session_dir: Optional[str] = None
     storage_status: str = "available"
+    merge_status: SyncMergeStatus = "pending"
+    merge_error: Optional[str] = None
+    merge_started_at: Optional[datetime] = None
+    merge_completed_at: Optional[datetime] = None
+    merge_results: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_merge_status(cls, data: object) -> object:
+        if isinstance(data, dict) and "merge_status" not in data:
+            registered = data.get("registered_video_ids") or {}
+            slots = data.get("camera_slots") or {}
+            data = dict(data)
+            data["merge_status"] = "completed" if slots and len(registered) >= len(slots) else "pending"
+        return data
 
 
 class SyncTestRequest(BaseModel):

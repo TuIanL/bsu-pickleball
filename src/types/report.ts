@@ -278,6 +278,7 @@ export interface RecordingSession {
 
 /** 双摄同步录制状态 */
 export type SyncRecordingStatus = "recording" | "completed" | "failed" | "canceled";
+export type SyncMergeStatus = "pending" | "running" | "completed" | "failed";
 
 /** 同步片段状态 */
 export type SyncSegmentStatus = "recording" | "completed" | "failed";
@@ -376,6 +377,17 @@ export interface SyncRecordingSession {
   storage_root?: string;
   session_dir?: string;
   storage_status?: string;
+  merge_status?: SyncMergeStatus;
+  merge_error?: string;
+  merge_started_at?: string;
+  merge_completed_at?: string;
+  merge_results?: Partial<Record<CameraSlotRole, {
+    status: string;
+    video_id?: string;
+    output_path?: string;
+    fragment_count?: number;
+    error?: string | null;
+  }>>;
 }
 
 export interface SyncStopResponse {

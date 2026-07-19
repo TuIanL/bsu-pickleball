@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import inspect
 import json
 import logging
 import threading
@@ -791,30 +792,18 @@ class AnalysisWorkerRuntime:
                     "clip_start_ms": payload.clipStartMs,
                     "clip_end_ms": payload.clipEndMs,
                 }
-                try:
-                    return pipeline.run(**run_kwargs)
-                except TypeError as exc:
-                    message = str(exc)
-                    if "clip_start_ms" in message or "clip_end_ms" in message:
-                        run_kwargs.pop("clip_start_ms", None)
-                        run_kwargs.pop("clip_end_ms", None)
-                    elif "match_context" in message:
-                        run_kwargs.pop("match_context", None)
-                    elif "court_view_match_threshold" in message:
-                        run_kwargs.pop("court_view_match_threshold", None)
-                    elif "source_fps" in message:
-                        run_kwargs.pop("source_fps", None)
-                    elif "cancellation_token" in message:
-                        run_kwargs.pop("cancellation_token", None)
-                    else:
-                        raise
-                    try:
-                        return pipeline.run(**run_kwargs)
-                    except TypeError as fallback_exc:
-                        if "cancellation_token" not in str(fallback_exc):
-                            raise
-                        run_kwargs.pop("cancellation_token", None)
-                        return pipeline.run(**run_kwargs)
+                signature = inspect.signature(pipeline.run)
+                accepts_kwargs = any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+                if not accepts_kwargs:
+                    run_kwargs = {
+                        key: value
+                        for key, value in run_kwargs.items()
+                        if key in signature.parameters
+                    }
+                return pipeline.run(**run_kwargs)
 
             while True:
                 try:

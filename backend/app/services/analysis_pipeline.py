@@ -488,6 +488,12 @@ class AnalysisPipeline:
         player_trajectory_url: str | None = None
         player_trajectory_status: str | None = None
         player_trajectory_detail: str | None = None
+        player_render_trajectory_json_path: str | None = None
+        player_render_trajectory_url: str | None = None
+        player_render_trajectory_status: str | None = None
+        player_render_trajectory_detail: str | None = None
+        calibration_diagnostics_json_path: str | None = None
+        calibration_diagnostics_url: str | None = None
         court_view_roi_path: str | None = None
         court_view_roi_url: str | None = None
         court_view_roi_status: str | None = None
@@ -526,6 +532,11 @@ class AnalysisPipeline:
             tracking_result = run_output.tracking
             ball_run_output = run_output.ball_run_output
             player_multitarget_detections = run_output.player_multitarget_detections
+            calibration_diagnostics_json_path = run_output.calibration_diagnostics_path
+            calibration_diagnostics_url = (
+                f"/api/analysis/jobs/{job_id}/artifacts/calibration-diagnostics"
+                if run_output.calibration_diagnostics_path else None
+            )
             if run_output.court_view_roi is not None:
                 court_view_roi_json = self.storage.court_view_roi_json_path(job_id)
                 self.storage.write_json(court_view_roi_json, run_output.court_view_roi.model_dump(mode="json"))
@@ -956,8 +967,8 @@ class AnalysisPipeline:
                 player_render_trajectory_url=player_render_trajectory_url,
                 court_view_roi_json_path=court_view_roi_path,
                 court_view_roi_url=court_view_roi_url,
-                calibration_diagnostics_json_path=run_output.calibration_diagnostics_path,
-                calibration_diagnostics_url=f"/api/analysis/jobs/{job_id}/artifacts/calibration-diagnostics" if run_output.calibration_diagnostics_path else None,
+                calibration_diagnostics_json_path=calibration_diagnostics_json_path,
+                calibration_diagnostics_url=calibration_diagnostics_url,
                 source_video_url=source_video_url,
                 tracking_overlay_status=tracking_overlay_status,
                 tracking_overlay_detail=tracking_overlay_detail,
@@ -990,7 +1001,7 @@ class AnalysisPipeline:
             ),
             message=message,
             match_context=match_ctx,
-            observed_player_count=len({t.player_id for t in tracks if t.player_id}),
+            observed_player_count=len({t.track_id for t in tracks if t.track_id}),
         )
         result = self.storage.publicize_pipeline_result(result)
         self._write_result(result)
@@ -1043,8 +1054,8 @@ class AnalysisPipeline:
             stages.append(self._stage("bounce-detection", "弹跳候选", "skipped", "球轨迹未生成，未运行弹跳检测"))
             fields.detections_status = "skipped"
             fields.detections_detail = detail
-            fields.ball_overlay_status = "skipped"
-            fields.ball_overlay_detail = detail
+            fields.ball_overlay_status = None
+            fields.ball_overlay_detail = None
             fields.ball_trajectory_status = "skipped"
             fields.ball_trajectory_detail = "球检测未运行"
             fields.cleaned_ball_trajectory_status = "skipped"
@@ -1118,8 +1129,11 @@ class AnalysisPipeline:
         self.storage.write_json(overlay_path, overlay_payload)
         fields.ball_overlay_json_path = str(overlay_path)
         fields.ball_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/ball-overlay"
-        fields.ball_overlay_status = overlay_status
-        fields.ball_overlay_detail = overlay_detail
+        fields.ball_overlay_status = None if overlay_status == "unavailable" else overlay_status
+        fields.ball_overlay_detail = None if overlay_status == "unavailable" else overlay_detail
+        if overlay_status == "unavailable":
+            fields.ball_overlay_json_path = None
+            fields.ball_overlay_url = None
 
         if run.status != "available" or not run.raw_points:
             # 无可用轨迹：弹跳检测阶段 skipped
@@ -2045,7 +2059,7 @@ class AnalysisPipeline:
             status="available",
             detail=(
                 f"已生成 {len(selection_diagnostics)} 条目标球场主球员选择诊断；"
-                f"模式 {self.primary_player_selector.last_selection_mode}"
+                f"模式 {primary_player_selector.last_selection_mode}"
             ),
             selection_mode=primary_player_selector.last_selection_mode,  # type: ignore[arg-type]
             fallback_reason=primary_player_selector.last_fallback_reason,

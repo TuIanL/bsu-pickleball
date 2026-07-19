@@ -3,7 +3,7 @@ import {
   ListTodo,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { AppPath, AppShellMode, NavigationSection } from "../../types/report";
+import type { AppShellMode, NavigationSection, AppPath } from "../../app/navigationTypes";
 import { AppSidebar } from "./AppSidebar";
 
 interface AppShellProps {
@@ -15,7 +15,6 @@ interface AppShellProps {
 
 export function AppShell({ shellMode, navigationSection, children, onNavigate }: AppShellProps) {
   const isLanding = shellMode === "landing";
-  const isCapture = shellMode === "capture";
 
   return (
     <div className="min-h-screen overflow-x-hidden text-[#17231D]">

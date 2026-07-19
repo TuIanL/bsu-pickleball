@@ -82,18 +82,6 @@ export function useActiveCaptureTake() {
     }
   }, [activeTake]);
 
-  const startPolling = useCallback(() => {
-    stopPolling();
-    fetchActive();
-    pollRef.current = setInterval(fetchActive, POLL_INTERVAL);
-    clockRef.current = setInterval(() => {
-      setActiveTake((prev) => {
-        if (!prev) return prev;
-        return { ...prev };
-      });
-    }, CLOCK_INTERVAL);
-  }, [fetchActive]);
-
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -106,9 +94,20 @@ export function useActiveCaptureTake() {
     seqRef.current += 1;
   }, []);
 
-  pollFnRef.current = startPolling;
+  const startPolling = useCallback(() => {
+    stopPolling();
+    fetchActive();
+    pollRef.current = setInterval(fetchActive, POLL_INTERVAL);
+    clockRef.current = setInterval(() => {
+      setActiveTake((prev) => {
+        if (!prev) return prev;
+        return { ...prev };
+      });
+    }, CLOCK_INTERVAL);
+  }, [fetchActive, stopPolling]);
 
   useEffect(() => {
+    pollFnRef.current = startPolling;
     startPolling();
     const handleVisibility = () => {
       if (document.hidden) {

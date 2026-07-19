@@ -11,7 +11,7 @@ import json
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 from pydantic import ValidationError
 
 
@@ -39,6 +39,59 @@ class TestSyncRecorderUnit:
         assert recorder.is_recording is False
         assert recorder.processes == []
         assert recorder.segment_index == 1
+
+    def test_extracts_first_middle_and_last_frame(self, tmp_path):
+        from app.camera.sync_recorder_service import _extract_first_and_last_frames
+
+        video_path = tmp_path / "camera_s1.ts"
+        capture = MagicMock()
+        capture.isOpened.return_value = True
+        capture.get.return_value = 101
+        capture.read.side_effect = [(True, "first"), (True, "middle"), (True, "last")]
+
+        with (
+            patch("app.camera.sync_recorder_service.cv2.VideoCapture", return_value=capture),
+            patch("app.camera.sync_recorder_service.cv2.imwrite", return_value=True) as imwrite,
+        ):
+            first, last = _extract_first_and_last_frames(str(video_path))
+
+        assert first == str(tmp_path / "camera_s1_first_frame.jpg")
+        assert last == str(tmp_path / "camera_s1_last_frame.jpg")
+        assert capture.set.call_args_list == [
+            call(1, 0),
+            call(1, 50),
+            call(1, 100),
+        ]
+        assert [Path(args.args[0]).name for args in imwrite.call_args_list] == [
+            "camera_s1_first_frame.jpg",
+            "camera_s1_middle_frame.jpg",
+            "camera_s1_last_frame.jpg",
+        ]
+
+    def test_external_volume_uses_local_staging_on_macos(self, tmp_path):
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        staging = tmp_path / "pickleball-sync_test-abc123"
+        with (
+            patch("app.camera.sync_recorder_service.platform.system", return_value="Darwin"),
+            patch("app.camera.sync_recorder_service.tempfile.mkdtemp", return_value=str(staging)) as mkdtemp,
+        ):
+            result = SyncRecordingService._recording_staging_dir(
+                "sync_test", Path("/Volumes/Elements/captures/take_sync_test")
+            )
+
+        assert result == staging
+        mkdtemp.assert_called_once_with(prefix="pickleball-sync_test-")
+
+    def test_internal_volume_does_not_use_staging(self):
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        with patch("app.camera.sync_recorder_service.platform.system", return_value="Darwin"):
+            result = SyncRecordingService._recording_staging_dir(
+                "sync_test", Path("/Users/tuian/captures/take_sync_test")
+            )
+
+        assert result is None
 
     def test_common_overlap_alignment_uses_same_frame_count(self):
         from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
@@ -214,8 +267,7 @@ class TestSyncRecorderUnit:
 
         assert order[:2] == ["terminate:cam_1", "terminate:cam_2"]
 
-    def test_dual_command_uses_shared_clock_and_constant_frame_rate(self, monkeypatch):
-        """默认双摄路径不得保留两个独立相机的时间戳。"""
+    def test_dual_command_preserves_source_frames(self, monkeypatch):
         from app.camera.sync_recorder_service import SyncRecorder
 
         monkeypatch.setenv("PICKLEBALL_SYNC_VIDEO_ENCODER", "libx264")
@@ -223,14 +275,15 @@ class TestSyncRecorderUnit:
         recorder.fps = 60
         cmd = recorder._build_record_command("rtsp://camera/live", "/tmp/cam.ts", duration=5)
 
+        assert ["-rtsp_transport", "udp"] == cmd[cmd.index("-rtsp_transport"):cmd.index("-rtsp_transport") + 2]
         assert ["-timeout", "5000000"] == cmd[cmd.index("-timeout"):cmd.index("-timeout") + 2]
-        assert ["-use_wallclock_as_timestamps", "1"] == cmd[cmd.index("-use_wallclock_as_timestamps"):cmd.index("-use_wallclock_as_timestamps") + 2]
         assert ["-fflags", "+genpts"] == cmd[cmd.index("-fflags"):cmd.index("-fflags") + 2]
         assert ["-map", "0:v:0"] == cmd[cmd.index("-map"):cmd.index("-map") + 2]
-        assert ["-vf", "fps=60"] == cmd[cmd.index("-vf"):cmd.index("-vf") + 2]
-        assert ["-fps_mode", "cfr"] == cmd[cmd.index("-fps_mode"):cmd.index("-fps_mode") + 2]
-        assert ["-c:v", "libx264"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
-        assert "copy" not in cmd
+        assert ["-c:v", "copy"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
+        assert "-use_wallclock_as_timestamps" not in cmd
+        assert "-vf" not in cmd
+        assert "-fps_mode" not in cmd
+        assert "-r" not in cmd
 
     def test_probe_media_diagnostics_calculates_effective_fps(self, tmp_path):
         """诊断必须以实际包数/媒体时长衡量帧率，不能相信 TS 声明帧率。"""
@@ -367,6 +420,104 @@ class TestSyncRecordingService:
         finally:
             module.SYNC_SESSIONS.pop(session.session_id, None)
 
+    def test_stop_does_not_register_or_merge_videos(self, tmp_path):
+        from datetime import datetime, timezone
+        from app.camera import sync_recorder_service as module
+        from app.camera.models import SyncRecordingSession
+
+        class FakeRecorder:
+            def stop_recording(self):
+                return None
+
+        service = module.SyncRecordingService(sync_recorder_factory=lambda: FakeRecorder())
+        session = SyncRecordingSession(
+            session_id="sync_stop_without_merge",
+            status="recording",
+            camera_slots={},
+            output_dir=str(tmp_path),
+            started_at=datetime.now(timezone.utc),
+        )
+        module.SYNC_SESSIONS[session.session_id] = session
+        try:
+            with patch.object(service, "_persist"), \
+                 patch.object(service, "_finalize_capture_take"), \
+                 patch.object(service, "_materialize_staged_media", return_value=session), \
+                 patch.object(service, "_register_session_videos") as register:
+                stopped = service.stop_session(session.session_id)
+
+            assert stopped.session.merge_status == "pending"
+            assert stopped.analysis_available is False
+            register.assert_not_called()
+        finally:
+            module.SYNC_SESSIONS.pop(session.session_id, None)
+
+    def test_merge_request_is_persisted_and_rejects_duplicate(self, tmp_path):
+        from app.camera import sync_recorder_service as module
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
+
+        ts_path = tmp_path / "cam_1.ts"
+        ts_path.write_bytes(b"ts")
+        session = SyncRecordingSession(
+            session_id="sync_merge_request",
+            status="completed",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="cam_a"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="cam_b"),
+            },
+            segments=[SyncSegment(
+                segment_index=1,
+                status="completed",
+                files=[SyncSegmentFile(camera_id="cam_a", role="cam_1", file_path=str(ts_path), file_size=2)],
+            )],
+            output_dir=str(tmp_path),
+        )
+        service = module.SyncRecordingService(sync_recorder_factory=lambda: object())
+        module.SYNC_SESSIONS[session.session_id] = session
+        try:
+            with patch.object(service, "_persist"), patch.object(module.threading, "Thread") as thread:
+                submitted = service.request_merge(session.session_id)
+                assert submitted.merge_status == "running"
+                thread.return_value.start.assert_called_once()
+                with pytest.raises(RuntimeError, match="合并中"):
+                    service.request_merge(session.session_id)
+        finally:
+            module.SYNC_SESSIONS.pop(session.session_id, None)
+
+    def test_background_merge_requires_both_camera_videos(self, tmp_path):
+        from app.camera import sync_recorder_service as module
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession
+
+        session = SyncRecordingSession(
+            session_id="sync_background_merge",
+            status="completed",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="cam_a"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="cam_b"),
+            },
+            output_dir=str(tmp_path),
+            merge_status="running",
+        )
+        service = module.SyncRecordingService(sync_recorder_factory=lambda: object())
+        module.SYNC_SESSIONS[session.session_id] = session
+        merged = session.model_copy(update={
+            "registered_video_ids": {"cam_1": "video-a", "cam_2": "video-b"},
+            "merge_results": {
+                "cam_1": {"status": "succeeded", "video_id": "video-a"},
+                "cam_2": {"status": "succeeded", "video_id": "video-b"},
+            },
+        })
+        try:
+            with patch.object(service, "_persist"), \
+                 patch.object(service, "_persist_capture_manifest"), \
+                 patch.object(service, "_register_session_videos", return_value=(merged, None, False, None)):
+                service._merge_session_videos_background(session.session_id)
+
+            completed = module.SYNC_SESSIONS[session.session_id]
+            assert completed.merge_status == "completed"
+            assert completed.default_analysis_video_id == "video-a"
+        finally:
+            module.SYNC_SESSIONS.pop(session.session_id, None)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SyncRecording 模型测试
@@ -433,6 +584,21 @@ class TestSyncModels:
         assert session.session_id == "sync_test"
         assert session.status == "recording"
         assert session.total_restarts == 0
+        assert session.merge_status == "pending"
+
+    def test_legacy_session_merge_status_is_derived(self):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession
+
+        session = SyncRecordingSession.model_validate({
+            "session_id": "legacy_sync",
+            "status": "completed",
+            "camera_slots": {
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="cam_a").model_dump(),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="cam_b").model_dump(),
+            },
+            "registered_video_ids": {"cam_1": "video-a", "cam_2": "video-b"},
+        })
+        assert session.merge_status == "completed"
 
     def test_sync_test_result_all_online(self):
         """验证测试结果模型"""

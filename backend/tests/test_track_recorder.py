@@ -233,7 +233,7 @@ class TestBehavioralBaseline:
 # ── 3.10-3.11: TrackRecorder 单测 ──────────────────────────────
 
 class TestTrackRecorderUnit:
-    def test_sync_command_uses_host_clock_and_constant_frame_rate(self, monkeypatch):
+    def test_sync_command_preserves_source_frames(self, monkeypatch):
         from app.camera.track_recorder import TrackRecorder, FragmentStartSpec
 
         monkeypatch.setenv("PICKLEBALL_SYNC_VIDEO_ENCODER", "libx264")
@@ -246,11 +246,12 @@ class TestTrackRecorderUnit:
 
         cmd = TrackRecorder()._build_command(spec)
 
-        assert ["-use_wallclock_as_timestamps", "1"] == cmd[cmd.index("-use_wallclock_as_timestamps"):cmd.index("-use_wallclock_as_timestamps") + 2]
-        assert ["-vf", "fps=60"] == cmd[cmd.index("-vf"):cmd.index("-vf") + 2]
-        assert ["-fps_mode", "cfr"] == cmd[cmd.index("-fps_mode"):cmd.index("-fps_mode") + 2]
-        assert ["-c:v", "libx264"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
-        assert "copy" not in cmd
+        assert ["-rtsp_transport", "udp"] == cmd[cmd.index("-rtsp_transport"):cmd.index("-rtsp_transport") + 2]
+        assert ["-c:v", "copy"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
+        assert "-use_wallclock_as_timestamps" not in cmd
+        assert "-vf" not in cmd
+        assert "-fps_mode" not in cmd
+        assert "-r" not in cmd
 
     def test_fragment_start_spec_creation(self):
         """3.10: FragmentStartSpec 正确构造"""

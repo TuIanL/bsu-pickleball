@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Camera, Play, RefreshCw, Trash2, Upload, X, LayoutDashboard } from "lucide-react";
+import { Camera, Play, RefreshCw, Trash2, Upload, LayoutDashboard } from "lucide-react";
 import type { NavigateFn, AppPath } from "../app/navigationTypes";
 import type { AnalysisJobSummary, RecordingSession, FieldSession, SyncRecordingSession } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
@@ -9,6 +9,7 @@ import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
 import { FieldSessionGroupCard } from "../components/platform/FieldSessionGroupCard";
 import { groupRecordingsByFieldSession } from "../services/recordingGrouping";
 import { getVideoStreamUrl } from "../services/analysisClient";
+import { canUseSyncVideos, getSyncMergeStatus } from "../services/syncMergeState";
 import {
   listAnalysisJobs,
   deleteAnalysisJob,
@@ -20,8 +21,8 @@ import {
   listFieldSessions,
   deleteFieldSession,
   listSyncRecordings,
+  mergeSyncRecording,
   deleteSyncRecording,
-  RECENT_ANALYSIS_JOB_EVENT,
 } from "../services/analysisClient";
 import {
   errorToNotice,
@@ -68,6 +69,7 @@ export function AnalysisTasksPage({
   // 双摄同步录制
   const [syncRecordings, setSyncRecordings] = useState<SyncRecordingSession[]>([]);
   const [syncRecordingsLoading, setSyncRecordingsLoading] = useState(false);
+  const [mergingSyncRecordingIds, setMergingSyncRecordingIds] = useState<Set<string>>(() => new Set());
   const [fieldSessionsLoading, setFieldSessionsLoading] = useState(false);
   const [playingSession, setPlayingSession] = useState<RecordingSession | null>(null);
   const [playingSyncSession, setPlayingSyncSession] = useState<SyncRecordingSession | null>(null);
@@ -83,16 +85,6 @@ export function AnalysisTasksPage({
   const handleCloseSyncPlayer = () => {
     setPlayingSyncSession(null);
     setSyncPlaybackErrors({});
-  };
-
-  const handleDeleteRecordingSession = async (sessionId: string) => {
-    if (!window.confirm("确定要删除该录制记录吗？")) return;
-    try {
-      await deleteRecording(sessionId);
-      await loadRecordings();
-    } catch (e) {
-      // silent
-    }
   };
 
   const handleDeleteFieldSession = async (session: FieldSession) => {
@@ -253,8 +245,25 @@ export function AnalysisTasksPage({
     try {
       await deleteSyncRecording(sessionId);
       await loadSyncRecordingsList();
-    } catch {
-      // silent
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "删除失败，请稍后重试");
+    }
+  };
+
+  const handleMergeSyncRecording = async (sessionId: string) => {
+    setMergingSyncRecordingIds((current) => new Set(current).add(sessionId));
+    try {
+      const updated = await mergeSyncRecording(sessionId);
+      setSyncRecordings((current) => current.map((item) => item.session_id === sessionId ? updated : item));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "视频合并提交失败，请稍后重试");
+      await loadSyncRecordingsList();
+    } finally {
+      setMergingSyncRecordingIds((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
     }
   };
 
@@ -283,6 +292,12 @@ export function AnalysisTasksPage({
     }, 3000);
     return () => window.clearInterval(interval);
   }, [sourceFilter, recordings, loadRecordings]);
+
+  useEffect(() => {
+    if (sourceFilter !== "sync_recording" || !syncRecordings.some((item) => item.merge_status === "running")) return;
+    const interval = window.setInterval(() => { void loadSyncRecordingsList(); }, 2500);
+    return () => window.clearInterval(interval);
+  }, [sourceFilter, syncRecordings, loadSyncRecordingsList]);
 
   const loadJobs = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) {
@@ -791,6 +806,8 @@ export function AnalysisTasksPage({
                   onDelete={handleDeleteSyncRecordingSession}
                   onNavigate={onNavigate}
                   onPlay={handlePlaySyncSession}
+                  onMerge={handleMergeSyncRecording}
+                  merging={mergingSyncRecordingIds.has(sr.session_id)}
                 />
               ))}
             </section>
@@ -999,17 +1016,21 @@ function SyncRecordingTaskCard({
   onDelete,
   onNavigate,
   onPlay,
+  onMerge,
+  merging = false,
 }: {
   session: SyncRecordingSession;
   onDelete: (sessionId: string) => void;
   onNavigate: NavigateFn;
   onPlay: (session: SyncRecordingSession) => void;
+  onMerge: (sessionId: string) => void;
+  merging?: boolean;
 }) {
   const cam1Name = session.camera_slots?.cam_1?.camera_id ?? "—";
   const cam2Name = session.camera_slots?.cam_2?.camera_id ?? "—";
   const cam1VideoId = session.registered_video_ids?.cam_1 ?? session.default_analysis_video_id;
-  const cam2VideoId = session.registered_video_ids?.cam_2;
-  const canPlay = session.status === "completed" && (!!cam1VideoId || !!cam2VideoId);
+  const mergeStatus = getSyncMergeStatus(session);
+  const canPlay = canUseSyncVideos(session);
   const statusLabel: Record<string, string> = {
     recording: "录制中",
     completed: "已完成",
@@ -1021,6 +1042,12 @@ function SyncRecordingTaskCard({
     completed: "bg-[#22C55E]/12 text-[#168A34]",
     failed: "bg-[#FF4D4F]/12 text-[#C92A2A]",
     canceled: "bg-slate-200 text-slate-500",
+  };
+  const mergeStatusLabel: Record<string, string> = {
+    pending: "待合并",
+    running: "合并中",
+    completed: "视频已就绪",
+    failed: "合并失败",
   };
 
   return (
@@ -1038,37 +1065,49 @@ function SyncRecordingTaskCard({
             <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${statusColor[session.status] ?? ""}`}>
               {statusLabel[session.status] ?? session.status}
             </span>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${mergeStatus === "completed" ? "bg-[#22C55E]/12 text-[#168A34]" : mergeStatus === "failed" ? "bg-[#FF4D4F]/12 text-[#C92A2A]" : "bg-[#E8A838]/15 text-[#9A6500]"}`}>
+              {mergeStatusLabel[mergeStatus] ?? mergeStatus}
+            </span>
           </div>
           <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
             {session.duration_sec != null && (
               <span>时长: {Math.floor(session.duration_sec / 60)}分{Math.floor(session.duration_sec % 60)}秒</span>
             )}
             <span>分段: {session.segments?.length ?? 0}</span>
-            <span>可预览: {[cam1VideoId ? "A" : null, cam2VideoId ? "B" : null].filter(Boolean).join(" / ") || "未注册"}</span>
+            <span>可预览: {canPlay ? "A / B" : "合并完成后可用"}</span>
             {session.total_restarts > 0 && <span className="text-[#E8A838]">重启 {session.total_restarts} 次</span>}
           </div>
         </div>
       </div>
-      {session.error_message && (
-        <p className="mt-2 text-xs text-[#FF4D4F] truncate">{session.error_message}</p>
+      {(session.error_message || session.merge_error) && (
+        <p className="mt-2 text-xs text-[#FF4D4F] truncate">{session.merge_error || session.error_message}</p>
       )}
-      {session.default_analysis_video_id && session.status === "completed" && (
+      {canPlay && session.default_analysis_video_id && (
         <div className="mt-3 pt-3 border-t border-[#DDE9D6]">
           <span className="text-xs text-[#168A34] font-bold">默认分析视频已就绪</span>
         </div>
       )}
       <div className="mt-3 flex flex-wrap gap-2 border-t border-[#DDE9D6] pt-3">
+        {(mergeStatus === "pending" || mergeStatus === "failed") && session.status === "completed" && (
+          <button className="green-button inline-flex items-center gap-1 px-3 py-2 text-xs" onClick={() => onMerge(session.session_id)} disabled={merging} type="button">
+            <RefreshCw size={12} className={merging ? "animate-spin" : ""} />
+            {mergeStatus === "failed" ? "重新合并" : "合并视频"}
+          </button>
+        )}
+        {mergeStatus === "running" && (
+          <span className="self-center text-xs font-semibold text-[#9A6500]">正在后台合并两路视频...</span>
+        )}
         {canPlay && (
           <button className="quiet-button px-3 py-2 text-xs" onClick={() => onPlay(session)} type="button">
             <Play size={12} className="inline mr-1" />查看双路视频
           </button>
         )}
-        {session.status === "completed" && (
+        {canPlay && (
           <button className="quiet-button px-3 py-2 text-xs" onClick={() => onNavigate(`/recording/${session.session_id}`)} type="button">
             <LayoutDashboard size={12} className="inline mr-1" />工作台
           </button>
         )}
-        {cam1VideoId && session.status === "completed" && (
+        {canPlay && cam1VideoId && (
           <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/new?videoId=${cam1VideoId}&source=recording&sessionId=${session.session_id}`)} type="button">
             分析 A 机位
           </button>
@@ -1083,11 +1122,10 @@ function SyncRecordingTaskCard({
             <Trash2 size={12} className="inline mr-1" />删除
           </button>
         )}
-        {!canPlay && session.status === "completed" && (
-          <span className="self-center text-xs text-slate-400">视频尚未注册，请刷新列表或检查分段文件</span>
+        {!canPlay && session.status === "completed" && mergeStatus !== "running" && (
+          <span className="self-center text-xs text-slate-400">{mergeStatus === "failed" ? "视频合并失败，请重试" : "视频尚未合并"}</span>
         )}
       </div>
     </div>
   );
 }
-

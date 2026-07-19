@@ -691,7 +691,6 @@ import type {
   SessionTimelineEvent,
   SyncRecordingSession,
   SyncStartRequest,
-  SyncStopResponse,
   SyncTestRequest,
   SyncTestResult,
   TimelineEventCreate,
@@ -845,6 +844,12 @@ export async function deleteSyncRecording(sessionId: string): Promise<{ session_
   });
 }
 
+export async function mergeSyncRecording(sessionId: string): Promise<SyncRecordingSession> {
+  return requestJson<SyncRecordingSession>(`/api/sync-recordings/${sessionId}/merge`, {
+    method: "POST",
+  });
+}
+
 export function getCameraPreviewUrl(cameraId?: string): string | undefined {
   return cameraId ? toApiUrl(`/api/cameras/${cameraId}/preview`) : undefined;
 }
@@ -962,12 +967,14 @@ export async function getActiveCaptureTake(): Promise<{
   takeId: string;
   fieldSessionId: string;
   captureTakeId: string;
+  sourceSessionId: string;
+  sourceSessionType: string;
   startedAt: string;
   serverNow: string;
-  status: string;
+  status: "starting" | "recording" | "stopping" | "recovering" | "finalizing";
   title: string | null;
   courtName: string | null;
-  captureMode: string;
+  captureMode: "single" | "dual";
   videoSpec: { width?: number; height?: number; fps?: number } | null;
 } | null> {
   return requestJson(`/api/capture-takes/active`);

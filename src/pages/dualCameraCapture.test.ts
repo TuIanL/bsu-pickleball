@@ -11,6 +11,7 @@ import type {
   SyncRecordingStatus,
   SyncSegmentStatus,
 } from "../types/report";
+import { canUseSyncVideos, getSyncMergeStatus } from "../services/syncMergeState";
 
 type SlotPair = Record<CameraSlotRole, string>;
 type DualConsoleState = "setup" | "testing" | "recording" | "stopped";
@@ -89,6 +90,38 @@ describe("Double camera type definitions", () => {
     };
     expect(respNoAnalysis.analysis_available).toBe(false);
     expect(respNoAnalysis.analysis_blocked_reason).toBeDefined();
+  });
+});
+
+describe("Deferred dual-camera merge state", () => {
+  const session = (merge_status?: "pending" | "running" | "completed" | "failed"): SyncRecordingSession => ({
+    session_id: "sync_merge_test",
+    status: "completed",
+    camera_slots: {},
+    segments: [],
+    output_dir: "/tmp/test",
+    associated_video_paths: [],
+    court_name: "",
+    match_format: "doubles",
+    fps: 60,
+    resolution: "1920x1080",
+    auto_analyze_after_stop: false,
+    total_restarts: 0,
+    merge_status,
+    registered_video_ids: merge_status === "completed" ? { cam_1: "video-a", cam_2: "video-b" } : {},
+  });
+
+  it("only enables playback after both cameras finish merging", () => {
+    expect(canUseSyncVideos(session("pending"))).toBe(false);
+    expect(canUseSyncVideos(session("running"))).toBe(false);
+    expect(canUseSyncVideos(session("failed"))).toBe(false);
+    expect(canUseSyncVideos(session("completed"))).toBe(true);
+  });
+
+  it("derives completed state for legacy sessions with both video IDs", () => {
+    const legacy = session();
+    legacy.registered_video_ids = { cam_1: "video-a", cam_2: "video-b" };
+    expect(getSyncMergeStatus(legacy)).toBe("completed");
   });
 });
 

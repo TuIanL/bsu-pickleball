@@ -736,7 +736,7 @@ class SessionService:
                 if duration_ms > 0:
                     capture_segment_service.close_all_open_for_take(db, take_id, duration_ms)
                 from app.services.capture_archive_service import snapshot_capture_timeline
-                snapshot_capture_timeline(db, take_id)
+                snapshot_capture_timeline(db, take_id, fps=getattr(session, "fps", None))
                 db.commit()
             except Exception as exc:
                 db.rollback()

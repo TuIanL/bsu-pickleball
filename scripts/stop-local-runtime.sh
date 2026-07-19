@@ -125,7 +125,9 @@ stop_port_listeners() {
   fi
 
   pids="$(listener_pids "$port")"
-  [[ -n "$pids" ]] || return
+  # An unused port is the normal case after a clean shutdown. Explicitly
+  # return success so `set -e` does not abort before checking the other port.
+  [[ -n "$pids" ]] || return 0
 
   say "$name: stopping remaining listener(s) on port $port..."
   for pid in $pids; do
@@ -134,7 +136,7 @@ stop_port_listeners() {
 
   sleep 0.5
   pids="$(listener_pids "$port")"
-  [[ -n "$pids" ]] || return
+  [[ -n "$pids" ]] || return 0
 
   say "$name: forcing remaining listener(s) on port $port..."
   for pid in $pids; do

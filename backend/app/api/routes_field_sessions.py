@@ -110,7 +110,6 @@ def archive(field_session_id: str, db: Session = Depends(get_db)) -> FieldSessio
 def delete(field_session_id: str, db: Session = Depends(get_db)) -> FieldSessionDeleteResult:
     """删除 Field Session。有视频的录制会被保护，无视频的孤立数据将级联清理。"""
     from app.models.field_session import FieldSession
-    from pathlib import Path
 
     fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
     if fs is None:
@@ -122,14 +121,8 @@ def delete(field_session_id: str, db: Session = Depends(get_db)) -> FieldSession
     recordings = session_service.list_sessions(field_session_id=field_session_id)
     sync_recordings = sync_recording_service.list_sessions(field_session_id=field_session_id)
 
-    # 检查是否存在有视频的录制
-    has_video = any(
-        r.video_id or (r.video_path and Path(r.video_path).exists())
-        for r in recordings
-    ) or any(
-        s.registered_video_ids
-        for s in sync_recordings
-    )
+    # 录制记录本身就是任务数据，删除 Field Session 前必须先显式删除录制。
+    has_video = bool(recordings or sync_recordings)
 
     if has_video:
         raise HTTPException(

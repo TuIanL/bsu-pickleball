@@ -1,7 +1,6 @@
 import {
   Activity,
   AlertTriangle,
-  Camera,
   FileText,
   LayoutDashboard,
   Loader2,
@@ -13,7 +12,7 @@ import {
 } from "lucide-react";
 import { useActiveCaptureTake, type ActiveCaptureTakeSummary } from "../../hooks/useActiveCaptureTake";
 import { computeCaptureElapsedMs } from "../capture/captureClock";
-import type { NavigationSection, AppPath } from "../../types/report";
+import type { NavigationSection, AppPath } from "../../app/navigationTypes";
 
 interface NavItem {
   section: NavigationSection;

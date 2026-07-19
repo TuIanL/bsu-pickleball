@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 OnExitCallback = Callable[[RecorderExit], None]
 
 
+def _build_video_filter(fps: int, resolution: str) -> str:
+    """Build the CFR/scaling filter used by recorder compatibility tests."""
+    filters = [f"fps={fps}"]
+    if "x" in resolution:
+        width, height = resolution.split("x", 1)
+        if width.isdigit() and height.isdigit() and int(width) > 0 and int(height) > 0:
+            filters.append(f"scale={width}:{height}")
+    filters.append("format=yuv420p")
+    return ",".join(filters)
+
+
 class Recorder:
     """管理一个 FFmpeg 子进程，将视频流录制为 MP4 文件。"""
 

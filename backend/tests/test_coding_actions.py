@@ -33,6 +33,8 @@ def test(name):
     print(f"  {name}...", end=" ")
     return True
 
+test.__test__ = False
+
 def ok():
     print("✓")
 

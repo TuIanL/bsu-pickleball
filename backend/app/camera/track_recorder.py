@@ -7,6 +7,7 @@ import os
 import platform
 import subprocess
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,6 +96,8 @@ class TrackRecorder:
         self._pgid: int = 0                # FFmpeg 进程组 ID
         self._fingerprint: str = ""        # 命令指纹（用于去重/追踪）
         self._registration_id: int = 0     # 进程注册表返回的注册 ID
+        self._stderr_tail: deque[str] = deque(maxlen=40)
+        self._stderr_thread: threading.Thread | None = None
 
     def start_fragment(self, spec: FragmentStartSpec,
                        on_exit: Callable[[FragmentExit], None],
@@ -131,6 +134,17 @@ class TrackRecorder:
                 self._pgid = 0
             self._start_ms = int(self._clock.monotonic_ms())
 
+            # FFmpeg writes connection and decoder diagnostics continuously.
+            # A PIPE that is never drained eventually blocks FFmpeg before it
+            # can write media, which is especially likely for a dead RTSP URL.
+            self._stderr_tail.clear()
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr,
+                args=(self._process.stderr,),
+                daemon=True,
+            )
+            self._stderr_thread.start()
+
             if self._process_registry:
                 try:
                     self._registration_id = self._process_registry.register_started(
@@ -149,6 +163,20 @@ class TrackRecorder:
 
             return FragmentHandle(spec.fragment_id, self)
 
+    def _drain_stderr(self, stream) -> None:
+        """Consume FFmpeg diagnostics so the child cannot block on stderr."""
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not isinstance(chunk, (bytes, bytearray)) or not chunk:
+                    break
+                text = bytes(chunk).decode("utf-8", errors="replace")
+                self._stderr_tail.extend(text.splitlines())
+        except (OSError, ValueError):
+            pass
+
     @staticmethod
     def _sync_encoder() -> str:
         configured = os.environ.get("PICKLEBALL_SYNC_VIDEO_ENCODER")
@@ -160,28 +188,17 @@ class TrackRecorder:
         """根据分段规格构建 FFmpeg 命令行"""
         cmd = [
             "ffmpeg",
-            "-rtsp_transport", "tcp",
+            "-rtsp_transport", "udp",
             "-timeout", "5000000",
         ]
         if spec.sync_to_host_clock:
-            encoder = self._sync_encoder()
             cmd.extend([
-                # Timestamp each input frame on this host's shared clock, then
-                # make both outputs advance at the requested identical cadence.
-                "-use_wallclock_as_timestamps", "1",
                 "-fflags", "+genpts",
                 "-i", spec.stream_url,
                 "-map", "0:v:0",
                 "-an",
-                "-vf", f"fps={spec.fps}",
-                "-fps_mode", "cfr",
-                "-r", str(spec.fps),
-                "-c:v", encoder,
+                "-c:v", "copy",
             ])
-            if encoder == "libx264":
-                cmd.extend(["-preset", "veryfast", "-tune", "zerolatency", "-crf", "20"])
-            else:
-                cmd.extend(["-b:v", "12M"])
         else:
             cmd.extend([
                 "-fflags", "+genpts",
@@ -201,6 +218,13 @@ class TrackRecorder:
         elapsed_ms = int(self._clock.monotonic_ms()) - self._start_ms
 
         with self._lock:
+            file_size = 0
+            if self._spec:
+                try:
+                    file_size = self._spec.output_path.stat().st_size
+                except OSError:
+                    pass
+            stderr_tail = "\n".join(self._stderr_tail)[-4000:]
             if self._process_registry:
                 try:
                     self._process_registry.register_ended(
@@ -216,16 +240,19 @@ class TrackRecorder:
             status = "completed"
             if self._stop_reason == "cancelled":
                 status = "discarded"
-            elif return_code != 0 or is_unexpected:
+            elif return_code != 0 or is_unexpected or file_size <= 0:
                 status = "failed"
 
             self._result = FragmentResult(
                 fragment_id=self._fragment_id,
                 status=status,
                 return_code=return_code,
+                file_size=file_size,
                 media_duration_ms=elapsed_ms,
                 take_end_offset_ms=(self._spec.take_start_offset_ms + elapsed_ms) if self._spec else elapsed_ms,
-                error_message="" if status == "completed" else f"FFmpeg exit code={return_code}",
+                error_message=("" if status == "completed" else
+                               f"FFmpeg exit code={return_code}" +
+                               (f": {stderr_tail}" if stderr_tail else "")),
             )
 
             if not self._callback_emitted and self._on_exit:
@@ -234,6 +261,7 @@ class TrackRecorder:
                     fragment_id=self._fragment_id,
                     return_code=return_code,
                     unexpected=is_unexpected,
+                    stderr_tail=stderr_tail,
                 ))
 
             self._completed.set()
