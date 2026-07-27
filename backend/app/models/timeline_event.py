@@ -37,6 +37,7 @@ class TimelineEventSource(str, enum.Enum):
     manual = "manual"          # 人工标注
     algorithm = "algorithm"    # 算法自动生成
     corrected = "corrected"    # 人工修正
+    vidat_import = "vidat_import"  # Vidat 确认导入
 
 
 # 时间轴事件模型，映射 session_timeline_events 表
@@ -66,6 +67,8 @@ class SessionTimelineEvent(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")                            # 备注详情
     payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")                  # 附加数据（JSON格式）
     is_undone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)                # 是否已撤销
+    annotation_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    vidat_import_audit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)                       # 创建时间

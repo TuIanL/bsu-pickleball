@@ -2,6 +2,7 @@ import type { LiveCodingState, SessionTimelineEvent } from "../types/report";
 
 interface ScoreBoardProps {
   liveState: LiveCodingState | null;
+  matchFormat?: string;
   onCorrectScore?: (scoreA: number, scoreB: number, server: "A" | "B", reason: string) => void;
   onInitialServerSelect?: (server: "A" | "B") => void;
   showInitialServerSelector?: boolean;
@@ -10,21 +11,9 @@ interface ScoreBoardProps {
 }
 
 export function ScoreBoard({
-  liveState, onCorrectScore, onInitialServerSelect,
-  showInitialServerSelector, openRallyExists, timelineEvents = [],
+  liveState, matchFormat, openRallyExists, timelineEvents = [],
 }: ScoreBoardProps) {
   if (!liveState) return null;
-
-  const scoringMode = liveState.scoring_mode ?? "none";
-  if (scoringMode === "manual") {
-    return (
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-500">
-        双打自动计分暂不可用
-      </div>
-    );
-  }
-
-  const isScoring = scoringMode === "side_out_singles_v1";
   const server = liveState.server_team;
   const scoreA = liveState.score_a ?? 0;
   const scoreB = liveState.score_b ?? 0;
@@ -33,34 +22,47 @@ export function ScoreBoard({
     <div className="space-y-3 rounded-xl border border-[#DDE9D6] bg-white p-4">
       {/* Header */}
       <ScoreHeader
-        setOrdinal={liveState.set_ordinal}
         gameOrdinal={liveState.game_ordinal}
         hasCurrentGame={Boolean(liveState.current_game_segment_id)}
-        hasCurrentSet={Boolean(liveState.current_set_segment_id)}
+        gamesWonA={liveState.games_won_a ?? 0}
+        gamesWonB={liveState.games_won_b ?? 0}
       />
 
       {/* Score Display */}
       <ScoreDisplay scoreA={scoreA} scoreB={scoreB} server={server} />
+
+      <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-bold">
+        <span className="rounded bg-slate-100 px-2 py-1 text-slate-600">
+          {liveState.scoring_phase === "serve_only" ? "发球得分" : "每球得分"}
+        </span>
+        {server && liveState.serving_side && (
+          <span className="rounded bg-emerald-50 px-2 py-1 text-emerald-700">
+            {server} 方{liveState.serving_side === "left" ? "左区" : "右区"}{matchFormat === "doubles" ? "队员" : ""}发球
+          </span>
+        )}
+      </div>
+
+      {liveState.match_status === "completed" && (
+        <div className="rounded-lg bg-emerald-50 px-3 py-2 text-center text-sm font-bold text-emerald-800">
+          比赛结束 · {liveState.match_winner} 方胜 · {liveState.games_won_a}:{liveState.games_won_b}
+        </div>
+      )}
 
       <CompletedGameSummary events={timelineEvents} />
 
       {/* Recent Points */}
       <RecentPoints results={liveState.recent_results ?? []} openRallyExists={openRallyExists} />
 
-      {/* Initial Server Selector */}
-      {showInitialServerSelector && onInitialServerSelect && isScoring && (
-        <InitialServerSelector onSelect={onInitialServerSelect} />
-      )}
     </div>
   );
 }
 
-function ScoreHeader({ setOrdinal, gameOrdinal, hasCurrentGame, hasCurrentSet }: { setOrdinal: number; gameOrdinal: number; hasCurrentGame: boolean; hasCurrentSet: boolean }) {
-  const visibleSet = setOrdinal + (setOrdinal > 0 && !hasCurrentSet ? 1 : 0);
+function ScoreHeader({ gameOrdinal, hasCurrentGame, gamesWonA, gamesWonB }: { gameOrdinal: number; hasCurrentGame: boolean; gamesWonA: number; gamesWonB: number }) {
   const visibleGame = gameOrdinal + (gameOrdinal > 0 && !hasCurrentGame ? 1 : 0);
   return (
-    <div className="text-xs font-bold text-slate-500">
-      {visibleSet > 0 ? `盘 ${visibleSet}` : ""} {visibleGame > 0 ? `· 局 ${visibleGame}` : ""}
+    <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+      <span>{visibleGame > 0 ? `第 ${visibleGame} 局` : "等待开局"}</span>
+      <span>胜局 A {gamesWonA} : {gamesWonB} B</span>
     </div>
   );
 }
@@ -116,30 +118,6 @@ function RecentPoints({ results, openRallyExists }: { results: Array<{ winner: s
       {openRallyExists && (
         <div className="w-4 h-4 rounded-sm border border-dashed border-slate-400 bg-slate-100 animate-pulse" title="进行中" />
       )}
-    </div>
-  );
-}
-
-function InitialServerSelector({ onSelect }: { onSelect: (server: "A" | "B") => void }) {
-  return (
-    <div className="border-t border-slate-200 pt-2 mt-2">
-      <p className="text-xs font-bold text-slate-500 mb-2">本局先发球方</p>
-      <div className="flex gap-2">
-        <button
-          className="flex-1 rounded-lg bg-green-50 border border-green-300 px-3 py-1.5 text-xs font-bold text-green-700 hover:bg-green-100"
-          onClick={() => onSelect("A")}
-          type="button"
-        >
-          A 方
-        </button>
-        <button
-          className="flex-1 rounded-lg bg-blue-50 border border-blue-300 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
-          onClick={() => onSelect("B")}
-          type="button"
-        >
-          B 方
-        </button>
-      </div>
     </div>
   );
 }

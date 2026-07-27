@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas.tracking import PlayerFramePosition, PlayerTrajectoryArtifact
+from app.schemas.tracking import PlayerFramePosition, PlayerIdentityDiagnostic, PlayerTrajectoryArtifact
 from app.vision.courtvision_calibration_engine.court_units import (
     PICKLEBALL_COURT_LENGTH_M,
     PICKLEBALL_COURT_WIDTH_M,
@@ -20,6 +20,17 @@ def position(track_id, frame, x_ft, y_ft, timestamp=None):
         court_unit="ft",
         confidence=0.9,
     )
+
+
+@pytest.mark.parametrize("event", ["side_quota_fallback_replaced", "fallback_tentative_promoted"])
+def test_player_identity_diagnostic_accepts_lock_manager_events(event):
+    diagnostic = PlayerIdentityDiagnostic(
+        frame_index=0,
+        event=event,
+        reason="test",
+    )
+
+    assert diagnostic.event == event
 
 
 def test_player_trajectory_artifact_serializes_metric_metadata_and_track_history():

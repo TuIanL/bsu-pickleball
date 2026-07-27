@@ -27,6 +27,7 @@ import { SystemStatusCard, adaptRuntimeMetric } from "../components/capture/Syst
 import { formatTimelineEventLabel } from "../components/capture/eventLabels";
 import type { TimelineWindowMode, TimelineDensity } from "../components/MiniTimeline";
 import type { RecordingControlViewModel } from "../components/capture/captureTypes";
+import { buildMatchControlViewModel, withInitialServer } from "../services/matchControlViewModel";
 
 /** 导航跳转函数签名 */
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
@@ -76,6 +77,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const [storageRoot, setStorageRoot] = useState<string>("");                    // 自定义存储目录
   const [defaultStorageRoot, setDefaultStorageRoot] = useState<string>("");      // 系统默认存储目录
   const [storagePickerBusy, setStoragePickerBusy] = useState(false);             // 目录选择器中
+  const [pendingInitialServer, setPendingInitialServer] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);                           // 设备抽屉打开
   const [previewKey, setPreviewKey] = useState(0);                               // 预览图刷新 key
@@ -106,6 +108,9 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     captureTakeId: runtime.captureTakeId,
     phase: runtime.phase,
   });
+  const isMatch = fieldSession?.capture_mode === "match";
+  const matchControls = buildMatchControlViewModel(liveCoding.liveCodingState);
+  const hasPendingMatchAction = liveCoding.outboxItems.some(item => item.status === "pending" || item.status === "sending");
 
   // ── 页面协调 ──
   const handleStart = async () => {
@@ -135,13 +140,13 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
     const key = e.key;
-    const quickEvents = liveCoding.quickEvents;
+    if (pendingInitialServer || hasPendingMatchAction) return;
+    const quickEvents = isMatch ? matchControls.events : liveCoding.quickEvents;
     const findAndTrigger = (type: string) => {
       const ev = quickEvents.find(q => q.type === type);
       if (ev) liveCoding.addTimelineEvent(ev);
     };
-    if (key === "1") findAndTrigger("start_set");
-    else if (key === "2") findAndTrigger("start_game");
+    if (key === "2" && isMatch && matchControls.canStartGame) setPendingInitialServer(true);
     else if (key === "3") findAndTrigger("start_next_rally");
     else if (key === "4") findAndTrigger("rally_result_a");
     else if (key === "5") findAndTrigger("rally_result_b");
@@ -150,7 +155,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     else if (key === "8") findAndTrigger("start_timeout");
     else if (key.toUpperCase() === "H") findAndTrigger("add_note");
     else if (key === "Backspace") findAndTrigger("undo");
-  }, [runtime.phase, liveCoding.quickEvents, liveCoding.addTimelineEvent]);
+  }, [runtime.phase, liveCoding.quickEvents, liveCoding.addTimelineEvent, pendingInitialServer, hasPendingMatchAction, isMatch, matchControls]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -320,9 +325,6 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     }
   }, [runtime.phase, runtime.session?.sourceSessionId]);
 
-  const scoringMode = liveCoding.liveCodingState?.scoring_mode ?? "none";
-  const isMatchSingles = fieldSession?.capture_mode === "match" && scoringMode === "side_out_singles_v1";
-  const [pendingInitialServer, setPendingInitialServer] = useState<boolean>(false);
   const [mergeStatus, setMergeStatus] = useState<string | null>(null);
   const [mergeDetail, setMergeDetail] = useState<string | null>(null);
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindowMode>("full");
@@ -588,6 +590,12 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       )}
 
       {/* Main workspace: Single or Dual */}
+      {fieldSession.capture_mode === "match" && runtime.phase === "idle" && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--capture-border-default)", background: "var(--capture-surface-card)", color: "var(--capture-text-secondary)" }}>
+          <strong>五局三胜 · 每局 21 分 · 20:20 后发球得分 · 21 分封顶</strong>
+          <span>A/B 身份整场固定，换边不交换比分</span>
+        </div>
+      )}
       {isDualMode ? (
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-4">
@@ -647,14 +655,9 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
             {(runtime.phase === "recording" || runtime.phase === "stopping" || runtime.phase === "recovering") && (
               <ScoreBoard
                 liveState={liveCoding.liveCodingState}
+                matchFormat={fieldSession?.match_format}
                 openRallyExists={liveCoding.liveCodingState?.current_rally_segment_id != null}
                 timelineEvents={liveCoding.timelineEvents}
-                showInitialServerSelector={pendingInitialServer}
-                onInitialServerSelect={(server) => {
-                  setPendingInitialServer(false);
-                  const gameEvent = liveCoding.quickEvents.find((e: { type: string }) => e.type === "start_game");
-                  if (gameEvent) liveCoding.addTimelineEvent({ ...gameEvent, payload: { initial_server_team: server } });
-                }}
               />
             )}
             {cameraSetup.previewTracks.length > 0 && (
@@ -679,36 +682,46 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
             </span>
           </div>
           <EventActionToolbar
-            events={liveCoding.quickEvents.filter(
-              e => isMatchSingles || (e.type !== "rally_result_a" && e.type !== "rally_result_b" && e.type !== "rally_replay")
-            ).map(e => {
-              const liveSegmentIds = new Set([
-                liveCoding.liveCodingState?.current_set_segment_id,
-                liveCoding.liveCodingState?.current_game_segment_id,
-                liveCoding.liveCodingState?.current_rally_segment_id,
-              ].filter((id): id is string => Boolean(id)));
-              const isActiveSegment = (segmentId: string): boolean => liveSegmentIds.has(segmentId)
-                || liveCoding.segments.some(seg => seg.parent_segment_id === segmentId && isActiveSegment(seg.id));
-              const activeSegmentByType: Record<"set" | "game" | "rally", boolean> = {
-                set: Boolean(liveCoding.liveCodingState?.current_set_segment_id),
-                game: Boolean(liveCoding.liveCodingState?.current_game_segment_id),
-                rally: Boolean(liveCoding.liveCodingState?.current_rally_segment_id),
-              };
-              const hasOpenSegment = (segType: "set" | "game" | "rally") => activeSegmentByType[segType]
-                || liveCoding.segments.some(seg => seg.segment_type === segType && (seg.status === "open" || isActiveSegment(seg.id)));
-              if (e.type === "start_set" && hasOpenSegment("set")) return { ...e, type: "end_set" as const, label: "盘结束", note: "结束当前的一盘" };
-              if (e.type === "start_game" && hasOpenSegment("game")) return { ...e, type: "end_game" as const, label: "局结束", note: "结束当前的一局" };
-              if (e.type === "start_next_rally" && hasOpenSegment("rally")) return { ...e, type: "end_rally" as const, label: "分结束", note: "结束当前的一分" };
-              return e;
-            })}
+            events={isMatch ? matchControls.events : liveCoding.quickEvents}
+            disabled={hasPendingMatchAction || pendingInitialServer}
             isPending={(type) => liveCoding.outboxItems.some(i =>
               i.action === type && (i.status === "pending" || i.status === "sending")
             )}
             onAction={(event) => {
-              if (event.type === "start_game" && isMatchSingles) setPendingInitialServer(true);
+              if (event.type === "start_game" && isMatch) {
+                setPendingInitialServer(true);
+                return;
+              }
               liveCoding.addTimelineEvent(event as any);
             }}
           />
+          {pendingInitialServer && (
+            <div className="rounded-lg border p-3" role="dialog" aria-label="选择本局先发球方" style={{ borderColor: "var(--capture-border-default)", background: "var(--capture-surface-elevated)" }}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-sm font-bold" style={{ color: "var(--capture-text-primary)" }}>选择第 {(liveCoding.liveCodingState?.games_won_a ?? 0) + (liveCoding.liveCodingState?.games_won_b ?? 0) + 1} 局先发球方</p>
+                <button type="button" onClick={() => setPendingInitialServer(false)} aria-label="取消选择先发球方" title="取消">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {(["A", "B"] as const).map(server => (
+                  <button
+                    key={server}
+                    type="button"
+                    className="h-10 rounded-lg border text-sm font-bold"
+                    style={{ borderColor: server === "A" ? "#86C99A" : "#A9C5FB", color: server === "A" ? "#237A43" : "#2D6AE5", background: server === "A" ? "#EAF7EE" : "#EEF3FF" }}
+                    onClick={() => {
+                      const gameEvent = liveCoding.quickEvents.find(event => event.type === "start_game");
+                      if (gameEvent) liveCoding.addTimelineEvent(withInitialServer(gameEvent, server));
+                      setPendingInitialServer(false);
+                    }}
+                  >
+                    {server} 方先发
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <MiniTimeline
             segments={liveCoding.segments}
             events={liveCoding.timelineEvents}

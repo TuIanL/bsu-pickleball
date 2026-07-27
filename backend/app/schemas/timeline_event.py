@@ -158,6 +158,8 @@ class TimelineEventSummary(BaseModel):
     label: str
     note: str
     payload_json: dict[str, Any]
+    annotation_package_id: Optional[str] = None
+    vidat_import_audit_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -184,6 +186,8 @@ class TimelineEventDetail(BaseModel):
     label: str
     note: str
     payload_json: dict[str, Any]
+    annotation_package_id: Optional[str] = None
+    vidat_import_audit_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

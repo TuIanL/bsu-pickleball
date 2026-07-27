@@ -2,148 +2,93 @@
 
 ### Requirement: Coding Actions 语义命令 API
 
-系统 MUST 提供语义级命令 API，后端在一个 SQLite 事务中完成命令日志、事件、区间投影、计分状态机和状态更新，并返回当前 CaptureTake 的完整有效投影。
+系统 MUST 提供语义级命令 API，后端在一个 SQLite 事务中完成命令日志、事件、区间投影、统一计分 FSM、自动收局和状态更新，并返回当前 CaptureTake 的完整有效投影。
 
-**修改内容**: 新增三种结果 action 类型（`rally_result_a`、`rally_result_b`、`rally_replay`），match + singles 模式下替代 `end_rally`；新增 `correct_score` action 类型；`start_game` 新增 `initial_server_team` payload。每个 result action 在同一事务内完成段操作、比分 FSM 和状态更新。`end_rally` 作为后端合法 action 保留。
-
-#### Scenario: 执行 rally_result_a action
-- **WHEN** 用户请求 `POST /api/capture-takes/{id}/coding-actions`
-- **AND** `action` 为 `rally_result_a`
+#### Scenario: 执行 rally_result_a 或 rally_result_b
+- **WHEN** 用户请求 coding action API
+- **AND** action 为 `rally_result_a` 或 `rally_result_b`
 - **AND** 存在 open rally
-- **THEN** 系统 SHALL 在一个事务内完成：
-  - 关闭 open rally segment，创建 `rally_end` 事件（payload 含 `winner:"A"`、`validity:"valid"`）
-  - 关闭当前间歇（如果有）
-  - 创建 `non_play_start` 事件（`intermission_kind: "between_rallies"`）
-  - 执行 FSM reducer：发球方为 A 时 `score_a` 加 1；发球方为 B 时 side out
-  - push 到 `recent_results` 尾部
-  - 更新 `LiveCodingState` 的 `score_a`、`server_team`、`match_phase`、`recent_results` 等字段
-  - 更新 `CaptureTake.revision`
+- **THEN** 系统 SHALL 在一个事务中关闭 rally、创建含胜方的 `rally_end`、运行对应规则 reducer、更新 `recent_results` 和 LiveCodingState
+- **AND** 达到 21 分时系统 SHALL 在同一事务中自动关闭当前 game、写入最终比分并累计胜局
+- **AND** 一方累计 3 个胜局时系统 SHALL 在同一事务中完成比赛
 
-#### Scenario: 执行 rally_result_b action
-- **WHEN** `action` 为 `rally_result_b`
-- **AND** 存在 open rally
-- **THEN** 系统 SHALL 在同一事务内完成 rally 关闭、`rally_end` 事件创建（`winner:"B"`）、FSM 更新（发球方赢则加分，接发方赢则 side out）
+#### Scenario: 执行 rally_replay
+- **WHEN** action 为 `rally_replay` 且存在 open rally
+- **THEN** 系统 SHALL 关闭当前 rally 并记录 `validity=replay`
+- **AND** 系统 SHALL 不改变任何计分或比赛结果字段
 
-#### Scenario: 执行 rally_replay action
-- **WHEN** `action` 为 `rally_replay`
-- **AND** 存在 open rally
-- **THEN** 系统 SHALL 在同一事务内完成 rally 关闭、`rally_end` 事件创建（`validity:"replay"`）
-- **AND** FSM SHALL 不改变 `score_a`、`score_b` 和 `server_team`
-- **AND** `recent_results` SHALL push `{"validity": "replay"}`
-
-#### Scenario: 无 open rally 时结果 action 返回错误
-- **WHEN** 不存在 open rally
-- **AND** 用户执行 `rally_result_a`、`rally_result_b` 或 `rally_replay`
-- **THEN** 系统 SHALL 返回错误
-- **AND** 系统 SHALL 不执行 FSM 更新
-
-#### Scenario: 执行 correct_score action
-- **WHEN** `action` 为 `correct_score`
-- **AND** payload 包含 `score_a`、`score_b`、`server_team`
-- **THEN** 系统 SHALL 将 `LiveCodingState` 的 `score_a`、`score_b`、`server_team` 设为 payload 中的值
-- **AND** 系统 SHALL 不创建或关闭任何 `CaptureSegment` 或段相关 `TimelineEvent`
-- **AND** 系统 SHALL 创建一条 `score_correction` 类型的 TimelineEvent
+#### Scenario: 新规则拒绝无结果分结束
+- **WHEN** take 使用 `hybrid_21_best_of_5_v1`
+- **AND** 用户执行 `end_rally`
+- **THEN** 系统 SHALL 拒绝该 action
+- **AND** 系统 SHALL 提示必须选择 A 方胜、B 方胜或重打
 
 #### Scenario: start_game 携带初始发球方
-- **WHEN** 用户执行 `start_game` action
+- **WHEN** 用户执行 `start_game`
 - **AND** payload 包含 `initial_server_team`
-- **THEN** 系统 SHALL 在现有段操作之外额外执行：
-  - `score_a` = 0
-  - `score_b` = 0
-  - `server_team` = `payload.initial_server_team`
-  - `recent_results` = []
+- **THEN** 系统 SHALL 创建唯一的新 game 并初始化 0:0、发球方、每球得分阶段和右区站位
 
-#### Scenario: revision 冲突返回 409（不同 client_action_id）
-- **WHEN** 请求的 `expected_revision` 与当前 revision 不匹配
-- **AND** `client_action_id` 是新 ID
-- **THEN** 系统 SHALL 返回 409 Conflict
-- **AND** 响应 SHALL 包含 `error: "revision_conflict"`、`current_revision` 和权威 LiveCodingState
+#### Scenario: revision 冲突
+- **WHEN** 请求的 `expected_revision` 与当前 revision 不匹配且 `client_action_id` 为新 ID
+- **THEN** 系统 SHALL 返回 409 Conflict 和权威 LiveCodingState
 - **AND** 系统 SHALL 不自动重新执行该动作
-
-#### Scenario: 时间戳校验
-- **WHEN** 请求的 `timestamp_ms` 与 CaptureTake 已录制时长相比较
-- **AND** 偏差超过 ±5 秒
-- **THEN** 系统 SHALL 返回 400 错误
-- **AND** 系统 SHALL 不执行该动作
-
-#### Scenario: 使用服务器时间兜底
-- **WHEN** 请求未提交 `timestamp_ms`
-- **THEN** 系统 SHALL 使用 `当前服务器时间 - CaptureTake.started_at` 计算 `timestamp_ms`
 
 ### Requirement: LiveCodingState 快照管理
 
-系统 MUST 维护 CaptureTake 的实时编码状态快照，每次成功 action 在同一事务内更新，并显式表达比赛阶段、间歇原因、计分状态和计分模式。
+系统 MUST 维护实时编码状态快照，完整表达比赛阶段、比分、发球状态、胜局和比赛完成状态。
 
-**修改内容**: `LiveCodingState` 新增 `server_team`、`score_a`、`score_b`、`scoring_mode`、`scoring_ruleset_version`、`recent_results` 字段；`start_game` 初始化比分和发球方。
+#### Scenario: 新比赛初始状态
+- **WHEN** 创建新的单打或双打 match CaptureTake
+- **THEN** 系统 SHALL 初始化 `score_a=0`、`score_b=0`、`games_won_a=0`、`games_won_b=0`
+- **AND** `server_team` 和 `serving_side` SHALL 为 None
+- **AND** `scoring_phase` SHALL 为 `rally`
+- **AND** `match_status` SHALL 为 `not_started`
+- **AND** `scoring_ruleset_version` SHALL 为 `hybrid_21_best_of_5_v1`
 
-#### Scenario: 初始状态（单打）
-- **WHEN** 创建新的 CaptureTake
-- **AND** `match_format` 为 `singles`
-- **THEN** 系统 SHALL 初始化 LiveCodingState：
-  - `set_ordinal` = 0, `game_ordinal` = 0, `rally_ordinal` = 0
-  - `match_phase` = `idle`, `intermission_kind` = None
-  - `score_a` = 0, `score_b` = 0, `server_team` = None
-  - `scoring_mode` = `"side_out_singles_v1"`
-  - `scoring_ruleset_version` = `"side_out_singles_v1"`
-  - `recent_results` = []
-
-#### Scenario: 双打初始状态
-- **WHEN** 创建新的 CaptureTake
-- **AND** `match_format` 为 `doubles`
-- **THEN** 系统 SHALL 将 `scoring_mode` 设为 `"manual"`
-- **AND** `scoring_ruleset_version` 设为 `"manual"`
-- **AND** 不初始化计分相关字段
-
-#### Scenario: 每次 action 同步更新
-- **WHEN** 执行成功的 coding action
-- **THEN** 系统 SHALL 在同一事务中更新 LiveCodingState
-- **AND** 系统 SHALL 更新 revision、ordinal、`match_phase`、`intermission_kind` 和 `updated_at`
-- **AND** `non_play` SHALL 在 `match_phase` 为 `intermission` 时为 true，否则为 false
+#### Scenario: API 返回完整状态
+- **WHEN** 客户端获取 live state 或成功执行 coding action
+- **THEN** 响应 SHALL 包含 revision、segment ordinals、match phase、比分、发球方、计分阶段、发球站位、双方胜局、比赛状态和 recent results
 
 #### Scenario: 状态重放恢复
-- **WHEN** 状态需要从命令日志重建（如 undo、一致性检查或测试）
-- **THEN** 系统 SHALL 按执行顺序重放未标记为 `undone` 的 CaptureCodingAction
-- **AND** 系统 SHALL 恢复到与有效事件和有效区间一致的状态
-
-#### Scenario: 获取 LiveCodingState
-- **WHEN** 用户请求 `GET /api/capture-takes/{id}/live-state`
-- **THEN** 系统 SHALL 返回当前 LiveCodingState
-- **AND** 响应 SHALL 包含 revision、ordinal、`match_phase`、`intermission_kind`、`non_play`、`score_a`、`score_b`、`server_team`、`scoring_mode`、`scoring_ruleset_version`、`recent_results`
+- **WHEN** undo 或一致性检查触发状态重建
+- **THEN** 系统 SHALL 按有效命令日志恢复 segment、比分、发球状态、胜局和比赛结果
 
 ### Requirement: 完整层级状态转移规则
 
-系统 MUST 根据完整的状态转移表执行层级关闭、开分、间歇操作和计分状态机更新。
+系统 MUST 根据比赛状态只允许合法的开局、开分和结果操作，并由制胜分自动完成局与比赛层级关闭。
 
-**修改内容**: match + singles 模式下 `end_rally` 被三种结果 action 替代；`side_change` 额外要求不改变比分和发球方；双打模式不执行 FSM。
+#### Scenario: 等待开局
+- **WHEN** 没有 open game 且比赛尚未完成
+- **THEN** 系统 SHALL 允许 `start_game`
+- **AND** 系统 SHALL 拒绝 `start_next_rally` 和 rally result action
 
-#### Scenario: rally_result_a 关闭当前分并进入间歇
-- **WHEN** `match_phase` 为 `rally_active`
-- **AND** 执行 `rally_result_a` action
-- **THEN** 系统 SHALL 关闭 open rally 并创建 `rally_end` 事件（`payload.winner="A"`）
-- **AND** 系统 SHALL 创建 `intermission_kind` 为 `between_rallies` 的 `non_play_start` 事件
-- **AND** 系统 SHALL 将 `match_phase` 设为 `intermission`
-- **AND** 系统 SHALL 执行 FSM 计分和发球权更新
+#### Scenario: 等待开分
+- **WHEN** 存在 open game 且不存在 open rally
+- **THEN** 系统 SHALL 允许 `start_next_rally`
+- **AND** 系统 SHALL 拒绝 rally result action
 
-#### Scenario: side_change 不改比分和发球权
-- **WHEN** 执行 `change_side` action
-- **THEN** 系统 SHALL 不改变 `score_a`、`score_b`、`server_team`
-- **AND** A/B 身份 SHALL 保持不变
+#### Scenario: 回合进行中
+- **WHEN** 存在 open rally
+- **THEN** 系统 SHALL 允许 `rally_result_a`、`rally_result_b` 或 `rally_replay`
+- **AND** 系统 SHALL 拒绝重复开分或开局
 
-#### Scenario: start_next_rally 后比分不变
-- **WHEN** 执行 `start_next_rally` action
-- **THEN** 系统 SHALL 不改变 `score_a`、`score_b`、`server_team` 和 `recent_results`
-- **AND** FSM 状态 SHALL 保持不动
+#### Scenario: 比赛已结束
+- **WHEN** `match_status=completed`
+- **THEN** 系统 SHALL 拒绝 `start_game`、`start_next_rally` 和全部 rally result action
+
+#### Scenario: side_change 不改比赛投影
+- **WHEN** 用户执行 `change_side`
+- **THEN** 系统 SHALL 不改变比分、胜局、发球方、计分阶段或 A/B 身份
 
 ### Requirement: 一键推进操作
 
-**修改内容**: 新增 "分开始后再点结果按钮" 的配搭操作模式。
+系统 MUST 采用状态化的比赛推进流程，每一分通过一次开始操作和一次明确结果操作完成。
 
-#### Scenario: 比分模式下的一分两击
-- **WHEN** 比赛录制中
-- **AND** 用户点击 `start_next_rally` 开分
-- **AND** 用户随后点击 `rally_result_a`、`rally_result_b` 或 `rally_replay`
-- **THEN** 系统 SHALL 记录该分结果并更新计分状态
-- **AND** 每分必须经过"分开始"和"结果按钮"两次操作
+#### Scenario: 完成一分
+- **WHEN** 用户在等待开分状态执行 `start_next_rally`
+- **AND** 随后执行 `rally_result_a`、`rally_result_b` 或 `rally_replay`
+- **THEN** 系统 SHALL 记录完整 rally 区间和结果
+- **AND** 系统 SHALL 回到等待开分、等待下一局或比赛完成状态之一
 
 ### Requirement: 撤销操作
 
@@ -174,42 +119,33 @@
 
 ### Requirement: 键盘快捷键
 
-**修改内容**: 新增三个结果按钮和修正比分的快捷键映射。
+系统 MUST 让比赛快捷键服从当前状态和先发方选择流程，不得绕过 UI 可用性约束。
 
-#### Scenario: 快捷键映射
-- **WHEN** 录制中且焦点不在 input/textarea/select，且无弹窗
-- **THEN** 系统 SHALL 响应以下快捷键：
-  - `1` → 开始新盘
-  - `2` → 开始新局
-  - `3` → 开始下一分
-  - `4` → A 方胜
-  - `5` → B 方胜
-  - `6` → 重打
-  - `7` → 换边
-  - `8` → 战术暂停
-  - `H` → 重点片段
-  - `Backspace` → 撤销
+#### Scenario: 动态快捷键
+- **WHEN** 录制中且焦点不在表单控件或弹窗内
+- **THEN** `2` SHALL 在允许开局时打开初始发球方选择器
+- **AND** `3` SHALL 仅在等待开分时开始下一分
+- **AND** `4`、`5`、`6` SHALL 仅在回合进行中分别提交 A 方胜、B 方胜和重打
+- **AND** `7`、`8`、`H`、`Backspace` SHALL 分别保持换边、暂停、重点标记和撤销语义
 
-#### Scenario: 快捷键不响应
-- **WHEN** 焦点在 input/textarea/select 或打开弹窗
-- **THEN** 系统 SHALL 不响应快捷键
+#### Scenario: 选择器打开时
+- **WHEN** 初始发球方选择器处于打开状态
+- **THEN** 比赛 action 快捷键 SHALL 不触发后台 action
 
 ### Requirement: 前端乐观更新
 
-**修改内容**: 前端在等待 `rally_result_*` 响应时，乐观显示计分板 pending 状态而非伪造比分。
+系统 MUST 在等待比赛 action 响应时展示 pending 状态，但不得在客户端伪造比分、发球权、胜局或比赛结果。
 
-#### Scenario: 结果按钮 pending 状态
-- **WHEN** 用户点击 `rally_result_a`
-- **AND** 等待后端响应期间
-- **THEN** 前端 SHALL 将结果按钮展示为 pending 状态（禁用、旋转动画或透明度变化）
-- **AND** 前端 SHALL 不自行增加比分或改变发球方显示
-- **AND** 计分板 SHALL 保持之前的状态
+#### Scenario: 结果提交中
+- **WHEN** 用户提交 A 方胜、B 方胜或重打并等待后端响应
+- **THEN** 当前结果操作 SHALL 显示 pending
+- **AND** 所有会造成冲突的比赛主操作 SHALL 暂时禁用
+- **AND** 计分板 SHALL 保持最近一次权威状态
 
-#### Scenario: 结果确认后计分板同步
-- **WHEN** 收到后端成功响应
-- **THEN** 前端 SHALL 以后端返回的 `live_state.score_a`、`score_b`、`server_team`、`recent_results` 更新计分板
-- **AND** 前端 SHALL 释放按钮的 pending 状态
-
+#### Scenario: 权威响应返回
+- **WHEN** coding action 成功返回
+- **THEN** 前端 SHALL 用完整响应替换 live state、segments 和 timeline events
+- **AND** 操作区 SHALL 根据新权威状态重新派生可用动作
 ### Requirement: Coding Action 响应回写
 
 系统 MUST 在收到 `executeCodingAction` 成功响应后以完整权威投影同步当前 Take 的前端状态。

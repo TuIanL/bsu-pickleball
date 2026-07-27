@@ -57,7 +57,7 @@ export function AppShell({ shellMode, navigationSection, children, onNavigate }:
       )}
 
       {/* Main content area */}
-      <main style={!isLanding ? { marginLeft: 216 } : undefined}>
+      <main className={!isLanding ? "ml-16 sm:ml-[216px]" : undefined}>
         {children}
       </main>
 

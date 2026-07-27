@@ -36,3 +36,8 @@ models/*
 *.onnx
 *.ckpt
 *.engine
+
+# IDE and Python caches
+.idea/
+__pycache__/
+*.pyc

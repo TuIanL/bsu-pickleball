@@ -1,9 +1,10 @@
 import { CirclePause, Maximize2, Minimize2, Pause, Play, Volume2, VolumeX } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
+import React, { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
   BallTrajectoryArtifact,
   BounceEventsArtifact,
   MatchSummary,
+  PipelineTrackPoint,
   PlayerMarker,
   PoseOverlayArtifact,
   ServeEventsArtifact,
@@ -12,6 +13,7 @@ import type {
   VideoOverlayLabel,
 } from "../../types/report";
 import { resolveDetectionFrame, resolvePoseFrame, type PoseResolutionResult } from "./videoOverlayPlayback";
+import { CourtMinimap } from "./CourtMinimap";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
@@ -43,6 +45,10 @@ interface VideoAnalysisCardProps {
   trackingOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
   videoSrc?: string;
+  /** H.264 源视频兜底：当 videoSrc（overlay 视频）编码不被浏览器支持时自动回退 */
+  fallbackVideoSrc?: string;
+  /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
+  pipelineTracks?: PipelineTrackPoint[];
 }
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
@@ -90,6 +96,8 @@ export function VideoAnalysisCard({
   trackingOverlayStatus,
   trackingOverlay,
   videoSrc,
+  fallbackVideoSrc,
+  pipelineTracks,
 }: VideoAnalysisCardProps) {
   if (videoSrc) {
     return (
@@ -118,6 +126,7 @@ export function VideoAnalysisCard({
           trackingOverlayLoadState={trackingOverlayLoadState}
           trackingOverlayStatus={trackingOverlayStatus}
           videoSrc={videoSrc}
+          fallbackVideoSrc={fallbackVideoSrc}
         />
         {!compact ? (
           <RealVideoFooter
@@ -137,6 +146,7 @@ export function VideoAnalysisCard({
             trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={trackingOverlayStatus}
             trackingOverlay={trackingOverlay}
+            pipelineTracks={pipelineTracks}
           />
         ) : null}
       </article>
@@ -268,6 +278,26 @@ export function VideoAnalysisCard({
   );
 }
 
+/** 轻量错误边界：防止 CourtMinimap 内部异常导致整个视频卡片白屏 */
+class CourtMinimapErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
 function VideoCardHeader({ match }: { match: MatchSummary }) {
   return (
     <div className="flex items-center justify-between border-b border-[#DDE9D6] px-4 py-3 sm:px-5">
@@ -305,6 +335,8 @@ function RealVideoOverlay({
   trackingOverlayLoadState = "idle",
   trackingOverlayStatus,
   videoSrc,
+  fallbackVideoSrc,
+  pipelineTracks,
 }: {
   match: MatchSummary;
   ballTrajectory?: BallTrajectoryArtifact | null;
@@ -328,11 +360,15 @@ function RealVideoOverlay({
   trackingOverlayLoadState?: OverlayLoadState;
   trackingOverlayStatus?: string;
   videoSrc: string;
+  fallbackVideoSrc?: string;
+  /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
+  pipelineTracks?: PipelineTrackPoint[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [activeVideoSrc, setActiveVideoSrc] = useState<string | undefined>(videoSrc);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -518,6 +554,17 @@ function RealVideoOverlay({
     setCurrentTime(seekTime);
   };
 
+  const handleVideoError = () => {
+    // 当 overlay 视频（如 mpeg4 编码）无法被浏览器解码时，自动回退到 H.264 源视频
+    if (activeVideoSrc !== fallbackVideoSrc && fallbackVideoSrc) {
+      console.warn(
+        "[VideoAnalysisCard] 主视频源加载失败（可能编码不支持），自动回退到源视频",
+        { failedSrc: activeVideoSrc, fallback: fallbackVideoSrc },
+      );
+      setActiveVideoSrc(fallbackVideoSrc);
+    }
+  };
+
   return (
     <div className="bg-[#091016]">
       <div
@@ -531,8 +578,15 @@ function RealVideoOverlay({
           playsInline
           preload="metadata"
           ref={videoRef}
-          src={videoSrc}
+          src={activeVideoSrc}
+          onError={handleVideoError}
         />
+        {activeVideoSrc && duration === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            <span className="text-sm text-white/70">正在加载视频（大文件可能需要几秒）…</span>
+          </div>
+        )}
 
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full"
@@ -689,6 +743,18 @@ function RealVideoOverlay({
           球
         </button>
         </div>
+
+        {pipelineTracks && pipelineTracks.length > 0 && (
+          <div className="absolute right-4 top-16 shadow-black/20">
+            <CourtMinimapErrorBoundary>
+              <CourtMinimap
+                tracks={pipelineTracks}
+                currentTimeSec={currentTime}
+                trailSeconds={6}
+              />
+            </CourtMinimapErrorBoundary>
+          </div>
+        )}
 
         <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">

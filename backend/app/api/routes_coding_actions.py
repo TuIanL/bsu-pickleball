@@ -160,6 +160,12 @@ def get_live_state(
         scoring_mode=getattr(state, "scoring_mode", "none"),
         scoring_ruleset_version=getattr(state, "scoring_ruleset_version", None),
         recent_results=json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or []),
+        games_won_a=getattr(state, "games_won_a", 0),
+        games_won_b=getattr(state, "games_won_b", 0),
+        scoring_phase=getattr(state, "scoring_phase", "rally"),
+        serving_side=getattr(state, "serving_side", None),
+        match_status=getattr(state, "match_status", "not_started"),
+        match_winner=getattr(state, "match_winner", None),
     )
 
 

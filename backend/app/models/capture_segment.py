@@ -32,6 +32,7 @@ class SegmentSource(str, enum.Enum):
     manual = "manual"          # 人工标注
     algorithm = "algorithm"    # 算法生成
     corrected = "corrected"    # 人工修正
+    vidat_import = "vidat_import"
 
 
 # 编辑状态枚举（支持非破坏式编辑）
@@ -87,6 +88,8 @@ class CaptureSegment(Base):
         Enum(SegmentSource), nullable=False, default=SegmentSource.manual                           # 数据来源
     )
     is_highlight: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)              # 是否为高亮片段
+    annotation_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    vidat_import_audit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)                         # 创建时间

@@ -76,12 +76,9 @@ class CaptureStartCoordinator:
             from app.services.capture_take_service import initialize_capture_take_timeline
             from app.models.field_session import FieldSession
             fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
-            if fs and fs.match_format == "singles":
-                scoring_mode = "side_out_singles_v1"
-                scoring_ruleset_version = "side_out_singles_v1"
-            elif fs and fs.match_format == "doubles":
-                scoring_mode = "manual"
-                scoring_ruleset_version = "manual"
+            if fs and fs.match_format in ("singles", "doubles"):
+                scoring_mode = "hybrid_21_best_of_5_v1"
+                scoring_ruleset_version = "hybrid_21_best_of_5_v1"
             else:
                 scoring_mode = "none"
                 scoring_ruleset_version = None

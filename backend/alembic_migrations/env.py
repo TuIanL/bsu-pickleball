@@ -20,6 +20,7 @@ import app.models.capture_track  # noqa: F401
 import app.models.capture_coding_action  # noqa: F401
 import app.models.live_coding_state  # noqa: F401
 import app.models.capture_segment  # noqa: F401
+import app.models.vidat_annotation  # noqa: F401
 
 target_metadata = Base.metadata
 

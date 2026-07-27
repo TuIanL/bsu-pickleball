@@ -134,12 +134,12 @@ export function AppSidebar({ navigationSection, onNavigate }: AppSidebarProps) {
   const { activeTake, isOrphan, forceCancel, forceCancelling } = useActiveCaptureTake();
 
   return (
-    <aside className="fixed left-0 top-0 bottom-0 w-[216px] bg-white border-r border-[#E4E7EC] flex flex-col z-40">
-      <button className="flex items-center gap-2 px-4 h-16 shrink-0 w-full text-left hover:bg-[#F9FAFB] transition" onClick={() => onNavigate("/")} type="button">
+    <aside className="fixed left-0 top-0 bottom-0 w-16 sm:w-[216px] bg-white border-r border-[#E4E7EC] flex flex-col z-40">
+      <button className="flex items-center justify-center gap-2 px-2 sm:justify-start sm:px-4 h-16 shrink-0 w-full text-left hover:bg-[#F9FAFB] transition" onClick={() => onNavigate("/")} type="button">
         <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-[#22C55E]/30 bg-[#19B84C]/14 text-[#168A34]">
           <Activity size={20} aria-hidden="true" />
         </span>
-        <span className="min-w-0">
+        <span className="hidden min-w-0 sm:block">
           <span className="block text-sm font-black tracking-[0.02em] text-[#182230]">
             拍动视析
           </span>
@@ -153,7 +153,7 @@ export function AppSidebar({ navigationSection, onNavigate }: AppSidebarProps) {
           return (
             <button
               key={item.section}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+              className={`w-full flex items-center justify-center gap-2.5 px-2 py-2.5 sm:justify-start sm:px-3 rounded-lg text-sm font-medium transition ${
                 isActive
                   ? "bg-[#EAF7EE] text-[#3BAA62]"
                   : "text-[#475467] hover:bg-[#F2F4F7]"
@@ -162,20 +162,22 @@ export function AppSidebar({ navigationSection, onNavigate }: AppSidebarProps) {
               type="button"
             >
               <item.icon size={18} aria-hidden="true" />
-              {item.label}
+              <span className="hidden sm:inline">{item.label}</span>
             </button>
           );
         })}
       </nav>
 
       {activeTake && (
-        <ActiveRecordingBlock
-          activeTake={activeTake}
-          onNavigate={onNavigate}
-          isOrphan={isOrphan}
-          forceCancel={forceCancel}
-          forceCancelling={forceCancelling}
-        />
+        <div className="hidden sm:block">
+          <ActiveRecordingBlock
+            activeTake={activeTake}
+            onNavigate={onNavigate}
+            isOrphan={isOrphan}
+            forceCancel={forceCancel}
+            forceCancelling={forceCancelling}
+          />
+        </div>
       )}
     </aside>
   );

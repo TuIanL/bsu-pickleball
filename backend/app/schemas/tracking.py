@@ -578,12 +578,15 @@ class PlayerIdentityDiagnostic(BaseModel):
     #           player_reset_after_prolonged_loss=长时间丢失后重置 /
     #           player_slot_filled=空位填充 / rejected_low_conf_unlocked=未锁定低置信度拒绝 /
     #           rejected_outside_near_court=超出近场范围 / rejected_outside_tracking=超出跟踪范围 /
-    #           rejected_bbox_size=框尺寸不合规 / retained_by_lock=因锁定保留
+    #           rejected_bbox_size=框尺寸不合规 / retained_by_lock=因锁定保留 /
+    #           side_quota_fallback_replaced=侧配额降级候选被替换 /
+    #           fallback_tentative_promoted=侧配额降级候选升级
     event: Literal[
         "created", "assigned", "reconnected", "lost", "inactive", "unmatched", "filtered",
         "player_locked", "player_reconnected_from_lost", "player_reset_after_prolonged_loss",
         "player_slot_filled", "rejected_low_conf_unlocked", "rejected_outside_near_court",
         "rejected_outside_tracking", "rejected_bbox_size", "retained_by_lock",
+        "side_quota_fallback_replaced", "fallback_tentative_promoted",
     ]
     player_id: Optional[str] = None
     track_id: Optional[int] = None

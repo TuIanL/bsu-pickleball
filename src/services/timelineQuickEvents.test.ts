@@ -9,6 +9,7 @@ describe("timelineQuickEvents", () => {
     expect(events.some((e) => e.type === "start_set")).toBe(true);
     expect(events.some((e) => e.type === "start_game")).toBe(true);
     expect(events.some((e) => e.type === "change_side")).toBe(true);
+    expect(events.find((e) => e.type === "start_game")?.payload.initial_server_team).toBeUndefined();
   });
 
   it("returns practice events for 'practice' mode", () => {

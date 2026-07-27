@@ -18,7 +18,15 @@ from app.services import capture_coding_action_service as coding_svc
 from app.services import live_coding_state_service as state_svc
 from app.services import capture_segment_service as seg_svc
 from app.services import timeline_event_service as event_svc
-from app.services.scoring_fsm import ScoringState, ScoringAction, reduce_scoring_state
+from app.services.scoring_fsm import (
+    HYBRID_21_RULESET,
+    ScoringAction,
+    ScoringState,
+    initial_game_state,
+    reduce_scoring_state_for_ruleset,
+    scoring_phase_for,
+    serving_side_for,
+)
 
 # ── 公开 action 列表 ──
 
@@ -107,7 +115,9 @@ def execute_coding_action(
 def _empty_state() -> dict:
     return {"revision": 0, "set_ordinal": 0, "game_ordinal": 0, "rally_ordinal": 0, "non_play": False,
             "score_a": 0, "score_b": 0, "server_team": None, "scoring_mode": "none",
-            "scoring_ruleset_version": None, "recent_results": []}
+            "scoring_ruleset_version": None, "recent_results": [], "games_won_a": 0,
+            "games_won_b": 0, "scoring_phase": "rally", "serving_side": None,
+            "match_status": "not_started", "match_winner": None}
 
 
 # 确保 take 存在状态快照，不存在则初始化
@@ -128,6 +138,7 @@ def _apply_action(
     payload: dict,
 ) -> dict:
     state = _ensure_state(db, take)
+    _validate_match_action(db, take, state, action, payload)
     request_hash = coding_svc.compute_request_hash(action, payload)
     action_record = coding_svc.create_action_record(
         db,
@@ -204,6 +215,33 @@ def _apply_action(
             pass
 
     return result
+
+
+def _validate_match_action(
+    db: Session, take: CaptureTake, state: LiveCodingState, action: str, payload: dict
+) -> None:
+    if getattr(state, "scoring_ruleset_version", None) != HYBRID_21_RULESET:
+        return
+    open_game = seg_svc.get_open_segment_by_type(db, take.id, "game")
+    open_rally = seg_svc.get_open_segment_by_type(db, take.id, "rally")
+    if getattr(state, "match_status", "not_started") == "completed" and action in {
+        "start_game", "start_next_rally", "rally_result_a", "rally_result_b", "rally_replay"
+    }:
+        raise ValueError("比赛已结束，不能继续开局或计分")
+    if action == "start_game":
+        if payload.get("initial_server_team") not in ("A", "B"):
+            raise ValueError("start_game 需要选择 initial_server_team A 或 B")
+        if open_game is not None:
+            raise ValueError("当前局尚未结束")
+    elif action == "start_next_rally":
+        if open_game is None:
+            raise ValueError("请先开始新局")
+        if open_rally is not None:
+            raise ValueError("当前分尚未结束")
+    elif action in ("rally_result_a", "rally_result_b", "rally_replay") and open_rally is None:
+        raise ValueError("当前没有进行中的分")
+    elif action == "end_rally":
+        raise ValueError("请选择 A 方胜、B 方胜或重打来结束本分")
 
 
 # ── Action handlers ──
@@ -316,6 +354,10 @@ def _handle_start_game(
     segments.append(_segment_to_dict(seg))
 
     initial_server = (payload or {}).get("initial_server_team") or state.server_team or "A"
+    if getattr(state, "scoring_ruleset_version", None) == HYBRID_21_RULESET:
+        initial = initial_game_state(_state_from_model(state), initial_server)
+        state.serving_side = initial.serving_side
+        state.match_winner = None
     state_svc.upsert_state(db, take.id, revision=take.revision,
                            set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal + 1,
                            rally_ordinal=0, non_play=False, match_phase="idle",
@@ -324,6 +366,10 @@ def _handle_start_game(
                            current_rally_segment_id=None,
                            server_team=initial_server,
                            score_a=0, score_b=0,
+                           games_won_a=getattr(state, "games_won_a", 0),
+                           games_won_b=getattr(state, "games_won_b", 0),
+                           scoring_phase="rally", serving_side="right",
+                           match_status="in_progress",
                            recent_results=[])
     return events, segments
 
@@ -596,7 +642,7 @@ def _handle_rally_result(
     db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
     *, winner: str | None, validity: str,
 ) -> tuple[list[dict], list[dict]]:
-    # 无 open rally 时 no-op（与 end_rally 行为一致）
+    # Legacy rules preserve the old no-op behavior. Hybrid actions are gated above.
     events, segments = _close_open_by_type(db, take, timestamp_ms, "rally")
     if not events and not segments:
         return events, segments
@@ -613,21 +659,25 @@ def _handle_rally_result(
             break
 
     # FSM
-    if getattr(state, "scoring_mode", "none") in ("side_out_singles_v1",):
-        current_state = ScoringState(
-            server_team=getattr(state, "server_team", None),
-            score_a=getattr(state, "score_a", 0),
-            score_b=getattr(state, "score_b", 0),
-        )
+    ruleset = getattr(state, "scoring_ruleset_version", None)
+    new_state = _state_from_model(state)
+    if ruleset in ("side_out_singles_v1", HYBRID_21_RULESET):
+        current_state = _state_from_model(state)
         act = ScoringAction(
             type="rally_result",
             winner=winner,
             validity=validity,
         )
-        new_state = reduce_scoring_state(current_state, act)
+        new_state = reduce_scoring_state_for_ruleset(current_state, act, ruleset)
         state.server_team = new_state.server_team
         state.score_a = new_state.score_a
         state.score_b = new_state.score_b
+        state.games_won_a = new_state.games_won_a
+        state.games_won_b = new_state.games_won_b
+        state.scoring_phase = new_state.scoring_phase
+        state.serving_side = new_state.serving_side
+        state.match_status = new_state.match_status
+        state.match_winner = new_state.match_winner
 
     # recent_results
     try:
@@ -649,6 +699,31 @@ def _handle_rally_result(
         payload_json={"intermission_kind": "between_rallies"})
     events.append(_event_to_dict(start_np))
 
+    if ruleset == HYBRID_21_RULESET and new_state.game_completed:
+        game_events, game_segments = _close_open_by_type(db, take, timestamp_ms, "game")
+        game_payload = {
+            "score_a": new_state.score_a,
+            "score_b": new_state.score_b,
+            "winner": new_state.game_winner,
+            "games_won_a": new_state.games_won_a,
+            "games_won_b": new_state.games_won_b,
+        }
+        _set_event_payload(db, game_events, "game_end", game_payload)
+        events.extend(game_events)
+        segments.extend(game_segments)
+        state.current_game_segment_id = None
+        if new_state.match_status == "completed":
+            set_events, set_segments = _close_open_by_type(db, take, timestamp_ms, "set")
+            match_payload = {
+                "winner": new_state.match_winner,
+                "games_won_a": new_state.games_won_a,
+                "games_won_b": new_state.games_won_b,
+            }
+            _set_event_payload(db, set_events, "set_end", match_payload)
+            events.extend(set_events)
+            segments.extend(set_segments)
+            state.current_set_segment_id = None
+
     state_svc.upsert_state(db, take.id, revision=take.revision,
         set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
         rally_ordinal=state.rally_ordinal, non_play=True,
@@ -657,6 +732,11 @@ def _handle_rally_result(
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=None,
         server_team=state.server_team, score_a=state.score_a, score_b=state.score_b,
+        games_won_a=getattr(state, "games_won_a", 0), games_won_b=getattr(state, "games_won_b", 0),
+        scoring_phase=getattr(state, "scoring_phase", "rally"),
+        serving_side=getattr(state, "serving_side", None),
+        match_status=getattr(state, "match_status", "not_started"),
+        match_winner=getattr(state, "match_winner", None),
         recent_results=recent)
     return events, segments
 
@@ -673,8 +753,10 @@ def _handle_correct_score(
 
     if score_a is None or score_b is None or server_team is None:
         raise ValueError("correct_score 需要 score_a、score_b、server_team")
-    if score_a < 0 or score_b < 0:
-        raise ValueError("比分不能为负")
+    if score_a < 0 or score_b < 0 or score_a > 21 or score_b > 21:
+        raise ValueError("比分必须在 0 到 21 之间")
+    if score_a == 21 and score_b == 21:
+        raise ValueError("双方不能同时达到 21 分")
     if server_team not in ("A", "B"):
         raise ValueError("server_team 必须为 A 或 B")
 
@@ -697,6 +779,38 @@ def _handle_correct_score(
     state.server_team = server_team
     state.score_a = score_a
     state.score_b = score_b
+    state.scoring_phase = scoring_phase_for(score_a, score_b)
+    state.serving_side = serving_side_for(server_team, score_a, score_b)
+
+    events = [_event_to_dict(ev)]
+    segments: list[dict] = []
+    winner = "A" if score_a == 21 else "B" if score_b == 21 else None
+    if getattr(state, "scoring_ruleset_version", None) == HYBRID_21_RULESET and winner:
+        if seg_svc.get_open_segment_by_type(db, take.id, "game") is None:
+            raise ValueError("没有可由比分修正结束的当前局")
+        if winner == "A":
+            state.games_won_a += 1
+        else:
+            state.games_won_b += 1
+        state.match_winner = "A" if state.games_won_a == 3 else "B" if state.games_won_b == 3 else None
+        state.match_status = "completed" if state.match_winner else "in_progress"
+        game_events, game_segments = _close_open_by_type(db, take, timestamp_ms, "game")
+        _set_event_payload(db, game_events, "game_end", {
+            "score_a": score_a, "score_b": score_b, "winner": winner,
+            "games_won_a": state.games_won_a, "games_won_b": state.games_won_b,
+        })
+        events.extend(game_events)
+        segments.extend(game_segments)
+        state.current_game_segment_id = None
+        if state.match_winner:
+            set_events, set_segments = _close_open_by_type(db, take, timestamp_ms, "set")
+            _set_event_payload(db, set_events, "set_end", {
+                "winner": state.match_winner,
+                "games_won_a": state.games_won_a, "games_won_b": state.games_won_b,
+            })
+            events.extend(set_events)
+            segments.extend(set_segments)
+            state.current_set_segment_id = None
 
     state_svc.upsert_state(db, take.id, revision=take.revision,
         set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
@@ -705,8 +819,38 @@ def _handle_correct_score(
         current_set_segment_id=state.current_set_segment_id,
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=state.current_rally_segment_id,
-        server_team=server_team, score_a=score_a, score_b=score_b)
-    return [_event_to_dict(ev)], []
+        server_team=server_team, score_a=score_a, score_b=score_b,
+        games_won_a=getattr(state, "games_won_a", 0), games_won_b=getattr(state, "games_won_b", 0),
+        scoring_phase=state.scoring_phase, serving_side=state.serving_side,
+        match_status=getattr(state, "match_status", "not_started"),
+        match_winner=getattr(state, "match_winner", None))
+    return events, segments
+
+
+def _state_from_model(state: LiveCodingState) -> ScoringState:
+    return ScoringState(
+        server_team=getattr(state, "server_team", None),
+        score_a=getattr(state, "score_a", 0),
+        score_b=getattr(state, "score_b", 0),
+        games_won_a=getattr(state, "games_won_a", 0),
+        games_won_b=getattr(state, "games_won_b", 0),
+        scoring_phase=getattr(state, "scoring_phase", "rally"),
+        serving_side=getattr(state, "serving_side", None),
+        match_status=getattr(state, "match_status", "not_started"),
+        match_winner=getattr(state, "match_winner", None),
+    )
+
+
+def _set_event_payload(
+    db: Session, events: list[dict], event_type: str, payload: dict
+) -> None:
+    for event_dict in events:
+        if event_dict.get("event_type") != event_type:
+            continue
+        event_db = db.query(SessionTimelineEvent).filter(SessionTimelineEvent.id == event_dict["id"]).first()
+        if event_db is not None:
+            event_db.payload_json = json.dumps(payload, ensure_ascii=False)
+        event_dict["payload_json"] = payload
 
 
 def _find_last_event(events: list[dict], event_type: str) -> dict | None:
@@ -832,38 +976,53 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
     phase = "rally_active" if open_rally else "intermission" if active_intermission else "idle"
 
     # ── 使用 FSM reducer 重建比分状态 ──
+    ruleset = getattr(state, "scoring_ruleset_version", None)
     scoring_state = ScoringState(server_team=None, score_a=0, score_b=0)
     recent_results: list[dict] = []
     for act in active_actions:
         if act.action_type == "start_game":
             p = json.loads(act.payload_json or "{}") if isinstance(act.payload_json, str) else (act.payload_json or {})
-            scoring_state = ScoringState(
-                server_team=p.get("initial_server_team", scoring_state.server_team),
-                score_a=0, score_b=0,
-            )
+            initial_server = p.get("initial_server_team", scoring_state.server_team)
+            if ruleset == HYBRID_21_RULESET and initial_server in ("A", "B"):
+                scoring_state = initial_game_state(scoring_state, initial_server)
+            else:
+                scoring_state = ScoringState(server_team=initial_server, score_a=0, score_b=0)
             recent_results = []
         elif act.action_type in ("end_game", "end_set"):
             # 局/盘结束后，下一局从 0:0 和未指定发球方开始；
             # 最后一局比分由 game_end 事件的 payload 保留。
-            scoring_state = ScoringState(server_team=None, score_a=0, score_b=0)
-            recent_results = []
+            if ruleset != HYBRID_21_RULESET:
+                scoring_state = ScoringState(server_team=None, score_a=0, score_b=0)
+                recent_results = []
         elif act.action_type in ("rally_result_a", "rally_result_b"):
             winner = "A" if act.action_type == "rally_result_a" else "B"
-            scoring_state = reduce_scoring_state(scoring_state, ScoringAction(type="rally_result", winner=winner, validity="valid"))
+            scoring_state = reduce_scoring_state_for_ruleset(
+                scoring_state, ScoringAction(type="rally_result", winner=winner, validity="valid"), ruleset
+            )
             recent_results.append({"winner": winner, "validity": "valid"})
         elif act.action_type == "rally_replay":
-            scoring_state = reduce_scoring_state(scoring_state, ScoringAction(type="rally_result", validity="replay"))
+            scoring_state = reduce_scoring_state_for_ruleset(
+                scoring_state, ScoringAction(type="rally_result", validity="replay"), ruleset
+            )
             recent_results.append({"winner": None, "validity": "replay"})
         elif act.action_type == "correct_score":
             p = json.loads(act.payload_json or "{}") if isinstance(act.payload_json, str) else (act.payload_json or {})
-            scoring_state = ScoringState(
-                server_team=p.get("server_team", scoring_state.server_team),
-                score_a=p.get("score_a", scoring_state.score_a),
-                score_b=p.get("score_b", scoring_state.score_b),
+            scoring_state = reduce_scoring_state_for_ruleset(
+                scoring_state,
+                ScoringAction(
+                    type="correct_score",
+                    target_server_team=p.get("server_team", scoring_state.server_team),
+                    target_score_a=p.get("score_a", scoring_state.score_a),
+                    target_score_b=p.get("score_b", scoring_state.score_b),
+                ),
+                ruleset,
             )
 
     if len(recent_results) > 10:
         recent_results = recent_results[-10:]
+
+    state.serving_side = scoring_state.serving_side
+    state.match_winner = scoring_state.match_winner
 
     state_svc.upsert_state(db, take.id, revision=take.revision,
                            set_ordinal=current_set.ordinal if current_set else 0,
@@ -878,6 +1037,12 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
                            server_team=scoring_state.server_team,
                            score_a=scoring_state.score_a,
                            score_b=scoring_state.score_b,
+                           games_won_a=scoring_state.games_won_a,
+                           games_won_b=scoring_state.games_won_b,
+                           scoring_phase=scoring_state.scoring_phase,
+                           serving_side=scoring_state.serving_side,
+                           match_status=scoring_state.match_status,
+                           match_winner=scoring_state.match_winner,
                            recent_results=recent_results)
 
 
@@ -911,6 +1076,8 @@ def _event_to_dict(ev) -> dict:
         "id": ev.id, "event_type": ev.event_type.value, "label": ev.label,
         "timestamp_ms": ev.timestamp_ms, "source": ev.source.value, "note": ev.note,
         "payload_json": payload, "is_undone": ev.is_undone,
+        "annotation_package_id": getattr(ev, "annotation_package_id", None),
+        "vidat_import_audit_id": getattr(ev, "vidat_import_audit_id", None),
     }
 
 

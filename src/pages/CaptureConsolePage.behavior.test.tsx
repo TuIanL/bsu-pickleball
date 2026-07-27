@@ -37,10 +37,10 @@ describe("Match mode quick events contain result buttons", () => {
     expect(types).toContain("undo");
   });
 
-  it("start_game payload includes initial_server_team", () => {
+  it("start_game has no default initial server", () => {
     const btn = MATCH_QUICK_EVENTS.find((e: QuickEventDef) => e.type === "start_game");
     expect(btn).toBeDefined();
-    expect(btn!.payload.initial_server_team).toBe("A");
+    expect(btn!.payload.initial_server_team).toBeUndefined();
   });
 
   it("three result buttons are ordered first", () => {

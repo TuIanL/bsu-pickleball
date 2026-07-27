@@ -20,8 +20,8 @@
 from pathlib import Path
 
 # FastAPI 核心组件
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
 from app.schemas.video import VideoMetadata, VideoUploadResponse
@@ -82,11 +82,13 @@ def read_video(video_id: str) -> VideoMetadata:
 # 定义一个"播放视频流"的接口
 # GET /api/videos/{video_id}/stream：返回视频文件本身，浏览器可直接播放
 @router.get("/{video_id}/stream")
-def stream_video(video_id: str) -> FileResponse:
+def stream_video(video_id: str, request: Request) -> StreamingResponse:
     """
     浏览器可播放的源视频流
 
     返回一个文件响应，浏览器的 <video> 标签用它即可播放视频。
+    使用 StreamingResponse 并手动管理文件句柄，避免 Starlette FileResponse
+    在 range/seek 场景下出现的文件描述符泄漏。
     """
     # 先拿到视频元数据，以便知道文件在磁盘的哪里、是什么类型
     video = video_service.get_video(video_id)
@@ -99,23 +101,65 @@ def stream_video(video_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Video file not found")
 
     # 如果是 .ts 文件，尝试返回同目录下的 *._merged.mp4（浏览器支持 MP4 但不支持 TS）
+    filename = video.original_filename
+    media_type = video.content_type or "video/mp4"
     if path.suffix.lower() == ".ts":
         merged = path.parent / f"{path.stem}_merged.mp4"
         if merged.exists():
-            return FileResponse(
-                merged,
-                media_type="video/mp4",
-                filename=merged.name,
-                content_disposition_type="inline",
-            )
+            path = merged
+            filename = merged.name
+            media_type = "video/mp4"
 
-    # 用 FileResponse 把文件作为 HTTP 响应发回去
-    # - path：文件路径
-    # - media_type：告诉浏览器这是什么类型的文件（如 video/mp4）
-    # - filename：建议浏览器下载或显示时使用的文件名
-    return FileResponse(
-        path,
-        media_type=video.content_type or "video/mp4",
-        filename=video.original_filename,
-        content_disposition_type="inline",
+    file_size = path.stat().st_size
+    range_header = request.headers.get("range")
+
+    def _file_iterator(start: int, end: int):
+        # 同步生成器；with 语句保证文件在迭代结束后一定关闭
+        with open(path, "rb") as file:
+            file.seek(start)
+            remaining = end - start
+            chunk_size = 1024 * 1024  # 1 MiB
+            while remaining > 0:
+                to_read = min(chunk_size, remaining)
+                chunk = file.read(to_read)
+                if not chunk:
+                    break
+                yield chunk
+                remaining -= len(chunk)
+
+    headers: dict[str, str] = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{filename}"',
+    }
+
+    if range_header:
+        # 解析 Bytes Range，例如 bytes=0-1023
+        try:
+            unit, range_spec = range_header.split("=", 1)
+            if unit.strip().lower() != "bytes":
+                raise ValueError("Only bytes ranges are supported")
+            start_str, end_str = range_spec.split("-", 1)
+            start = int(start_str) if start_str.strip() else 0
+            end = int(end_str) + 1 if end_str.strip() else file_size
+            end = min(end, file_size)
+            if start < 0 or start >= file_size or start >= end:
+                raise ValueError("Invalid byte range")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid Range header: {exc}") from exc
+
+        headers["Content-Range"] = f"bytes {start}-{end - 1}/{file_size}"
+        headers["Content-Length"] = str(end - start)
+        return StreamingResponse(
+            _file_iterator(start, end),
+            status_code=206,
+            media_type=media_type,
+            headers=headers,
+        )
+
+    headers["Content-Length"] = str(file_size)
+    return StreamingResponse(
+        _file_iterator(0, file_size),
+        status_code=200,
+        media_type=media_type,
+        headers=headers,
     )

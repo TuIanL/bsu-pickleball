@@ -40,6 +40,12 @@ def init_state(db: Session, capture_take_id: str, *,
         scoring_mode=scoring_mode,
         scoring_ruleset_version=scoring_ruleset_version,
         recent_results="[]",
+        games_won_a=0,
+        games_won_b=0,
+        scoring_phase="rally",
+        serving_side=None,
+        match_status="not_started",
+        match_winner=None,
         updated_at=now,
     )
     db.add(state)
@@ -69,6 +75,12 @@ def upsert_state(
     scoring_mode: str | None = None,
     scoring_ruleset_version: str | None = None,
     recent_results: list[dict] | None = None,
+    games_won_a: int | None = None,
+    games_won_b: int | None = None,
+    scoring_phase: str | None = None,
+    serving_side: str | None = None,
+    match_status: str | None = None,
+    match_winner: str | None = None,
 ) -> LiveCodingState:
     state = get_state(db, capture_take_id)
     now = datetime.now(timezone.utc)
@@ -91,6 +103,12 @@ def upsert_state(
             scoring_mode=scoring_mode or "none",
             scoring_ruleset_version=scoring_ruleset_version,
             recent_results=json.dumps(recent_results or [], ensure_ascii=False),
+            games_won_a=games_won_a or 0,
+            games_won_b=games_won_b or 0,
+            scoring_phase=scoring_phase or "rally",
+            serving_side=serving_side,
+            match_status=match_status or "not_started",
+            match_winner=match_winner,
             updated_at=now,
         )
         db.add(state)
@@ -117,6 +135,18 @@ def upsert_state(
             state.scoring_ruleset_version = scoring_ruleset_version
         if recent_results is not None:
             state.recent_results = json.dumps(recent_results, ensure_ascii=False)
+        if games_won_a is not None:
+            state.games_won_a = games_won_a
+        if games_won_b is not None:
+            state.games_won_b = games_won_b
+        if scoring_phase is not None:
+            state.scoring_phase = scoring_phase
+        if serving_side is not None:
+            state.serving_side = serving_side
+        if match_status is not None:
+            state.match_status = match_status
+        if match_winner is not None:
+            state.match_winner = match_winner
         state.updated_at = now
     db.flush()
     return state
@@ -146,4 +176,10 @@ def state_to_dict(state: LiveCodingState) -> dict:
         "scoring_mode": getattr(state, "scoring_mode", "none"),
         "scoring_ruleset_version": getattr(state, "scoring_ruleset_version", None),
         "recent_results": recent,
+        "games_won_a": getattr(state, "games_won_a", 0),
+        "games_won_b": getattr(state, "games_won_b", 0),
+        "scoring_phase": getattr(state, "scoring_phase", "rally"),
+        "serving_side": getattr(state, "serving_side", None),
+        "match_status": getattr(state, "match_status", "not_started"),
+        "match_winner": getattr(state, "match_winner", None),
     }

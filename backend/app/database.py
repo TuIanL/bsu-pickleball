@@ -85,6 +85,24 @@ def _ensure_capture_storage_columns(engine: Engine) -> None:
             connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN analysis_role VARCHAR(32) NOT NULL DEFAULT 'default'"))
 
 
+def _ensure_vidat_provenance_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    additions = {
+        "capture_coding_actions": {"source": "VARCHAR(32) NOT NULL DEFAULT 'manual'", "annotation_package_id": "VARCHAR(64)", "vidat_import_audit_id": "VARCHAR(64)"},
+        "session_timeline_events": {"annotation_package_id": "VARCHAR(64)", "vidat_import_audit_id": "VARCHAR(64)"},
+        "capture_segments": {"annotation_package_id": "VARCHAR(64)", "vidat_import_audit_id": "VARCHAR(64)"},
+        "vidat_import_previews": {"annotation_json": "TEXT NOT NULL DEFAULT '{}'"},
+    }
+    with engine.begin() as connection:
+        for table, definitions in additions.items():
+            if not inspector.has_table(table):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table)}
+            for name, definition in definitions.items():
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+
+
 def init_db() -> None:
     """应用启动时调用：确保所有 ORM 表存在。"""
     # 导入所有模型以触发 Base.metadata 注册
@@ -102,9 +120,11 @@ def init_db() -> None:
     import app.models.media_fragment  # noqa: F401
     import app.models.track_finalization  # noqa: F401
     import app.models.track_timeline_span  # noqa: F401
+    import app.models.vidat_annotation  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     _ensure_capture_storage_columns(engine)
+    _ensure_vidat_provenance_columns(engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
     lcs_columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
     with engine.begin() as connection:
@@ -124,6 +144,18 @@ def init_db() -> None:
             connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN scoring_ruleset_version VARCHAR(64)"))
         if "recent_results" not in lcs_columns:
             connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN recent_results TEXT NOT NULL DEFAULT '[]'"))
+        if "games_won_a" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN games_won_a INTEGER NOT NULL DEFAULT 0"))
+        if "games_won_b" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN games_won_b INTEGER NOT NULL DEFAULT 0"))
+        if "scoring_phase" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN scoring_phase VARCHAR(16) NOT NULL DEFAULT 'rally'"))
+        if "serving_side" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN serving_side VARCHAR(8)"))
+        if "match_status" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN match_status VARCHAR(16) NOT NULL DEFAULT 'not_started'"))
+        if "match_winner" not in lcs_columns:
+            connection.execute(text("ALTER TABLE live_coding_states ADD COLUMN match_winner VARCHAR(8)"))
 
 
 def get_db() -> Session:

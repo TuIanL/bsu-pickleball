@@ -481,7 +481,10 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
               trackingOverlayLoadState={trackingOverlayLoadState}
               trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
               trackingOverlay={trackingOverlay ?? null}
-              videoSrc={analysis.source === "job" ? overlayVideoSrc ?? videoSrc : undefined}
+              // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
+              videoSrc={videoSrc ?? undefined}
+              fallbackVideoSrc={overlayVideoSrc ?? undefined}
+              pipelineTracks={result?.tracks}
             />
             <VisualizationArtifactGallery
               heatmapsManifest={heatmapsManifest ?? null}
@@ -589,7 +592,10 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
             trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
             trackingOverlay={trackingOverlay ?? null}
-            videoSrc={analysis.source === "job" ? overlayVideoSrc ?? videoSrc : undefined}
+            // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
+            videoSrc={videoSrc ?? undefined}
+            fallbackVideoSrc={overlayVideoSrc ?? undefined}
+            pipelineTracks={result?.tracks}
           />
           {analysis.source === "job" ? (
             <VisualizationArtifactGallery

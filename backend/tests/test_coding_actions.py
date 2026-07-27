@@ -23,6 +23,12 @@ def setup_take(db):
     ))
     take = create_capture_take(db, field_session_id=fs.id, capture_mode="single",
         source_session_type="recording", source_session_id=sid)
+    # This module exercises the historical permissive coding workflow. New
+    # hybrid-rule behavior has isolated tests below/in test_hybrid_coding_actions.
+    from app.services.live_coding_state_service import get_state
+    legacy_state = get_state(db, take.id)
+    legacy_state.scoring_mode = "manual"
+    legacy_state.scoring_ruleset_version = "manual"
     db.commit()
     create_track(db, capture_take_id=take.id, camera_id="cam",
         role="primary", offset_ms=0, offset_source="measured", sync_quality="good")

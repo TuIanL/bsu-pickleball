@@ -22,6 +22,11 @@ function makeLiveState(overrides: Partial<LiveCodingState>): LiveCodingState {
       { winner: "A", validity: "valid" },
       { winner: "B", validity: "valid" },
     ],
+    games_won_a: 1,
+    games_won_b: 0,
+    scoring_phase: "rally",
+    serving_side: "left",
+    match_status: "in_progress",
     ...overrides,
   };
 }
@@ -35,8 +40,7 @@ describe("ScoreBoard", () => {
     expect(screen.getByText("A 方")).toBeTruthy();
     expect(screen.getByText("B 方")).toBeTruthy();
     // Set/game info should contain the ordinals
-    expect(screen.getByText((c: string) => c.includes("盘"))).toBeTruthy();
-    expect(screen.getByText((c: string) => c.includes("局"))).toBeTruthy();
+    expect(screen.getByText((c: string) => c.includes("第 3 局"))).toBeTruthy();
   });
 
   it("shows server indicator for A", () => {
@@ -56,9 +60,10 @@ describe("ScoreBoard", () => {
     expect(blocks).toBe(5);
   });
 
-  it("shows manual mode placeholder", () => {
-    render(<ScoreBoard liveState={makeLiveState({ scoring_mode: "manual" })} />);
-    expect(screen.getByText("双打自动计分暂不可用")).toBeTruthy();
+  it("shows doubles scoring instead of a manual placeholder", () => {
+    const { container } = render(<ScoreBoard liveState={makeLiveState({ scoring_mode: "manual" })} />);
+    expect(container.textContent).not.toContain("双打自动计分暂不可用");
+    expect(container.textContent).toContain("每球得分");
   });
 
   it("renders null state gracefully", () => {
@@ -66,15 +71,16 @@ describe("ScoreBoard", () => {
     expect(container.innerHTML).toBe("");
   });
 
-  it("does not show score info for manual mode", () => {
+  it("shows score info for doubles and historical manual states", () => {
     const { container } = render(<ScoreBoard liveState={makeLiveState({ scoring_mode: "manual", score_a: 5, score_b: 3 })} />);
-    expect(container.textContent).not.toContain("5");
-    expect(container.textContent).not.toContain("3");
+    expect(container.textContent).toContain("5");
+    expect(container.textContent).toContain("3");
   });
 
-  it("shows initial server selector when flag and callback are set", () => {
-    render(<ScoreBoard liveState={makeLiveState({})} showInitialServerSelector={true} onInitialServerSelect={() => {}} />);
-    expect(screen.getByText("本局先发球方")).toBeTruthy();
+  it("shows serve-only phase and doubles player side", () => {
+    render(<ScoreBoard liveState={makeLiveState({ scoring_phase: "serve_only", serving_side: "right" })} matchFormat="doubles" />);
+    expect(screen.getByText("发球得分")).toBeTruthy();
+    expect(screen.getByText("A 方右区队员发球")).toBeTruthy();
   });
 
   it("shows pending indicator when open rally exists", () => {

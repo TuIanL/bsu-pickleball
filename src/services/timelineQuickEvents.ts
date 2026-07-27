@@ -40,7 +40,7 @@ export const MATCH_QUICK_EVENTS: QuickEventDef[] = [
   { type: "rally_result_b", source: "manual", label: "B方胜", note: "", payload: {}, group: "match" },
   { type: "rally_replay", source: "manual", label: "重打", note: "", payload: {}, group: "match" },
   { type: "start_set", source: "manual", label: "盘开始", note: "新的一盘开始", payload: {}, group: "hierarchy" },
-  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: { initial_server_team: "A" }, group: "hierarchy" },
+  { type: "start_game", source: "manual", label: "局开始", note: "新的一局开始", payload: {}, group: "hierarchy" },
   { type: "start_next_rally", source: "manual", label: "分开始", note: "开始新的一分", payload: {}, group: "hierarchy" },
   { type: "start_timeout", source: "manual", label: "战术暂停", note: "进入战术暂停", payload: {}, group: "match" },
   { type: "change_side", source: "manual", label: "换边", note: "双方交换场地", payload: {}, group: "match" },

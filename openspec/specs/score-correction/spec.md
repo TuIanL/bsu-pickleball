@@ -48,3 +48,11 @@
 - **WHEN** 多个 `correct_score` action 具有相同的 `timestamp_ms`
 - **THEN** 重放时 SHALL 按 `revision` 升序执行
 - **AND** 最终状态 SHALL 以 `revision` 最大的修正为准
+
+### Requirement: Vidat 比分锚点映射
+系统 MUST 将 Vidat 中有效的比分修正标注转换为 `correct_score` 语义动作，并按既有修正锚点规则参与状态重放。
+
+#### Scenario: 导入比分修正
+- **WHEN** 确认的 Vidat 标注包含 score correction 及合法的 A/B 分数和发球方
+- **THEN** 系统 SHALL 创建可审计的 `correct_score` 语义动作
+- **AND** 后续回合 SHALL 从该锚点重放

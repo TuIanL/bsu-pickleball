@@ -492,7 +492,7 @@ export type TimelineEventType =
   | "add_note"
   | "score_correction";
 
-export type TimelineEventSource = "manual" | "algorithm" | "corrected";
+export type TimelineEventSource = "manual" | "algorithm" | "corrected" | "vidat_import";
 export type TimelineEventPayload = Record<string, unknown>;
 
 export interface SessionTimelineEvent {
@@ -508,6 +508,8 @@ export interface SessionTimelineEvent {
   label: string;
   note: string;
   payload_json: TimelineEventPayload;
+  annotation_package_id?: string;
+  vidat_import_audit_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -585,6 +587,12 @@ export interface LiveCodingState {
   scoring_mode: string;             // 计分模式
   scoring_ruleset_version?: string; // 规则版本
   recent_results: Array<{ winner: string | null; validity: string }>;  // 最近 N 分
+  games_won_a: number;
+  games_won_b: number;
+  scoring_phase: "rally" | "serve_only";
+  serving_side?: "left" | "right" | null;
+  match_status: "not_started" | "in_progress" | "completed";
+  match_winner?: "A" | "B" | null;
 }
 
 /** 编码动作响应 */

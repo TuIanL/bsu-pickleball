@@ -44,6 +44,9 @@ class CaptureCodingAction(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     reverses_action_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    annotation_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    vidat_import_audit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

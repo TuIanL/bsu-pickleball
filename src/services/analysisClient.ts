@@ -34,6 +34,27 @@ const STORAGE_KEY = "pre-pickleball-analysis-jobs";
 const RECENT_JOB_KEY = "pre-pickleball-recent-analysis-job";
 export const RECENT_ANALYSIS_JOB_EVENT = "pre-pickleball-recent-analysis-job-change";
 
+export interface VidatPackage {
+  id: string;
+  capture_take_id: string;
+  version: number;
+  package_dir: string;
+  manifest: { video?: { file?: string; fps?: number; duration?: number }; [key: string]: unknown };
+  imported_at: string | null;
+}
+
+export interface VidatImportPreview {
+  preview_id: string;
+  confirmation_token: string;
+  expires_at: string;
+  operations: unknown[];
+  coding_actions: unknown[];
+  changes: Array<{ kind: string; before?: unknown; after?: unknown }>;
+  blocking_errors: string[];
+  conflicts: string[];
+  score_summary: { affected_scores: unknown[]; final: Record<string, unknown> };
+}
+
 export interface AnalysisApiErrorInfo {
   backendDetail?: string;
   causeMessage?: string;
@@ -1004,6 +1025,35 @@ export async function listSegments(
   if (segmentType) sp.set("segment_type", segmentType);
   const q = sp.toString();
   return requestJson<CaptureSegmentSummary[]>(`/api/capture-takes/${takeId}/segments${q ? `?${q}` : ""}`);
+}
+
+export function listVidatPackages(captureTakeId: string): Promise<VidatPackage[]> {
+  return requestJson(`/api/vidat/capture-takes/${captureTakeId}/packages`);
+}
+
+export function createVidatPackage(captureTakeId: string): Promise<VidatPackage> {
+  return requestJson(`/api/vidat/capture-takes/${captureTakeId}/packages`, { method: "POST" });
+}
+
+export function openVidatPackage(packageId: string): Promise<{ url: string; package_id: string }> {
+  return requestJson(`/api/vidat/packages/${packageId}/open`, { method: "POST" });
+}
+
+export function startVidatService(): Promise<{ url: string; started: boolean }> {
+  return requestJson("/api/vidat/service/start", { method: "POST" });
+}
+
+export function previewVidatImport(packageId: string, annotation: unknown): Promise<VidatImportPreview> {
+  return requestJson(`/api/vidat/packages/${packageId}/import-previews`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ annotation }),
+  });
+}
+
+export function confirmVidatImport(packageId: string, confirmationToken: string, annotation: unknown): Promise<{ audit_id: string }> {
+  return requestJson(`/api/vidat/packages/${packageId}/import-confirmations`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmation_token: confirmationToken, annotation }),
+  });
 }
 
 export async function getCaptureTakeRuntimeStatus(

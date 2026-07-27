@@ -54,6 +54,12 @@ class LiveCodingStateResponse(BaseModel):
     scoring_mode: str = "none"
     scoring_ruleset_version: Optional[str] = None
     recent_results: list[dict] = []
+    games_won_a: int = 0
+    games_won_b: int = 0
+    scoring_phase: str = "rally"
+    serving_side: Optional[str] = None
+    match_status: str = "not_started"
+    match_winner: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

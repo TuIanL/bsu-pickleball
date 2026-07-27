@@ -3,13 +3,14 @@ import type { QuickEventDef } from "../../services/timelineQuickEvents";
 interface Props {
   events: QuickEventDef[];
   isPending?: (type: string) => boolean;
+  disabled?: boolean;
   onAction: (event: QuickEventDef) => void;
 }
 
 const groupLabels: Record<string, string> = {
   hierarchy: "层级事件",
-  match: "比赛状态",
-  auxiliary: "辅助事件",
+  match: "主要操作",
+  auxiliary: "辅助操作",
 };
 
 const colorMap: Record<string, { bg: string; border: string; text: string }> = {
@@ -28,7 +29,7 @@ const colorMap: Record<string, { bg: string; border: string; text: string }> = {
   rally_replay: { bg: "#F2F4F7", border: "#D0D5DD", text: "#475467" },
 };
 
-export function EventActionToolbar({ events, isPending, onAction }: Props) {
+export function EventActionToolbar({ events, isPending, disabled = false, onAction }: Props) {
   const grouped: Record<string, QuickEventDef[]> = {};
   for (const ev of events) {
     const g = ev.group || "auxiliary";
@@ -43,13 +44,13 @@ export function EventActionToolbar({ events, isPending, onAction }: Props) {
           <p className="text-xs font-medium mb-1.5" style={{ color: "var(--capture-text-muted)" }}>{groupLabels[groupKey]}</p>
           <div className="flex flex-wrap gap-2">
             {groupEvents.map(event => {
-              const pending = isPending?.(event.type) ?? false;
+              const pending = disabled || (isPending?.(event.type) ?? false);
               const colors = colorMap[event.type] ?? { bg: "#F2F4F7", border: "#D0D5DD", text: "#475467" };
               const isUndo = event.type === "undo";
               return (
                 <button
                   key={event.type}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${pending ? "opacity-50 cursor-wait" : ""} ${isUndo ? "ml-2" : ""}`}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${pending ? "opacity-50 cursor-wait" : ""} ${isUndo ? "ml-2" : ""} ${event.type === "rally_result_a" || event.type === "rally_result_b" ? "min-w-28 flex-1" : ""}`}
                   style={{ background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text, height: 36 }}
                   onClick={() => onAction(event)}
                   disabled={pending}

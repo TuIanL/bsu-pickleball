@@ -6,7 +6,7 @@ interface CaptureWorkspaceLayoutProps {
 
 export function CaptureWorkspaceLayout({ children }: CaptureWorkspaceLayoutProps) {
   return (
-    <div className="mx-auto max-w-[1600px] space-y-5 px-6 py-6" style={{ background: "var(--capture-surface-page)", minHeight: "100vh" }}>
+    <div className="mx-auto max-w-[1600px] space-y-5 px-3 py-4 sm:px-6 sm:py-6" style={{ background: "var(--capture-surface-page)", minHeight: "100vh" }}>
       {children}
     </div>
   );

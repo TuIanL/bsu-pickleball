@@ -7,6 +7,7 @@ import {
   listTimelineEvents, listSegments, getVideoStreamUrl,
 } from "../services/analysisClient";
 import { MiniTimeline } from "../components/MiniTimeline";
+import { VidatWorkbenchPanel } from "../components/capture/VidatWorkbenchPanel";
 
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
@@ -233,6 +234,18 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
     }
   }, []);
 
+  const refreshDerivedData = useCallback(async () => {
+    if (pageState.status !== "loaded") return;
+    const current = pageState.recording ?? pageState.syncRecording;
+    if (!current) return;
+    const [events, nextSegments] = await Promise.all([
+      current.field_session_id ? listTimelineEvents(current.field_session_id) : Promise.resolve([]),
+      current.capture_take_id ? listSegments(current.capture_take_id) : Promise.resolve([]),
+    ]);
+    setTimelineEvents(eventsForRecording(events ?? [], current));
+    setSegments(nextSegments ?? []);
+  }, [pageState]);
+
   // ── Loading ──
   if (pageState.status === "loading") {
     return (
@@ -285,6 +298,10 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
           <p className="text-sm text-slate-500 truncate">{subtitle}</p>
         </div>
       </div>
+
+      {session.capture_take_id && (
+        <VidatWorkbenchPanel captureTakeId={session.capture_take_id} onImported={refreshDerivedData} />
+      )}
 
       {/* 视频区 */}
       <div className={`grid gap-4 ${isDual ? "lg:grid-cols-2" : "grid-cols-1"}`}>

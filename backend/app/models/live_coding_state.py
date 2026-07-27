@@ -32,6 +32,12 @@ class LiveCodingState(Base):
     scoring_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="none")   # 计分模式（"side_out_singles_v1" / "manual" / "none"）
     scoring_ruleset_version: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 规则版本（历史记录归属）
     recent_results: Mapped[str] = mapped_column(Text, nullable=False, default="[]")          # 最近 10 分结果 JSON 数组
+    games_won_a: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    games_won_b: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scoring_phase: Mapped[str] = mapped_column(String(16), nullable=False, default="rally")
+    serving_side: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    match_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_started")
+    match_winner: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     current_set_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 当前盘区间ID
     current_game_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True) # 当前局区间ID
