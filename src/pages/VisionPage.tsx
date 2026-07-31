@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, LineChart, Timer } from "lucide-react";
+import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, LineChart, Route, Timer } from "lucide-react";
 import type { NavigateFn, AppPath, ReportType } from "../app/navigationTypes";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, StructuredVisualizationData } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
@@ -452,6 +452,14 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
               当前数据来源：{sourceLabel}。详细报告已收纳到右侧下级标签中，主画面只保留视频和状态。
             </p>
           </div>
+          <button
+            className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
+            onClick={() => onNavigate(`/analysis/${jobId}/trajectory`)}
+            type="button"
+          >
+            <Route size={17} aria-hidden="true" />
+            查看球路
+          </button>
         </section>
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">

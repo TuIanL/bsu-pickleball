@@ -115,6 +115,112 @@ class TestSyncRecorderUnit:
         assert alignment["cam_1"] == (0.0, 1709)
         assert alignment["cam_2"] == pytest.approx((7 / 60, 1709))
 
+    def test_multi_segment_alignment_sums_frames_across_segments(self):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        session = SyncRecordingSession(
+            session_id="multi_segment_alignment",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            segments=[
+                SyncSegment(segment_index=1, files=[
+                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s1.ts",
+                                    media_duration_sec=10.0, input_start_time=100.0),
+                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s1.ts",
+                                    media_duration_sec=9.5, input_start_time=100.5),
+                ]),
+                SyncSegment(segment_index=2, files=[
+                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s2.ts",
+                                    media_duration_sec=10.0, input_start_time=150.0),
+                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s2.ts",
+                                    media_duration_sec=10.0, input_start_time=151.0),
+                ]),
+            ],
+            fps=60,
+        )
+
+        alignment = SyncRecordingService._compute_sync_alignment(session)
+
+        assert "cam_1" in alignment
+        assert "cam_2" in alignment
+        trim_1, frames_1 = alignment["cam_1"]
+        trim_2, frames_2 = alignment["cam_2"]
+        # Segment 1 overlap: max(100.0, 100.5)=100.5, min(110.0, 110.0)=110.0 → 9.5s * 60 = 570 frames
+        # Segment 2 overlap: max(150.0, 151.0)=151.0, min(160.0, 161.0)=160.0 → 9.0s * 60 = 540 frames
+        # Total: 570 + 540 = 1110 frames
+        assert frames_1 == 1110
+        assert frames_2 == 1110
+        # Trim for cam_1: common_first_start(100.5) - cam_1_first(100.0) = 0.5s
+        assert trim_1 == pytest.approx(0.5)
+        # Trim for cam_2: common_first_start(100.5) - cam_2_first(100.5) = 0.0
+        assert trim_2 == pytest.approx(0.0)
+
+    def test_multi_segment_alignment_skips_segment_without_overlap(self):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        session = SyncRecordingSession(
+            session_id="multi_segment_no_overlap",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            segments=[
+                SyncSegment(segment_index=1, files=[
+                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s1.ts",
+                                    media_duration_sec=10.0, input_start_time=100.0),
+                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s1.ts",
+                                    media_duration_sec=10.0, input_start_time=100.0),
+                ]),
+                SyncSegment(segment_index=2, files=[
+                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s2.ts",
+                                    media_duration_sec=5.0, input_start_time=200.0),
+                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s2.ts",
+                                    media_duration_sec=5.0, input_start_time=300.0),
+                ]),
+            ],
+            fps=60,
+        )
+
+        alignment = SyncRecordingService._compute_sync_alignment(session)
+
+        assert "cam_1" in alignment
+        assert "cam_2" in alignment
+        # Segment 2 has no overlap (200.0+5.0=205.0 < 300.0), so only segment 1 counts
+        trim_1, frames = alignment["cam_1"]
+        assert frames == 600  # 10s * 60fps
+
+    def test_multi_segment_alignment_single_segment_fallback(self):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession, SyncSegment, SyncSegmentFile
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        session = SyncRecordingSession(
+            session_id="single_segment",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            segments=[SyncSegment(segment_index=1, files=[
+                SyncSegmentFile(camera_id="174", role="cam_1", file_path="174.ts",
+                                media_duration_sec=20.0, input_start_time=100.0),
+                SyncSegmentFile(camera_id="175", role="cam_2", file_path="175.ts",
+                                media_duration_sec=20.0, input_start_time=99.5),
+            ])],
+            fps=30,
+        )
+
+        alignment = SyncRecordingService._compute_sync_alignment(session)
+
+        trim_1, frames = alignment["cam_1"]
+        assert trim_1 == 0.0
+        # common_start = max(100.0, 99.5) = 100.0
+        # common_end = min(120.0, 119.5) = 119.5
+        # duration = 19.5s → 19.5 * 30 = 585 frames
+        assert frames == 585
+
     def test_merge_with_frame_alignment_does_not_concat_full_ts_with_tail_mp4(self, tmp_path):
         from app.camera.sync_recorder_service import SyncRecordingService
 
@@ -266,6 +372,81 @@ class TestSyncRecorderUnit:
         recorder._terminate_all_processes()
 
         assert order[:2] == ["terminate:cam_1", "terminate:cam_2"]
+
+    def test_extract_first_and_last_frames_empty_video_returns_none(self, tmp_path):
+        from app.camera.sync_recorder_service import _extract_first_and_last_frames
+
+        video_path = tmp_path / "empty.ts"
+        video_path.write_bytes(b"")
+        capture = MagicMock()
+        capture.isOpened.return_value = True
+        capture.get.return_value = 0
+
+        with patch("app.camera.sync_recorder_service.cv2.VideoCapture", return_value=capture):
+            first, last = _extract_first_and_last_frames(str(video_path))
+
+        assert first is None
+        assert last is None
+
+    def test_extract_first_and_last_frames_unopenable_returns_none(self, tmp_path):
+        from app.camera.sync_recorder_service import _extract_first_and_last_frames
+
+        video_path = tmp_path / "missing.ts"
+        with patch("app.camera.sync_recorder_service.cv2.VideoCapture", return_value=MagicMock(isOpened=lambda: False)):
+            first, last = _extract_first_and_last_frames(str(video_path))
+
+        assert first is None
+        assert last is None
+
+    def test_pts_sidecar_round_trip_matches_frame_timing(self, tmp_path):
+        from app.services.dual_camera_sync import (
+            write_frame_timing_sidecar,
+            read_frame_timing_sidecar,
+        )
+
+        sidecar = tmp_path / "frames.jsonl"
+        fake = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"frames": [
+                {"best_effort_timestamp_time": "1.400000", "pkt_dts_time": "1.400000", "key_frame": 1},
+                {"best_effort_timestamp_time": "1.416667", "pkt_dts_time": "1.416667", "key_frame": 0},
+                {"best_effort_timestamp_time": "1.433333", "pkt_dts_time": "1.433333", "key_frame": 0},
+            ]}),
+            stderr="",
+        )
+        with patch("app.services.dual_camera_sync.subprocess.run", return_value=fake):
+            summary = write_frame_timing_sidecar("source.ts", sidecar)
+
+        assert summary["frame_count"] == 3
+        assert summary["first_pts_seconds"] == 1.4
+        assert summary["last_pts_seconds"] == pytest.approx(1.433333)
+
+        frames = read_frame_timing_sidecar(sidecar)
+        assert len(frames) == 3
+        assert frames[0].frame_index == 0
+        assert frames[0].keyframe is True
+        assert frames[2].keyframe is False
+
+    def test_pts_sidecar_frames_are_monotonic(self, tmp_path):
+        from app.services.dual_camera_sync import write_frame_timing_sidecar
+
+        sidecar = tmp_path / "frames.jsonl"
+        fake = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"frames": [
+                {"best_effort_timestamp_time": "1.400", "pkt_dts_time": "1.400", "key_frame": 1},
+                {"best_effort_timestamp_time": "1.417", "pkt_dts_time": "1.416", "key_frame": 0},
+                {"best_effort_timestamp_time": "1.433", "pkt_dts_time": "1.433", "key_frame": 0},
+            ]}),
+            stderr="",
+        )
+        with patch("app.services.dual_camera_sync.subprocess.run", return_value=fake):
+            summary = write_frame_timing_sidecar("source.ts", sidecar)
+
+        assert summary["frame_count"] == 3
+        lines = sidecar.read_text().splitlines()
+        pts_values = [json.loads(line)["pts_seconds"] for line in lines]
+        assert pts_values == sorted(pts_values)
 
     def test_dual_command_preserves_source_frames(self, monkeypatch):
         from app.camera.sync_recorder_service import SyncRecorder

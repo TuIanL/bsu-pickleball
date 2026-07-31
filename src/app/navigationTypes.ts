@@ -25,6 +25,7 @@ export type AppPath =
   | `/analysis/${string}`
   | `/analysis/${string}/details`
   | `/analysis/${string}/vision`
+  | `/analysis/${string}/trajectory`
   | `/analysis/${string}/reports/${ReportType}`
   | "/training"
   | "/hardware"
@@ -46,6 +47,7 @@ export type RouteState =
   | { name: "analysis-details"; path: `/analysis/${string}/details`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "vision"; path: "/vision"; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "ball-trajectory"; path: `/analysis/${string}/trajectory`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "report"; path: `/reports/${ReportType}`; reportType: ReportType; shellMode: "standard"; navigationSection: "reports" }
   | { name: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string; shellMode: "standard"; navigationSection: "reports" }
   | { name: "camera-hub"; path: "/camera"; shellMode: "standard"; navigationSection: "devices" }

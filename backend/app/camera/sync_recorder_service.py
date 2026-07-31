@@ -1528,44 +1528,95 @@ class SyncRecordingService:
 
     @staticmethod
     def _compute_sync_alignment(session: SyncRecordingSession) -> dict[str, tuple[float, int | None]]:
-        """Find the common overlap and frame count for the first synchronized segment."""
-        observations: dict[str, tuple[float, float]] = {}
-        for role in ("cam_1", "cam_2"):
-            slot = session.camera_slots.get(role)
-            if not slot:
-                continue
-            for segment in session.segments:
+        """Find the common overlap across all synchronized segments.
+
+        For each segment pair (cam_1 + cam_2), compute the input-time
+        overlap independently and sum the resulting frame counts.  The
+        first segment determines *trim_start*; subsequent segments add to
+        *target_frames* but do not affect the start offset.
+
+        Gap/overlap between segments is diagnosed via logging so that
+        callers (annotation manifest, merge pipeline) can decide whether
+        the recording is suitable for frame-accurate alignment.
+        """
+        observations: dict[int, dict[str, tuple[float, float]]] = {}
+        for segment in sorted(session.segments, key=lambda s: s.segment_index):
+            seg_obs: dict[str, tuple[float, float]] = {}
+            for role in ("cam_1", "cam_2"):
+                slot = session.camera_slots.get(role)
+                if not slot:
+                    continue
                 item = next((f for f in segment.files if f.camera_id == slot.camera_id), None)
                 if item and item.input_start_time is not None and item.media_duration_sec > 0:
-                    # The output media PTS is normalized independently by each
-                    # FFmpeg process (currently both files start at 1.4s), so
-                    # it cannot describe cross-camera capture timing. The
-                    # RTSP input start is the shared host-clock observation.
                     alignment_start = item.input_start_time
                     if alignment_start is None:
                         alignment_start = item.media_start_time_sec
                     if alignment_start is not None:
-                        observations[role] = (alignment_start, item.media_duration_sec)
-                    break
-        if len(observations) < 2:
+                        seg_obs[role] = (alignment_start, item.media_duration_sec)
+            if len(seg_obs) >= 2:
+                observations[segment.segment_index] = seg_obs
+
+        if not observations:
             return {}
-        common_start = max(start for start, _ in observations.values())
-        common_end = min(start + duration for start, duration in observations.values())
-        common_duration = common_end - common_start
-        if common_duration <= 0:
-            logger.warning("双摄没有可用的共同时间区间: %s", observations)
-            return {}
+
         fps = max(session.fps, 1)
-        target_frames = max(1, int(common_duration * fps))
-        return {
-            # Quantize trimming to a source frame. This keeps the residual
-            # timing error below half a frame instead of relying on ffmpeg's
-            # arbitrary timestamp seek behavior.
-            role: (
-                round(max(0.0, common_start - start) * fps) / fps,
-                target_frames,
+        total_frames = 0
+        first_start: dict[str, float] = {}
+        diagnostics: dict[int, dict[str, object]] = {}
+
+        sorted_indices = sorted(observations.keys())
+        for i, seg_idx in enumerate(sorted_indices):
+            seg_obs = observations[seg_idx]
+            common_start = max(start for start, _ in seg_obs.values())
+            common_end = min(start + duration for start, duration in seg_obs.values())
+            common_duration = common_end - common_start
+
+            if common_duration <= 0:
+                logger.warning("分段 %d 无共同时间区间: %s", seg_idx, seg_obs)
+                continue
+
+            segment_frames = max(1, int(common_duration * fps))
+            total_frames += segment_frames
+
+            for role, (start, _) in seg_obs.items():
+                if role not in first_start:
+                    first_start[role] = start
+
+            # Gap/overlap diagnostic between this segment and the previous one
+            if i > 0:
+                prev_obs = observations[sorted_indices[i - 1]]
+                gap_info: dict[str, object] = {}
+                for role in ("cam_1", "cam_2"):
+                    if role in prev_obs and role in seg_obs:
+                        prev_end = prev_obs[role][0] + prev_obs[role][1]
+                        curr_start = seg_obs[role][0]
+                        gap = curr_start - prev_end
+                        label = "gap" if gap > 0.001 else ("overlap" if gap < -0.001 else "contiguous")
+                        gap_info[role] = {
+                            "gap_seconds": round(gap, 6),
+                            "label": label,
+                        }
+                if gap_info:
+                    diagnostics[seg_idx] = gap_info
+
+        if not first_start:
+            return {}
+
+        if diagnostics:
+            logger.info(
+                "双摄分段间隙诊断: %s segments, %s gaps/overlaps detected",
+                len(observations), len(diagnostics),
             )
-            for role, (start, _) in observations.items()
+            for seg_idx, info in diagnostics.items():
+                logger.info("  分段 %d: %s", seg_idx, info)
+
+        return {
+            role: (
+                round(max(0.0, common_first_start - start) * fps) / fps,
+                total_frames,
+            )
+            for role, start in first_start.items()
+            for common_first_start in [max(first_start.values())]
         }
 
     @staticmethod

@@ -31,6 +31,7 @@ describe("parsePath", () => {
     { pathname: "/analysis/job-1", expected: { name: "analysis-job", path: "/analysis/job-1", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/analysis/job-1/details", expected: { name: "analysis-details", path: "/analysis/job-1/details", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/analysis/job-1/vision", expected: { name: "vision", path: "/analysis/job-1/vision", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
+    { pathname: "/analysis/job-1/trajectory", expected: { name: "ball-trajectory", path: "/analysis/job-1/trajectory", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
     {
       pathname: "/analysis/job-1/reports/movement",
       expected: { name: "report", path: "/analysis/job-1/reports/movement", reportType: "movement", jobId: "job-1", shellMode: "standard", navigationSection: "reports" },

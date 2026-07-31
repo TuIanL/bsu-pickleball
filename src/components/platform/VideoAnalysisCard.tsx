@@ -127,6 +127,7 @@ export function VideoAnalysisCard({
           trackingOverlayStatus={trackingOverlayStatus}
           videoSrc={videoSrc}
           fallbackVideoSrc={fallbackVideoSrc}
+          pipelineTracks={pipelineTracks}
         />
         {!compact ? (
           <RealVideoFooter
@@ -146,7 +147,6 @@ export function VideoAnalysisCard({
             trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={trackingOverlayStatus}
             trackingOverlay={trackingOverlay}
-            pipelineTracks={pipelineTracks}
           />
         ) : null}
       </article>

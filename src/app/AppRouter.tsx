@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import type { AnalysisJobSummary } from "../types/report";
 import type { RouteState, NavigateFn } from "./navigationTypes";
 import { LandingPage } from "../pages/LandingPage";
@@ -16,6 +16,10 @@ import { VisionPage } from "../pages/VisionPage";
 import { ReportPage } from "../pages/ReportPage";
 import { NewAnalysisPage } from "../pages/NewAnalysisPage";
 import { AnalysisTasksPage } from "../pages/AnalysisTasksPage";
+
+const BallTrajectoryPage = lazy(() =>
+  import("../pages/BallTrajectoryPage").then((module) => ({ default: module.BallTrajectoryPage })),
+);
 
 interface AppRouterProps {
   route: RouteState;
@@ -48,6 +52,12 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <AnalysisDetailsPage jobId={route.jobId} onNavigate={onNavigate} />;
       case "vision":
         return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={onNavigate} recentJob={recentJob} />;
+      case "ball-trajectory":
+        return (
+          <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[#667085]">正在加载球路视图…</div>}>
+            <BallTrajectoryPage key={route.jobId} jobId={route.jobId} onNavigate={onNavigate} />
+          </Suspense>
+        );
       case "report":
         return <ReportPage jobId={"jobId" in route ? route.jobId : undefined} reportType={route.reportType} onNavigate={onNavigate} />;
       case "camera-hub":

@@ -22,6 +22,7 @@ const routeMeta = {
   "analysis-job": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-details": { shellMode: "standard", navigationSection: "analysis" },
   vision: { shellMode: "standard", navigationSection: "analysis" },
+  "ball-trajectory": { shellMode: "standard", navigationSection: "analysis" },
   report: { shellMode: "standard", navigationSection: "reports" },
   "camera-hub": { shellMode: "standard", navigationSection: "devices" },
   training: { shellMode: "standard", navigationSection: "settings" },
@@ -92,6 +93,18 @@ export function parsePath(pathname: string): RouteState {
   if (analysisDetailsMatch) {
     const [, jobId] = analysisDetailsMatch;
     return { name: "analysis-details", path: `/analysis/${jobId}/details`, jobId, ...routeMeta["analysis-details"] };
+  }
+
+  const analysisTrajectoryMatch = pathname.match(/^\/analysis\/([^/]+)\/trajectory$/);
+
+  if (analysisTrajectoryMatch) {
+    const [, jobId] = analysisTrajectoryMatch;
+    return {
+      name: "ball-trajectory",
+      path: `/analysis/${jobId}/trajectory`,
+      jobId,
+      ...routeMeta["ball-trajectory"],
+    };
   }
 
   const analysisReportMatch = pathname.match(/^\/analysis\/([^/]+)\/reports\/([^/]+)$/);

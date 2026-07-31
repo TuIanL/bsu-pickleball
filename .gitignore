@@ -37,6 +37,9 @@ models/*
 *.ckpt
 *.engine
 
+# WorkBuddy project memory (daily logs, session notes)
+.workbuddy/
+
 # IDE and Python caches
 .idea/
 __pycache__/
