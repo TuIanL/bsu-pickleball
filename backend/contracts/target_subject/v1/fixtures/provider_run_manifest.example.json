@@ -1,0 +1,25 @@
+{
+  "schema_version": "pb.target-provider-run-manifest.v1.0",
+  "run_id": "pilot-v1",
+  "run_mode": "pilot",
+  "dataset": {
+    "commit": "7451f79af57a3bf342c75f4b681d6706ed268105",
+    "worktree_clean": true,
+    "release_manifest_sha256": "d31f802bd981c907bb9ecb32fdc34bba4241dae6884ea49c526e263682aed2d6"
+  },
+  "platform": {"commit": "99e944bbfaedeb908a68eaccd12980279fef2319", "worktree_clean": true},
+  "provider": "pb.target-candidate-provider.v1.0",
+  "configuration_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "models": {"person_detector": "2222222222222222222222222222222222222222222222222222222222222222"},
+  "runtime_versions": {"python": "3.13.5", "opencv": "4.10.0"},
+  "samples": [
+    {
+      "sample_id": "clip_000001",
+      "video_sha256": "89b3008f8836b713545c0c528bad4d2bf97f223371f4dc5b6794a9d497e3d706",
+      "status": "completed",
+      "result_path": "results/clip_000001.json",
+      "result_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "error_code": null
+    }
+  ]
+}

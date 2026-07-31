@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teng-i.local/schemas/target-subject/provider-result.v1.json",
+  "title": "Target-subject candidate provider result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_id", "sample_id", "video_sha256", "provider", "calibration", "frames", "tracklets", "candidates", "errors"],
+  "properties": {
+    "schema_version": {"const": "pb.target-candidate-result.v1.0"},
+    "request_id": {"type": "string", "minLength": 1},
+    "sample_id": {"type": "string", "pattern": "^clip_[0-9]{6}$"},
+    "video_sha256": {"$ref": "#/$defs/sha256"},
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "platform_commit", "worktree_clean", "configuration_sha256", "models", "runtime_versions"],
+      "properties": {
+        "contract_version": {"const": "pb.target-candidate-provider.v1.0"},
+        "platform_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "worktree_clean": {"type": "boolean"},
+        "configuration_sha256": {"$ref": "#/$defs/sha256"},
+        "models": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}},
+        "runtime_versions": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "status", "reason"],
+      "properties": {
+        "mode": {"enum": ["origin_calibration", "fallback_image_space"]},
+        "status": {"enum": ["accepted", "fallback"]},
+        "calibration_id": {"type": ["string", "null"]},
+        "calibration_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "frames": {"type": "array", "items": {"$ref": "#/$defs/frame"}},
+    "tracklets": {"type": "array", "items": {"$ref": "#/$defs/tracklet"}},
+    "candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
+    "errors": {"type": "array", "items": {"$ref": "#/$defs/error"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+    "roi_transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "offset_x", "offset_y", "scale_x", "scale_y"],
+      "properties": {
+        "version": {"const": "source-roi-affine.v1.0"},
+        "offset_x": {"type": "number"},
+        "offset_y": {"type": "number"},
+        "scale_x": {"type": "number", "exclusiveMinimum": 0},
+        "scale_y": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detection_id", "track_id", "bbox_source", "bbox_roi", "confidence", "observation_source"],
+      "properties": {
+        "detection_id": {"type": "string", "minLength": 1},
+        "track_id": {"type": "integer", "minimum": 1},
+        "bbox_source": {"$ref": "#/$defs/bbox"},
+        "bbox_roi": {"anyOf": [{"$ref": "#/$defs/bbox"}, {"type": "null"}]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "observation_source": {"const": "detected"}
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame_index", "timestamp_seconds", "status", "roi_transform", "detections", "error_code"],
+      "properties": {
+        "frame_index": {"type": "integer", "minimum": 0},
+        "timestamp_seconds": {"type": "number", "minimum": 0},
+        "status": {"enum": ["observed", "missing", "error"]},
+        "roi_transform": {"$ref": "#/$defs/roi_transform"},
+        "detections": {"type": "array", "items": {"$ref": "#/$defs/detection"}},
+        "error_code": {"type": ["string", "null"]}
+      }
+    },
+    "identity_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "frame_index", "details"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "frame_index": {"type": ["integer", "null"], "minimum": 0},
+        "details": {"type": "string"}
+      }
+    },
+    "tracklet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tracklet_id", "source_track_ids", "first_frame", "last_frame", "detection_ids", "identity_diagnostics"],
+      "properties": {
+        "tracklet_id": {"type": "string", "pattern": "^tracklet_[0-9]{3}$"},
+        "source_track_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "first_frame": {"type": "integer", "minimum": 0},
+        "last_frame": {"type": "integer", "minimum": 0},
+        "detection_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "identity_diagnostics": {"type": "array", "items": {"$ref": "#/$defs/identity_diagnostic"}}
+      }
+    },
+    "score_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverage", "mean_confidence", "motion", "continuity", "geometry", "pose_motion"],
+      "properties": {
+        "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "mean_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "motion": {"type": "number", "minimum": 0},
+        "continuity": {"type": "number", "minimum": 0, "maximum": 1},
+        "geometry": {"type": "number", "minimum": 0},
+        "pose_motion": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "candidate_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame_index", "timestamp_seconds", "status", "bbox_source", "confidence", "source_tracklet_id", "source_track_id"],
+      "properties": {
+        "frame_index": {"type": "integer", "minimum": 0},
+        "timestamp_seconds": {"type": "number", "minimum": 0},
+        "status": {"enum": ["detected", "interpolated", "missing"]},
+        "bbox_source": {"anyOf": [{"$ref": "#/$defs/bbox"}, {"type": "null"}]},
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "source_tracklet_id": {"type": ["string", "null"]},
+        "source_track_id": {"type": ["integer", "null"], "minimum": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "missing"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "bbox_source": {"type": "null"},
+              "confidence": {"type": "null"},
+              "source_tracklet_id": {"type": "null"},
+              "source_track_id": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "bbox_source": {"$ref": "#/$defs/bbox"},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "source_tracklet_id": {"type": "string", "minLength": 1},
+              "source_track_id": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      ]
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "tracklet_ids", "source_track_ids", "rank", "score", "score_evidence", "observations"],
+      "properties": {
+        "candidate_id": {"type": "string", "pattern": "^candidate_[0-9]{3}$"},
+        "tracklet_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "source_track_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "rank": {"type": "integer", "minimum": 1},
+        "score": {"type": "number"},
+        "score_evidence": {"$ref": "#/$defs/score_evidence"},
+        "observations": {"type": "array", "items": {"$ref": "#/$defs/candidate_observation"}}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "code", "message"],
+      "properties": {
+        "scope": {"enum": ["run", "video", "frame", "candidate"]},
+        "frame_index": {"type": ["integer", "null"], "minimum": 0},
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

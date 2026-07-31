@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teng-i.local/schemas/target-subject/provider-request.v1.json",
+  "title": "Target-subject candidate provider request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_id", "run_mode", "sample_id", "video", "origin_long_video_id", "calibration", "configuration"],
+  "properties": {
+    "schema_version": {"const": "pb.target-candidate-request.v1.0"},
+    "request_id": {"type": "string", "minLength": 1},
+    "run_mode": {"enum": ["development", "pilot", "formal"]},
+    "sample_id": {"type": "string", "pattern": "^clip_[0-9]{6}$"},
+    "video": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "fps", "frame_count", "width", "height"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "fps": {"type": "number", "exclusiveMinimum": 0},
+        "frame_count": {"type": "integer", "minimum": 1},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "origin_long_video_id": {"enum": ["origin_01", "origin_02", "origin_03"]},
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested_mode"],
+      "properties": {
+        "requested_mode": {"enum": ["origin_calibration", "fallback_image_space"]},
+        "calibration_id": {"type": ["string", "null"]},
+        "calibration_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "homography": {
+          "type": ["array", "null"],
+          "minItems": 9,
+          "maxItems": 9,
+          "items": {"type": "number"}
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detector_model_path", "detector_confidence", "tracker_iou_threshold", "tracker_max_lost", "candidate_merge_max_gap", "candidate_merge_min_iou"],
+      "properties": {
+        "detector_model_path": {"type": "string", "minLength": 1},
+        "detector_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "detector_device": {"type": ["string", "null"]},
+        "tracker_iou_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "tracker_max_lost": {"type": "integer", "minimum": 0},
+        "candidate_merge_max_gap": {"type": "integer", "minimum": 0},
+        "candidate_merge_min_iou": {"type": "number", "minimum": 0, "maximum": 1},
+        "pose_scoring_enabled": {"type": "boolean", "default": false},
+        "pose_config_path": {"type": ["string", "null"]},
+        "pose_checkpoint_path": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

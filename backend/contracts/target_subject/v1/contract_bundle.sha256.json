@@ -1,0 +1,11 @@
+{
+  "contract_version": "pb.target-candidate-provider.v1.0",
+  "files": {
+    "fixtures/provider_request.example.json": "4e73f0bd30733b77769e5cc67b7c6471b6689e7c59dfcef8e8ca78699a2ada7e",
+    "fixtures/provider_result.example.json": "43fd9621e81b5b2da249194931882f8b06b555e8d7f7611128d767b18f9f7356",
+    "fixtures/provider_run_manifest.example.json": "f9f8b2f032b33ef73651db3e21601d92bed3541c2f1eb6339a1b9927dc860459",
+    "schemas/provider_request.schema.json": "ebc70a71b1604bb12896fbb2a2c7c1ee7d264156b870ac4bc726aa23dd8e4a45",
+    "schemas/provider_result.schema.json": "d9b7932d987cfdc56dc4759a7be71eb2b97832478ee7f75244821b75a6c31598",
+    "schemas/provider_run_manifest.schema.json": "f4cf3a51044fe4652ef1d86ee91001ec6b6ddda3a244a6c724d08ed4c8ceea34"
+  }
+}
