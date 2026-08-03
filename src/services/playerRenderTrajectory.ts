@@ -96,7 +96,7 @@ function normalizeV1(raw: RawPlayerRenderTrajectoryV1): NormalizedPlayerRenderTr
     };
   });
 
-  const segments = buildV1Segments(rawSamples, slotMap);
+  const segments = buildV1Segments(rawSamples);
   const samples = buildV1Samples(rawSamples, segments, slotMap);
 
   return buildIndexed(samples, players, segments, DEFAULT_COURT_VISUAL_THEME_V1, null);
@@ -122,7 +122,6 @@ const MAX_DISTANCE_JUMP_FT = 9.84;
 
 function buildV1Segments(
   samples: RawPlayerRenderFrame[],
-  slotMap: Map<string, string>,
 ): RenderSegmentMetadata[] {
   const byPlayer = new Map<string, RawPlayerRenderFrame[]>();
   for (const s of samples) {
@@ -168,7 +167,6 @@ function buildV1Samples(
   segments: RenderSegmentMetadata[],
   slotMap: Map<string, string>,
 ): NormalizedRenderFrame[] {
-  const segById = new Map(segments.map((s) => [s.segment_id, s]));
   const byPlayer = new Map<string, NormalizedRenderFrame[]>();
   for (const s of samples) {
     const ns: NormalizedRenderFrame = {

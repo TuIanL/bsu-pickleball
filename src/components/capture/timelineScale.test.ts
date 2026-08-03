@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { computeTicks, toTimelineMarkers } from "./timelineScale";
+import type { TimelineEventType } from "../../types/report";
+
+type MarkerEvent = Parameters<typeof toTimelineMarkers>[0][number];
+
+function markerEvent(
+  event_type: TimelineEventType,
+  id: string,
+  timestamp_ms: number,
+  payload_json: MarkerEvent["payload_json"] = {},
+): MarkerEvent {
+  return { event_type, id, timestamp_ms, payload_json };
+}
 
 describe("computeTicks", () => {
   it("returns empty array for zero duration", () => {
@@ -70,9 +82,7 @@ describe("computeTicks", () => {
 
 describe("toTimelineMarkers", () => {
   it("extracts side_change markers", () => {
-    const events = [
-      { event_type: "side_change", id: "e1", timestamp_ms: 5000, note: "换边" },
-    ] as any[];
+    const events = [markerEvent("side_change", "e1", 5000)];
     const markers = toTimelineMarkers(events);
     expect(markers).toHaveLength(1);
     expect(markers[0].track).toBe("side_change");
@@ -80,36 +90,28 @@ describe("toTimelineMarkers", () => {
   });
 
   it("extracts highlight add_note markers", () => {
-    const events = [
-      { event_type: "add_note", id: "e2", timestamp_ms: 10000, note: "精彩", payload_json: { highlight: true } },
-    ] as any[];
+    const events = [markerEvent("add_note", "e2", 10000, { highlight: true })];
     const markers = toTimelineMarkers(events);
     expect(markers).toHaveLength(1);
     expect(markers[0].track).toBe("highlight");
   });
 
   it("extracts highlighted session_note", () => {
-    const events = [
-      { event_type: "session_note", id: "e3", timestamp_ms: 15000, payload_json: { highlight: true } },
-    ] as any[];
+    const events = [markerEvent("session_note", "e3", 15000, { highlight: true })];
     const markers = toTimelineMarkers(events);
     expect(markers).toHaveLength(1);
     expect(markers[0].track).toBe("highlight");
   });
 
   it("extracts timeout markers", () => {
-    const events = [
-      { event_type: "non_play_start", id: "e4", timestamp_ms: 20000, payload_json: { intermission_kind: "timeout" } },
-    ] as any[];
+    const events = [markerEvent("non_play_start", "e4", 20000, { intermission_kind: "timeout" })];
     const markers = toTimelineMarkers(events);
     expect(markers).toHaveLength(1);
     expect(markers[0].track).toBe("timeout");
   });
 
   it("filters non-highlight add_note", () => {
-    const events = [
-      { event_type: "add_note", id: "e5", timestamp_ms: 25000, payload_json: { highlight: false } },
-    ] as any[];
+    const events = [markerEvent("add_note", "e5", 25000, { highlight: false })];
     const markers = toTimelineMarkers(events);
     expect(markers).toHaveLength(0);
   });

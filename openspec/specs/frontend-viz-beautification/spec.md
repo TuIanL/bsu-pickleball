@@ -1,6 +1,12 @@
+# frontend-viz-beautification Specification
+
+## Purpose
+
+定义前端球场轨迹、指标卡和进度图的可视化增强规则，改善坐标参考、方向识别、图例和交互反馈，同时保持核心数据链路独立。
+
 > **优先级：Optional（可后置）** — 本 spec 中的需求不属于 MVP，可在核心数据链路完成后单独推进。不阻塞结构化热力图和散点图的交付。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: SVG 球场轨迹图增加坐标参考网格
 

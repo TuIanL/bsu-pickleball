@@ -27,7 +27,7 @@ describe("captureRuntimeReducer", () => {
 
   it("recording → stop_requested → completed", () => {
     const rec = { phase: "recording" as const, session };
-    let s = captureRuntimeReducer(rec, { type: "STOP_REQUESTED" });
+    const s = captureRuntimeReducer(rec, { type: "STOP_REQUESTED" });
     expect(s.phase).toBe("stopping");
   });
 
@@ -60,7 +60,7 @@ describe("captureRuntimeReducer", () => {
 
   it("recovering → stop again → stopping", () => {
     const rec = { phase: "recovering" as const, session, operationError: "timeout" };
-    let s = captureRuntimeReducer(rec, { type: "STOP_REQUESTED" });
+    const s = captureRuntimeReducer(rec, { type: "STOP_REQUESTED" });
     expect(s.phase).toBe("stopping");
   });
 

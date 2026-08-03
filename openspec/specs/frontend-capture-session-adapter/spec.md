@@ -30,7 +30,7 @@ TBD - created by syncing change unify-single-dual-capture-controller.
 
 ### Requirement: CaptureTrackRuntime.trackId 可为空
 
-启动时 `CaptureTrackRuntime.trackId` 可能不可得（只在 `CaptureTrackStopResult` 中返回）。停止后从 `result.tracks` 补充。
+系统 SHALL 允许启动时 `CaptureTrackRuntime.trackId` 暂时为空，并在停止后从 `result.tracks` 补充该字段。
 
 #### Scenario: 启动时 trackId 为空
 

@@ -23,8 +23,8 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { section: "capture", label: "工作台", icon: LayoutDashboard, path: "/workspace" as AppPath },
-  { section: "videos", label: "视频管理", icon: Video, path: "/analysis/tasks" },
-  { section: "analysis", label: "分析任务", icon: PlaySquare, path: "/capture" },
+  { section: "videos", label: "视频管理", icon: Video, path: "/capture" },
+  { section: "analysis", label: "分析任务", icon: PlaySquare, path: "/analysis/tasks" },
   { section: "reports", label: "报告中心", icon: FileText, path: "/reports/movement" },
   { section: "devices", label: "设备管理", icon: Monitor, path: "/camera" },
   { section: "settings", label: "设置", icon: Settings, path: "/training" },

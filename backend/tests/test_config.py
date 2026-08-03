@@ -100,7 +100,7 @@ def test_court_aware_attention_selector_configuration(monkeypatch):
         config.get_settings.cache_clear()
 
 
-def test_analysis_artifact_configuration_defaults_enable_outputs(monkeypatch):
+def test_analysis_artifact_configuration_defaults_enable_outputs(monkeypatch, tmp_path):
     for name in [
         "PICKLEBALL_BALL_MODEL_PATH",
         "PICKLEBALL_ENABLE_BALL_DETECTION",
@@ -110,6 +110,8 @@ def test_analysis_artifact_configuration_defaults_enable_outputs(monkeypatch):
         "PICKLEBALL_VISUALIZATION_LANGUAGE",
     ]:
         monkeypatch.delenv(name, raising=False)
+    # Keep the default contract independent from repository model assets.
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(tmp_path / "empty-models"))
     config.get_settings.cache_clear()
 
     try:
@@ -136,6 +138,22 @@ def test_ball_model_path_auto_discovers_local_ball_model(monkeypatch, tmp_path):
     try:
         settings = config.get_settings()
         assert settings.ball_model_path == str(ball_model_path)
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_court_line_model_path_auto_discovers_local_model(monkeypatch, tmp_path):
+    model_dir = tmp_path / "models"
+    court_model_path = model_dir / "court-line" / "best.pt"
+    court_model_path.parent.mkdir(parents=True)
+    court_model_path.write_text("weights", encoding="utf-8")
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(model_dir))
+    monkeypatch.delenv("PICKLEBALL_COURT_LINE_MODEL_PATH", raising=False)
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.court_line_model_path == str(court_model_path)
     finally:
         config.get_settings.cache_clear()
 

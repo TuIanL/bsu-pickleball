@@ -1,4 +1,10 @@
-## ADDED Requirements
+# orphan-capture-take-recovery Specification
+
+## Purpose
+
+定义服务启动和录制 session 自愈时对孤儿 CaptureTake、单路 session 与双路 session 的恢复边界。
+
+## Requirements
 
 ### Requirement: 启动时修复孤儿 CaptureTake
 

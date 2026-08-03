@@ -1,4 +1,4 @@
-import { CirclePause, Maximize2, Minimize2, Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { Bone, Box, CircleDot, CirclePause, Diamond, Map, Maximize2, Minimize2, Pause, Play, Route, Volume2, VolumeX } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
   BallTrajectoryArtifact,
@@ -12,11 +12,15 @@ import type {
   TrackingOverlayArtifact,
   VideoOverlayLabel,
 } from "../../types/report";
-import { resolveDetectionFrame, resolvePoseFrame, type PoseResolutionResult } from "./videoOverlayPlayback";
+import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 import { CourtMinimap } from "./CourtMinimap";
+import { formatPlayerId } from "../../utils/analysisHelpers";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
+const BALL_TRAIL_SECONDS = 1.2;
+const BALL_PATH_GAP_SECONDS = 0.7;
+const MAX_BALL_PATH_POINTS = 84;
 
 interface VideoAnalysisCardProps {
   compact?: boolean;
@@ -375,7 +379,10 @@ function RealVideoOverlay({
   const [naturalSize, setNaturalSize] = useState({ width: 1920, height: 1080 });
   const [showBoxes, setShowBoxes] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
-  const [showBall, setShowBall] = useState(true);
+  const [showBallPoint, setShowBallPoint] = useState(true);
+  const [showBallPath, setShowBallPath] = useState(true);
+  const [showBounces, setShowBounces] = useState(true);
+  const [showCourtHud, setShowCourtHud] = useState(false);
 
   const source = trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
   const detectionRenderFrame = useMemo(
@@ -390,14 +397,18 @@ function RealVideoOverlay({
   const boxCount = detectionRenderFrame?.detections.length ?? 0;
   const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
   const poseInGap = poseRenderFrame?.inGap ?? false;
-  const ballSamples = useMemo(() => resolveBallSamples(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
+  const ballPathSegments = useMemo(() => resolveBallPathSegments(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
+  const ballSamples = useMemo(() => ballPathSegments.flat(), [ballPathSegments]);
   const allBounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
   const visibleBounceMarkers = useMemo(
     () => resolveVisibleBounceMarkers(allBounceMarkers, currentTime),
     [allBounceMarkers, currentTime]
   );
   const ballCount = ballSamples.length;
+  const boxesAvailable = Boolean(trackingOverlay?.frames.length);
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
+  const ballAvailable = hasUsableBallSamples(ballTrajectory);
+  const bounceAvailable = Boolean(allBounceMarkers.length);
   const trackingStatusLabel = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
   const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
   const ballStatusLabel = resolveLayerStatus(ballTrajectoryLoadState, ballTrajectory?.status ?? ballTrajectoryStatus);
@@ -619,7 +630,7 @@ function RealVideoOverlay({
                 x={x1}
                 y={Math.max(18, y1 - 8)}
               >
-                {detection.track_id ? `ID ${detection.track_id}` : "person"} · {Math.round(detection.confidence * 100)}%
+                {formatPlayerId(detection.player_id) || "person"} · {Math.round(detection.confidence * 100)}%
               </text>
             </g>
           );
@@ -664,41 +675,50 @@ function RealVideoOverlay({
           </g>
         ))}
 
-        {showBall && ballSamples.length ? (
-          <g>
-            <polyline
-              fill="none"
-              points={ballSamples.map((sample) => sample.image_xy?.join(",")).filter(Boolean).join(" ")}
+        {showBallPath ? ballPathSegments.map((segment, segmentIndex) => segment.slice(1).map((sample, index) => {
+          const previous = segment[index];
+          const [x1, y1] = previous.image_xy;
+          const [x2, y2] = sample.image_xy;
+          const isEstimated = previous.interpolated || sample.interpolated;
+          const confidence = Math.min(previous.confidence ?? 1, sample.confidence ?? 1);
+          return (
+            <line
+              data-testid="video-ball-segment"
+              key={`${segmentIndex}-${sample.frame_index}-${sample.timestamp_sec}`}
+              opacity={isEstimated ? 0.42 : Math.max(0.45, confidence)}
               stroke="#D9FF3F"
+              strokeDasharray={isEstimated ? "7 7" : undefined}
               strokeLinecap="round"
-              strokeLinejoin="round"
               strokeWidth={Math.max(2, source.width * 0.0018)}
-              opacity="0.75"
+              x1={x1}
+              x2={x2}
+              y1={y1}
+              y2={y2}
             />
-            {ballSamples.slice(-1).map((sample) => {
-              if (!sample.image_xy) {
-                return null;
-              }
-              const [x, y] = sample.image_xy;
-              return (
-                <circle
-                  cx={x}
-                  cy={y}
-                  fill="#D9FF3F"
-                  key={`${sample.frame_index}-${sample.timestamp_sec}`}
-                  r={Math.max(5, source.width * 0.004)}
-                  stroke="#071008"
-                  strokeWidth={Math.max(2, source.width * 0.0016)}
-                />
-              );
-            })}
-          </g>
-        ) : null}
+          );
+        })) : null}
 
-        {showBall && visibleBounceMarkers.map((event) => {
+        {showBallPoint ? ballSamples.slice(-1).map((sample) => {
+          const [x, y] = sample.image_xy;
+          return (
+            <g data-testid="video-ball-current" key={`${sample.frame_index}-${sample.timestamp_sec}`}>
+              <circle cx={x} cy={y} fill="rgba(217,255,63,0.26)" r={Math.max(9, source.width * 0.006)} />
+              <circle
+                cx={x}
+                cy={y}
+                fill="#F8FAFC"
+                r={Math.max(5, source.width * 0.004)}
+                stroke="#D9FF3F"
+                strokeWidth={Math.max(2, source.width * 0.0016)}
+              />
+            </g>
+          );
+        }) : null}
+
+        {showBounces && visibleBounceMarkers.map((event) => {
           const [x, y] = event.image_xy;
           return (
-            <g key={event.event_id}>
+            <g data-testid="video-bounce" key={event.event_id}>
               <circle
                 cx={x}
                 cy={y}
@@ -718,43 +738,88 @@ function RealVideoOverlay({
         <strong className="text-sm text-white">{match.venue}</strong>
         </div>
 
-        <div className="absolute right-4 top-4 flex gap-2">
-        <button
-          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showBoxes ? "border-[#22C55E]/45 bg-[#22C55E]/20 text-[#D9FF3F]" : "border-white/10 bg-black/45 text-white"}`}
-          onClick={() => setShowBoxes((value) => !value)}
-          type="button"
-        >
-          人框
-        </button>
-        <button
-          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showSkeleton ? "border-[#2F80ED]/45 bg-[#2F80ED]/25 text-[#BBD8FF]" : "border-white/10 bg-black/45 text-white"}`}
-          title={skeletonAvailable ? "显示或隐藏 RTMPose 骨架" : poseDetail}
-          onClick={() => setShowSkeleton((value) => !value)}
-          type="button"
-        >
-          骨架
-        </button>
-        <button
-          className={`rounded-full border px-3 py-1 text-xs font-black backdrop-blur ${showBall ? "border-[#D9FF3F]/45 bg-[#D9FF3F]/18 text-[#D9FF3F]" : "border-white/10 bg-black/45 text-white"}`}
-          title={ballTrajectory?.samples.length ? "显示或隐藏球轨迹与弹跳候选" : ballDetail}
-          onClick={() => setShowBall((value) => !value)}
-          type="button"
-        >
-          球
-        </button>
+        <div aria-label="视频分析图层" className="absolute right-2 top-2 z-20 flex gap-1.5 sm:right-4 sm:top-4">
+          <OverlayToggle
+            active={showBoxes}
+            available={boxesAvailable}
+            icon={<Box size={15} aria-hidden="true" />}
+            label="人体框"
+            onClick={() => setShowBoxes((value) => !value)}
+            tone="green"
+            unavailableReason={trackingDetail}
+          />
+          <OverlayToggle
+            active={showSkeleton}
+            available={skeletonAvailable}
+            icon={<Bone size={15} aria-hidden="true" />}
+            label="骨架"
+            onClick={() => setShowSkeleton((value) => !value)}
+            tone="blue"
+            unavailableReason={poseDetail}
+          />
+          <OverlayToggle
+            active={showBallPoint}
+            available={ballAvailable}
+            icon={<CircleDot size={15} aria-hidden="true" />}
+            label="球点"
+            onClick={() => setShowBallPoint((value) => !value)}
+            tone="lime"
+            unavailableReason={ballDetail}
+          />
+          <OverlayToggle
+            active={showBallPath}
+            available={ballAvailable}
+            icon={<Route size={15} aria-hidden="true" />}
+            label="球路"
+            onClick={() => setShowBallPath((value) => !value)}
+            tone="lime"
+            unavailableReason={ballDetail}
+          />
+          <OverlayToggle
+            active={showBounces}
+            available={bounceAvailable}
+            icon={<Diamond size={15} aria-hidden="true" />}
+            label="弹跳候选"
+            onClick={() => setShowBounces((value) => !value)}
+            tone="orange"
+            unavailableReason={bounceDetail}
+          />
         </div>
 
-        {pipelineTracks && pipelineTracks.length > 0 && (
-          <div className="absolute right-4 top-16 shadow-black/20">
-            <CourtMinimapErrorBoundary>
-              <CourtMinimap
-                tracks={pipelineTracks}
-                currentTimeSec={currentTime}
-                trailSeconds={6}
-              />
-            </CourtMinimapErrorBoundary>
+        {(pipelineTracks?.length || ballAvailable || bounceAvailable) ? (
+          <div className="absolute right-2 top-12 z-10 flex origin-top-right flex-col items-end gap-1.5 scale-[0.82] shadow-black/20 sm:right-4 sm:top-14 sm:scale-100">
+            <button
+              aria-expanded={showCourtHud}
+              aria-label={showCourtHud ? "收起球场地图" : "展开球场地图"}
+              className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[0.68rem] font-bold backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D9FF3F] ${
+                showCourtHud
+                  ? "border-[#D9FF3F]/60 bg-[#D9FF3F]/18 text-[#D9FF3F]"
+                  : "border-white/15 bg-black/50 text-white hover:bg-black/70"
+              }`}
+              onClick={() => setShowCourtHud((value) => !value)}
+              type="button"
+            >
+              <Map size={14} aria-hidden="true" />
+              球场地图
+            </button>
+            {showCourtHud ? (
+              <div className="max-h-[min(24rem,calc(100vh-15rem))] overflow-y-auto rounded-lg">
+                <CourtMinimapErrorBoundary>
+                  <CourtMinimap
+                    ballTrajectory={ballTrajectory}
+                    bounceEvents={bounceEvents}
+                    showBallPath={showBallPath}
+                    showBallPoint={showBallPoint}
+                    showBounces={showBounces}
+                    tracks={pipelineTracks ?? []}
+                    currentTimeSec={currentTime}
+                    trailSeconds={3}
+                  />
+                </CourtMinimapErrorBoundary>
+              </div>
+            ) : null}
           </div>
-        )}
+        ) : null}
 
         <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">
@@ -774,6 +839,7 @@ function RealVideoOverlay({
             球轨迹：{statusCopy(ballStatusLabel, ballDetail)}
           </p>
         ) : null}
+        {ballCount ? <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">图像空间球路 · 小地图为球场平面投影 · 视觉估算</p> : null}
         </div>
 
         <div className="absolute inset-x-4 bottom-4 flex flex-col gap-3 sm:left-auto sm:right-4 sm:w-[min(30rem,calc(100%-2rem))]">
@@ -990,6 +1056,45 @@ export function ServeRallyStrip({
   );
 }
 
+function OverlayToggle({
+  active,
+  available,
+  icon,
+  label,
+  onClick,
+  tone,
+  unavailableReason,
+}: {
+  active: boolean;
+  available: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  tone: "blue" | "green" | "lime" | "orange";
+  unavailableReason: string;
+}) {
+  const activeClasses = {
+    blue: "border-[#2F80ED]/60 bg-[#2F80ED]/25 text-[#BBD8FF]",
+    green: "border-[#22C55E]/60 bg-[#22C55E]/22 text-[#D9FF3F]",
+    lime: "border-[#D9FF3F]/60 bg-[#D9FF3F]/18 text-[#D9FF3F]",
+    orange: "border-[#FF9500]/60 bg-[#FF9500]/20 text-[#FFD7A0]",
+  }[tone];
+
+  return (
+    <button
+      aria-label={`${active ? "隐藏" : "显示"}${label}`}
+      aria-pressed={active}
+      className={`grid size-8 place-items-center rounded-md border backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D9FF3F] disabled:cursor-not-allowed disabled:opacity-45 ${active ? activeClasses : "border-white/15 bg-black/50 text-white"}`}
+      disabled={!available}
+      onClick={onClick}
+      title={available ? `${active ? "隐藏" : "显示"}${label}` : unavailableReason}
+      type="button"
+    >
+      {icon}
+    </button>
+  );
+}
+
 function statusLabel(status: string): string {
   if (status === "loading") {
     return "加载中";
@@ -1048,17 +1153,52 @@ function statusCopy(status: string, detail: string): string {
   return detail;
 }
 
-function resolveBallSamples(ballTrajectory: BallTrajectoryArtifact | null | undefined, currentTime: number): BallTrajectoryArtifact["samples"] {
-  const samples = (ballTrajectory?.samples ?? []).filter((sample) => sample.image_xy && (sample.accepted ?? true));
-  if (!samples.length) {
-    return [];
+type ImageBallSample = BallTrajectoryArtifact["samples"][number] & { image_xy: [number, number] };
+
+function hasImagePoint(sample: BallTrajectoryArtifact["samples"][number]): sample is ImageBallSample {
+  return Array.isArray(sample.image_xy)
+    && sample.image_xy.length >= 2
+    && Number.isFinite(sample.image_xy[0])
+    && Number.isFinite(sample.image_xy[1])
+    && Number.isFinite(sample.timestamp_sec)
+    && (sample.accepted ?? true);
+}
+
+function hasUsableBallSamples(ballTrajectory: BallTrajectoryArtifact | null | undefined): boolean {
+  return (ballTrajectory?.samples ?? []).some(hasImagePoint);
+}
+
+function sampleBallPathEvenly(samples: ImageBallSample[], maxPoints: number): ImageBallSample[] {
+  if (samples.length <= maxPoints) return samples;
+  return Array.from(
+    { length: maxPoints },
+    (_, index) => samples[Math.round((index * (samples.length - 1)) / (maxPoints - 1))],
+  );
+}
+
+function resolveBallPathSegments(
+  ballTrajectory: BallTrajectoryArtifact | null | undefined,
+  currentTime: number,
+): ImageBallSample[][] {
+  const cutoff = currentTime - BALL_TRAIL_SECONDS;
+  const samples = (ballTrajectory?.samples ?? [])
+    .filter(hasImagePoint)
+    .filter((sample) => sample.timestamp_sec >= cutoff && sample.timestamp_sec <= currentTime)
+    .sort((left, right) => left.timestamp_sec - right.timestamp_sec);
+  const segments: ImageBallSample[][] = [];
+  let active: ImageBallSample[] = [];
+
+  for (const sample of samples) {
+    const previous = active.at(-1);
+    if (previous && sample.timestamp_sec - previous.timestamp_sec > BALL_PATH_GAP_SECONDS) {
+      if (active.length) segments.push(sampleBallPathEvenly(active, MAX_BALL_PATH_POINTS));
+      active = [];
+    }
+    active.push(sample);
   }
-  const currentIndex = samples.findIndex((sample) => Math.abs(sample.timestamp_sec - currentTime) <= 0.08);
-  if (currentIndex >= 0) {
-    return samples.slice(Math.max(0, currentIndex - 18), currentIndex + 1);
-  }
-  const previous = samples.filter((sample) => sample.timestamp_sec <= currentTime).slice(-18);
-  return previous.length ? previous : samples.slice(0, 1);
+
+  if (active.length) segments.push(sampleBallPathEvenly(active, MAX_BALL_PATH_POINTS));
+  return segments;
 }
 
 function resolveBounceMarkers(bounceEvents: BounceEventsArtifact | null | undefined) {

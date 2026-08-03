@@ -92,7 +92,7 @@ describe("captureAdapter", () => {
       expect(phaseFromStopStatus("failed")).toBe("failed");
     });
     it("maps unknown to failed", () => {
-      expect(phaseFromStopStatus("unknown" as any)).toBe("failed");
+      expect(phaseFromStopStatus("unknown" as Parameters<typeof phaseFromStopStatus>[0])).toBe("failed");
     });
   });
 

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# media-fragment-model Specification
+
+## Purpose
+
+定义媒体 Fragment 的持久化双索引、状态流转、时间偏移和跨重启时间线映射规则，确保分片生命周期和产物关联能够被实现与测试验证。
+
+## Requirements
 
 ### Requirement: MediaFragment 持久化 + 双索引
 

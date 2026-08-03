@@ -1,4 +1,10 @@
-## ADDED Requirements
+# segment-editing Specification
+
+## Purpose
+
+定义片段边界编辑、乐观锁、拆分合并、归档恢复、审计记录、层级约束和 Vidat 导入重建规则，确保编辑操作可恢复、可审计且不会破坏时间层级。
+
+## Requirements
 
 ### Requirement: Segment 边界修正（唯一边界真相）
 

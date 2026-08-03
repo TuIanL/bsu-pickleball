@@ -45,7 +45,7 @@ export function AppShell({ shellMode, navigationSection, children, onNavigate }:
             <div className="ml-auto flex items-center gap-2">
               <button
                 className="quiet-button px-4 py-2.5"
-                onClick={() => onNavigate("/tasks")}
+                onClick={() => onNavigate("/analysis/tasks")}
                 type="button"
               >
                 <ListTodo size={16} aria-hidden="true" />

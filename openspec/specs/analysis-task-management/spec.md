@@ -155,3 +155,28 @@ The system SHALL provide clear feedback for cancellation actions from task manag
 - **WHEN** a cancellation request cannot be accepted or cannot reach the backend
 - **THEN** the frontend shows a recoverable error and does not pretend the job has been canceled
 
+### Requirement: Analysis task list filters by recording session
+The system SHALL support filtering analysis tasks by `recording_session_id` query parameter, enabling per-recording task views.
+
+#### Scenario: Filter by recording session ID
+- **WHEN** the frontend requests `GET /api/analysis/jobs?recording_session_id=<sid>`
+- **THEN** the backend SHALL return only jobs whose `metadata.recording_session_id` matches `<sid>`
+- **AND** if no matching jobs exist, SHALL return an empty list
+
+### Requirement: Analysis task recording origin display
+The system SHALL expose the recording session origin of analysis jobs via the `AnalysisJobSummary` and SHALL display it in the task management UI.
+
+#### Scenario: Task has recording session origin
+- **WHEN** an `AnalysisJobSummary` has `recordingSessionId` or `metadata.recording_session_id` set
+- **THEN** the task card SHALL display a "来源录制" badge with the camera slot label (A/B machine position)
+- **AND** the badge SHALL include a link to navigate back to the corresponding recording card
+
+#### Scenario: Dual-camera recording cards show analysis status
+- **WHEN** the dual-camera recording tab lists sync recording sessions
+- **THEN** each card SHALL query analysis jobs belonging to that session
+- **AND** cam analysis buttons SHALL reflect the analysis job status: "分析 X 机位" (no job), "分析中 N%" (running), "查看 X 分析报告" (completed), "重新分析" (failed/canceled)
+
+#### Scenario: Upload tab excludes dual-camera derived tasks
+- **WHEN** the upload tasks tab displays analysis jobs
+- **THEN** tasks whose `recording_session_id` matches an existing sync recording session SHALL be excluded from this tab
+- **AND** they SHALL appear exclusively within the corresponding dual-camera recording cards

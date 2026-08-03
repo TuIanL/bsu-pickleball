@@ -188,7 +188,7 @@ def test_early_lock_sets_assignment_side():
         )
         manager.update(frame, positions=[pos])
 
-    slot = manager.slots.get("player_1")
+    slot = manager.slots.get("Player_1")
     assert slot is not None
     assert slot.assignment_side is not None
 
@@ -315,9 +315,9 @@ def test_attention_path_obeys_quota():
     assert len(selected_ids) <= 2
 
 
-# ======== Task 7.18: slot reset frees occupancy ========
+# ======== Task 7.18: hard lock keeps slot occupancy ========
 
-def test_slot_reset_frees_occupancy():
+def test_hard_lock_keeps_slot_occupancy_after_long_loss():
     config = PlayerLockConfig(
         fps=30, target_player_count=2,
         near_side_quota=1, far_side_quota=1,
@@ -336,11 +336,12 @@ def test_slot_reset_frees_occupancy():
         manager.update(frame, positions=[pos])
 
     near_before = manager.near_occupancy
-    # Mark slot as lost for many frames to trigger reset
-    for frame in range(25, 60):
+    # 长时间丢失：硬锁到底，槽位占用不释放、身份不重置
+    for frame in range(25, 80):
         manager.update(frame, positions=[], suggestions=[])
 
-    assert manager.near_occupancy <= near_before
+    assert manager.near_occupancy == near_before
+    assert manager.slots["Player_1"].state == "lost"
 
 
 # ======== Task 7.20: 422 for invalid matchFormat ========

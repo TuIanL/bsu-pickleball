@@ -108,7 +108,8 @@ describe("getPlayerRenderTrajectory", () => {
 
 describe("contract: style_profile consistency", () => {
   it("DEFAULT_COURT_VISUAL_THEME_V1 matches backend fixture style_profile", () => {
-    const fixtureStyle = (v2Fixture as any).style_profile;
+    const fixtureStyle = (v2Fixture as unknown as RawPlayerRenderTrajectoryV2).style_profile;
+    if (!fixtureStyle) throw new Error("fixture style_profile is required");
 
     expect(DEFAULT_COURT_VISUAL_THEME_V1.version).toBe(fixtureStyle.version);
     expect(DEFAULT_COURT_VISUAL_THEME_V1.players.slot_1).toBe(fixtureStyle.players.slot_1);

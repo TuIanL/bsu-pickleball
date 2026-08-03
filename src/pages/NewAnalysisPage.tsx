@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { ArrowRight, Camera, Upload } from "lucide-react";
-import type { NavigateFn, AppPath } from "../app/navigationTypes";
+import type { NavigateFn } from "../app/navigationTypes";
 import type { AnalysisUploadMetadata, AutomaticCalibrationResponse } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -76,18 +76,16 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [automaticCalibrationError, setAutomaticCalibrationError] = useState<AnalysisApiError | null>(null);
   const [submitStep, setSubmitStep] = useState<"idle" | "uploading" | "calibrating" | "creating">("idle");
 
-  // 支持从录制视频直接创建分析（?videoId=xxx）
+  // 支持直接传入 videoId（如从其他页面跳转）
   const [searchParams] = useState(() => new URLSearchParams(window.location.search));
   const videoIdParam = searchParams.get("videoId");
-  const recordingSessionIdParam = searchParams.get("sessionId");
   const sourceFpsParam = Number(searchParams.get("fps") ?? NaN);
-  const isFromRecording = searchParams.get("source") === "recording";
 
   const [metadata, setMetadata] = useState({
     matchTitle: "匹克球训练对局",
     venue: "北京体育大学匹克球训练场",
     matchDate: today,
-    sourceFps: 30,
+    sourceFps: 60,
     matchFormat: "doubles" as AnalysisUploadMetadata["matchFormat"],
     cameraAngle: "elevated" as AnalysisUploadMetadata["cameraAngle"],
     athleteLabel: "球馆体验用户 A",
@@ -96,35 +94,16 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<DiagnosticNotice | null>(null);
 
-  // 当来自录制时，自动设置 videoId 并预填元数据
+  // 当 videoId 传入时自动设置，并预填 fps
   useEffect(() => {
     if (!videoIdParam) return;
+    // URL parameters are external input; hydrate local form state when they change.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronizes URL state into the form.
     setUploadedVideoId(videoIdParam);
     if (Number.isFinite(sourceFpsParam) && sourceFpsParam > 0) {
-      updateMetadata("sourceFps", sourceFpsParam);
+      setMetadata((current) => ({ ...current, sourceFps: sourceFpsParam }));
     }
-    if (!recordingSessionIdParam) return;
-    // 尝试获取录制信息来预填元数据
-    import("../services/analysisClient").then(({ getRecording }) => {
-      getRecording(recordingSessionIdParam).then((recording) => {
-        if (!recording) return;
-        const angleMap: Record<string, AnalysisUploadMetadata["cameraAngle"]> = {
-          baseline_high: "elevated", baseline: "baseline", sideline: "sideline",
-          overhead: "elevated", side: "sideline", elevated: "elevated",
-        };
-        setMetadata({
-          matchTitle: `${recording.court_name || "录制比赛"} ${new Date(recording.started_at).toLocaleDateString("zh-CN")}`,
-          venue: recording.court_name || "未知球场",
-          matchDate: new Date(recording.started_at).toISOString().slice(0, 10),
-          sourceFps: recording.fps || 30,
-          matchFormat: (recording.match_format === "singles" ? "singles" : "doubles") as AnalysisUploadMetadata["matchFormat"],
-          cameraAngle: angleMap[recording.camera_angle ?? ""] ?? "elevated",
-          athleteLabel: "球场采集",
-          level: "大众进阶",
-        });
-      }).catch(() => {});
-    });
-  }, [recordingSessionIdParam, sourceFpsParam, videoIdParam]);
+  }, [videoIdParam, sourceFpsParam]);
 
   const validSourceFps = Number.isFinite(metadata.sourceFps) && metadata.sourceFps > 0 && metadata.sourceFps <= 240;
   const canSubmit = Boolean(
@@ -485,9 +464,9 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 <span className="grid size-14 place-items-center mx-auto rounded-full bg-[#22C55E]/15 text-[#168A34]">
                   <Camera size={24} aria-hidden="true" />
                 </span>
-                <strong className="mt-4 block text-lg text-[#14241B]">已选择录制视频</strong>
+                <strong className="mt-4 block text-lg text-[#14241B]">已选择视频</strong>
                 <p className="mt-2 text-sm text-slate-500">
-                  来源：球场采集录制 · 跳过文件上传步骤，直接进行四角标定
+                  跳过文件上传步骤，直接进行四角标定
                 </p>
               </div>
             ) : (
@@ -836,4 +815,3 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     </PageFrame>
   );
 }
-

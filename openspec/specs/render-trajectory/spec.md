@@ -1,8 +1,14 @@
-## ADDED Requirements
+# render-trajectory Specification
+
+## Purpose
+
+定义球员渲染轨迹从原始观测、身份 epoch、投影质量到 artifact、指标点和前端读取的完整契约。
+
+## Requirements
 
 ### Requirement: 原始坐标在 smoother 前保存
 
-系统必须在 `CourtPositionSmoother.update()` 执行之前保存每一帧的原始球场坐标，供渲染轨迹使用。
+系统 MUST 在 `CourtPositionSmoother.update()` 执行之前保存每一帧的原始球场坐标，供渲染轨迹使用。
 
 #### Scenario: 原始坐标与平滑坐标分离
 
@@ -18,7 +24,7 @@
 
 ### Requirement: 渲染观测 (CourtTrackObservation) 逐帧收集
 
-系统必须在 pipeline 中逐帧收集 `CourtTrackObservation` 结构，包含原始坐标和稳定 player_id。
+系统 MUST 在 pipeline 中逐帧收集 `CourtTrackObservation` 结构，包含原始坐标和稳定 player_id。
 
 #### Scenario: 观测包含原始坐标
 
@@ -36,7 +42,7 @@
 
 ### Requirement: 生命周期事件通过 Pipeline 侧 Cursor 收集
 
-系统不得在 `PlayerIdentityManager` 上新增 API 方法。必须通过 diagnostics cursor 在 pipeline 侧适配。
+系统 MUST NOT 在 `PlayerIdentityManager` 上新增 API 方法，并 MUST 通过 diagnostics cursor 在 pipeline 侧适配。
 
 #### Scenario: diagnostics cursor 收集事件
 
@@ -57,7 +63,7 @@
 
 ### Requirement: CourtTrackPostProcessor 处理渲染轨迹
 
-系统必须提供 `CourtTrackPostProcessor` 模块，从观测/事件输入生成包含渲染槽位和分段信息的逐帧渲染轨迹。`build_tracks()` 保持返回 `list[RenderFrame]`（向后兼容），新增 `process()` 返回 `CourtTrackPostProcessResult`。
+系统 MUST 提供 `CourtTrackPostProcessor` 模块，从观测/事件输入生成包含渲染槽位和分段信息的逐帧渲染轨迹。`build_tracks()` 保持返回 `list[RenderFrame]`（向后兼容），新增 `process()` 返回 `CourtTrackPostProcessResult`。
 
 #### Scenario: process() 返回完整结果
 
@@ -106,7 +112,7 @@
 
 ### Requirement: 基础异常点过滤
 
-PostProcessor 必须在插值前过滤孤立跳点。
+PostProcessor MUST 在插值前过滤孤立跳点。
 
 #### Scenario: 三点孤立尖峰检测
 
@@ -128,6 +134,8 @@ PostProcessor 必须在插值前过滤孤立跳点。
 - **AND** 不进入插值
 
 ### Requirement: 线性插值填充中间帧
+
+系统 SHALL 在满足最大间隔和质量条件时，对渲染轨迹中的中间帧执行线性插值。
 
 #### Scenario: 短间隔正常插值
 
@@ -151,7 +159,7 @@ PostProcessor 必须在插值前过滤孤立跳点。
 
 ### Requirement: 渲染轨迹 artifact
 
-系统必须生成独立的 `player_render_trajectory.json` artifact。
+系统 MUST 生成独立的 `player_render_trajectory.json` artifact。
 
 #### Scenario: 渲染轨迹包含逐帧坐标
 
@@ -166,7 +174,7 @@ PostProcessor 必须在插值前过滤孤立跳点。
 
 ### Requirement: Artifact API 路由
 
-系统必须为渲染轨迹 artifact 提供 HTTP API 端点。
+系统 MUST 为渲染轨迹 artifact 提供 HTTP API 端点。
 
 #### Scenario: 注册白名单和路由
 
@@ -176,7 +184,7 @@ PostProcessor 必须在插值前过滤孤立跳点。
 
 ### Requirement: 指标点与渲染点分离
 
-`_run_visualization` 必须分离静态可视化轨迹和 Overlay 渲染轨迹的消费数据源。
+`_run_visualization` SHALL 分离静态可视化轨迹和 Overlay 渲染轨迹的消费数据源。
 
 #### Scenario: 热力图和散点图使用指标点
 
@@ -196,7 +204,7 @@ PostProcessor 必须在插值前过滤孤立跳点。
 
 ### Requirement: Overlay 逐帧索引读取
 
-OverlayVideoWriter 不得在视频循环中全量扫描历史点列表。
+OverlayVideoWriter MUST NOT 在视频循环中全量扫描历史点列表。
 
 #### Scenario: 帧索引表预构建
 
@@ -206,7 +214,7 @@ OverlayVideoWriter 不得在视频循环中全量扫描历史点列表。
 
 ### Requirement: 球员拖尾按时间定义
 
-球员拖尾长度由时间秒数决定，球轨迹仍使用点数。
+系统 SHALL 按时间秒数决定球员拖尾长度，球轨迹仍使用点数。
 
 #### Scenario: 拖尾覆盖固定时间窗口的轨迹
 
@@ -227,7 +235,7 @@ OverlayVideoWriter 不得在视频循环中全量扫描历史点列表。
 
 ### Requirement: player_id 渲染路径规范化
 
-渲染路径中 LockManager 产生的 `player_` 前缀 player_id 必须规范化为 `Player_` 前缀。
+渲染路径中 LockManager 产生的 `player_` 前缀 player_id MUST 规范化为 `Player_` 前缀。
 
 #### Scenario: 规范化函数缩小作用域
 
@@ -244,7 +252,7 @@ OverlayVideoWriter 不得在视频循环中全量扫描历史点列表。
 
 ### Requirement: identity_epoch 由上游生成，PostProcessor 只消费
 
-`CourtTrackPostProcessor` 将 `CourtTrackObservation.identity_epoch` 视为权威输入，不负责递增或重新计算 epoch。当前只有上游已实现的 `player_reset_after_prolonged_loss` 会改变 epoch。未来上游实现 canonical identity reassignment 后，只要递增 epoch，PostProcessor 无需修改即可自动切段。
+`CourtTrackPostProcessor` SHALL 将 `CourtTrackObservation.identity_epoch` 视为权威输入，不负责递增或重新计算 epoch。当前只有上游已实现的 `player_reset_after_prolonged_loss` 会改变 epoch。未来上游实现 canonical identity reassignment 后，只要递增 epoch，PostProcessor 无需修改即可自动切段。
 
 #### Scenario: epoch 变化触发新 segment
 
@@ -271,7 +279,7 @@ OverlayVideoWriter 不得在视频循环中全量扫描历史点列表。
 
 ### Requirement: canonical_player_id 在 PostProcessor 入口规范化
 
-PostProcessor 入口必须对输入的所有 player_id 执行 `canonical_player_id()` 规范化，确保 slot 分配和分段使用一致的 ID 格式。
+PostProcessor 入口 MUST 对输入的所有 player_id 执行 `canonical_player_id()` 规范化，确保 slot 分配和分段使用一致的 ID 格式。
 
 #### Scenario: 规范化输入中的 player_id
 

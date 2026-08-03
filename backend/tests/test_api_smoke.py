@@ -353,6 +353,7 @@ def test_extended_json_artifact_routes_return_json(monkeypatch, tmp_path):
         restore_analysis_state(snapshot)
 
     assert all(response.status_code == 200 for response in responses.values())
+    assert all(response.headers["content-type"].startswith("application/json") for response in responses.values())
     assert responses["ball-overlay"].json()["schema_version"] == "1.0"
     assert responses["position-scatter-plots"].json()["items"] == []
 
@@ -369,11 +370,14 @@ def test_known_extended_artifact_route_returns_404_when_missing(monkeypatch, tmp
     JOBS[job.id] = job
 
     try:
-        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-overlay")
+        responses = {
+            name: client.get(f"/api/analysis/jobs/{job.id}/artifacts/{name}")
+            for name in ["ball-overlay", "ball-trajectory", "cleaned-ball-trajectory", "bounce-events"]
+        }
     finally:
         restore_analysis_state(snapshot)
 
-    assert response.status_code == 404
+    assert all(response.status_code == 404 for response in responses.values())
 
 
 def test_detections_jsonl_artifact_route_preserves_record_boundaries(monkeypatch, tmp_path):
@@ -885,7 +889,7 @@ def test_pipeline_job_records_failed_stage(monkeypatch):
 
 
 def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
-    video_bytes = make_test_video_bytes(tmp_path)
+    video_bytes = make_long_test_video_bytes(tmp_path)
     upload_response = client.post(
         "/api/videos/upload",
         files={"file": ("overlay.avi", video_bytes, "video/avi")},
@@ -945,14 +949,26 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     serve_events = storage.read_json(storage.serve_events_json_path("job-overlay-test"))
     court_view_roi = storage.read_json(storage.court_view_roi_json_path("job-overlay-test"))
     assert tracking_overlay["frames"][0]["detections"][0]["track_id"] == "1"
-    assert tracking_overlay["frames"][0]["detections"][0]["player_id"] == "Player_1"
-    assert tracking_overlay["frames"][0]["detections"][0]["label"] == "P1 / T1"
+    # bootstrap 完成前（早期帧）检测无身份
+    assert tracking_overlay["frames"][0]["detections"][0].get("player_id") is None
+    # bootstrap 完成后：检测携带 canonical 身份，标签只含 P{n}，不含原始 track_id
+    labelled = [
+        det
+        for frame in tracking_overlay["frames"]
+        for det in frame["detections"]
+        if det.get("player_id")
+    ]
+    assert labelled
+    locked_player = sorted({det["player_id"] for det in labelled})[0]
+    assert locked_player in {"Player_1", "Player_2", "Player_3", "Player_4"}
+    assert all("/ T" not in (det.get("label") or "") for det in labelled)
+    assert all(det["label"] == det["player_id"].replace("Player_", "P") for det in labelled)
     assert player_selection["selection_mode"] in {"rule", "fallback"}
     assert player_selection["diagnostics"]
     assert player_selection_samples["labels"] == ["target_player", "neighbor_court_player", "spectator", "uncertain"]
     assert player_selection_samples["samples"]
     assert player_trajectories["court"]["court_unit"] == "m"
-    assert player_trajectories["players"]["Player_1"][0]["court_unit"] == "m"
+    assert player_trajectories["players"][locked_player][0]["court_unit"] == "m"
     assert storage.player_trajectory_csv_path("job-overlay-test").exists()
     assert pose_overlay["frames"][0]["subjects"][0]["keypoints"][0]["name"] == "nose"
     assert serve_events["detector_version"] == "serve-moment-context-v1"
@@ -1010,7 +1026,7 @@ def test_pipeline_gates_non_court_frames_and_records_roi_artifact(tmp_path):
 
 
 def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
-    video_bytes = make_test_video_bytes(tmp_path)
+    video_bytes = make_long_test_video_bytes(tmp_path)
     upload_response = client.post(
         "/api/videos/upload",
         files={"file": ("player-only-overlay.avi", video_bytes, "video/avi")},
@@ -1045,16 +1061,17 @@ def test_pipeline_omits_ball_overlay_without_losing_player_overlay(tmp_path):
     assert result.status == "completed"
     assert result.artifacts.tracking_overlay_status == "available"
     assert result.artifacts.player_trajectory_status == "available"
-    assert result.artifacts.ball_overlay_status is None
+    assert result.artifacts.ball_overlay_status == "unavailable"
     assert result.artifacts.ball_overlay_url is None
     assert result.artifacts.detections_url is None
-    assert result.artifacts.analysis_overlay_video_url is None
+    # 球 overlay 被省略，但球员 overlay 视频正常生成（球员身份已锁定）
+    assert result.artifacts.analysis_overlay_video_url is not None
     assert all(stage.id != "ball-tracking" for stage in result.stages)
 
     storage = StorageService()
     assert storage.tracking_overlay_json_path("job-player-only-overlay").exists()
     assert storage.player_trajectory_json_path("job-player-only-overlay").exists()
-    assert not storage.ball_overlay_json_path("job-player-only-overlay").exists()
+    # 无球检测器：球分析只写入 unavailable 占位 overlay，真正的球轨迹/弹跳产物不产生
     assert not storage.ball_trajectory_json_path("job-player-only-overlay").exists()
     assert not storage.cleaned_ball_trajectory_json_path("job-player-only-overlay").exists()
     assert not storage.bounce_events_json_path("job-player-only-overlay").exists()
@@ -1646,6 +1663,21 @@ def make_test_video_bytes(tmp_path):
     path = tmp_path / "overlay.avi"
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (96, 96))
     for _ in range(3):
+        frame = np.zeros((96, 96, 3), dtype=np.uint8)
+        frame[16:82, 18:48] = (255, 255, 255)
+        writer.write(frame)
+    writer.release()
+    return path.read_bytes()
+
+
+def make_long_test_video_bytes(tmp_path):
+    # 40 帧（5fps × 8s）：足够 bootstrap 完成球员锁定（身份层依赖锁定 hint 才能建立身份）
+    import cv2  # type: ignore
+    import numpy as np
+
+    path = tmp_path / "overlay-long.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (96, 96))
+    for _ in range(40):
         frame = np.zeros((96, 96, 3), dtype=np.uint8)
         frame[16:82, 18:48] = (255, 255, 255)
         writer.write(frame)

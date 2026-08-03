@@ -1,5 +1,9 @@
 # player-render-trajectory-v2
 
+## Purpose
+
+定义版本化球员渲染轨迹 artifact 的身份槽位、分段、投影质量、样式快照和前端兼容归一化规则。
+
 ## Requirements
 
 ### Requirement: Artifact 提供渲染身份槽位

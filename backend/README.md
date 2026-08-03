@@ -1,6 +1,6 @@
 # Pickleball Vision Backend
 
-This FastAPI backend is the product and research foundation for fixed-camera pickleball video analysis. It keeps the sample/demo report path available for degraded local use, but the primary flow is now durable real-video analysis: upload a match, calibrate the court, enqueue an analysis job, run the worker-backed pipeline, and preserve execution records that can support product debugging and research output.
+This FastAPI backend is the product and research foundation for fixed-camera pickleball video analysis. It keeps an explicit metadata-only demo path for local presentation, but the primary flow is durable real-video analysis: upload a match, calibrate the court, enqueue an analysis job, run the worker-backed pipeline, and preserve execution records that can support product debugging and research output. A real frontend request failure remains visible to the user and is never converted into a completed demo job.
 
 The backend is intentionally local-first. It uses a lightweight durable job store and local worker runtime before introducing external infrastructure such as Redis, Celery, or distributed GPU scheduling.
 
@@ -78,7 +78,7 @@ npm run app:stop
 On macOS, you can also double-click `start-pickleball.command` and
 `stop-pickleball.command` in the repository root.
 
-The startup command enables pose inference by default and sets
+The startup command enables pose inference when the repository-local model assets are discovered and sets
 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` for the trusted OpenMMLab RTMPose
 checkpoint stored under `models/rtmpose/`.
 
@@ -258,6 +258,7 @@ enabled by default; add `--disable-clahe` for an unenhanced baseline, or
 - `POST /api/analysis/jobs/delete`
 - `GET /api/analysis/jobs/{job_id}/result`
 - `GET /api/analysis/jobs/{job_id}/report`
+- `GET /api/analysis/jobs/{job_id}/artifacts/{artifact_name}` for generated JSON/video artifacts; known but missing artifacts return `404`
 - `GET /api/analysis/jobs/{job_id}/artifacts/tracking-overlay`
 - `GET /api/analysis/jobs/{job_id}/artifacts/pose-overlay`
 
@@ -286,6 +287,10 @@ curl -X POST http://localhost:8000/api/calibrations \
 ```
 
 Create a metadata-only demo job:
+
+This endpoint is for explicit developer/demo requests only. A real upload or
+pipeline request must include `videoId`; missing backend/API responses are not
+replaced by this demo payload in the frontend.
 
 ```bash
 curl -X POST http://localhost:8000/api/analysis/jobs \
@@ -360,6 +365,18 @@ Runtime artifacts live under `backend/data/`:
 - `tmp/`: temporary frames and intermediate files
 
 SQLite stores lightweight business metadata and relationships. Videos, calibration JSON, analysis JSON/JSONL, images, reports, and overlay videos remain filesystem artifacts and should not be embedded in the database. Override the database location with `PICKLEBALL_DATABASE_PATH` when running isolated tests or alternate local environments.
+
+The FastAPI lifespan initializes the database, starts the analysis worker,
+recovers zombie jobs, then cleans stale camera leases and orphan recordings in
+that order. Shutdown stops the worker. Tests use pytest temporary directories
+for the database, uploads, outputs, recordings, and model discovery; they do
+not use the default `backend/data/app.sqlite3`.
+
+Ball detection is enabled by configuration by default, but its model is
+auto-discovered from the repository model layout. If the model or runtime is
+missing, the pipeline records an `unavailable` or `failed` artifact state and
+does not synthesize ball data. Set `PICKLEBALL_ENABLE_BALL_DETECTION=false` to
+skip the capability explicitly.
 
 These generated files are ignored by git. Model weights should live in the repo-level `models/` directory and are also ignored.
 

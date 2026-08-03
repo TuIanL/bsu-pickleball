@@ -338,6 +338,8 @@ class JobStore:
             videoId=payload.videoId,
             calibrationId=payload.calibrationId,
             analysisMode=mode,
+            recordingSessionId=payload.recording_session_id,
+            cameraSlot=payload.camera_slot,
         )
         return self.save(job)
 

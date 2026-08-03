@@ -21,7 +21,7 @@ TBD - created by archiving change build-layered-visual-analysis-platform. Update
 
 #### Scenario: User accesses task history
 - **WHEN** 用户点击导航栏右上角「任务历史」
-- **THEN** 系统导航到 `/tasks`，展示所有分析任务列表
+- **THEN** 系统导航到 `/analysis/tasks`，展示所有分析任务列表
 
 ### Requirement: Top navigation for core workflows
 
@@ -86,7 +86,7 @@ The system SHALL keep the layered product pages polished and legible across comm
 
 #### Scenario: User opens task history
 - **WHEN** 用户点击导航栏右上角「任务历史」或从完成面板进入
-- **THEN** 系统打开任务历史页面 `/tasks`，展示所有分析任务
+- **THEN** 系统打开任务历史页面 `/analysis/tasks`，展示所有分析任务
 
 ### Requirement: Job-specific route support
 The system SHALL support route states for analysis jobs, job-specific result pages, and job-specific analysis details.

@@ -157,7 +157,6 @@ _RENDER_EVENT_MAPPING: dict[str, str] = {
     "reconnected": "identity_reconnected",
     "player_locked": "lock_acquired",
     "player_reconnected_from_lost": "lock_reconnected",
-    "player_reset_after_prolonged_loss": "identity_reset",
 }
 
 
@@ -863,8 +862,8 @@ class AnalysisPipeline:
         detections_detail = ball_fields.detections_detail
         ball_overlay_json_path = ball_fields.ball_overlay_json_path
         ball_overlay_url = ball_fields.ball_overlay_url
-        ball_overlay_status = ball_fields.ball_overlay_status if ball_fields.ball_overlay_json_path else None
-        ball_overlay_detail = ball_fields.ball_overlay_detail if ball_fields.ball_overlay_json_path else None
+        ball_overlay_status = ball_fields.ball_overlay_status
+        ball_overlay_detail = ball_fields.ball_overlay_detail
         ball_trajectory_json_path = ball_fields.ball_trajectory_json_path
         ball_trajectory_url = ball_fields.ball_trajectory_url
         ball_trajectory_status = ball_fields.ball_trajectory_status
@@ -1054,8 +1053,8 @@ class AnalysisPipeline:
             stages.append(self._stage("bounce-detection", "弹跳候选", "skipped", "球轨迹未生成，未运行弹跳检测"))
             fields.detections_status = "skipped"
             fields.detections_detail = detail
-            fields.ball_overlay_status = None
-            fields.ball_overlay_detail = None
+            fields.ball_overlay_status = "skipped"
+            fields.ball_overlay_detail = detail
             fields.ball_trajectory_status = "skipped"
             fields.ball_trajectory_detail = "球检测未运行"
             fields.cleaned_ball_trajectory_status = "skipped"
@@ -1073,7 +1072,7 @@ class AnalysisPipeline:
                 traj_status = "available"
                 traj_detail = f"球检测已运行，{run.accepted_count} 帧接受候选（共 {len(run.ball_detections)} 条 ball 检测记录）"
             else:
-                traj_status = "no_detections"
+                traj_status = "available"
                 traj_detail = "球检测已运行，但没有达到置信度/连续性阈值的球候选"
         elif run.status == "unavailable":
             traj_stage_status = "unavailable"
@@ -1106,34 +1105,39 @@ class AnalysisPipeline:
         fields.ball_trajectory_status = traj_status
         fields.ball_trajectory_detail = traj_detail
 
-        # 写入 ball_overlay.json（始终写入，即使无可用轨迹）
-        overlay_status = traj_status if traj_status in {"available", "no_detections"} else "unavailable"
+        fields.ball_trajectory_status = (
+            run.status if run.status != "available" else ("available" if run.raw_points else "skipped")
+        )
+        fields.ball_trajectory_detail = (
+            traj_detail if run.status != "available" or run.raw_points else "未生成可用球轨迹"
+        )
+
+        # 只有可用的球分析才生成 overlay 文件；其他状态保留诊断但由 API 返回 404。
+        overlay_status = "available" if run.status == "available" else run.status
         overlay_detail = (
             f"已生成 {len([s for s in run.samples if s.accepted])} 帧球叠加记录"
-            if traj_status == "available"
+            if run.status == "available"
             else traj_detail
         )
-        overlay_path = self.storage.ball_overlay_json_path(job_id)
-        overlay_payload = build_ball_overlay_payload(
-            job_id=job_id,
-            video_id=video_id,
-            samples=run.samples,
-            source_width=source_width,
-            source_height=source_height,
-            fps=fps,
-            frame_stride=frame_stride,
-            processed_frame_count=processed_frame_count,
-            status=overlay_status,
-            detail=overlay_detail,
-        )
-        self.storage.write_json(overlay_path, overlay_payload)
-        fields.ball_overlay_json_path = str(overlay_path)
-        fields.ball_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/ball-overlay"
-        fields.ball_overlay_status = None if overlay_status == "unavailable" else overlay_status
-        fields.ball_overlay_detail = None if overlay_status == "unavailable" else overlay_detail
-        if overlay_status == "unavailable":
-            fields.ball_overlay_json_path = None
-            fields.ball_overlay_url = None
+        fields.ball_overlay_status = overlay_status
+        fields.ball_overlay_detail = overlay_detail
+        if run.status == "available":
+            overlay_path = self.storage.ball_overlay_json_path(job_id)
+            overlay_payload = build_ball_overlay_payload(
+                job_id=job_id,
+                video_id=video_id,
+                samples=run.samples,
+                source_width=source_width,
+                source_height=source_height,
+                fps=fps,
+                frame_stride=frame_stride,
+                processed_frame_count=processed_frame_count,
+                status=overlay_status,
+                detail=overlay_detail,
+            )
+            self.storage.write_json(overlay_path, overlay_payload)
+            fields.ball_overlay_json_path = str(overlay_path)
+            fields.ball_overlay_url = f"/api/analysis/jobs/{job_id}/artifacts/ball-overlay"
 
         if run.status != "available" or not run.raw_points:
             # 无可用轨迹：弹跳检测阶段 skipped
@@ -1147,8 +1151,8 @@ class AnalysisPipeline:
                 "status": "skipped",
             }
             stages.append(bounce_stage)
-            fields.cleaned_ball_trajectory_status = traj_status
-            fields.cleaned_ball_trajectory_detail = traj_detail
+            fields.cleaned_ball_trajectory_status = "skipped"
+            fields.cleaned_ball_trajectory_detail = "未生成可用球轨迹"
             fields.bounce_events_status = "skipped"
             fields.bounce_events_detail = "未生成可用球轨迹"
             return
@@ -1160,6 +1164,11 @@ class AnalysisPipeline:
             self.storage.write_jsonl(detections_path, [rec.model_dump(mode="json") for rec in detections_records])
             fields.detections_jsonl_path = str(detections_path)
             fields.detections_url = f"/api/analysis/jobs/{job_id}/artifacts/detections"
+            fields.detections_status = "available"
+            fields.detections_detail = f"已生成 {len(detections_records)} 条检测记录"
+        else:
+            fields.detections_status = "skipped"
+            fields.detections_detail = "没有可写入的检测记录"
 
         # 写入原始轨迹
         raw_path = self.storage.ball_trajectory_json_path(job_id)
@@ -1189,7 +1198,7 @@ class AnalysisPipeline:
             self.storage.write_json(bounce_path, build_bounce_events_payload(job_id=job_id, events=run.bounce_events))
             fields.bounce_events_json_path = str(bounce_path)
             fields.bounce_events_url = f"/api/analysis/jobs/{job_id}/artifacts/bounce-events"
-            fields.bounce_events_status = "available" if run.bounce_events else "no_candidates"
+            fields.bounce_events_status = "available"
             fields.bounce_events_detail = (
                 f"检测到 {len(run.bounce_events)} 个弹跳候选"
                 if run.bounce_events
@@ -1807,6 +1816,8 @@ class AnalysisPipeline:
                     positions=frame_positions,
                     suggestions=primary_selections,
                     frame=frame,
+                    frame_width=frame_width,
+                    frame_height=frame_height,
                 )
                 eligible_track_ids = lock_update.eligible_track_ids | suggested_track_ids
                 # 7) 把轨迹整理成"帧检测"格式（只保留主球员对应的轨迹）
@@ -1828,7 +1839,12 @@ class AnalysisPipeline:
                 player_by_track = {
                     sample.track_id: sample.player_id
                     for sample in player_samples
-                    if sample.track_id is not None and sample.tracking_status == "detected"
+                    if sample.track_id is not None and sample.tracking_status in ("detected", "tentative")
+                }
+                tentative_by_track = {
+                    sample.track_id
+                    for sample in player_samples
+                    if sample.track_id is not None and sample.tracking_status == "tentative"
                 }
                 # 8b) 收集渲染观测（原始坐标 + 稳定身份）
                 for pos in frame_positions:
@@ -1852,7 +1868,7 @@ class AnalysisPipeline:
                         projection_confidence=raw["projection_confidence"],
                         footpoint_method=raw["footpoint_method"],
                         lock_state=None,
-                        tracking_status="detected",
+                        tracking_status="tentative" if pos.track_id in tentative_by_track else "detected",
                     ))
                 for detection in frame_detections:
                     if detection.track_id is None:
@@ -1860,7 +1876,8 @@ class AnalysisPipeline:
                     player_id = player_by_track.get(int(detection.track_id))
                     if player_id is not None:
                         detection.player_id = player_id
-                        detection.label = f"{player_id.replace('Player_', 'P')} / T{detection.track_id}"
+                        # 标签只显示 canonical 身份（P1..P4），不泄漏原始 track_id
+                        detection.label = player_id.replace("Player_", "P")
 
                 all_detections.extend(raw_detections)
                 overlay_frames.append(

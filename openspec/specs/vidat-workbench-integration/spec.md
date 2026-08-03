@@ -1,4 +1,10 @@
-## ADDED Requirements
+# vidat-workbench-integration Specification
+
+## Purpose
+
+定义从项目打开本地 Vidat 工作台、传递视频与标注配置以及 CLI 导出兼容的集成行为，明确本地工具不可用时的错误提示和降级边界。
+
+## Requirements
 
 ### Requirement: 一键打开 Vidat 工作台
 系统 SHALL 允许用户从项目中为指定标注包打开本地 Vidat，并自动提供对应视频、标签配置和 annotation 文件。

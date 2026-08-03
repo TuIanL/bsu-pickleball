@@ -179,6 +179,8 @@ The backend SHALL expose a tracking or detection overlay artifact for completed 
 
 ### Requirement: Primary-player overlay subject selection
 
+系统 SHALL 根据 `MatchAnalysisContext.expected_player_count` 选择渲染叠加层球员，而不是使用固定的全局人数上限。
+
 **FROM**: 选择器使用固定的全局配置 `max_subjects=4`，按置信度和 tracklet 质量排序后取前 N 名。
 
 **TO**: 选择器使用 `MatchAnalysisContext.expected_player_count` 作为 `max_subjects`，在单打上下文中引擎 SHALL 只选择最多 2 名球员，双打上下文中选择最多 4 名球员。
@@ -260,6 +262,8 @@ The Player Tracking Engine SHALL provide enough unit metadata or conversion beha
 
 ### Requirement: Participant-limited overlay labels
 
+系统 SHALL 根据比赛上下文限制叠加层身份标签的参与者数量，并保留稳定的球员身份标识。
+
 **FROM**: 叠加层标签限制基于固定全局配置值判定参与者数量。
 
 **TO**: 叠加层标签的参与者上限由 `MatchAnalysisContext` 驱动。单打最多 2 个身份，双打最多 4 个身份。
@@ -326,6 +330,8 @@ ROI-aware detection SHALL preserve source-frame coordinate semantics for trackin
 
 ### Requirement: 投影观测点 schema 边界语义
 
+后端 SHALL 根据赛制上下文区分严格标定控制点和可容忍的球员脚点投影观测点，并在指标输入前处理标准球场边界。
+
 **FROM**: 运动指标始终假设存在 4 名球员轨迹。
 
 **TO**: 运动指标接收赛制上下文，根据 expected_player_count 和球场投影坐标映射球员轨迹。单打场景 SHALL 只产生 2 组轨迹，双打场景产生 4 组。
@@ -358,7 +364,7 @@ ROI-aware detection SHALL preserve source-frame coordinate semantics for trackin
 系统 SHALL 基于已有 `PickleballCourtGeometry.court_bounds` 和 `PickleballCourtGeometry.tracking_bounds`，叠加自定义外扩，构建三层空间门控。
 
 ```python
-# 所有值单位为英尺
+所有值单位为英尺
 inside_court:
   x: [0, 20], y: [0, 44]           # court_bounds（已有）
 
@@ -370,6 +376,12 @@ near_court_area（新增）：
 tracking_area：
   x: [-4, 24], y: [-8, 52]         # tracking_bounds（已有）
 ```
+
+#### Scenario: 候选按空间区域门控
+
+- **WHEN** 新检测候选进入球员跟踪流程
+- **THEN** 系统 SHALL 使用 `near_court_area` 判断是否允许初始化，并使用 `tracking_area` 判断已锁定轨迹是否继续跟踪
+- **AND** 位于 `tracking_area` 外的候选 MUST 被拒绝并记录门控原因
 
 #### Scenario: 新候选只能在 near_court_area 内初始化
 

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# dataset-ml-release-contract Specification
+
+## Purpose
+
+定义机器学习标签 profile、canonical manifest、媒体校验、数据切分、审计报告和不可变发布包的质量契约。
+
+## Requirements
 
 ### Requirement: ML 标签 Profile 定义
 系统 SHALL 通过 `model_label_profiles.yaml` 定义从 v3 源标注到不同训练任务标签的确定性映射规则。每个 Profile 声明其目标类型（flat_class / action_family / multitask）、类别列表和派生规则。

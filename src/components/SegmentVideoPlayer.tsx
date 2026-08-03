@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
-import { Play, Pause, SkipForward, SkipBack, ChevronLeft, ChevronRight } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack } from "lucide-react";
 
 export interface SegmentVideoPlayerHandle {
   seekToTakeTime(timestampMs: number): void;
@@ -25,7 +25,7 @@ interface SegmentVideoPlayerProps {
 
 export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVideoPlayerProps>(
   function SegmentVideoPlayer(
-    { videoUrl, fps = 30, segmentStartMs, segmentEndMs, trackLabel, trackOptions, onTrackChange, onTimeUpdate, onDurationReady, syncQuality },
+    { videoUrl, fps = 30, trackLabel, trackOptions, onTrackChange, onTimeUpdate, onDurationReady, syncQuality },
     ref,
   ) {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -112,7 +112,10 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
       } else if (e.key === " ") {
         e.preventDefault();
         const video = videoRef.current;
-        if (video) video.paused ? video.play() : video.pause();
+        if (video) {
+          if (video.paused) void video.play();
+          else video.pause();
+        }
       }
     }, [fps]);
 

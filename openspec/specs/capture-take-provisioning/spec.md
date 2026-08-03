@@ -1,5 +1,9 @@
 # capture-take-provisioning Specification
 
+## Purpose
+
+定义 CaptureTake、轨道、租约和录制启动编排的统一契约，覆盖失败补偿、状态转换、终态化与历史录制兼容。
+
 ## Requirements
 
 ### Requirement: CaptureStartCoordinator 统一启动编排

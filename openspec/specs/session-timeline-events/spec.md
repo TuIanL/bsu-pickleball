@@ -1,6 +1,14 @@
-## MODIFIED Requirements
+# session-timeline-events Specification
+
+## Purpose
+
+定义录制时间线事件的查询、比赛间歇元数据、rally_end、比分修正、合法性和 Vidat 导入溯源契约。
+
+## Requirements
 
 ### Requirement: 查询时间线事件
+
+系统 SHALL 使用 `listTimelineEvents(fieldSessionId, params)` 的双参数签名查询时间线事件，并正确传递筛选参数。
 
 **变更**：修复前端 `listTimelineEvents` 调用参数错误。
 
@@ -10,7 +18,11 @@
 - `capture_take_id` SHALL 作为 `params` 的字段传递，而非取代 `fieldSessionId` 位置
 - `limit` 参数 SHALL 按实际 API 设计传递，不传递不支持的筛选字段
 
-## ADDED Requirements
+#### Scenario: 按 session 和筛选参数查询事件
+
+- **WHEN** 前端请求指定 Field Session 的时间线事件并传入 `capture_take_id`
+- **THEN** API 调用 SHALL 将 Field Session ID 作为第一个参数、筛选对象作为第二个参数
+- **AND** 请求 URL MUST NOT 包含 `[object Object]`
 
 ### Requirement: 比赛间歇原因元数据
 

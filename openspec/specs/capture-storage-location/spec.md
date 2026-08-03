@@ -1,7 +1,7 @@
 # capture-storage-location Specification
 
 ## Purpose
-管理每次单摄或双摄录制的临时存储位置、会话目录结构、目录复用和存储故障处理。
+管理每次单摄或双摄录制的临时存储位置、会话目录结构、目录复用和存储故障处理，并明确路径隔离、清理和恢复时的可验证边界。
 
 ## Requirements
 ### Requirement: 原生目录选择与本次录制作用域

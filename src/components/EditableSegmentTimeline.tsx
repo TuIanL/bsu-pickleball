@@ -3,7 +3,7 @@ import type { CaptureSegmentSummary, SessionTimelineEvent } from "../types/repor
 
 interface EditableSegmentTimelineProps {
   segments: CaptureSegmentSummary[];
-  events: any[];
+  events: SessionTimelineEvent[];
   totalDurationMs: number;
   currentTimeMs: number;
   onSeek: (ms: number) => void;
@@ -69,9 +69,7 @@ export function EditableSegmentTimeline({
     onSeek(Math.max(0, Math.min(ms, totalDurationMs)));
   }, [totalDurationMs, onSeek]);
 
-  const eventMarkers = events.filter(
-    (e: any) => ["side_change", "non_play_start", "session_note"].includes(e.event_type ?? ""),
-  );
+  const eventMarkers = events.filter((e) => ["side_change", "non_play_start", "session_note"].includes(e.event_type ?? ""));
 
   return (
     <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
@@ -140,7 +138,7 @@ export function EditableSegmentTimeline({
           <div className="absolute left-0 right-0 flex items-center gap-2" style={{ top: TRACKS.length * 28 + 2 }}>
             <span className="text-xs font-bold w-6 text-right text-slate-400 shrink-0">事件</span>
             <div className="relative flex-1 h-4">
-              {eventMarkers.map((evt: any) => (
+              {eventMarkers.map((evt) => (
                 <div key={evt.id} className="absolute top-0" style={{ left: scale(evt.timestamp_ms ?? 0) }}>
                   <svg width="10" height="16"><polygon points="5,16 0,8 10,8" fill="#94A3B8" /></svg>
                 </div>

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# score-correction Specification
+
+## Purpose
+
+定义比分修正锚点、reducer 重放、撤销、revision 排序和 Vidat 导入映射规则，并与片段管理保持隔离。
+
+## Requirements
 
 ### Requirement: 比分修正锚点
 

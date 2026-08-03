@@ -108,6 +108,8 @@ Runtime Hook MUST NOT 直接调用 `freeze()` 或 `flushWithDeadline()`。Outbox
 
 ### Requirement: 恢复结果完整性
 
+系统 SHALL 在恢复阶段联合 Source Session 和 CaptureTake 构造包含媒体、轨道和分析入口的完整停止结果。
+
 **变更**：恢复时联合 Source Session 和 CaptureTake 构造完整结果。
 
 **修改前**：恢复时仅使用 `sourceSession.status` 映射为 `completed`，结果对象固定为 `tracks: []`、`analysisAvailable: false`。

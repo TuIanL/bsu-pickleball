@@ -19,6 +19,8 @@ export function useCapturePreflight({ mode, slots }: UseCapturePreflightOptions)
 
   // slots 变化时自动 reset
   useEffect(() => {
+    // Camera selection is external input; reset the result when it changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- invalidates stale preflight state.
     setState({ status: "idle" });
   }, [slots?.cam_1, slots?.cam_2]);
 
@@ -26,12 +28,12 @@ export function useCapturePreflight({ mode, slots }: UseCapturePreflightOptions)
     if (mode !== "dual" || !slots?.cam_1 || !slots?.cam_2) return;
     setState({ status: "running" });
     try {
-      const result = await runSyncTest({ cam_1_id: slots.cam_1, cam_2_id: slots.cam_2 } as any);
+      const result = await runSyncTest({ cam_1_id: slots.cam_1, cam_2_id: slots.cam_2, duration: 5 });
       setState({ status: "passed", result });
-    } catch (e: any) {
-      setState({ status: "failed", error: e?.message ?? "测试失败" });
+    } catch (e: unknown) {
+      setState({ status: "failed", error: e instanceof Error ? e.message : "测试失败" });
     }
-  }, [mode, slots?.cam_1, slots?.cam_2]);
+  }, [mode, slots]);
 
   return { preflightState: state, runTest };
 }

@@ -187,6 +187,8 @@ def create_analysis_job(
                 calibrationId=payload.calibrationId,
                 analysisMode="real" if payload.calibrationId else "limited",
                 frameStride=payload.frameStride,
+                recordingSessionId=payload.recording_session_id,
+                cameraSlot=payload.camera_slot,
             )
             return _save_job(job)
 
@@ -234,6 +236,8 @@ def create_analysis_job(
         reportId=report_id,
         analysisMode="demo",
         frameStride=payload.frameStride,
+        recordingSessionId=payload.recording_session_id,
+        cameraSlot=payload.camera_slot,
     )
     report = build_mock_report(job, payload.metadata, report_id, now)
     _save_job(job)

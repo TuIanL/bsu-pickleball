@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, LineChart, Route, Timer } from "lucide-react";
 import type { NavigateFn, AppPath, ReportType } from "../app/navigationTypes";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, StructuredVisualizationData } from "../types/report";
@@ -683,19 +683,14 @@ function VisualizationArtifactGallery({
   jobId?: string;
 }) {
   const [structuredViz, setStructuredViz] = useState<StructuredVisualizationData | null>(null);
-  const [structuredVizLoadState, setStructuredVizLoadState] = useState<OverlayLoadState>("idle");
-
   useEffect(() => {
     if (!jobId) return;
-    setStructuredVizLoadState("loading");
     getStructuredVizData(jobId)
       .then((data) => {
         setStructuredViz(data);
-        setStructuredVizLoadState(data ? "available" : "unavailable");
       })
       .catch(() => {
         setStructuredViz(null);
-        setStructuredVizLoadState("failed");
       });
   }, [jobId]);
 

@@ -59,7 +59,6 @@ export function adaptPipelineResultToReport(
   const hasPoseOverlay = poseOverlayStatus === "available";
   // 球分析事实状态：只在真实 job 结果里消费，不回退为 demo 球数据
   const ballTrajectoryStatus = result.artifacts.ball_trajectory_status;
-  const cleanedBallStatus = result.artifacts.cleaned_ball_trajectory_status;
   const bounceStatus = result.artifacts.bounce_events_status;
   const ballAvailable = ballTrajectoryStatus === "available";
   const bounceAvailable = bounceStatus === "available" || bounceStatus === "no_candidates";

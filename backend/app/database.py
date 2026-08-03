@@ -72,6 +72,7 @@ def _ensure_capture_storage_columns(engine: Engine) -> None:
         return
     columns = {column["name"] for column in inspect(engine).get_columns("capture_takes")}
     track_columns = {column["name"] for column in inspect(engine).get_columns("capture_tracks")} if inspect(engine).has_table("capture_tracks") else set()
+    ffmpeg_columns = {column["name"] for column in inspect(engine).get_columns("ffmpeg_registry")} if inspect(engine).has_table("ffmpeg_registry") else set()
     with engine.begin() as connection:
         if "storage_root" not in columns:
             connection.execute(text("ALTER TABLE capture_takes ADD COLUMN storage_root VARCHAR(1024)"))
@@ -83,6 +84,12 @@ def _ensure_capture_storage_columns(engine: Engine) -> None:
             connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN slot VARCHAR(16) NOT NULL DEFAULT 'cam_1'"))
         if "analysis_role" not in track_columns:
             connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN analysis_role VARCHAR(32) NOT NULL DEFAULT 'default'"))
+        if "fragment_id" not in ffmpeg_columns:
+            connection.execute(text("ALTER TABLE ffmpeg_registry ADD COLUMN fragment_id VARCHAR(64)"))
+        if "return_code" not in ffmpeg_columns:
+            connection.execute(text("ALTER TABLE ffmpeg_registry ADD COLUMN return_code INTEGER"))
+        if "exit_reason" not in ffmpeg_columns:
+            connection.execute(text("ALTER TABLE ffmpeg_registry ADD COLUMN exit_reason VARCHAR(64)"))
 
 
 def _ensure_vidat_provenance_columns(engine: Engine) -> None:

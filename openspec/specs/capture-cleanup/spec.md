@@ -1,5 +1,9 @@
 # capture-cleanup Specification
 
+## Purpose
+
+定义录制资源删除、级联清理、引用保护和幂等行为，确保单摄与双摄流程共享一致的清理边界，并为实现和回归测试提供可验证约束。
+
 ## Requirements
 
 ### Requirement: 统一录制资源清理

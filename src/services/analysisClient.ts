@@ -97,6 +97,52 @@ interface StoredJob {
   summary: AnalysisJobSummary;
 }
 
+interface DemoFallbackOptions {
+  useDemoFallback?: boolean;
+}
+
+type LegacyAnalysisJobSummary = AnalysisJobSummary & {
+  recording_session_id?: string;
+  camera_slot?: "cam_1" | "cam_2";
+  metadata: AnalysisUploadMetadata & {
+    recordingSessionId?: string;
+    cameraSlot?: "cam_1" | "cam_2";
+  };
+};
+
+function normalizeAnalysisJobSummary(job: AnalysisJobSummary): AnalysisJobSummary {
+  const raw = job as LegacyAnalysisJobSummary;
+  const recordingSessionId = job.recordingSessionId
+    ?? raw.recording_session_id
+    ?? job.metadata.recording_session_id
+    ?? raw.metadata.recordingSessionId;
+  const cameraSlot = job.cameraSlot
+    ?? raw.camera_slot
+    ?? job.metadata.camera_slot
+    ?? raw.metadata.cameraSlot;
+
+  return {
+    ...job,
+    recordingSessionId,
+    cameraSlot,
+    metadata: {
+      ...job.metadata,
+      recording_session_id: job.metadata.recording_session_id ?? recordingSessionId,
+      camera_slot: job.metadata.camera_slot ?? cameraSlot,
+    },
+  };
+}
+
+function isAnalysisJobSummary(value: AnalysisPipelineResult | AnalysisJobSummary): value is AnalysisJobSummary {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && "id" in value
+    && "metadata" in value
+    && "stages" in value,
+  );
+}
+
 const stageLabels: Record<AnalysisStageId, string> = {
   upload: "视频上传",
   queue: "任务排队",
@@ -183,9 +229,20 @@ function getStoredJobs(): Record<string, StoredJob> {
 
 function getStoredJobSummaries(): AnalysisJobSummary[] {
   return Object.values(getStoredJobs())
-    .map((job) => job.summary)
-    .filter((summary): summary is AnalysisJobSummary => Boolean(summary?.id))
+    .map((job) => normalizeAnalysisJobSummary(job.summary))
+    .filter((summary): summary is AnalysisJobSummary => Boolean(summary?.id && summary.analysisMode === "demo"))
     .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
+}
+
+function getStoredDemoJob(jobId: string): StoredJob | undefined {
+  const stored = getStoredJobs()[jobId];
+  return stored?.summary.analysisMode === "demo" ? stored : undefined;
+}
+
+function getStoredDemoJobs(): Record<string, StoredJob> {
+  return Object.fromEntries(
+    Object.entries(getStoredJobs()).filter(([, job]) => job.summary.analysisMode === "demo"),
+  );
 }
 
 function saveStoredJob(job: StoredJob) {
@@ -214,7 +271,7 @@ export function getRecentAnalysisJob(): AnalysisJobSummary | null {
       return null;
     }
     const job = JSON.parse(payload) as AnalysisJobSummary;
-    return job?.id ? job : null;
+    return job?.id ? normalizeAnalysisJobSummary(job) : null;
   } catch {
     return null;
   }
@@ -226,8 +283,9 @@ export function rememberAnalysisJob(job?: AnalysisJobSummary | null) {
   }
 
   try {
-    window.localStorage.setItem(RECENT_JOB_KEY, JSON.stringify(job));
-    window.dispatchEvent(new CustomEvent(RECENT_ANALYSIS_JOB_EVENT, { detail: job }));
+    const normalizedJob = normalizeAnalysisJobSummary(job);
+    window.localStorage.setItem(RECENT_JOB_KEY, JSON.stringify(normalizedJob));
+    window.dispatchEvent(new CustomEvent(RECENT_ANALYSIS_JOB_EVENT, { detail: normalizedJob }));
   } catch {
     // localStorage can be unavailable in private browsing; navigation still works for the current route.
   }
@@ -248,6 +306,9 @@ function buildMockJob(metadata: AnalysisUploadMetadata): StoredJob {
     metadata,
     stages: buildStages("report"),
     reportId,
+    analysisMode: "demo",
+    recordingSessionId: metadata.recording_session_id,
+    cameraSlot: metadata.camera_slot,
   };
 
   const report: AnalysisReport = {
@@ -430,6 +491,8 @@ interface AnalysisJobRequest {
   requestNewVersion?: boolean;
   useDemoFallback?: boolean;
   videoId?: string;
+  recordingSessionId?: string;
+  cameraSlot?: "cam_1" | "cam_2";
 }
 
 export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
@@ -487,7 +550,7 @@ export async function acceptAutomaticCalibration(
 
 export async function createAnalysisJob(request: AnalysisJobRequest): Promise<AnalysisJobSummary> {
   try {
-    const job = await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
+    const job = normalizeAnalysisJobSummary(await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
       body: JSON.stringify({
         metadata: request.metadata,
         videoId: request.videoId,
@@ -496,13 +559,15 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
         sourceFps: request.metadata.sourceFps,
         priority: request.priority ?? 0,
         requestNewVersion: request.requestNewVersion ?? false,
+        recording_session_id: request.recordingSessionId,
+        camera_slot: request.cameraSlot,
       }),
       method: "POST",
-    });
+    }));
     rememberAnalysisJob(job);
     return job;
   } catch (error) {
-    if (request.videoId || request.useDemoFallback === false) {
+    if (request.videoId || request.useDemoFallback !== true) {
       throw error;
     }
 
@@ -514,20 +579,20 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
   }
 }
 
-export async function listAnalysisJobs(): Promise<AnalysisJobSummary[]> {
+export async function listAnalysisJobs(options: DemoFallbackOptions = {}): Promise<AnalysisJobSummary[]> {
   try {
-    const jobs = await requestJson<AnalysisJobSummary[]>("/api/analysis/jobs");
+    const jobs = (await requestJson<AnalysisJobSummary[]>("/api/analysis/jobs")).map(normalizeAnalysisJobSummary);
     if (jobs.length) {
       rememberAnalysisJob(jobs[0]);
       return jobs;
     }
-    const storedJobs = getStoredJobSummaries();
+    const storedJobs = options.useDemoFallback ? getStoredJobSummaries() : [];
     if (storedJobs.length) {
       rememberAnalysisJob(storedJobs[0]);
     }
     return storedJobs;
   } catch (error) {
-    const storedJobs = getStoredJobSummaries();
+    const storedJobs = options.useDemoFallback ? getStoredJobSummaries() : [];
     if (storedJobs.length) {
       rememberAnalysisJob(storedJobs[0]);
       return storedJobs;
@@ -536,7 +601,7 @@ export async function listAnalysisJobs(): Promise<AnalysisJobSummary[]> {
   }
 }
 
-export async function deleteAnalysisJob(jobId: string): Promise<AnalysisDeleteResult> {
+export async function deleteAnalysisJob(jobId: string, options: DemoFallbackOptions = {}): Promise<AnalysisDeleteResult> {
   try {
     const result = await requestJson<AnalysisDeleteResult>(`/api/analysis/jobs/${jobId}`, {
       method: "DELETE",
@@ -546,15 +611,15 @@ export async function deleteAnalysisJob(jobId: string): Promise<AnalysisDeleteRe
     }
     return result;
   } catch (error) {
-    const stored = getStoredJobs()[jobId];
-    if (stored?.summary) {
+    const stored = options.useDemoFallback ? getStoredDemoJob(jobId) : undefined;
+    if (stored) {
       return deleteStoredJobs([jobId])[0];
     }
     throw error;
   }
 }
 
-export async function deleteAnalysisJobs(jobIds: string[]): Promise<AnalysisDeleteResult[]> {
+export async function deleteAnalysisJobs(jobIds: string[], options: DemoFallbackOptions = {}): Promise<AnalysisDeleteResult[]> {
   try {
     const results = await requestJson<AnalysisDeleteResult[]>("/api/analysis/jobs/delete", {
       body: JSON.stringify({ job_ids: jobIds }),
@@ -566,7 +631,7 @@ export async function deleteAnalysisJobs(jobIds: string[]): Promise<AnalysisDele
     }
     return results;
   } catch (error) {
-    const storedJobs = getStoredJobs();
+    const storedJobs = options.useDemoFallback ? getStoredDemoJobs() : {};
     const hasAnyStored = jobIds.some((jobId) => storedJobs[jobId]);
     if (hasAnyStored) {
       return deleteStoredJobs(jobIds);
@@ -576,21 +641,21 @@ export async function deleteAnalysisJobs(jobIds: string[]): Promise<AnalysisDele
 }
 
 export async function cancelAnalysisJob(jobId: string): Promise<AnalysisJobSummary> {
-  const job = await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/cancel`, {
+  const job = normalizeAnalysisJobSummary(await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/cancel`, {
     method: "POST",
-  });
+  }));
   rememberAnalysisJob(job);
   return job;
 }
 
 export async function getAnalysisJob(jobId: string): Promise<AnalysisJobSummary | null> {
   try {
-    const job = await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}`);
+    const job = normalizeAnalysisJobSummary(await requestJson<AnalysisJobSummary>(`/api/analysis/jobs/${jobId}`));
     rememberAnalysisJob(job);
     return job;
   } catch (error) {
-    const stored = getStoredJobs()[jobId];
-    if (stored?.summary) {
+    const stored = getStoredDemoJob(jobId);
+    if (stored) {
       rememberAnalysisJob(stored.summary);
       return stored.summary;
     }
@@ -605,7 +670,7 @@ export async function getAnalysisReport(jobId: string): Promise<AnalysisReport |
   try {
     return await requestJson<AnalysisReport>(`/api/analysis/jobs/${jobId}/report`);
   } catch (error) {
-    const stored = getStoredJobs()[jobId];
+    const stored = getStoredDemoJob(jobId);
     if (stored?.report) {
       return stored.report;
     }
@@ -618,10 +683,11 @@ export async function getAnalysisReport(jobId: string): Promise<AnalysisReport |
 
 export async function getAnalysisResult(jobId: string): Promise<AnalysisPipelineResult | AnalysisJobSummary | null> {
   try {
-    return await requestJson<AnalysisPipelineResult | AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/result`);
+    const result = await requestJson<AnalysisPipelineResult | AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/result`);
+    return isAnalysisJobSummary(result) ? normalizeAnalysisJobSummary(result) : result;
   } catch (error) {
-    const stored = getStoredJobs()[jobId];
-    if (stored?.summary) {
+    const stored = getStoredDemoJob(jobId);
+    if (stored) {
       return stored.summary;
     }
     if (isAnalysisApiError(error) && error.status === 404) {

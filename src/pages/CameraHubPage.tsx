@@ -1,24 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Camera,
-  CheckCircle2,
-  ChevronRight,
   Clock,
   Edit3,
-  LayoutDashboard,
   Play,
   PlusCircle,
   Radar,
   RefreshCw,
-  Timer,
   Trash2,
-  Upload,
   X,
-  Zap,
 } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
 import { PageFrame } from "../components/PageFrame";
-import { Field } from "../components/Field";
 import { Modal } from "../components/platform/Modal";
 import { quickEventsForMode, ACTION_TO_EVENT_TYPE, type QuickEventDef } from "../services/timelineQuickEvents";
 import type {
@@ -96,9 +89,20 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     }
   }, []);
 
+  const [recordingForm, setRecordingForm] = useState<RecordingStartRequest>({
+    camera_id: "",
+    court_name: "",
+    match_format: "doubles",
+    camera_angle: "baseline_high",
+    fps: 60,
+    resolution: "1920x1080",
+    auto_analyze_after_stop: true,
+  });
+
   // 当选中的 Field Session 变化时，预填录制表单并加载时间线事件
   useEffect(() => {
     if (!selectedFieldSession || selectedFieldSession.status === "archived") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears events for the selected session.
       setTimelineEvents([]);
       return;
     }
@@ -124,16 +128,6 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
     password: "",
   });
 
-  const [recordingForm, setRecordingForm] = useState<RecordingStartRequest>({
-    camera_id: "",
-    court_name: "",
-    match_format: "doubles",
-    camera_angle: "baseline_high",
-    fps: 60,
-    resolution: "1920x1080",
-    auto_analyze_after_stop: true,
-  });
-
   // 预览状态（依赖 recordingForm，需在其后声明）
   const [previewStatus, setPreviewStatus] = useState<"idle" | "loading" | "displaying" | "failed">("idle");
   const previewUrl = useMemo(() => getCameraPreviewUrl(recordingForm.camera_id), [recordingForm.camera_id]);
@@ -148,6 +142,8 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   // 当选中的摄像头变化时，重置预览状态
   useEffect(() => {
     if (!recordingForm.camera_id) {
+      // Camera selection changes an external preview resource.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets preview state for the new camera.
       setPreviewStatus("idle");
     } else {
       setPreviewStatus("loading");
@@ -253,6 +249,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       };
       if (recordingSessionId && activeSession?.started_at) {
         // 前端计算当前录制时间戳
+        // eslint-disable-next-line react-hooks/purity -- this handler runs only after a user event.
         const elapsed = Date.now() - new Date(activeSession.started_at).getTime();
         payload.timestamp_ms = Math.max(0, elapsed);
       }
@@ -304,6 +301,8 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   };
 
   useEffect(() => {
+    // Refresh the external camera/session list after mount and explicit refreshes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- publishes async list results.
     void loadData();
   }, [loadData, refreshKey]);
 

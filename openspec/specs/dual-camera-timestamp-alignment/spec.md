@@ -1,4 +1,10 @@
-## ADDED Requirements
+# dual-camera-timestamp-alignment Specification
+
+## Purpose
+
+定义双摄源帧时间、时间线映射、共同时间基派生视频、多分段录制和训练标注映射规则，并保证时间语义在实现和测试中可追踪验证。
+
+## Requirements
 
 ### Requirement: Preserve source frame timing
 

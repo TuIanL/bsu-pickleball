@@ -1,4 +1,10 @@
-## ADDED Requirements
+# capture-runtime-coordinator Specification
+
+## Purpose
+
+定义录制轨道启动、停止、退出事件消费和故障恢复预算的统一编排规则，确保多轨运行状态可恢复且不会重复启动。
+
+## Requirements
 
 ### Requirement: Coordinator 编排轨道运行与故障恢复
 

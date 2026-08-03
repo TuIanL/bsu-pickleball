@@ -58,7 +58,8 @@ CourtUnit = Literal["m", "ft"]
 # - lost：跟丢了（连续多帧找不到）
 # - inactive：该球员已不再参与（例如已下场）
 # - unmatched：检测到了人，但没能对应到任何已有球员身份
-PlayerTrackingStatus = Literal["detected", "interpolated", "lost", "inactive", "unmatched"]
+# - tentative：位置连续性软接管就近指派（低置信度临时身份，等待 lock hint 校正）
+PlayerTrackingStatus = Literal["detected", "interpolated", "lost", "inactive", "unmatched", "tentative"]
 
 # 球员身份（把某条轨迹判定为"目标球员"）所使用的方法：
 # - rule：基于规则（例如谁离目标半场最近）
@@ -118,6 +119,21 @@ def _validate_bbox(values: list[float]) -> list[float]:
     if not all(isfinite(value) for value in bbox):
         raise ValueError("bbox must contain only finite numeric values")
     return bbox
+
+
+def _validate_player_id(value: str) -> str:
+    """校验球员身份为 canonical 形式（Player_1 .. Player_4）。
+
+    对外契约：一场比赛/一个分析任务内球员身份只允许 1-4。
+    原始 tracker track_id 不得作为 player_id 进入最终产物。
+    """
+    text = str(value)
+    if not text.startswith("Player_") or not text[len("Player_"):].isdigit():
+        raise ValueError(f"player_id must be canonical Player_1..Player_4, got {text!r}")
+    number = int(text[len("Player_"):])
+    if not 1 <= number <= 4:
+        raise ValueError(f"player_id must be Player_1..Player_4, got {text!r}")
+    return text
 
 
 class Detection(BaseModel):
@@ -514,6 +530,11 @@ class PlayerTrajectorySample(BaseModel):
     # 数据来源：detector=检测器 / interpolation=插值
     source: Literal["detector", "interpolation"] = "detector"
 
+    @field_validator("player_id")
+    @classmethod
+    def validate_player_id(cls, value: str) -> str:
+        return _validate_player_id(value)
+
     @field_validator("bbox")
     @classmethod
     def validate_optional_bbox(cls, value: Optional[list[float]]) -> Optional[list[float]]:
@@ -551,6 +572,11 @@ class PlayerTrajectoryState(BaseModel):
     last_velocity_mps: list[float] = Field(default_factory=lambda: [0.0, 0.0], min_length=2, max_length=2)
     confidence: float = Field(default=0.0, ge=0, le=1)
 
+    @field_validator("player_id")
+    @classmethod
+    def validate_player_id(cls, value: str) -> str:
+        return _validate_player_id(value)
+
     @field_validator("last_position_m")
     @classmethod
     def validate_last_position(cls, value: Optional[list[float]]) -> Optional[list[float]]:
@@ -575,18 +601,18 @@ class PlayerIdentityDiagnostic(BaseModel):
     # 事件类型：created=新建 / assigned=分配 / reconnected=重连 /
     #           lost=丢失 / inactive=停用 / unmatched=未匹配 / filtered=被过滤 /
     #           player_locked=球员锁定 / player_reconnected_from_lost=丢失后重连 /
-    #           player_reset_after_prolonged_loss=长时间丢失后重置 /
     #           player_slot_filled=空位填充 / rejected_low_conf_unlocked=未锁定低置信度拒绝 /
     #           rejected_outside_near_court=超出近场范围 / rejected_outside_tracking=超出跟踪范围 /
     #           rejected_bbox_size=框尺寸不合规 / retained_by_lock=因锁定保留 /
     #           side_quota_fallback_replaced=侧配额降级候选被替换 /
-    #           fallback_tentative_promoted=侧配额降级候选升级
+    #           fallback_tentative_promoted=侧配额降级候选升级 /
+    #           soft_takeover_assigned=位置连续性软接管就近指派
     event: Literal[
         "created", "assigned", "reconnected", "lost", "inactive", "unmatched", "filtered",
-        "player_locked", "player_reconnected_from_lost", "player_reset_after_prolonged_loss",
+        "player_locked", "player_reconnected_from_lost",
         "player_slot_filled", "rejected_low_conf_unlocked", "rejected_outside_near_court",
         "rejected_outside_tracking", "rejected_bbox_size", "retained_by_lock",
-        "side_quota_fallback_replaced", "fallback_tentative_promoted",
+        "side_quota_fallback_replaced", "fallback_tentative_promoted", "soft_takeover_assigned",
     ]
     player_id: Optional[str] = None
     track_id: Optional[int] = None
@@ -627,6 +653,11 @@ class PlayerTrajectoryCoverage(BaseModel):
     status_counts: dict[str, int] = Field(default_factory=dict)
     # 该球员用过的轨迹 ID 历史
     history_track_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("player_id")
+    @classmethod
+    def validate_player_id(cls, value: str) -> str:
+        return _validate_player_id(value)
 
 
 class PlayerTrajectoryCoverageDiagnostics(BaseModel):

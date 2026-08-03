@@ -7,6 +7,7 @@ import { CaptureWizardPage } from "../pages/CaptureWizardPage";
 import CaptureConsolePage from "../pages/CaptureConsolePage";
 import { SegmentManagerPage } from "../pages/SegmentManagerPage";
 import { RecordingWorkspacePage } from "../pages/RecordingWorkspacePage";
+import { RecordingAnalyzePage } from "../pages/RecordingAnalyzePage";
 import { HardwarePage } from "../pages/HardwarePage";
 import { TrainingPage } from "../pages/TrainingPage";
 import { CameraHubPage } from "../pages/CameraHubPage";
@@ -68,6 +69,10 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <HardwarePage onNavigate={onNavigate} />;
       case "recordingWorkspace":
         return <RecordingWorkspacePage sessionId={route.sessionId} onNavigate={onNavigate} />;
+      case "recording-analyze": {
+        const cam = new URLSearchParams(window.location.search).get("cam") as "cam_1" | "cam_2" | null;
+        return <RecordingAnalyzePage sessionId={route.sessionId} cam={cam} onNavigate={onNavigate} />;
+      }
       case "workspace":
         return <div style={{ padding: 24, color: "#98A2B3", fontSize: 14 }}>工作台（建设中）</div>;
       case "landing":

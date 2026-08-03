@@ -54,6 +54,12 @@ Define the camera ingest management capability — registering, listing, deletin
 
 `CameraInfo` MUST 只存储连接信息，不包含球场语义。
 
+#### Scenario: 摄像头模型不包含球场语义
+
+- **WHEN** 后端序列化或读取一个 `CameraInfo`
+- **THEN** 结果 SHALL 只包含摄像头连接、认证和创建时间字段
+- **AND** 结果 MUST NOT 包含球场、球员或比赛位置字段
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | camera_id | string | 用户自定义唯一标识，如 `"baseline-cam"` |

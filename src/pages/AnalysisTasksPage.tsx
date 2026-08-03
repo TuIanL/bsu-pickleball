@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Camera, Play, RefreshCw, Trash2, Upload, LayoutDashboard } from "lucide-react";
+import { Camera, Play, RefreshCw, Trash2, Upload, LayoutDashboard, Video, ArrowRight } from "lucide-react";
 import type { NavigateFn, AppPath } from "../app/navigationTypes";
 import type { AnalysisJobSummary, RecordingSession, FieldSession, SyncRecordingSession } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
@@ -267,18 +267,15 @@ export function AnalysisTasksPage({
     }
   };
 
-  const recordingGroups = useMemo(
-    () => groupRecordingsByFieldSession(fieldSessions, recordings),
-    [fieldSessions, recordings],
-  );
+  const recordingGroups = groupRecordingsByFieldSession(fieldSessions, recordings);
 
   useEffect(() => {
+    // 预加载 sync recordings（无论当前 tab），用于 upload tab 排除双摄派生任务
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- starts external task-list requests.
+    void loadSyncRecordingsList();
     if (sourceFilter === "recorded") {
       void loadRecordings();
       void loadFieldSessions();
-    }
-    if (sourceFilter === "sync_recording") {
-      void loadSyncRecordingsList();
     }
   }, [sourceFilter, loadRecordings, loadFieldSessions, loadSyncRecordingsList]);
 
@@ -355,6 +352,27 @@ export function AnalysisTasksPage({
   }, []);
 
   const visibleJobs = jobs ?? [];
+  /** sync recording 的 session_id 集合（用于判断分析任务是否属于双摄录制） */
+  const syncSessionIds = useMemo(
+    () => new Set(syncRecordings.map(sr => sr.session_id)),
+    [syncRecordings],
+  );
+  /** 双摄录制派生的分析任务：recordingSessionId 或 metadata.recording_session_id 必须命中 sync session */
+  const recordingDerivedJobs = useMemo(
+    () => visibleJobs.filter(j => {
+      const sid = j.recordingSessionId ?? j.metadata.recording_session_id;
+      return sid ? syncSessionIds.has(sid) : false;
+    }),
+    [visibleJobs, syncSessionIds],
+  );
+  /** 上传 tab 显示的任务列表（排除双摄录制派生） */
+  const uploadJobs = useMemo(
+    () => visibleJobs.filter(j => {
+      const sid = j.recordingSessionId ?? j.metadata.recording_session_id;
+      return !sid || !syncSessionIds.has(sid);
+    }),
+    [visibleJobs, syncSessionIds],
+  );
   const activeCount = visibleJobs.filter(isActiveAnalysisJob).length;
   const completedCount = visibleJobs.filter((job) => job.status === "completed").length;
   const failedCount = visibleJobs.filter((job) => job.status === "failed").length;
@@ -367,6 +385,8 @@ export function AnalysisTasksPage({
   const isDeleting = deletingJobIds.length > 0;
 
   useEffect(() => {
+    // Keep selections valid after the server-side job list changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- removes deleted/ineligible selections.
     setSelectedJobIds((current) => current.filter((jobId) => eligibleJobIds.includes(jobId)));
   }, [eligibleJobKey]);
 
@@ -506,7 +526,7 @@ export function AnalysisTasksPage({
         <div className="grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-5 shadow-sm">
           {(sourceFilter === "upload"
             ? [
-              ["全部任务", visibleJobs.length],
+              ["全部任务", uploadJobs.length],
               ["分析中", activeCount],
               ["已完成", completedCount],
               ["失败", failedCount],
@@ -589,12 +609,15 @@ export function AnalysisTasksPage({
               <p className="text-sm font-bold text-[#168A34]">正在读取任务列表</p>
               <p className="mt-2 text-sm text-slate-500">正在连接后端并同步历史分析任务。</p>
             </section>
-          ) : visibleJobs.length === 0 ? (
+          ) : uploadJobs.length === 0 ? (
             <section className="mt-6 sport-card p-8 text-center">
               <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">暂无分析任务</p>
               <h2 className="mt-3 text-3xl font-black text-[#14241B]">先上传一场比赛</h2>
               <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
                 上传视频并完成四角标定后，任务会出现在这里，状态会从排队、分析中更新到分析完成。
+                {recordingDerivedJobs.length > 0 && (
+                  <><br />通过录制创建的分析任务可在「双摄录制」tab 里查看。</>
+                )}
               </p>
               <button className="green-button mx-auto mt-5" onClick={() => onNavigate("/analysis/new")} type="button">上传比赛</button>
             </section>
@@ -612,7 +635,7 @@ export function AnalysisTasksPage({
                   </button>
                 </div>
               </div>
-              {visibleJobs.map((job) => (
+              {uploadJobs.map((job) => (
                 <AnalysisTaskCard
                   canceling={cancelingJobIds.includes(job.id)}
                   deleting={deletingJobIds.includes(job.id)}
@@ -808,6 +831,9 @@ export function AnalysisTasksPage({
                   onPlay={handlePlaySyncSession}
                   onMerge={handleMergeSyncRecording}
                   merging={mergingSyncRecordingIds.has(sr.session_id)}
+                  analysisJobs={recordingDerivedJobs.filter(j =>
+                    j.recordingSessionId === sr.session_id || j.metadata.recording_session_id === sr.session_id
+                  )}
                 />
               ))}
             </section>
@@ -931,6 +957,27 @@ function AnalysisTaskCard({
           <p className="mt-2 text-sm leading-6 text-slate-600">
             {job.metadata.fileName} · {job.metadata.venue} · {job.metadata.athleteLabel}
           </p>
+          {job.recordingSessionId || job.cameraSlot || job.metadata.recording_session_id ? (
+            <div className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-[#168A34]/20 bg-[#EAF7EE] px-3 py-1.5 text-xs">
+              <span className="inline-flex items-center gap-1 font-black text-[#168A34]">
+                <Video size={12} aria-hidden="true" />
+                来源录制
+              </span>
+              {(job.cameraSlot ?? job.metadata.camera_slot) ? (
+                <span className="rounded-full bg-white/80 px-2 py-0.5 font-bold text-[#14241B]">
+                  {(job.cameraSlot ?? job.metadata.camera_slot) === "cam_1" ? "底线 A 机位" : "底线 B 机位"}
+                </span>
+              ) : null}
+              <button
+                className="ml-1 inline-flex items-center gap-0.5 font-bold text-[#168A34] underline-offset-2 hover:underline"
+                onClick={() => onNavigate(`/capture/${job.recordingSessionId ?? job.metadata.recording_session_id}/analyze?cam=${job.cameraSlot ?? job.metadata.camera_slot ?? "cam_1"}` as AppPath)}
+                type="button"
+              >
+                <ArrowRight size={12} aria-hidden="true" />
+                返回录制
+              </button>
+            </div>
+          ) : null}
           <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
             <TaskMeta label="更新时间" value={updatedAt} />
             <TaskMeta label="当前阶段" value={currentStage?.label ?? job.stage} />
@@ -1018,6 +1065,7 @@ function SyncRecordingTaskCard({
   onPlay,
   onMerge,
   merging = false,
+  analysisJobs = [],
 }: {
   session: SyncRecordingSession;
   onDelete: (sessionId: string) => void;
@@ -1025,17 +1073,29 @@ function SyncRecordingTaskCard({
   onPlay: (session: SyncRecordingSession) => void;
   onMerge: (sessionId: string) => void;
   merging?: boolean;
+  analysisJobs?: AnalysisJobSummary[];
 }) {
   const cam1Name = session.camera_slots?.cam_1?.camera_id ?? "—";
   const cam2Name = session.camera_slots?.cam_2?.camera_id ?? "—";
   const cam1VideoId = session.registered_video_ids?.cam_1 ?? session.default_analysis_video_id;
+  const cam2VideoId = session.registered_video_ids?.cam_2;
   const mergeStatus = getSyncMergeStatus(session);
   const canPlay = canUseSyncVideos(session);
+
+  // 查找每个机位的分析任务
+  // 兼容策略：优先用 cameraSlot / metadata.camera_slot，回退到 videoId 匹配 registered_video_ids
+  const findCamJob = (slot: "cam_1" | "cam_2") => analysisJobs.find(j => {
+    if (j.cameraSlot === slot || j.metadata.camera_slot === slot) return true;
+    // 旧任务兜底：用 videoId 与该机位的 registered video 匹配
+    const slotVideoId = slot === "cam_1" ? cam1VideoId : cam2VideoId;
+    if (j.videoId && slotVideoId && j.videoId === slotVideoId) return true;
+    return false;
+  });
+  const cam1Job = findCamJob("cam_1");
+  const cam2Job = findCamJob("cam_2");
+
   const statusLabel: Record<string, string> = {
-    recording: "录制中",
-    completed: "已完成",
-    failed: "失败",
-    canceled: "已取消",
+    recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消",
   };
   const statusColor: Record<string, string> = {
     recording: "bg-[#FF4D4F]/12 text-[#C92A2A]",
@@ -1044,10 +1104,73 @@ function SyncRecordingTaskCard({
     canceled: "bg-slate-200 text-slate-500",
   };
   const mergeStatusLabel: Record<string, string> = {
-    pending: "待合并",
-    running: "合并中",
-    completed: "视频已就绪",
-    failed: "合并失败",
+    pending: "待合并", running: "合并中", completed: "视频已就绪", failed: "合并失败",
+  };
+
+  /** 渲染单个机位的分析按钮 */
+  const renderCamAnalysisButton = (
+    camLabel: string, camName: string,
+    videoId: string | undefined,
+    job: AnalysisJobSummary | undefined,
+    slot: "cam_1" | "cam_2",
+  ) => {
+    if (!canPlay || !videoId) return null;
+    if (!job) {
+      return (
+        <button
+          key={slot}
+          className="green-button px-3 py-2 text-xs"
+          onClick={() => onNavigate(`/capture/${session.session_id}/analyze?cam=${slot}` as AppPath)}
+          type="button"
+        >
+          分析 {camLabel} 机位
+        </button>
+      );
+    }
+    // 有分析任务：按状态决定按钮
+    if (job.status === "completed") {
+      return (
+        <button
+          key={slot}
+          className="green-button px-3 py-2 text-xs"
+          onClick={() => onNavigate(`/analysis/${job.id}/vision`)}
+          type="button"
+        >
+          查看 {camLabel} 分析报告
+        </button>
+      );
+    }
+    if (job.status === "failed" || job.status === "canceled") {
+      return (
+        <div key={slot} className="flex items-center gap-1.5">
+          <span className="rounded-full bg-[#FF4D4F]/12 px-2 py-0.5 text-xs font-bold text-[#C92A2A]">
+            {job.status === "failed" ? "分析失败" : "已取消"}
+          </span>
+          <button
+            className="quiet-button px-2 py-1.5 text-xs"
+            onClick={() => onNavigate(`/capture/${session.session_id}/analyze?cam=${slot}` as AppPath)}
+            type="button"
+          >
+            重新分析
+          </button>
+        </div>
+      );
+    }
+    // 进行中
+    return (
+      <div key={slot} className="flex items-center gap-1.5">
+        <span className="rounded-full bg-[#E8A838]/15 px-2 py-0.5 text-xs font-bold text-[#9A6500]">
+          分析中 {job.progress}%
+        </span>
+        <button
+          className="quiet-button px-2 py-1.5 text-xs underline-offset-2 hover:underline"
+          onClick={() => onNavigate(`/analysis/${job.id}`)}
+          type="button"
+        >
+          查看进度
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -1087,6 +1210,35 @@ function SyncRecordingTaskCard({
           <span className="text-xs text-[#168A34] font-bold">默认分析视频已就绪</span>
         </div>
       )}
+      {/* 分析状态行 */}
+      {(cam1Job || cam2Job) && (
+        <div className="mt-2 flex flex-wrap gap-2 border-t border-[#DDE9D6] pt-3">
+          {cam1Job && (
+            <div className="flex items-center gap-2 rounded-full bg-[#EAF7EE] px-3 py-1 text-xs">
+              <span className="font-bold text-[#168A34]">A 机位</span>
+              {cam1Job.status === "completed" ? (
+                <span className="text-[#168A34]">分析完成</span>
+              ) : cam1Job.status === "failed" ? (
+                <span className="text-[#C92A2A]">分析失败</span>
+              ) : (
+                <span className="text-[#9A6500]">分析中 {cam1Job.progress}%</span>
+              )}
+            </div>
+          )}
+          {cam2Job && (
+            <div className="flex items-center gap-2 rounded-full bg-[#EAF7EE] px-3 py-1 text-xs">
+              <span className="font-bold text-[#168A34]">B 机位</span>
+              {cam2Job.status === "completed" ? (
+                <span className="text-[#168A34]">分析完成</span>
+              ) : cam2Job.status === "failed" ? (
+                <span className="text-[#C92A2A]">分析失败</span>
+              ) : (
+                <span className="text-[#9A6500]">分析中 {cam2Job.progress}%</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="mt-3 flex flex-wrap gap-2 border-t border-[#DDE9D6] pt-3">
         {(mergeStatus === "pending" || mergeStatus === "failed") && session.status === "completed" && (
           <button className="green-button inline-flex items-center gap-1 px-3 py-2 text-xs" onClick={() => onMerge(session.session_id)} disabled={merging} type="button">
@@ -1107,11 +1259,8 @@ function SyncRecordingTaskCard({
             <LayoutDashboard size={12} className="inline mr-1" />工作台
           </button>
         )}
-        {canPlay && cam1VideoId && (
-          <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/new?videoId=${cam1VideoId}&source=recording&sessionId=${session.session_id}`)} type="button">
-            分析 A 机位
-          </button>
-        )}
+        {renderCamAnalysisButton("A", cam1Name, cam1VideoId, cam1Job, "cam_1")}
+        {renderCamAnalysisButton("B", cam2Name, cam2VideoId, cam2Job, "cam_2")}
         {session.field_session_id && (
           <button className="quiet-button px-3 py-2 text-xs" onClick={() => onNavigate(`/capture/${session.field_session_id}` as AppPath)} type="button">
             返回采集

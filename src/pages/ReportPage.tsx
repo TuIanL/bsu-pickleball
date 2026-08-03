@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { ArrowRight, Dumbbell } from "lucide-react";
 import type { NavigateFn, AppPath } from "../app/navigationTypes";
 import type { AnalysisReport, ReportType, AnalysisJobSummary } from "../types/report";

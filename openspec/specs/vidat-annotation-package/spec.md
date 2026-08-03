@@ -1,4 +1,10 @@
-## ADDED Requirements
+# vidat-annotation-package Specification
+
+## Purpose
+
+定义可复现的 Vidat 标注包、版本刷新、历史留存和训练标注查询的文件与生命周期契约，确保发布包内容稳定、可追踪且可供训练流程消费。
+
+## Requirements
 
 ### Requirement: 可复现的 Vidat 标注包
 系统 SHALL 为视频就绪的 CaptureTake 创建版本化 Vidat 标注包，包含 manifest、Vidat annotation JSON、匹克球标签配置和视频访问引用。

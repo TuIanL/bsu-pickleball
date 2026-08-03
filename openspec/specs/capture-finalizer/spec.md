@@ -1,4 +1,10 @@
-## ADDED Requirements
+# capture-finalizer Specification
+
+## Purpose
+
+定义录制停止后的片段合并、视频注册、时间线映射持久化和幂等重试行为，保证最终产物状态真实可追踪，并为失败恢复和测试提供清晰边界。
+
+## Requirements
 
 ### Requirement: CaptureFinalizer 合并片段并注册视频
 

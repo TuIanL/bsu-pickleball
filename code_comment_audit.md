@@ -397,8 +397,6 @@
 - `src/pages/NewAnalysisPage.tsx`
 - `src/pages/RecordingWorkspacePage.tsx`
 - `src/pages/SegmentManagerPage.tsx`
-- `src/pages/TasksPage.tsx`
-- `src/pages/UploadModePage.tsx`
 - `src/pages/VisionPage.tsx`
 - `src/services/captureAdapter.ts`
 - `src/services/codingOutbox.ts`

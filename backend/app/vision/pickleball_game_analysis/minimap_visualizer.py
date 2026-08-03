@@ -57,23 +57,23 @@ class MinimapVisualizer:
         # 把"英尺球场坐标 (x_ft, y_ft)"映射到小地图图像像素坐标。
         # bounds="tracking" 时使用 tracking_bounds 做映射，可显示界外点；
         # bounds="court" 时使用 court_bounds，界外点返回 None。
-        if bounds == "court":
-            valid = self.court.is_in_court_bounds(x_ft, y_ft)
-        else:
-            valid = self.court.is_in_tracking_bounds(x_ft, y_ft)
+        mapping_bounds = self.court.court_bounds if bounds == "court" else self.court.tracking_bounds
+        valid = (
+            self.court.is_in_court_bounds(x_ft, y_ft)
+            if bounds == "court"
+            else self.court.is_in_tracking_bounds(x_ft, y_ft)
+        )
         if not clamp and not valid:
             return None
-        # 使用 tracking_bounds 的范围做像素映射
-        tb = self.court.tracking_bounds
-        x_span = tb.x_max - tb.x_min  # 28 ft
-        y_span = tb.y_max - tb.y_min  # 60 ft
-        x = min(tb.x_max, max(tb.x_min, float(x_ft))) if clamp else float(x_ft)
-        y = min(tb.y_max, max(tb.y_min, float(y_ft))) if clamp else float(y_ft)
+        x_span = mapping_bounds.x_max - mapping_bounds.x_min
+        y_span = mapping_bounds.y_max - mapping_bounds.y_min
+        x = min(mapping_bounds.x_max, max(mapping_bounds.x_min, float(x_ft))) if clamp else float(x_ft)
+        y = min(mapping_bounds.y_max, max(mapping_bounds.y_min, float(y_ft))) if clamp else float(y_ft)
         pad = self.config.minimap_padding
         draw_width = self.config.minimap_width - pad * 2
         draw_height = self.config.minimap_height - pad * 2
-        px = pad + ((x - tb.x_min) / x_span) * draw_width
-        py = pad + ((y - tb.y_min) / y_span) * draw_height
+        px = pad + ((x - mapping_bounds.x_min) / x_span) * draw_width
+        py = pad + ((y - mapping_bounds.y_min) / y_span) * draw_height
         return (int(round(px)), int(round(py)))
 
     def render(

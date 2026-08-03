@@ -1,5 +1,9 @@
 # capture-outbox-decoupling Specification
 
+## Purpose
+
+定义录制停止、Outbox 同步、迟到事件投影和本地恢复之间的时序约束，保证事件不会丢失或重复污染时间线。
+
 ## Requirements
 
 ### Requirement: 媒体停止优先于 Outbox 同步

@@ -32,9 +32,11 @@ class PlayerLockManager:
         self._bootstrap_complete = False
         self._bootstrap_tracklets: dict[int, _BootstrapTracklet] = {}
         self._track_to_slot: dict[int, str] = {}
+        self._frame_width: int | None = None
+        self._frame_height: int | None = None
 
         for idx in range(self.config.target_player_count):
-            identity_id = f"player_{idx + 1}"
+            identity_id = f"Player_{idx + 1}"
             self.slots[identity_id] = PlayerSlot(identity_id=identity_id)
 
     def update(
@@ -43,7 +45,12 @@ class PlayerLockManager:
         positions: Sequence[PlayerFramePosition],
         suggestions: Sequence | None = None,
         frame=None,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
     ) -> PlayerLockUpdate:
+        # 记录画面尺寸（用于 bootstrap 中心优先排序；缺失时退化为按置信度排序）
+        self._frame_width = frame_width
+        self._frame_height = frame_height
         suggested_ids: set[int] = set()
         if suggestions is not None:
             for s in suggestions:
@@ -212,102 +219,142 @@ class PlayerLockManager:
             if pos.court_position is not None:
                 tl.court_xs.append(pos.court_position[0])
                 tl.court_ys.append(pos.court_position[1])
+            if pos.bbox is not None and len(pos.bbox) >= 4:
+                tl.bbox_centers.append(
+                    ((pos.bbox[0] + pos.bbox[2]) / 2.0, (pos.bbox[1] + pos.bbox[3]) / 2.0)
+                )
 
     def _try_early_lock(self, frame_index: int) -> None:
-        half_length = self.court.length_ft / 2.0
-        for track_id, tl in list(self._bootstrap_tracklets.items()):
-            if len(tl.frame_indices) < self.config.min_observed_frames:
-                continue
-            if tl.mean_confidence() < self.config.searching_conf:
-                continue
-            side = tl.inferred_side(half_length)
-            if side and not self._side_has_capacity(side):
-                continue
-            for slot in self.slots.values():
-                if slot.state != "searching":
-                    continue
-                self._assign_candidate_to_slot(
-                    slot=slot,
-                    track_id=track_id,
-                    side=side,
-                    frame_index=frame_index,
-                    confidence=tl.mean_confidence(),
-                    observed_frames=len(tl.frame_indices),
-                )
-                break
+        self._assign_bootstrap_candidates(frame_index)
 
     def _finalize_bootstrap(self, frame_index: int) -> None:
-        half_length = self.court.length_ft / 2.0
-        near_candidates: list[tuple[int, _BootstrapTracklet]] = []
-        far_candidates: list[tuple[int, _BootstrapTracklet]] = []
-        unknown_candidates: list[tuple[int, _BootstrapTracklet]] = []
+        self._assign_bootstrap_candidates(frame_index)
+        # 剩余 searching 槽位：降级候选（fallback_tentative，锁定前可被更优候选替换）
+        remaining_searching = sum(1 for s in self.slots.values() if s.state == "searching")
+        if remaining_searching > 0 and self.config.allow_quota_fallback:
+            assigned: set[int] = set()
+            for slot in self.slots.values():
+                assigned.update(slot.track_id_history)
+            half_length = self.court.length_ft / 2.0
+            for track_id, tl in self._bootstrap_candidate_entries():
+                if track_id in assigned:
+                    continue
+                slot = self._first_searching_slot()
+                if slot is None:
+                    break
+                slot.state = "fallback_tentative"
+                slot.current_track_id = track_id
+                slot.track_id_history = [track_id]
+                slot.last_seen_frame = frame_index
+                slot.confidence_ema = tl.mean_confidence()
+                slot.observed_frames = len(tl.frame_indices)
+                slot.assignment_side = tl.inferred_side(half_length)
+                self._track_to_slot[track_id] = slot.identity_id
+                assigned.add(track_id)
+        self._bootstrap_complete = True
+
+    def _bootstrap_candidate_entries(self) -> list[tuple[int, _BootstrapTracklet]]:
+        # 已通过门控/置信度过滤的候选，按"画面中心距离升序、置信度/出现帧数降序"排序（中心优先、向外扩散）。
+        entries: list[tuple[int, _BootstrapTracklet]] = []
         for track_id, tl in self._bootstrap_tracklets.items():
             if len(tl.frame_indices) < self.config.min_observed_frames:
                 continue
             if tl.mean_confidence() < self.config.searching_conf:
                 continue
-            side = tl.inferred_side(half_length)
-            if side == "near":
-                near_candidates.append((track_id, tl))
-            elif side == "far":
-                far_candidates.append((track_id, tl))
-            else:
-                unknown_candidates.append((track_id, tl))
-        near_candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
-        far_candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
-        unknown_candidates.sort(key=lambda item: (item[1].mean_confidence(), len(item[1].frame_indices)), reverse=True)
+            entries.append((track_id, tl))
+        entries.sort(
+            key=lambda item: (
+                item[1].mean_center_distance(self._frame_width, self._frame_height),
+                -item[1].mean_confidence(),
+                -len(item[1].frame_indices),
+            )
+        )
+        return entries
 
+    def _assign_bootstrap_candidates(self, frame_index: int) -> None:
+        # 第一遍：象限匹配优先——每个象限取"中心最近"的候选锁定到对应槽位。
         assigned: set[int] = set()
         for slot in self.slots.values():
-            if slot.state != "searching":
-                assigned.add(slot.current_track_id or -1)
-
-        def _try_assign(track_id: int, tl: _BootstrapTracklet, side: str | None) -> bool:
+            assigned.update(slot.track_id_history)
+        for track_id, tl in self._bootstrap_candidate_entries():
             if track_id in assigned:
-                return False
-            if side and not self._side_has_capacity(side):
-                return False
-            for slot in self.slots.values():
-                if slot.state != "searching":
-                    continue
-                self._assign_candidate_to_slot(
-                    slot=slot,
-                    track_id=track_id,
-                    side=side,
-                    frame_index=frame_index,
-                    confidence=tl.mean_confidence(),
-                    observed_frames=len(tl.frame_indices),
-                )
+                continue
+            quadrant = self._infer_quadrant(tl)
+            slot = self._pick_quadrant_slot(quadrant)
+            if slot is None:
+                continue
+            self._assign_candidate_to_slot(
+                slot=slot,
+                track_id=track_id,
+                side=self._side_from_quadrant(quadrant),
+                frame_index=frame_index,
+                confidence=tl.mean_confidence(),
+                observed_frames=len(tl.frame_indices),
+            )
+            if slot.current_track_id == track_id:
                 assigned.add(track_id)
-                return True
-            return False
+        # 第二遍：象限未知（中心线附近）的候选填任意 searching 槽，避免没家。
+        for track_id, tl in self._bootstrap_candidate_entries():
+            if track_id in assigned:
+                continue
+            if self._infer_quadrant(tl) is not None:
+                continue
+            slot = self._first_searching_slot()
+            if slot is None:
+                break
+            self._assign_candidate_to_slot(
+                slot=slot,
+                track_id=track_id,
+                side=None,
+                frame_index=frame_index,
+                confidence=tl.mean_confidence(),
+                observed_frames=len(tl.frame_indices),
+            )
+            if slot.current_track_id == track_id:
+                assigned.add(track_id)
 
-        for track_id, tl in near_candidates:
-            _try_assign(track_id, tl, "near")
-        for track_id, tl in far_candidates:
-            _try_assign(track_id, tl, "far")
-        for track_id, tl in unknown_candidates:
-            _try_assign(track_id, tl, None)
+    def _infer_quadrant(self, tl: _BootstrapTracklet) -> str | None:
+        # 由球场中位坐标推断候选归属象限（近左/近右/远左/远右）；单打退化为近/远。
+        half_length = self.court.length_ft / 2.0
+        half_width = self.court.width_ft / 2.0
+        side = tl.inferred_side(half_length)
+        if side is None:
+            return None
+        if self.config.target_player_count <= 2:
+            return side
+        lateral = tl.inferred_lateral(half_width)
+        if lateral is None:
+            return None
+        return f"{side}_{lateral}"
 
-        remaining_searching = sum(1 for s in self.slots.values() if s.state == "searching")
-        if remaining_searching > 0 and self.config.allow_quota_fallback:
-            for track_id, tl in near_candidates + far_candidates + unknown_candidates:
-                if track_id in assigned:
-                    continue
-                for slot in self.slots.values():
-                    if slot.state != "searching":
-                        continue
-                    slot.state = "fallback_tentative"
-                    slot.current_track_id = track_id
-                    slot.track_id_history = [track_id]
-                    slot.last_seen_frame = frame_index
-                    slot.confidence_ema = tl.mean_confidence()
-                    slot.observed_frames = len(tl.frame_indices)
-                    slot.assignment_side = tl.inferred_side(half_length)
-                    self._track_to_slot[track_id] = slot.identity_id
-                    assigned.add(track_id)
-                    break
-        self._bootstrap_complete = True
+    def _slot_home_quadrant(self, slot: PlayerSlot) -> str:
+        # 槽位位置语义：Player_1..4 = 近左/近右/远左/远右；单打 = 近/远。
+        index = int(slot.identity_id.rsplit("_", 1)[-1]) - 1
+        if self.config.target_player_count == 4:
+            return ("near_left", "near_right", "far_left", "far_right")[index]
+        return ("near", "far")[index]
+
+    def _side_from_quadrant(self, quadrant: str | None) -> str | None:
+        if not quadrant:
+            return None
+        return quadrant.split("_")[0]
+
+    def _pick_quadrant_slot(self, quadrant: str | None) -> PlayerSlot | None:
+        # 返回 home 象限与候选一致的 searching 槽位；象限未知时返回 None（由第二遍处理）。
+        if quadrant is None:
+            return None
+        for slot in self.slots.values():
+            if slot.state != "searching":
+                continue
+            if self._slot_home_quadrant(slot) == quadrant:
+                return slot
+        return None
+
+    def _first_searching_slot(self) -> PlayerSlot | None:
+        for slot in self.slots.values():
+            if slot.state == "searching":
+                return slot
+        return None
 
     # ---------- spatial gating ----------
 
@@ -456,19 +503,9 @@ class PlayerLockManager:
         reconnect_candidates: set[int], track_hints: dict[int, str],
         diagnostics: list[PlayerIdentityDiagnostic],
     ) -> str:
+        # 硬锁到底：LOST 是持久状态，槽位身份永久保留，绝不回退 SEARCHING、绝不让位。
+        # lost_frames 仅用于诊断与状态展示；超过 lost_max_frames_locked 也不重置。
         slot.lost_frames += 1
-        if slot.lost_frames > self.config.lost_max_frames_locked:
-            slot.state = "searching"
-            slot.current_track_id = None
-            slot.lost_frames = 0
-            slot.observed_frames = 0
-            diagnostics.append(PlayerIdentityDiagnostic(
-                frame_index=frame_index,
-                event="player_reset_after_prolonged_loss",
-                player_id=slot.identity_id,
-                reason=f"lost_frames={slot.lost_frames}",
-            ))
-            return "reset"
 
         best_candidate, best_score = self._find_best_reconnect(slot, positions)
         if best_candidate is not None and best_score >= self.config.reconnect_threshold:
@@ -584,6 +621,7 @@ class _BootstrapTracklet:
     confidences: list[float] = field(default_factory=list)
     court_xs: list[float] = field(default_factory=list)
     court_ys: list[float] = field(default_factory=list)
+    bbox_centers: list[tuple[float, float]] = field(default_factory=list)
 
     def mean_confidence(self) -> float:
         return sum(self.confidences) / len(self.confidences) if self.confidences else 0.0
@@ -595,3 +633,20 @@ class _BootstrapTracklet:
         if abs(median_y - half_length) < self.SIDE_DEAD_ZONE_FT:
             return None
         return "near" if median_y < half_length else "far"
+
+    def inferred_lateral(self, half_width: float) -> str | None:
+        if not self.court_xs:
+            return None
+        median_x = statistics.median(self.court_xs)
+        if abs(median_x - half_width) < self.SIDE_DEAD_ZONE_FT:
+            return None
+        return "left" if median_x < half_width else "right"
+
+    def mean_center_distance(self, frame_width: int | None, frame_height: int | None) -> float:
+        # bbox 中心到画面中心的平均距离（像素）；缺失画面尺寸时返回 0（退化按置信度排序）。
+        if not self.bbox_centers or not frame_width or not frame_height:
+            return 0.0
+        center_x = frame_width / 2.0
+        center_y = frame_height / 2.0
+        total = sum(hypot(px - center_x, py - center_y) for px, py in self.bbox_centers)
+        return total / len(self.bbox_centers)

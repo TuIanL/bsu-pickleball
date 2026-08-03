@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -29,11 +31,25 @@ configure_logging()
 # 获取应用设置
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialize durable services before serving requests and stop workers on exit."""
+    init_db()
+    start_analysis_worker()
+    recover_zombie_jobs()
+    _cleanup_stale_leases()
+    try:
+        yield
+    finally:
+        stop_analysis_worker()
+
 # 初始化 FastAPI 应用
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="匹克球视频上传、标定及运动分析的 MVP 后端基础框架。",
+    lifespan=lifespan,
 )
 
 # 添加跨域资源共享 (CORS) 中间件
@@ -67,14 +83,6 @@ _os.makedirs(_TEST_FRAMES_DIR, exist_ok=True)
 app.mount("/api/sync-recordings/test-frames", StaticFiles(directory=_TEST_FRAMES_DIR), name="test_frames")
 
 
-@app.on_event("startup")
-def startup_workers() -> None:
-    init_db()
-    start_analysis_worker()
-    recover_zombie_jobs()
-    _cleanup_stale_leases()
-
-
 def _cleanup_stale_leases() -> None:
     try:
         from app.database import get_session_factory
@@ -88,11 +96,6 @@ def _cleanup_stale_leases() -> None:
         recover_orphan_recordings()
     except Exception:
         pass
-
-
-@app.on_event("shutdown")
-def shutdown_workers() -> None:
-    stop_analysis_worker()
 
 
 @app.get("/health")

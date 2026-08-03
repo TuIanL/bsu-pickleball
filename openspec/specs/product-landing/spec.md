@@ -34,7 +34,7 @@ TBD - created by syncing change redesign-product-entry-and-capture-console.
 
 #### Scenario: 用户从首页导航到任务历史
 - **WHEN** 用户点击导航栏右上角「任务历史」
-- **THEN** 系统导航到 `/tasks` 任务历史页面
+- **THEN** 系统导航到 `/analysis/tasks` 任务历史页面
 
 ### Requirement: 首页能力卡片纯展示
 

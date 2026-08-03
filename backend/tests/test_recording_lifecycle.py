@@ -109,12 +109,13 @@ def _mock_fs():
 
 class TestSingleCameraLifecycle:
 
-    def test_start_session_creates_recording(self, session_service, fake_recorder):
+    def test_start_session_creates_recording(self, session_service, fake_recorder, empty_session_factory):
         """0.6: 单摄 start"""
+        session_factory, _ = empty_session_factory
         with patch("app.camera.session_service.check_ffmpeg_available", return_value=True), \
              patch("app.camera.session_service.camera_registry") as reg, \
              patch("app.camera.sync_recorder_service.sync_recording_service") as sync, \
-             patch("app.database.get_session_factory"), \
+             patch("app.database.get_session_factory", return_value=session_factory), \
              patch("app.services.field_session_service.get_field_session", return_value=_mock_fs()):
             reg.get.return_value = _mock_cam()
             sync.is_camera_in_sync_recording = MagicMock(return_value=False)
@@ -124,12 +125,13 @@ class TestSingleCameraLifecycle:
         assert session.status == "recording"
         assert fake_recorder.started is True
 
-    def test_stop_session_completes(self, session_service, fake_recorder):
+    def test_stop_session_completes(self, session_service, fake_recorder, empty_session_factory):
         """0.6: 单摄 stop → completed"""
+        session_factory, _ = empty_session_factory
         with patch("app.camera.session_service.check_ffmpeg_available", return_value=True), \
              patch("app.camera.session_service.camera_registry") as reg, \
              patch("app.camera.sync_recorder_service.sync_recording_service") as sync, \
-             patch("app.database.get_session_factory"), \
+             patch("app.database.get_session_factory", return_value=session_factory), \
              patch("app.services.field_session_service.get_field_session", return_value=_mock_fs()):
             reg.get.return_value = _mock_cam()
             sync.is_camera_in_sync_recording = MagicMock(return_value=False)
@@ -139,12 +141,13 @@ class TestSingleCameraLifecycle:
         assert stopped.status == "completed"
         assert fake_recorder.stopped is True
 
-    def test_cancel_session(self, session_service, fake_recorder):
+    def test_cancel_session(self, session_service, fake_recorder, empty_session_factory):
         """0.6: 单摄 cancel → canceled"""
+        session_factory, _ = empty_session_factory
         with patch("app.camera.session_service.check_ffmpeg_available", return_value=True), \
              patch("app.camera.session_service.camera_registry") as reg, \
              patch("app.camera.sync_recorder_service.sync_recording_service") as sync, \
-             patch("app.database.get_session_factory"), \
+             patch("app.database.get_session_factory", return_value=session_factory), \
              patch("app.services.field_session_service.get_field_session", return_value=_mock_fs()):
             reg.get.return_value = _mock_cam()
             sync.is_camera_in_sync_recording = MagicMock(return_value=False)
@@ -154,12 +157,13 @@ class TestSingleCameraLifecycle:
         assert cancelled.status == "canceled"
         assert fake_recorder.cancelled is True
 
-    def test_stop_on_exit_race(self, session_service, fake_recorder):
+    def test_stop_on_exit_race(self, session_service, fake_recorder, empty_session_factory):
         """0.8: 复现 stop/on_exit 竞态"""
+        session_factory, _ = empty_session_factory
         with patch("app.camera.session_service.check_ffmpeg_available", return_value=True), \
              patch("app.camera.session_service.camera_registry") as reg, \
              patch("app.camera.sync_recorder_service.sync_recording_service") as sync, \
-             patch("app.database.get_session_factory"), \
+             patch("app.database.get_session_factory", return_value=session_factory), \
              patch("app.services.field_session_service.get_field_session", return_value=_mock_fs()):
             reg.get.return_value = _mock_cam()
             sync.is_camera_in_sync_recording = MagicMock(return_value=False)
@@ -171,12 +175,13 @@ class TestSingleCameraLifecycle:
         fake_recorder.simulate_unexpected_exit()
         assert True
 
-    def test_unexpected_exit_code_zero(self, session_service, fake_recorder):
+    def test_unexpected_exit_code_zero(self, session_service, fake_recorder, empty_session_factory):
         """0.9: 复现 returncode=0 意外退出"""
+        session_factory, _ = empty_session_factory
         with patch("app.camera.session_service.check_ffmpeg_available", return_value=True), \
              patch("app.camera.session_service.camera_registry") as reg, \
              patch("app.camera.sync_recorder_service.sync_recording_service") as sync, \
-             patch("app.database.get_session_factory"), \
+             patch("app.database.get_session_factory", return_value=session_factory), \
              patch("app.services.field_session_service.get_field_session", return_value=_mock_fs()):
             reg.get.return_value = _mock_cam()
             sync.is_camera_in_sync_recording = MagicMock(return_value=False)

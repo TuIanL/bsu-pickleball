@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw, Trash2, AlertTriangle } from "lucide-react";
-import type { AppPath, CaptureSegmentSummary, CaptureTakeSummary, LiveCodingState } from "../types/report";
-import { getCaptureTake, listSegments, getLiveCodingState, patchSegment, splitSegment, mergeSegments, archiveSegment, restoreSegment, deleteSegment, createAnalysisBatch, listTimelineEvents } from "../services/analysisClient";
+import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw } from "lucide-react";
+import type { AppPath, CaptureSegmentSummary, CaptureTakeSummary, SessionTimelineEvent } from "../types/report";
+import { getCaptureTake, listSegments, patchSegment, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents } from "../services/analysisClient";
 import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
 import { EditableSegmentTimeline } from "../components/EditableSegmentTimeline";
 
@@ -19,32 +19,33 @@ export function SegmentManagerPage({
 }) {
   const [take, setTake] = useState<CaptureTakeSummary | null>(null);
   const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
-  const [events, setEvents] = useState<any[]>([]);
+  const [events, setEvents] = useState<SessionTimelineEvent[]>([]);
   const [filter, setFilter] = useState<FilterType>("rally");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editingLabel, setEditingLabel] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [liveState, setLiveState] = useState<LiveCodingState | null>(null);
   const playerRef = useRef<SegmentVideoPlayerHandle>(null);
 
   const videoUrl = `/api/videos/${take?.source_session_id ?? ""}/stream`;
 
   const loadData = useCallback(async () => {
     try {
-      const [t, segs, state, evts] = await Promise.all([
+      const [t, segs, evts] = await Promise.all([
         getCaptureTake(takeId),
         listSegments(takeId),
-        getLiveCodingState(takeId).catch(() => null),
         listTimelineEvents(fieldSessionId, { capture_take_id: takeId }),
       ]);
       setTake(t);
       setSegments(segs ?? []);
-      setLiveState(state);
       setEvents(evts ?? []);
     } catch { /* ignore */ }
   }, [takeId, fieldSessionId]);
 
-  useEffect(() => { void loadData(); }, [loadData]);
+  useEffect(() => {
+    // Load the selected CaptureTake and its derived timeline data.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- publishes async API results.
+    void loadData();
+  }, [loadData]);
 
   const filteredSegments = useMemo(() => {
     const active = segments.filter(s => s.edit_status !== "superseded");
@@ -121,13 +122,16 @@ export function SegmentManagerPage({
       const result = await createAnalysisBatch(takeId, ids);
       alert(`已创建分析批次: ${result.batch_id}\n${result.items.length} 个任务已排队`);
       setSelectedIds(new Set());
-    } catch (e: any) { alert(`创建失败: ${e?.message ?? e}`); }
+    } catch (error: unknown) {
+      alert(`创建失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -163,7 +167,7 @@ export function SegmentManagerPage({
           ref={playerRef}
           videoUrl={videoUrl}
           fps={take.capture_mode === "dual" ? 30 : 30}
-          onTimeUpdate={(ms) => {/* timeline sync */}}
+          onTimeUpdate={() => { /* timeline sync */ }}
         />
 
         {/* Segment list */}

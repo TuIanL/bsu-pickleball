@@ -1,4 +1,10 @@
-## ADDED Requirements
+# segment-analysis-integration Specification
+
+## Purpose
+
+定义分析批次、任务输入快照、时间裁剪、Pipeline 预热区间和视频 HTTP Range 支持的集成契约。
+
+## Requirements
 
 ### Requirement: AnalysisBatch + AnalysisBatchItem
 

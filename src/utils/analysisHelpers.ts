@@ -93,3 +93,16 @@ export function cameraAngleLabel(angle: AnalysisUploadMetadata["cameraAngle"]) {
 
   return labels[angle];
 }
+
+/** 解析后端 canonical player id（Player_1..Player_4）为数字 1..4；非 canonical 返回 null。 */
+export function canonicalPlayerNumber(value?: string | null): number | null {
+  if (!value) return null;
+  const match = /^Player_([1-4])$/.exec(value.trim());
+  return match ? Number(match[1]) : null;
+}
+
+/** 把 canonical player id 映射为对外展示标签（P1..P4）。非 canonical 返回空串，绝不显示原始 track_id。 */
+export function formatPlayerId(value?: string | null): string {
+  const number = canonicalPlayerNumber(value);
+  return number === null ? "" : `P${number}`;
+}

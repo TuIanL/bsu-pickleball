@@ -92,7 +92,7 @@ TBD - created by archiving change add-court-aware-attention-player-selection. Up
 
 ### Requirement: Bootstrap 阶段（动态窗口）
 
-bootstrap 使用动态窗口：有最短帧数和最长帧数，任意候选满足条件即提前锁定，不必等窗口完全结束。
+后端 SHALL 使用具有最短帧数和最长帧数的动态 bootstrap 窗口，任意候选满足条件时可以提前锁定，不必等窗口完全结束。
 
 #### Scenario: bootstrap 阶段收集候选（最短窗口内）
 
@@ -131,4 +131,3 @@ bootstrap 使用动态窗口：有最短帧数和最长帧数，任意候选满�
 - **WHEN** bootstrap 结束分配 identity_id
 - **THEN** `side_hint` SHALL 基于预期球场位置设置（near_left / near_right / far_left / far_right）
 - **AND** 后续球员换位/走位时 `identity_id` SHALL 保持不变，`side_hint` SHALL 允许更新
-

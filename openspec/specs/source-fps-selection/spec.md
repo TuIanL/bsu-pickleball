@@ -1,3 +1,7 @@
+## Purpose
+
+定义源视频 FPS 的选择、继承、有效值计算和结果追踪规则，确保不同帧率下的时间窗口与分析输出保持一致。
+
 ## Requirements
 
 ### Requirement: 用户可选择或确认源视频 FPS

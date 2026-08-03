@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ArrowRight, LineChart } from "lucide-react";
-import type { NavigateFn, AppPath } from "../app/navigationTypes";
-import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, AnalysisUploadMetadata } from "../types/report";
+import type { NavigateFn } from "../app/navigationTypes";
+import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { ProjectionReadiness } from "../components/ProjectionReadiness";
@@ -12,7 +12,7 @@ import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, ge
 import { buildCourtTrackSummaries, type CourtTrackSummary } from "../services/courtProjectionTracks";
 import { formatPercent, formatSeconds } from "../services/analysisDiagnostics";
 import { adaptPipelineResultToReport, isPipelineResult } from "../services/pipelineReportAdapter";
-import { isActiveAnalysisJob, analysisStatusMeta, cameraAngleLabel, analysisModeLabel, formatDateTime, errorToNotice } from "../utils/analysisHelpers";
+import { isActiveAnalysisJob, analysisStatusMeta, cameraAngleLabel, analysisModeLabel, formatDateTime, errorToNotice, formatPlayerId } from "../utils/analysisHelpers";
 
 export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const { error, job, report, result } = useAnalysisResultReport(jobId);
@@ -154,7 +154,7 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
     const fallbackTracks = baseTracks.length > 0 ? baseTracks : trackSummaries.slice(0, Math.min(trackSummaries.length, 6));
     return fallbackTracks.slice(0, 6);
   }, [showFragments, trackSummaries]);
-  const inspectedPoint = useMemo(() => {
+  const inspectedPoint = (() => {
     if (!inspectedPointKey) {
       return null;
     }
@@ -167,7 +167,7 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
     }
 
     return null;
-  }, [inspectedPointKey, trackSummaries]);
+  })();
   const highlightedTracks = selectedTrack ? [selectedTrack, ...visibleTracks.filter((track) => track.trackId !== selectedTrack.trackId)] : visibleTracks;
   const hiddenFragmentCount = trackSummaries.filter((track) => track.isShortFragment).length;
   const renderedPointCount = highlightedTracks.reduce((total, track) => total + track.sampledPoints.length, 0);
@@ -262,7 +262,7 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
               {hiddenFragmentCount > 0 ? <span className="text-xs text-slate-400">({hiddenFragmentCount} 条)</span> : null}
             </label>
             <p className="text-xs font-semibold leading-5 text-slate-500">
-              默认优先显示持续时间更长、点数更多的主要轨迹；短片段可能来自遮挡、漏检或重新分配 ID。
+              默认优先显示持续时间更长、点数更多的主要轨迹；短片段可能来自遮挡或漏检后的跟丢重连。
             </p>
           </div>
 
@@ -285,7 +285,7 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
                         <span className="size-3 rounded-full" style={{ backgroundColor: summary.color }} />
                         {summary.label}
                       </span>
-                      <p className="mt-1 text-xs font-semibold text-slate-500">原始 ID：{summary.trackId}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">身份：{formatPlayerId(summary.trackId) || "—"}</p>
                     </div>
                     {summary.isShortFragment ? (
                       <span className="shrink-0 rounded-full bg-[#FF9500]/12 px-2.5 py-1 text-xs font-black text-[#A45A00]">短片段</span>
@@ -315,7 +315,7 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">点位检查</p>
             {inspectedPoint ? (
               <dl className="mt-3 grid gap-2 text-sm">
-                <RailMeta label="轨迹" value={`${inspectedPoint.summary.label} · ID ${inspectedPoint.summary.trackId}`} />
+                <RailMeta label="轨迹" value={`${inspectedPoint.summary.label} · ${formatPlayerId(inspectedPoint.summary.trackId) || "—"}`} />
                 <RailMeta label="时间" value={formatSeconds(inspectedPoint.point.timestamp_seconds) ?? "未知"} />
                 <RailMeta label="帧号" value={`#${inspectedPoint.point.frame_index}`} />
                 <RailMeta label="场地坐标" value={`x ${inspectedPoint.point.court_point.x.toFixed(2)} ft · y ${inspectedPoint.point.court_point.y.toFixed(2)} ft`} />
@@ -448,8 +448,6 @@ function formatTrackTimeRange(summary: CourtTrackSummary) {
   }
   return "时间未知";
 }
-
-type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
 export function useAnalysisResultReport(jobId?: string) {
   const [loadedResult, setLoadedResult] = useState<{

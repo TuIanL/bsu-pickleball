@@ -111,6 +111,17 @@ class RTMPose26Adapter:
         except ImportError as exc:
             raise RuntimeError("mmpose is not installed; install RTMPose runtime dependencies") from exc
 
+        # PyTorch >= 2.6 默认 weights_only=True，但 mmpose 检查点包含 numpy 对象，
+        # 需要将 numpy 的序列化全局加入安全列表。
+        try:
+            import torch  # type: ignore
+            import numpy as _np  # type: ignore
+
+            if hasattr(torch.serialization, "add_safe_globals"):
+                torch.serialization.add_safe_globals([_np.core.multiarray._reconstruct])
+        except ImportError:
+            pass
+
         try:
             from mmpose.utils import register_all_modules  # type: ignore
 

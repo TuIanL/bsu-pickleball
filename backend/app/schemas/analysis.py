@@ -86,6 +86,7 @@ class AnalysisUploadMetadata(BaseModel):
     recording_session_id: Optional[str] = None
     capture_take_id: Optional[str] = None
     session_dir: Optional[str] = None
+    camera_slot: Optional[Literal["cam_1", "cam_2"]] = None  # 双摄机位标识
 
 
 class AnalysisPipelineOptions(BaseModel):
@@ -128,6 +129,8 @@ class AnalysisJobCreate(BaseModel):
     clipEndMs: Optional[int] = Field(default=None, ge=0)
     captureSegmentId: Optional[str] = None
     segmentVersion: Optional[int] = None
+    recording_session_id: Optional[str] = None
+    camera_slot: Optional[Literal["cam_1", "cam_2"]] = None
 
 
 class AnalysisJobSummary(BaseModel):
@@ -168,6 +171,8 @@ class AnalysisJobSummary(BaseModel):
     clipEndMs: Optional[int] = None
     captureSegmentId: Optional[str] = None
     segmentVersion: Optional[int] = None
+    recordingSessionId: Optional[str] = None
+    cameraSlot: Optional[Literal["cam_1", "cam_2"]] = None
 
 
 # 删除任务的状态

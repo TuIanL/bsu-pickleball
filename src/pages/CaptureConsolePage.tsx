@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Camera, CheckCircle2, Clock, FolderOpen, Loader2, MapPin, Pencil, Play, PlusCircle,
-  RefreshCw, Square, Trash2, Upload, Users, Wifi, WifiOff, X,
+  Camera, FolderOpen, Loader2, Pencil, PlusCircle, RefreshCw, Trash2, X,
 } from "lucide-react";
-import type { AppPath, FieldSession, CameraInfo, ProbeResult, RecordingSession, SyncRecordingSession, SessionTimelineEvent, CaptureStopResult } from "../types/report";
+import type { AppPath, FieldSession, CameraInfo } from "../types/report";
 import {
-  getFieldSession, startFieldSession, completeFieldSession,
-  listCameras, createCamera, deleteCamera, probeCamera, updateCamera,
-  getCameraPreviewUrl, cancelRecording, cancelSyncRecording, getDefaultStorageLocation, pickStorageLocation,
+  getFieldSession, createCamera, deleteCamera, updateCamera,
+  getCameraPreviewUrl, getDefaultStorageLocation, pickStorageLocation,
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
 import { useCaptureRuntimeStatus } from "../hooks/useCaptureRuntimeStatus";
@@ -17,7 +15,7 @@ import { useCameraSetup } from "../hooks/useCameraSetup";
 import { useCapturePreflight } from "../hooks/useCapturePreflight";
 import { useLiveCoding } from "../hooks/useLiveCoding";
 import { CaptureWorkspaceLayout } from "../components/capture/CaptureWorkspaceLayout";
-import { CameraPreviewGrid, CameraPreviewCard } from "../components/capture/CameraPreviewCard";
+import { CameraPreviewCard } from "../components/capture/CameraPreviewCard";
 import { RecordingControlPanel } from "../components/capture/RecordingControlPanel";
 import { EventActionToolbar } from "../components/capture/EventActionToolbar";
 import { RecentEventsCard } from "../components/capture/RecentEventsCard";
@@ -27,6 +25,7 @@ import { SystemStatusCard, adaptRuntimeMetric } from "../components/capture/Syst
 import { formatTimelineEventLabel } from "../components/capture/eventLabels";
 import type { TimelineWindowMode, TimelineDensity } from "../components/MiniTimeline";
 import type { RecordingControlViewModel } from "../components/capture/captureTypes";
+import type { QuickEventDef } from "../services/timelineQuickEvents";
 import { buildMatchControlViewModel, withInitialServer } from "../services/matchControlViewModel";
 
 /** 导航跳转函数签名 */
@@ -34,6 +33,14 @@ type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 const captureModeLabel: Record<string, string> = {
   practice: "自由练习", match: "记分比赛", engineering: "工程测试",
+};
+
+const highlightEvent: QuickEventDef = {
+  type: "add_note",
+  source: "manual",
+  label: "重点标记",
+  note: "",
+  payload: { highlight: true },
 };
 
 function formatElapsed(ms: number): string {
@@ -73,7 +80,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
   const [fieldSession, setFieldSession] = useState<FieldSession | null>(null);  // 场次信息
   const [loading, setLoading] = useState(true);                                  // 初始加载中
   const [analysisIntent, setAnalysisIntent] = useState<string>("ask_after_recording");  // 分析策略
-  const [recordingFps, setRecordingFps] = useState<number>(60);                  // 录制帧率
+  const [recordingFps] = useState<number>(60);                                    // 录制帧率
   const [storageRoot, setStorageRoot] = useState<string>("");                    // 自定义存储目录
   const [defaultStorageRoot, setDefaultStorageRoot] = useState<string>("");      // 系统默认存储目录
   const [storagePickerBusy, setStoragePickerBusy] = useState(false);             // 目录选择器中
@@ -172,7 +179,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       setTimeout(() => resolve(null), 10000)
     );
 
-    const result = await Promise.race([stopPromise, timeoutPromise]);
+    await Promise.race([stopPromise, timeoutPromise]);
     // 如果超时先到，stopPromise 还在跑，API 回来后会自己 dispatch
     // 超时后页面显示"恢复中"，useCaptureRuntime 的自动轮询会处理
 
@@ -305,7 +312,11 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     finally { setLoading(false); }
   }, [sessionId]);
 
-  useEffect(() => { loadFieldSession(); }, [loadFieldSession]);
+  useEffect(() => {
+    // The session id is external navigation input; hydrate page state after it changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the selected field session.
+    void loadFieldSession();
+  }, [loadFieldSession]);
 
   useEffect(() => {
     void getDefaultStorageLocation()
@@ -510,7 +521,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         canStart={canStart}
         onStart={handleStart}
         onStop={handleStop}
-        onMark={() => liveCoding.addTimelineEvent({ type: "add_note", payload: { highlight: true } } as any)}
+        onMark={() => liveCoding.addTimelineEvent(highlightEvent)}
         onCancel={handleCancel}
         error={runtime.error || undefined}
         belowControls={
@@ -692,7 +703,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
                 setPendingInitialServer(true);
                 return;
               }
-              liveCoding.addTimelineEvent(event as any);
+              liveCoding.addTimelineEvent(event);
             }}
           />
           {pendingInitialServer && (
@@ -728,7 +739,6 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
             liveState={liveCoding.liveCodingState}
             totalDurationMs={runtime.elapsedMs}
             elapsedMs={runtime.elapsedMs}
-            showDurationHint={runtime.phase === "recording"}
             staticMode
             playing={runtime.phase === "recording"}
             compact
@@ -759,7 +769,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         <div className="rounded-xl p-4" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)", boxShadow: "var(--capture-shadow-card)" }}>
           <h3 className="text-sm font-bold mb-3" style={{ color: "var(--capture-text-primary)" }}>快捷操作</h3>
           <div className="grid grid-cols-3 gap-2">
-            <button className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs transition" style={{ background: "var(--capture-surface-page)" }} onClick={() => liveCoding.addTimelineEvent({ type: "add_note", payload: { highlight: true } } as any)} type="button" aria-label="重点标记" disabled={!isRecording}>
+            <button className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs transition" style={{ background: "var(--capture-surface-page)" }} onClick={() => liveCoding.addTimelineEvent(highlightEvent)} type="button" aria-label="重点标记" disabled={!isRecording}>
               <span style={{ color: "var(--capture-timeline-highlight)" }}>◆</span>
               <span style={{ color: "var(--capture-text-secondary)" }}>重点标记</span>
             </button>
@@ -840,7 +850,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
               <input className="w-full rounded-xl px-3 py-2 text-sm" style={{ border: "1px solid var(--capture-border-default)" }} placeholder="名称" value={newCameraForm.name} onChange={e => setNewCameraForm(f => ({ ...f, name: e.target.value }))} />
               <input className="w-full rounded-xl px-3 py-2 text-sm" style={{ border: "1px solid var(--capture-border-default)" }} placeholder="RTSP 地址" value={newCameraForm.stream_url} onChange={e => setNewCameraForm(f => ({ ...f, stream_url: e.target.value }))} />
               <button className="w-full rounded-xl py-2.5 text-sm font-bold text-white" style={{ background: "var(--capture-brand-primary)" }} onClick={async () => {
-                try { await createCamera(newCameraForm as any); cameraSetup.loadCameras(); setDrawerTab("list"); } catch { /* ignore */ }
+                try { await createCamera(newCameraForm); cameraSetup.loadCameras(); setDrawerTab("list"); } catch { /* ignore */ }
               }} type="button">注册</button>
             </div>
           )}

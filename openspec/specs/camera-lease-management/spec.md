@@ -1,4 +1,10 @@
-## MODIFIED Requirements
+# camera-lease-management Specification
+
+## Purpose
+
+定义摄像轨道 FFmpeg 进程登记、注入式 ProcessRegistry、退出记录和启动恢复清理的统一契约。
+
+## Requirements
 
 ### Requirement: FFmpeg 进程登记与启动恢复
 
@@ -21,8 +27,6 @@
 - **AND** 如果 Fragment.status 仍在 recording → MUST 标记为 interrupted
 - **AND** MUST 校验 PID/PGID/fingerprint 后清理孤儿进程
 - **AND** MUST release 关联 CameraLease
-
-## ADDED Requirements
 
 ### Requirement: ProcessRegistry 注入式接口
 

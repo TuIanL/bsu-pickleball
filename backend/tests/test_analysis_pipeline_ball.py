@@ -314,7 +314,8 @@ class TestFinalizeBallAnalysis:
 
         bounce_stage = next(s for s in stages if s.id == "bounce-detection")
         assert bounce_stage.status == "done"
-        assert fields.bounce_events_status == "no_candidates"
+        assert fields.bounce_events_status == "available"
+        assert "未检测到候选事件" in fields.bounce_events_detail
         assert bounce_stage.counters["bounce_event_count"] == 0
 
         # bounce_events.json 应该存在且 events 为空
@@ -337,7 +338,7 @@ class TestFinalizeBallAnalysis:
 
         traj_stage = next(s for s in stages if s.id == "ball-trajectory")
         assert traj_stage.status == "failed"
-        assert fields.ball_overlay_status == "unavailable"
+        assert fields.ball_overlay_status == "failed"
         # pipeline 仍然可以继续（在 run() 中由 strict mode check 决定是否 failed）
 
     def test_no_calibration_skipped(self, pipeline):

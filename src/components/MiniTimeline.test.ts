@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { deriveNonPlayRanges } from "./MiniTimeline";
-import type { SessionTimelineEvent } from "../types/report";
+import type { SessionTimelineEvent, TimelineEventType } from "../types/report";
 
 function makeEvent(
-  event_type: string,
+  event_type: TimelineEventType,
   timestamp_ms: number,
   overrides?: Partial<SessionTimelineEvent>,
 ): SessionTimelineEvent {
@@ -12,7 +12,7 @@ function makeEvent(
     field_session_id: "fs_test",
     timestamp_ms,
     occurred_at: new Date().toISOString(),
-    event_type: event_type as any,
+    event_type,
     source: "manual",
     label: "",
     note: "",

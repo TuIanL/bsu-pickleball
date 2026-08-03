@@ -65,10 +65,12 @@ def test_player_and_ball_artifact_points_are_normalized_to_feet():
 def test_minimap_maps_court_geometry_and_skips_out_of_bounds():
     minimap = MinimapVisualizer(VisualizationConfig(minimap_width=120, minimap_height=240, minimap_padding=10))
 
-    assert minimap.court_to_pixel(0, 0) == (10, 10)
-    assert minimap.court_to_pixel(20, 44) == (110, 230)
-    assert minimap.court_to_pixel(10, 22) == (60, 120)
-    assert minimap.court_to_pixel(-1, 22) is None
+    assert minimap.court_to_pixel(0, 0, bounds="court") == (10, 10)
+    assert minimap.court_to_pixel(20, 44, bounds="court") == (110, 230)
+    assert minimap.court_to_pixel(10, 22, bounds="court") == (60, 120)
+    assert minimap.court_to_pixel(-1, 22, bounds="court") is None
+    assert minimap.court_to_pixel(-4, -8, bounds="tracking") == (10, 10)
+    assert minimap.court_to_pixel(24, 52, bounds="tracking") == (110, 230)
 
     image = minimap.render(
         player_points=[VisualizationPoint(10, 22, label="Player_1")],
@@ -256,7 +258,7 @@ def test_position_visualization_image_route_returns_png(monkeypatch, tmp_path):
 
 
 def test_pipeline_generates_position_visualization_when_enabled(tmp_path):
-    video_bytes = _make_video(tmp_path / "pipeline-source.avi").read_bytes()
+    video_bytes = _make_long_video(tmp_path / "pipeline-source.avi").read_bytes()
     upload_response = client.post(
         "/api/videos/upload",
         files={"file": ("visualization.avi", video_bytes, "video/avi")},
@@ -363,6 +365,21 @@ def _make_video(path: Path) -> Path:
     for index in range(2):
         frame = np.zeros((64, 64, 3), dtype=np.uint8)
         frame[10 + index : 30 + index, 12:32] = (255, 255, 255)
+        writer.write(frame)
+    writer.release()
+    return path
+
+
+def _make_long_video(path: Path) -> Path:
+    # 40 帧（5fps × 8s）：足够 bootstrap 完成球员锁定（身份层依赖锁定 hint 才能建立身份）
+    import cv2  # type: ignore
+    import numpy as np
+
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (64, 64))
+    for index in range(40):
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        dx = index % 20
+        frame[10:30, 12 + dx : 32 + dx] = (255, 255, 255)
         writer.write(frame)
     writer.release()
     return path

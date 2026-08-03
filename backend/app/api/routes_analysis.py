@@ -24,10 +24,11 @@ from __future__ import annotations
 
 # Literal：限定某个参数只能取固定的几个字符串值（这里用于限定 artifact 名称白名单）
 # Union：表示返回值"可能是多种类型之一"
+# Query：URL 查询参数
 from pathlib import Path
-from typing import Literal, Union
+from typing import Literal, Optional, Union
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 # 不同的响应类型：
 # - FileResponse：返回一个文件（如视频/图片）
 # - JSONResponse：返回 JSON 数据
@@ -75,13 +76,17 @@ def create_analysis_job_route(payload: AnalysisJobCreate) -> AnalysisJobSummary:
 
 
 @router.get("/jobs", response_model=list[AnalysisJobSummary])
-def list_analysis_jobs_route() -> list[AnalysisJobSummary]:
+def list_analysis_jobs_route(recording_session_id: Optional[str] = Query(default=None, alias="recording_session_id")) -> list[AnalysisJobSummary]:
     """
     读取所有已知分析任务
 
+    支持按录制 session 过滤：?recording_session_id=<sid>。
     用于前端的"任务管理"页面，展示历史与当前任务列表。
     """
-    return list_analysis_jobs()
+    jobs = list_analysis_jobs()
+    if recording_session_id:
+        jobs = [j for j in jobs if j.metadata.recording_session_id == recording_session_id or j.recordingSessionId == recording_session_id]
+    return jobs
 
 
 @router.delete("/jobs/{job_id}", response_model=AnalysisDeleteResult)

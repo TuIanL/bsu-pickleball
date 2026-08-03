@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import type { SessionTimelineEvent } from "../types/report";
 
 // Test the Take isolation logic directly: loadTimelineEvents
 // with capture_take_id filtering + initializeLiveCoding clearing old data
 
-function createTakeIsolationTest() {
-  const timelineEventsRef = useRef<SessionTimelineEvent[]>([]);
+function useTakeIsolationTest() {
   const [captureTakeId, setCaptureTakeId] = useState<string | null>(null);
   const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
 
@@ -42,7 +41,7 @@ function createTakeIsolationTest() {
 
 describe("CaptureConsole Take isolation", () => {
   it("switching takes clears old events", async () => {
-    const hook = renderHook(() => createTakeIsolationTest());
+    const hook = renderHook(() => useTakeIsolationTest());
 
     // First take - load events for take_A
     await act(async () => {
@@ -65,7 +64,7 @@ describe("CaptureConsole Take isolation", () => {
   });
 
   it("loadTimelineEvents does nothing without captureTakeId", async () => {
-    const hook = renderHook(() => createTakeIsolationTest());
+    const hook = renderHook(() => useTakeIsolationTest());
 
     await act(async () => {
       await hook.result.current.loadTimelineEvents(null);
@@ -90,7 +89,7 @@ describe("CaptureConsole Take isolation", () => {
   });
 
   it("does not mix events from different takes", async () => {
-    const hook = renderHook(() => createTakeIsolationTest());
+    const hook = renderHook(() => useTakeIsolationTest());
 
     // Load take_A
     await act(async () => {

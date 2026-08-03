@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, FileUp, Loader2, RefreshCw } from "lucide-react";
 import {
   confirmVidatImport, createVidatPackage, listVidatPackages, openVidatPackage, startVidatService,
@@ -25,12 +25,16 @@ export function VidatWorkbenchPanel({ captureTakeId, onImported }: { captureTake
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     const next = await listVidatPackages(captureTakeId);
     setPackages(next);
     setSelected(current => current || next[0]?.id || "");
-  };
-  useEffect(() => { void reload().catch(() => setError("无法读取 Vidat 标注包")); }, [captureTakeId]);
+  }, [captureTakeId]);
+  useEffect(() => {
+    // Load the external Vidat package list when the selected Take changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- publishes async load/error state.
+    void reload().catch(() => setError("无法读取 Vidat 标注包"));
+  }, [reload]);
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true); setError("");

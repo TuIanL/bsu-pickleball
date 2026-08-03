@@ -10,7 +10,7 @@
 - **球员检测与跟踪**：基于 YOLO11 人体检测 + 多目标跟踪 + 脚点估计 + 球场坐标投影，锁定主球员并维持跨帧身份稳定。
 - **姿态估计**：可选启用 RTMPose26（26 关键点）推理，生成骨架叠加可视化。
 - **运动指标计算**：移动距离、速度、厨房区停留、双打间距、热力图等匹克球专项指标。
-- **球轨迹分析**：球检测、轨迹跟踪、弹跳事件识别（实验性，默认启用，模型不可用时自动降级）。
+- **球轨迹分析**：球检测、轨迹跟踪、弹跳事件识别（实验性；模型缺失或运行失败时明确标记为 unavailable/failed，不伪造球路）。
 - **发球检测**：基于站位/静止/运动峰值/回合线索的上下文发球时刻识别。
 - **摄像头录制与双摄同步**：支持实时摄像头预览、单/双摄录制、时间轴事件标记、实时编码计分、场次管理、片段编辑。
 - **分析报告**：前端展示视频叠加回放、散点图/热力图、指标卡、诊断结论与训练建议。
@@ -182,7 +182,7 @@ pre-pickleball/
 │   │   └── capture/                  # 录制控制台组件（CameraPreviewCard/RecordingControlPanel/
 │   │                                #   CaptureWorkspaceLayout/EventActionToolbar 等）
 │   ├── services/                     # 前端服务层（9 个：API 调用、数据适配、状态管理）
-│   │   ├── analysisClient.ts         # 分析 API 客户端（含 demo/localStorage 兜底）
+│   │   ├── analysisClient.ts         # 分析 API 客户端（真实失败可见；仅显式 demo 使用本地任务）
 │   │   ├── pipelineReportAdapter.ts  # 流水线结果 → 报告格式适配
 │   │   ├── captureAdapter.ts         # 录制会话适配器
 │   │   └── codingOutbox.ts           # 编码命令 FIFO 发送队列
@@ -247,6 +247,7 @@ Worker 执行视觉分析：
 | `/api/analysis/jobs/{id}` | GET | 查询任务状态与进度 |
 | `/api/analysis/jobs/{id}/result` | GET | 获取分析结果 |
 | `/api/analysis/jobs/{id}/report` | GET | 获取分析报告 |
+| `/api/analysis/jobs/{id}/artifacts/{name}` | GET | 获取已生成的 JSON/视频 artifact；已知缺失产物返回 404 |
 | `/api/analysis/jobs/{id}` | DELETE | 取消/删除任务 |
 | `/api/cameras` | GET/POST | 摄像头管理 |
 | `/api/recordings` | POST | 启动录制 |
@@ -256,7 +257,8 @@ Worker 执行视觉分析：
 ## 产品与科研边界
 
 - **产品主流程**以真实上传视频为核心：上传 → 标定 → 分析 → 查看报���。
-- Demo/sample 路径保留用于无后端时演示产品形态，页面上下文中与真实任务区分。
+- Demo/sample 路径保留用于明确的离线演示，页面上下文中与真实任务区分；真实视频或真实 API 失败不会静默创建已完成 demo 任务。
+- 分析任务列表规范入口为 `/analysis/tasks`，历史 `/tasks` 链接仍解析到同一页面；录制来源任务会保留 `recording_session_id` / `camera_slot` 归属字段。
 - **当前真实结论聚焦**：人员检测、姿态叠加、轨迹投影、移动指标。
 - **实验性功能**（不作为真实结论输出）：球追踪、弹跳检测、击球事件、回合分割、战术语义。
 - **科研产出来自可复现记录**：输入/配置签名、阶段耗时、模型运行环境、标定质量、轨迹/姿态/热力图产物、失败诊断、指标对比。
@@ -265,5 +267,6 @@ Worker 执行视觉分析：
 
 - 生产环境启动后端时建议**不带 `--reload`**，或使用 `--reload-exclude` 排除 `data/`、`.venv/`、模型文件，避免分析任务写盘触发不必要的重载。
 - 数据库为本地 SQLite（`data/app.sqlite3`），多实例部署需注意读写冲突。
-- RTMPose26 姿态推理为可选项，默认根据模型文件是否存在自动判断；如需强制开关，设置 `PICKLEBALL_ENABLE_POSE_INFERENCE=true/false`。
+- RTMPose26 姿态推理为可选项，默认根据模型文件是否存在自动判断；球模型同样支持自动发现，缺失时只报告不可用状态。如需强制开关，设置 `PICKLEBALL_ENABLE_POSE_INFERENCE=true/false` 或 `PICKLEBALL_ENABLE_BALL_DETECTION=true/false`。
+- 后端 pytest 使用临时数据库、上传/输出/录制/模型目录，不读取或修改默认运行数据库；完整质量门禁为 `npm run build`、`npm test`、`npm run lint` 和 `cd backend && python -m pytest -q`。
 - FFmpeg 为录制功能必需依赖，纯视频分析不需要。

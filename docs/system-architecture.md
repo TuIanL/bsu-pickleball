@@ -60,3 +60,20 @@ flowchart TD
 - Demo/sample 路径继续保留，用于无后端或无模型资产时解释产品形态，但必须在页面上下文中和真实任务区分。
 - 当前真实任务聚焦人员检测、姿态叠加、轨迹投影和移动指标；球追踪、击球事件、回合分割和战术语义在现阶段不作为真实结论输出。
 - 科研产出来自研发过程中的可复现记录：输入/配置签名、阶段耗时、模型运行环境、标定质量、轨迹/姿态/热力图 artifact、失败诊断和指标对比。
+
+## 5. 运行契约与质量基线
+
+- 分析任务列表的规范前端入口是 `/analysis/tasks`，`/tasks` 仅作为兼容别名；录制分析入口为 `/capture/<sessionId>/analyze?cam=cam_1|cam_2`。
+- 视频上传使用 `POST /api/videos/upload`，分析任务使用 `POST /api/analysis/jobs`；真实任务请求的网络、HTTP 或 pipeline 错误必须在任务详情中显示，不能被无关 demo 数据覆盖。
+- 可选 artifact 使用 `available`、`skipped`、`unavailable`、`failed` 状态。缺失文件的 artifact API 返回 `404`，但任务结果保留状态和诊断 detail。
+- 姿态和球模型支持仓库目录自动发现与显式开关。模型缺失时记录能力不可用，不改变人员轨迹等其他阶段的真实结果。
+- 后端测试使用临时数据库和文件/模型目录；本地 `backend/data/app.sqlite3` 是运行数据，不是测试 fixture。
+- 交付前执行 `npm run build`、`npm test`、`npm run lint` 与 `cd backend && python -m pytest -q`。当前 lint 仅保留 Fast Refresh 辅助导出和少量异步依赖 warning；真实模型推理风险仍需带模型的视频冒烟验证。
+
+## 6. 本次基线验收记录
+
+- 质量门禁结果：前端 production build 通过，Vitest `36 files / 243 tests` 通过，ESLint `0 errors / 15 warnings`，后端 pytest `511 passed / 13 warnings`。
+- 手工冒烟覆盖：后端停机时任务页展示网络错误且不创建完成态 demo；`/analysis/tasks` 与历史 `/tasks` 渲染同一任务页；已知但未生成的 `ball-trajectory` artifact 返回 404；历史任务保留 `skipped` 状态和 detail；录制来源任务可读取 `recording_session_id`。
+- 可接受 warning：Fast Refresh 对组件文件中的辅助导出提示；少数异步 effect 依赖提示；pytest 中来自 Pydantic 2 的 class-based config 弃用提示和历史配置 payload 序列化提示。这些 warning 未关闭 hooks/type 规则，也未影响质量命令退出状态。
+- 未覆盖风险：当前验收未使用完整真实视频和每台机器上的 YOLO/RTMPose/球模型组合做长时运行；模型权重、FFmpeg、GPU/CUDA 和视频编码器差异仍需独立环境验证。
+- 后续建议拆分为独立变更：迁移遗留 Pydantic 配置与配置 payload schema、拆出组件文件中的共享辅助导出、补充带真实模型的短视频 E2E/性能基线，以及收敛剩余 React effect 依赖 warning。

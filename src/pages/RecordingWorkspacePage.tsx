@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Camera, List, Loader2, Play } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import type { AppPath, RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
 import type { CaptureSegmentSummary } from "../types/report";
 import {
@@ -114,6 +114,8 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
 
   useEffect(() => {
     let cancelled = false;
+    // Reset derived data when switching recordings before the async reload.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prevents stale events during session transitions.
     setTimelineEvents([]);
     setSegments([]);
     setTimelineLoadState("idle");
@@ -261,7 +263,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <p className="text-slate-500">录制未找到</p>
-        <button className="quiet-button px-4 py-2" onClick={() => onNavigate("/tasks")} type="button">返回任务列表</button>
+        <button className="quiet-button px-4 py-2" onClick={() => onNavigate("/analysis/tasks")} type="button">返回任务列表</button>
       </div>
     );
   }
@@ -290,7 +292,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* 头部 */}
       <div className="flex items-center gap-4">
-        <button className="quiet-button p-2" onClick={() => onNavigate("/tasks")} type="button" title="返回">
+        <button className="quiet-button p-2" onClick={() => onNavigate("/analysis/tasks")} type="button" title="返回">
           <ArrowLeft size={18} />
         </button>
         <div className="min-w-0 flex-1">

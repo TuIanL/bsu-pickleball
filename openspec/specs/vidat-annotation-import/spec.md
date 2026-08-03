@@ -1,4 +1,10 @@
-## ADDED Requirements
+# vidat-annotation-import Specification
+
+## Purpose
+
+定义 Vidat 标注导入的格式校验、时间校验、差异预览、确认令牌和过期保护规则，确保导入行为可审计并且不会覆盖未经确认的历史数据。
+
+## Requirements
 
 ### Requirement: 导入格式与时间校验
 系统 MUST 在创建导入预览时校验 Vidat JSON 与标注包 manifest 的身份、视频、FPS、标签和时间边界。

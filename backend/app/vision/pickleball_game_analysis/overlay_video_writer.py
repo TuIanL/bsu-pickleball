@@ -164,8 +164,9 @@ class OverlayVideoWriter:
                 continue
             x1, y1, x2, y2 = [int(round(float(v))) for v in bbox[:4]]
             cv2.rectangle(frame, (x1, y1), (x2, y2), (35, 190, 90), 2)  # 绿色框
-            # 标签优先级：label > player_id > track_id > 默认“球员”文案。
-            label = str(detection.get("label") or detection.get("player_id") or detection.get("track_id") or self.labels["player"])
+            # 标签优先级：label > player_id > 默认“球员”文案。
+            # 不展示原始 track_id：身份契约要求用户可见标签只呈现 canonical 身份。
+            label = str(detection.get("label") or detection.get("player_id") or self.labels["player"])
             cv2.putText(frame, label, (x1, max(16, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (35, 190, 90), 2, cv2.LINE_AA)
 
     def _draw_pose(self, frame: np.ndarray, overlay_frame: dict[str, Any] | None) -> None:

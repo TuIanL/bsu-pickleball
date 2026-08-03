@@ -1,4 +1,10 @@
-## ADDED Requirements
+# rally-scoring-fsm Specification
+
+## Purpose
+
+定义匹克球单打与双打比赛的纯计分 reducer、状态机、事件重放、规则版本和 Vidat 修正行为。
+
+## Requirements
 
 ### Requirement: 纯计分 reducer 函数
 

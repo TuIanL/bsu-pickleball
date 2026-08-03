@@ -4,23 +4,36 @@
 Provide stable match-level player identities, metric-unit player trajectories, trajectory repair, and diagnostics for doubles pickleball analysis.
 ## Requirements
 ### Requirement: Stable doubles player identities
-The backend SHALL assign target-court-eligible projected player observations to stable match-level `player_id` values for doubles analysis, distinct from detector observations and temporary tracker `track_id` values.
 
-#### Scenario: Tracker emits fragmented IDs for four real players
-- **WHEN** a doubles video produces more than four distinct source `track_id` values across the match
-- **THEN** the final player trajectory artifact exposes no more than four stable `player_id` trajectories for target-court match metrics
+后端 SHALL 将"目标球场合格"的投影球员观测分配为稳定的比赛级 `player_id`，区别于检测器观测与临时 tracker `track_id`。身份分配 SHALL 以 lock manager 的 track-to-slot hint 为权威；身份层 SHALL 不独立创建球员身份，但 SHALL 允许对"合格且未匹配"的 track 做有界的位置连续性软接管（见本 requirement 的软接管场景与新增 requirement）。
 
-#### Scenario: Source track history is preserved
-- **WHEN** multiple source `track_id` values are assigned to the same real target-court player
-- **THEN** the player state records current and historical source track IDs for diagnostics
+#### Scenario: Tracker 为四名真实球员产生碎片化 ID
 
-#### Scenario: Existing track mapping is observed again
-- **WHEN** an observation contains a `track_id` already bound to a `player_id` and remains target-court eligible or is within a configured reconnect grace period
-- **THEN** the identity manager updates the existing player rather than creating a new player
+- **WHEN** 双打视频在全场产生超过四个不同的 source `track_id`
+- **THEN** 最终球员轨迹 artifact 对目标球场比赛指标只暴露不超过四个稳定的 `player_id` 轨迹
 
-#### Scenario: Neighbor court track is observed
-- **WHEN** an observation belongs to a tracklet classified as non-target-court by the player selection layer
-- **THEN** the identity manager does not create or update a final target-court `player_id` from that observation and records filtered diagnostics
+#### Scenario: 保留源 track 历史
+
+- **WHEN** 多个 source `track_id` 被分配给同一名真实目标球场球员
+- **THEN** 球员状态记录当前与历史 source track ID 供诊断使用
+
+#### Scenario: 再次观测到既有 track 映射
+
+- **WHEN** 一条观测包含已绑定到 `player_id` 的 `track_id`，且仍为目标球场合格或在配置的重连宽限期内
+- **THEN** 身份层更新既有球员而不是创建新球员
+
+#### Scenario: 身份层不独立创建身份
+
+- **WHEN** 出现新的未绑定 `track_id`，且 lock manager 尚未为其发出 hint
+- **THEN** 身份层 SHALL 先尝试位置连续性软接管（若该 track 落在某球员最近已知位置的 `soft_takeover_max_distance_m` 阈值内）
+- **AND** 若软接管不可用，SHALL 将该观测记录为 `unmatched`
+- **AND** SHALL 不创建新的 `player_id`（槽位封顶为 4）
+- **AND** 对超过距离阈值的 track，SHALL NOT 通过全局 best-candidate 匹配指派
+
+#### Scenario: 观测到相邻球场 track
+
+- **WHEN** 一条观测属于被球员选择层判定为非目标球场的 tracklet
+- **THEN** 身份层不基于该观测创建或更新最终目标球场 `player_id`，并记录 filtered 诊断
 
 ### Requirement: Metric court coordinate identity matching
 The backend SHALL use metric court coordinates as the canonical unit for player identity matching, speed filtering, interpolation, and final trajectory export.
@@ -148,9 +161,10 @@ The backend SHALL expose diagnostics for identity assignment, reconnect, lost, i
 
 #### Scenario: track_identity_hints 告知身份管理器绑定关系
 
-- **WHEN** `PlayerLockManager` 确定 track_id=4 是 player_3 的 LOST 恢复候选
-- **THEN** `PlayerLockUpdate.track_identity_hints` SHALL 包含 `{4: "player_3"}`
-- **AND** `PlayerIdentityManager` 在 `_assign_player()` 中 SHALL 优先尝试绑定到 player_3
+- **WHEN** `PlayerLockManager` 确定 track_id=4 是 Player_3 的 LOST 恢复候选
+- **THEN** `PlayerLockUpdate.track_identity_hints` SHALL 包含 `{4: "Player_3"}`
+- **AND** `PlayerIdentityManager` 在 `_assign_player()` 中 SHALL 优先绑定到 Player_3
+- **AND** 提示值 SHALL 与身份层 `player_id` 键格式一致（`Player_1`..`Player_4`），保证提示真正生效
 
 #### Scenario: 已锁定 track 即使未进 top 4 也被保留
 
@@ -204,15 +218,66 @@ The backend SHALL expose diagnostics for identity assignment, reconnect, lost, i
 - **THEN** `event` 有效值 SHALL 包含：
   - `"player_locked"` — 球员首次锁定
   - `"player_reconnected_from_lost"` — 从 LOST 恢复
-  - `"player_reset_after_prolonged_loss"` — 长时间丢失后重置
   - `"player_slot_filled"` — 空位被填充
   - `"rejected_low_conf_unlocked"` — 未锁定低置信度拒绝
   - `"rejected_outside_near_court"` — 超出近场区域拒绝
   - `"rejected_outside_tracking"` — 超出跟踪区域拒绝
   - `"rejected_bbox_size"` — bbox 尺寸不合规
   - `"retained_by_lock"` — 因锁定状态而保留
+  - `"unmatched"` — 无法关联到任何锁定身份（含锁定层尚未给出 hint 的新 track）
+
+#### Scenario: player_reset_after_prolonged_loss 已移除
+
+- **WHEN** 槽位长时间丢失（`lost_frames >= lost_max_frames_locked`）
+- **THEN** SHALL NOT 产生 `event: "player_reset_after_prolonged_loss"`
+- **AND** 该事件值 SHALL 从 `event` 有效值中移除
 
 #### Scenario: reason 字段包含子项分
 
 - **WHEN** 产生 `"player_reconnected_from_lost"` 事件
 - **THEN** `reason` 字段 SHALL 包含各分项分数，格式如 `"position=0.82 motion=0.65 appearance=0.43 side=0.90 bbox=0.70"`
+
+### Requirement: 对外 player_id 取值契约
+
+后端对外 trajectory 产物中的 `player_id` SHALL 只取锁定槽位对应的 canonical ID（`Player_1`..`Player_4`，展示为整数 `1`–`4`），数量不超过 `effective_player_count`，且 SHALL NOT 以原始 `track_id` 作为身份标识。
+
+#### Scenario: 身份数量与锁定槽位一一对应
+
+- **WHEN** 锁定层完成 bootstrap 并锁定 N 个槽位（N = `effective_player_count`）
+- **THEN** 最终 trajectory artifact SHALL 恰好暴露 N 个 `player_id`
+- **AND** 每个 `player_id` SHALL 与一个锁定槽位一一对应
+
+#### Scenario: 原始 track_id 不作为身份标识
+
+- **WHEN** 生成 projection 轨迹点或 trajectory 样本
+- **THEN** 其身份字段 SHALL 为 canonical `player_id`
+- **AND** SHALL NOT 使用原始 `track_id` 数字作为 `player_id`
+
+### Requirement: 合格未匹配 track 的位置连续性软接管
+
+后端 SHALL 对"目标球场合格、且既无 lock hint 也无既有 track-to-player 映射"的观测，按最近已知球场位置就近归入一个既有球员：候选球员的 `last_position_m` 距该观测在 `soft_takeover_max_distance_m` 阈值内、且本帧尚未被该球员接收过样本。软接管样本 SHALL 标记为 `tentative` 低置信度状态，SHALL NOT 创建第 5 个球员身份，且 lock hint 优先于软接管。
+
+#### Scenario: 新 track 出现在某球员最近已知位置附近
+
+- **WHEN** 一条目标球场合格观测既无 hint 也无映射，且其球场位置落在某球员 `last_position_m` 的 `soft_takeover_max_distance_m` 范围内
+- **THEN** 身份层将该 track 绑定到该球员，记录 `soft_takeover_assigned` 诊断，并产出 `tracking_status="tentative"`、置信度被截断为低值的样本
+
+#### Scenario: 新 track 距所有球员都很远
+
+- **WHEN** 一条目标球场合格观测既无 hint 也无映射，且距每个球员的 `last_position_m` 都超过 `soft_takeover_max_distance_m`
+- **THEN** 身份层将该观测记录为 `unmatched`，不进行指派
+
+#### Scenario: 一帧内两名 track 抢占同一球员
+
+- **WHEN** 某球员在当前帧已接收过一个样本，且第二条观测也在该球员的软接管阈值内
+- **THEN** 身份层不把第二条观测指派给该球员
+
+#### Scenario: lock hint 优先于软接管
+
+- **WHEN** lock manager 在同一帧为某 track 发出 `track_identity_hints`，而软接管本应适用
+- **THEN** 该 track 被指派为 hint 指定的身份，软接管不生效
+
+#### Scenario: 软接管样本进入检测框身份
+
+- **WHEN** 某 track 因软接管获得 `tentative` 样本
+- **THEN** 该 track 在当帧检测叠加中的 `player_id` SHALL 为该球员的 canonical ID，使框标签可显示 `P1-P4`

@@ -9,10 +9,11 @@ describe("parsePath", () => {
     { pathname: "", expected: { name: "landing", path: "/", shellMode: "landing", navigationSection: null } },
     { pathname: "/upload", expected: { name: "upload", path: "/upload", shellMode: "landing", navigationSection: null } },
     { pathname: "/tasks", expected: { name: "tasks", path: "/tasks", shellMode: "standard", navigationSection: "analysis" } },
-    { pathname: "/capture", expected: { name: "captureHome", path: "/capture", shellMode: "standard", navigationSection: "analysis" } },
+    { pathname: "/capture", expected: { name: "captureHome", path: "/capture", shellMode: "standard", navigationSection: "videos" } },
     { pathname: "/capture/new", expected: { name: "captureNew", path: "/capture/new", shellMode: "standard", navigationSection: "capture" } },
     // captureConsole (dynamic sessionId)
     { pathname: "/capture/fs-1", expected: { name: "captureConsole", path: "/capture/fs-1", sessionId: "fs-1", shellMode: "capture", navigationSection: "capture" } },
+    { pathname: "/capture/fs-1/analyze", expected: { name: "recording-analyze", path: "/capture/fs-1/analyze", sessionId: "fs-1", shellMode: "standard", navigationSection: "analysis" } },
     // Segment manager
     {
       pathname: "/capture/fs-1/takes/take-1/segments",
@@ -28,6 +29,7 @@ describe("parsePath", () => {
     // Workspace
     { pathname: "/workspace", expected: { name: "workspace", path: "/workspace", shellMode: "standard", navigationSection: "capture" } },
     // Analysis routes
+    { pathname: "/analysis/tasks", expected: { name: "analysis-tasks", path: "/analysis/tasks", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/analysis/job-1", expected: { name: "analysis-job", path: "/analysis/job-1", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/analysis/job-1/details", expected: { name: "analysis-details", path: "/analysis/job-1/details", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/analysis/job-1/vision", expected: { name: "vision", path: "/analysis/job-1/vision", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },

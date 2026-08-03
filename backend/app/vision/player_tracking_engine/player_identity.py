@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 # dataclass / field：数据结构与可变默认工厂；Counter：统计状态计数；
-# hypot：求两点距离。feet_to_meters / meters_to_feet：英制与公制互转；
+# feet_to_meters / meters_to_feet：英制与公制互转；
 # 标准球场尺寸常量 PICKLEBALL_COURT_WIDTH_M / LENGTH_M。
 from dataclasses import dataclass, field
 from collections import Counter
@@ -32,6 +32,8 @@ from app.vision.courtvision_calibration_engine.court_units import (
 class PlayerIdentityConfig:
     # 身份管理的可调参数：最多球员数、帧率、匹配阈值、重连距离/速度上限、
     # 各类缓冲帧数、球场外扩边距、输入坐标单位、平滑窗口大小等。
+    # 注意：锁定层接管身份决策后，match_threshold / max_reconnect_distance_m /
+    # max_speed_mps 三个字段已不再被使用（保留仅为配置兼容）。
     max_players: int = 4
     fps: float = 30.0
     match_threshold: float = 0.55
@@ -43,6 +45,10 @@ class PlayerIdentityConfig:
     court_buffer_m: float = 0.75
     input_court_unit: str = "ft"
     smoothing_window: int = 5
+    # 位置连续性软接管：当合格 track 既无 lock hint 也无既有映射时，就近归入某球员（tentative）。
+    soft_takeover_enabled: bool = True
+    soft_takeover_max_distance_m: float = 4.0
+    soft_takeover_confidence: float = 0.45
 
 
 @dataclass
@@ -135,7 +141,7 @@ class PlayerIdentityManager:
                     court_position_m=observation.court_position_m,
                 )
                 continue
-            player = self._assign_player(observation)
+            player, via_soft_takeover = self._assign_player(observation)
             if player is None:
                 self._diagnose(
                     frame_index,
@@ -145,7 +151,7 @@ class PlayerIdentityManager:
                     court_position_m=observation.court_position_m,
                 )
                 continue
-            samples = self._update_player(player, observation)
+            samples = self._update_player(player, observation, tentative=via_soft_takeover)
             outputs.extend(samples)
             updated_players.add(player.player_id)
 
@@ -211,81 +217,79 @@ class PlayerIdentityManager:
                 )
         return sorted(points, key=lambda point: (point.timestamp_seconds, point.frame_index, point.track_id))
 
-    def _assign_player(self, observation: PlayerObservation) -> PlayerState | None:
+    def _assign_player(self, observation: PlayerObservation) -> tuple[PlayerState | None, bool]:
+        # 返回 (player, via_soft_takeover)。锁定层（PlayerLockManager）是身份唯一权威：
+        # 身份层只做 "track -> 锁定槽位" 的转发；软接管只是无 hint/无映射时的位置连续性兜底。
         # 1) 优先使用 lock manager 提供的 track_identity_hints
-        hinted_player_id = getattr(self, "_current_hints", {}).get(observation.track_id)
-        if hinted_player_id is not None and hinted_player_id in self.players:
-            player = self.players[hinted_player_id]
+        hinted_player_id = self._current_hints.get(observation.track_id)
+        if hinted_player_id is not None:
+            player = self.players.get(hinted_player_id)
+            if player is None:
+                # 锁定层先锁定、身份层后注册：按 hint 补建对应槽位身份。
+                player = PlayerState(player_id=hinted_player_id)
+                self.players[hinted_player_id] = player
             self.track_to_player[observation.track_id] = hinted_player_id
-            return player
+            return player, False
 
         # 2) 已有 track->player 映射直接复用
         player_id = self.track_to_player.get(observation.track_id)
         if player_id is not None and player_id in self.players:
-            return self.players[player_id]
+            return self.players[player_id], False
 
-        # 3) 还有空位则新建
-        if len(self.players) < self.config.max_players:
-            player_id = f"Player_{len(self.players) + 1}"
-            player = PlayerState(player_id=player_id)
-            self.players[player_id] = player
-            self.track_to_player[observation.track_id] = player_id
+        # 3) 位置连续性软接管：无 hint、无映射但就近于某球员最近已知位置
+        soft_player_id = self._soft_takeover_candidate(observation)
+        if soft_player_id is not None:
+            player = self.players.get(soft_player_id)
+            if player is None:
+                player = PlayerState(player_id=soft_player_id)
+                self.players[soft_player_id] = player
+            self.track_to_player[observation.track_id] = soft_player_id
             self._diagnose(
                 observation.frame_index,
-                "created",
-                player_id=player_id,
+                "soft_takeover_assigned",
+                player_id=soft_player_id,
                 track_id=observation.track_id,
-                score=1.0,
-                reason="available player slot",
+                reason="positional continuity soft takeover",
                 court_position_m=observation.court_position_m,
             )
-            return player
+            return player, True
 
-        # 4) 否则在现有球员里找最佳候选
-        player, score, reason = self._best_candidate(observation)
-        if player is None or score < self.config.match_threshold:
-            return None
-        self.track_to_player[observation.track_id] = player.player_id
+        # 4) 无 hint、无映射、无软接管：记录 unmatched，不新建身份
+        #    （新 track 需等待锁定层在后续帧给出 hint，通常发生在 bootstrap / reconnect 后）
         self._diagnose(
             observation.frame_index,
-            "reconnected" if player.status in {"lost", "inactive"} else "assigned",
-            player_id=player.player_id,
+            "unmatched",
             track_id=observation.track_id,
-            score=score,
-            reason=reason,
+            reason="no lock manager hint",
             court_position_m=observation.court_position_m,
         )
-        return player
+        return None, False
 
-    def _best_candidate(self, observation: PlayerObservation) -> tuple[PlayerState | None, float, str]:
-        # 在所有已有球员里挑“预测位置离观测最近且运动方向最一致”的作为最佳候选。
-        best_player: PlayerState | None = None
-        best_score = 0.0
-        best_reason = ""
-        for player in self.players.values():
+    def _soft_takeover_candidate(self, observation: PlayerObservation) -> str | None:
+        # 就近软接管：在阈值内找"最近已知位置"最靠近该观测、且本帧尚未更新的球员。
+        # 只覆盖既有球员槽位，绝不创建第 5 个身份；lock hint 到来后仍以 hint 为准。
+        if not self.config.soft_takeover_enabled:
+            return None
+        best_player_id: str | None = None
+        best_distance = self.config.soft_takeover_max_distance_m
+        for player_id, player in self.players.items():
             if player.last_position_m is None:
                 continue
-            predicted = self._predict_position(player, observation.frame_index)
-            distance = _distance(predicted, observation.court_position_m)
-            # 速度不现实（超过上限）则位置分记 0。
-            if not self._speed_is_plausible(player, observation):
-                position_score = 0.0
-                reason = "implausible speed"
-            else:
-                # 距预测位置越近，位置分越高（按最大重连距离归一）。0..1
-                position_score = max(0.0, 1.0 - distance / self.config.max_reconnect_distance_m)
-                reason = "position"
-            motion_score = self._motion_score(player, predicted, observation.court_position_m)
-            # 综合分：位置占 0.7、运动一致性占 0.3。
-            score = 0.7 * position_score + 0.3 * motion_score
-            if score > best_score:
-                best_player = player
-                best_score = score
-                best_reason = f"{reason}+motion"
-        return best_player, best_score, best_reason
+            # 本帧已接收过样本的球员不再接收软接管（一帧一名 track）
+            if player.last_seen_frame == observation.frame_index:
+                continue
+            distance = hypot(
+                observation.court_position_m[0] - player.last_position_m[0],
+                observation.court_position_m[1] - player.last_position_m[1],
+            )
+            if distance <= best_distance:
+                best_distance = distance
+                best_player_id = player_id
+        return best_player_id
 
-    def _update_player(self, player: PlayerState, observation: PlayerObservation) -> list[PlayerTrajectorySample]:
+    def _update_player(self, player: PlayerState, observation: PlayerObservation, tentative: bool = False) -> list[PlayerTrajectorySample]:
         # 用一次观测更新球员状态，并产出（含插值）轨迹样本。
+        # tentative=True 表示软接管就近指派：样本标记为低置信度 tentative，等待 lock hint 校正。
         inserted = self._interpolate(player, observation)
         previous_position = player.last_position_m
         previous_timestamp = player.last_timestamp
@@ -312,7 +316,7 @@ class PlayerIdentityManager:
                 ]
         player.last_position_m = observation.court_position_m
 
-        # 记录当前帧的真实（detected）样本。
+        # 记录当前帧的真实（detected）样本；软接管样本标记为低置信度 tentative。
         sample = PlayerTrajectorySample(
             frame_index=observation.frame_index,
             timestamp_seconds=observation.timestamp_seconds,
@@ -322,8 +326,8 @@ class PlayerIdentityManager:
             image_footpoint=observation.image_footpoint,
             court_x=observation.court_position_m[0],
             court_y=observation.court_position_m[1],
-            confidence=observation.confidence,
-            tracking_status="detected",
+            confidence=min(observation.confidence, self.config.soft_takeover_confidence) if tentative else observation.confidence,
+            tracking_status="tentative" if tentative else "detected",
             is_interpolated=False,
             source="detector",
         )
@@ -403,33 +407,6 @@ class PlayerIdentityManager:
             court_position_m=court_position_m,
             confidence=position.confidence,
         )
-
-    def _predict_position(self, player: PlayerState, frame_index: int) -> list[float]:
-        # 基于上一位置与平滑速度，线性预测本帧球员应处的位置（用于重连匹配）。
-        if player.last_position_m is None:
-            return [0.0, 0.0]
-        fps = self.config.fps if self.config.fps > 0 else 30.0
-        elapsed = max(0.0, (frame_index - player.last_seen_frame) / fps)
-        return [
-            player.last_position_m[0] + player.last_velocity_mps[0] * elapsed,
-            player.last_position_m[1] + player.last_velocity_mps[1] * elapsed,
-        ]
-
-    def _motion_score(self, player: PlayerState, predicted: list[float], observed: list[float]) -> float:
-        # 运动一致性分：比较“预测速度方向”与“实际观测位移方向”的余弦相似度（0..1，无关时 0.5）。
-        if player.last_position_m is None:
-            return 0.5
-        observed_delta = [observed[0] - player.last_position_m[0], observed[1] - player.last_position_m[1]]
-        return _cosine_score(player.last_velocity_mps, observed_delta) if _norm(observed_delta) > 1e-6 else 0.5
-
-    def _speed_is_plausible(self, player: PlayerState, observation: PlayerObservation) -> bool:
-        # 判断本次观测相对上次的移动速度是否不超过上限（过滤明显错误的大跳变）。
-        if player.last_position_m is None:
-            return True
-        elapsed = observation.timestamp_seconds - player.last_timestamp
-        if elapsed <= 0:
-            return True
-        return _distance(player.last_position_m, observation.court_position_m) / elapsed <= self.config.max_speed_mps
 
     def _in_metric_bounds(self, point: list[float]) -> bool:
         # 判断球场坐标（米）是否落在含外扩边距的球场范围内。
@@ -518,26 +495,6 @@ class PlayerIdentityManager:
             diagnostic_event_counts=dict(Counter(item.event for item in self.diagnostics)),
             warnings=warnings,
         )
-
-
-def _distance(a: list[float], b: list[float]) -> float:
-    # 欧氏距离。
-    return hypot(a[0] - b[0], a[1] - b[1])
-
-
-def _norm(vector: list[float]) -> float:
-    # 向量的模长。
-    return hypot(vector[0], vector[1])
-
-
-def _cosine_score(a: list[float], b: list[float]) -> float:
-    # 余弦相似度映射到 0..1（(-1,1)→(0,1)）。任一向量过短返回 0.5。
-    norm_a = _norm(a)
-    norm_b = _norm(b)
-    if norm_a < 1e-6 or norm_b < 1e-6:
-        return 0.5
-    cosine = (a[0] * b[0] + a[1] * b[1]) / (norm_a * norm_b)
-    return max(0.0, min(1.0, (cosine + 1.0) / 2.0))
 
 
 def _side_for_metric_y(y: float) -> str:

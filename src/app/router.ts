@@ -12,13 +12,14 @@ const routeMeta = {
   upload: { shellMode: "landing", navigationSection: null },
   workspace: { shellMode: "standard", navigationSection: "capture" },
   tasks: { shellMode: "standard", navigationSection: "analysis" },
-  captureHome: { shellMode: "standard", navigationSection: "analysis" },
+  captureHome: { shellMode: "standard", navigationSection: "videos" },
   captureNew: { shellMode: "standard", navigationSection: "capture" },
   captureConsole: { shellMode: "capture", navigationSection: "capture" },
   segmentManager: { shellMode: "standard", navigationSection: "capture" },
   recordingWorkspace: { shellMode: "standard", navigationSection: "videos" },
   "new-analysis": { shellMode: "standard", navigationSection: "analysis" },
-  "analysis-tasks": { shellMode: "standard", navigationSection: "videos" },
+  "analysis-tasks": { shellMode: "standard", navigationSection: "analysis" },
+  "recording-analyze": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-job": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-details": { shellMode: "standard", navigationSection: "analysis" },
   vision: { shellMode: "standard", navigationSection: "analysis" },
@@ -67,6 +68,14 @@ export function parsePath(pathname: string): RouteState {
   if (segmentManagerMatch) {
     const [, fieldSessionId, takeId] = segmentManagerMatch;
     return { name: "segmentManager", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, fieldSessionId, takeId, ...routeMeta.segmentManager };
+  }
+
+  const recordingAnalyzeMatch = captureConsoleMatch
+    ? captureConsoleMatch[1].match(/^(.+)\/analyze$/)
+    : null;
+  if (recordingAnalyzeMatch) {
+    const [, sessionId] = recordingAnalyzeMatch;
+    return { name: "recording-analyze", path: `/capture/${sessionId}/analyze`, sessionId, ...routeMeta["recording-analyze"] };
   }
 
   if (captureConsoleMatch) {

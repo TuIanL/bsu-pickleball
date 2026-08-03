@@ -1,4 +1,10 @@
-## MODIFIED Requirements
+# live-coding-console Specification
+
+## Purpose
+
+定义实时录制工作台中的 Coding Action、比赛状态快照、撤销重放、轮询合并和运行状态展示契约。
+
+## Requirements
 
 ### Requirement: Coding Actions 语义命令 API
 
@@ -230,6 +236,8 @@
 
 ### Requirement: 录制中实时时间线视图
 
+CaptureConsolePage SHALL 在录制和停止阶段使用 MiniTimeline 展示实时分层时间线，而不是使用时间戳胶囊占位。
+
 **变更**：替换 `CaptureConsolePage` 中时间戳胶囊占位为真正的 `MiniTimeline` 组件。
 
 **修改前**：`CaptureConsolePage` 在录制阶段将最近 20 条事件渲染为时间戳芯片，不显示区间增长、非比赛时段叠加或分层轨道。
@@ -241,13 +249,27 @@
 - MiniTimeline SHALL 显示实时播放头
 - MiniTimeline SHALL 使用 `segments`、`events`、`liveState` 和 `elapsedMs` 作为数据源
 
+#### Scenario: 录制阶段显示实时 MiniTimeline
+
+- **WHEN** CaptureConsolePage 处于 `recording` 或 `stopping` 阶段
+- **THEN** 页面 SHALL 渲染 MiniTimeline，并使用当前 segments、events、liveState 和 elapsedMs
+- **AND** 页面 MUST NOT 退回仅显示时间戳胶囊的旧占位视图
+
 ### Requirement: 事件写入唯一入口
+
+系统 SHALL 通过 Outbox 和 `coding-actions` 作为时间线事件的唯一写入入口，不得直接创建重复的 timeline event。
 
 **变更**：`addTimelineEvent` 不再直接调用 `createTimelineEvent` API，仅通过 Outbox 写入。
 
 **修改前**：按钮点击 → 创建 Outbox item → enqueue → 直接调用 `createTimelineEvent` → Outbox sender flush。同一事件可能产生两条 DB 记录。
 
 **修改后**：按钮点击 → 创建 Outbox item → enqueue → Outbox sender 通过 `coding-actions` 接口发送 → 响应更新 `events`/`segments`/`liveState`。SHALL 不再直接调用 `POST /api/field-sessions/{id}/timeline-events`。
+
+#### Scenario: 时间线事件只经 Outbox 写入
+
+- **WHEN** 用户在实时录制工作台添加一个时间线事件
+- **THEN** 前端 SHALL 创建并发送一个 Outbox item
+- **AND** 前端 MUST NOT 直接调用 `POST /api/field-sessions/{id}/timeline-events`
 
 ### Requirement: 桌面端实时录制工作台层级
 

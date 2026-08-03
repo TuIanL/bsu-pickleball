@@ -44,7 +44,7 @@ export function adaptSyncRecordingSession(s: SyncRecordingSession): UnifiedCaptu
   if (!s.started_at) throw new Error("SyncRecordingSession 缺少 started_at");
 
   const tracks: CaptureTrackRuntime[] = [];
-  const slots = (s as any).camera_slots ?? {};
+  const slots = s.camera_slots ?? {};
   for (const name of ["cam_1", "cam_2"]) {
     const slot = slots[name];
     if (slot) {
@@ -59,7 +59,7 @@ export function adaptSyncRecordingSession(s: SyncRecordingSession): UnifiedCaptu
   return {
     sourceType: "sync_recording",
     sourceSessionId: s.session_id,
-    captureTakeId: (s as any).capture_take_id ?? "",
+    captureTakeId: s.capture_take_id ?? "",
     mode: "dual",
     startedAt: s.started_at,
     fps: s.fps ?? 60,

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# live-score-display Specification
+
+## Purpose
+
+定义实时计分板、发球方选择、最近回合序列、规则提示和状态驱动操作区的展示与交互规则，确保计分状态和录制工作台保持一致。
+
+## Requirements
 
 ### Requirement: 前端实时计分板
 

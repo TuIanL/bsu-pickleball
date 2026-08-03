@@ -22,6 +22,7 @@ class PlayerLockConfig:
     lock_min_hits: int = 5
     plausible_min_hits: int = 3
     lost_grace_frames: int = 3
+    # 【deprecated】硬锁到底后不再触发状态回退；保留字段仅为兼容旧配置/测试。
     lost_max_frames_locked: int = 300
     locked_conf: float = 0.06
     tentative_conf: float = 0.12
@@ -36,7 +37,7 @@ class PlayerLockConfig:
 
 @dataclass
 class PlayerSlot:
-    identity_id: str
+    identity_id: str  # "Player_1" / "Player_2" / "Player_3" / "Player_4"（与身份层命名一致）
     state: str = "searching"
     current_track_id: int | None = None
     track_id_history: list[int] = field(default_factory=list)

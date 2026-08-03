@@ -86,7 +86,7 @@ class Settings(BaseModel):
     ball_stationary_blacklist_seconds: float = 2.0         # 球静止候选加入黑名单的累计时长
 
     # ---- 可视化输出 ----
-    enable_analysis_overlay_video: bool = True            # 是否生成分析叠加视频
+    enable_analysis_overlay_video: bool = False           # 是否生成分析叠加视频（骨架已由前端 SVG 实时渲染）
     enable_position_visualizations: bool = True           # 是否生成位置可视化图
     visualization_language: str = "zh-CN"                 # 可视化文字语言
     enable_projection_debug_jsonl: bool = False           # 是否生成逐帧投影诊断 JSONL
@@ -110,7 +110,7 @@ class Settings(BaseModel):
     # ---- 球员分析容量（统一硬限制）----
     player_analysis_hard_limit: int = 4                  # 系统能同时分析的最大球员数（容量上限）
 
-    # ---- 球员锁定（跨帧保持 player_1~player_4 身份稳定性）----
+    # ---- 球员锁定（跨帧保持 Player_1~Player_4 身份稳定性，锁定后硬锁到底）----
     player_lock_target_player_count: int = 4              # 主球员目标数量（singles=2, doubles=4）【deprecated: 改用 player_analysis_hard_limit】
     player_lock_bootstrap_min_frames: int = 60            # bootstrap 最短收集帧数
     player_lock_bootstrap_max_frames: int = 180           # bootstrap 最长收集帧数
@@ -118,7 +118,7 @@ class Settings(BaseModel):
     player_lock_lock_min_hits: int = 5                    # 锁定所需连续命中帧数
     player_lock_plausible_min_hits: int = 3               # 进入 tentative 所需连续帧数
     player_lock_lost_grace_frames: int = 3                # 从 locked 到 lost 的容错帧数
-    player_lock_lost_max_frames_locked: int = 300         # lost 状态最长容忍帧数
+    player_lock_lost_max_frames_locked: int = 300         # lost 状态最长容忍帧数【deprecated: 硬锁到底后不再触发回退】
     player_lock_bootstrap_min_seconds: float = 1.0         # bootstrap 最短收集时长
     player_lock_bootstrap_max_seconds: float = 3.0         # bootstrap 最长收集时长
     player_lock_lost_grace_seconds: float = 0.1            # 从 locked 到 lost 的容错时长

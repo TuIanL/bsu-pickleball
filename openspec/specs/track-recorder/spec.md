@@ -1,4 +1,10 @@
-## ADDED Requirements
+# track-recorder Specification
+
+## Purpose
+
+定义单轨 FFmpeg Fragment 的启动、优雅停止、强制取消、异常退出通知和重复停止幂等行为。
+
+## Requirements
 
 ### Requirement: TrackRecorder 管理单轨 FFmpeg 进程
 

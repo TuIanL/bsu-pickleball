@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Camera,
   CheckCircle2,
@@ -79,6 +79,8 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
   };
 
   useEffect(() => {
+    // Populate the page from the external Field Session API.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- publishes async loading state.
     void loadSessions();
   }, [loadSessions]);
 

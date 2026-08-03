@@ -2,7 +2,7 @@
 import { useReducer, useState, useEffect, useCallback, useRef } from "react";
 import { computeCaptureElapsedMs } from "../components/capture/captureClock";
 import type {
-  CaptureRuntimeState, CaptureStartIntent, UnifiedCaptureSession, NormalizedCaptureStopResult, CaptureMode,
+  CaptureRuntimeState, CaptureStartIntent, UnifiedCaptureSession, NormalizedCaptureStopResult,
 } from "../types/capture";
 import {
   adaptRecordingSession, adaptSyncRecordingSession, normalizeCaptureStopResult,
@@ -14,7 +14,7 @@ import {
   getRecording, getSyncRecording, getCaptureTake,
   listRecordings, listSyncRecordings, getFieldSession,
 } from "../services/analysisClient";
-import type { RecordingStartRequest, SyncStartRequest, CaptureTakeSummary } from "../types/report";
+import type { RecordingStartRequest, SyncStartRequest, CaptureTakeSummary, FieldSession } from "../types/report";
 
 // ── Reducer ──────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction
 /** useCaptureRuntime 配置参数 */
 type UseCaptureRuntimeOptions = {
   fieldSessionId: string;                         // 场次 ID
-  onFieldSessionStarted?: (fs: any) => void;      // 启动录制成功后回调
+  onFieldSessionStarted?: (fs: FieldSession) => void; // 启动录制成功后回调
 };
 
 export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: UseCaptureRuntimeOptions) {
@@ -121,20 +121,30 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     if (clockRef.current) { clearInterval(clockRef.current); clockRef.current = null; }
   }, []);
 
+  const recordingStartedAt = state.phase === "recording" ? state.session.startedAt : null;
+  const stoppedDurationMs = state.phase === "completed" || state.phase === "partial"
+    ? state.result.captureTakeId ? (state.result.tracks[0]?.durationMs ?? 0) : 0
+    : null;
+
   // elapsedMs lifecycle
   useEffect(() => {
-    if (state.phase === "recording") {
-      startClock(state.session.startedAt);
+    if (recordingStartedAt) {
+      startClock(recordingStartedAt);
     } else {
       stopClock();
-      if (state.phase === "completed" || state.phase === "partial") {
-        setElapsedMs(state.result.captureTakeId ? (
-          state.result.tracks[0]?.durationMs ?? 0
-        ) : 0);
+      if (stoppedDurationMs !== null) {
+        // The interval is external state; publish the final duration after it stops.
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronizes terminal capture duration.
+        setElapsedMs(stoppedDurationMs);
       }
     }
     return stopClock;
-  }, [state.phase]);
+  }, [recordingStartedAt, stoppedDurationMs, startClock, stopClock]);
+
+  const activeSession = state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering"
+    || state.phase === "completed" || state.phase === "partial" || state.phase === "canceled"
+    ? state.session
+    : null;
 
   // session-specific polling
   useEffect(() => {
@@ -158,7 +168,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
       } catch { /* polling failure is non-critical */ }
     }, 5000);
     return () => clearInterval(timer);
-  }, [state.phase, (state as any).session?.sourceSessionId]);
+  }, [state.phase, activeSession?.sourceSessionId, activeSession?.mode]);
 
   // ── Hydration: 页面重进时发现活跃录制 ──
   const hydrate = useCallback(async () => {
@@ -268,13 +278,13 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
         session = adaptSyncRecordingSession(refreshed);
       }
       dispatch({ type: "STARTED", session });
-    } catch (e: any) {
-      dispatch({ type: "START_FAILED", error: e?.message ?? "启动录制失败" });
+    } catch (e: unknown) {
+      dispatch({ type: "START_FAILED", error: e instanceof Error ? e.message : "启动录制失败" });
     }
   }, [fieldSessionId, onFieldSessionStarted]);
 
   const stop = useCallback(async () => {
-    if (state.phase !== "recording" && state.phase !== "recovering") return;
+    if (!activeSession || (state.phase !== "recording" && state.phase !== "recovering")) return;
     if (state.phase === "recovering" && recoveryRef.current.timer) {
       clearTimeout(recoveryRef.current.timer);
       recoveryRef.current.timer = null;
@@ -282,26 +292,26 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     dispatch({ type: "STOP_REQUESTED" });
 
     try {
-      const sid = state.session.sourceSessionId;
-      const mode = state.session.mode;
+      const sid = activeSession.sourceSessionId;
+      const mode = activeSession.mode;
 
       if (mode === "single") {
         const result = await stopRecording(sid);
-        const ns = normalizeCaptureStopResult(result as any);
+        const ns = normalizeCaptureStopResult(result);
         const refreshed = await getRecording(sid).catch(() => null);
-        const session = refreshed ? adaptRecordingSession(refreshed) : state.session;
+        const session = refreshed ? adaptRecordingSession(refreshed) : activeSession;
         dispatch({ type: "STOP_SUCCEEDED", session, result: ns });
       } else {
         const result = await stopSyncRecording(sid);
-        const ns = normalizeCaptureStopResult(result as any);
+        const ns = normalizeCaptureStopResult(result);
         const refreshed = await getSyncRecording(sid).catch(() => null);
-        const session = refreshed ? adaptSyncRecordingSession(refreshed) : state.session;
+        const session = refreshed ? adaptSyncRecordingSession(refreshed) : activeSession;
         dispatch({ type: "STOP_SUCCEEDED", session, result: ns });
       }
-    } catch (e: any) {
-      dispatch({ type: "STOP_RESULT_UNKNOWN", error: e?.message ?? "停止请求结果未知" });
+    } catch (e: unknown) {
+      dispatch({ type: "STOP_RESULT_UNKNOWN", error: e instanceof Error ? e.message : "停止请求结果未知" });
     }
-  }, [state.phase, (state as any).session?.sourceSessionId, (state as any).session?.mode]);
+  }, [state.phase, activeSession]);
 
   const recover = useCallback(async () => {
     if (state.phase !== "recovering") return;
@@ -367,17 +377,19 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
             };
         dispatch({ type: "RECOVERED", session, result });
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       recoveryRef.current.attemptCount++;
       setRecoveryAttemptCount(recoveryRef.current.attemptCount);
-      dispatch({ type: "STOP_RESULT_UNKNOWN", error: e?.message ?? "恢复查询失败" });
+      dispatch({ type: "STOP_RESULT_UNKNOWN", error: e instanceof Error ? e.message : "恢复查询失败" });
     }
-  }, [state.phase, fieldSessionId, (state as any).session]);
+  }, [state.phase, fieldSessionId, activeSession]);
 
   // ── Auto-recovery: recovering 状态下自动查询服务器 ──
   useEffect(() => {
     if (state.phase !== "recovering") {
       recoveryRef.current.timer = null;
+      // Reset the timeout indicator when recovery leaves its polling state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronizes derived recovery status.
       setRecoveryTimedOut(false);
       return;
     }
@@ -419,7 +431,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
   }, [state.phase, recover]);
 
   const cancel = useCallback(async () => {
-    if (state.phase !== "recording" && state.phase !== "stopping" && state.phase !== "recovering") return;
+    if (!activeSession || (state.phase !== "recording" && state.phase !== "stopping" && state.phase !== "recovering")) return;
     if (state.phase === "recovering" && recoveryRef.current.timer) {
       clearTimeout(recoveryRef.current.timer);
       recoveryRef.current.timer = null;
@@ -427,21 +439,21 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     dispatch({ type: "CANCEL_REQUESTED" });
 
     try {
-      const sid = state.session.sourceSessionId;
-      const mode = state.session.mode;
+      const sid = activeSession.sourceSessionId;
+      const mode = activeSession.mode;
       if (mode === "single") {
         const s = await cancelRecording(sid);
         const us = adaptRecordingSession(s);
         dispatch({ type: "CANCELED", session: us });
       } else {
         const s = await cancelSyncRecording(sid);
-        const us = adaptSyncRecordingSession(s as any);
+        const us = adaptSyncRecordingSession(s);
         dispatch({ type: "CANCELED", session: us });
       }
-    } catch (e: any) {
-      dispatch({ type: "FAILED", session: state.session, error: e?.message ?? "取消失败" });
+    } catch (e: unknown) {
+      dispatch({ type: "FAILED", session: activeSession, error: e instanceof Error ? e.message : "取消失败" });
     }
-  }, [state.phase, (state as any).session]);
+  }, [state.phase, activeSession]);
 
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
@@ -460,16 +472,14 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
 
   const hydrationError = state.phase === "hydration_failed" ? state.error : "";
 
-  const operationError = state.phase === "recovering"
-    ? (state as any).operationError ?? ""
-    : "";
+  const operationError = state.phase === "recovering" ? state.operationError : "";
 
   return {
     phase: state.phase,                                // 当前阶段
     session: (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "completed" || state.phase === "partial")
       ? state.session : (state.phase === "canceled" ? state.session : null),
     result: (state.phase === "completed" || state.phase === "partial" || state.phase === "failed") ? state.result : null,
-    error: state.phase === "failed" ? (state as any).error ?? "" : operationError,
+    error: state.phase === "failed" ? state.error : operationError,
     elapsedMs,                                         // 已录制毫秒数
     captureTakeId,                                     // 当前 CaptureTake ID
     isRecording: state.phase === "recording" || state.phase === "stopping",

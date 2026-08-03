@@ -185,7 +185,7 @@ Define Field Session as the top-level court-side capture task context for groupi
 
 ### Requirement: FieldSessionGroupCard 提供删除采集任务入口
 
-系统 MUST 在 `/tasks` 页面的「录制视频」Tab 中，为每个 `FieldSessionGroupCard` 提供删除当前采集任务的入口。
+系统 MUST 在 `/analysis/tasks` 页面的「录制视频」Tab 中，为每个 `FieldSessionGroupCard` 提供删除当前采集任务的入口；历史 `/tasks` 入口提供相同页面。
 
 #### Scenario: 分组卡片头部显示删除按钮
 

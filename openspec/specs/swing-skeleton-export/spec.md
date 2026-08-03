@@ -1,4 +1,10 @@
-## ADDED Requirements
+# swing-skeleton-export Specification
+
+## Purpose
+
+定义从视频输入到 YOLO 检测、IoU 跟踪、RTMPose 姿态、骨架叠加、照片集和错误报告的 CLI 工作流。
+
+## Requirements
 
 ### Requirement: CLI 入口接收视频路径
 

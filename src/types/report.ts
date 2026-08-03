@@ -685,6 +685,11 @@ export interface AnalysisUploadMetadata {
   cameraAngle: CameraAngle;
   athleteLabel: string;
   level: string;
+  camera_id?: string;
+  recording_session_id?: string;
+  capture_take_id?: string;
+  session_dir?: string;
+  camera_slot?: "cam_1" | "cam_2";
 }
 
 export interface AnalysisStage {
@@ -735,6 +740,8 @@ export interface AnalysisJobSummary {
   videoId?: string;
   calibrationId?: string;
   analysisMode?: "demo" | "real" | "limited";
+  recordingSessionId?: string;
+  cameraSlot?: "cam_1" | "cam_2";
 }
 
 export type AnalysisDeleteStatus = "deleted" | "blocked" | "not_found" | "failed";
@@ -870,6 +877,8 @@ export interface DetectionOverlayBox {
   confidence: number;
   class_name: "person";
   track_id?: string;
+  /** canonical 球员身份（Player_1..Player_4）；未关联时为空。原始 track_id 不作为展示身份。 */
+  player_id?: string;
   source_width: number;
   source_height: number;
 }

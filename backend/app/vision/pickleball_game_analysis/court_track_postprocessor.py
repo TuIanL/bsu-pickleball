@@ -27,7 +27,7 @@ def _classify_court_side(y_ft: float) -> str:
 
 
 _EVENT_BREAK_MAP: dict[str, SegmentBreakReason] = {
-    "player_reset_after_prolonged_loss": "identity_reset",
+    # 硬锁到底后不再产生 player_reset_after_prolonged_loss；identity_reset 分段保留为防御性兜底。
 }
 
 

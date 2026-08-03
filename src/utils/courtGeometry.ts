@@ -57,11 +57,6 @@ export function courtSvgDefs() {
   const br = courtToSvg(COURT_WIDTH_FT, COURT_LENGTH_FT);
   const netLeft = courtToSvg(0, CENTER_LINE_Y_FT);
   const netRight = courtToSvg(COURT_WIDTH_FT, CENTER_LINE_Y_FT);
-  const kitchenTopLeft = courtToSvg(0, 0);
-  const kitchenTopRight = courtToSvg(COURT_WIDTH_FT, 0);
-  const kitchenBottomLeft = courtToSvg(0, COURT_LENGTH_FT);
-  const kitchenBottomRight = courtToSvg(COURT_WIDTH_FT, COURT_LENGTH_FT);
-
   const kitchenTopFar = courtToSvg(0, KITCHEN_DEPTH_FT);
   const kitchenTopNear = courtToSvg(COURT_WIDTH_FT, KITCHEN_DEPTH_FT);
   const kitchenBottomFar = courtToSvg(0, COURT_LENGTH_FT - KITCHEN_DEPTH_FT);

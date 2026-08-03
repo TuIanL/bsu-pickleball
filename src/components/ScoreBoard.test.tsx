@@ -55,7 +55,7 @@ describe("ScoreBoard", () => {
 
   it("shows recent_results blocks via container", () => {
     const state = makeLiveState({});
-    const { container } = render(<ScoreBoard liveState={state} />);
+    render(<ScoreBoard liveState={state} />);
     const blocks = state.recent_results!.length;
     expect(blocks).toBe(5);
   });

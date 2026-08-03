@@ -1,4 +1,10 @@
-## ADDED Requirements
+# structured-heatmap Specification
+
+## Purpose
+
+定义结构化热力图数据的后端输出、前端渲染、交互图例和历史数据缺失时的降级行为，确保数据契约与视觉展示可以独立验证。
+
+## Requirements
 
 ### Requirement: 系统暴露结构化热力图数据
 

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# recording-policy Specification
+
+## Purpose
+
+定义单轨和多轨录制在故障、重启预算耗尽及降级场景下的 RecordingPolicy 策略行为，明确每种策略的恢复范围和终态结果。
+
+## Requirements
 
 ### Requirement: RecordingPolicy 可配置故障策略
 

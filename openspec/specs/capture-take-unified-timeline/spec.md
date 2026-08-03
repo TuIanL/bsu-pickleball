@@ -1,4 +1,10 @@
-## ADDED Requirements
+# capture-take-unified-timeline Specification
+
+## Purpose
+
+定义 CaptureTake、CaptureTrack 与事件时间线的数据模型、生命周期、时间映射和旧数据适配规则。
+
+## Requirements
 
 ### Requirement: CaptureTake 数据模型
 

@@ -1,5 +1,3 @@
-import type { SessionTimelineEvent, CaptureSegmentSummary } from "../../types/report";
-
 const EVENT_LABELS: Record<string, string> = {
   set_start: "盘开始", set_end: "盘结束",
   game_start: "局开始", game_end: "局结束",

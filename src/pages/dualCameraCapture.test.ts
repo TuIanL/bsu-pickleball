@@ -6,7 +6,6 @@ import type {
   SyncTestRequest,
   SyncTestResult,
   SyncSegment,
-  SyncSegmentFile,
   CameraSlotRole,
   SyncRecordingStatus,
   SyncSegmentStatus,

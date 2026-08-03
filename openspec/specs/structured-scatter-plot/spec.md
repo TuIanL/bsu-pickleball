@@ -1,4 +1,10 @@
-## ADDED Requirements
+# structured-scatter-plot Specification
+
+## Purpose
+
+定义结构化散点图数据的后端输出、前端渲染、图例切换和历史任务缺失数据时的降级行为，确保轨迹数据和可视化组件边界清晰可测。
+
+## Requirements
 
 ### Requirement: 系统暴露结构化散点图数据
 

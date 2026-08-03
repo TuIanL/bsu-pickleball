@@ -1,6 +1,6 @@
 /** useLiveCoding —— 实时编码：Outbox、Timeline、Segments、LiveCodingState */
 import { useState, useRef, useCallback, useEffect } from "react";
-import type { LiveCodingState, CaptureSegmentSummary, SessionTimelineEvent } from "../types/report";
+import type { LiveCodingState, CaptureSegmentSummary, SessionTimelineEvent, CodingActionResponse, TimelineEventCreate } from "../types/report";
 import {
   getLiveCodingState, listSegments, listTimelineEvents, createTimelineEvent,
 } from "../services/analysisClient";
@@ -80,17 +80,14 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
   const undoStackRef = useRef<{segments: CaptureSegmentSummary[]; events: SessionTimelineEvent[]}[]>([]);
   const segmentsRef = useRef<CaptureSegmentSummary[]>([]);
   const eventsRef = useRef<SessionTimelineEvent[]>([]);
-  const startedAtRef = useRef(startedAt);
   const initialNonPlayRef = useRef(false);
 
-  startedAtRef.current = startedAt;
-
   const nowMs = useCallback(() => {
-    if (startedAtRef.current) {
-      return Math.max(0, Date.now() - Date.parse(startedAtRef.current));
+    if (startedAt) {
+      return Math.max(0, Date.now() - Date.parse(startedAt));
     }
     return elapsedMs;
-  }, [elapsedMs]);
+  }, [elapsedMs, startedAt]);
 
   // 同步 ref 跟踪最新 state
   useEffect(() => { segmentsRef.current = segments; }, [segments]);
@@ -102,7 +99,7 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     return [...map.values()];
   };
 
-  const applyCodingResponse = useCallback((response: any) => {
+  const applyCodingResponse = useCallback((response: CodingActionResponse) => {
     revisionRef.current = response.revision;
     if (response.live_state) {
       setLiveCodingState({ ...response.live_state, revision: response.revision });
@@ -110,20 +107,22 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     if (Array.isArray(response.timeline_events)) {
       setTimelineEvents(response.timeline_events as SessionTimelineEvent[]);
     } else if (response.created_events?.length) {
-      setTimelineEvents(prev => upsertById(prev, response.created_events as SessionTimelineEvent[]));
+      setTimelineEvents(prev => upsertById(prev, response.created_events as unknown as SessionTimelineEvent[]));
     }
     if (Array.isArray(response.segments)) {
       setSegments(response.segments as CaptureSegmentSummary[]);
     } else if (response.updated_segments?.length) {
-      setSegments(prev => upsertById(prev, response.updated_segments as CaptureSegmentSummary[]));
+      setSegments(prev => upsertById(prev, response.updated_segments as unknown as CaptureSegmentSummary[]));
     }
   }, []);
 
   // 加载 Timeline Events：仅在有 captureTakeId 时加载，避免混入历史事件
   useEffect(() => {
+    // A new Take must not display events belonging to the previous Take.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clears stale external data on Take change.
     setTimelineEvents([]);
     if (!fieldSessionId || !captureTakeId) return;
-    listTimelineEvents(fieldSessionId, { capture_take_id: captureTakeId } as any)
+    listTimelineEvents(fieldSessionId, { capture_take_id: captureTakeId })
       .then(setTimelineEvents)
       .catch(() => {});
   }, [fieldSessionId, captureTakeId]);
@@ -144,7 +143,7 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       } catch { /* ignore */ }
 
       try {
-        const segs = await listSegments(captureTakeId as any);
+        const segs = await listSegments(captureTakeId);
         setSegments(segs ?? []);
       } catch { /* ignore */ }
 
@@ -180,7 +179,7 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       timestamp_ms: ts,
       note: "",
       payload_json: { intermission_kind: "between_rallies" },
-    } as any).then(created => {
+    } satisfies TimelineEventCreate).then(created => {
       if (created) {
         setTimelineEvents(prev => upsertById(prev, [created as SessionTimelineEvent]));
       }
@@ -198,9 +197,9 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     outboxSenderRef.current?.freeze?.();
   }, []);
 
-  const createEventLocal = useCallback(async (fieldSessionId: string, payload: Record<string, unknown>) => {
+  const createEventLocal = useCallback(async (fieldSessionId: string, payload: TimelineEventCreate) => {
     try {
-      const created = await createTimelineEvent(fieldSessionId, payload as any);
+      const created = await createTimelineEvent(fieldSessionId, payload);
       if (created) {
         setTimelineEvents(prev => upsertById(prev, [created as SessionTimelineEvent]));
       }
@@ -425,7 +424,7 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       setOutboxItems(getPendingItems(captureTakeId));
       outboxSenderRef.current?.flush().catch(() => {});
     } else if (fieldSessionId) {
-      listTimelineEvents(fieldSessionId, {} as any)
+      listTimelineEvents(fieldSessionId)
         .then(setTimelineEvents)
         .catch(() => {});
     }

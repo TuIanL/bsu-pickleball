@@ -1,4 +1,4 @@
-import { ArrowRight, Camera, Sparkles, Upload, Zap } from "lucide-react";
+import { Camera, Sparkles, Upload, Zap } from "lucide-react";
 import type { ReactNode } from "react";
 import { VideoAnalysisCard } from "../components/platform/VideoAnalysisCard";
 import {

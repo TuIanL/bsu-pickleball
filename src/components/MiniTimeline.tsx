@@ -18,7 +18,6 @@ interface TimelineProps {
   liveState: LiveCodingState | null;
   totalDurationMs: number;
   elapsedMs: number;
-  showDurationHint?: boolean;
   staticMode?: boolean;
   playing?: boolean;
   markers?: TimelineMarker[];
@@ -34,7 +33,6 @@ const TRACK_HEIGHT_EXPANDED = 26;
 const TRACK_GAP_COMPACT = 4;
 const TRACK_GAP_EXPANDED = 6;
 const HIGHLIGHT_TRACK_HEIGHT = 20;
-const VIEW_DURATION_MS = 90000;
 const PLAYHEAD_HEADROOM_MS = 5000;
 
 const TRACKS = [
@@ -65,11 +63,11 @@ export function deriveNonPlayRanges(events: SessionTimelineEvent[], elapsedMs: n
   return ranges;
 }
 
-export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, showDurationHint, staticMode = false, playing = false, markers: externalMarkers, compact = false, windowMode, onWindowModeChange, density, onDensityChange }: TimelineProps) {
+export function MiniTimeline({ segments, events, liveState, totalDurationMs, elapsedMs, staticMode = false, playing = false, markers: externalMarkers, compact = false, windowMode, onWindowModeChange, density, onDensityChange }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(600);
   const [smoothElapsedMs, setSmoothElapsedMs] = useState(elapsedMs);
-  const anchorRef = useRef({ elapsedMs, at: performance.now() });
+  const anchorRef = useRef({ elapsedMs, at: 0 });
 
   const trackHeight = compact ? TRACK_HEIGHT_COMPACT : TRACK_HEIGHT_EXPANDED;
   const trackGap = compact ? TRACK_GAP_COMPACT : TRACK_GAP_EXPANDED;
@@ -89,7 +87,6 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
   useEffect(() => {
     if (!staticMode || !playing) {
       anchorRef.current = { elapsedMs, at: performance.now() };
-      setSmoothElapsedMs(elapsedMs);
       return;
     }
     anchorRef.current = { elapsedMs, at: performance.now() };
@@ -116,7 +113,7 @@ export function MiniTimeline({ segments, events, liveState, totalDurationMs, ela
 
   // 录制中使用 runtime 每 250ms 更新的时间，避免 rAF 让整个时间轴每帧重排；
   // 静态播放仍保留平滑指针。
-  const displayElapsedMs = staticMode ? smoothElapsedMs : elapsedMs;
+  const displayElapsedMs = staticMode && playing ? smoothElapsedMs : elapsedMs;
   const contentEndMs = Math.max(totalDurationMs, displayElapsedMs, latestContentMs);
   const windowEnd = internalWindowMode === "recent"
     ? Math.max(displayElapsedMs + PLAYHEAD_HEADROOM_MS, latestContentMs)

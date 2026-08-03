@@ -1,4 +1,10 @@
-## ADDED Requirements
+# match-21-point-rules Specification
+
+## Purpose
+
+定义 21 分混合计分、三局两胜、发球站位、胜局累计和 A/B 身份稳定性的比赛规则，覆盖正常比赛、平分和历史规则兼容场景。
+
+## Requirements
 
 ### Requirement: 统一比赛结构
 

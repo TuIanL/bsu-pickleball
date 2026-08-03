@@ -18,7 +18,7 @@ TBD - created by archiving change add-app-sidebar-and-active-capture-presence. U
 #### Scenario: 导航项
 
 - **WHEN** 侧边栏渲染
-- **THEN** 导航项 SHALL 包含：工作台、视频管理、分析任务、报告中心、设备管理、设置
+- **THEN** 导航项 SHALL 包含：工作台、视频管理（→`/capture`）、分析任务（→`/analysis/tasks`）、报告中心、设备管理、设置
 - **AND** 每个导航项 SHALL 有对应图标和文字标签
 - **AND** 当前活跃导航项 SHALL 以浅绿背景（`#EAF7EE`）和绿色文字（`#3BAA62`）高亮
 - **AND** 非活跃项 SHALL 使用 `#475467` 文字色
@@ -28,6 +28,8 @@ TBD - created by archiving change add-app-sidebar-and-active-capture-presence. U
 - **WHEN** 用户点击导航项
 - **THEN** 系统 SHALL 调用 `onNavigate()` 跳转到对应路径
 - **AND** 高亮状态 SHALL 跟随当前路由更新
+- **AND**「视频管理」SHALL 跳转到 `/capture`（录制管理 / 现场采集）
+- **AND**「分析任务」SHALL 跳转到 `/analysis/tasks`（分析任务列表）
 
 ### Requirement: 侧边栏当前录制状态块
 

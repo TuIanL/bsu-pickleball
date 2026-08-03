@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,7 +10,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { AppPath, FieldSessionCreate } from "../types/report";
-import { createFieldSession, startFieldSession, listCameras } from "../services/analysisClient";
+import { createFieldSession } from "../services/analysisClient";
 
 type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
