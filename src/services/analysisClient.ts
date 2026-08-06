@@ -493,6 +493,9 @@ interface AnalysisJobRequest {
   videoId?: string;
   recordingSessionId?: string;
   cameraSlot?: "cam_1" | "cam_2";
+  /** 任务级推理开关：YOLO 人体检测 / RTMPose 姿态识别（不传则后端沿用全局配置） */
+  enableModelInference?: boolean;
+  enablePoseInference?: boolean;
 }
 
 export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
@@ -561,6 +564,8 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
         requestNewVersion: request.requestNewVersion ?? false,
         recording_session_id: request.recordingSessionId,
         camera_slot: request.cameraSlot,
+        enableModelInference: request.enableModelInference,
+        enablePoseInference: request.enablePoseInference,
       }),
       method: "POST",
     }));

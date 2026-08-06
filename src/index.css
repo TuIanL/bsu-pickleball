@@ -106,12 +106,33 @@ button {
     @apply inline-flex items-center justify-center gap-2 rounded-full border border-[#D8E5D2] bg-white/85 px-5 py-3 text-sm font-semibold text-[#203127] transition hover:-translate-y-0.5 hover:border-[#22C55E]/45 hover:bg-[#F5FFF2] focus:outline-none focus:ring-2 focus:ring-[#22C55E]/55 focus:ring-offset-2 focus:ring-offset-[#F5F8F2];
   }
 
+  .danger-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-[#F5C1C1] bg-[#A32D2D] px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-[#791F1F] focus:outline-none focus:ring-2 focus:ring-[#E24B4A] focus:ring-offset-2 focus:ring-offset-[#F5F8F2];
+  }
+
   .green-button:disabled,
-  .quiet-button:disabled {
+  .quiet-button:disabled,
+  .danger-button:disabled {
     @apply cursor-not-allowed opacity-50 hover:translate-y-0;
   }
 
   .field-input {
     @apply w-full rounded-2xl border border-[#D8E5D2] bg-white/90 px-4 py-3 text-sm font-semibold text-[#203127] outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20;
   }
+}
+
+/* 右下角浮动 toast：最小淡入（出现时上移 + 渐显） */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast-in {
+  animation: toast-in 0.18s ease-out;
 }

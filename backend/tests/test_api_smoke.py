@@ -1175,7 +1175,9 @@ def test_pipeline_keeps_high_confidence_line_out_players_for_overlay_and_pose(tm
     )
 
     assert result.status == "completed"
-    assert result.tracks == []
+    # 场外高置信度球员（发球/接发球站位）现在保留在主轨迹中（小地图可显示在场外）
+    assert len(result.tracks) == 3
+    assert result.tracks[0].court_point.x > 20.0  # 场外但合理范围内
 
     storage = StorageService()
     tracking_result = storage.read_json(storage.tracking_json_path("job-line-out-overlay"))
@@ -1700,3 +1702,21 @@ def make_court_then_non_court_video_bytes(tmp_path):
     writer.write(non_court)
     writer.release()
     return path.read_bytes()
+
+
+def test_inline_content_disposition_handles_chinese_filename():
+    """中文文件名不能导致 latin-1 编码失败（stream_video 500 的回归防护）。"""
+    from app.api.routes_video import _inline_content_disposition
+
+    cd = _inline_content_disposition("测试视频25s.mp4")
+    # ASCII fallback 保证 latin-1 安全
+    assert cd.startswith('inline; filename="25s.mp4"')
+    # RFC 5987 UTF-8 版本保留原始中文文件名
+    assert "filename*=UTF-8''" in cd
+    assert "%E6%B5%8B%E8%AF%95" in cd  # "测试" 的 UTF-8 百分号编码
+
+    plain = _inline_content_disposition("match.mp4")
+    assert plain == 'inline; filename="match.mp4"; filename*=UTF-8\'\'match.mp4'
+
+    empty = _inline_content_disposition("视频.mp4")
+    assert 'filename="video.mp4"' in empty  # 全中文 → fallback 到 video.mp4

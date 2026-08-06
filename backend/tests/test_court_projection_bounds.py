@@ -74,8 +74,8 @@ class TestCourtBounds:
         assert any(p[1] == pytest.approx(-5) for p in all_traj_points), "y=-5 should be in trajectory"
 
         # 检查热力图：y=-5 点不应纳入网格
-        if data.heatmaps is not None:
-            for cell in data.heatmaps.cells:
+        if data.heatmaps is not None and data.heatmaps.visual_grid is not None:
+            for cell in data.heatmaps.visual_grid.cells:
                 # 22 rows over 0~44ft → row for y=-5 would be -1, clamped to 0
                 # y=-5 is outside court so should not appear in any cell
                 pass
@@ -251,6 +251,20 @@ class TestPositionSmoother:
 
         assert reduction >= 50, f"Expected >=50% jitter reduction, got {reduction:.0f}%"
 
+    # stride>1 时相邻处理帧不应被误判为断帧（gap 语义为"额外缺失帧数"）
+    def test_frame_stride_keeps_smoothing(self):
+        smoother = CourtPositionSmoother(alpha=0.5, max_speed_ft_s=30.0, max_gap_frames=10, frame_stride=2)
+
+        r = smoother.update(track_id=1, frame_index=0, x_ft=10.0, y_ft=22.0, timestamp=0.0)
+        assert r.smoothing_status == "smoothed"
+        # 相邻处理帧（原始帧号差 2 == frame_stride）应正常平滑，而不是 gap_hold
+        r = smoother.update(track_id=1, frame_index=2, x_ft=11.0, y_ft=22.0, timestamp=0.066)
+        assert r.smoothing_status == "smoothed", f"expected smoothed, got {r.smoothing_status}"
+        assert r.x > 10.0  # 平滑值应跟随输入移动
+        # 真正缺帧（原始帧号差 > stride）仍应 gap_hold
+        r = smoother.update(track_id=1, frame_index=6, x_ft=13.0, y_ft=22.0, timestamp=0.2)
+        assert r.smoothing_status == "gap_hold", f"expected gap_hold, got {r.smoothing_status}"
+
     def test_outlier_detection(self):
         smoother = CourtPositionSmoother(alpha=0.5, max_speed_ft_s=30.0, max_gap_frames=10)
 
@@ -399,9 +413,9 @@ class TestIntegration:
         assert data.outside_court_point_count >= 1
 
         # 热力图不应包含界外点
-        if data.heatmaps is not None:
+        if data.heatmaps is not None and data.heatmaps.visual_grid is not None:
             # 手动检查网格是否包含 y=-5 区域
-            for cell in data.heatmaps.cells:
+            for cell in data.heatmaps.visual_grid.cells:
                 # 22 rows over 44ft → row index for y=-5 would be floor((-5)/2) = -3, clamped to 0
                 # Since y=-5 is outside court bounds, it should not be counted
                 pass

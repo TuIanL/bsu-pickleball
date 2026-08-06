@@ -31,6 +31,28 @@ def test_footpoint_is_bottom_center_of_bbox():
     estimate = FootpointEstimator().estimate(bbox)
 
     assert estimate.image_footpoint == [20, 80]
+
+
+def test_footpoint_hybrid_fallback_marks_pose_unavailable():
+    """hybrid 无 pose 关键点时回退 bbox 底部中心，并显式标记 pose_unavailable。"""
+    bbox = BoundingBox(x1=10, y1=20, x2=30, y2=80)
+
+    estimate = FootpointEstimator(method="hybrid").estimate(bbox, pose_keypoints=None, frame_shape=(100, 100))
+
+    assert estimate.method == "bbox_bottom_center"
+    assert estimate.image_footpoint == [20, 80]
+    assert estimate.metadata is not None
+    assert estimate.metadata.get("pose_unavailable") is True
+
+
+def test_footpoint_bbox_method_does_not_flag_pose_unavailable():
+    """直接 bbox_bottom_center 方法不标记 pose_unavailable。"""
+    bbox = BoundingBox(x1=10, y1=20, x2=30, y2=80)
+
+    estimate = FootpointEstimator(method="bbox_bottom_center").estimate(bbox, pose_keypoints=None, frame_shape=(100, 100))
+
+    assert estimate.method == "bbox_bottom_center"
+    assert estimate.metadata is None or "pose_unavailable" not in (estimate.metadata or {})
     assert estimate.method == "bbox_bottom_center"
     assert estimate_footpoint(bbox) == (20, 80)
 

@@ -18,6 +18,7 @@
 
 # pathlib.Path 是 Python 处理文件路径的标准工具，可用来判断文件是否存在
 from pathlib import Path
+from urllib.parse import quote
 
 # FastAPI 核心组件
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -33,6 +34,18 @@ from app.services.video_service import UnsupportedVideoError, video_service
 # - prefix="/api/videos" 表示本文件里所有接口的路径都以 /api/videos 开头
 # - tags=["videos"] 只是给接口打个分组标签，方便在自动生成的 API 文档里归类
 router = APIRouter(prefix="/api/videos", tags=["videos"])
+
+
+def _inline_content_disposition(filename: str) -> str:
+    # 中文等非 ASCII 文件名直接放进 Content-Disposition 会触发 Starlette 的
+    # latin-1 编码（UnicodeEncodeError → 500），导致视频流加载失败。
+    # 这里用 RFC 5987 的 filename* 提供 UTF-8 编码版本，fallback 用 ASCII 化文件名。
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii").strip()
+    # ASCII 化后文件名主体为空（如全中文只剩扩展名）时回退到通用名
+    if not ascii_name or not ascii_name[0].isalnum():
+        ascii_name = "video.mp4"
+    encoded = quote(filename)
+    return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
 
 
 # 定义一个"上传视频"的接口
@@ -129,7 +142,7 @@ def stream_video(video_id: str, request: Request) -> StreamingResponse:
 
     headers: dict[str, str] = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Disposition": _inline_content_disposition(filename),
     }
 
     if range_header:

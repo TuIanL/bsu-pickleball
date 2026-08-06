@@ -7,9 +7,20 @@ from app.vision.courtvision_calibration_engine.court_units import (
     feet_to_meters,
 )
 from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
+from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
+from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
 
 
-def position(track_id, frame, x_ft, y_ft, timestamp=None):
+def position(
+    track_id,
+    frame,
+    x_ft,
+    y_ft,
+    timestamp=None,
+    valid=True,
+    projection_status="inside_court",
+    is_inside_tracking_area=True,
+):
     return PlayerFramePosition(
         frame_index=frame,
         timestamp=float(frame if timestamp is None else timestamp),
@@ -19,10 +30,20 @@ def position(track_id, frame, x_ft, y_ft, timestamp=None):
         court_position=[x_ft, y_ft],
         court_unit="ft",
         confidence=0.9,
+        valid=valid,
+        projection_status=projection_status,
+        is_inside_tracking_area=is_inside_tracking_area,
     )
 
 
-@pytest.mark.parametrize("event", ["side_quota_fallback_replaced", "fallback_tentative_promoted"])
+@pytest.mark.parametrize(
+    "event",
+    [
+        "side_quota_fallback_replaced",
+        "fallback_tentative_promoted",
+        "player_reconnected_after_track_change",
+    ],
+)
 def test_player_identity_diagnostic_accepts_lock_manager_events(event):
     diagnostic = PlayerIdentityDiagnostic(
         frame_index=0,
@@ -79,6 +100,81 @@ def test_identity_binds_lost_slot_new_track_to_same_player_via_hint():
     assert samples[-1].player_id == "Player_1"
     assert manager.track_to_player[2] == "Player_1"
     assert manager.players["Player_1"].history_track_ids == {1, 2}
+
+
+def test_identity_hint_wins_when_old_mapped_track_shares_slot_in_same_frame():
+    manager = PlayerIdentityManager(PlayerIdentityConfig(max_players=1))
+
+    manager.update(0, [position(1, 0, 10, 20)], track_identity_hints={1: "Player_1"})
+    samples = manager.update(
+        1,
+        [position(1, 1, 10.1, 20.0), position(2, 1, 10.2, 20.0)],
+        eligible_track_ids={1, 2},
+        track_identity_hints={2: "Player_1"},
+    )
+
+    detected = [sample for sample in samples if sample.frame_index == 1 and not sample.is_interpolated]
+    assert len(detected) == 1
+    assert detected[0].track_id == 2
+    assert detected[0].player_id == "Player_1"
+    assert any(
+        diagnostic.event == "filtered"
+        and diagnostic.track_id == 1
+        and diagnostic.reason == "player slot already assigned by higher-priority track in this frame"
+        for diagnostic in manager.diagnostics
+    )
+
+
+def test_lock_recovery_contract_preserves_player_id_and_eligibility():
+    lock_manager = PlayerLockManager(
+        PlayerLockConfig(
+            target_player_count=1,
+            near_side_quota=1,
+            far_side_quota=0,
+            bootstrap_min_frames=3,
+            bootstrap_max_frames=20,
+            min_observed_frames=3,
+            lock_min_hits=3,
+            reconnect_threshold=0.45,
+        )
+    )
+    identity_manager = PlayerIdentityManager(PlayerIdentityConfig(max_players=1))
+
+    for frame in range(8):
+        observed = [position(100, frame, 10, 20)]
+        lock_update = lock_manager.update(frame, observed)
+        identity_manager.update(
+            frame,
+            observed,
+            eligible_track_ids=lock_update.eligible_track_ids,
+            track_identity_hints=lock_update.track_identity_hints,
+        )
+
+    recovered_position = position(200, 8, 10.1, 20.0)
+    lock_update = lock_manager.update(8, [recovered_position])
+    samples = identity_manager.update(
+        8,
+        [recovered_position],
+        eligible_track_ids=lock_update.eligible_track_ids,
+        track_identity_hints=lock_update.track_identity_hints,
+    )
+
+    assert samples[-1].player_id == "Player_1"
+    assert samples[-1].track_id == 200
+    assert identity_manager.players["Player_1"].history_track_ids == {100, 200}
+    assert any(d.event == "player_reconnected_after_track_change" for d in lock_update.diagnostics)
+
+    filtered = identity_manager.update(
+        9,
+        [position(300, 9, 10.2, 20.0)],
+        eligible_track_ids=set(),
+        track_identity_hints={},
+    )
+    assert filtered == []
+    assert any(
+        d.event == "filtered" and d.track_id == 300 and d.reason == "not target-court eligible"
+        for d in identity_manager.diagnostics
+    )
 
 
 def test_identity_does_not_create_identity_without_hint():
@@ -163,6 +259,30 @@ def test_projected_track_points_preserve_tolerated_boundary_observations():
     assert points[0].track_id == "Player_1"
     assert points[0].court_point.x == pytest.approx(10)
     assert points[0].court_point.y == pytest.approx(44.2195)
+
+
+def test_identity_preserves_visible_boundary_player_for_overlay_and_trajectory():
+    manager = PlayerIdentityManager()
+    boundary = position(
+        1,
+        0,
+        10,
+        46.5,
+        valid=False,
+        projection_status="outside_court_visible",
+    )
+
+    samples = manager.update(
+        0,
+        [boundary],
+        eligible_track_ids={1},
+        track_identity_hints={1: "Player_1"},
+    )
+
+    assert samples[-1].player_id == "Player_1"
+    assert manager.players["Player_1"].history_track_ids == {1}
+    exported = manager.to_projected_track_points(output_court_unit="ft")
+    assert exported[-1].court_point.y == pytest.approx(46.5)
 
 
 def test_player_trajectory_artifact_schema_accepts_empty_players():

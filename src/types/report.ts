@@ -742,6 +742,9 @@ export interface AnalysisJobSummary {
   analysisMode?: "demo" | "real" | "limited";
   recordingSessionId?: string;
   cameraSlot?: "cam_1" | "cam_2";
+  /** 任务实际使用的推理开关（YOLO 人体检测 / RTMPose 姿态识别），后端解析后固化 */
+  enableModelInference?: boolean;
+  enablePoseInference?: boolean;
 }
 
 export type AnalysisDeleteStatus = "deleted" | "blocked" | "not_found" | "failed";
@@ -879,6 +882,8 @@ export interface DetectionOverlayBox {
   track_id?: string;
   /** canonical 球员身份（Player_1..Player_4）；未关联时为空。原始 track_id 不作为展示身份。 */
   player_id?: string;
+  /** 后端生成的 canonical 展示标签；前端在相同 track 的身份恢复时可补全。 */
+  label?: string;
   source_width: number;
   source_height: number;
 }
@@ -1304,6 +1309,51 @@ export interface SkillRating {
   note: string;
 }
 
+// ── 球员六维雷达评分 ──────────────────────────────────────────────
+
+export type PlayerScoreDimensionKey =
+  | "serve"
+  | "return_serve"
+  | "offense"
+  | "defense"
+  | "agility"
+  | "shot_consistency";
+
+export interface PlayerScoreDimension {
+  key: PlayerScoreDimensionKey;
+  label: string;
+}
+
+/** 六维评分维度（顺序即雷达图轴序）：发球 / 接发球 / 进攻能力 / 防守能力 / 敏捷 / 击球稳定性。 */
+export const PLAYER_SCORE_DIMENSIONS: readonly PlayerScoreDimension[] = [
+  { key: "serve", label: "发球" },
+  { key: "return_serve", label: "接发球" },
+  { key: "offense", label: "进攻能力" },
+  { key: "defense", label: "防守能力" },
+  { key: "agility", label: "敏捷" },
+  { key: "shot_consistency", label: "击球稳定性" },
+];
+
+/**
+ * 单名球员的六维评分。
+ * 键为 canonical player id（`Player_1`..`Player_4`），与视频叠加 HUD 的 P1..P4 对齐；
+ * 分值 0–10、1 位小数。数据源当前为 mock，但键契约保持 canonical，为真实算法预留。
+ */
+export interface PlayerScore {
+  player_id: string;
+  serve: number;
+  return_serve: number;
+  offense: number;
+  defense: number;
+  agility: number;
+  shot_consistency: number;
+}
+
+/** 球员评分聚合：按 canonical player id 索引，便于 O(1) 按球员取值。 */
+export interface PlayerScoring {
+  players: Record<string, PlayerScore>;
+}
+
 export interface DrillRecommendation {
   id: string;
   title: string;
@@ -1387,6 +1437,47 @@ export interface VisualGrid {
   cells: HeatmapCell[];
 }
 
+export interface HeatmapPlayerGrid {
+  id: string;
+  label: string;
+  color: string;
+  grid: VisualGrid;
+}
+
+export interface VisualHeatmaps {
+  visual_grid?: VisualGrid;
+  players: HeatmapPlayerGrid[];
+}
+
+export interface ZoneStat {
+  zone: string;          // kitchen / transition / backcourt
+  label: string;         // 网前区 / 过渡区 / 后场区
+  seconds: number;
+  occupancy: number;
+}
+
+export interface ZoneFeedback {
+  level: string;         // excellent / good / insufficient
+  summary: string;
+}
+
+export interface PlayerZoneStats {
+  id: string;
+  label: string;
+  color: string;
+  denominator_seconds: number;
+  tracked_seconds: number;
+  data_sufficiency: string;   // sufficient / insufficient
+  kitchen_control_rate: number;
+  avg_distance_to_kitchen_line_m: number;
+  zones: ZoneStat[];
+  feedback?: ZoneFeedback | null;
+}
+
+export interface ZoneStats {
+  players: PlayerZoneStats[];
+}
+
 export interface ScatterPlayer {
   id: string;
   label: string;
@@ -1413,11 +1504,10 @@ export interface CourtGeometry {
 
 export interface StructuredVisualizationData {
   court: CourtGeometry;
-  heatmaps?: {
-    visual_grid: VisualGrid;
-  };
+  heatmaps?: VisualHeatmaps;
   scatter_plots: ScatterPlots;
   player_trajectories: PlayerTrajectory[];
+  zone_stats?: ZoneStats;
 }
 
 // ── player-render-trajectory v2 types ──

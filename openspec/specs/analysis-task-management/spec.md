@@ -126,7 +126,7 @@ The system SHALL support deleting multiple eligible analysis tasks from task man
 - **THEN** no backend deletion request is made and task selection remains unchanged or is safely dismissed without deleting files
 
 ### Requirement: Delete feedback and refresh
-The system SHALL provide clear feedback for deletion actions and keep task management state current after deletion.
+The system SHALL provide clear feedback for deletion actions via a compact floating toast that auto-dismisses when all selected items are deleted and requires manual dismissal when some items are blocked or failed, and SHALL keep task management state current after deletion. Persistent error states such as a failed task-list load SHALL remain inline rather than being shown as a transient toast.
 
 #### Scenario: Delete request is in progress
 - **WHEN** a single or batch deletion is running
@@ -139,6 +139,18 @@ The system SHALL provide clear feedback for deletion actions and keep task manag
 #### Scenario: Delete completes
 - **WHEN** a single or batch deletion finishes
 - **THEN** the frontend refreshes task summaries, clears deleted task selections, and preserves access to upload and manual refresh actions
+
+#### Scenario: Delete result shown as a floating toast
+- **WHEN** a single or batch deletion finishes with any result
+- **THEN** the frontend shows a compact toast fixed to the bottom-right of the viewport with a single line of text, without displacing the task list content
+
+#### Scenario: Fully successful delete auto-dismisses
+- **WHEN** all selected tasks are deleted successfully
+- **THEN** the toast is green, auto-dismisses after 3 seconds, and does not show a countdown or progress indicator
+
+#### Scenario: Delete with blocked or failed items requires manual dismissal
+- **WHEN** a deletion result includes blocked, missing, or failed items
+- **THEN** the toast is amber, includes a close button, and remains until the user dismisses it manually
 
 ### Requirement: Task cancellation feedback
 The system SHALL provide clear feedback for cancellation actions from task management and job status surfaces.
@@ -180,3 +192,142 @@ The system SHALL expose the recording session origin of analysis jobs via the `A
 - **WHEN** the upload tasks tab displays analysis jobs
 - **THEN** tasks whose `recording_session_id` matches an existing sync recording session SHALL be excluded from this tab
 - **AND** they SHALL appear exclusively within the corresponding dual-camera recording cards
+
+### Requirement: Terminal task bulk cleanup
+The system SHALL provide a one-click action on the analysis task management page that deletes all failed and canceled analysis tasks in the upload-task list, reusing the existing batch deletion path.
+
+#### Scenario: User clears failed and canceled tasks
+- **WHEN** the upload-task list contains at least one task with status `failed` or `canceled`
+- **THEN** the clear control is enabled and, after the user confirms, the frontend submits the eligible task ids to the existing batch delete endpoint
+- **AND** the frontend reports per-task deletion results using the existing delete feedback summary
+
+#### Scenario: No terminal tasks exist
+- **WHEN** the upload-task list contains no tasks with status `failed` or `canceled`
+- **THEN** the clear control is disabled or performs no action
+
+#### Scenario: User cancels cleanup confirmation
+- **WHEN** the user dismisses the cleanup confirmation dialog
+- **THEN** no backend deletion request is made and the task list remains unchanged
+
+#### Scenario: Cleanup has partial results
+- **WHEN** a cleanup request includes tasks that are missing or blocked
+- **THEN** the frontend reports which tasks were deleted and which require attention
+
+#### Scenario: Cleanup keeps the local fallback store consistent
+- **WHEN** a cleanup succeeds through the backend
+- **THEN** the frontend removes the same demo tasks from the browser local fallback store so the local list stays consistent
+
+### Requirement: Analysis task list sorting
+The system SHALL allow users to sort the upload-task list by creation time or update time, in ascending or descending order, on the analysis task management page.
+
+#### Scenario: User sorts by creation time
+- **WHEN** the user selects creation-time ordering on the upload-task list
+- **THEN** the list is ordered by task `createdAt`, ascending or descending as chosen
+
+#### Scenario: User sorts by update time
+- **WHEN** the user selects update-time ordering on the upload-task list
+- **THEN** the list is ordered by task `updatedAt`, falling back to `createdAt` when `updatedAt` is absent, ascending or descending as chosen
+
+#### Scenario: Default ordering matches prior behavior
+- **WHEN** the task management page loads with no explicit sort selection
+- **THEN** the upload-task list is ordered by update time, newest first, matching the previous list order
+
+#### Scenario: Sorting applies to all data paths
+- **WHEN** the task list is sourced either from the backend API or from the browser local fallback store
+- **THEN** the same sort logic is applied in both cases so ordering is consistent
+
+### Requirement: Analysis task batch select by analysis mode
+The system SHALL provide a "select by analysis mode" entry in the upload-task tab toolbar of the analysis task management page, allowing users to batch-select all eligible (non-active) tasks of a given analysis mode — 样例任务 / 有限真实分析 / 真实视频分析 — into the existing selection set, which is shared with the existing batch deletion flow.
+
+#### Scenario: User opens the mode select popover
+- **WHEN** the upload-task tab shows at least one analysis task
+- **THEN** the toolbar SHALL expose a "按类型选择" button, and activating it SHALL open a small popover listing the three analysis modes with their eligible (deletable) task counts
+
+#### Scenario: User checks an analysis mode
+- **WHEN** the user checks an analysis mode in the popover
+- **THEN** all eligible (non-active) tasks of that mode SHALL be added to the selection set
+- **AND** the task card checkboxes and the selected-count label SHALL update to reflect the new selection
+
+#### Scenario: User unchecks an analysis mode
+- **WHEN** the user unchecks an analysis mode in the popover
+- **THEN** all eligible tasks of that mode SHALL be removed from the selection set
+- **AND** the task card checkboxes and the selected-count label SHALL update to reflect the new selection
+
+#### Scenario: Mode checkbox shows indeterminate state
+- **WHEN** only a proper subset of a mode's eligible tasks is present in the selection set, for example after the user manually adjusted individual cards
+- **THEN** the mode checkbox SHALL render an indeterminate (partial) state
+
+#### Scenario: Active tasks are excluded from mode selection
+- **WHEN** a mode contains active (queued, uploaded, or processing) tasks
+- **THEN** mode-based selection SHALL apply only to eligible tasks
+- **AND** active tasks SHALL remain unselected and SHALL NOT be part of any subsequent batch deletion
+
+#### Scenario: User deletes mode-selected tasks
+- **WHEN** the user selects tasks via the analysis-mode popover and then confirms the existing batch delete action
+- **THEN** the deletion SHALL reuse the existing batch delete endpoint and feedback flow, and the list SHALL refresh with the same per-task result reporting as existing batch deletion
+
+#### Scenario: No deletable tasks in a mode
+- **WHEN** a mode has zero eligible (deletable) tasks
+- **THEN** its checkbox SHALL be disabled or non-selectable with a zero count, and checking it SHALL have no effect on the selection set
+
+#### Scenario: Popover closes
+- **WHEN** the user clicks outside the popover or presses Escape
+- **THEN** the popover SHALL close without altering the current selection set
+
+### Requirement: Analysis task list filter by analysis mode
+The system SHALL allow users to filter the upload-task list by analysis mode from the same "按类型选择" popover, in addition to batch-selecting tasks.
+
+#### Scenario: User filters the list by a mode
+- **WHEN** the user clicks an analysis mode in the popover filter section
+- **THEN** the upload-task list SHALL show only tasks of that analysis mode
+- **AND** the filter section SHALL mark the active mode
+
+#### Scenario: User returns to the full list
+- **WHEN** the user clicks the currently active mode again or clicks "全部"
+- **THEN** the upload-task list SHALL show all upload tasks again
+
+#### Scenario: Filter and batch select coexist
+- **WHEN** the popover shows both the filter section and the batch-select section
+- **THEN** the batch-select checkboxes SHALL remain independent of the active filter and still operate on all eligible tasks
+
+#### Scenario: Select-all follows the filtered list
+- **WHEN** a mode filter is active and the user toggles select-all
+- **THEN** select-all SHALL apply to the visible eligible tasks of the filtered list
+- **AND** the "已选 N 个可删除历史任务" count SHALL reflect the visible eligible tasks
+
+#### Scenario: Active filter is reflected on the trigger button
+- **WHEN** a mode filter other than "全部" is active
+- **THEN** the trigger button SHALL display the active mode label appended to "按类型选择"
+- **AND** the trigger button SHALL render with an active-state style that distinguishes it from the default state
+
+### Requirement: Mode filter survives navigation away and back
+The system SHALL keep the active mode filter when the user navigates from the upload-task tab to another page (e.g. an analysis details page) and returns, by persisting it for the duration of the browser session.
+
+#### Scenario: User navigates away and returns
+- **WHEN** the user has a non-default mode filter active and navigates to a different route (such as an analysis detail page)
+- **AND** the user navigates back to the upload-task tab within the same browser session
+- **THEN** the upload-task list SHALL be filtered by the same mode as before navigation
+- **AND** the trigger button SHALL still display the active mode label
+
+#### Scenario: Session boundary resets the filter
+- **WHEN** the user opens the app in a new browser session
+- **THEN** the mode filter SHALL default to "全部" with no persisted state shown
+
+### Requirement: Analysis task inference toggles display
+The system SHALL expose the inference toggle states used by each analysis job in its summary and SHALL display them in the task management UI and job detail page.
+
+#### Scenario: Job summary exposes toggle states
+- **WHEN** the frontend retrieves an analysis job summary
+- **THEN** the summary SHALL include `enableModelInference` and `enablePoseInference` reflecting the values the job was created with
+
+#### Scenario: Legacy jobs have fallback values
+- **WHEN** an existing job record predates the toggle fields and lacks them
+- **THEN** the summary SHALL fall back to the backend global configuration values rather than failing to render
+
+#### Scenario: Task management page shows toggle states
+- **WHEN** the task management page lists analysis jobs
+- **THEN** each job card SHALL display the inference toggle states (e.g. a compact badge such as "检测开 / 姿态关")
+
+#### Scenario: Job detail page shows toggle states
+- **WHEN** the user opens the job detail page
+- **THEN** the task information section SHALL show the human detection and pose estimation toggle states alongside the other task metadata

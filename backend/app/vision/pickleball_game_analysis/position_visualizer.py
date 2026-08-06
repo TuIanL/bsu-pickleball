@@ -58,7 +58,7 @@ class PositionVisualizer:
             image_url_prefix=f"{image_url_prefix}/heatmaps",
             artifact_url=heatmaps_artifact_url,
             player_points=player_points,
-            visual_grid=structured_data.heatmaps if structured_data else None,
+            visual_grid=structured_data.heatmaps.visual_grid if structured_data and structured_data.heatmaps else None,
         )
         scatter_items = self._generate_scatters(
             job_id=job_id,

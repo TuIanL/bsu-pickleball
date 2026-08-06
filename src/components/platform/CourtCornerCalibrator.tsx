@@ -30,6 +30,29 @@ export type CalibrationPointDraft = {
   y: number;
 };
 
+/**
+ * 校验四点标定的近端/远端底线 Y 顺序是否合理。
+ * 正常标定下近端底线位于画面下方（图像 y 更大）。
+ * 返回 true 表示顺序合理（或数据不足以判断），false 表示疑似颠倒/差值过小。
+ */
+export function isBaselineOrderPlausible(
+  points: CalibrationPointDraft[],
+  frameHeight: number,
+): boolean {
+  const far = points.filter((point) => point.id === "top_left" || point.id === "top_right");
+  const near = points.filter((point) => point.id === "bottom_left" || point.id === "bottom_right");
+  if (far.length !== 2 || near.length !== 2) {
+    return true;
+  }
+  const farAvgY = (far[0].y + far[1].y) / 2;
+  const nearAvgY = (near[0].y + near[1].y) / 2;
+  if (!Number.isFinite(farAvgY) || !Number.isFinite(nearAvgY)) {
+    return true;
+  }
+  const threshold = Number.isFinite(frameHeight) && frameHeight > 0 ? frameHeight * 0.1 : 20;
+  return nearAvgY - farAvgY >= threshold;
+}
+
 export interface CourtCornerCalibratorProps {
   /** 视频流 URL（用于预览和标定） */
   videoSrc: string;
@@ -290,6 +313,16 @@ export function CourtCornerCalibrator({
 
   const handleSubmit = async () => {
     if (!calibrationComplete) return;
+
+    // 四点 Y 顺序校验：近端底线应位于画面下方（图像 y 更大）；
+    // 疑似颠倒或差值过小时弹确认框，由用户决定是否继续。
+    const frameHeight = calibrationVideoRef.current?.videoHeight ?? 0;
+    if (!isBaselineOrderPlausible(calibrationPoints, frameHeight)) {
+      const confirmed = window.confirm(
+        "检测到近端与远端底线可能颠倒（近端底线应位于画面下方）。请确认画面顶/底对应的场地底线，确认无误后继续。",
+      );
+      if (!confirmed) return;
+    }
 
     try {
       const pointMap = calibrationPoints.reduce(

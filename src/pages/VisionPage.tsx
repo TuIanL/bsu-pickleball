@@ -9,14 +9,16 @@ import { StatusState } from "../components/StatusState";
 import { VideoAnalysisCard } from "../components/platform/VideoAnalysisCard";
 import { MetricCard } from "../components/platform/MetricCard";
 import { SkillRatings } from "../components/platform/SkillRatings";
+import { PlayerScoringPanel } from "../components/platform/PlayerScoringPanel";
 import { RecommendedDrills } from "../components/RecommendedDrills";
 import { ProgressChart } from "../components/platform/ProgressChart";
 import StructuredHeatmap from "../components/platform/StructuredHeatmap";
 import StructuredScatterPlot from "../components/platform/StructuredScatterPlot";
+import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap";
 import { supportedReportTypes } from "../app/router";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
 import { adaptPipelineResultToReport, isPipelineResult } from "../services/pipelineReportAdapter";
-import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles } from "../utils/analysisHelpers";
+import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles, buildPlayerRoster } from "../utils/analysisHelpers";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
@@ -528,6 +530,12 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
             trackingOverlayLoadState={trackingOverlayLoadState}
           />
         </section>
+
+        <section className="mt-6">
+          <PlayerScoringPanel
+            roster={buildPlayerRoster(result?.tracks, result?.match_context?.expected_player_count)}
+          />
+        </section>
       </PageFrame>
     );
   }
@@ -696,6 +704,7 @@ function VisualizationArtifactGallery({
 
   const hasStructuredHeatmap = !!(structuredViz?.heatmaps?.visual_grid?.cells.length);
   const hasStructuredScatter = !!(structuredViz?.scatter_plots.players?.length || structuredViz?.scatter_plots.ball?.length || structuredViz?.scatter_plots.bounces?.length);
+  const hasZoneStats = !!(structuredViz?.zone_stats?.players?.length);
 
   const groups = [
     {
@@ -715,6 +724,15 @@ function VisualizationArtifactGallery({
       detail: scatterDetail,
       structuredKey: "scatter" as const,
       hasStructured: hasStructuredScatter,
+    },
+    {
+      title: "区域空间热力图",
+      manifest: undefined,
+      loadState: "unavailable" as const,
+      status: undefined,
+      detail: "暂无区域统计",
+      structuredKey: "zone" as const,
+      hasStructured: hasZoneStats,
     },
   ];
 
@@ -751,6 +769,8 @@ function VisualizationArtifactGallery({
                 <div className="mt-4">
                   {group.structuredKey === "heatmap" ? (
                     <StructuredHeatmap data={structuredData} fallbackPngUrl={firstPngUrl} />
+                  ) : group.structuredKey === "zone" ? (
+                    <StructuredZoneHeatmap data={structuredData} />
                   ) : (
                     <StructuredScatterPlot data={structuredData} fallbackPngUrl={firstPngUrl} />
                   )}

@@ -279,8 +279,16 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
     settings = get_settings()
     config_payload = {
         "frameStride": payload.frameStride,
-        "enableModelInference": settings.enable_model_inference,
-        "enablePoseInference": settings.enable_pose_inference,
+        "enableModelInference": (
+            payload.enableModelInference
+            if payload.enableModelInference is not None
+            else settings.enable_model_inference
+        ),
+        "enablePoseInference": (
+            payload.enablePoseInference
+            if payload.enablePoseInference is not None
+            else settings.enable_pose_inference
+        ),
         "detectorModel": settings.default_detector_model,
         "detectorDevice": settings.detector_device,
         "rtmposeConfig": settings.rtmpose_config_path,
@@ -317,6 +325,7 @@ class JobStore:
         job_id = job_id or f"job-{uuid4().hex[:10]}"
         report_id = report_id or f"PV-{job_id.upper()}"
         mode = "real" if payload.calibrationId else "limited" if payload.videoId else "demo"
+        settings = get_settings()
         job = AnalysisJobSummary(
             id=job_id,
             status="queued",
@@ -340,6 +349,16 @@ class JobStore:
             analysisMode=mode,
             recordingSessionId=payload.recording_session_id,
             cameraSlot=payload.camera_slot,
+            enableModelInference=(
+                payload.enableModelInference
+                if payload.enableModelInference is not None
+                else settings.enable_model_inference
+            ),
+            enablePoseInference=(
+                payload.enablePoseInference
+                if payload.enablePoseInference is not None
+                else settings.enable_pose_inference
+            ),
         )
         return self.save(job)
 
@@ -777,7 +796,12 @@ class AnalysisWorkerRuntime:
                 elif job.metadata.session_dir:
                     from app.services.storage_service import StorageService
                     StorageService.register_capture_job(job.id, job.metadata.session_dir)
-                pipeline = self.pipeline_factory()
+                pipeline = self.pipeline_factory(
+                    analysis_options={
+                        "enable_model_inference": payload.enableModelInference,
+                        "enable_pose_inference": payload.enablePoseInference,
+                    }
+                )
                 match_context = build_match_context(
                     job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
                 )
@@ -793,6 +817,7 @@ class AnalysisWorkerRuntime:
                     "cancellation_token": token,
                     "clip_start_ms": payload.clipStartMs,
                     "clip_end_ms": payload.clipEndMs,
+                    "capture_take_id": job.metadata.capture_take_id,
                 }
                 signature = inspect.signature(pipeline.run)
                 accepts_kwargs = any(

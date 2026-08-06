@@ -64,9 +64,18 @@ _STORAGE = StorageService()
 _JOB_STORE = JobStore(_STORAGE)
 
 
-def _pipeline_factory() -> AnalysisPipeline:
+def _pipeline_factory(analysis_options: dict | None = None) -> AnalysisPipeline:
     # 工厂函数：每次需要跑分析时，新建一个 AnalysisPipeline 实例。
-    return AnalysisPipeline()
+    # 任务级推理开关（enable_model_inference / enable_pose_inference）通过 analysis_options 透传，
+    # 未提供的字段沿用后端全局配置。
+    return AnalysisPipeline(**(analysis_options or {}))
+
+
+def _demo_settings() -> Settings:
+    # demo 任务构建时解析推理开关的全局默认值（模块级函数避免与函数内局部 import 冲突）。
+    from app.core.config import get_settings
+
+    return get_settings()
 
 
 def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
@@ -238,6 +247,16 @@ def create_analysis_job(
         frameStride=payload.frameStride,
         recordingSessionId=payload.recording_session_id,
         cameraSlot=payload.camera_slot,
+        enableModelInference=(
+            payload.enableModelInference
+            if payload.enableModelInference is not None
+            else _demo_settings().enable_model_inference
+        ),
+        enablePoseInference=(
+            payload.enablePoseInference
+            if payload.enablePoseInference is not None
+            else _demo_settings().enable_pose_inference
+        ),
     )
     report = build_mock_report(job, payload.metadata, report_id, now)
     _save_job(job)

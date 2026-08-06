@@ -21,7 +21,6 @@ export interface HudPlayer {
   label: string;
   segments: HudPoint[][];
   latest: HudPoint | null;
-  direction: { x: number; y: number } | null;
   speedMetersPerSecond: number | null;
   /** 最新有效点是否已落后当前播放时间超过新鲜度阈值（视为停滞/丢失） */
   stale: boolean;
@@ -52,6 +51,8 @@ export interface VideoOverlayHudOptions {
   maxGapSeconds?: number;
   maxPlayerPoints?: number;
   playerTrailSeconds?: number;
+  /** 球员轨迹连续两点位移超过该值（英尺）即断开 segment，避免身份跳变产生虚假连线 */
+  maxTrailJumpFt?: number;
   /** 球员最新点落后当前播放时间超过该阈值即标记为停滞（秒） */
   staleThresholdSeconds?: number;
 }
@@ -66,6 +67,7 @@ const DEFAULT_OPTIONS: Required<VideoOverlayHudOptions> = {
   maxGapSeconds: 0.7,
   maxPlayerPoints: 120,
   playerTrailSeconds: 3,
+  maxTrailJumpFt: 6,
   staleThresholdSeconds: 0.5,
 };
 
@@ -102,13 +104,20 @@ function sampleEvenly<T>(points: T[], maxPoints: number): T[] {
   return Array.from({ length: maxPoints }, (_, index) => points[Math.round((index * (points.length - 1)) / (maxPoints - 1))]);
 }
 
-function splitAtGaps(points: HudPoint[], maxGapSeconds: number, maxPoints: number): HudPoint[][] {
+function splitAtGaps(
+  points: HudPoint[],
+  maxGapSeconds: number,
+  maxPoints: number,
+  maxDisplacementFt = Infinity,
+): HudPoint[][] {
   const segments: HudPoint[][] = [];
   let active: HudPoint[] = [];
 
   for (const point of points) {
     const previous = active.at(-1);
-    if (previous && point.timestampSeconds - previous.timestampSeconds > maxGapSeconds) {
+    const timeGapTooLarge = previous !== undefined && point.timestampSeconds - previous.timestampSeconds > maxGapSeconds;
+    const jumpTooLarge = previous !== undefined && Math.hypot(point.x - previous.x, point.y - previous.y) > maxDisplacementFt;
+    if (previous && (timeGapTooLarge || jumpTooLarge)) {
       if (active.length) segments.push(sampleEvenly(active, maxPoints));
       active = [];
     }
@@ -123,26 +132,25 @@ function latestSegmentPoint(segments: HudPoint[][]): HudPoint | null {
   return segments.at(-1)?.at(-1) ?? null;
 }
 
-function resolveMotion(
+function resolveSpeed(
   segments: HudPoint[][],
   courtUnit: CourtUnit,
-): Pick<HudPlayer, "direction" | "speedMetersPerSecond"> {
+): { speedMetersPerSecond: number | null } {
   const latestSegment = segments.at(-1) ?? [];
-  if (latestSegment.length < 2) return { direction: null, speedMetersPerSecond: null };
+  if (latestSegment.length < 2) return { speedMetersPerSecond: null };
 
   const latest = latestSegment.at(-1)!;
   const previous = latestSegment.at(-2)!;
   const duration = latest.timestampSeconds - previous.timestampSeconds;
-  if (duration <= 0) return { direction: null, speedMetersPerSecond: null };
+  if (duration <= 0) return { speedMetersPerSecond: null };
 
   const deltaX = latest.x - previous.x;
   const deltaY = latest.y - previous.y;
   const distance = Math.hypot(deltaX, deltaY);
-  if (distance <= 0.01) return { direction: null, speedMetersPerSecond: 0 };
+  if (distance <= 0.01) return { speedMetersPerSecond: 0 };
 
   const metersPerUnit = courtUnit === "ft" ? 0.3048 : courtUnit === "m" ? 1 : null;
   return {
-    direction: { x: deltaX / distance, y: deltaY / distance },
     speedMetersPerSecond: metersPerUnit === null ? null : (distance / duration) * metersPerUnit,
   };
 }
@@ -196,7 +204,7 @@ export function buildVideoOverlayHud(
         ))
         .filter((point): point is HudPoint => point !== null)
         .sort((left, right) => left.timestampSeconds - right.timestampSeconds);
-      const segments = splitAtGaps(points, config.maxGapSeconds, config.maxPlayerPoints);
+      const segments = splitAtGaps(points, config.maxGapSeconds, config.maxPlayerPoints, config.maxTrailJumpFt);
       const sourceId = playerTracks[0]?.track_id ?? id;
       const latest = latestSegmentPoint(segments);
       return {
@@ -205,7 +213,7 @@ export function buildVideoOverlayHud(
         segments,
         latest,
         stale: latest !== null && latest.timestampSeconds < currentTime - config.staleThresholdSeconds,
-        ...resolveMotion(segments, config.courtUnit),
+        ...resolveSpeed(segments, config.courtUnit),
       };
     })
     .filter((player) => player.latest !== null)

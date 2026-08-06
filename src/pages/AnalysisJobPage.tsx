@@ -148,6 +148,22 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               ["球员/队伍", job.metadata.athleteLabel],
               ["水平", job.metadata.level],
               ["分析模式", job.analysisMode === "real" ? "真实视频分析" : job.analysisMode === "limited" ? "有限分析" : "样例任务"],
+              [
+                "人体检测 (YOLO)",
+                job.enableModelInference === undefined
+                  ? "沿用全局"
+                  : job.enableModelInference
+                    ? "开启"
+                    : "关闭",
+              ],
+              [
+                "姿态识别 (RTMPose)",
+                job.enablePoseInference === undefined
+                  ? "沿用全局"
+                  : job.enablePoseInference
+                    ? "开启"
+                    : "关闭",
+              ],
               ["视频 ID", job.videoId ?? "无"],
               ["标定 ID", job.calibrationId ?? "无"],
               ["创建时间", new Date(job.createdAt).toLocaleString()],

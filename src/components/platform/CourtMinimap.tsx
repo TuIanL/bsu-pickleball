@@ -125,9 +125,6 @@ export function CourtMinimap({
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
-          <marker id="court-hud-arrow" markerHeight="5" markerWidth="5" orient="auto" refX="4" refY="2.5">
-            <path d="M0,0 L5,2.5 L0,5 Z" fill="currentColor" />
-          </marker>
         </defs>
         <rect fill="#07131B" height={VIEW_HEIGHT} width={VIEW_WIDTH} />
         {trackingPolygon.length === 4 ? (
@@ -154,7 +151,6 @@ export function CourtMinimap({
                 <>
                   {!player.stale ? <circle cx={latest[0]} cy={latest[1]} fill={color} filter="url(#court-hud-glow)" opacity="0.32" r="10" /> : null}
                   <circle cx={latest[0]} cy={latest[1]} fill={color} r="4.5" stroke="#07131B" strokeDasharray={player.stale ? "2 1.5" : undefined} strokeWidth="1.4" />
-                  {player.direction && !player.stale ? <line markerEnd="url(#court-hud-arrow)" stroke={color} strokeLinecap="round" strokeWidth="2.2" x1={latest[0]} x2={latest[0] + player.direction.x * 11} y1={latest[1]} y2={latest[1] - player.direction.y * 11} /> : null}
                   <text fill="#F8FAFC" fontSize="7.4" fontWeight="800" paintOrder="stroke" stroke="#07131B" strokeWidth="2.4" textAnchor="middle" x={latest[0]} y={latest[1] - 8}>{player.label}{player.stale ? "?" : ""}</text>
                 </>
               ) : null}

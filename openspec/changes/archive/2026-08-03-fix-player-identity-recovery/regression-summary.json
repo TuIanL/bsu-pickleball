@@ -1,0 +1,97 @@
+{
+  "input": {
+    "path": "/Users/tuian/Downloads/测试视频25s.mp4",
+    "duration_seconds": 24.736003,
+    "width": 1920,
+    "height": 1080,
+    "codec": "h264",
+    "source_fps": 60,
+    "match_format": "doubles"
+  },
+  "analysis": {
+    "video_id": "video-4fd96ae339",
+    "calibration_id": "calib-9b34b2a687",
+    "source_fps": 60,
+    "frame_stride": 5,
+    "final_job_id": "job-3a91cd44ed",
+    "baseline_job_id": "job-5c706a00ad",
+    "comparison_job_id": "job-65ed2ccfe6",
+    "request_new_version": true
+  },
+  "final": {
+    "overlay_frames": 297,
+    "overlay_detections": 1060,
+    "player_id_counts": {
+      "Player_1": 285,
+      "Player_2": 199,
+      "Player_3": 283,
+      "Player_4": 235
+    },
+    "person_count": 58,
+    "duplicate_track_frames": 0,
+    "duplicate_slot_track_frames": 0,
+    "trajectory_coverage_ratio": 0.9966329966,
+    "render_samples": 5031,
+    "render_segments": 31,
+    "diagnostic_event_counts": {
+      "unmatched": 68,
+      "filtered": 208,
+      "side_quota_fallback_replaced": 1,
+      "lost": 20,
+      "player_reconnected_after_track_change": 7,
+      "player_reconnected_from_lost": 5,
+      "inactive": 3
+    },
+    "duplicate_guard_frames": [
+      620,
+      1400,
+      1405,
+      1425
+    ],
+    "reconnect_frames": [
+      345,
+      620,
+      690,
+      730,
+      740,
+      880,
+      1140,
+      1150,
+      1300,
+      1320,
+      1350,
+      1430
+    ],
+    "track_history": {
+      "Player_1": [1],
+      "Player_2": [4, 14, 17, 19, 32, 34],
+      "Player_3": [2],
+      "Player_4": [6, 12, 13, 18, 25, 26, 27, 31, 33]
+    },
+    "longest_person_interval": {
+      "start_frame": 0,
+      "end_frame": 55,
+      "sampled_frames": 12,
+      "duration_seconds": 0.9166667
+    }
+  },
+  "comparison": {
+    "baseline": {
+      "job_id": "job-5c706a00ad",
+      "player_ids": ["Player_1", "Player_2", "Player_3"],
+      "person_count": 609,
+      "duplicate_track_frames": 0,
+      "duplicate_slot_track_frames": 0,
+      "trajectory_coverage_ratio": 0.9966329966
+    },
+    "pre_one_to_one": {
+      "job_id": "job-65ed2ccfe6",
+      "player_ids": ["Player_1", "Player_2", "Player_3", "Player_4"],
+      "person_count": 323,
+      "duplicate_track_frames": 0,
+      "duplicate_slot_track_frames": 4,
+      "trajectory_coverage_ratio": 0.9966329966
+    }
+  },
+  "residual_risk": "The 25-second clip does not cover every multi-player crossing or long-occlusion pattern; appearance ReID remains out of scope."
+}

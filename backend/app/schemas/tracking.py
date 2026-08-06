@@ -601,6 +601,7 @@ class PlayerIdentityDiagnostic(BaseModel):
     # 事件类型：created=新建 / assigned=分配 / reconnected=重连 /
     #           lost=丢失 / inactive=停用 / unmatched=未匹配 / filtered=被过滤 /
     #           player_locked=球员锁定 / player_reconnected_from_lost=丢失后重连 /
+    #           player_reconnected_after_track_change=锁定态换 track 后恢复 /
     #           player_slot_filled=空位填充 / rejected_low_conf_unlocked=未锁定低置信度拒绝 /
     #           rejected_outside_near_court=超出近场范围 / rejected_outside_tracking=超出跟踪范围 /
     #           rejected_bbox_size=框尺寸不合规 / retained_by_lock=因锁定保留 /
@@ -609,7 +610,7 @@ class PlayerIdentityDiagnostic(BaseModel):
     #           soft_takeover_assigned=位置连续性软接管就近指派
     event: Literal[
         "created", "assigned", "reconnected", "lost", "inactive", "unmatched", "filtered",
-        "player_locked", "player_reconnected_from_lost",
+        "player_locked", "player_reconnected_from_lost", "player_reconnected_after_track_change",
         "player_slot_filled", "rejected_low_conf_unlocked", "rejected_outside_near_court",
         "rejected_outside_tracking", "rejected_bbox_size", "retained_by_lock",
         "side_quota_fallback_replaced", "fallback_tentative_promoted", "soft_takeover_assigned",

@@ -89,6 +89,7 @@ class Settings(BaseModel):
     enable_analysis_overlay_video: bool = False           # 是否生成分析叠加视频（骨架已由前端 SVG 实时渲染）
     enable_position_visualizations: bool = True           # 是否生成位置可视化图
     visualization_language: str = "zh-CN"                 # 可视化文字语言
+    kitchen_line_reference_distance_m: float = 0.9        # 平均站位距厨房线"参考基准"（米，硬编码常数，反馈文案标注为参考基准）
     enable_projection_debug_jsonl: bool = False           # 是否生成逐帧投影诊断 JSONL
     enable_projection_debug_overlay: bool = False         # 是否生成投影诊断叠加视频
     near_clip_threshold: float = 0.94                     # bbox 底边裁切检测阈值（画面高度比例）
@@ -132,6 +133,10 @@ class Settings(BaseModel):
     player_lock_bootstrap_court_margin_ft: float = 12.0   # bootstrap 期间球场外扩（英尺）
     player_lock_lost_reconnect_court_margin_ft: float = 20.0  # lost 重连球场外扩（英尺）
     player_lock_enable_appearance_score: bool = False     # 是否启用人脸/外观特征重连评分
+
+    # ---- 重复重叠 track 抑制（同一目标被跟踪器分身时的去重）----
+    player_duplicate_track_iou_threshold: float = 0.6     # 判定同一目标所需的最小 bbox 重叠度
+    player_duplicate_track_sustain_frames: int = 3        # 重叠需持续的连续帧数（含缺席容错）
 
     # ---- 场地线检测（用于自动标定）----
     court_line_model_path: str | None = None              # 场地线分割模型路径
@@ -341,6 +346,10 @@ def get_settings() -> Settings:
         enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true").lower()
         in {"1", "true", "yes"},
         visualization_language=os.getenv("PICKLEBALL_VISUALIZATION_LANGUAGE", "zh-CN"),
+        kitchen_line_reference_distance_m=max(
+            0.0,
+            float(os.getenv("PICKLEBALL_KITCHEN_LINE_REFERENCE_DISTANCE_M", "0.9")),
+        ),
         enable_projection_debug_jsonl=os.getenv("PICKLEBALL_ENABLE_PROJECTION_DEBUG_JSONL", "false").lower()
         in {"1", "true", "yes"},
         enable_projection_debug_overlay=os.getenv("PICKLEBALL_ENABLE_PROJECTION_DEBUG_OVERLAY", "false").lower()
@@ -432,6 +441,8 @@ def get_settings() -> Settings:
         player_lock_bootstrap_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_COURT_MARGIN_FT", "12.0")),
         player_lock_lost_reconnect_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_RECONNECT_COURT_MARGIN_FT", "20.0")),
         player_lock_enable_appearance_score=os.getenv("PICKLEBALL_PLAYER_LOCK_ENABLE_APPEARANCE_SCORE", "false").lower() in {"1", "true", "yes"},
+        player_duplicate_track_iou_threshold=_clamp_float(os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_IOU_THRESHOLD", "0.6"), 0.0, 1.0),
+        player_duplicate_track_sustain_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_SUSTAIN_FRAMES", "3"))),
         court_line_model_path=os.getenv("PICKLEBALL_COURT_LINE_MODEL_PATH")
         or _first_existing_path(model_dir, ["court-line/best.pt", "court-line/court-line-seg.pt"]),
         court_line_device=os.getenv("PICKLEBALL_COURT_LINE_DEVICE") or None,

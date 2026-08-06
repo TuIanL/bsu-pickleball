@@ -133,26 +133,6 @@ export function VideoAnalysisCard({
           fallbackVideoSrc={fallbackVideoSrc}
           pipelineTracks={pipelineTracks}
         />
-        {!compact ? (
-          <RealVideoFooter
-            poseOverlayDetail={poseOverlayDetail}
-            poseOverlayLoadState={poseOverlayLoadState}
-            poseOverlayStatus={poseOverlayStatus}
-            poseOverlay={poseOverlay}
-            ballTrajectory={ballTrajectory}
-            ballTrajectoryDetail={ballTrajectoryDetail}
-            ballTrajectoryLoadState={ballTrajectoryLoadState}
-            ballTrajectoryStatus={ballTrajectoryStatus}
-            bounceEvents={bounceEvents}
-            bounceEventsDetail={bounceEventsDetail}
-            bounceEventsLoadState={bounceEventsLoadState}
-            bounceEventsStatus={bounceEventsStatus}
-            trackingOverlayDetail={trackingOverlayDetail}
-            trackingOverlayLoadState={trackingOverlayLoadState}
-            trackingOverlayStatus={trackingOverlayStatus}
-            trackingOverlay={trackingOverlay}
-          />
-        ) : null}
       </article>
     );
   }
@@ -303,15 +283,18 @@ class CourtMinimapErrorBoundary extends React.Component<
 }
 
 function VideoCardHeader({ match }: { match: MatchSummary }) {
+  const hasScore = Boolean(match.score) && match.score !== "MVP";
   return (
     <div className="flex items-center justify-between border-b border-[#DDE9D6] px-4 py-3 sm:px-5">
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">实时智能标注</p>
         <h2 className="mt-1 text-lg font-black text-[#14241B] sm:text-xl">视频回放 · {match.currentRally}</h2>
       </div>
-      <div className="rounded-full border border-[#DDE9D6] bg-[#17231D] px-3 py-1 text-sm font-black text-white">
-        {match.score}
-      </div>
+      {hasScore ? (
+        <div className="rounded-full border border-[#DDE9D6] bg-[#17231D] px-3 py-1 text-sm font-black text-white">
+          {match.score}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -914,77 +897,6 @@ function RealVideoOverlay({
   );
 }
 
-function RealVideoFooter({
-  ballTrajectory,
-  ballTrajectoryDetail,
-  ballTrajectoryLoadState = "idle",
-  ballTrajectoryStatus,
-  bounceEvents,
-  bounceEventsDetail,
-  bounceEventsLoadState = "idle",
-  bounceEventsStatus,
-  poseOverlayDetail,
-  poseOverlayLoadState = "idle",
-  poseOverlayStatus,
-  poseOverlay,
-  trackingOverlayDetail,
-  trackingOverlayLoadState = "idle",
-  trackingOverlayStatus,
-  trackingOverlay,
-}: {
-  ballTrajectory?: BallTrajectoryArtifact | null;
-  ballTrajectoryDetail?: string;
-  ballTrajectoryLoadState?: OverlayLoadState;
-  ballTrajectoryStatus?: string;
-  bounceEvents?: BounceEventsArtifact | null;
-  bounceEventsDetail?: string;
-  bounceEventsLoadState?: OverlayLoadState;
-  bounceEventsStatus?: string;
-  poseOverlay?: PoseOverlayArtifact | null;
-  poseOverlayDetail?: string;
-  poseOverlayLoadState?: OverlayLoadState;
-  poseOverlayStatus?: string;
-  trackingOverlay?: TrackingOverlayArtifact | null;
-  trackingOverlayDetail?: string;
-  trackingOverlayLoadState?: OverlayLoadState;
-  trackingOverlayStatus?: string;
-}) {
-  const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
-  const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "骨架关节 overlay");
-  const ballDetail = layerDetail(ballTrajectoryLoadState, ballTrajectory?.detail ?? ballTrajectoryDetail, "球轨迹 layer");
-  const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
-  const trackingStatus = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
-  const poseStatus = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
-  const ballStatus = resolveLayerStatus(ballTrajectoryLoadState, ballTrajectory?.status ?? ballTrajectoryStatus);
-  const bounceStatus = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
-  return (
-    <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
-      <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl bg-[#F5FAF1] p-3">
-          <strong className="text-[#168A34]">YOLO 人体框</strong>
-          {trackingStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(trackingStatus)}</span> : null}
-          <p className="mt-1 text-slate-600">{trackingDetail}</p>
-        </div>
-        <div className="rounded-2xl bg-[#F5FAF1] p-3">
-          <strong className="text-[#1E63B6]">RTMPose 骨架</strong>
-          {poseStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(poseStatus)}</span> : null}
-          <p className="mt-1 text-slate-600">{poseDetail}</p>
-        </div>
-        <div className="rounded-2xl bg-[#F5FAF1] p-3">
-          <strong className="text-[#7A8F00]">球轨迹</strong>
-          {ballStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(ballStatus)}</span> : null}
-          <p className="mt-1 text-slate-600">{ballDetail}</p>
-        </div>
-        <div className="rounded-2xl bg-[#F5FAF1] p-3">
-          <strong className="text-[#A45A00]">弹跳候选</strong>
-          {bounceStatus ? <span className="ml-2 text-xs font-black uppercase text-slate-500">{statusLabel(bounceStatus)}</span> : null}
-          <p className="mt-1 text-slate-600">{bounceDetail}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function ServeRallyStrip({
   currentTime,
   loadState,
@@ -1093,28 +1005,6 @@ function OverlayToggle({
       {icon}
     </button>
   );
-}
-
-function statusLabel(status: string): string {
-  if (status === "loading") {
-    return "加载中";
-  }
-  if (status === "available") {
-    return "可用";
-  }
-  if (status === "partial") {
-    return "部分";
-  }
-  if (status === "failed") {
-    return "失败";
-  }
-  if (status === "skipped") {
-    return "跳过";
-  }
-  if (status === "no_detections" || status === "no_poses" || status === "no_candidates") {
-    return "无主体";
-  }
-  return "不可用";
 }
 
 function resolveLayerStatus(loadState: OverlayLoadState, artifactStatus?: string): string {

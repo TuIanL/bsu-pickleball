@@ -13,6 +13,7 @@ from app.schemas.tracking import (
     PlayerIdentityDiagnostic,
 )
 from app.vision.courtvision_calibration_engine.court_geometry import standard_court, PickleballCourtGeometry
+from app.vision.courtvision_calibration_engine.court_units import meters_to_feet
 from app.vision.player_tracking_engine.player_lock_types import (
     PlayerLockConfig,
     PlayerLockUpdate,
@@ -59,11 +60,6 @@ class PlayerLockManager:
                 except AttributeError:
                     pass
 
-        locked_track_ids: set[int] = set()
-        for slot in self.slots.values():
-            if slot.state in {"locked", "lost"} and slot.current_track_id is not None:
-                locked_track_ids.add(slot.current_track_id)
-
         if not self._bootstrap_complete and frame_index < self.config.bootstrap_max_frames:
             self._run_bootstrap(frame_index, positions)
 
@@ -76,44 +72,96 @@ class PlayerLockManager:
         newly_locked: list[str] = []
         newly_lost: list[str] = []
 
+        # Phase 1: consume each still-visible locked track once.  A stale or
+        # duplicated slot mapping must not make one observation update two P IDs.
+        locked_track_ids: set[int] = set()
+        recovery_slots: list[PlayerSlot] = []
         for slot in self.slots.values():
             if slot.state == "locked":
                 matched = self._find_matching_position(slot, positions)
-                if matched is not None:
+                owner = self._track_to_slot.get(matched.track_id) if matched is not None else None
+                if (
+                    matched is not None
+                    and matched.track_id not in locked_track_ids
+                    and (owner is None or owner == slot.identity_id)
+                ):
                     self._update_slot_from_position(slot, matched, frame_index)
                     locked_track_ids.add(matched.track_id)
                     self._track_to_slot[matched.track_id] = slot.identity_id
                     track_hints[matched.track_id] = slot.identity_id
                 else:
-                    prev_state = slot.state
-                    slot.lost_frames += 1
-                    if slot.lost_frames >= self.config.lost_grace_frames:
-                        slot.state = "lost"
-                        slot.current_track_id = None
-                        if prev_state != "lost":
-                            newly_lost.append(slot.identity_id)
-
+                    recovery_slots.append(slot)
             elif slot.state == "lost":
-                if self._handle_lost_slot(slot, frame_index, positions, reconnect_candidates, track_hints, diagnostics) == "recovered":
-                    newly_locked.append(slot.identity_id)
+                recovery_slots.append(slot)
 
-            elif slot.state in {"searching", "tentative", "fallback_tentative"}:
-                if not self._bootstrap_complete:
-                    continue
-                matched = self._find_new_candidate(slot, positions, locked_track_ids | reconnect_candidates)
-                if matched is not None:
-                    if slot.state == "fallback_tentative" and self._can_replace_fallback(slot, matched.track_id, matched.confidence):
-                        diagnostics.append(PlayerIdentityDiagnostic(
-                            frame_index=frame_index,
-                            event="side_quota_fallback_replaced",
-                            player_id=slot.identity_id,
-                            track_id=matched.track_id,
-                            reason=f"fallback_replaced; old_track={slot.current_track_id}",
-                            court_position_m=list(matched.court_position) if matched.court_position else None,
-                        ))
-                        slot.state = "searching"
-                        slot.current_track_id = None
-                    self._try_lock_slot(slot, matched, frame_index, locked_track_ids, track_hints, diagnostics, newly_locked)
+        # Phase 2: assign unclaimed observations globally.  Sorting all viable
+        # pairs by score makes the result deterministic and prevents duplicate
+        # reconnects when two LOST slots prefer the same detector track.
+        recovery_assignments = self._assign_recovery_candidates(
+            recovery_slots,
+            positions,
+            locked_track_ids,
+        )
+        for slot, candidate, score in recovery_assignments:
+            previous_state = slot.state
+            score_details = self._reconnect_score_details(slot, candidate)
+            slot.state = "locked"
+            slot.current_track_id = candidate.track_id
+            slot.lost_frames = 0
+            locked_track_ids.add(candidate.track_id)
+            reconnect_candidates.add(candidate.track_id)
+            self._track_to_slot[candidate.track_id] = slot.identity_id
+            track_hints[candidate.track_id] = slot.identity_id
+            self._update_slot_from_position(slot, candidate, frame_index)
+            diagnostics.append(PlayerIdentityDiagnostic(
+                frame_index=frame_index,
+                event=(
+                    "player_reconnected_from_lost"
+                    if previous_state == "lost"
+                    else "player_reconnected_after_track_change"
+                ),
+                player_id=slot.identity_id,
+                track_id=candidate.track_id,
+                score=score,
+                reason=score_details,
+                court_position_m=list(candidate.court_position) if candidate.court_position else None,
+            ))
+            if previous_state == "lost":
+                newly_locked.append(slot.identity_id)
+
+        # Unassigned locked/lost slots advance their loss clock only after the
+        # same-frame recovery pass has had a chance to rescue them.
+        recovered_slot_ids = {slot.identity_id for slot, _candidate, _score in recovery_assignments}
+        for slot in recovery_slots:
+            if slot.identity_id in recovered_slot_ids:
+                continue
+            slot.lost_frames += 1
+            if slot.state == "locked" and slot.lost_frames >= self.config.lost_grace_frames:
+                slot.state = "lost"
+                slot.current_track_id = None
+                newly_lost.append(slot.identity_id)
+
+        # Phase 3: fill only slots that are not hard-locked.  All tracks
+        # already consumed by locked/reconnected slots remain excluded.
+        for slot in self.slots.values():
+            if slot.state not in {"searching", "tentative", "fallback_tentative"}:
+                continue
+            if not self._bootstrap_complete:
+                continue
+            matched = self._find_new_candidate(slot, positions, locked_track_ids | reconnect_candidates)
+            if matched is not None:
+                if slot.state == "fallback_tentative" and self._can_replace_fallback(slot, matched.track_id, matched.confidence):
+                    diagnostics.append(PlayerIdentityDiagnostic(
+                        frame_index=frame_index,
+                        event="side_quota_fallback_replaced",
+                        player_id=slot.identity_id,
+                        track_id=matched.track_id,
+                        reason=f"fallback_replaced; old_track={slot.current_track_id}",
+                        court_position_m=list(matched.court_position) if matched.court_position else None,
+                    ))
+                    slot.state = "searching"
+                    slot.current_track_id = None
+                self._try_lock_slot(slot, matched, frame_index, locked_track_ids, track_hints, diagnostics, newly_locked)
 
         eligible_track_ids = locked_track_ids | reconnect_candidates
 
@@ -166,6 +214,7 @@ class PlayerLockManager:
         slot: PlayerSlot,
         track_id: int,
         side: str | None,
+        quadrant: str | None,
         frame_index: int,
         confidence: float,
         observed_frames: int,
@@ -177,6 +226,10 @@ class PlayerLockManager:
         if track_id not in slot.track_id_history:
             slot.track_id_history.append(track_id)
         slot.assignment_side = side
+        if quadrant is not None:
+            slot.home_quadrant = quadrant
+        if slot.side_hint is None:
+            slot.side_hint = quadrant or side
         slot.last_seen_frame = frame_index
         slot.confidence_ema = 0.7 * slot.confidence_ema + 0.3 * confidence
         slot.observed_frames = observed_frames
@@ -209,7 +262,7 @@ class PlayerLockManager:
 
     def _collect_bootstrap_observations(self, frame_index: int, positions: Sequence[PlayerFramePosition]) -> None:
         for pos in positions:
-            if not pos.valid or pos.court_position is None:
+            if not self._is_identity_candidate(pos):
                 continue
             if not self._is_in_court_neighborhood(pos.court_position, self.config.bootstrap_court_margin_ft):
                 continue
@@ -249,6 +302,8 @@ class PlayerLockManager:
                 slot.confidence_ema = tl.mean_confidence()
                 slot.observed_frames = len(tl.frame_indices)
                 slot.assignment_side = tl.inferred_side(half_length)
+                slot.home_quadrant = self._infer_quadrant(tl)
+                slot.side_hint = slot.home_quadrant or slot.assignment_side
                 self._track_to_slot[track_id] = slot.identity_id
                 assigned.add(track_id)
         self._bootstrap_complete = True
@@ -287,6 +342,7 @@ class PlayerLockManager:
                 slot=slot,
                 track_id=track_id,
                 side=self._side_from_quadrant(quadrant),
+                quadrant=quadrant,
                 frame_index=frame_index,
                 confidence=tl.mean_confidence(),
                 observed_frames=len(tl.frame_indices),
@@ -306,6 +362,7 @@ class PlayerLockManager:
                 slot=slot,
                 track_id=track_id,
                 side=None,
+                quadrant=None,
                 frame_index=frame_index,
                 confidence=tl.mean_confidence(),
                 observed_frames=len(tl.frame_indices),
@@ -358,6 +415,18 @@ class PlayerLockManager:
 
     # ---------- spatial gating ----------
 
+    @staticmethod
+    def _is_identity_candidate(position: PlayerFramePosition) -> bool:
+        """Keep visible boundary observations eligible for player identity.
+
+        ``valid`` describes the strict court rectangle, while a player can be
+        visibly standing just beyond a baseline and still be inside the broad
+        tracking area used by the primary-player selector.
+        """
+        if position.court_position is None or not position.is_inside_tracking_area:
+            return False
+        return position.valid or position.projection_status == "outside_court_visible"
+
     def _is_in_court_neighborhood(self, court_position: list[float], margin_ft: float) -> bool:
         x, y = court_position[0], court_position[1]
         return (
@@ -384,7 +453,7 @@ class PlayerLockManager:
     def _find_matching_position(self, slot: PlayerSlot, positions: Sequence[PlayerFramePosition]) -> PlayerFramePosition | None:
         if slot.current_track_id is not None:
             for pos in positions:
-                if pos.track_id == slot.current_track_id and pos.valid and pos.court_position is not None:
+                if pos.track_id == slot.current_track_id and self._is_identity_candidate(pos):
                     classification = self._classify_candidate(pos.court_position, slot.state)
                     if classification != "outside":
                         if pos.confidence >= self._conf_threshold_for_state(slot.state):
@@ -397,9 +466,12 @@ class PlayerLockManager:
         best: PlayerFramePosition | None = None
         best_conf = 0.0
         for pos in positions:
-            if not pos.valid or pos.court_position is None:
+            if not self._is_identity_candidate(pos):
                 continue
             if pos.track_id in exclude_track_ids:
+                continue
+            owner = self._track_to_slot.get(pos.track_id)
+            if owner is not None and owner != slot.identity_id:
                 continue
             classification = self._classify_candidate(pos.court_position, slot.state)
             if classification not in {"inside_court", "near_court_area"}:
@@ -408,6 +480,55 @@ class PlayerLockManager:
                 best = pos
                 best_conf = pos.confidence
         return best
+
+    def _assign_recovery_candidates(
+        self,
+        slots: Sequence[PlayerSlot],
+        positions: Sequence[PlayerFramePosition],
+        occupied_track_ids: set[int],
+    ) -> list[tuple[PlayerSlot, PlayerFramePosition, float]]:
+        """Greedily make a deterministic one-to-one reconnect assignment.
+
+        A global candidate list is used instead of letting each LOST slot pick
+        independently.  This keeps a single detector track from producing two
+        canonical identity hints in the same frame while preserving the
+        existing score threshold and spatial gates.
+        """
+        pairs: list[tuple[float, str, int, PlayerSlot, PlayerFramePosition]] = []
+        seen_track_ids: set[int] = set()
+        for slot in slots:
+            for position in positions:
+                if position.track_id in occupied_track_ids or position.track_id in seen_track_ids:
+                    continue
+                owner = self._track_to_slot.get(position.track_id)
+                if owner is not None and owner != slot.identity_id:
+                    continue
+                if not self._is_identity_candidate(position):
+                    continue
+                if self._classify_candidate(position.court_position, slot.state) == "outside":
+                    continue
+                if position.confidence < self._conf_threshold_for_state(slot.state):
+                    continue
+                score = self._compute_reconnect_score(slot, position)
+                if score < self.config.reconnect_threshold:
+                    continue
+                pairs.append((score, slot.identity_id, position.track_id, slot, position))
+            # Do not suppress a track globally while building the pair list:
+            # it may be a valid candidate for more than one slot and is then
+            # resolved by the deterministic reservation pass below.
+            seen_track_ids.clear()
+
+        pairs.sort(key=lambda item: (-item[0], item[1], item[2]))
+        assigned_slots: set[str] = set()
+        assigned_tracks = set(occupied_track_ids)
+        assignments: list[tuple[PlayerSlot, PlayerFramePosition, float]] = []
+        for score, _identity_id, _track_id, slot, position in pairs:
+            if slot.identity_id in assigned_slots or position.track_id in assigned_tracks:
+                continue
+            assigned_slots.add(slot.identity_id)
+            assigned_tracks.add(position.track_id)
+            assignments.append((slot, position, score))
+        return assignments
 
     def _conf_threshold_for_state(self, state: str) -> float:
         thresholds = {
@@ -535,7 +656,7 @@ class PlayerLockManager:
         best_candidate: PlayerFramePosition | None = None
         best_score = 0.0
         for pos in positions:
-            if not pos.valid or pos.court_position is None:
+            if not self._is_identity_candidate(pos):
                 continue
             classification = self._classify_candidate(pos.court_position, "lost")
             if classification == "outside":
@@ -555,17 +676,26 @@ class PlayerLockManager:
         curr_pos = [float(position.court_position[0]), float(position.court_position[1])]
 
         dist = _distance(last_pos, curr_pos)
-        position_score = max(0.0, 1.0 - dist / max(1.0, self.config.max_reconnect_distance_ft))
+
+        # 硬距离门：候选超过"允许距离"（基础距离 + 估计速度 × 流逝时间）时直接拒绝，
+        # 避免 position=0 的远距离错误候选靠 motion/side/bbox 分数补足阈值完成重连（P1 被错接到 P2 分身 track 的根因）。
+        allowed_dist_ft = self.config.max_reconnect_distance_ft
+        if self.config.reconnect_gate_enabled:
+            elapsed_s = max(0.0, float(position.frame_index - slot.last_seen_frame)) / max(1.0, self.config.fps)
+            speed_ft_s = 0.0
+            if slot.last_velocity_mps is not None:
+                speed_ft_s = meters_to_feet(hypot(slot.last_velocity_mps[0], slot.last_velocity_mps[1]))
+            allowed_dist_ft = self.config.max_reconnect_distance_ft + speed_ft_s * elapsed_s
+            if dist > allowed_dist_ft:
+                return -1.0
+
+        position_score = max(0.0, 1.0 - dist / max(1.0, allowed_dist_ft))
 
         motion_score = 0.5
         if slot.last_velocity_mps is not None:
             motion_score = _cosine_score(slot.last_velocity_mps, [curr_pos[0] - last_pos[0], curr_pos[1] - last_pos[1]])
 
-        side_score = 0.5
-        if slot.side_hint is not None:
-            side = "near" if curr_pos[1] < self.court.length_ft / 2.0 else "far"
-            expected_side = slot.side_hint.split("_")[0] if "_" in slot.side_hint else ""
-            side_score = 1.0 if side == expected_side else 0.2
+        side_score = self._reconnect_side_score(slot, curr_pos)
 
         bbox_score = 0.5
         if slot.last_bbox is not None and position.bbox is not None:
@@ -586,9 +716,7 @@ class PlayerLockManager:
         motion_score = 0.5
         if slot.last_velocity_mps is not None:
             motion_score = _cosine_score(slot.last_velocity_mps, [curr_pos[0] - last_pos[0], curr_pos[1] - last_pos[1]])
-        side = "near" if curr_pos[1] < self.court.length_ft / 2.0 else "far"
-        expected_side = slot.side_hint.split("_")[0] if slot.side_hint and "_" in slot.side_hint else ""
-        side_score = 1.0 if side == expected_side else 0.2
+        side_score = self._reconnect_side_score(slot, curr_pos)
         bbox_score = 0.5
         if slot.last_bbox is not None and position.bbox is not None:
             last_aspect = (slot.last_bbox[2] - slot.last_bbox[0]) / max(1.0, slot.last_bbox[3] - slot.last_bbox[1])
@@ -596,6 +724,21 @@ class PlayerLockManager:
             ratio = min(last_aspect, curr_aspect) / max(1e-6, max(last_aspect, curr_aspect))
             bbox_score = max(0.0, min(1.0, ratio))
         return f"position={position_score:.2f} motion={motion_score:.2f} side={side_score:.2f} bbox={bbox_score:.2f}"
+
+    def _reconnect_side_score(self, slot: PlayerSlot, position: list[float]) -> float:
+        """Score current side and home quadrant without making either an ID."""
+        expected = slot.side_hint or slot.home_quadrant or slot.assignment_side
+        if expected is None:
+            return 0.5
+        actual_side = "near" if position[1] < self.court.length_ft / 2.0 else "far"
+        expected_side = expected.split("_", 1)[0]
+        if actual_side != expected_side:
+            return 0.2
+        if "_" not in expected or self.config.target_player_count <= 2:
+            return 1.0
+        actual_lateral = "left" if position[0] < self.court.width_ft / 2.0 else "right"
+        expected_lateral = expected.split("_", 1)[1]
+        return 1.0 if actual_lateral == expected_lateral else self.config.reconnect_lateral_mismatch_score
 
 
 # ---------- internal helpers ----------

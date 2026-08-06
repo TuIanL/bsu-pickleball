@@ -7,7 +7,17 @@ from app.vision.player_tracking_engine.player_lock_manager import PlayerLockMana
 from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
 
 
-def pos(track_id, frame, x_ft, y_ft, confidence=0.9, bbox=None):
+def pos(
+    track_id,
+    frame,
+    x_ft,
+    y_ft,
+    confidence=0.9,
+    bbox=None,
+    valid=True,
+    projection_status="inside_court",
+    is_inside_tracking_area=True,
+):
     if bbox is None:
         bbox = [x_ft * 20, 100, x_ft * 20 + 60, 260]
     return PlayerFramePosition(
@@ -19,7 +29,9 @@ def pos(track_id, frame, x_ft, y_ft, confidence=0.9, bbox=None):
         court_position=[x_ft, y_ft],
         court_unit="ft",
         confidence=confidence,
-        valid=True,
+        valid=valid,
+        projection_status=projection_status,
+        is_inside_tracking_area=is_inside_tracking_area,
     )
 
 
@@ -52,6 +64,11 @@ def test_bootstrap_quadrant_unique_assigns_each_home_slot():
 
     locked = {slot.identity_id: slot.current_track_id for slot in manager.slots.values() if slot.state == "locked"}
     assert locked == {"Player_1": 101, "Player_2": 102, "Player_3": 103, "Player_4": 104}
+    assert manager.slots["Player_1"].home_quadrant == "near_left"
+    assert manager.slots["Player_1"].side_hint == "near_left"
+    assert manager.slots["Player_2"].home_quadrant == "near_right"
+    assert manager.slots["Player_3"].home_quadrant == "far_left"
+    assert manager.slots["Player_4"].side_hint == "far_right"
 
 
 def test_bootstrap_does_not_steal_other_quadrant_slot():
@@ -62,6 +79,31 @@ def test_bootstrap_does_not_steal_other_quadrant_slot():
 
     assert manager.slots["Player_1"].current_track_id == 101
     assert manager.slots["Player_2"].state == "searching"
+
+
+def test_bootstrap_accepts_visible_boundary_player_inside_tracking_area():
+    manager = PlayerLockManager(
+        _doubles_config(
+            target_player_count=1,
+            near_side_quota=1,
+            far_side_quota=0,
+        )
+    )
+    boundary_position = lambda frame: pos(
+        105,
+        frame,
+        10.0,
+        -2.5,
+        valid=False,
+        projection_status="outside_court_visible",
+    )
+
+    for frame in range(10):
+        manager.update(frame, positions=[boundary_position(frame)])
+
+    slot = manager.slots["Player_1"]
+    assert slot.state == "locked"
+    assert slot.current_track_id == 105
 
 
 def test_bootstrap_same_quadrant_picks_center_closest():
@@ -133,3 +175,177 @@ def test_hard_lock_reconnects_new_track_to_same_slot():
     assert slot.current_track_id == 200
     assert 200 in update.eligible_track_ids
     assert update.track_identity_hints.get(200) == "Player_1"
+
+
+def _lock_two_slots_for_reconnect(**overrides):
+    config = _doubles_config(
+        target_player_count=2,
+        near_side_quota=1,
+        far_side_quota=1,
+        lost_grace_frames=2,
+        **overrides,
+    )
+    manager = PlayerLockManager(config)
+    for frame in range(15):
+        manager.update(
+            frame,
+            positions=[
+                pos(100, frame, 10.0, 5.0),
+                pos(101, frame, 10.0, 39.0),
+            ],
+        )
+    assert manager.slots["Player_1"].state == "locked"
+    assert manager.slots["Player_2"].state == "locked"
+    for frame in range(15, 20):
+        manager.update(frame, positions=[])
+    assert all(slot.state == "lost" for slot in manager.slots.values())
+    return manager
+
+
+def test_reconnect_competition_assigns_one_slot_per_track():
+    manager = _lock_two_slots_for_reconnect(reconnect_threshold=0.25)
+
+    update = manager.update(20, positions=[pos(200, 20, 10.0, 5.0)])
+
+    matching_slots = [slot.identity_id for slot in manager.slots.values() if slot.current_track_id == 200]
+    assert len(matching_slots) == 1
+    assert len([track_id for track_id in update.track_identity_hints if track_id == 200]) == 1
+    assert 200 in update.eligible_track_ids
+    assert any(slot.state == "lost" for slot in manager.slots.values())
+
+
+def test_reconnect_assigns_two_distinct_tracks_to_two_lost_slots():
+    manager = _lock_two_slots_for_reconnect(reconnect_threshold=0.45)
+
+    update = manager.update(
+        20,
+        positions=[
+            pos(200, 20, 10.0, 5.0),
+            pos(201, 20, 10.0, 39.0),
+        ],
+    )
+
+    assert manager.slots["Player_1"].current_track_id == 200
+    assert manager.slots["Player_2"].current_track_id == 201
+    assert update.track_identity_hints == {200: "Player_1", 201: "Player_2"}
+    assert update.eligible_track_ids == {200, 201}
+
+
+def test_locked_slot_recovers_track_change_before_lost_transition():
+    config = _doubles_config(
+        target_player_count=1,
+        near_side_quota=1,
+        far_side_quota=0,
+        lost_grace_frames=3,
+        reconnect_threshold=0.45,
+    )
+    manager = PlayerLockManager(config)
+    for frame in range(15):
+        manager.update(frame, positions=[pos(100, frame, 10.0, 5.0)])
+
+    update = manager.update(15, positions=[pos(200, 15, 10.2, 5.0)])
+
+    slot = manager.slots["Player_1"]
+    assert slot.state == "locked"
+    assert slot.current_track_id == 200
+    assert slot.track_id_history == [100, 200]
+    assert update.track_identity_hints == {200: "Player_1"}
+    assert any(d.event == "player_reconnected_after_track_change" for d in update.diagnostics)
+
+
+def test_track_history_ownership_prevents_cross_slot_reassignment():
+    manager = _lock_two_slots_for_reconnect(reconnect_threshold=0.45)
+
+    # Player_1 changes from 100 to 200 while Player_2 keeps 101. The old
+    # source track 100 must remain owned by Player_1 if it reappears later.
+    manager.update(
+        20,
+        positions=[
+            pos(200, 20, 10.0, 5.0),
+            pos(101, 20, 10.0, 39.0),
+        ],
+    )
+    update = manager.update(
+        21,
+        positions=[
+            pos(200, 21, 10.0, 5.0),
+            pos(100, 21, 10.0, 5.0),
+        ],
+    )
+
+    assert manager.slots["Player_2"].current_track_id == 101
+    assert update.track_identity_hints.get(100) != "Player_2"
+
+
+def _lock_one_slot_for_reconnect(**overrides):
+    config = _doubles_config(
+        target_player_count=1,
+        near_side_quota=1,
+        far_side_quota=0,
+        lost_grace_frames=2,
+        **overrides,
+    )
+    manager = PlayerLockManager(config)
+    for frame in range(15):
+        manager.update(frame, positions=[pos(100, frame, 5.0, 5.0)])
+    assert manager.slots["Player_1"].state == "locked"
+    for frame in range(15, 20):
+        manager.update(frame, positions=[], suggestions=[])
+    assert manager.slots["Player_1"].state == "lost"
+    return manager
+
+
+def _lock_p1_near_left_for_reconnect(**overrides):
+    config = _doubles_config(
+        target_player_count=4,
+        near_side_quota=2,
+        far_side_quota=2,
+        lost_grace_frames=2,
+        **overrides,
+    )
+    manager = PlayerLockManager(config)
+    # 只给一个近左候选 → bootstrap 锁到 Player_1（近左）
+    for frame in range(15):
+        manager.update(frame, positions=[pos(100, frame, 5.0, 5.0)])
+    slot = manager.slots["Player_1"]
+    assert slot.state == "locked", slot.state
+    assert slot.home_quadrant == "near_left", slot.home_quadrant
+    for frame in range(15, 20):
+        manager.update(frame, positions=[], suggestions=[])
+    assert slot.state == "lost"
+    return manager
+
+
+def test_reconnect_distance_gate_rejects_far_candidate():
+    # P1 锁定在近左 (5,5)；候选在 (25,5) 距离 20ft > 15ft 硬门 → 拒绝，保持 LOST
+    manager = _lock_one_slot_for_reconnect(reconnect_threshold=0.0)  # 即使阈值放宽也不应重连
+    update = manager.update(20, positions=[pos(200, 20, 25.0, 5.0)])
+
+    slot = manager.slots["Player_1"]
+    assert slot.state == "lost"
+    assert slot.current_track_id is None
+    assert update.track_identity_hints.get(200) is None
+    assert 200 not in update.eligible_track_ids
+
+
+def test_reconnect_distance_gate_accepts_near_candidate():
+    # P1 锁定在近左 (5,5)；候选在 (5.2,5.0) 距离极小 → 正常重连
+    manager = _lock_one_slot_for_reconnect(reconnect_threshold=0.45)
+    update = manager.update(20, positions=[pos(200, 20, 5.2, 5.0)])
+
+    slot = manager.slots["Player_1"]
+    assert slot.state == "locked"
+    assert slot.current_track_id == 200
+    assert update.track_identity_hints.get(200) == "Player_1"
+
+
+def test_reconnect_lateral_mismatch_alone_cannot_reach_threshold():
+    # P1（双打）锁定在近左 (5,5)；候选在近右 (18,5) 距离 13ft 在门内，但横向错配侧分仅 0.2
+    manager = _lock_p1_near_left_for_reconnect(reconnect_threshold=0.45)
+    update = manager.update(20, positions=[pos(200, 20, 18.0, 5.0)])
+
+    slot = manager.slots["Player_1"]
+    assert slot.state == "lost"
+    assert slot.current_track_id is None
+    # 近右候选不能被错配给近左的 P1（可归近右槽位 Player_2，但不能顶替 P1）
+    assert update.track_identity_hints.get(200) != "Player_1"

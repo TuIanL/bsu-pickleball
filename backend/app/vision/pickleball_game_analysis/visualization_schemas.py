@@ -180,6 +180,59 @@ class VisualGrid:
 
 
 @dataclass(frozen=True)
+class HeatmapPlayerGrid:
+    """热力图中的一个球员图层（独立 22×10 网格 + 展示标签/颜色）。"""
+    id: str
+    label: str
+    color: str
+    grid: VisualGrid
+
+
+@dataclass(frozen=True)
+class VisualHeatmaps:
+    """热力图数据：合并视图（visual_grid）+ 每球员独立网格。"""
+    visual_grid: VisualGrid | None = None
+    players: list[HeatmapPlayerGrid] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ZoneStat:
+    """单个球场区域的占用统计。"""
+    zone: str           # kitchen / transition / backcourt
+    label: str          # 网前区 / 过渡区 / 后场区
+    seconds: float      # 有效时间内停留秒数
+    occupancy: float    # seconds / denominator_seconds
+
+
+@dataclass(frozen=True)
+class ZoneFeedback:
+    """网前控制反馈（等级 + 文案）。"""
+    level: str          # excellent / good / insufficient
+    summary: str        # 中文反馈文案
+
+
+@dataclass(frozen=True)
+class PlayerZoneStats:
+    """单名球员的区域占用统计与网前控制指标。"""
+    id: str
+    label: str
+    color: str
+    denominator_seconds: float          # 分母：Σ窗口长度 或 总时长
+    tracked_seconds: float              # 窗口内实际跟踪到的时间
+    data_sufficiency: str               # sufficient / insufficient
+    kitchen_control_rate: float         # kitchen_seconds / denominator_seconds
+    avg_distance_to_kitchen_line_m: float
+    zones: list[ZoneStat] = field(default_factory=list)
+    feedback: ZoneFeedback | None = None
+
+
+@dataclass(frozen=True)
+class ZoneStats:
+    """球员空间热力图数据：每名球员一段统计。"""
+    players: list[PlayerZoneStats] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ScatterPlayer:
     """散点图中的一个球员。"""
     id: str
@@ -213,11 +266,12 @@ class StructuredVisualizationData:
     通过 GET /visualization-data 端点暴露给前端。
     """
     court: CourtGeometry = field(default_factory=CourtGeometry)
-    heatmaps: VisualGrid | None = None
+    heatmaps: VisualHeatmaps | None = None
     scatter_plots: ScatterPlots = field(default_factory=ScatterPlots)
     player_trajectories: list[PlayerTrajectory] = field(default_factory=list)
     outside_court_point_count: int = 0
     dropped_point_count: int = 0
+    zone_stats: ZoneStats | None = None
 
 
 # 多语言标签表：键为语言代码，值为 {标签键: 文案}。当前支持中文(zh-CN)与英文(en-US)。
@@ -606,6 +660,38 @@ def canonical_player_id(value: str) -> str:
     if value.startswith("player_"):
         return "Player_" + value.removeprefix("player_")
     return value
+
+
+def canonical_player_number(value: str) -> int | None:
+    """解析 canonical 球员 id（Player_1 / player_1）为数字 1..4；非 canonical 返回 None。"""
+    for prefix in ("Player_", "player_"):
+        if value.startswith(prefix):
+            suffix = value[len(prefix):]
+            if suffix.isdigit():
+                return int(suffix)
+    return None
+
+
+def display_player_label(label: str) -> str:
+    """把 canonical 球员 id（Player_1 / player_1）映射为展示标签 P1..P4；解析失败回退原始 label。"""
+    for prefix in ("Player_", "player_"):
+        if label.startswith(prefix):
+            suffix = label[len(prefix):]
+            if suffix.isdigit():
+                return f"P{suffix}"
+    return label
+
+
+def player_palette_color(colors: list[str], fallback_index: int, label: str) -> str:
+    """按 canonical 球员序号显式分配调色板颜色；canonical 解析失败回退排序索引。
+
+    保持现有调色板视觉不变：canonical 序号与自然排序索引一致时结果相同，
+    但显式按序号分配避免任何排序漂移导致的颜色错位。
+    """
+    if not colors:
+        return ""
+    number = canonical_player_number(label)
+    return colors[(number - 1) % len(colors)] if number is not None else colors[fallback_index % len(colors)]
 
 
 def _safe_int(value: Any) -> int | None:

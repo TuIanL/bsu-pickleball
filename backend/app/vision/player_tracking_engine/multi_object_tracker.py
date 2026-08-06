@@ -111,5 +111,51 @@ def _iou(a: list[float], b: list[float]) -> float:
     return intersection / union
 
 
+class DuplicateTrackSuppressor:
+    """抑制同一目标被跟踪器分身出的重复重叠 track（仅作用于球员路径输出）。
+
+    当一个 track 对（如 P2 的 track 41 与其分身 track 50）bbox 重叠度超过阈值并持续
+    达到连续帧数时，视为同一目标被重复跟踪，从输出中剔除较新的分身。只过滤输出、
+    不改内部轨迹状态：若两目标后续分离（IoU 下降），被抑制 track 可自然重新出现。
+    """
+
+    def __init__(self, iou_threshold: float = 0.6, sustain_frames: int = 3) -> None:
+        # iou_threshold：判定"同一目标"所需的最小 bbox 重叠度；
+        # sustain_frames：重叠需持续的连续帧数（含 1 帧缺席容错），避免误杀真·近距离双人。
+        self.iou_threshold = iou_threshold
+        self.sustain_frames = sustain_frames
+        self._pair_count: dict[frozenset[int], int] = {}
+
+    def filter(self, tracks: list[Track]) -> list[Track]:
+        # 两两比较当前帧活跃 track；IoU ≥ 阈值则累加该对持续重叠帧数，否则 -1（容错缺席/短暂分离）。
+        # 持续 ≥ sustain_frames 时抑制对中较新的 track（track_id 较大者为分身）；
+        # 仅当新 track 置信度显著更高（> 旧 + 0.15）时才反过来保留新 track。
+        counts: dict[frozenset[int], int] = {}
+        seen_pairs: set[frozenset[int]] = set()
+        suppressed: set[int] = set()
+        for i in range(len(tracks)):
+            for j in range(i + 1, len(tracks)):
+                a = tracks[i]
+                b = tracks[j]
+                iou = _iou(a.bbox, b.bbox)
+                pair = frozenset({a.track_id, b.track_id})
+                prev = self._pair_count.get(pair, 0)
+                cur = prev + 1 if iou >= self.iou_threshold else max(0, prev - 1)
+                counts[pair] = cur
+                seen_pairs.add(pair)
+                if cur >= self.sustain_frames:
+                    older, newer = (a, b) if a.track_id < b.track_id else (b, a)
+                    if newer.confidence > older.confidence + 0.15:
+                        suppressed.add(older.track_id)
+                    else:
+                        suppressed.add(newer.track_id)
+        # 本帧缺席的 track 对计数衰减 -1，而非清零，避免单帧缺口打断持续重叠累计
+        for pair, prev in self._pair_count.items():
+            if pair not in seen_pairs:
+                counts[pair] = max(0, prev - 1)
+        self._pair_count = counts
+        return [track for track in tracks if track.track_id not in suppressed]
+
+
 # 别名：SimpleDetectionTracker 等价于 MultiObjectTracker（保持历史/兼容命名）。
 SimpleDetectionTracker = MultiObjectTracker

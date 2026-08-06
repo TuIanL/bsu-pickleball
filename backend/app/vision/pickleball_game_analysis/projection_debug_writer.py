@@ -46,6 +46,8 @@ class ProjectionDebugWriter:
         calibration_quality: str | None = None,
         near_frame_bottom: bool = False,
         bbox_clip_suspected: bool = False,
+        pose_unavailable: bool | None = None,
+        filter_reason: str | None = None,
     ) -> None:
         if self._file is None:
             return
@@ -66,6 +68,10 @@ class ProjectionDebugWriter:
         if near_frame_bottom or bbox_clip_suspected:
             record["near_frame_bottom"] = near_frame_bottom
             record["bbox_clip_suspected"] = bbox_clip_suspected
+        if pose_unavailable is not None:
+            record["pose_unavailable"] = pose_unavailable
+        if filter_reason:
+            record["filter_reason"] = filter_reason
         self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._frame_counter += 1
         if self._frame_counter % self._flush_interval == 0:

@@ -5,6 +5,7 @@ import type {
   PoseOverlayFrame,
   PoseSubject,
 } from "../../types/report";
+import { formatPlayerId } from "../../utils/analysisHelpers";
 
 type OverlayFrame = DetectionOverlayFrame | PoseOverlayFrame;
 
@@ -138,11 +139,16 @@ function interpolateDetection(
   ratio: number,
   timestamp: number
 ): DetectionOverlayBox {
+  const playerId = current.player_id ?? next.player_id;
+  const label = current.label
+    ?? (playerId ? formatPlayerId(playerId) || next.label : next.label);
   return {
     ...current,
     timestamp_seconds: timestamp,
     bbox: current.bbox.map((value, index) => lerp(value, next.bbox[index] ?? value, ratio)),
     confidence: lerp(current.confidence, next.confidence, ratio),
+    player_id: playerId,
+    label,
   };
 }
 

@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { scaleQuantize } from "d3-scale";
 import { courtSvgDefs } from "../../utils/courtGeometry";
-import type { StructuredVisualizationData } from "../../types/report";
+import type { HeatmapPlayerGrid, StructuredVisualizationData, VisualGrid } from "../../types/report";
 
 const HEATMAP_COLORS = ["#0000FF", "#00FF00", "#FFFF00", "#FF0000"];
 
@@ -11,9 +11,11 @@ interface StructuredHeatmapProps {
 }
 
 export default function StructuredHeatmap({ data, fallbackPngUrl }: StructuredHeatmapProps) {
-  const grid = data?.heatmaps?.visual_grid;
+  const heatmaps = data?.heatmaps;
+  const players = heatmaps?.players ?? [];
+  const aggregateGrid = heatmaps?.visual_grid;
 
-  if (!grid || grid.cells.length === 0) {
+  if (!heatmaps || (!aggregateGrid && players.length === 0)) {
     if (fallbackPngUrl) {
       return (
         <img
@@ -26,105 +28,124 @@ export default function StructuredHeatmap({ data, fallbackPngUrl }: StructuredHe
     return null;
   }
 
-  return <HeatmapSVG grid={grid} />;
+  // 旧 JSON 无 per-player 网格时，回退渲染合并网格。
+  if (players.length === 0 && aggregateGrid) {
+    return <AggregateHeatmapSVG grid={aggregateGrid} />;
+  }
+
+  return <PlayerLayersHeatmapSVG players={players} />;
 }
 
-function HeatmapSVG({ grid }: { grid: NonNullable<StructuredVisualizationData["heatmaps"]>["visual_grid"] }) {
-  const [hovered, setHovered] = useState<{ row: number; col: number; count: number } | null>(null);
+function HeatmapCourtBase({ children }: { children: React.ReactNode }) {
   const defs = courtSvgDefs();
+  return (
+    <svg viewBox={defs.viewBox} className="w-full bg-white" style={{ aspectRatio: "200/440" }}>
+      <rect
+        x={defs.courtOutline.x}
+        y={defs.courtOutline.y}
+        width={defs.courtOutline.width}
+        height={defs.courtOutline.height}
+        fill="#F5FAF1"
+        stroke="#14241B"
+        strokeWidth={1}
+        rx={2}
+      />
+      <line x1={defs.net.x1} y1={defs.net.y1} x2={defs.net.x2} y2={defs.net.y2} stroke="#14241B" strokeWidth={1.5} strokeDasharray="4,3" />
+      <line x1={defs.kitchenTop.x1} y1={defs.kitchenTop.y1} x2={defs.kitchenTop.x2} y2={defs.kitchenTop.y2} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
+      <line x1={defs.kitchenBottom.x1} y1={defs.kitchenBottom.y1} x2={defs.kitchenBottom.x2} y2={defs.kitchenBottom.y2} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
+      {children}
+    </svg>
+  );
+}
 
-  const colorScale = useMemo(() => {
-    const max = grid.max_count || 1;
-    return scaleQuantize<string>().domain([0, max]).range(HEATMAP_COLORS);
-  }, [grid.max_count]);
-
+/** 合并网格回退视图（蓝→红渐变）。 */
+function AggregateHeatmapSVG({ grid }: { grid: VisualGrid }) {
+  const defs = courtSvgDefs();
+  const max = grid.max_count || 1;
+  const colorScale = scaleQuantize<string>().domain([0, max]).range(HEATMAP_COLORS);
   const cellWidth = defs.courtOutline.width / grid.cols;
   const cellHeight = defs.courtOutline.height / grid.rows;
 
   return (
-    <div className="relative">
-      <svg viewBox={defs.viewBox} className="w-full bg-white" style={{ aspectRatio: "200/440" }}>
-        <rect
-          x={defs.courtOutline.x}
-          y={defs.courtOutline.y}
-          width={defs.courtOutline.width}
-          height={defs.courtOutline.height}
-          fill="#F5FAF1"
-          stroke="#14241B"
-          strokeWidth={1}
-          rx={2}
-        />
-        <line x1={defs.net.x1} y1={defs.net.y1} x2={defs.net.x2} y2={defs.net.y2} stroke="#14241B" strokeWidth={1.5} strokeDasharray="4,3" />
-        <line x1={defs.kitchenTop.x1} y1={defs.kitchenTop.y1} x2={defs.kitchenTop.x2} y2={defs.kitchenTop.y2} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
-        <line x1={defs.kitchenBottom.x1} y1={defs.kitchenBottom.y1} x2={defs.kitchenBottom.x2} y2={defs.kitchenBottom.y2} stroke="#22C55E" strokeWidth={1} strokeDasharray="3,2" />
-        {grid.cells.map((cell) => {
-          if (cell.count === 0) return null;
-          const x = defs.courtOutline.x + cell.col * cellWidth;
-          const y = defs.courtOutline.y + cell.row * cellHeight;
-          const fill = colorScale(cell.count);
-          const isHovered = hovered?.row === cell.row && hovered?.col === cell.col;
-          return (
-            <rect
-              key={`${cell.row}-${cell.col}`}
-              x={x}
-              y={y}
-              width={cellWidth}
-              height={cellHeight}
-              fill={fill}
-              opacity={isHovered ? 0.85 : 0.55}
-              stroke={isHovered ? "#14241B" : "none"}
-              strokeWidth={isHovered ? 1 : 0}
-              className="cursor-pointer transition-opacity"
-              onMouseEnter={() => setHovered(cell)}
-              onMouseLeave={() => setHovered(null)}
-            />
-          );
-        })}
-        {hovered && (
+    <HeatmapCourtBase>
+      {grid.cells.map((cell) => {
+        if (cell.count === 0) return null;
+        const x = defs.courtOutline.x + cell.col * cellWidth;
+        const y = defs.courtOutline.y + cell.row * cellHeight;
+        return (
           <rect
-            x={defs.courtOutline.x + hovered.col * cellWidth}
-            y={defs.courtOutline.y + hovered.row * cellHeight}
+            key={`${cell.row}-${cell.col}`}
+            x={x}
+            y={y}
             width={cellWidth}
             height={cellHeight}
-            fill="none"
-            stroke="#14241B"
-            strokeWidth={2}
-            rx={1}
+            fill={colorScale(cell.count)}
+            opacity={0.55}
           />
-        )}
-      </svg>
-      {hovered && (
-        <div className="absolute left-1/2 top-2 -translate-x-1/2 rounded-lg bg-[#14241B] px-3 py-1.5 text-xs font-semibold text-white shadow-lg">
-          第{hovered.row + 1}行第{hovered.col + 1}列: {hovered.count} 次
-        </div>
-      )}
-      <ColorLegend maxCount={grid.max_count} colors={HEATMAP_COLORS} />
-    </div>
+        );
+      })}
+    </HeatmapCourtBase>
   );
 }
 
-function ColorLegend({ maxCount, colors }: { maxCount: number; colors: string[] }) {
-  const steps = colors.length;
-  const segments = steps - 1;
-  const segWidth = 20;
+/** 每球员图层 + 图例切换（默认全开，各自 max_count 归一化）。 */
+function PlayerLayersHeatmapSVG({ players }: { players: HeatmapPlayerGrid[] }) {
+  const [visibleLayers, setVisibleLayers] = useState<Set<string>>(() => new Set(players.map((p) => p.id)));
+  const defs = courtSvgDefs();
+
+  function toggleLayer(id: string) {
+    setVisibleLayers((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
-    <div className="mt-2 flex items-center gap-3 px-2">
-      <div className="flex rounded-md overflow-hidden border border-[#DDE9D6]">
-        {Array.from({ length: segments }, (_, i) => (
-          <div
-            key={i}
-            className="h-3"
-            style={{
-              width: segWidth,
-              background: `linear-gradient(to right, ${colors[i]}, ${colors[i + 1]})`,
-            }}
-          />
+    <div className="relative">
+      <HeatmapCourtBase>
+        {players.map((player) => {
+          if (!visibleLayers.has(player.id)) return null;
+          const grid = player.grid;
+          const max = grid.max_count || 1;
+          const cellWidth = defs.courtOutline.width / grid.cols;
+          const cellHeight = defs.courtOutline.height / grid.rows;
+          return grid.cells.map((cell) => {
+            if (cell.count === 0) return null;
+            const x = defs.courtOutline.x + cell.col * cellWidth;
+            const y = defs.courtOutline.y + cell.row * cellHeight;
+            return (
+              <rect
+                key={`${player.id}-${cell.row}-${cell.col}`}
+                x={x}
+                y={y}
+                width={cellWidth}
+                height={cellHeight}
+                fill={player.color}
+                opacity={0.28 + 0.62 * (cell.count / max)}
+              />
+            );
+          });
+        })}
+      </HeatmapCourtBase>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 px-2">
+        {players.map((player) => (
+          <button
+            key={`legend-heatmap-${player.id}`}
+            onClick={() => toggleLayer(player.id)}
+            className="flex items-center gap-1.5 text-xs font-medium"
+          >
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: player.color, opacity: visibleLayers.has(player.id) ? 1 : 0.3 }}
+            />
+            <span className={visibleLayers.has(player.id) ? "text-[#14241B]" : "text-slate-400 line-through"}>
+              {player.label}
+            </span>
+          </button>
         ))}
       </div>
-      <span className="text-[10px] font-medium text-slate-500">0</span>
-      <div className="flex-1" />
-      <span className="text-[10px] font-medium text-slate-500">{maxCount}</span>
     </div>
   );
 }

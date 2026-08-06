@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowLeft, CircleDot, Info, Loader2, Route, SlidersHorizontal } from "lucide-react";
+import { AlertCircle, ArrowLeft, CircleDot, Loader2, Route, SlidersHorizontal } from "lucide-react";
 import type { AppPath, NavigateFn } from "../app/navigationTypes";
 import { PageFrame } from "../components/PageFrame";
 import { BallTrajectoryScene } from "../components/platform/BallTrajectoryScene";
@@ -7,7 +7,6 @@ import {
   getAnalysisJob,
   getAnalysisResult,
   getBallTrajectory,
-  getBounceEvents,
 } from "../services/analysisClient";
 import {
   buildBallTrajectoryVisualization,
@@ -60,11 +59,8 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
         if (!nextJob) throw new Error("分析任务不存在或已被删除");
         if (!result) throw new Error("该任务尚未生成可读取的分析结果");
 
-        const [trajectoryArtifact, bounceArtifact] = await Promise.all([
-          getBallTrajectory(result),
-          getBounceEvents(result).catch(() => null),
-        ]);
-        const nextData = buildBallTrajectoryVisualization(trajectoryArtifact, bounceArtifact);
+        const trajectoryArtifact = await getBallTrajectory(result);
+        const nextData = buildBallTrajectoryVisualization(trajectoryArtifact);
         if (!alive) return;
         setJob(nextJob);
         setData(nextData);
@@ -105,7 +101,7 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
           <div>
             <Loader2 className="mx-auto animate-spin text-[#168A34]" size={28} aria-hidden="true" />
             <h1 className="mt-4 text-xl font-bold text-[#182230]">正在构建球路</h1>
-            <p className="mt-2 text-sm text-[#667085]">读取清洗轨迹并生成估算 2.5D 视图…</p>
+            <p className="mt-2 text-sm text-[#667085]">读取清洗轨迹并生成球路视图…</p>
           </div>
         </div>
       </PageFrame>
@@ -149,29 +145,19 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
             返回视觉分析
           </button>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-md bg-[#EAF8F0] px-2.5 py-1 text-xs font-bold text-[#168A34]">
-              <Route size={14} aria-hidden="true" />
-              估算 2.5D
-            </span>
             <span className="text-xs text-[#98A2B3]">任务 {jobId}</span>
           </div>
           <h1 className="mt-3 text-3xl font-black text-[#182230] sm:text-4xl">球路可视化</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#667085]">
-            {job?.metadata.matchTitle ?? "比赛分析"} · 基于现有单摄二维投影生成，用于观察方向和轨迹分布。
+            {job?.metadata.matchTitle ?? "比赛分析"}
           </p>
         </div>
         <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[#E4E7EC] py-3 lg:border-y-0 lg:py-0">
           <Metric label="球路" value={`${data?.trajectories.length ?? 0}`} />
           <Metric label="较高可信" value={`${highConfidenceCount}`} />
-          <Metric label="弹跳候选" value={`${data?.bounces.length ?? 0}`} />
           <Metric label="累计时长" value={`${totalDuration.toFixed(1)}s`} />
         </div>
       </header>
-
-      <div className="mb-4 flex items-start gap-3 rounded-lg border border-[#F4D58D] bg-[#FFF8E8] px-4 py-3 text-sm leading-6 text-[#7A4D0B]">
-        <Info className="mt-0.5 shrink-0" size={17} aria-hidden="true" />
-        <p>弧线高度为视觉估算，不是双摄测量结果；不可用于判断真实最高点、过网高度或三维球速。</p>
-      </div>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_304px]">
         <div className="min-w-0">
@@ -185,7 +171,6 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
             </div>
           ) : filteredTrajectories.length ? (
             <BallTrajectoryScene
-              bounces={data?.bounces ?? []}
               trajectories={filteredTrajectories}
               selectedTrajectoryId={effectiveSelectedTrajectoryId}
               onSelectTrajectory={handleSelectTrajectory}
@@ -242,7 +227,6 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
               <Legend color="#25B86A" label="近端到远端" />
               <Legend color="#F04438" label="远端到近端" />
               <Legend color="#A7B0AA" label="插值点" dot />
-              <Legend color="#F59E0B" label="弹跳候选" ring />
             </div>
           </section>
 
@@ -308,13 +292,10 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Legend({ color, label, dot = false, ring = false }: { color: string; label: string; dot?: boolean; ring?: boolean }) {
+function Legend({ color, label, dot = false }: { color: string; label: string; dot?: boolean }) {
   return (
     <span className="flex items-center gap-2">
-      <span
-        className={`${dot ? "size-2 rounded-full" : ring ? "size-2.5 rounded-full border-2 bg-transparent" : "h-0.5 w-4"}`}
-        style={ring ? { borderColor: color } : { backgroundColor: color }}
-      />
+      <span className={`${dot ? "size-2 rounded-full" : "h-0.5 w-4"}`} style={{ backgroundColor: color }} />
       {label}
     </span>
   );

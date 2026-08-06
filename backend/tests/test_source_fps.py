@@ -34,6 +34,20 @@ def test_analysis_signature_includes_source_fps():
     assert analysis_signature(base) != analysis_signature(changed)
 
 
+def test_analysis_signature_includes_inference_toggles():
+    """任务级推理开关不同 → 配置签名不同（防止去重合并）。"""
+    enabled = AnalysisJobCreate(
+        metadata=_metadata(30), videoId="video-1", calibrationId="cal-1", enableModelInference=True
+    )
+    disabled = AnalysisJobCreate(
+        metadata=_metadata(30), videoId="video-1", calibrationId="cal-1", enableModelInference=False
+    )
+
+    assert enabled.enableModelInference is True
+    assert disabled.enableModelInference is False
+    assert analysis_signature(enabled) != analysis_signature(disabled)
+
+
 def test_frames_for_seconds_scales_with_fps():
     assert frames_for_seconds(2.0, 30) == 60
     assert frames_for_seconds(2.0, 60) == 120

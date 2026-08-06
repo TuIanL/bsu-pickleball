@@ -131,6 +131,9 @@ class AnalysisJobCreate(BaseModel):
     segmentVersion: Optional[int] = None
     recording_session_id: Optional[str] = None
     camera_slot: Optional[Literal["cam_1", "cam_2"]] = None
+    # 任务级推理开关：None 表示沿用后端全局配置（enable_model_inference / enable_pose_inference）
+    enableModelInference: Optional[bool] = None
+    enablePoseInference: Optional[bool] = None
 
 
 class AnalysisJobSummary(BaseModel):
@@ -173,6 +176,9 @@ class AnalysisJobSummary(BaseModel):
     segmentVersion: Optional[int] = None
     recordingSessionId: Optional[str] = None
     cameraSlot: Optional[Literal["cam_1", "cam_2"]] = None
+    # 任务实际使用的推理开关（创建时由 payload 或全局配置解析后固化；旧任务缺失时为 None）
+    enableModelInference: Optional[bool] = None
+    enablePoseInference: Optional[bool] = None
 
 
 # 删除任务的状态

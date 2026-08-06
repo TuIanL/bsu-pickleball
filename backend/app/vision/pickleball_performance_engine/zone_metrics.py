@@ -43,3 +43,41 @@ def kitchen_dwell(
         )
 
     return metrics
+
+
+# 后场带深（英尺）：从每条底线向内 7 英尺为后场区。
+BACKCOURT_DEPTH_FT = 7.0
+
+# 三区展示标签（与前端区域卡片对应）。
+ZONE_LABELS: dict[str, str] = {
+    "kitchen": "网前区",
+    "transition": "过渡区",
+    "backcourt": "后场区",
+}
+
+
+def zone_for(
+    x_ft: float,
+    y_ft: float,
+    court: StandardPickleballCourt | None = None,
+) -> str | None:
+    """返回 (x, y) 所在的三段区域名（kitchen/transition/backcourt）；球场外返回 None。
+
+    全球场三段横带（y 从近端底线 0 → 远端底线 length）：
+    - kitchen：近/远厨房线之间（网前 kitchen_depth 英尺，含球网两侧）；
+    - transition：厨房线到"距底线 BACKCOURT_DEPTH_FT 英尺"之间；
+    - backcourt：两条底线向内各 BACKCOURT_DEPTH_FT 英尺。
+    三段划分由球场几何常量推导，不写魔法数（backcourt 深度为显式常量）。
+    """
+    court = court or standard_court()
+    length = court.length_ft
+    near_kitchen = court.net_y_ft - court.kitchen_depth_ft
+    far_kitchen = court.net_y_ft + court.kitchen_depth_ft
+
+    if near_kitchen <= y_ft <= far_kitchen:
+        return "kitchen"
+    if BACKCOURT_DEPTH_FT <= y_ft < near_kitchen or far_kitchen < y_ft <= length - BACKCOURT_DEPTH_FT:
+        return "transition"
+    if 0 <= y_ft < BACKCOURT_DEPTH_FT or length - BACKCOURT_DEPTH_FT < y_ft <= length:
+        return "backcourt"
+    return None

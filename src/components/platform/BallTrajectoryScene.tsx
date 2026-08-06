@@ -2,16 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Columns3, Expand, Focus, Rows3 } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type {
-  EstimatedBallTrajectory,
-  TrajectoryBounceMarker,
-} from "../../services/ballTrajectoryVisualization";
+import type { EstimatedBallTrajectory } from "../../services/ballTrajectoryVisualization";
 
 type CameraView = "oblique" | "top" | "side" | "end";
 
 interface BallTrajectorySceneProps {
   trajectories: EstimatedBallTrajectory[];
-  bounces: TrajectoryBounceMarker[];
   selectedTrajectoryId: string | null;
   onSelectTrajectory: (trajectoryId: string) => void;
   onWebGlError: (message: string) => void;
@@ -136,16 +132,6 @@ function addTrajectories(
   return selectableLines;
 }
 
-function addBounces(scene: THREE.Scene, bounces: TrajectoryBounceMarker[]) {
-  const material = new THREE.MeshStandardMaterial({ color: "#F59E0B", emissive: "#7C3A00", emissiveIntensity: 0.12 });
-  for (const bounce of bounces) {
-    const marker = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.075, 10, 24), material);
-    marker.rotation.x = Math.PI / 2;
-    marker.position.copy(courtVector(bounce.courtXFt, 0.09, bounce.courtYFt));
-    scene.add(marker);
-  }
-}
-
 function disposeScene(scene: THREE.Scene) {
   scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh || object instanceof THREE.Line)) return;
@@ -157,7 +143,6 @@ function disposeScene(scene: THREE.Scene) {
 
 export function BallTrajectoryScene({
   trajectories,
-  bounces,
   selectedTrajectoryId,
   onSelectTrajectory,
   onWebGlError,
@@ -198,7 +183,7 @@ export function BallTrajectoryScene({
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.dataset.trajectoryCanvas = "true";
-    renderer.domElement.setAttribute("aria-label", "交互式估算球路球场");
+    renderer.domElement.setAttribute("aria-label", "交互式球路球场");
     mount.replaceChildren(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -221,7 +206,6 @@ export function BallTrajectoryScene({
     controls.target.set(0, 1.2, 0);
 
     const selectableLines = addTrajectories(scene, trajectories, selectedTrajectoryId);
-    addBounces(scene, bounces);
 
     const resize = () => {
       const width = Math.max(1, mount.clientWidth);
@@ -281,7 +265,7 @@ export function BallTrajectoryScene({
       cameraRef.current = null;
       controlsRef.current = null;
     };
-  }, [activeView, applyView, bounces, onSelectTrajectory, onWebGlError, selectedTrajectoryId, trajectories]);
+  }, [activeView, applyView, onSelectTrajectory, onWebGlError, selectedTrajectoryId, trajectories]);
 
   useEffect(() => {
     const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === containerRef.current);

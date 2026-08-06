@@ -35,6 +35,7 @@ from app.schemas.tracking import (
     DetectionOverlayFrame,
     FrameDetection,
     PlayerFramePosition,
+    PlayerIdentityDiagnostic,
     PlayerSelectionArtifact,
     PlayerTrajectoryArtifact,
     ProjectedCourtPoint2D,
@@ -65,7 +66,7 @@ from app.vision.pickleball_performance_engine.speed_metrics import speed_summari
 from app.vision.pickleball_performance_engine.trajectory_metrics import total_distances
 from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
-from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
+from app.vision.player_tracking_engine.multi_object_tracker import DuplicateTrackSuppressor, MultiObjectTracker
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
 from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
@@ -94,6 +95,7 @@ from app.vision.pickleball_game_analysis.position_visualizer import PositionVisu
 from app.vision.pickleball_game_analysis.projection_debug_writer import ProjectionDebugWriter
 from app.vision.pickleball_game_analysis.projection_debug_overlay_writer import ProjectionDebugOverlayWriter
 from app.vision.pickleball_game_analysis.visualization_data_builder import PositionVisualizationDataBuilder
+from app.vision.pickleball_game_analysis.effective_time_windows import resolve_effective_windows
 from app.vision.pickleball_game_analysis.court_track_postprocessor import CourtTrackPostProcessor
 from app.vision.pickleball_game_analysis.court_track_types import CourtTrackEvent, CourtTrackObservation, RenderSlotOverflowError, canonical_player_id
 from app.vision.pickleball_game_analysis.visualization_schemas import (
@@ -157,6 +159,7 @@ _RENDER_EVENT_MAPPING: dict[str, str] = {
     "reconnected": "identity_reconnected",
     "player_locked": "lock_acquired",
     "player_reconnected_from_lost": "lock_reconnected",
+    "player_reconnected_after_track_change": "lock_reconnected",
 }
 
 
@@ -277,12 +280,26 @@ class AnalysisPipeline:
         serve_start_detector: ServeStartDetector | None = None,
         ball_detector: Any | None = None,
         frame_stride: int | None = None,
+        # 任务级推理开关：None 表示沿用后端全局配置（enable_model_inference / enable_pose_inference）
+        enable_model_inference: bool | None = None,
+        enable_pose_inference: bool | None = None,
     ) -> None:
         self.video_service = video_service or VideoService()
         self.calibration_service = calibration_service or CalibrationService()
         self.storage = storage or StorageService()
         self.settings = get_settings()
-        # 检测器：没注入就按配置创建；如果配置关闭模型推理，则用一个"空检测器"（不真跑模型）
+        # 解析任务级覆盖：显式传入时优先，否则用全局配置
+        self._enable_model_inference = (
+            self.settings.enable_model_inference
+            if enable_model_inference is None
+            else enable_model_inference
+        )
+        self._enable_pose_inference = (
+            self.settings.enable_pose_inference
+            if enable_pose_inference is None
+            else enable_pose_inference
+        )
+        # 检测器：没注入就按配置创建；如果关闭模型推理，则用一个"空检测器"（不真跑模型）
         detector_was_injected = detector is not None
         self.detector = detector or (
             PersonDetector(
@@ -290,13 +307,13 @@ class AnalysisPipeline:
                 conf_threshold=self.settings.detector_confidence,
                 device=self.settings.detector_device,
             )
-            if self.settings.enable_model_inference
+            if self._enable_model_inference
             else EmptyPersonDetector()
         )
         self.model_inference_enabled = (
             not isinstance(self.detector, EmptyPersonDetector)
             if detector_was_injected
-            else self.settings.enable_model_inference
+            else self._enable_model_inference
         )
         self.tracker = tracker
         self.footpoint_estimator = footpoint_estimator or FootpointEstimator()
@@ -305,12 +322,13 @@ class AnalysisPipeline:
             include_invalid=True,
             drop_outside_tracking=False,
         )
-        # 球员球场坐标时间平滑器
+        # 球员球场坐标时间平滑器（frame_stride 与抽帧步长一致，避免 stride>1 时被误判为断帧）
         from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
         self.position_smoother = CourtPositionSmoother(
             alpha=0.45,
             max_speed_ft_s=30.0,
             max_gap_frames=10,
+            frame_stride=max(1, int(frame_stride or self.settings.overlay_frame_stride)),
         )
         # 主球员选择器：不再在 __init__ 中创建，改为在 _run_tracking 中按赛制创建
         # 姿态估计器：按配置创建 RTMPose26 适配器，关闭时设为 None
@@ -323,7 +341,7 @@ class AnalysisPipeline:
                 conf_exit_threshold=self.settings.pose_confidence_exit,
                 keypoint_schema=self.settings.pose_keypoint_schema,
             )
-            if self.settings.enable_pose_inference
+            if self._enable_pose_inference
             else None
         )
         # 发球开始检测器
@@ -379,6 +397,7 @@ class AnalysisPipeline:
         cancellation_token: CancellationToken | None = None,
         clip_start_ms: int | None = None,
         clip_end_ms: int | None = None,
+        capture_take_id: str | None = None,
     ) -> AnalysisPipelineResult:
         # 流水线主入口。根据"有没有视频 / 有没有标定"分三条路径：
         #   A) 有视频 + 有标定 → 跑真实跟踪（最完整）
@@ -885,7 +904,14 @@ class AnalysisPipeline:
         self._notify_progress(progress_callback, metrics_stage)
         self._check_cancelled(cancellation_token)
 
-        visualization_fields = self._run_visualization(job_id=job_id, video=video, progress_callback=progress_callback)
+        visualization_fields = self._run_visualization(
+            job_id=job_id,
+            video=video,
+            progress_callback=progress_callback,
+            clip_start_ms=clip_start_ms,
+            clip_end_ms=clip_end_ms,
+            capture_take_id=capture_take_id,
+        )
         visualization_stage = self._stage(
             "visualization",
             "可视化输出",
@@ -1233,6 +1259,9 @@ class AnalysisPipeline:
         job_id: str,
         video: VideoMetadata | None,
         progress_callback: ProgressCallback | None = None,
+        clip_start_ms: int | None = None,
+        clip_end_ms: int | None = None,
+        capture_take_id: str | None = None,
     ) -> _VisualizationArtifactFields:
         enabled_overlay = bool(self.settings.enable_analysis_overlay_video)
         enabled_positions = bool(self.settings.enable_position_visualizations)
@@ -1261,13 +1290,22 @@ class AnalysisPipeline:
 
         if enabled_positions:
             try:
+                # 0. 解析比赛有效时间（KCR 分母）：clip 区间 > 时间线 rally 净时间 > 总时长回退
+                effective_windows = resolve_effective_windows(
+                    clip_start_ms=clip_start_ms,
+                    clip_end_ms=clip_end_ms,
+                    capture_take_id=capture_take_id,
+                )
                 # 1. 构建结构化可视化数据（前端 SVG 渲染 + PNG fallback 共用）
-                builder = PositionVisualizationDataBuilder()
+                builder = PositionVisualizationDataBuilder(
+                    reference_distance_m=self.settings.kitchen_line_reference_distance_m,
+                )
                 structured_data = builder.build_and_write(
                     output_path=self.storage.structured_visualization_data_path(job_id),
                     player_points=metric_player_points,
                     ball_points=ball_points,
                     bounce_points=bounce_points,
+                    effective_windows=effective_windows,
                 )
                 # 2. 生成 PNG（消费结构化数据以避免重复计算 22×10 网格）
                 heatmaps_url = f"/api/analysis/jobs/{job_id}/artifacts/position-heatmaps"
@@ -1607,6 +1645,11 @@ class AnalysisPipeline:
         )
 
         tracker = self.tracker or MultiObjectTracker(max_lost=identity_lost_buffer_frames)
+        # 重复重叠 track 抑制：同一目标被跟踪器分身出的重复 track（如 P2 的 track 41/50）只保留其一
+        duplicate_suppressor = DuplicateTrackSuppressor(
+            iou_threshold=self.settings.player_duplicate_track_iou_threshold,
+            sustain_frames=self.settings.player_duplicate_track_sustain_frames,
+        )
         # 球员身份管理器（把轨迹对应到稳定 player_id，处理重连/插值/跟丢）
         identity_manager = PlayerIdentityManager(
             PlayerIdentityConfig(
@@ -1679,6 +1722,7 @@ class AnalysisPipeline:
         render_observations: list[CourtTrackObservation] = []
         render_identity_epoch_by_player: dict[str, int] = {}
         render_events: list[CourtTrackEvent] = []
+        lock_diagnostics: list[PlayerIdentityDiagnostic] = []
         render_identity_diagnostic_cursor = 0
 
         if not clip_applied:
@@ -1736,6 +1780,8 @@ class AnalysisPipeline:
                     full_frame_fallback_count += 1
                 # 3) 跟踪：把本帧检测关联到已有轨迹
                 tracks = tracker.update(detections)
+                # 3b) 重复 track 抑制：剔除同一目标的重复重叠 track（仅球员路径）
+                tracks = duplicate_suppressor.filter(tracks)
                 # 4) 估算每个轨迹的脚点（画面坐标）
                 footpoints = {track.track_id: self.footpoint_estimator.estimate(track, frame_shape=(frame_width, frame_height)) for track in tracks}
                 # 5) 投影：脚点 + 单应矩阵 → 球场坐标
@@ -1774,17 +1820,25 @@ class AnalysisPipeline:
                 # 5d) 投影调试日志写入（每帧每个球员一行 JSONL）
                 if debug_writer is not None and debug_minimap is not None:
                     for pos in frame_positions:
-                        raw = pos.court_position
+                        # 原始投影值（5b 在平滑前保存），平滑后 court_position 已被覆盖
+                        raw = render_raw_by_track.get(pos.track_id)
+                        raw = [raw["x_ft"], raw["y_ft"]] if raw else None
                         smoothed = pos.court_position
                         px = None
-                        if raw and len(raw) >= 2:
-                            px = debug_minimap.court_to_pixel(raw[0], raw[1])
+                        if smoothed and len(smoothed) >= 2:
+                            px = debug_minimap.court_to_pixel(smoothed[0], smoothed[1])
                         fp_method = pos.footpoint_method or "unknown"
                         near_bottom = False
                         clip_suspected = False
+                        pose_unavailable = False
                         if hasattr(pos, 'footpoint_metadata') and pos.footpoint_metadata:
                             near_bottom = pos.footpoint_metadata.get('near_frame_bottom', False)
                             clip_suspected = pos.footpoint_metadata.get('bbox_clip_suspected', False)
+                            pose_unavailable = bool(pos.footpoint_metadata.get('pose_unavailable', False))
+                        status = pos.projection_status or "unknown"
+                        filter_reason = None
+                        if status == "outside_tracking_area":
+                            filter_reason = "court position outside allowed tracking bounds (x:-4..24, y:-8..52)"
                         debug_writer.write_frame(
                             frame_index=frame_index,
                             track_id=pos.track_id,
@@ -1794,11 +1848,13 @@ class AnalysisPipeline:
                             footpoint_confidence=pos.projection_confidence,
                             court_position_raw=raw if raw else [0, 0],
                             court_position_smoothed=smoothed if smoothed else [0, 0],
-                            projection_status=pos.projection_status or "unknown",
+                            projection_status=status,
                             minimap_pixel=px,
                             calibration_quality=calibration_quality,
                             near_frame_bottom=near_bottom,
                             bbox_clip_suspected=clip_suspected,
+                            pose_unavailable=pose_unavailable,
+                            filter_reason=filter_reason,
                         )
                 # 6) 选主球员（建议集合，不再作为硬门控）
                 primary_selections = primary_player_selector.select(
@@ -1819,6 +1875,7 @@ class AnalysisPipeline:
                     frame_width=frame_width,
                     frame_height=frame_height,
                 )
+                lock_diagnostics.extend(lock_update.diagnostics)
                 eligible_track_ids = lock_update.eligible_track_ids | suggested_track_ids
                 # 7) 把轨迹整理成"帧检测"格式（只保留主球员对应的轨迹）
                 frame_detections = self._tracks_to_frame_detections(
@@ -2061,6 +2118,22 @@ class AnalysisPipeline:
             processed_frame_count=processed_frame_count,
             frame_stride=stride,
         )
+        if lock_diagnostics:
+            all_diagnostics = [*player_trajectories.diagnostics, *lock_diagnostics]
+            player_trajectories.diagnostics = sorted(
+                all_diagnostics,
+                key=lambda diagnostic: (
+                    diagnostic.frame_index,
+                    diagnostic.track_id is None,
+                    diagnostic.track_id if diagnostic.track_id is not None else -1,
+                    diagnostic.event,
+                ),
+            )
+            if player_trajectories.coverage is not None:
+                diagnostic_event_counts: dict[str, int] = {}
+                for diagnostic in player_trajectories.diagnostics:
+                    diagnostic_event_counts[diagnostic.event] = diagnostic_event_counts.get(diagnostic.event, 0) + 1
+                player_trajectories.coverage.diagnostic_event_counts = diagnostic_event_counts
         player_metric_tracks = identity_manager.to_projected_track_points(output_court_unit="ft")
 
         # ── 过滤预热帧：仅保留 clip 范围内的 track points 用于指标计算 ──
@@ -2479,13 +2552,19 @@ class AnalysisPipeline:
 
     def _positions_to_projected_tracks(self, positions: list[PlayerFramePosition]) -> list[ProjectedTrackPoint]:
         # 内部：把"逐帧球员位置"转成"投影轨迹点"列表。
-        # 只保留有效、且落在标准球场范围（20x44 英尺）内的点。
+        # 球员允许站在场地外（发球/接发球站位在底线外），因此不用 position.valid（仅场内）
+        # 一刀切过滤；过滤边界与前端 CourtMinimap TRACKING_BOUNDS（x:-4~24, y:-8~52）对齐。
+        # 但场外放行仅对高置信度点生效（≥ 主球员置信度阈值），低置信度观众/杂散检测仍排除，
+        # 避免小地图渲染观众。
         projected: list[ProjectedTrackPoint] = []
         for position in positions:
-            if not position.valid or position.court_position is None:
+            if position.court_position is None:
                 continue
             court_x, court_y = position.court_position
-            if not (0.0 <= court_x <= 20.0 and 0.0 <= court_y <= 44.0):
+            if not (-4.0 <= court_x <= 24.0 and -8.0 <= court_y <= 52.0):
+                continue
+            in_court = 0.0 <= court_x <= 20.0 and 0.0 <= court_y <= 44.0
+            if not in_court and (position.confidence or 0.0) < self.settings.primary_player_min_confidence:
                 continue
             image_x, image_y = position.image_footpoint
             projected.append(

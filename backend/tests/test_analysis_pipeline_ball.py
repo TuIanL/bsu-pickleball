@@ -562,3 +562,93 @@ class TestBackwardCompatibility:
         assert metrics.ball_detection_rate == 0.0
         assert metrics.bounce_event_count == 0
         assert metrics.first_bounce_timestamp_seconds is None
+
+
+class TestTaskLevelInferenceToggles:
+    """任务级推理开关覆盖全局配置。"""
+
+    def test_task_level_disable_overrides_global_enable_for_detector(self):
+        """全局开启人体检测、任务级关闭 → 使用空检测器，model_inference_enabled=False。"""
+        from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
+
+        with patch("app.services.analysis_pipeline.get_settings") as mock_get:
+            mock_get.return_value = _mock_settings(enable_model_inference=True)
+            p = AnalysisPipeline(enable_model_inference=False)
+            assert isinstance(p.detector, EmptyPersonDetector)
+            assert p.model_inference_enabled is False
+
+    def test_task_level_disable_overrides_global_enable_for_pose(self):
+        """全局开启姿态、任务级关闭 → pose_estimator 为 None（不初始化 RTMPose）。"""
+        with patch("app.services.analysis_pipeline.get_settings") as mock_get:
+            mock_get.return_value = _mock_settings(enable_pose_inference=True)
+            p = AnalysisPipeline(enable_pose_inference=False)
+            assert p.pose_estimator is None
+
+    def test_global_config_used_when_task_toggle_omitted(self):
+        """任务级未传开关 → 沿用全局配置（默认关闭时走空检测器）。"""
+        from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
+
+        with patch("app.services.analysis_pipeline.get_settings") as mock_get:
+            mock_get.return_value = _mock_settings(enable_model_inference=False)
+            p = AnalysisPipeline()
+            assert isinstance(p.detector, EmptyPersonDetector)
+            assert p.model_inference_enabled is False
+            assert p.pose_estimator is None
+
+
+class TestProjectedTracksAllowOutOfBoundsPlayers:
+    """球员可站在场地外（发球/接发球站位），过滤边界与前端 TRACKING_BOUNDS 对齐。"""
+
+    def _make_position(self, court_x: float, court_y: float, *, status: str = "outside_court_visible"):
+        from app.schemas.tracking import PlayerFramePosition
+        return PlayerFramePosition(
+            frame_index=0,
+            timestamp=0.0,
+            track_id=1,
+            bbox=[0, 0, 10, 100],
+            image_footpoint=[5, 100],
+            court_position=[court_x, court_y],
+            confidence=0.9,
+            valid=status == "inside_court",
+            validity="valid" if status == "inside_court" else "invalid",
+            footpoint_method="bbox_bottom_center",
+            is_inside_court=status == "inside_court",
+            is_inside_tracking_area=status != "outside_tracking_area",
+            projection_status=status,
+            projection_confidence=0.7,
+        )
+
+    def test_out_of_bounds_player_within_tracking_bounds_is_kept(self):
+        """发球站位（court_y=48，场外但在 -8..52 内）应写入主轨迹。"""
+        from app.services.analysis_pipeline import AnalysisPipeline
+
+        with patch("app.services.analysis_pipeline.get_settings") as mock_get:
+            mock_get.return_value = _mock_settings()
+            p = AnalysisPipeline()
+            tracks = p._positions_to_projected_tracks([self._make_position(10, 48)])
+
+        assert len(tracks) == 1
+        assert tracks[0].court_point.y == pytest.approx(48)
+
+    def test_far_out_of_bounds_player_is_dropped(self):
+        """homography 外推严重异常（court_y=60 超出合理范围）应被丢弃。"""
+        from app.services.analysis_pipeline import AnalysisPipeline
+
+        with patch("app.services.analysis_pipeline.get_settings") as mock_get:
+            mock_get.return_value = _mock_settings()
+            p = AnalysisPipeline()
+            tracks = p._positions_to_projected_tracks([self._make_position(10, 60)])
+
+        assert tracks == []
+
+    def test_inside_court_player_is_kept(self):
+        """场内点照常写入主轨迹。"""
+        from app.services.analysis_pipeline import AnalysisPipeline
+
+        with patch("app.services.analysis_pipeline.get_settings") as mock_get:
+            mock_get.return_value = _mock_settings()
+            p = AnalysisPipeline()
+            tracks = p._positions_to_projected_tracks([self._make_position(10, 22, status="inside_court")])
+
+        assert len(tracks) == 1
+        assert tracks[0].court_point.y == pytest.approx(22)

@@ -78,17 +78,74 @@
 ## Requirements
 ### Requirement: 软接管产生的临时身份显示 canonical 标签
 
-视频检测叠加层（`VideoAnalysisCard`）对经位置连续性软接管获得身份的检测框 SHALL 显示对应的 canonical player ID（如 `P1`），不得因置信度低而降级为 `person`。仅当检测框的 `player_id` 完全为空（软接管也不适用）时，标签 SHALL 显示中性文本（如 `person`）。
+视频检测叠加层对经 lock hint 或位置连续性软接管获得身份的检测框 SHALL 显示对应的 canonical player ID（如 `P1`），不得因 `tentative` 或低置信度而降级为 `person`。仅当检测框在当前帧确实没有可证明的 `player_id` 时，标签 SHALL 显示中性文本。
 
 #### Scenario: 软接管身份的检测显示 canonical ID
 
-- **WHEN** 一个检测框的 `player_id` 由身份层软接管（`tracking_status="tentative"`）指派为 `Player_2`
-- **THEN** 框标签 SHALL 显示 `P2`（或等价 canonical 形式）
-- **AND** SHALL NOT 因低置信度而显示 `person` 或原始 `track_id`
+- **WHEN** 一个检测框的 `player_id` 由身份层软接管指派为 `Player_2`
+- **THEN** 框标签 SHALL 显示 `P2`
+- **AND** SHALL NOT 因 `tracking_status="tentative"` 显示 `person`
+
+#### Scenario: lock hint 恢复身份的检测显示 canonical ID
+
+- **WHEN** 一个新 track 由 lock hint 指派到 `Player_3`
+- **THEN** 框标签 SHALL 显示 `P3`
+- **AND** 标签 SHALL NOT 显示原始 `track_id`
 
 #### Scenario: 完全未关联的检测仍显示中性文本
 
-- **WHEN** 一个检测框 `player_id` 为空，且位置连续性软接管不适用
-- **THEN** 框标签 SHALL 显示中性文本（如 `person`）
+- **WHEN** 一个检测框 `player_id` 为空且 soft takeover 不适用
+- **THEN** 框标签 SHALL 显示 `person`
 - **AND** SHALL NOT 显示 `ID {track_id}` 形式的原始数字
+
+### Requirement: 相邻 overlay 帧保持可证明的 canonical 身份
+
+前端 overlay 帧解析在相邻帧之间插值时 SHALL 保留或继承可证明的 canonical player identity，但 SHALL NOT 根据不同 track 的空间距离自行猜测身份。
+
+#### Scenario: 同一 track 的下一帧恢复身份
+
+- **WHEN** 当前 overlay 帧的 detection 与下一 overlay 帧使用相同 `track_id`
+- **AND** 当前帧 `player_id` 为空而下一帧为 `Player_1`
+- **THEN** 插值后的当前渲染 detection SHALL 使用 `Player_1`
+- **AND** 标签 SHALL 显示 `P1` 而不是 `person`
+
+#### Scenario: 不同 track 不由前端猜测身份
+
+- **WHEN** 当前帧和下一帧的 track_id 不同
+- **AND** 后端没有为下一 track 提供 `player_id`
+- **THEN** 前端 SHALL NOT 仅凭空间距离将其标为某个 P ID
+- **AND** SHALL 保留中性标签或等待后端身份数据
+
+#### Scenario: canonical ID 不泄漏 raw track_id
+
+- **WHEN** overlay detection 同时包含 `player_id` 和 `track_id`
+- **THEN** 用户可见标签 SHALL 只显示 `P1`..`P4`
+- **AND** SHALL NOT 显示 raw `track_id`
+
+### Requirement: 结构化可视化产物使用 canonical player ID 与展示标签
+
+后端 `/visualization-data` 中的 `heatmaps.players`、`scatter_plots.players`、`zone_stats.players`、`player_trajectories` 球员标识字段 SHALL 使用 canonical player ID（`Player_1`..`Player_4`），展示标签 SHALL 为 `P1`..`P4`；SHALL NOT 使用排序索引（如 `"0"`）或 `"球员N"` 形式作为标识或标签。
+
+#### Scenario: 热力图球员 id 为 canonical
+
+- **WHEN** 分析完成生成 heatmaps 结构化数据
+- **THEN** `heatmaps.players[].id` SHALL 为 canonical player ID（如 `Player_2`）
+- **AND** `heatmaps.players[].label` SHALL 为 `P2`（或等价 canonical 形式）
+
+#### Scenario: zone_stats 球员 id 为 canonical
+
+- **WHEN** 分析完成生成 zone_stats 结构化数据
+- **THEN** `zone_stats.players[].id` SHALL 为 canonical player ID（如 `Player_1`）
+- **AND** `zone_stats.players[].label` SHALL 为 `P1`（或等价 canonical 形式）
+
+#### Scenario: 散点图球员 id 为 canonical
+
+- **WHEN** 分析完成生成 scatter_plots 结构化数据
+- **THEN** `scatter_plots.players[].id` SHALL 为 canonical player ID（如 `Player_3`）
+
+#### Scenario: 非 canonical 标签不参与对齐声明
+
+- **WHEN** 某球员点 label 无法解析为 `Player_N` 形式
+- **THEN** 该 id 原样保留且颜色回退索引分配
+- **AND** 该产物不声称与 canonical P1-P4 对齐
 

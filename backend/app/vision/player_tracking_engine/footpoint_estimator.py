@@ -42,7 +42,11 @@ class FootpointEstimator:
             if self.method != "hybrid":
                 raise NotImplementedError(f"Footpoint method {self.method} requires pose keypoints")
         # bbox_bottom_center 或 hybrid fallback
-        return self._estimate_from_bbox(bbox_or_track, frame_shape=frame_shape)
+        # 进入 bbox fallback 且本应是 pose 方法时，显式标记 pose_unavailable，便于诊断区分
+        pose_unavailable = self.method in (
+            "hybrid", "pose_ankle_midpoint", "pose_ankle_single", "knee_extrapolated",
+        )
+        return self._estimate_from_bbox(bbox_or_track, frame_shape=frame_shape, pose_unavailable=pose_unavailable)
 
     def _estimate_from_pose(self, keypoints: Mapping[int, dict] | None) -> FootpointEstimate | None:
         if keypoints is None:
@@ -97,19 +101,28 @@ class FootpointEstimator:
 
         return None
 
-    def _estimate_from_bbox(self, bbox_or_track: BoundingBox | Track | list[float] | tuple[float, float, float, float], *, frame_shape: tuple[int, int] | None = None) -> FootpointEstimate:
+    def _estimate_from_bbox(
+        self,
+        bbox_or_track: BoundingBox | Track | list[float] | tuple[float, float, float, float],
+        *,
+        frame_shape: tuple[int, int] | None = None,
+        pose_unavailable: bool = False,
+    ) -> FootpointEstimate:
         x1, _, x2, y2 = _bbox_values(bbox_or_track)
         near_bottom, clip_suspected = self._check_near_frame_bottom(y2, frame_shape)
         conf = 0.7
-        metadata: dict[str, bool] | None = None
+        metadata: dict[str, bool] = {}
+        if pose_unavailable:
+            metadata["pose_unavailable"] = True
         if near_bottom:
             conf = 0.35
-            metadata = {"near_frame_bottom": True, "bbox_clip_suspected": True}
+            metadata["near_frame_bottom"] = True
+            metadata["bbox_clip_suspected"] = True
         return FootpointEstimate(
             image_footpoint=[float(x1 + x2) / 2.0, float(y2)],
             method="bbox_bottom_center",
             confidence=conf,
-            metadata=metadata,
+            metadata=metadata or None,
         )
 
     def _check_near_frame_bottom(self, bbox_y2: float, frame_shape: tuple[int, int] | None, threshold: float = 0.94) -> tuple[bool, bool]:

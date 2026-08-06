@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Camera, Play, RefreshCw, Trash2, Upload, LayoutDashboard, Video, ArrowRight } from "lucide-react";
+import { Camera, Play, RefreshCw, Trash2, Upload, LayoutDashboard, Video, ArrowRight, ArrowDownUp, ListFilter } from "lucide-react";
 import type { NavigateFn, AppPath } from "../app/navigationTypes";
 import type { AnalysisJobSummary, RecordingSession, FieldSession, SyncRecordingSession } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { Modal } from "../components/platform/Modal";
 import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
+import DeleteToast, { type DeleteToastData } from "../components/platform/DeleteToast";
 import { FieldSessionGroupCard } from "../components/platform/FieldSessionGroupCard";
 import { groupRecordingsByFieldSession } from "../services/recordingGrouping";
 import { getVideoStreamUrl } from "../services/analysisClient";
@@ -28,10 +29,35 @@ import {
   errorToNotice,
   isActiveAnalysisJob,
   isCancelableAnalysisJob,
+  isTerminalAnalysisJob,
+  sortAnalysisJobs,
   analysisStatusMeta,
   analysisModeLabel,
   formatDateTime,
+  ANALYSIS_MODES,
+  applyModeSelection,
+  modeSelectionState,
 } from "../utils/analysisHelpers";
+import type { AnalysisSortKey, AnalysisSortDir, AnalysisModeValue } from "../utils/analysisHelpers";
+import { AnalysisModeSelectPopover } from "../components/platform/AnalysisModeSelectPopover";
+import type { AnalysisModeFilter } from "../components/platform/AnalysisModeSelectPopover";
+
+// 会话级持久化：进入任务详情再返回后保持「按类型筛选」的选择
+const MODE_FILTER_SESSION_KEY = "analysis-tasks-mode-filter";
+const ANALYSIS_MODE_VALUES = ANALYSIS_MODES as readonly AnalysisModeValue[];
+
+function readPersistedModeFilter(): AnalysisModeFilter {
+  if (typeof window === "undefined") return "all";
+  try {
+    const stored = window.sessionStorage.getItem(MODE_FILTER_SESSION_KEY);
+    if (stored && ANALYSIS_MODE_VALUES.includes(stored as AnalysisModeValue)) {
+      return stored as AnalysisModeValue;
+    }
+  } catch {
+    // sessionStorage 在隐私模式可能不可用，静默回退到默认
+  }
+  return "all";
+}
 
 export function AnalysisTasksPage({
   onNavigate,
@@ -44,9 +70,29 @@ export function AnalysisTasksPage({
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
-  const [deleteNotice, setDeleteNotice] = useState<DiagnosticNotice | null>(null);
+  const [deleteToast, setDeleteToast] = useState<DeleteToastData | null>(null);
   const [deletingJobIds, setDeletingJobIds] = useState<string[]>([]);
   const [cancelingJobIds, setCancelingJobIds] = useState<string[]>([]);
+
+  // 上传任务列表排序：创建/更新时间 × 新→旧 / 旧→新
+  const [sortKey, setSortKey] = useState<AnalysisSortKey>("updatedAt");
+  const [sortDir, setSortDir] = useState<AnalysisSortDir>("desc");
+
+  // 「按类型选择」弹层开关（仅上传视频任务 tab）
+  const [modeSelectOpen, setModeSelectOpen] = useState(false);
+  // 「按类型筛选」：全部或某一分析模式（上传任务 tab 列表过滤）
+  // 进入详情页再返回时，从 sessionStorage 恢复，保持筛选上下文
+  const [modeFilter, setModeFilter] = useState<AnalysisModeFilter>(readPersistedModeFilter);
+
+  /** 写入 modeFilter 并同步持久化到 sessionStorage（详情页返回时 remount 会读回） */
+  const updateModeFilter = (next: AnalysisModeFilter) => {
+    setModeFilter(next);
+    try {
+      window.sessionStorage.setItem(MODE_FILTER_SESSION_KEY, next);
+    } catch {
+      // 忽略隐私模式/无 sessionStorage 时的写入失败
+    }
+  };
 
   // 来源筛选：上传视频 / 录制视频 / 双摄录制
   const [sourceFilter, setSourceFilter] = useState<"upload" | "recorded" | "sync_recording">("upload");
@@ -55,16 +101,10 @@ export function AnalysisTasksPage({
   const [fieldSessions, setFieldSessions] = useState<FieldSession[]>([]);
   const [selectedRecordingIds, setSelectedRecordingIds] = useState<Set<string>>(() => new Set());
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
-  const [batchDeleteResult, setBatchDeleteResult] = useState<{
-    deleted: number; blocked: number; failed: number;
-  } | null>(null);
 
   // ── Field Session 批量删除 ──
   const [selectedFieldSessionIds, setSelectedFieldSessionIds] = useState<Set<string>>(() => new Set());
   const [isFieldSessionBatchDeleting, setIsFieldSessionBatchDeleting] = useState(false);
-  const [fieldSessionBatchResult, setFieldSessionBatchResult] = useState<{
-    deleted: number; blocked: number; failed: number;
-  } | null>(null);
 
   // 双摄同步录制
   const [syncRecordings, setSyncRecordings] = useState<SyncRecordingSession[]>([]);
@@ -124,7 +164,7 @@ export function AnalysisTasksPage({
     if (!window.confirm(`确定批量删除 ${ids.length} 个录制记录吗？此操作不可撤销。`)) return;
 
     setIsBatchDeleting(true);
-    setBatchDeleteResult(null);
+    setDeleteToast(null);
 
     const results = await Promise.allSettled(ids.map(id => deleteRecording(id)));
     let deleted = 0, blocked = 0, failed = 0;
@@ -138,7 +178,7 @@ export function AnalysisTasksPage({
       }
     }
 
-    setBatchDeleteResult({ deleted, blocked, failed });
+    setDeleteToast(buildDeleteToast(deleted, blocked, failed, 0, "录制"));
     setSelectedRecordingIds(new Set());
     setIsBatchDeleting(false);
     void loadRecordings();
@@ -161,7 +201,7 @@ export function AnalysisTasksPage({
     if (!window.confirm(`确定批量删除 ${ids.length} 个采集任务吗？\n注意：包含录制视频的采集任务将无法删除，请先删除录制。`)) return;
 
     setIsFieldSessionBatchDeleting(true);
-    setFieldSessionBatchResult(null);
+    setDeleteToast(null);
 
     const results = await Promise.allSettled(ids.map(id => deleteFieldSession(id)));
     let deleted = 0, blocked = 0, failed = 0;
@@ -173,7 +213,7 @@ export function AnalysisTasksPage({
       } else failed++;
     }
 
-    setFieldSessionBatchResult({ deleted, blocked, failed });
+    setDeleteToast(buildDeleteToast(deleted, blocked, failed, 0, "采集任务"));
     setSelectedFieldSessionIds(new Set());
     setIsFieldSessionBatchDeleting(false);
     void loadFieldSessions();
@@ -189,7 +229,7 @@ export function AnalysisTasksPage({
     if (!window.confirm(`确定清理 ${emptyGroups.length} 个没有录制视频的采集任务吗？此操作不可撤销。`)) return;
 
     setIsFieldSessionBatchDeleting(true);
-    setFieldSessionBatchResult(null);
+    setDeleteToast(null);
 
     const results = await Promise.allSettled(emptyGroups.map(g => deleteFieldSession(g.fieldSession!.id)));
     let deleted = 0, blocked = 0, failed = 0;
@@ -201,7 +241,7 @@ export function AnalysisTasksPage({
       } else failed++;
     }
 
-    setFieldSessionBatchResult({ deleted, blocked, failed });
+    setDeleteToast(buildDeleteToast(deleted, blocked, failed, 0, "采集任务"));
     setIsFieldSessionBatchDeleting(false);
     void loadFieldSessions();
     void loadRecordings();
@@ -373,6 +413,17 @@ export function AnalysisTasksPage({
     }),
     [visibleJobs, syncSessionIds],
   );
+  /** 按当前排序配置渲染的上传任务列表（排序不改变统计与批量删除的可见集） */
+  const sortedUploadJobs = useMemo(
+    () => sortAnalysisJobs(uploadJobs, sortKey, sortDir),
+    [uploadJobs, sortKey, sortDir],
+  );
+  /** 失败/取消的终端任务：一键清除的目标 */
+  const terminalJobs = useMemo(
+    () => uploadJobs.filter(isTerminalAnalysisJob),
+    [uploadJobs],
+  );
+  const terminalJobIds = terminalJobs.map((job) => job.id);
   const activeCount = visibleJobs.filter(isActiveAnalysisJob).length;
   const completedCount = visibleJobs.filter((job) => job.status === "completed").length;
   const failedCount = visibleJobs.filter((job) => job.status === "failed").length;
@@ -381,8 +432,39 @@ export function AnalysisTasksPage({
   const eligibleJobIds = eligibleJobs.map((job) => job.id);
   const eligibleJobKey = eligibleJobIds.join("|");
   const selectedEligibleIds = selectedJobIds.filter((jobId) => eligibleJobIds.includes(jobId));
-  const allEligibleSelected = eligibleJobIds.length > 0 && eligibleJobIds.every((jobId) => selectedJobIds.includes(jobId));
   const isDeleting = deletingJobIds.length > 0;
+
+  /** 上传 tab 内可删除任务：「按类型选择」只作用于这些可见任务 */
+  const uploadEligibleJobs = useMemo(
+    () => uploadJobs.filter((job) => !isActiveAnalysisJob(job)),
+    [uploadJobs],
+  );
+  /** 「按类型选择」弹层的三个分析模式行：可删任务计数 + 勾选三态 */
+  const modeRows = useMemo(
+    () =>
+      ANALYSIS_MODES.map((mode) => {
+        const eligibleIds = uploadEligibleJobs.filter((job) => job.analysisMode === mode).map((job) => job.id);
+        return {
+          mode,
+          eligibleCount: eligibleIds.length,
+          state: modeSelectionState(eligibleIds, selectedJobIds),
+        };
+      }),
+    [uploadEligibleJobs, selectedJobIds],
+  );
+
+  /** 按「类型筛选」过滤后的上传任务列表（默认全部） */
+  const filteredUploadJobs = useMemo(
+    () => (modeFilter === "all" ? sortedUploadJobs : sortedUploadJobs.filter((job) => job.analysisMode === modeFilter)),
+    [sortedUploadJobs, modeFilter],
+  );
+  /** 当前筛选下可见的可删除任务：全选与已选计数按此范围计算 */
+  const visibleEligibleIds = useMemo(
+    () => filteredUploadJobs.filter((job) => !isActiveAnalysisJob(job)).map((job) => job.id),
+    [filteredUploadJobs],
+  );
+  const selectedVisibleIds = selectedJobIds.filter((jobId) => visibleEligibleIds.includes(jobId));
+  const allVisibleSelected = visibleEligibleIds.length > 0 && visibleEligibleIds.every((jobId) => selectedJobIds.includes(jobId));
 
   useEffect(() => {
     // Keep selections valid after the server-side job list changes.
@@ -390,37 +472,62 @@ export function AnalysisTasksPage({
     setSelectedJobIds((current) => current.filter((jobId) => eligibleJobIds.includes(jobId)));
   }, [eligibleJobKey]);
 
-  const summarizeDeleteResults = (results: Awaited<ReturnType<typeof deleteAnalysisJobs>>) => {
-    const deleted = results.filter((result) => result.status === "deleted");
-    const blocked = results.filter((result) => result.status === "blocked");
-    const missing = results.filter((result) => result.status === "not_found");
-    const failed = results.filter((result) => result.status === "failed");
-    const attention = [...blocked, ...missing, ...failed];
+  const buildDeleteToast = (
+    deleted: number,
+    blocked: number,
+    failed: number,
+    missing: number,
+    unit: string,
+  ): DeleteToastData => {
+    const parts: string[] = [];
+    if (blocked) parts.push(`受保护 ${blocked}`);
+    if (missing) parts.push(`未找到 ${missing}`);
+    if (failed) parts.push(`失败 ${failed}`);
+    if (parts.length === 0) {
+      return { kind: "success", message: `已删除 ${deleted} 个${unit}` };
+    }
+    return {
+      kind: "attention",
+      message: `已删除 ${deleted} 个${unit}，${parts.length} 个未删除（${parts.join(" · ")}）`,
+    };
+  };
 
-    setDeleteNotice({
-      title: attention.length ? "删除完成，部分任务需要处理" : "删除完成",
-      body: attention.length
-        ? `已删除 ${deleted.length} 个任务，${attention.length} 个任务未删除。运行中任务会被后端保护，缺失任务会在刷新后消失。`
-        : `已删除 ${deleted.length} 个任务，并同步清理本地产物。`,
-      detailItems: [
-        ["已删除", deleted.length],
-        ["受保护", blocked.length],
-        ["未找到", missing.length],
-        ["失败", failed.length],
-      ],
-    });
+  const summarizeDeleteResults = (results: Awaited<ReturnType<typeof deleteAnalysisJobs>>) => {
+    const deleted = results.filter((result) => result.status === "deleted").length;
+    const blocked = results.filter((result) => result.status === "blocked").length;
+    const missing = results.filter((result) => result.status === "not_found").length;
+    const failed = results.filter((result) => result.status === "failed").length;
+    setDeleteToast(buildDeleteToast(deleted, blocked, failed, missing, "任务"));
   };
 
   const toggleSelection = (jobId: string) => {
-    setDeleteNotice(null);
+    setDeleteToast(null);
     setSelectedJobIds((current) => (
       current.includes(jobId) ? current.filter((item) => item !== jobId) : [...current, jobId]
     ));
   };
 
   const toggleSelectAll = () => {
-    setDeleteNotice(null);
-    setSelectedJobIds(allEligibleSelected ? [] : eligibleJobIds);
+    setDeleteToast(null);
+    setSelectedJobIds(allVisibleSelected ? [] : visibleEligibleIds);
+  };
+
+  /** 按类型筛选：选择某模式即过滤列表；点击当前激活项回到「全部」 */
+  const handleSelectModeFilter = (mode: AnalysisModeFilter) => {
+    updateModeFilter(modeFilter === mode ? "all" : mode);
+  };
+
+  /** 按类型选择：勾选 = 加入该类全部可删任务，取消 = 同步移除（复用同一选择集） */
+  const handleToggleMode = (mode: AnalysisModeValue, check: boolean) => {
+    setDeleteToast(null);
+    const eligibleIds = uploadEligibleJobs.filter((job) => job.analysisMode === mode).map((job) => job.id);
+    setSelectedJobIds((current) => applyModeSelection(current, eligibleIds, check));
+  };
+
+  /** 来源 tab 切换：同时收起「按类型选择」弹层 */
+  const switchSourceFilter = (filter: "upload" | "recorded" | "sync_recording") => {
+    setModeSelectOpen(false);
+    setSourceFilter(filter);
   };
 
   const handleSingleDelete = async (job: AnalysisJobSummary) => {
@@ -432,14 +539,14 @@ export function AnalysisTasksPage({
       return;
     }
     setDeletingJobIds([job.id]);
-    setDeleteNotice(null);
+    setDeleteToast(null);
     try {
       const result = await deleteAnalysisJob(job.id);
       summarizeDeleteResults([result]);
       setSelectedJobIds((current) => current.filter((jobId) => jobId !== job.id));
       await loadJobs({ silent: true });
-    } catch (error) {
-      setDeleteNotice(errorToNotice("删除任务失败", "没有删除任何任务，请检查后端服务后重试。", error));
+    } catch {
+      setDeleteToast({ kind: "attention", message: "删除任务失败，没有删除任何任务，请检查后端服务后重试" });
     } finally {
       setDeletingJobIds([]);
     }
@@ -454,21 +561,21 @@ export function AnalysisTasksPage({
       return;
     }
     setCancelingJobIds((current) => [...current, job.id]);
-    setDeleteNotice(null);
+    setDeleteToast(null);
     try {
       const nextJob = await cancelAnalysisJob(job.id);
       setJobs((current) => current?.map((item) => (item.id === nextJob.id ? nextJob : item)) ?? [nextJob]);
       rememberAnalysisJob(nextJob);
-      setDeleteNotice({
-        title: nextJob.status === "canceled" ? "任务已取消" : "已请求取消任务",
-        body:
+      setDeleteToast({
+        kind: "success",
+        message:
           nextJob.status === "canceled"
-            ? "任务已停止，生成的临时产物会由后端清理。"
-            : "运行中的分析会在下一处安全检查点停止，任务列表会继续刷新。",
+            ? "任务已取消，生成的临时产物已由后端清理"
+            : "已请求取消任务，运行中的分析会在安全检查点停止",
       });
       await loadJobs({ silent: true });
-    } catch (error) {
-      setDeleteNotice(errorToNotice("取消任务失败", "无法取消该分析任务，请刷新后重试。", error));
+    } catch {
+      setDeleteToast({ kind: "attention", message: "取消任务失败，无法取消该分析任务，请刷新后重试" });
     } finally {
       setCancelingJobIds((current) => current.filter((jobId) => jobId !== job.id));
     }
@@ -483,15 +590,46 @@ export function AnalysisTasksPage({
       return;
     }
     setDeletingJobIds(selectedEligibleIds);
-    setDeleteNotice(null);
+    setDeleteToast(null);
     try {
       const results = await deleteAnalysisJobs(selectedEligibleIds);
       summarizeDeleteResults(results);
       const deletedIds = results.filter((result) => result.status === "deleted" || result.status === "not_found").map((result) => result.job_id);
       setSelectedJobIds((current) => current.filter((jobId) => !deletedIds.includes(jobId)));
       await loadJobs({ silent: true });
-    } catch (error) {
-      setDeleteNotice(errorToNotice("批量删除失败", "没有删除任何任务，请检查后端服务后重试。", error));
+    } catch {
+      setDeleteToast({ kind: "attention", message: "批量删除失败，没有删除任何任务，请检查后端服务后重试" });
+    } finally {
+      setDeletingJobIds([]);
+    }
+  };
+
+  const handleSortChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const [key, dir] = event.target.value.split(":") as [AnalysisSortKey, AnalysisSortDir];
+    setSortKey(key);
+    setSortDir(dir);
+  };
+
+  const handleClearTerminal = async () => {
+    if (!terminalJobIds.length || isDeleting) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `确定清除全部 ${terminalJobIds.length} 个失败/取消任务吗？本地任务产物会被同步删除，无法恢复。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setDeletingJobIds(terminalJobIds);
+    setDeleteToast(null);
+    try {
+      const results = await deleteAnalysisJobs(terminalJobIds);
+      summarizeDeleteResults(results);
+      const deletedIds = results.filter((result) => result.status === "deleted" || result.status === "not_found").map((result) => result.job_id);
+      setSelectedJobIds((current) => current.filter((jobId) => !deletedIds.includes(jobId)));
+      await loadJobs({ silent: true });
+    } catch {
+      setDeleteToast({ kind: "attention", message: "清除失败/取消任务失败，没有删除任何任务，请检查后端服务后重试" });
     } finally {
       setDeletingJobIds([]);
     }
@@ -561,19 +699,13 @@ export function AnalysisTasksPage({
         </div>
       ) : null}
 
-      {deleteNotice ? (
-        <div className="mt-6">
-          <DiagnosticNoticeCard notice={deleteNotice} tone={deleteNotice.title.includes("失败") ? "error" : "info"} />
-        </div>
-      ) : null}
-
       {/* 来源切换 Tab */}
       <div className="mt-6 flex gap-2">
         <button
           className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
             sourceFilter === "upload" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
           }`}
-          onClick={() => setSourceFilter("upload")}
+          onClick={() => switchSourceFilter("upload")}
           type="button"
         >
           <Upload size={14} className="inline mr-1.5" />
@@ -583,7 +715,7 @@ export function AnalysisTasksPage({
           className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
             sourceFilter === "recorded" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
           }`}
-          onClick={() => setSourceFilter("recorded")}
+          onClick={() => switchSourceFilter("recorded")}
           type="button"
         >
           <Camera size={14} className="inline mr-1.5" />
@@ -593,7 +725,7 @@ export function AnalysisTasksPage({
           className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
             sourceFilter === "sync_recording" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
           }`}
-          onClick={() => setSourceFilter("sync_recording")}
+          onClick={() => switchSourceFilter("sync_recording")}
           type="button"
         >
           <Camera size={14} className="inline mr-1.5" />
@@ -624,18 +756,69 @@ export function AnalysisTasksPage({
           ) : (
             <section className="mt-6 grid gap-4">
               <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                <label className="inline-flex items-center gap-3 text-sm font-bold text-[#14241B]">
-                  <input checked={allEligibleSelected} className="size-4 accent-[#22C55E]" disabled={!eligibleJobIds.length || isDeleting} onChange={toggleSelectAll} type="checkbox" />
-                  已选 {selectedEligibleIds.length} / {eligibleJobIds.length} 个可删除历史任务
-                </label>
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+                  <label className="inline-flex items-center gap-3 text-sm font-bold text-[#14241B]">
+                    <input checked={allVisibleSelected} className="size-4 accent-[#22C55E]" disabled={!visibleEligibleIds.length || isDeleting} onChange={toggleSelectAll} type="checkbox" />
+                    已选 {selectedVisibleIds.length} / {visibleEligibleIds.length} 个可删除历史任务
+                  </label>
+                  <div className="relative">
+                    <button
+                      aria-expanded={modeSelectOpen}
+                      aria-haspopup="menu"
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-semibold outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20 ${
+                        modeFilter !== "all"
+                          ? "border-[#17231D] bg-[#17231D] text-white hover:bg-[#0F1A14]"
+                          : "border-[#D8E5D2] bg-white text-[#203127] hover:bg-[#F5FAF1]"
+                      }`}
+                      disabled={!modeRows.some((row) => row.eligibleCount > 0) || isDeleting}
+                      onClick={() => setModeSelectOpen((open) => !open)}
+                      type="button"
+                    >
+                      <ListFilter
+                        aria-hidden="true"
+                        className={modeFilter !== "all" ? "text-white/80" : "text-slate-500"}
+                        size={15}
+                      />
+                      按类型选择{modeFilter !== "all" && (
+                        <span className="font-bold">· {analysisModeLabel(modeFilter)}</span>
+                      )}
+                    </button>
+                    <AnalysisModeSelectPopover
+                      modeFilter={modeFilter}
+                      onClose={() => setModeSelectOpen(false)}
+                      onSelectModeFilter={handleSelectModeFilter}
+                      onToggleMode={handleToggleMode}
+                      open={modeSelectOpen}
+                      rows={modeRows}
+                    />
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-semibold text-[#203127]">
+                    <ArrowDownUp size={16} className="text-slate-500" aria-hidden="true" />
+                    排序
+                    <select
+                      aria-label="任务排序"
+                      className="rounded-lg border border-[#D8E5D2] bg-white px-2.5 py-1.5 text-sm font-semibold text-[#203127] outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20"
+                      onChange={handleSortChange}
+                      value={`${sortKey}:${sortDir}`}
+                    >
+                      <option value="updatedAt:desc">更新时间 新→旧</option>
+                      <option value="createdAt:desc">创建时间 新→旧</option>
+                      <option value="createdAt:asc">创建时间 旧→新</option>
+                      <option value="updatedAt:asc">更新时间 旧→新</option>
+                    </select>
+                  </label>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button className="quiet-button px-4 py-2.5" disabled={!selectedEligibleIds.length || isDeleting} onClick={() => setSelectedJobIds([])} type="button">清空选择</button>
                   <button className="green-button px-4 py-2.5" disabled={!selectedEligibleIds.length || isDeleting} onClick={handleBatchDelete} type="button">
                     <Trash2 size={16} aria-hidden="true" />{isDeleting ? "删除中" : "批量删除"}
                   </button>
+                  <button className="danger-button px-4 py-2.5" disabled={!terminalJobIds.length || isDeleting} onClick={handleClearTerminal} type="button">
+                    <Trash2 size={16} aria-hidden="true" />{isDeleting ? "清除中" : `清除失败/取消${terminalJobIds.length ? ` (${terminalJobIds.length})` : ""}`}
+                  </button>
                 </div>
               </div>
-              {uploadJobs.map((job) => (
+              {filteredUploadJobs.map((job) => (
                 <AnalysisTaskCard
                   canceling={cancelingJobIds.includes(job.id)}
                   deleting={deletingJobIds.includes(job.id)}
@@ -707,18 +890,6 @@ export function AnalysisTasksPage({
                 </div>
               </div>
 
-              {/* 删除结果提示（录制） */}
-              {batchDeleteResult && (
-                <div className={`rounded-2xl p-4 text-sm ${batchDeleteResult.blocked + batchDeleteResult.failed > 0 ? "border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 text-[#C92A2A]" : "border border-[#22C55E]/25 bg-[#22C55E]/8 text-[#168A34]"}`}>
-                  <p className="font-bold">{batchDeleteResult.blocked + batchDeleteResult.failed > 0 ? "批量删除完成，部分任务未删除" : "批量删除完成"}</p>
-                  <p className="mt-1 text-xs">
-                    已删除 {batchDeleteResult.deleted} 个录制。
-                    {batchDeleteResult.blocked > 0 && ` ${batchDeleteResult.blocked} 个受保护（录制中）。`}
-                    {batchDeleteResult.failed > 0 && ` ${batchDeleteResult.failed} 个删除失败。`}
-                  </p>
-                </div>
-              )}
-
               {/* 采集任务操作工具栏 */}
               <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3 text-sm font-bold text-[#14241B]">
@@ -766,18 +937,6 @@ export function AnalysisTasksPage({
                   </button>
                 </div>
               </div>
-
-              {/* 删除结果提示（采集任务） */}
-              {fieldSessionBatchResult && (
-                <div className={`rounded-2xl p-4 text-sm ${fieldSessionBatchResult.blocked + fieldSessionBatchResult.failed > 0 ? "border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 text-[#C92A2A]" : "border border-[#22C55E]/25 bg-[#22C55E]/8 text-[#168A34]"}`}>
-                  <p className="font-bold">{fieldSessionBatchResult.blocked + fieldSessionBatchResult.failed > 0 ? "批量删除完成，部分采集任务未删除" : "批量删除完成"}</p>
-                  <p className="mt-1 text-xs">
-                    已删除 {fieldSessionBatchResult.deleted} 个采集任务。
-                    {fieldSessionBatchResult.blocked > 0 && ` ${fieldSessionBatchResult.blocked} 个受保护（有录制视频）。`}
-                    {fieldSessionBatchResult.failed > 0 && ` ${fieldSessionBatchResult.failed} 个删除失败。`}
-                  </p>
-                </div>
-              )}
 
               {recordingGroups.map((group) => (
                 <FieldSessionGroupCard
@@ -892,6 +1051,10 @@ export function AnalysisTasksPage({
           </div>
         </Modal>
       )}
+
+      {deleteToast && (
+        <DeleteToast toast={deleteToast} onClose={() => setDeleteToast(null)} />
+      )}
     </PageFrame>
   );
 }
@@ -934,6 +1097,11 @@ function AnalysisTaskCard({
               <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
                 {analysisModeLabel(job.analysisMode)}
               </span>
+              {job.enableModelInference !== undefined || job.enablePoseInference !== undefined ? (
+                <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+                  检测{job.enableModelInference ? "开" : "关"} · 姿态{job.enablePoseInference ? "开" : "关"}
+                </span>
+              ) : null}
               {recent ? (
                 <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/12 px-3 py-1 text-xs font-black text-[#168A34]">
                   最近任务

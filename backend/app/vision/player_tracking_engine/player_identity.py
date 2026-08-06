@@ -61,6 +61,8 @@ class PlayerObservation:
     image_footpoint: list[float]
     court_position_m: list[float]
     confidence: float
+    projection_status: str = "inside_court"
+    is_inside_tracking_area: bool = True
 
 
 @dataclass
@@ -113,7 +115,7 @@ class PlayerIdentityManager:
         observations = [
             self._position_to_observation(position)
             for position in positions
-            if position.valid and position.court_position is not None
+            if self._is_identity_candidate(position)
         ]
         # 若指定了“合格 track 集合”，先记录被过滤掉的观测，再丢弃它们。
         if eligible_track_ids is not None:
@@ -130,9 +132,17 @@ class PlayerIdentityManager:
 
         outputs: list[PlayerTrajectorySample] = []
         updated_players: set[str] = set()
+        # A selector suggestion can keep an old mapped track eligible in the
+        # same frame that the lock manager promotes a replacement track.  The
+        # canonical hint must win so one player slot cannot emit two current
+        # tracks in one frame.
+        observations.sort(key=self._assignment_priority)
         for observation in observations:
             # 落在度量边界外的点跳过并记录诊断。
-            if not self._in_metric_bounds(observation.court_position_m):
+            if (
+                not self._in_metric_bounds(observation.court_position_m)
+                and not self._in_tracking_bounds(observation.court_position_m)
+            ):
                 self._diagnose(
                     frame_index,
                     "filtered",
@@ -151,12 +161,32 @@ class PlayerIdentityManager:
                     court_position_m=observation.court_position_m,
                 )
                 continue
+            if player.player_id in updated_players:
+                self._diagnose(
+                    frame_index,
+                    "filtered",
+                    player_id=player.player_id,
+                    track_id=observation.track_id,
+                    reason="player slot already assigned by higher-priority track in this frame",
+                    court_position_m=observation.court_position_m,
+                )
+                continue
             samples = self._update_player(player, observation, tentative=via_soft_takeover)
             outputs.extend(samples)
             updated_players.add(player.player_id)
 
         self._update_player_statuses(frame_index, updated_players)
         return outputs
+
+    def _assignment_priority(self, observation: PlayerObservation) -> tuple[int, float, int]:
+        """Order observations so authoritative recovery hints win over stale mappings."""
+        if observation.track_id in self._current_hints:
+            priority = 0
+        elif observation.track_id in self.track_to_player:
+            priority = 1
+        else:
+            priority = 2
+        return priority, -observation.confidence, observation.track_id
 
     def to_artifact(
         self,
@@ -406,7 +436,22 @@ class PlayerIdentityManager:
             image_footpoint=position.image_footpoint,
             court_position_m=court_position_m,
             confidence=position.confidence,
+            projection_status=position.projection_status,
+            is_inside_tracking_area=position.is_inside_tracking_area,
         )
+
+    @staticmethod
+    def _is_identity_candidate(position: PlayerFramePosition) -> bool:
+        """Accept strict court points and visible points in the tracking buffer.
+
+        The strict metric rectangle is applied later by metric input builders.
+        Identity and overlay need to retain a real player who is standing just
+        beyond a baseline or sideline, otherwise the same person degrades to
+        an unlabelled ``person`` box.
+        """
+        if position.court_position is None or not position.is_inside_tracking_area:
+            return False
+        return position.valid or position.projection_status == "outside_court_visible"
 
     def _in_metric_bounds(self, point: list[float]) -> bool:
         # 判断球场坐标（米）是否落在含外扩边距的球场范围内。
@@ -414,6 +459,22 @@ class PlayerIdentityManager:
         return (
             -margin <= point[0] <= PICKLEBALL_COURT_WIDTH_M + margin
             and -margin <= point[1] <= PICKLEBALL_COURT_LENGTH_M + margin
+        )
+
+    @staticmethod
+    def _in_tracking_bounds(point: list[float]) -> bool:
+        """Keep a finite visible player inside the standard tracking buffer.
+
+        The identity layer may retain these samples for labels and trajectory
+        continuity; ``standard_court_metric_points`` still excludes them from
+        court-only movement metrics.
+        """
+        x_margin = feet_to_meters(4.0)
+        y_near_margin = feet_to_meters(8.0)
+        y_far_margin = feet_to_meters(8.0)
+        return (
+            -x_margin <= point[0] <= PICKLEBALL_COURT_WIDTH_M + x_margin
+            and -y_near_margin <= point[1] <= PICKLEBALL_COURT_LENGTH_M + y_far_margin
         )
 
     def _diagnose(

@@ -30,6 +30,10 @@ class PlayerLockConfig:
     reconnect_threshold: float = 0.45
     court_margin_ft: float = 12.0
     max_reconnect_distance_ft: float = 15.0
+    # 重连空间门控：同侧但横向错配的候选侧分（与错侧同级惩罚），避免 position=0 的远距离候选靠运动/外观分数补足阈值
+    reconnect_lateral_mismatch_score: float = 0.2
+    # 重连硬距离门开关：候选超过"允许距离"（max_reconnect_distance_ft + 速度×流逝时间）时拒绝重连、保持 LOST
+    reconnect_gate_enabled: bool = True
     bootstrap_court_margin_ft: float = 12.0
     lost_reconnect_court_margin_ft: float = 20.0
     enable_appearance_score: bool = False
@@ -50,6 +54,7 @@ class PlayerSlot:
 
     side_hint: str | None = None
     assignment_side: str | None = None
+    home_quadrant: str | None = None
     confidence_ema: float = 0.0
     appearance_descriptor: list[float] | None = None
 

@@ -76,6 +76,10 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [automaticCalibrationError, setAutomaticCalibrationError] = useState<AnalysisApiError | null>(null);
   const [submitStep, setSubmitStep] = useState<"idle" | "uploading" | "calibrating" | "creating">("idle");
 
+  // 任务级推理开关：默认全部开启，用户可手动关闭（无标定时检测阶段本就跳过）
+  const [enableModelInference, setEnableModelInference] = useState(true);
+  const [enablePoseInference, setEnablePoseInference] = useState(true);
+
   // 支持直接传入 videoId（如从其他页面跳转）
   const [searchParams] = useState(() => new URLSearchParams(window.location.search));
   const videoIdParam = searchParams.get("videoId");
@@ -106,9 +110,10 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   }, [videoIdParam, sourceFpsParam]);
 
   const validSourceFps = Number.isFinite(metadata.sourceFps) && metadata.sourceFps > 0 && metadata.sourceFps <= 240;
+  const hasCalibration = calibrationPoints.length === calibrationPointOrder.length;
   const canSubmit = Boolean(
     (selectedFile || uploadedVideoId) &&
-      calibrationPoints.length === calibrationPointOrder.length &&
+      hasCalibration &&
       validSourceFps &&
       metadata.matchTitle.trim() &&
       metadata.venue.trim() &&
@@ -394,6 +399,8 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         calibrationId,
         frameStride: 2,
         useDemoFallback: false,
+        enableModelInference,
+        enablePoseInference,
       });
       rememberAnalysisJob(job);
       onNavigate("/analysis/tasks");
@@ -797,6 +804,34 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               <DiagnosticNoticeCard notice={error} />
             </div>
           ) : null}
+
+          <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-white/70 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">模型推理</p>
+            <p className="mt-1 text-xs text-slate-500">选择本次分析是否运行以下模型推理（默认开启，可手动关闭）。</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-[#F5FAF1] px-3 py-2.5">
+                <span className="text-sm font-semibold text-[#14241B]">人体检测 (YOLO)</span>
+                <input
+                  checked={enableModelInference}
+                  className="size-4 accent-[#22C55E]"
+                  onChange={(event) => setEnableModelInference(event.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-[#F5FAF1] px-3 py-2.5">
+                <span className="text-sm font-semibold text-[#14241B]">姿态识别 (RTMPose)</span>
+                <input
+                  checked={enablePoseInference}
+                  className="size-4 accent-[#22C55E]"
+                  onChange={(event) => setEnablePoseInference(event.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+            </div>
+            {!hasCalibration ? (
+              <p className="mt-2 text-xs text-[#A45A00]">完成四角标定后，人体检测与姿态识别才会真正运行。</p>
+            ) : null}
+          </div>
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             <button className="green-button" disabled={!canSubmit || isSubmitting} onClick={handleSubmit} type="button">
