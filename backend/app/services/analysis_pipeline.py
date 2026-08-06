@@ -86,6 +86,8 @@ from app.vision.pickleball_game_analysis.detection_writer import (
     build_cleaned_trajectory_payload,
     build_raw_trajectory_payload,
 )
+from app.vision.pickleball_game_analysis.reconstruction_engine import reconstruct_ball_trajectory
+from app.vision.pickleball_game_analysis.reconstruction_schemas import ReconstructionConfig
 from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceEvent, TrajectoryPoint
 from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner
 from app.vision.pickleball_game_analysis.calibration_diagnostics import CalibrationDiagnostics
@@ -199,6 +201,10 @@ class _BallArtifactFields:
     bounce_events_url: str | None = None
     bounce_events_status: str | None = None
     bounce_events_detail: str | None = None
+    reconstructed_ball_trajectory_json_path: str | None = None
+    reconstructed_ball_trajectory_url: str | None = None
+    reconstructed_ball_trajectory_status: str | None = None
+    reconstructed_ball_trajectory_detail: str | None = None
 
 
 @dataclass
@@ -847,6 +853,13 @@ class AnalysisPipeline:
         _ball_fps = tracking_result.fps if video and calibration else 0.0
         _ball_processed = tracking_result.processed_frame_count if video and calibration else 0
         _ball_stride = frame_stride or self.frame_stride
+        # 重建球轨迹需要 homography 与（可选的）serve 事件；mock 路径下均不可用
+        _reconstruction_homography = (
+            calibration.homography.values
+            if (calibration is not None and calibration.homography is not None)
+            else None
+        )
+        _reconstruction_serve_events = locals().get("serve_events")
         self._finalize_ball_analysis(
             job_id, ball_run_output, player_multitarget_detections, video_id, stages, ball_fields,
             source_width=_ball_source_width,
@@ -855,6 +868,8 @@ class AnalysisPipeline:
             frame_stride=_ball_stride,
             processed_frame_count=_ball_processed,
             progress_callback=progress_callback,
+            homography=_reconstruction_homography,
+            serve_events=_reconstruction_serve_events,
         )
 
         # 球分析 strict mode 检查：strict=true 且球分析失败时，整体 pipeline failed
@@ -895,6 +910,10 @@ class AnalysisPipeline:
         bounce_events_url = ball_fields.bounce_events_url
         bounce_events_status = ball_fields.bounce_events_status
         bounce_events_detail = ball_fields.bounce_events_detail
+        reconstructed_ball_trajectory_json_path = ball_fields.reconstructed_ball_trajectory_json_path
+        reconstructed_ball_trajectory_url = ball_fields.reconstructed_ball_trajectory_url
+        reconstructed_ball_trajectory_status = ball_fields.reconstructed_ball_trajectory_status
+        reconstructed_ball_trajectory_detail = ball_fields.reconstructed_ball_trajectory_detail
 
         # 计算运动指标（附加球分析摘要）
         _ball_metrics = self._build_ball_metrics_summary(ball_run_output)
@@ -967,6 +986,8 @@ class AnalysisPipeline:
                 cleaned_ball_trajectory_url=cleaned_ball_trajectory_url,
                 bounce_events_json_path=bounce_events_json_path,
                 bounce_events_url=bounce_events_url,
+                reconstructed_ball_trajectory_json_path=reconstructed_ball_trajectory_json_path,
+                reconstructed_ball_trajectory_url=reconstructed_ball_trajectory_url,
                 analysis_overlay_video_path=analysis_overlay_video_path,
                 analysis_overlay_video_url=analysis_overlay_video_url,
                 heatmaps_manifest_json_path=heatmaps_manifest_json_path,
@@ -1009,6 +1030,8 @@ class AnalysisPipeline:
                 cleaned_ball_trajectory_detail=cleaned_ball_trajectory_detail,
                 bounce_events_status=bounce_events_status,
                 bounce_events_detail=bounce_events_detail,
+                reconstructed_ball_trajectory_status=reconstructed_ball_trajectory_status,
+                reconstructed_ball_trajectory_detail=reconstructed_ball_trajectory_detail,
                 analysis_overlay_video_status=analysis_overlay_video_status,
                 analysis_overlay_video_detail=analysis_overlay_video_detail,
                 position_visualizations_status=position_visualizations_status,
@@ -1046,14 +1069,17 @@ class AnalysisPipeline:
         frame_stride: int = 1,
         processed_frame_count: int = 0,
         progress_callback: ProgressCallback | None = None,
+        homography: list[list[float]] | None = None,
+        serve_events: list[Any] | None = None,
     ) -> None:
         """统一处理球分析阶段的状态记录与 artifact 写入。
 
         所有路径都会进入：球未启用 → skipped；启用但缺依赖 → unavailable；
-        启用且产生候选 → 写入 ball_overlay / detections / 轨迹 / 清洗 / 弹跳 artifact。
+        启用且产生候选 → 写入 ball_overlay / detections / 轨迹 / 清洗 / 弹跳 / 重建 artifact。
 
         用户可见阶段收敛为两个：ball-trajectory 和 bounce-detection。
         ball-detection 的内部信息并入 ball-trajectory 的 counters。
+        重建产物（第三套）在弹跳检测之后生成，不新增用户可见阶段。
         """
         enabled = self.ball_detection_enabled
         if ball_run_output is None:
@@ -1087,6 +1113,8 @@ class AnalysisPipeline:
             fields.cleaned_ball_trajectory_detail = "球轨迹未生成"
             fields.bounce_events_status = "skipped"
             fields.bounce_events_detail = "球轨迹未生成"
+            fields.reconstructed_ball_trajectory_status = "skipped"
+            fields.reconstructed_ball_trajectory_detail = "球轨迹未生成"
             return
 
         run = ball_run_output
@@ -1181,6 +1209,8 @@ class AnalysisPipeline:
             fields.cleaned_ball_trajectory_detail = "未生成可用球轨迹"
             fields.bounce_events_status = "skipped"
             fields.bounce_events_detail = "未生成可用球轨迹"
+            fields.reconstructed_ball_trajectory_status = "skipped"
+            fields.reconstructed_ball_trajectory_detail = "未生成可用球轨迹"
             return
 
         # 写入 detections.jsonl（player + ball 共享合同）
@@ -1252,6 +1282,48 @@ class AnalysisPipeline:
             "status": fields.bounce_events_status,
         }
         stages.append(bounce_stage)
+
+        # 重建球轨迹（第三套产物）：在弹跳检测之后生成，不覆盖 raw/cleaned。
+        if (
+            self.settings.enable_ball_reconstruction
+            and run.status == "available"
+            and run.cleaned_points
+        ):
+            try:
+                reconstruction_config = ReconstructionConfig(
+                    default_contact_height_m=self.settings.ball_reconstruction_contact_height_m,
+                )
+                reconstructed_payload = reconstruct_ball_trajectory(
+                    job_id=job_id,
+                    cleaned_points=run.cleaned_points,
+                    bounce_events=run.bounce_events or [],
+                    serve_events=serve_events,
+                    homography=homography,
+                    fps=fps,
+                    config=reconstruction_config,
+                )
+                if reconstructed_payload["status"] in {"available", "no_candidates"}:
+                    reconstructed_path = self.storage.reconstructed_ball_trajectory_json_path(job_id)
+                    self.storage.write_json(reconstructed_path, reconstructed_payload)
+                    fields.reconstructed_ball_trajectory_json_path = str(reconstructed_path)
+                    fields.reconstructed_ball_trajectory_url = (
+                        f"/api/analysis/jobs/{job_id}/artifacts/reconstructed-ball-trajectory"
+                    )
+                    fields.reconstructed_ball_trajectory_status = reconstructed_payload["status"]
+                    fields.reconstructed_ball_trajectory_detail = reconstructed_payload["detail"]
+                else:
+                    fields.reconstructed_ball_trajectory_status = reconstructed_payload["status"]
+                    fields.reconstructed_ball_trajectory_detail = reconstructed_payload["detail"]
+            except Exception as exc:
+                logger.warning("Ball trajectory reconstruction failed: %s", exc)
+                fields.reconstructed_ball_trajectory_status = "failed"
+                fields.reconstructed_ball_trajectory_detail = f"球轨迹重建失败：{exc}"
+        elif self.settings.enable_ball_reconstruction and run.status == "available":
+            fields.reconstructed_ball_trajectory_status = "skipped"
+            fields.reconstructed_ball_trajectory_detail = "未生成清洗球轨迹，跳过重建"
+        else:
+            fields.reconstructed_ball_trajectory_status = "skipped"
+            fields.reconstructed_ball_trajectory_detail = "球轨迹重建未启用"
 
     def _run_visualization(
         self,

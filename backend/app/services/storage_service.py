@@ -236,6 +236,10 @@ class StorageService:
         # 球弹跳事件 JSON
         return self._job_artifact_root(job_id) / "bounce_events.json"
 
+    def reconstructed_ball_trajectory_json_path(self, job_id: str) -> Path:
+        # 事件切分重建球轨迹 JSON（第三套数据）
+        return self._job_artifact_root(job_id) / "reconstructed_ball_trajectory.json"
+
     def analysis_overlay_video_path(self, job_id: str) -> Path:
         # 分析叠加视频（mp4）
         return self._job_artifact_root(job_id) / "analysis_overlay.mp4"

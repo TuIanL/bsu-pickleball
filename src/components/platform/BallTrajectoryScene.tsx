@@ -93,6 +93,31 @@ function buildCourt(): THREE.Group {
   return group;
 }
 
+interface SolidDashedRun {
+  points: THREE.Vector3[];
+  dashed: boolean;
+}
+
+function splitSolidDashed(trajectory: EstimatedBallTrajectory): SolidDashedRun[] {
+  const runs: SolidDashedRun[] = [];
+  let current: THREE.Vector3[] = [];
+  let currentDashed: boolean | null = null;
+  for (const point of trajectory.points) {
+    // 未知高度点不渲染（不伪造地面位置），避免制造假落点
+    if (point.estimatedHeightFt === null) continue;
+    const vec = courtVector(point.courtXFt, point.estimatedHeightFt + 0.08, point.courtYFt);
+    const dashed = point.interpolated;
+    if (currentDashed !== null && dashed !== currentDashed && current.length >= 2) {
+      runs.push({ points: current, dashed: currentDashed });
+      current = [];
+    }
+    current.push(vec);
+    currentDashed = dashed;
+  }
+  if (current.length >= 2) runs.push({ points: current, dashed: currentDashed ?? false });
+  return runs;
+}
+
 function addTrajectories(
   scene: THREE.Scene,
   trajectories: EstimatedBallTrajectory[],
@@ -103,30 +128,63 @@ function addTrajectories(
     const selected = trajectory.id === selectedId;
     const color = selected ? "#111827" : DIRECTION_COLORS[trajectory.direction];
     const opacity = selected ? 1 : trajectory.highConfidence ? 0.9 : 0.34;
-    const points = trajectory.points.map((point) => courtVector(point.courtXFt, point.estimatedHeightFt + 0.08, point.courtYFt));
-    const curve = new THREE.CatmullRomCurve3(points, false, "centripetal");
-    const curvePoints = curve.getPoints(Math.max(24, points.length * 2));
-    const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
-    const material = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
-    const line = new THREE.Line(geometry, material);
-    line.userData.trajectoryId = trajectory.id;
-    line.renderOrder = selected ? 3 : 2;
-    scene.add(line);
-    selectableLines.push(line);
 
+    // 每个飞行段 = 独立 line strip；段内按 source 拆实线 / 虚线，绝不跨事件边界共用样条
+    for (const run of splitSolidDashed(trajectory)) {
+      const geometry = new THREE.BufferGeometry().setFromPoints(run.points);
+      let line: THREE.Line;
+      if (run.dashed) {
+        const material = new THREE.LineDashedMaterial({
+          color,
+          transparent: true,
+          opacity: opacity * 0.82,
+          dashSize: 0.34,
+          gapSize: 0.22,
+        });
+        line = new THREE.Line(geometry, material);
+        line.computeLineDistances();
+      } else {
+        const material = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
+        line = new THREE.Line(geometry, material);
+      }
+      line.userData.trajectoryId = trajectory.id;
+      line.renderOrder = selected ? 3 : 2;
+      scene.add(line);
+      selectableLines.push(line);
+    }
+
+    const renderedPoints = trajectory.points
+      .filter((point) => point.estimatedHeightFt !== null)
+      .map((point) => courtVector(point.courtXFt, point.estimatedHeightFt as number + 0.08, point.courtYFt));
     const endpointMaterial = new THREE.MeshStandardMaterial({ color, transparent: opacity < 1, opacity });
-    for (const endpoint of [points[0], points[points.length - 1]]) {
+    for (const endpoint of [renderedPoints[0], renderedPoints[renderedPoints.length - 1]]) {
+      if (!endpoint) continue;
       const marker = new THREE.Mesh(new THREE.SphereGeometry(selected ? 0.24 : 0.17, 14, 10), endpointMaterial);
       marker.position.copy(endpoint);
       marker.userData.trajectoryId = trajectory.id;
       scene.add(marker);
     }
 
-    const interpolatedMaterial = new THREE.MeshStandardMaterial({ color: "#A7B0AA", transparent: true, opacity: 0.72 });
-    for (const point of trajectory.points.filter((item) => item.interpolated)) {
-      const marker = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), interpolatedMaterial);
-      marker.position.copy(courtVector(point.courtXFt, point.estimatedHeightFt + 0.08, point.courtYFt));
-      scene.add(marker);
+    // 事件锚点视觉语义：弹地橙色圆环、击球紫色菱形
+    for (const anchor of trajectory.anchors ?? []) {
+      const vec = courtVector(anchor.courtXFt, 0.08, anchor.courtYFt);
+      if (anchor.anchorType === "bounce") {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.22, 0.05, 8, 20),
+          new THREE.MeshStandardMaterial({ color: "#F97316", transparent: true, opacity: 0.95 }),
+        );
+        ring.position.copy(vec);
+        ring.rotation.x = Math.PI / 2;
+        scene.add(ring);
+      } else if (anchor.anchorType === "contact") {
+        const diamond = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.2),
+          new THREE.MeshStandardMaterial({ color: "#8B5CF6", transparent: true, opacity: 0.95 }),
+        );
+        diamond.position.copy(vec);
+        diamond.scale.y = 1.4;
+        scene.add(diamond);
+      }
     }
   }
   return selectableLines;

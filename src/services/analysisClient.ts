@@ -13,6 +13,7 @@ import type {
   CalibrationPoint,
   ManualCalibrationResponse,
   PoseOverlayArtifact,
+  ReconstructedBallTrajectoryArtifact,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
   StructuredVisualizationData,
@@ -733,6 +734,13 @@ export async function getBallTrajectory(result: AnalysisPipelineResult): Promise
 export async function getBounceEvents(result: AnalysisPipelineResult): Promise<BounceEventsArtifact | null> {
   const path = result.artifacts.bounce_events_url;
   return path ? requestJson<BounceEventsArtifact>(path) : null;
+}
+
+export async function getReconstructedBallTrajectory(
+  result: AnalysisPipelineResult,
+): Promise<ReconstructedBallTrajectoryArtifact | null> {
+  const path = result.artifacts.reconstructed_ball_trajectory_url;
+  return path ? requestJson<ReconstructedBallTrajectoryArtifact>(path) : null;
 }
 
 export function getAnalysisOverlayVideoUrl(result: AnalysisPipelineResult): string | undefined {

@@ -1,8 +1,32 @@
-# ball-trajectory-visualization Specification
+# ball-trajectory-visualization Specification (Delta)
 
-## Purpose
-TBD - created by archiving change add-ball-trajectory-visualization. Update Purpose after archive.
-## Requirements
+## ADDED Requirements
+
+### Requirement: 事件锚点视觉语义
+系统 SHALL 按重建产物中的事件类型与样本来源渲染视觉标记，使击球、弹地、推算点与丢失边界在场景中可区分。
+
+#### Scenario: 弹地点标记
+- **WHEN** 重建段以弹地事件为锚点
+- **THEN** 场景 SHALL 以橙色圆环标记弹地点
+
+#### Scenario: 击球点标记
+- **WHEN** 重建段以击球事件为锚点
+- **THEN** 场景 SHALL 以菱形标记击球点
+
+#### Scenario: 推算点虚线
+- **WHEN** 重建样本 `source` 为 `interpolated` 或 `model_predicted`
+- **THEN** 场景 SHALL 以虚线或浅色样式绘制该部分，与 `detected` 点可区分
+
+#### Scenario: 丢失边界断开
+- **WHEN** 两个重建段之间存在长时间丢失边界
+- **THEN** 场景 SHALL 视觉上断开，不跨丢失边界连线
+
+#### Scenario: 击球/弹地边界保持几何连续
+- **WHEN** 两个重建段共享同一击球或弹地锚点
+- **THEN** 场景 SHALL 在共享锚点处保持几何连续（两段各自独立 geometry，但端点重合）
+
+## MODIFIED Requirements
+
 ### Requirement: 任务级球路视图
 系统 SHALL 为具有任务 ID 的分析任务提供独立球路可视化路由，并 SHALL 优先从重建产物 `reconstructed_ball_trajectory.json` 加载数据；重建产物不可用时，再回退到清洗球轨迹、原始球轨迹和弹跳候选 artifact。
 
@@ -87,27 +111,3 @@ TBD - created by archiving change add-ball-trajectory-visualization. Update Purp
 #### Scenario: WebGL 初始化失败
 - **WHEN** 浏览器无法创建 Three.js WebGL renderer
 - **THEN** 页面显示渲染不可用状态且应用其余导航继续可用
-
-### Requirement: 事件锚点视觉语义
-系统 SHALL 按重建产物中的事件类型与样本来源渲染视觉标记，使击球、弹地、推算点与丢失边界在场景中可区分。
-
-#### Scenario: 弹地点标记
-- **WHEN** 重建段以弹地事件为锚点
-- **THEN** 场景 SHALL 以橙色圆环标记弹地点
-
-#### Scenario: 击球点标记
-- **WHEN** 重建段以击球事件为锚点
-- **THEN** 场景 SHALL 以菱形标记击球点
-
-#### Scenario: 推算点虚线
-- **WHEN** 重建样本 `source` 为 `interpolated` 或 `model_predicted`
-- **THEN** 场景 SHALL 以虚线或浅色样式绘制该部分，与 `detected` 点可区分
-
-#### Scenario: 丢失边界断开
-- **WHEN** 两个重建段之间存在长时间丢失边界
-- **THEN** 场景 SHALL 视觉上断开，不跨丢失边界连线
-
-#### Scenario: 击球/弹地边界保持几何连续
-- **WHEN** 两个重建段共享同一击球或弹地锚点
-- **THEN** 场景 SHALL 在共享锚点处保持几何连续（两段各自独立 geometry，但端点重合）
-

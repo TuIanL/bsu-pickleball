@@ -1,19 +1,43 @@
-import type { BallTrajectoryArtifact, BallTrajectorySample, BounceEventsArtifact } from "../types/report";
+import type {
+  BallTrajectoryArtifact,
+  BallTrajectorySample,
+  BounceEventsArtifact,
+  ReconstructedBallTrajectoryArtifact,
+  ReconstructedBallTrajectorySegment,
+} from "../types/report";
 
 export const PICKLEBALL_COURT_WIDTH_FT = 20;
 export const PICKLEBALL_COURT_LENGTH_FT = 44;
 
 export type TrajectoryDirection = "near-to-far" | "far-to-near";
 
+export type TrajectoryPointSource = "detected" | "interpolated" | "model_predicted" | "anchor";
+
 export interface EstimatedTrajectoryPoint {
   frameIndex: number;
   timestampSeconds: number;
   courtXFt: number;
   courtYFt: number;
-  estimatedHeightFt: number;
+  estimatedHeightFt: number | null;
   confidence: number | null;
   interpolated: boolean;
-  heightSource: "estimated";
+  heightSource: string | null;
+  source: TrajectoryPointSource;
+}
+
+export interface TrajectoryAnchorMarker {
+  anchorType: "bounce" | "contact" | "raw_endpoint" | "loss";
+  courtXFt: number;
+  courtYFt: number;
+  frameIndex: number;
+  confidence: number;
+}
+
+export interface TrajectoryQualitySummary {
+  overall: number | null;
+  displayLevel: "high" | "medium" | "low" | "none" | null;
+  netCrossingStatus: string | null;
+  observationCoverage: number | null;
 }
 
 export interface EstimatedBallTrajectory {
@@ -27,8 +51,11 @@ export interface EstimatedBallTrajectory {
   averageConfidence: number | null;
   interpolatedRatio: number;
   highConfidence: boolean;
-  peakEstimatedHeightFt: number;
+  peakEstimatedHeightFt: number | null;
   points: EstimatedTrajectoryPoint[];
+  anchors?: TrajectoryAnchorMarker[];
+  quality?: TrajectoryQualitySummary;
+  reconstructionMode?: string;
 }
 
 export interface TrajectoryBounceMarker {
@@ -155,7 +182,8 @@ function buildTrajectory(points: ValidPoint[], sequence: number, maxPoints: numb
       return {
         ...point,
         estimatedHeightFt: 4 * peakEstimatedHeightFt * progress * (1 - progress),
-        heightSource: "estimated" as const,
+        heightSource: "estimated",
+        source: (point.interpolated ? "interpolated" : "detected") as TrajectoryPointSource,
       };
     }),
   };
@@ -180,6 +208,13 @@ function buildBounceMarkers(artifact?: BounceEventsArtifact | null): TrajectoryB
   });
 }
 
+/**
+ * 遗留构建器：从原始/清洗球轨迹自行分段 + 估算高度弧线。
+ *
+ * 仅用于降级路径（任务没有重建产物时回退旧渲染），或已归档任务旧产物展示。
+ * 正式渲染请使用 buildReconstructedBallTrajectoryVisualization —— 本函数
+ * 保留的前端分段 / 方向 / 平均置信度 / 高度生成逻辑不再用于重建产物。
+ */
 export function buildBallTrajectoryVisualization(
   artifact?: BallTrajectoryArtifact | null,
   bounceArtifact?: BounceEventsArtifact | null,
@@ -212,6 +247,150 @@ export function buildBallTrajectoryVisualization(
     trajectories: segments.map((segment, index) => buildTrajectory(segment, index + 1, resolved.maxPointsPerTrajectory)),
     bounces: buildBounceMarkers(bounceArtifact),
     discardedPointCount: samples.length - validPoints.length,
+  };
+}
+
+// ---- 事件切分重建球轨迹：主渲染路径（前端不自行分段 / 估高） ----
+
+function isDisplayableSegment(segment: ReconstructedBallTrajectorySegment): boolean {
+  if (segment.status === "insufficient_spatial_anchors") return false;
+  if (segment.reconstruction_mode === "image_only") return false;
+  // 默认视图只显示较高可信（high/medium）；low 仅调试模式、none 不生成
+  if (segment.quality?.display_level === "none" || segment.quality?.display_level === "low") return false;
+  return segment.samples.some((sample) => finiteNumber(sample.court_xy?.[0]) !== null && finiteNumber(sample.court_xy?.[1]) !== null);
+}
+
+function buildReconstructedTrajectory(
+  segment: ReconstructedBallTrajectorySegment,
+  sequence: number,
+): EstimatedBallTrajectory {
+  const points: EstimatedTrajectoryPoint[] = segment.samples.flatMap((sample) => {
+    const x = finiteNumber(sample.court_xy?.[0]);
+    const y = finiteNumber(sample.court_xy?.[1]);
+    const timestamp = finiteNumber(sample.timestamp_sec);
+    const frameIndex = finiteNumber(sample.frame_index);
+    if (x === null || y === null || timestamp === null || frameIndex === null) return [];
+    const interpolated = sample.source === "interpolated" || sample.source === "model_predicted";
+    return [{
+      frameIndex,
+      timestampSeconds: timestamp,
+      courtXFt: x,
+      courtYFt: y,
+      estimatedHeightFt: finiteNumber(sample.estimated_height_ft),
+      confidence: finiteNumber(sample.confidence),
+      interpolated,
+      heightSource: sample.height_source ?? null,
+      source: sample.source,
+    }];
+  });
+  if (points.length === 0) {
+    return emptyReconstructedTrajectory(segment, sequence);
+  }
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  const duration = Math.max(0, last.timestampSeconds - first.timestampSeconds);
+  const direction: TrajectoryDirection = last.courtYFt >= first.courtYFt ? "near-to-far" : "far-to-near";
+  const heights = points.flatMap((point) => point.estimatedHeightFt === null ? [] : [point.estimatedHeightFt]);
+  const peakEstimatedHeightFt = heights.length ? Math.max(...heights) : null;
+
+  const quality = segment.quality;
+  const displayLevel = quality?.display_level ?? null;
+  const highConfidence = displayLevel === "high";
+
+  const anchors: TrajectoryAnchorMarker[] = (segment.anchors ?? []).flatMap((anchor) => {
+    const x = finiteNumber(anchor.court_xy?.[0]);
+    const y = finiteNumber(anchor.court_xy?.[1]);
+    if (x === null || y === null) return [];
+    return [{
+      anchorType: anchor.anchor_type,
+      courtXFt: x,
+      courtYFt: y,
+      frameIndex: anchor.frame_index,
+      confidence: anchor.confidence ?? 0,
+    }];
+  });
+
+  return {
+    id: `trajectory-${sequence}`,
+    sequence,
+    direction,
+    startTimeSeconds: first.timestampSeconds,
+    endTimeSeconds: last.timestampSeconds,
+    durationSeconds: duration,
+    pointCount: points.length,
+    averageConfidence: quality?.detection_score ?? null,
+    interpolatedRatio: quality?.predicted_ratio ?? points.filter((point) => point.interpolated).length / points.length,
+    highConfidence,
+    peakEstimatedHeightFt,
+    points,
+    anchors,
+    quality: {
+      overall: finiteNumber(quality?.overall),
+      displayLevel,
+      netCrossingStatus: quality?.net_crossing_status ?? null,
+      observationCoverage: finiteNumber(quality?.observation_coverage),
+    },
+    reconstructionMode: segment.reconstruction_mode,
+  };
+}
+
+function emptyReconstructedTrajectory(segment: ReconstructedBallTrajectorySegment, sequence: number): EstimatedBallTrajectory {
+  return {
+    id: `trajectory-${sequence}`,
+    sequence,
+    direction: "near-to-far",
+    startTimeSeconds: 0,
+    endTimeSeconds: 0,
+    durationSeconds: 0,
+    pointCount: 0,
+    averageConfidence: null,
+    interpolatedRatio: 0,
+    highConfidence: false,
+    peakEstimatedHeightFt: null,
+    points: [],
+    anchors: [],
+    reconstructionMode: segment.reconstruction_mode,
+  };
+}
+
+function buildReconstructedBounceMarkers(segments: ReconstructedBallTrajectorySegment[]): TrajectoryBounceMarker[] {
+  const markers: TrajectoryBounceMarker[] = [];
+  for (const segment of segments) {
+    for (const anchor of segment.anchors ?? []) {
+      if (anchor.anchor_type !== "bounce") continue;
+      const x = finiteNumber(anchor.court_xy?.[0]);
+      const y = finiteNumber(anchor.court_xy?.[1]);
+      if (x === null || y === null) continue;
+      markers.push({
+        id: anchor.anchor_id,
+        timestampSeconds: 0,
+        courtXFt: x,
+        courtYFt: y,
+        confidence: anchor.confidence ?? 0,
+      });
+    }
+  }
+  return markers;
+}
+
+/**
+ * 主渲染路径：直接消费后端重建产物，按段构造轨迹。
+ * 不进行前端分段、方向生成、平均置信度合成或高度生成；
+ * 高度与质量均来自后端重建结果。
+ */
+export function buildReconstructedBallTrajectoryVisualization(
+  artifact?: ReconstructedBallTrajectoryArtifact | null,
+): BallTrajectoryVisualizationData {
+  if (!artifact || artifact.status !== "available" || artifact.segments.length === 0) {
+    return { trajectories: [], bounces: [], discardedPointCount: 0 };
+  }
+  const segments = artifact.segments.filter(isDisplayableSegment);
+  const trajectories = segments.map((segment, index) => buildReconstructedTrajectory(segment, index + 1));
+  return {
+    trajectories: trajectories.filter((trajectory) => trajectory.pointCount > 0),
+    bounces: buildReconstructedBounceMarkers(segments),
+    discardedPointCount: 0,
   };
 }
 

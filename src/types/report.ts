@@ -1000,6 +1000,93 @@ export interface BounceEventsArtifact {
   events: BounceEventCandidate[];
 }
 
+// ---- 事件切分重建球轨迹（第三套产物，前端按段直接渲染） ----
+
+export type ReconstructedSampleSource = "detected" | "interpolated" | "model_predicted" | "anchor";
+
+export interface ReconstructedBallTrajectorySample {
+  frame_index: number;
+  timestamp_sec: number;
+  court_xy?: [number, number] | number[] | null;
+  estimated_height_ft?: number | null;
+  source: ReconstructedSampleSource;
+  confidence?: number | null;
+  height_source?: string | null;
+  height_confidence?: number | null;
+  height_uncertainty_ft?: number | null;
+  gap_length_frames?: number | null;
+  reprojection_error_px?: number | null;
+}
+
+export interface ReconstructedTrajectoryAnchor {
+  anchor_id: string;
+  anchor_type: "bounce" | "contact" | "raw_endpoint" | "loss";
+  frame_index: number;
+  court_xy?: [number, number] | number[] | null;
+  height_ft?: number | null;
+  confidence?: number;
+  uncertainty_ft?: number;
+}
+
+export interface ReconstructedTrajectoryQuality {
+  observation_coverage?: number;
+  detection_score?: number;
+  image_fit_rmse_px?: number | null;
+  fit_score?: number;
+  predicted_ratio?: number;
+  continuity_score?: number;
+  anchor_confidence?: number;
+  event_confidence?: number;
+  physical_plausibility?: number;
+  net_crossing_status?: "not_expected" | "expected" | "estimated" | "implausible" | "unknown";
+  height_confidence?: number;
+  overall?: number;
+  display_level?: "high" | "medium" | "low" | "none";
+}
+
+export interface ReconstructedBallTrajectorySegment {
+  segment_id: string;
+  reconstruction_mode: "dual_anchor_warp" | "single_anchor_warp" | "image_only" | "local_visual_arc";
+  status: "reconstructed" | "insufficient_spatial_anchors";
+  start_event_id?: string | null;
+  end_event_id?: string | null;
+  start_event_type?: string | null;
+  end_event_type?: string | null;
+  boundary_reason?: string;
+  fit_space?: string;
+  model?: string;
+  anchors: ReconstructedTrajectoryAnchor[];
+  quality?: ReconstructedTrajectoryQuality;
+  samples: ReconstructedBallTrajectorySample[];
+}
+
+export interface ReconstructedBallTrajectoryEvent {
+  event_id: string;
+  event_type: "hit" | "bounce" | "loss" | "serve_reset" | "end_of_stream";
+  frame_index: number;
+  timestamp_sec: number;
+  image_xy?: [number, number] | number[] | null;
+  court_xy?: [number, number] | number[] | null;
+  confidence?: number;
+  source?: string;
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface ReconstructedBallTrajectoryArtifact {
+  schema_version: string;
+  job_id: string;
+  status: "available" | "no_candidates" | "partial" | "unavailable" | "skipped" | "failed";
+  detail: string;
+  reconstruction_mode: "event_anchored_2_5d";
+  coordinate_semantics?: {
+    xy?: string;
+    z?: string;
+    metric_validity?: string;
+  };
+  events: ReconstructedBallTrajectoryEvent[];
+  segments: ReconstructedBallTrajectorySegment[];
+}
+
 export interface ServeEventCandidate {
   id: string;
   timestamp_seconds: number;
@@ -1164,6 +1251,10 @@ export interface AnalysisPipelineResult {
     bounce_events_url?: string;
     bounce_events_status?: string;
     bounce_events_detail?: string;
+    reconstructed_ball_trajectory_json_path?: string;
+    reconstructed_ball_trajectory_url?: string;
+    reconstructed_ball_trajectory_status?: string;
+    reconstructed_ball_trajectory_detail?: string;
     analysis_overlay_video_path?: string;
     analysis_overlay_video_url?: string;
     analysis_overlay_video_status?: string;

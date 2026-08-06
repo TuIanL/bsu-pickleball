@@ -7,9 +7,11 @@ import {
   getAnalysisJob,
   getAnalysisResult,
   getBallTrajectory,
+  getReconstructedBallTrajectory,
 } from "../services/analysisClient";
 import {
   buildBallTrajectoryVisualization,
+  buildReconstructedBallTrajectoryVisualization,
   type BallTrajectoryVisualizationData,
   type EstimatedBallTrajectory,
 } from "../services/ballTrajectoryVisualization";
@@ -59,8 +61,13 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
         if (!nextJob) throw new Error("分析任务不存在或已被删除");
         if (!result) throw new Error("该任务尚未生成可读取的分析结果");
 
-        const trajectoryArtifact = await getBallTrajectory(result);
-        const nextData = buildBallTrajectoryVisualization(trajectoryArtifact);
+        const trajectoryArtifact = await getReconstructedBallTrajectory(result);
+        let nextData = buildReconstructedBallTrajectoryVisualization(trajectoryArtifact);
+        // 无重建产物（旧任务 / 重建不可用）时降级到原始轨迹模式
+        if (nextData.trajectories.length === 0) {
+          const legacyArtifact = await getBallTrajectory(result);
+          nextData = buildBallTrajectoryVisualization(legacyArtifact);
+        }
         if (!alive) return;
         setJob(nextJob);
         setData(nextData);
@@ -226,7 +233,9 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
             <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-[#667085]">
               <Legend color="#25B86A" label="近端到远端" />
               <Legend color="#F04438" label="远端到近端" />
-              <Legend color="#A7B0AA" label="插值点" dot />
+              <Legend color="#A7B0AA" label="推算点（虚线）" dash />
+              <Legend color="#F97316" label="弹地点（圆环）" ring />
+              <Legend color="#8B5CF6" label="击球点（菱形）" diamond />
             </div>
           </section>
 
@@ -292,10 +301,28 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Legend({ color, label, dot = false }: { color: string; label: string; dot?: boolean }) {
+function Legend({ color, label, dot = false, dash = false, ring = false, diamond = false }: {
+  color: string;
+  label: string;
+  dot?: boolean;
+  dash?: boolean;
+  ring?: boolean;
+  diamond?: boolean;
+}) {
+  const marker = diamond ? (
+    <span className="inline-block size-2 rotate-45" style={{ backgroundColor: color }} />
+  ) : ring ? (
+    <span className="inline-block size-2.5 rounded-full border-2" style={{ borderColor: color }} />
+  ) : dash ? (
+    <span className="inline-block h-0.5 w-4 border-t-2 border-dashed" style={{ borderColor: color }} />
+  ) : dot ? (
+    <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
+  ) : (
+    <span className="h-0.5 w-4" style={{ backgroundColor: color }} />
+  );
   return (
     <span className="flex items-center gap-2">
-      <span className={`${dot ? "size-2 rounded-full" : "h-0.5 w-4"}`} style={{ backgroundColor: color }} />
+      {marker}
       {label}
     </span>
   );

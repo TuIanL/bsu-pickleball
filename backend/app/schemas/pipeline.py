@@ -61,6 +61,8 @@ class AnalysisArtifacts(BaseModel):
     cleaned_ball_trajectory_url: Optional[str] = None
     bounce_events_json_path: Optional[str] = None
     bounce_events_url: Optional[str] = None
+    reconstructed_ball_trajectory_json_path: Optional[str] = None
+    reconstructed_ball_trajectory_url: Optional[str] = None
     analysis_overlay_video_path: Optional[str] = None
     analysis_overlay_video_url: Optional[str] = None
     heatmaps_manifest_json_path: Optional[str] = None
@@ -104,6 +106,8 @@ class AnalysisArtifacts(BaseModel):
     cleaned_ball_trajectory_detail: Optional[str] = None
     bounce_events_status: Optional[str] = None
     bounce_events_detail: Optional[str] = None
+    reconstructed_ball_trajectory_status: Optional[str] = None
+    reconstructed_ball_trajectory_detail: Optional[str] = None
     analysis_overlay_video_status: Optional[str] = None
     analysis_overlay_video_detail: Optional[str] = None
     position_visualizations_status: Optional[str] = None
