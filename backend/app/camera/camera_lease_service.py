@@ -1,9 +1,9 @@
 """CameraLeaseManager —— 摄像机录制资源租约统一管理。"""
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -22,8 +22,13 @@ class CameraLeaseManager:
     def __init__(self, db_factory):
         self._db_factory = db_factory
 
-    def acquire(self, camera_ids: list[str], capture_take_id: str,
-                source_session_id: str = "", owner_instance_id: str = "default") -> list[CameraLease]:
+    def acquire(
+        self,
+        camera_ids: list[str],
+        capture_take_id: str,
+        source_session_id: str = "",
+        owner_instance_id: str = "default",
+    ) -> list[CameraLease]:
         """在事务中原子获取多路 Lease。任一冲突则整体回滚。"""
         db: Session = self._db_factory()
         try:
@@ -39,18 +44,25 @@ class CameraLeaseManager:
                         "RETURNING camera_id"
                     ),
                     {
-                        "cid": camera_id, "tid": capture_take_id, "sid": source_session_id,
-                        "oid": owner_instance_id, "ts": datetime.now(timezone.utc),
+                        "cid": camera_id,
+                        "tid": capture_take_id,
+                        "sid": source_session_id,
+                        "oid": owner_instance_id,
+                        "ts": datetime.now(UTC),
                         "cid2": camera_id,
                     },
                 )
                 if result.rowcount == 0:
                     raise LeaseConflictError(camera_id)
             db.commit()
-            leases = db.query(CameraLease).filter(
-                CameraLease.capture_take_id == capture_take_id,
-                CameraLease.status == LeaseStatus.active,
-            ).all()
+            leases = (
+                db.query(CameraLease)
+                .filter(
+                    CameraLease.capture_take_id == capture_take_id,
+                    CameraLease.status == LeaseStatus.active,
+                )
+                .all()
+            )
             return leases
         except LeaseConflictError:
             db.rollback()
@@ -65,10 +77,7 @@ class CameraLeaseManager:
         db: Session = self._db_factory()
         try:
             db.execute(
-                text(
-                    "UPDATE camera_leases SET status = 'released' "
-                    "WHERE capture_take_id = :tid AND status = 'active'"
-                ),
+                text("UPDATE camera_leases SET status = 'released' WHERE capture_take_id = :tid AND status = 'active'"),
                 {"tid": capture_take_id},
             )
             db.commit()
@@ -82,11 +91,8 @@ class CameraLeaseManager:
         db: Session = self._db_factory()
         try:
             db.execute(
-                text(
-                    "UPDATE camera_leases SET heartbeat_at = :ts "
-                    "WHERE capture_take_id = :tid AND status = 'active'"
-                ),
-                {"tid": capture_take_id, "ts": datetime.now(timezone.utc)},
+                text("UPDATE camera_leases SET heartbeat_at = :ts WHERE capture_take_id = :tid AND status = 'active'"),
+                {"tid": capture_take_id, "ts": datetime.now(UTC)},
             )
             db.commit()
         except Exception:
@@ -94,13 +100,17 @@ class CameraLeaseManager:
         finally:
             db.close()
 
-    def find_active_lease(self, camera_id: str) -> Optional[CameraLease]:
+    def find_active_lease(self, camera_id: str) -> CameraLease | None:
         db: Session = self._db_factory()
         try:
-            return db.query(CameraLease).filter(
-                CameraLease.camera_id == camera_id,
-                CameraLease.status == LeaseStatus.active,
-            ).first()
+            return (
+                db.query(CameraLease)
+                .filter(
+                    CameraLease.camera_id == camera_id,
+                    CameraLease.status == LeaseStatus.active,
+                )
+                .first()
+            )
         finally:
             db.close()
 
@@ -115,18 +125,27 @@ class CameraLeaseManager:
 
         db: Session = self._db_factory()
         try:
-            stale_threshold = datetime.now(timezone.utc) - timedelta(seconds=30)
-            stale = db.query(CameraLease).filter(
-                CameraLease.status == LeaseStatus.active,
-                CameraLease.heartbeat_at < stale_threshold,
-            ).all()
+            stale_threshold = datetime.now(UTC) - timedelta(seconds=30)
+            stale = (
+                db.query(CameraLease)
+                .filter(
+                    CameraLease.status == LeaseStatus.active,
+                    CameraLease.heartbeat_at < stale_threshold,
+                )
+                .all()
+            )
 
             from app.models.ffmpeg_registry import FFmpegProcessRegistry
+
             for lease in stale:
-                procs = db.query(FFmpegProcessRegistry).filter(
-                    FFmpegProcessRegistry.capture_take_id == lease.capture_take_id,
-                    FFmpegProcessRegistry.ended_at.is_(None),
-                ).all()
+                procs = (
+                    db.query(FFmpegProcessRegistry)
+                    .filter(
+                        FFmpegProcessRegistry.capture_take_id == lease.capture_take_id,
+                        FFmpegProcessRegistry.ended_at.is_(None),
+                    )
+                    .all()
+                )
                 for proc in procs:
                     try:
                         os.killpg(proc.pgid, signal.SIGTERM)

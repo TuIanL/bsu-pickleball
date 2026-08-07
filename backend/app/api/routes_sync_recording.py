@@ -13,16 +13,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.camera.ffmpeg_utils import check_ffmpeg_available
 from app.camera.models import (
     SyncRecordingSession,
     SyncStartRequest,
-    SyncStopResponse,
     SyncTestRequest,
     SyncTestResult,
 )
-from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
-from app.camera.ffmpeg_utils import check_ffmpeg_available
 from app.camera.sync_recorder_service import sync_recording_service
+from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 
 router = APIRouter(prefix="/api/sync-recordings", tags=["sync-recordings"])
 
@@ -53,9 +52,9 @@ def start_sync_recording(payload: SyncStartRequest) -> SyncRecordingSession:
     try:
         return sync_recording_service.start_session(payload)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/{session_id}/stop", response_model=CaptureStopResult)
@@ -70,25 +69,26 @@ def stop_sync_recording(session_id: str) -> CaptureStopResult:
         if tid:
             from app.database import get_session_factory
             from app.services.capture_take_service import get_capture_take
+
             db = get_session_factory()()
             try:
                 take = get_capture_take(db, tid)
             finally:
                 db.close()
         cam_slots = getattr(session, "camera_slots", {}) or {}
-        cam_1_vid = cam_2_vid = None
         for slot_name in ("cam_1", "cam_2"):
             slot_info = cam_slots.get(slot_name) if isinstance(cam_slots, dict) else getattr(cam_slots, slot_name, None)
-            cid = getattr(slot_info, "camera_id", None) if slot_info else None
+            getattr(slot_info, "camera_id", None) if slot_info else None
         return CaptureStopResultBuilder.from_sync_session(
-            session, capture_take=take,
+            session,
+            capture_take=take,
             cam_1_video_id=getattr(response, "default_analysis_video_id", None),
             warnings=[] if response.analysis_available else [response.analysis_blocked_reason or "分析不可用"],
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{session_id}/cancel", response_model=SyncRecordingSession)
@@ -102,9 +102,9 @@ def cancel_sync_recording(session_id: str) -> SyncRecordingSession:
     try:
         return sync_recording_service.cancel_session(session_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{session_id}/merge", response_model=SyncRecordingSession, status_code=202)
@@ -114,9 +114,9 @@ def merge_sync_recording(session_id: str) -> SyncRecordingSession:
     try:
         return sync_recording_service.request_merge(session_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.get("", response_model=list[SyncRecordingSession])
@@ -156,9 +156,9 @@ def run_sync_test(payload: SyncTestRequest) -> SyncTestResult:
     try:
         return sync_recording_service.run_test(payload)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.delete("/{session_id}")

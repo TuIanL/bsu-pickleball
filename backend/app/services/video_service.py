@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,7 +18,6 @@ from fastapi import UploadFile
 
 from app.schemas.video import VideoMetadata
 from app.services.storage_service import StorageService
-
 
 # 允许上传的视频后缀白名单（不在里面的直接报错，避免乱传文件）
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
@@ -67,7 +66,7 @@ class VideoService:
             content_type=upload.content_type,
             size_bytes=size,
             path=str(destination),
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
         )
         # 6) 写入内存缓存 + 落盘 JSON
         VIDEOS[video_id] = metadata
@@ -87,7 +86,7 @@ class VideoService:
             content_type="video/mp4",
             size_bytes=file_size,
             path=str(file_path),
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
             source="recording",  # 标记来源为"录制"
         )
         VIDEOS[video_id] = metadata

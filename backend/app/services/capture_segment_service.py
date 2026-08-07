@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.capture_segment import CaptureSegment, SegmentType, SegmentStatus, SegmentSource, EditStatus
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentStatus, SegmentType
 
 # 区间 ID 前缀
 _ID_PREFIX = "sg"
@@ -65,9 +65,7 @@ def close_segment(
 
 
 # 获取某个 take 下所有未关闭的区间，按类型排序
-def get_open_segments_for_take(
-    db: Session, capture_take_id: str
-) -> list[CaptureSegment]:
+def get_open_segments_for_take(db: Session, capture_take_id: str) -> list[CaptureSegment]:
     return (
         db.query(CaptureSegment)
         .filter(
@@ -81,9 +79,7 @@ def get_open_segments_for_take(
 
 
 # 按类型获取某个 take 下唯一未关闭的区间
-def get_open_segment_by_type(
-    db: Session, capture_take_id: str, segment_type: str
-) -> CaptureSegment | None:
+def get_open_segment_by_type(db: Session, capture_take_id: str, segment_type: str) -> CaptureSegment | None:
     return (
         db.query(CaptureSegment)
         .filter(
@@ -120,13 +116,14 @@ def get_segment(db: Session, segment_id: str) -> CaptureSegment | None:
 
 
 # 关闭某个 take 下所有未关闭区间（录制停止时，状态记为 inferred）
-def close_all_open_for_take(
-    db: Session, capture_take_id: str, end_ms: int
-) -> list[CaptureSegment]:
+def close_all_open_for_take(db: Session, capture_take_id: str, end_ms: int) -> list[CaptureSegment]:
     open_segs = get_open_segments_for_take(db, capture_take_id)
     for seg in open_segs:
         close_segment(
-            db, seg, end_ms=end_ms,
-            status="inferred", close_reason="recording_stopped",
+            db,
+            seg,
+            end_ms=end_ms,
+            status="inferred",
+            close_reason="recording_stopped",
         )
     return open_segs

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,7 +43,7 @@ def _parse_payload_json(v: Any, *, allow_none: bool = False) -> dict[str, Any] |
         try:
             parsed = json.loads(v)
         except json.JSONDecodeError:
-            raise ValueError("payload_json 必须是有效的 JSON 对象")
+            raise ValueError("payload_json 必须是有效的 JSON 对象") from None
         if not isinstance(parsed, dict):
             raise ValueError("payload_json 必须是 JSON 对象")
         return parsed
@@ -52,14 +52,15 @@ def _parse_payload_json(v: Any, *, allow_none: bool = False) -> dict[str, Any] |
 
 class TimelineEventCreate(BaseModel):
     """创建 Session Timeline Event 的请求体。"""
-    recording_session_id: Optional[str] = Field(default=None, description="关联的录制会话 ID")
-    capture_take_id: Optional[str] = Field(default=None, description="关联的 CaptureTake ID")
-    timestamp_ms: Optional[int] = Field(default=None, description="视频内时间戳（毫秒），未提交时后端兜底计算")
-    occurred_at: Optional[datetime] = Field(default=None, description="真实世界时间")
+
+    recording_session_id: str | None = Field(default=None, description="关联的录制会话 ID")
+    capture_take_id: str | None = Field(default=None, description="关联的 CaptureTake ID")
+    timestamp_ms: int | None = Field(default=None, description="视频内时间戳（毫秒），未提交时后端兜底计算")
+    occurred_at: datetime | None = Field(default=None, description="真实世界时间")
     event_type: TimelineEventTypeStr = Field(..., description="事件类型")
     source: TimelineEventSourceStr = Field(default="manual", description="事件来源")
-    label: Optional[str] = Field(default="", description="事件标签")
-    note: Optional[str] = Field(default="", description="事件备注")
+    label: str | None = Field(default="", description="事件标签")
+    note: str | None = Field(default="", description="事件备注")
     payload_json: dict[str, Any] = Field(default_factory=dict, description="扩展数据 JSON 对象")
 
     @field_validator("timestamp_ms")
@@ -73,11 +74,23 @@ class TimelineEventCreate(BaseModel):
     @classmethod
     def validate_event_type(cls, v: str) -> str:
         valid = [
-            "session_note", "non_play_start", "non_play_end",
-            "game_start", "game_end", "set_start", "set_end",
-            "rally_start", "rally_end", "score_update", "score_correction",
-            "side_change", "timeout_start", "timeout_end",
-            "drill_start", "drill_end", "custom_marker",
+            "session_note",
+            "non_play_start",
+            "non_play_end",
+            "game_start",
+            "game_end",
+            "set_start",
+            "set_end",
+            "rally_start",
+            "rally_end",
+            "score_update",
+            "score_correction",
+            "side_change",
+            "timeout_start",
+            "timeout_end",
+            "drill_start",
+            "drill_end",
+            "custom_marker",
         ]
         if v not in valid:
             raise ValueError(f"event_type 必须是以下之一: {', '.join(valid)}")
@@ -99,12 +112,13 @@ class TimelineEventCreate(BaseModel):
 
 class TimelineEventUpdate(BaseModel):
     """更新 Session Timeline Event 的请求体。不允许修改 field_session_id。"""
-    timestamp_ms: Optional[int] = None
-    event_type: Optional[TimelineEventTypeStr] = None
-    source: Optional[TimelineEventSourceStr] = None
-    label: Optional[str] = None
-    note: Optional[str] = None
-    payload_json: Optional[dict[str, Any]] = None
+
+    timestamp_ms: int | None = None
+    event_type: TimelineEventTypeStr | None = None
+    source: TimelineEventSourceStr | None = None
+    label: str | None = None
+    note: str | None = None
+    payload_json: dict[str, Any] | None = None
 
     @field_validator("timestamp_ms")
     @classmethod
@@ -119,11 +133,23 @@ class TimelineEventUpdate(BaseModel):
         if v is None:
             return None
         valid = [
-            "session_note", "non_play_start", "non_play_end",
-            "game_start", "game_end", "set_start", "set_end",
-            "rally_start", "rally_end", "score_update", "score_correction",
-            "side_change", "timeout_start", "timeout_end",
-            "drill_start", "drill_end", "custom_marker",
+            "session_note",
+            "non_play_start",
+            "non_play_end",
+            "game_start",
+            "game_end",
+            "set_start",
+            "set_end",
+            "rally_start",
+            "rally_end",
+            "score_update",
+            "score_correction",
+            "side_change",
+            "timeout_start",
+            "timeout_end",
+            "drill_start",
+            "drill_end",
+            "custom_marker",
         ]
         if v not in valid:
             raise ValueError(f"event_type 必须是以下之一: {', '.join(valid)}")
@@ -146,10 +172,11 @@ class TimelineEventUpdate(BaseModel):
 
 class TimelineEventSummary(BaseModel):
     """Session Timeline Event 列表项。"""
+
     id: str
     field_session_id: str
-    recording_session_id: Optional[str] = None
-    capture_take_id: Optional[str] = None
+    recording_session_id: str | None = None
+    capture_take_id: str | None = None
     is_undone: bool = False
     timestamp_ms: int
     occurred_at: datetime
@@ -158,8 +185,8 @@ class TimelineEventSummary(BaseModel):
     label: str
     note: str
     payload_json: dict[str, Any]
-    annotation_package_id: Optional[str] = None
-    vidat_import_audit_id: Optional[str] = None
+    annotation_package_id: str | None = None
+    vidat_import_audit_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -174,10 +201,11 @@ class TimelineEventSummary(BaseModel):
 
 class TimelineEventDetail(BaseModel):
     """Session Timeline Event 详情。"""
+
     id: str
     field_session_id: str
-    recording_session_id: Optional[str] = None
-    capture_take_id: Optional[str] = None
+    recording_session_id: str | None = None
+    capture_take_id: str | None = None
     is_undone: bool = False
     timestamp_ms: int
     occurred_at: datetime
@@ -186,8 +214,8 @@ class TimelineEventDetail(BaseModel):
     label: str
     note: str
     payload_json: dict[str, Any]
-    annotation_package_id: Optional[str] = None
-    vidat_import_audit_id: Optional[str] = None
+    annotation_package_id: str | None = None
+    vidat_import_audit_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

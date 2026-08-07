@@ -55,9 +55,7 @@ class YoloBallDetectorAdapter(BallDetectorProtocol):
         if self._model is not None:
             return self._model
         if not self.model_path:
-            raise BallDetectionModelMissingError(
-                "未配置球检测模型路径（PICKLEBALL_BALL_MODEL_PATH），球检测不可用"
-            )
+            raise BallDetectionModelMissingError("未配置球检测模型路径（PICKLEBALL_BALL_MODEL_PATH），球检测不可用")
         from pathlib import Path
 
         if not Path(self.model_path).exists():

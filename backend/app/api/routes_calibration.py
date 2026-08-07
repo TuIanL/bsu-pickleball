@@ -20,32 +20,34 @@
 # 让 list[str] 这类类型注解在较旧的 Python 版本也能使用
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 # 标定相关的数据模型（Schema，规定请求/响应的字段与类型）
 from app.schemas.calibration import (
-    CalibrationCreate,                      # 基础"创建标定"的请求
-    CalibrationPreviewRequest,              # 生成预览图的请求（可选携带某一帧画面）
-    CalibrationPreviewResponse,             # 预览图的结果
-    CalibrationReadResponse,                # 读取标定的响应
-    CalibrationResult,                      # 标定结果
-    AutomaticCalibrationRequest,            # 请求生成"自动标定建议"
-    AutomaticCalibrationResponse,           # 自动标定建议的结果
-    ManualCalibrationResponse,              # 手工标定的响应
-    ManualKeypointCalibrationRequest,       # 手工四角点标定的请求（含四个角点的像素坐标）
-    ProjectionRequest,                      # 投影请求（输入图像坐标，求球场坐标）
-    ProjectionResult,                       # 投影结果
+    AutomaticCalibrationRequest,  # 请求生成"自动标定建议"
+    AutomaticCalibrationResponse,  # 自动标定建议的结果
+    CalibrationCreate,  # 基础"创建标定"的请求
+    CalibrationPreviewRequest,  # 生成预览图的请求（可选携带某一帧画面）
+    CalibrationPreviewResponse,  # 预览图的结果
+    CalibrationReadResponse,  # 读取标定的响应
+    CalibrationResult,  # 标定结果
+    ManualCalibrationResponse,  # 手工标定的响应
+    ManualKeypointCalibrationRequest,  # 手工四角点标定的请求（含四个角点的像素坐标）
+    ProjectionRequest,  # 投影请求（输入图像坐标，求球场坐标）
+    ProjectionResult,  # 投影结果
     SemiAutomaticCalibrationAcceptRequest,  # 半自动：接受或微调后的角点
 )
+
 # 自动标定服务：负责生成建议、保存半自动结果
 from app.services.automatic_calibration_service import automatic_calibration_service
+
 # 标定核心服务：计算单应性矩阵、保存标定、生成预览图
 from app.services.calibration_service import calibration_service
+
 # 存储服务：负责拼出各类文件在磁盘上的路径
 from app.services.storage_service import StorageService
+
 # 单应性矩阵计算可能抛出的错误（例如四个角点给得不对、近似共线时无法求解）
 from app.vision.courtvision_calibration_engine.homography import HomographyError
 
@@ -58,6 +60,7 @@ _storage = StorageService()
 
 
 # ---------- 标定工作台接口（manual_router，前缀 /calibration） ----------
+
 
 @manual_router.post("/manual", response_model=ManualCalibrationResponse)
 def create_manual_calibration(payload: ManualKeypointCalibrationRequest) -> ManualCalibrationResponse:
@@ -132,7 +135,7 @@ def read_manual_calibration(calibration_id: str) -> CalibrationReadResponse:
 @manual_router.post("/{calibration_id}/preview", response_model=CalibrationPreviewResponse)
 def create_calibration_preview(
     calibration_id: str,
-    payload: Optional[CalibrationPreviewRequest] = None,
+    payload: CalibrationPreviewRequest | None = None,
 ) -> CalibrationPreviewResponse:
     """
     生成场地 overlay 预览图
@@ -156,6 +159,7 @@ def create_calibration_preview(
 
 
 # ---------- 基础标定接口（router，前缀 /api/calibrations） ----------
+
 
 @router.post("", response_model=CalibrationResult)
 def create_calibration(payload: CalibrationCreate) -> CalibrationResult:

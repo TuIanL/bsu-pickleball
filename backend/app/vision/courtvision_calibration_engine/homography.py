@@ -17,16 +17,15 @@ from __future__ import annotations
 
 # Sequence：泛指"序列"（list/tuple 等）；下面用来标注"一串点"这种参数。
 from collections.abc import Sequence
-# List / Tuple / Union：类型注解用（Union 表示"或"）。
-from typing import List, Tuple, Union
 
+# List / Tuple / Union：类型注解用（Union 表示"或"）。
 # numpy：Python 的数值计算库，矩阵/数组运算都靠它（写作 np）。
 import numpy as np
 
 # PointLike：单个 2D 点的类型，可以是 (x, y) 元组或 [x, y] 列表。
-PointLike = Union[Tuple[float, float], List[float]]
+PointLike = tuple[float, float] | list[float]
 # PointInput：可以是一个点，也可以是一串点。
-PointInput = Union[PointLike, Sequence[PointLike]]
+PointInput = PointLike | Sequence[PointLike]
 
 
 class HomographyError(ValueError):
@@ -35,6 +34,7 @@ class HomographyError(ValueError):
 
     单独建一个类，方便调用方精确捕获"标定/投影"相关的错误（而不是把所有 ValueError 都拦下）。
     """
+
     pass
 
 
@@ -138,7 +138,9 @@ def _coerce_point_input(point_or_points: PointInput) -> tuple[np.ndarray, bool]:
     return array, is_single
 
 
-def _transform_points(point_or_points: PointInput, homography: Sequence[Sequence[float]] | np.ndarray) -> tuple[float, float] | list[tuple[float, float]]:
+def _transform_points(
+    point_or_points: PointInput, homography: Sequence[Sequence[float]] | np.ndarray
+) -> tuple[float, float] | list[tuple[float, float]]:
     """
     核心：用单应性矩阵把点从"一个平面"变换到"另一个平面"。
 

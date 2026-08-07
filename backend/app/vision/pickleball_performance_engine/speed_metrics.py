@@ -8,8 +8,10 @@ from math import hypot
 # SpeedSegment：单个“相邻帧速度片段”的数据模型（含起止时间、速度）。
 # SpeedSummary：单名球员的速度汇总（平均、最大、全部片段列表）。
 from app.schemas.metrics import SpeedSegment, SpeedSummary
+
 # ProjectedTrackPoint：投影到标准球场坐标系（英尺）的轨迹点。
 from app.schemas.tracking import ProjectedTrackPoint
+
 # group_tracks：本包内轨迹指标模块提供的“按球员分组并排序”工具函数。
 from app.vision.pickleball_performance_engine.trajectory_metrics import group_tracks
 
@@ -26,7 +28,7 @@ def speed_summaries(points: list[ProjectedTrackPoint]) -> list[SpeedSummary]:
     for track_id, track_points in group_tracks(points).items():
         segments: list[SpeedSegment] = []  # 该球员的所有“相邻帧速度片段”。
         # 遍历相邻帧对 (前一帧, 当前帧)。
-        for previous, current in zip(track_points, track_points[1:]):
+        for previous, current in zip(track_points, track_points[1:], strict=False):
             # 两帧之间的时间差（秒）。
             elapsed = current.timestamp_seconds - previous.timestamp_seconds
             # 时间差非正（时间戳异常或倒退）时跳过，避免除零或负速度。

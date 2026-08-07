@@ -3,3 +3,18 @@ name = "pre-pickleball"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = []
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+src = ["backend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI 依赖注入的标准写法：Depends()/File() 必须在默认参数中求值
+"backend/app/api/*.py" = ["B008"]
+"backend/app/api/**/*.py" = ["B008"]
+# 包 docstring 含长中文说明行，不参与行宽约束
+"backend/**/__init__.py" = ["E501"]

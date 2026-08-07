@@ -6,15 +6,15 @@ Timeline Event 服务层 —— 创建、列表、读取、更新和删除 Sessi
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app.models.timeline_event import (
     SessionTimelineEvent,
-    TimelineEventType,
     TimelineEventSource,
+    TimelineEventType,
 )
 
 _ID_PREFIX = "te"
@@ -34,6 +34,7 @@ def _dump_payload_json(payload_json: object | None) -> str:
 
 # ── 内部方法（不提交事务，供 coding-actions 内部调用）──
 
+
 def _add_timeline_event(
     db: Session,
     field_session_id: str,
@@ -47,7 +48,7 @@ def _add_timeline_event(
     note: str = "",
     payload_json: object | None = None,
 ) -> SessionTimelineEvent:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     event = SessionTimelineEvent(
         id=_generate_id(),
         field_session_id=field_session_id,
@@ -70,14 +71,15 @@ def _add_timeline_event(
 
 # ── 外部 API 方法（负责事务控制）──
 
+
 def create_timeline_event(
     db: Session,
     field_session_id: str,
     payload: dict,
 ) -> SessionTimelineEvent:
     """创建 Session Timeline Event，校验 Field Session 存在、录制归属、时间戳策略。"""
-    from app.services.field_session_service import get_field_session
     from app.camera.session_service import session_service
+    from app.services.field_session_service import get_field_session
 
     fs = get_field_session(db, field_session_id)
     if fs is None:
@@ -88,37 +90,35 @@ def create_timeline_event(
 
     if capture_take_id:
         from app.services.capture_take_service import get_capture_take
+
         take = get_capture_take(db, capture_take_id)
         if take is None:
             raise ValueError(f"CaptureTake {capture_take_id} 不存在")
         if take.field_session_id != field_session_id:
-            raise ValueError(
-                f"CaptureTake {capture_take_id} 不属于 Field Session {field_session_id}"
-            )
+            raise ValueError(f"CaptureTake {capture_take_id} 不属于 Field Session {field_session_id}")
 
     if recording_session_id:
         recording = session_service.get_session(recording_session_id)
         if recording is None:
             raise ValueError(f"RecordingSession {recording_session_id} 不存在")
         if recording.field_session_id != field_session_id:
-            raise ValueError(
-                f"RecordingSession {recording_session_id} 不属于 Field Session {field_session_id}"
-            )
+            raise ValueError(f"RecordingSession {recording_session_id} 不属于 Field Session {field_session_id}")
 
     timestamp_ms = payload.get("timestamp_ms")
     if timestamp_ms is None:
         if capture_take_id:
             from app.services.capture_take_service import get_capture_take
+
             take = get_capture_take(db, capture_take_id)
             if take and take.started_at:
-                elapsed = (datetime.now(timezone.utc) - take.started_at).total_seconds()
+                elapsed = (datetime.now(UTC) - take.started_at).total_seconds()
                 timestamp_ms = max(0, int(elapsed * 1000))
             else:
                 timestamp_ms = 0
         elif recording_session_id:
             recording = session_service.get_session(recording_session_id)
             if recording and recording.started_at:
-                elapsed = (datetime.now(timezone.utc) - recording.started_at).total_seconds()
+                elapsed = (datetime.now(UTC) - recording.started_at).total_seconds()
                 timestamp_ms = max(0, int(elapsed * 1000))
             else:
                 timestamp_ms = 0
@@ -153,9 +153,7 @@ def list_timeline_events(
     to_ms: int | None = None,
     include_undone: bool = False,
 ) -> list[SessionTimelineEvent]:
-    q = db.query(SessionTimelineEvent).filter(
-        SessionTimelineEvent.field_session_id == field_session_id
-    )
+    q = db.query(SessionTimelineEvent).filter(SessionTimelineEvent.field_session_id == field_session_id)
     if not include_undone:
         q = q.filter(SessionTimelineEvent.is_undone == False)  # noqa: E712
     if event_type:
@@ -207,7 +205,7 @@ def update_timeline_event(
             else:
                 value = payload[key]
             setattr(event, key, value)
-    event.updated_at = datetime.now(timezone.utc)
+    event.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(event)
     return event
@@ -223,8 +221,4 @@ def delete_timeline_event(db: Session, event_id: str) -> bool:
 
 
 def count_events_for_field_session(db: Session, field_session_id: str) -> int:
-    return (
-        db.query(SessionTimelineEvent)
-        .filter(SessionTimelineEvent.field_session_id == field_session_id)
-        .count()
-    )
+    return db.query(SessionTimelineEvent).filter(SessionTimelineEvent.field_session_id == field_session_id).count()

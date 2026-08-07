@@ -53,7 +53,7 @@ def test_duplicate_suppressor_tolerates_single_frame_gap():
     # 真实分身场景常见 1 帧缺席（如 fr=1302 只有 50 没有 41）——缺席帧计数衰减而非清零
     suppressor = DuplicateTrackSuppressor(iou_threshold=0.6, sustain_frames=3)
     suppressor.filter([trk(41, _BBOX_A, 0.7), trk(50, _BBOX_B, 0.5)])  # 重叠 1
-    suppressor.filter([trk(50, _BBOX_B, 0.5)])                          # 缺席（仅 50）
+    suppressor.filter([trk(50, _BBOX_B, 0.5)])  # 缺席（仅 50）
     out = None
     for _ in range(3):
         out = suppressor.filter([trk(41, _BBOX_A, 0.7), trk(50, _BBOX_B, 0.5)])  # 重叠 2,3,4

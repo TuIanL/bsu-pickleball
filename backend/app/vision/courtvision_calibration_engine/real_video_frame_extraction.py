@@ -12,14 +12,14 @@
 # `from __future__ import annotations`：兼容较新类型写法。
 from __future__ import annotations
 
+import json  # 写 manifest JSON
+import re  # 正则（用于清洗文件名）
+
 # asdict：dataclass 转 dict；dataclass：数据类。
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone   # 生成清单时间（带时区）
-import json   # 写 manifest JSON
-from pathlib import Path   # 路径对象
-import re   # 正则（用于清洗文件名）
-from typing import Any   # 泛指 dict 等
-
+from datetime import UTC, datetime  # 生成清单时间（带时区）
+from pathlib import Path  # 路径对象
+from typing import Any  # 泛指 dict 等
 
 # 支持的视频扩展名（小写），用于发现视频文件
 SUPPORTED_VIDEO_EXTENSIONS = {
@@ -36,6 +36,7 @@ SUPPORTED_VIDEO_EXTENSIONS = {
 
 class FrameExtractionError(ValueError):
     """抽帧相关的错误（继承自 ValueError）。"""
+
     pass
 
 
@@ -46,6 +47,7 @@ class FrameExtractionSettings:
 
     控制：每几秒抽一帧、单个视频最多抽多少帧、起止时间、JPEG 质量、是否覆盖、清单文件名。
     """
+
     interval_seconds: float = 2.0
     max_frames_per_video: int | None = 200
     start_seconds: float = 0.0
@@ -78,7 +80,7 @@ def extract_real_video_frames(
         raise FrameExtractionError(f"No supported video files found under: {source}")
 
     output.mkdir(parents=True, exist_ok=True)
-    used_stems: dict[str, int] = {}   # 用于同名视频去重
+    used_stems: dict[str, int] = {}  # 用于同名视频去重
     videos = [
         _extract_one_video(
             video_path=video_path,
@@ -95,7 +97,7 @@ def extract_real_video_frames(
     manifest_path = output / settings.manifest_name
     manifest = {
         "manifest_version": 1,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "input_path": str(source),
         "output_root": str(output),
         "manifest_path": str(manifest_path),
@@ -119,9 +121,7 @@ def discover_video_paths(input_path: str | Path) -> list[Path]:
     if not path.is_dir():
         return []
     return sorted(
-        child
-        for child in path.iterdir()
-        if child.is_file() and child.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+        child for child in path.iterdir() if child.is_file() and child.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
     )
 
 
@@ -162,7 +162,7 @@ def _extract_one_video(
     # 延迟导入 OpenCV
     try:
         import cv2  # type: ignore
-    except ImportError as exc:
+    except ImportError:
         entry["errors"].append({"message": "OpenCV is required to extract video frames"})
         return entry
 

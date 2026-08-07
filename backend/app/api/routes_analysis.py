@@ -26,9 +26,10 @@ from __future__ import annotations
 # Union：表示返回值"可能是多种类型之一"
 # Query：URL 查询参数
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
+
 # 不同的响应类型：
 # - FileResponse：返回一个文件（如视频/图片）
 # - JSONResponse：返回 JSON 数据
@@ -37,11 +38,11 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 # 分析相关的数据模型
 from app.schemas.analysis import (
-    AnalysisDeleteRequest,   # 批量删除请求（含 job_ids 列表）
-    AnalysisDeleteResult,    # 单个删除的结果
-    AnalysisJobCreate,       # 创建任务的请求
-    AnalysisJobSummary,      # 任务摘要/状态
-    AnalysisReport,          # 面向用户的分析报告
+    AnalysisDeleteRequest,  # 批量删除请求（含 job_ids 列表）
+    AnalysisDeleteResult,  # 单个删除的结果
+    AnalysisJobCreate,  # 创建任务的请求
+    AnalysisJobSummary,  # 任务摘要/状态
+    AnalysisReport,  # 面向用户的分析报告
 )
 from app.schemas.pipeline import AnalysisPipelineResult  # 分析流水线结果（含运动指标）
 
@@ -76,7 +77,9 @@ def create_analysis_job_route(payload: AnalysisJobCreate) -> AnalysisJobSummary:
 
 
 @router.get("/jobs", response_model=list[AnalysisJobSummary])
-def list_analysis_jobs_route(recording_session_id: Optional[str] = Query(default=None, alias="recording_session_id")) -> list[AnalysisJobSummary]:
+def list_analysis_jobs_route(
+    recording_session_id: str | None = Query(default=None, alias="recording_session_id"),
+) -> list[AnalysisJobSummary]:
     """
     读取所有已知分析任务
 
@@ -85,7 +88,11 @@ def list_analysis_jobs_route(recording_session_id: Optional[str] = Query(default
     """
     jobs = list_analysis_jobs()
     if recording_session_id:
-        jobs = [j for j in jobs if j.metadata.recording_session_id == recording_session_id or j.recordingSessionId == recording_session_id]
+        jobs = [
+            j
+            for j in jobs
+            if j.metadata.recording_session_id == recording_session_id or j.recordingSessionId == recording_session_id
+        ]
     return jobs
 
 
@@ -139,8 +146,8 @@ def cancel_analysis_job_route(job_id: str) -> AnalysisJobSummary:
     return job
 
 
-@router.get("/jobs/{job_id}/result", response_model=Union[AnalysisPipelineResult, AnalysisJobSummary])
-def read_analysis_result(job_id: str) -> Union[AnalysisPipelineResult, AnalysisJobSummary]:
+@router.get("/jobs/{job_id}/result", response_model=AnalysisPipelineResult | AnalysisJobSummary)
+def read_analysis_result(job_id: str) -> AnalysisPipelineResult | AnalysisJobSummary:
     """
     读取分析结果
 
@@ -183,28 +190,28 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
 def read_analysis_artifact(
     job_id: str,
     artifact_name: Literal[
-        "tracking-overlay",                       # 轨迹叠加数据（JSON）
-        "player-selection",                       # 主球员筛选结果
-        "player-selection-training-samples",      # 主球员筛选的训练样本
-        "ball-overlay",                           # 球的叠加数据
-        "detections",                             # 逐帧检测框（JSONL 文本）
-        "ball-trajectory",                        # 球轨迹
-        "cleaned-ball-trajectory",                # 清洗后的球轨迹
-        "bounce-events",                          # 弹跳事件
-        "reconstructed-ball-trajectory",          # 事件切分重建球轨迹
-        "analysis-overlay-video",                 # 分析叠加视频（mp4 文件）
-        "position-heatmaps",                      # 位置热力图清单
-        "position-scatter-plots",                 # 位置散点图清单
-        "pose-overlay",                           # 姿态骨架叠加
-        "player-trajectories",                    # 球员轨迹
-        "player-render-trajectories",             # 渲染轨迹（逐帧坐标，仅用于小地图）
-        "serve-events",                           # 发球事件
-        "serve-debug-candidates",                 # 发球候选（调试用）
-        "serve-score-series",                     # 发球评分序列
-        "serve-clips-manifest",                   # 发球片段清单
-        "serve-debug-overlay",                    # 发球调试叠加视频
-        "court-view-roi",                         # 场地视角 ROI（感兴趣区域）
-        "calibration-diagnostics",                # 标定质量诊断
+        "tracking-overlay",  # 轨迹叠加数据（JSON）
+        "player-selection",  # 主球员筛选结果
+        "player-selection-training-samples",  # 主球员筛选的训练样本
+        "ball-overlay",  # 球的叠加数据
+        "detections",  # 逐帧检测框（JSONL 文本）
+        "ball-trajectory",  # 球轨迹
+        "cleaned-ball-trajectory",  # 清洗后的球轨迹
+        "bounce-events",  # 弹跳事件
+        "reconstructed-ball-trajectory",  # 事件切分重建球轨迹
+        "analysis-overlay-video",  # 分析叠加视频（mp4 文件）
+        "position-heatmaps",  # 位置热力图清单
+        "position-scatter-plots",  # 位置散点图清单
+        "pose-overlay",  # 姿态骨架叠加
+        "player-trajectories",  # 球员轨迹
+        "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
+        "serve-events",  # 发球事件
+        "serve-debug-candidates",  # 发球候选（调试用）
+        "serve-score-series",  # 发球评分序列
+        "serve-clips-manifest",  # 发球片段清单
+        "serve-debug-overlay",  # 发球调试叠加视频
+        "court-view-roi",  # 场地视角 ROI（感兴趣区域）
+        "calibration-diagnostics",  # 标定质量诊断
     ],
 ) -> JSONResponse | FileResponse | PlainTextResponse:
     """

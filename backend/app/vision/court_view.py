@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from math import isfinite
-from typing import Sequence
 
 from app.schemas.court_view import (
     CourtViewFrameSample,
@@ -39,7 +39,11 @@ def compute_expanded_detection_roi(
             status="unavailable",
             detail="缺少有效源视频 frame dimensions，无法推导 detection ROI",
             calibration_id=calibration_id,
-            diagnostics={"reason": "invalid_frame_dimensions", "frame_width": frame_width, "frame_height": frame_height},
+            diagnostics={
+                "reason": "invalid_frame_dimensions",
+                "frame_width": frame_width,
+                "frame_height": frame_height,
+            },
         )
     if image_points is None or len(image_points) < 4:
         return DetectionRoiArtifact(
@@ -124,7 +128,12 @@ def filter_detections_to_roi(
     if roi is None or roi.status != "available" or roi.bounds is None:
         return list(detections), 0
     bounds = roi.bounds
-    if bounds.x1 <= 0 and bounds.y1 <= 0 and bounds.x2 >= bounds.source_width - 1 and bounds.y2 >= bounds.source_height - 1:
+    if (
+        bounds.x1 <= 0
+        and bounds.y1 <= 0
+        and bounds.x2 >= bounds.source_width - 1
+        and bounds.y2 >= bounds.source_height - 1
+    ):
         return list(detections), 0
     kept: list[Detection] = []
     filtered = 0

@@ -165,7 +165,12 @@ def build_ball_overlay_payload(
     for sample in samples:
         bbox: list[float] | None = None
         if sample.image_xy is not None:
-            bbox = [float(sample.image_xy[0]), float(sample.image_xy[1]), float(sample.image_xy[0]), float(sample.image_xy[1])]
+            bbox = [
+                float(sample.image_xy[0]),
+                float(sample.image_xy[1]),
+                float(sample.image_xy[0]),
+                float(sample.image_xy[1]),
+            ]
             # 尝试从 diagnostics 中提取原始 bbox
             diag_bbox = sample.diagnostics.get("bbox")
             if isinstance(diag_bbox, list | tuple) and len(diag_bbox) == 4:
@@ -186,21 +191,23 @@ def build_ball_overlay_payload(
         if sample.court_xy is not None:
             court = {"x": round(float(sample.court_xy[0]), 4), "y": round(float(sample.court_xy[1]), 4), "unit": "ft"}
 
-        overlay_frames.append({
-            "frame_index": int(sample.frame_index),
-            "timestamp_seconds": round(float(sample.timestamp_sec), 6),
-            "ball": {
-                "center": (
-                    {"x": round(float(sample.image_xy[0]), 2), "y": round(float(sample.image_xy[1]), 2)}
-                    if sample.image_xy is not None
-                    else None
-                ),
-                "bbox": bbox,
-                "confidence": round(float(sample.confidence), 4) if sample.confidence is not None else None,
-                "track_status": track_status,
-                "court": court,
-            },
-        })
+        overlay_frames.append(
+            {
+                "frame_index": int(sample.frame_index),
+                "timestamp_seconds": round(float(sample.timestamp_sec), 6),
+                "ball": {
+                    "center": (
+                        {"x": round(float(sample.image_xy[0]), 2), "y": round(float(sample.image_xy[1]), 2)}
+                        if sample.image_xy is not None
+                        else None
+                    ),
+                    "bbox": bbox,
+                    "confidence": round(float(sample.confidence), 4) if sample.confidence is not None else None,
+                    "track_status": track_status,
+                    "court": court,
+                },
+            }
+        )
 
     missing_count = max(0, processed_frame_count - detected_count)
     detection_rate = round(detected_count / max(1, processed_frame_count), 4) if processed_frame_count > 0 else 0.0
@@ -227,6 +234,8 @@ def build_ball_overlay_payload(
     }
 
 
-def write_ball_overlay(path: Path, *, job_id: str, video_id: str | None = None, samples: list[BallFrameSample], **kwargs: Any) -> Path:
+def write_ball_overlay(
+    path: Path, *, job_id: str, video_id: str | None = None, samples: list[BallFrameSample], **kwargs: Any
+) -> Path:
     """便捷方法：构造并写入 ball_overlay.json（前端叠加/可视化用）。"""
     return write_json(path, build_ball_overlay_payload(job_id=job_id, video_id=video_id, samples=samples, **kwargs))

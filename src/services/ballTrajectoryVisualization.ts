@@ -2,8 +2,10 @@ import type {
   BallTrajectoryArtifact,
   BallTrajectorySample,
   BounceEventsArtifact,
+  PlayerRosterEntry,
   ReconstructedBallTrajectoryArtifact,
   ReconstructedBallTrajectorySegment,
+  ShotOwnershipStatus,
 } from "../types/report";
 
 export const PICKLEBALL_COURT_WIDTH_FT = 20;
@@ -41,7 +43,7 @@ export interface TrajectoryQualitySummary {
 }
 
 export interface EstimatedBallTrajectory {
-  id: string;
+  id: string;                       // 后端 segment_id（稳定标识）
   sequence: number;
   direction: TrajectoryDirection;
   startTimeSeconds: number;
@@ -56,6 +58,26 @@ export interface EstimatedBallTrajectory {
   anchors?: TrajectoryAnchorMarker[];
   quality?: TrajectoryQualitySummary;
   reconstructionMode?: string;
+  shotId: string | null;
+  hitterPlayerId: string | null;
+  hitterRenderSlot: string | null;
+  ownershipStatus: ShotOwnershipStatus;
+  ownershipConfidence: number | null;
+}
+
+export interface EstimatedBallShot {
+  shotId: string;
+  hitterPlayerId: string | null;
+  hitterRenderSlot: string | null;
+  ownershipStatus: ShotOwnershipStatus;
+  ownershipConfidence: number | null;
+  segmentIds: string[];
+  segments: EstimatedBallTrajectory[];
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  durationSeconds: number;
+  pointCount: number;
+  sequence: number;
 }
 
 export interface TrajectoryBounceMarker {
@@ -70,6 +92,8 @@ export interface BallTrajectoryVisualizationData {
   trajectories: EstimatedBallTrajectory[];
   bounces: TrajectoryBounceMarker[];
   discardedPointCount: number;
+  shots: EstimatedBallShot[];
+  playerRoster: PlayerRosterEntry[];
 }
 
 export interface TrajectoryBuildOptions {
@@ -186,6 +210,11 @@ function buildTrajectory(points: ValidPoint[], sequence: number, maxPoints: numb
         source: (point.interpolated ? "interpolated" : "detected") as TrajectoryPointSource,
       };
     }),
+    shotId: null,
+    hitterPlayerId: null,
+    hitterRenderSlot: null,
+    ownershipStatus: "not_applicable",
+    ownershipConfidence: null,
   };
 }
 
@@ -247,6 +276,8 @@ export function buildBallTrajectoryVisualization(
     trajectories: segments.map((segment, index) => buildTrajectory(segment, index + 1, resolved.maxPointsPerTrajectory)),
     bounces: buildBounceMarkers(bounceArtifact),
     discardedPointCount: samples.length - validPoints.length,
+    shots: [],
+    playerRoster: [],
   };
 }
 
@@ -312,7 +343,7 @@ function buildReconstructedTrajectory(
   });
 
   return {
-    id: `trajectory-${sequence}`,
+    id: segment.segment_id,
     sequence,
     direction,
     startTimeSeconds: first.timestampSeconds,
@@ -332,12 +363,17 @@ function buildReconstructedTrajectory(
       observationCoverage: finiteNumber(quality?.observation_coverage),
     },
     reconstructionMode: segment.reconstruction_mode,
+    shotId: segment.shot_id ?? null,
+    hitterPlayerId: segment.hitter_player_id ?? null,
+    hitterRenderSlot: segment.hitter_render_slot ?? null,
+    ownershipStatus: segment.ownership_status ?? "not_applicable",
+    ownershipConfidence: finiteNumber(segment.ownership_confidence),
   };
 }
 
 function emptyReconstructedTrajectory(segment: ReconstructedBallTrajectorySegment, sequence: number): EstimatedBallTrajectory {
   return {
-    id: `trajectory-${sequence}`,
+    id: segment.segment_id,
     sequence,
     direction: "near-to-far",
     startTimeSeconds: 0,
@@ -351,6 +387,11 @@ function emptyReconstructedTrajectory(segment: ReconstructedBallTrajectorySegmen
     points: [],
     anchors: [],
     reconstructionMode: segment.reconstruction_mode,
+    shotId: segment.shot_id ?? null,
+    hitterPlayerId: segment.hitter_player_id ?? null,
+    hitterRenderSlot: segment.hitter_render_slot ?? null,
+    ownershipStatus: segment.ownership_status ?? "not_applicable",
+    ownershipConfidence: finiteNumber(segment.ownership_confidence),
   };
 }
 
@@ -375,6 +416,87 @@ function buildReconstructedBounceMarkers(segments: ReconstructedBallTrajectorySe
 }
 
 /**
+ * 按后端 `shot_id` 聚合飞行段为 Shot 视图模型（I5：筛选、选中、统计以 shot 为单位）。
+ * `shotId = null` 的段不进入任何 Shot（孤立段，单独归类）。
+ */
+export function buildShots(trajectories: EstimatedBallTrajectory[]): EstimatedBallShot[] {
+  const byShot = new Map<string, EstimatedBallTrajectory[]>();
+  for (const trajectory of trajectories) {
+    if (trajectory.shotId === null) continue;
+    const bucket = byShot.get(trajectory.shotId) ?? [];
+    bucket.push(trajectory);
+    byShot.set(trajectory.shotId, bucket);
+  }
+  const shots: EstimatedBallShot[] = [];
+  for (const [shotId, segments] of byShot) {
+    const sorted = [...segments].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const hitter = sorted.find((segment) => segment.hitterPlayerId !== null) ?? first;
+    shots.push({
+      shotId,
+      hitterPlayerId: hitter.hitterPlayerId,
+      hitterRenderSlot: hitter.hitterRenderSlot,
+      ownershipStatus: hitter.ownershipStatus,
+      ownershipConfidence: hitter.ownershipConfidence,
+      segmentIds: sorted.map((segment) => segment.id),
+      segments: sorted,
+      startTimeSeconds: first.startTimeSeconds,
+      endTimeSeconds: last.endTimeSeconds,
+      durationSeconds: Math.max(0, last.endTimeSeconds - first.startTimeSeconds),
+      pointCount: sorted.reduce((total, segment) => total + segment.pointCount, 0),
+      sequence: 0,
+    });
+  }
+  shots.sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+  shots.forEach((shot, index) => { shot.sequence = index + 1; });
+  return shots;
+}
+
+export interface TrajectoryFilterOptions {
+  playerFilter: "all" | "unassigned" | string;
+  confidence: ConfidenceFilterLike;
+  displayLimit: number | "all";
+}
+
+type ConfidenceFilterLike = "all" | "high";
+
+function matchesPlayerFilter(trajectory: EstimatedBallTrajectory, playerFilter: TrajectoryFilterOptions["playerFilter"]): boolean {
+  if (playerFilter === "all") return true;
+  if (playerFilter === "unassigned") {
+    return trajectory.shotId === null || trajectory.ownershipStatus === "ambiguous" || trajectory.ownershipStatus === "unassigned";
+  }
+  return trajectory.hitterPlayerId === playerFilter;
+}
+
+function shotMatchesPlayerFilter(shot: EstimatedBallShot, playerFilter: TrajectoryFilterOptions["playerFilter"]): boolean {
+  if (playerFilter === "all") return true;
+  if (playerFilter === "unassigned") {
+    return shot.ownershipStatus === "ambiguous" || shot.ownershipStatus === "unassigned";
+  }
+  return shot.hitterPlayerId === playerFilter;
+}
+
+/**
+ * 筛选顺序（不变量 I5）：球员归属 → 可信度 → 最近 N 条限制。
+ */
+export function filterTrajectories(
+  trajectories: EstimatedBallTrajectory[],
+  shots: EstimatedBallShot[],
+  options: TrajectoryFilterOptions,
+): { trajectories: EstimatedBallTrajectory[]; shots: EstimatedBallShot[] } {
+  const playerFiltered = trajectories.filter((trajectory) => matchesPlayerFilter(trajectory, options.playerFilter));
+  const confidenceFiltered = playerFiltered.filter((trajectory) => options.confidence === "all" || trajectory.highConfidence);
+  const limited = options.displayLimit === "all" ? confidenceFiltered : confidenceFiltered.slice(-options.displayLimit);
+
+  const shotFiltered = shots.filter((shot) => shotMatchesPlayerFilter(shot, options.playerFilter))
+    .filter((shot) => options.confidence === "all" || shot.segments.some((segment) => segment.highConfidence));
+  const shotLimited = options.displayLimit === "all" ? shotFiltered : shotFiltered.slice(-options.displayLimit);
+
+  return { trajectories: limited, shots: shotLimited };
+}
+
+/**
  * 主渲染路径：直接消费后端重建产物，按段构造轨迹。
  * 不进行前端分段、方向生成、平均置信度合成或高度生成；
  * 高度与质量均来自后端重建结果。
@@ -383,14 +505,17 @@ export function buildReconstructedBallTrajectoryVisualization(
   artifact?: ReconstructedBallTrajectoryArtifact | null,
 ): BallTrajectoryVisualizationData {
   if (!artifact || artifact.status !== "available" || artifact.segments.length === 0) {
-    return { trajectories: [], bounces: [], discardedPointCount: 0 };
+    return { trajectories: [], bounces: [], discardedPointCount: 0, shots: [], playerRoster: [] };
   }
   const segments = artifact.segments.filter(isDisplayableSegment);
-  const trajectories = segments.map((segment, index) => buildReconstructedTrajectory(segment, index + 1));
+  const trajectories = segments.map((segment, index) => buildReconstructedTrajectory(segment, index + 1))
+    .filter((trajectory) => trajectory.pointCount > 0);
   return {
-    trajectories: trajectories.filter((trajectory) => trajectory.pointCount > 0),
+    trajectories,
     bounces: buildReconstructedBounceMarkers(segments),
     discardedPointCount: 0,
+    shots: buildShots(trajectories),
+    playerRoster: artifact.player_roster ?? [],
   };
 }
 

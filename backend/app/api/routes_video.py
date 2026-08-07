@@ -22,10 +22,11 @@ from urllib.parse import quote
 
 # FastAPI 核心组件
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
 from app.schemas.video import VideoMetadata, VideoUploadResponse
+
 # 导入真正干活的"视频服务"对象 video_service（逻辑在 services 层，不在路由层）
 # UnsupportedVideoError 是我们自定义的异常：当上传的文件不是受支持的视频格式时抛出
 from app.services.video_service import UnsupportedVideoError, video_service
@@ -45,7 +46,7 @@ def _inline_content_disposition(filename: str) -> str:
     if not ascii_name or not ascii_name[0].isalnum():
         ascii_name = "video.mp4"
     encoded = quote(filename)
-    return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
 
 
 # 定义一个"上传视频"的接口

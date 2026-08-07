@@ -12,7 +12,6 @@ from app.vision.courtvision_calibration_engine.court_geometry import standard_co
 from app.vision.courtvision_calibration_engine.homography import (
     HomographyError,
     court_to_image,
-    _transform_points,
 )
 
 
@@ -99,14 +98,15 @@ class CalibrationDiagnostics:
 
         in_frame = all(
             0 <= px <= self._frame_width and 0 <= py <= self._frame_height
-            for px, py in projected if isinstance(projected, list)
+            for px, py in projected
+            if isinstance(projected, list)
         )
         if not in_frame:
             return False
 
         if isinstance(projected, list) and len(projected) >= 6:
             net_left_y = projected[0][1]
-            net_right_y = projected[1][1]
+            projected[1][1]
             near_kitchen_left_y = projected[2][1]
             far_kitchen_left_y = projected[4][1]
             if not (near_kitchen_left_y != far_kitchen_left_y):
@@ -135,12 +135,15 @@ class CalibrationDiagnostics:
         tl, tr, br, bl = pts
 
         def _line_intersection(p1, p2, p3, p4):
-            x1, y1 = p1; x2, y2 = p2; x3, y3 = p3; x4, y4 = p4
+            x1, y1 = p1
+            x2, y2 = p2
+            x3, y3 = p3
+            x4, y4 = p4
             denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
             if abs(denom) < 1e-10:
                 return None
-            px = ((x1*y2 - y1*x2) * (x3 - x4) - (x1 - x2) * (x3*y4 - y3*x4)) / denom
-            py = ((x1*y2 - y1*x2) * (y3 - y4) - (y1 - y2) * (x3*y4 - y3*x4)) / denom
+            px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
+            py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
             return (px, py)
 
         vp1 = _line_intersection(tl, tr, bl, br)
@@ -154,12 +157,12 @@ class CalibrationDiagnostics:
         dx2 = vp2[0] - (tl[0] + bl[0]) / 2
         dy2 = vp2[1] - (tl[1] + bl[1]) / 2
 
-        mag1 = np.sqrt(dx1*dx1 + dy1*dy1)
-        mag2 = np.sqrt(dx2*dx2 + dy2*dy2)
+        mag1 = np.sqrt(dx1 * dx1 + dy1 * dy1)
+        mag2 = np.sqrt(dx2 * dx2 + dy2 * dy2)
         if mag1 < 1e-6 or mag2 < 1e-6:
             return 0.0
 
-        cos_angle = abs(dx1*dx2 + dy1*dy2) / (mag1 * mag2)
+        cos_angle = abs(dx1 * dx2 + dy1 * dy2) / (mag1 * mag2)
         cos_angle = max(-1.0, min(1.0, cos_angle))
         ortho_deviation_deg = abs(90.0 - np.degrees(np.arccos(cos_angle)))
         return float(ortho_deviation_deg)
@@ -192,14 +195,12 @@ class CalibrationDiagnostics:
         if result.corner_max_error_px > 10.0 or not result.derived_points_within_frame:
             quality = "suspect"
             warnings.append(
-                "Corner reprojection error or derived point anomaly — "
-                "may indicate poor calibration or swapped points"
+                "Corner reprojection error or derived point anomaly — may indicate poor calibration or swapped points"
             )
         elif result.corner_max_error_px > 5.0:
             quality = "suspect"
             warnings.append(
-                f"Corner reprojection error {result.corner_max_error_px:.1f}px > 5.0px "
-                f"— calibration may be imprecise"
+                f"Corner reprojection error {result.corner_max_error_px:.1f}px > 5.0px — calibration may be imprecise"
             )
 
         if result.aspect_ratio_error > 20.0:
@@ -213,9 +214,7 @@ class CalibrationDiagnostics:
         if not result.baseline_direction_valid:
             if quality == "good":
                 quality = "suspect"
-            warnings.append(
-                "Near/far baseline may be swapped — near court projects to top of image"
-            )
+            warnings.append("Near/far baseline may be swapped — near court projects to top of image")
 
         if result.homography_condition_number >= 50000:
             if quality == "good":

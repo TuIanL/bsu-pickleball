@@ -101,7 +101,9 @@ class PositionVisualizationDataBuilder:
         )
         return data
 
-    def _split_points(self, player_points: list[VisualizationPoint]) -> tuple[list[VisualizationPoint], list[VisualizationPoint], list[VisualizationPoint]]:
+    def _split_points(
+        self, player_points: list[VisualizationPoint]
+    ) -> tuple[list[VisualizationPoint], list[VisualizationPoint], list[VisualizationPoint]]:
         """分离球场内、tracking buffer 内、tracking buffer 外三组点。"""
         inside_court: list[VisualizationPoint] = []
         outside_visible: list[VisualizationPoint] = []
@@ -131,10 +133,7 @@ class PositionVisualizationDataBuilder:
             counts[(row, col)] += 1
 
         max_count = max(counts.values(), default=0)
-        cells = [
-            HeatmapCell(row=r, col=c, count=cnt)
-            for (r, c), cnt in sorted(counts.items())
-        ]
+        cells = [HeatmapCell(row=r, col=c, count=cnt) for (r, c), cnt in sorted(counts.items())]
         return VisualGrid(rows=rows, cols=cols, max_count=max_count, cells=cells)
 
     def _build_heatmaps(self, player_points: list[VisualizationPoint]) -> VisualHeatmaps | None:
@@ -145,12 +144,14 @@ class PositionVisualizationDataBuilder:
         players: list[HeatmapPlayerGrid] = []
         for index, (label, points) in enumerate(sorted(_group_points_by_label(player_points).items())):
             grid = self._build_grid(points)
-            players.append(HeatmapPlayerGrid(
-                id=canonical_player_id(label),
-                label=display_player_label(label),
-                color=player_palette_color(PLAYER_HEX_COLORS, index, label),
-                grid=grid if grid is not None else VisualGrid(),
-            ))
+            players.append(
+                HeatmapPlayerGrid(
+                    id=canonical_player_id(label),
+                    label=display_player_label(label),
+                    color=player_palette_color(PLAYER_HEX_COLORS, index, label),
+                    grid=grid if grid is not None else VisualGrid(),
+                )
+            )
         return VisualHeatmaps(visual_grid=visual_grid, players=players)
 
     def _build_zone_stats(
@@ -180,12 +181,14 @@ class PositionVisualizationDataBuilder:
         grouped = _group_points_by_label(player_points)
         for index, (label, points) in enumerate(sorted(grouped.items())):
             coords = [(p.x_ft, p.y_ft) for p in points]
-            players.append(ScatterPlayer(
-                id=canonical_player_id(label),
-                label=display_player_label(label),
-                color=player_palette_color(PLAYER_HEX_COLORS, index, label),
-                points=coords,
-            ))
+            players.append(
+                ScatterPlayer(
+                    id=canonical_player_id(label),
+                    label=display_player_label(label),
+                    color=player_palette_color(PLAYER_HEX_COLORS, index, label),
+                    points=coords,
+                )
+            )
 
         ball_coords = [(p.x_ft, p.y_ft) for p in ball_points if self.court.is_in_court_bounds(p.x_ft, p.y_ft)]
         bounce_coords = [(p.x_ft, p.y_ft) for p in bounce_points if self.court.is_in_court_bounds(p.x_ft, p.y_ft)]
@@ -195,14 +198,16 @@ class PositionVisualizationDataBuilder:
     def _build_player_trajectories(self, player_points: list[VisualizationPoint]) -> list[PlayerTrajectory]:
         grouped = _group_points_by_label(player_points)
         trajectories: list[PlayerTrajectory] = []
-        for index, (label, points) in enumerate(sorted(grouped.items())):
+        for _index, (label, points) in enumerate(sorted(grouped.items())):
             sorted_points = sorted(points, key=lambda p: p.frame_index or 0)
             path = [(p.x_ft, p.y_ft) for p in sorted_points]
-            trajectories.append(PlayerTrajectory(
-                id=canonical_player_id(label),
-                label=display_player_label(label),
-                path=path,
-            ))
+            trajectories.append(
+                PlayerTrajectory(
+                    id=canonical_player_id(label),
+                    label=display_player_label(label),
+                    path=path,
+                )
+            )
         return trajectories
 
 
@@ -216,6 +221,7 @@ def _group_points_by_label(points: list[VisualizationPoint]) -> dict[str, list[V
 
 def _structured_to_dict(data: StructuredVisualizationData) -> dict:
     """将 StructuredVisualizationData 转为 JSON 可序列化的 dict。"""
+
     def _point_list(points: list[tuple[float, float]]) -> list[list[float]]:
         return [[round(x, 2), round(y, 2)] for x, y in points]
 
@@ -301,8 +307,5 @@ def _grid_to_dict(grid: VisualGrid) -> dict:
         "rows": grid.rows,
         "cols": grid.cols,
         "max_count": grid.max_count,
-        "cells": [
-            {"row": c.row, "col": c.col, "count": c.count}
-            for c in grid.cells
-        ],
+        "cells": [{"row": c.row, "col": c.col, "count": c.count} for c in grid.cells],
     }

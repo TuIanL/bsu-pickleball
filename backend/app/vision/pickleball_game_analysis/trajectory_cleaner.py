@@ -19,8 +19,8 @@ class TrajectoryCleanerConfig:
       - 对短距离缺失（连续无球）做线性插值补全。
     """
 
-    max_interpolation_gap: int = 12       # 允许插值的最大缺失帧数（超过则不补）
-    outlier_step_floor_px: float = 90.0   # 单帧位移的异常阈值下限（像素/帧），低于此不可能判为异常
+    max_interpolation_gap: int = 12  # 允许插值的最大缺失帧数（超过则不补）
+    outlier_step_floor_px: float = 90.0  # 单帧位移的异常阈值下限（像素/帧），低于此不可能判为异常
 
 
 class TrajectoryCleaner:
@@ -50,7 +50,7 @@ class TrajectoryCleaner:
 
         # 先计算每段"每帧位移"（已按帧间隔归一化）
         steps: list[float] = []
-        for left, right in zip(valid_indices[:-1], valid_indices[1:]):
+        for left, right in zip(valid_indices[:-1], valid_indices[1:], strict=False):
             frame_gap = max(1, cleaned[right].frame_index - cleaned[left].frame_index)
             steps.append(float(np.linalg.norm(coords[right] - coords[left]) / frame_gap))
         threshold = self._robust_threshold(np.array(steps, dtype=np.float32), self.config.outlier_step_floor_px)
@@ -62,7 +62,9 @@ class TrajectoryCleaner:
                 continue
             prev_dist = float(np.linalg.norm(coords[index] - coords[prev_index]) / max(1, index - prev_index))
             next_dist = float(np.linalg.norm(coords[next_index] - coords[index]) / max(1, next_index - index))
-            bridge_dist = float(np.linalg.norm(coords[next_index] - coords[prev_index]) / max(1, next_index - prev_index))
+            bridge_dist = float(
+                np.linalg.norm(coords[next_index] - coords[prev_index]) / max(1, next_index - prev_index)
+            )
             if prev_dist > threshold and next_dist > threshold and bridge_dist < threshold:
                 diagnostics = dict(cleaned[index].diagnostics)
                 diagnostics["cleaner_reject_reason"] = "isolated_jump"
@@ -87,7 +89,7 @@ class TrajectoryCleaner:
         """
         interpolated = [replace(point) for point in points]
         valid = [index for index, point in enumerate(interpolated) if point.image_xy is not None]
-        for left, right in zip(valid[:-1], valid[1:]):
+        for left, right in zip(valid[:-1], valid[1:], strict=False):
             gap = right - left
             if gap <= 1 or gap - 1 > self.config.max_interpolation_gap:
                 continue
@@ -117,7 +119,9 @@ class TrajectoryCleaner:
     @staticmethod
     def _coords(points: list[TrajectoryPoint]) -> np.ndarray:
         """把轨迹点抽成 numpy 坐标数组，缺失点填 (nan, nan)。"""
-        return np.array([point.image_xy if point.image_xy is not None else (np.nan, np.nan) for point in points], dtype=np.float32)
+        return np.array(
+            [point.image_xy if point.image_xy is not None else (np.nan, np.nan) for point in points], dtype=np.float32
+        )
 
     @staticmethod
     def _previous_valid(coords: np.ndarray, index: int) -> int | None:

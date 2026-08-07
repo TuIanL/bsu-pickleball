@@ -4,12 +4,12 @@ Field Session 服务层 —— 封装创建、列表、读取、更新和状态�
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.field_session import FieldSession, FieldSessionStatus, CaptureMode, MatchFormat, CameraSetup
+from app.models.field_session import CameraSetup, CaptureMode, FieldSession, FieldSessionStatus, MatchFormat
 from app.schemas.field_session import FieldSessionCreate, FieldSessionUpdate
 
 # 前缀 + 时间戳生成可读 ID
@@ -31,7 +31,7 @@ _ALLOWED_TRANSITIONS: dict[FieldSessionStatus, set[FieldSessionStatus]] = {
 
 def create_field_session(db: Session, payload: FieldSessionCreate) -> FieldSession:
     """创建 Field Session，状态默认为 planned。"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session = FieldSession(
         id=_generate_id(),
         title=payload.title,
@@ -99,7 +99,7 @@ def update_field_session(db: Session, field_session_id: str, payload: FieldSessi
             elif key == "camera_setup":
                 value = CameraSetup(value)
             setattr(fs, key, value)
-    fs.updated_at = datetime.now(timezone.utc)
+    fs.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(fs)
     return fs
@@ -115,7 +115,7 @@ def _transition(db: Session, field_session_id: str, target: FieldSessionStatus) 
         raise ValueError(f"不允许从 {fs.status.value} 流转到 {target.value}")
 
     fs.status = target
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if target == FieldSessionStatus.live:
         fs.started_at = now
     if target == FieldSessionStatus.completed:
@@ -167,11 +167,11 @@ def cascade_delete_field_session(
     """级联删除 Field Session 及其所有关联数据（无视频录制 + 孤立事件）。"""
     from app.camera.session_service import session_service
     from app.camera.sync_recorder_service import sync_recording_service
-    from app.models.timeline_event import SessionTimelineEvent
-    from app.models.capture_track import CaptureTrack
     from app.models.capture_coding_action import CaptureCodingAction
     from app.models.capture_segment import CaptureSegment
     from app.models.capture_take import CaptureTake
+    from app.models.capture_track import CaptureTrack
+    from app.models.timeline_event import SessionTimelineEvent
 
     # 1. 清理录制会话文件（每个 delete_session 内部也会清理 DB）
     for recording in recordings:
@@ -180,31 +180,17 @@ def cascade_delete_field_session(
         sync_recording_service.delete_session(sync_rec.session_id)
 
     # 2. 清理残余 DB 记录（兜底，确保无漏网之鱼）
-    takes = (
-        db.query(CaptureTake)
-        .filter(CaptureTake.field_session_id == field_session_id)
-        .all()
-    )
+    takes = db.query(CaptureTake).filter(CaptureTake.field_session_id == field_session_id).all()
     for take in takes:
-        db.query(SessionTimelineEvent).filter(
-            SessionTimelineEvent.capture_take_id == take.id
-        ).delete()
-        db.query(CaptureTrack).filter(
-            CaptureTrack.capture_take_id == take.id
-        ).delete()
-        db.query(CaptureCodingAction).filter(
-            CaptureCodingAction.capture_take_id == take.id
-        ).delete()
-        db.query(CaptureSegment).filter(
-            CaptureSegment.capture_take_id == take.id
-        ).delete()
+        db.query(SessionTimelineEvent).filter(SessionTimelineEvent.capture_take_id == take.id).delete()
+        db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == take.id).delete()
+        db.query(CaptureCodingAction).filter(CaptureCodingAction.capture_take_id == take.id).delete()
+        db.query(CaptureSegment).filter(CaptureSegment.capture_take_id == take.id).delete()
     for take in takes:
         db.delete(take)
 
     # 清理孤立时间线事件（只有 field_session_id 的残余事件）
-    db.query(SessionTimelineEvent).filter(
-        SessionTimelineEvent.field_session_id == field_session_id
-    ).delete()
+    db.query(SessionTimelineEvent).filter(SessionTimelineEvent.field_session_id == field_session_id).delete()
 
     # 3. 删除 FieldSession 本身
     fs = get_field_session(db, field_session_id)

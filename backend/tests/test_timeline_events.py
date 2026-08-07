@@ -1,15 +1,16 @@
 """Session Timeline Event 后端测试."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.camera.camera_registry import CAMERAS
-from app.camera.session_service import SESSIONS, session_service, _ACTIVE_CAMERA, _ACTIVE_SESSION_ID
 import app.camera.session_service as recording_service_module
+from app.camera.camera_registry import CAMERAS
+from app.camera.session_service import SESSIONS, session_service
 from app.core import config
 from app.database import Base, get_engine, init_db, reset_database_state
 from app.main import app
@@ -40,6 +41,7 @@ def client(tmp_path, monkeypatch):
 
 # ---- 辅助函数 ----
 
+
 def _create_field_session(client: TestClient, **overrides) -> dict:
     payload = {
         "title": "测试场次",
@@ -60,7 +62,7 @@ def _create_recording(client: TestClient, field_session_id: str | None = None) -
     """在内存中创建一条已完成的 RecordingSession 用于测试。"""
     from app.camera.models import RecordingSession
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rec_id = f"rec_{now.strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:6]}_test"
     session = RecordingSession(
         session_id=rec_id,
@@ -101,6 +103,7 @@ def _create_timeline_event(
 
 
 # ---- 5.1 基本 CRUD 测试 ----
+
 
 def test_create_timeline_event_succeeds(client):
     fs = _create_field_session(client)
@@ -236,6 +239,7 @@ def test_delete_timeline_event(client):
 
 # ---- 5.2 错误场景测试 ----
 
+
 def test_create_event_for_missing_field_session(client):
     response = _create_timeline_event(client, "nonexistent_fs")
     assert response.status_code == 404
@@ -243,9 +247,7 @@ def test_create_event_for_missing_field_session(client):
 
 def test_create_event_with_invalid_recording_session(client):
     fs = _create_field_session(client)
-    response = _create_timeline_event(
-        client, fs["id"], recording_session_id="nonexistent_recording"
-    )
+    response = _create_timeline_event(client, fs["id"], recording_session_id="nonexistent_recording")
     assert response.status_code == 400
 
 
@@ -308,6 +310,7 @@ def test_list_events_for_missing_field_session(client):
 
 # ---- 5.3 时间戳策略测试 ----
 
+
 def test_timestamp_fallback_with_recording(client):
     fs = _create_field_session(client)
     rec = _create_recording(client, field_session_id=fs["id"])
@@ -345,6 +348,7 @@ def test_timestamp_explicit_value_preserved(client):
 
 
 # ---- 5.4 Field Session 删除保护测试 ----
+
 
 def test_delete_field_session_with_events_no_video_succeeds(client):
     """无视频的采集任务即使有时间线事件也应能删除（级联清理）。"""

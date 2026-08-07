@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -12,20 +12,18 @@ from app.models.live_coding_state import LiveCodingState
 
 # 获取某个 take 的实时编码状态快照
 def get_state(db: Session, capture_take_id: str) -> LiveCodingState | None:
-    return db.query(LiveCodingState).filter(
-        LiveCodingState.capture_take_id == capture_take_id
-    ).first()
+    return db.query(LiveCodingState).filter(LiveCodingState.capture_take_id == capture_take_id).first()
 
 
 # 初始化实时编码状态；已存在时直接返回，避免重复创建。
-def init_state(db: Session, capture_take_id: str, *,
-               scoring_mode: str = "none",
-               scoring_ruleset_version: str | None = None) -> LiveCodingState:
+def init_state(
+    db: Session, capture_take_id: str, *, scoring_mode: str = "none", scoring_ruleset_version: str | None = None
+) -> LiveCodingState:
     existing = get_state(db, capture_take_id)
     if existing is not None:
         return existing
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     state = LiveCodingState(
         capture_take_id=capture_take_id,
         revision=0,
@@ -83,7 +81,7 @@ def upsert_state(
     match_winner: str | None = None,
 ) -> LiveCodingState:
     state = get_state(db, capture_take_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if state is None:
         state = LiveCodingState(
             capture_take_id=capture_take_id,
@@ -155,7 +153,9 @@ def upsert_state(
 # 将实时编码状态对象转换为字典（用于接口返回）
 def state_to_dict(state: LiveCodingState) -> dict:
     try:
-        recent = json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or [])
+        recent = (
+            json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or [])
+        )
     except (json.JSONDecodeError, TypeError):
         recent = []
     return {

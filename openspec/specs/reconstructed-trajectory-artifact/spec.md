@@ -1,19 +1,23 @@
 # reconstructed-trajectory-artifact Specification
 
 ## Purpose
-定义第三套球轨迹重建产物的 JSON 契约、source 分类、坐标语义、存储路径、API slug 与前端接线，作为前端的权威数据来源（前端不再自行分段与估高）。
+定义第三套球轨迹重建产物的 JSON 契约、source 分类、坐标语义、存储路径、API slug 与前端接线，作为前端的权威数据来源（前端不再自行分段与估高）。v2 增加球员名单、击球事件归属与 Shot 级归属传播字段；`event_status`（是否为可信击球）与 `ownership_status`（能否确定击球者）严格分离。v1 产物保留不回写，前端兼容降级。
 ## Requirements
 ### Requirement: 重建产物 JSON 契约
-系统 SHALL 输出结构化重建产物 `reconstructed_ball_trajectory.json`，包含 schema 版本、重建模式、坐标语义、事件列表与飞行段列表。
+系统 SHALL 输出结构化重建产物 `reconstructed_ball_trajectory.json`，包含 schema 版本、重建模式、坐标语义、球员名单、事件列表与飞行段列表。schema 版本 SHALL 为 `reconstructed_ball_trajectory.v2`。
 
 #### Scenario: 产物顶层结构
 - **WHEN** 系统输出重建产物
-- **THEN** 产物顶层 SHALL 包含 `schema_version`、`reconstruction_mode`、`coordinate_semantics`、`events`、`segments`
+- **THEN** 产物顶层 SHALL 包含 `schema_version`、`reconstruction_mode`、`coordinate_semantics`、`player_roster`、`events`、`segments`
 - **AND** `coordinate_semantics` SHALL 包含 `xy = court_ft_visual_estimate`、`z = estimated_height_ft` 与 `metric_validity = visualization_only`
+- **AND** `player_roster` SHALL 为球员列表，每项含 `player_id`、`render_slot` 与 `initial_side`
 
 #### Scenario: 事件列表
 - **WHEN** 产物包含事件
 - **THEN** `events` 数组 SHALL 包含击球、弹地与 serve 重置等边界事件，每个事件含 `event_id`、`event_type`、`frame_index`、`timestamp_sec` 与 `confidence`
+- **AND** 击球事件 SHALL 含 `event_status ∈ {confirmed, ambiguous}` 与 `hitter_player_id`
+- **AND** 击球事件 SHALL 含 `attribution` 对象（status、confidence、method、candidate_scores、attributed_frame_index）
+- **AND** `events` 数组 SHALL NOT 包含 `suppressed_by_bounce` 状态的 HIT 事件
 
 #### Scenario: 飞行段结构
 - **WHEN** 产物包含飞行段
@@ -22,56 +26,40 @@
 - **AND** `fit_space` SHALL 记录为 `image_px`
 
 ### Requirement: 重建样本来源分类
-系统 SHALL 为每个重建样本标记来源，模型推算点不得伪装成真实检测点。
+系统 SHALL 为每个重建采样点记录来源分类，用于前端视觉编码与质量评估。
 
-#### Scenario: 来源取值
-- **WHEN** 系统输出重建样本
-- **THEN** 每个样本的 `source` SHALL 为 `detected / interpolated / model_predicted / anchor` 之一
+#### Scenario: 样本来源枚举
+- **WHEN** 系统输出重建采样点
+- **THEN** 每个样本 `source` SHALL 为 `detected`、`interpolated`、`model_predicted` 或 `anchor` 之一
 
-#### Scenario: 检测点来源
-- **WHEN** 样本由真实检测观测构成
-- **THEN** 样本 `source` SHALL 为 `detected` 且携带原始 `confidence`
-
-#### Scenario: 推算点来源
-- **WHEN** 样本由模型补齐或拟合生成
-- **THEN** 样本 `source` SHALL 为 `model_predicted` 或 `interpolated`
-- **AND** 样本 SHALL 携带 `gap_length_frames`（若适用）
-- **AND** 前端 SHALL 以可区分样式（虚线/浅色）绘制推算点
-
-#### Scenario: 锚点来源
-- **WHEN** 样本对应事件锚点位置
-- **THEN** 样本 `source` SHALL 为 `anchor`
+#### Scenario: 缺失点保留
+- **WHEN** 采样点缺少球场坐标或高度
+- **THEN** 样本 SHALL 保留 `court_xy = null` 或 `estimated_height_ft = null`
+- **AND** 前端 SHALL 以断开或虚线样式渲染
 
 ### Requirement: 高度字段语义
-系统 SHALL 在每个重建样本中保存估算高度、高度来源、高度置信度与高度不确定度。
+系统 SHALL 对重建采样的高度字段声明估值语义，不声称真实三维测量。
 
-#### Scenario: 样本高度字段
-- **WHEN** 系统输出重建样本
-- **THEN** 样本 SHALL 包含 `estimated_height_ft`、`height_source`、`height_confidence` 与可选的 `height_uncertainty_ft`
-
-#### Scenario: 先验高度标注
-- **WHEN** 高度来源为全局先验
-- **THEN** `height_source` SHALL 为 `global_contact_prior`
-- **AND** `height_confidence` SHALL 为低值（如 0.25 量级）
-
-#### Scenario: serve 先验标注
-- **WHEN** 高度来源为 serve 先验
-- **THEN** `height_source` SHALL 为 `serve_prior`
+#### Scenario: 高度为视觉估计
+- **WHEN** 系统输出 `estimated_height_ft`
+- **THEN** 该字段 SHALL 为基于事件边界与弧线先验的视觉估计
+- **AND** 配合 `height_source`、`height_confidence` 与 `height_uncertainty_ft` 使用
+- **AND** 文档 SHALL 标注 `metric_validity = visualization_only`
 
 ### Requirement: 弹地与击球边界高度不变量
-系统 SHALL 保证弹地边界高度严格为零，击球边界不得被默认设为零。
+系统 SHALL 对事件边界处的高度值施加物理不变量约束。
 
-#### Scenario: 弹地边界高度为零
-- **WHEN** 样本位于弹地事件锚点
-- **THEN** `estimated_height_ft` SHALL 严格为 0
+#### Scenario: 弹地点高度为零
+- **WHEN** 飞行段以 bounce 事件为端点锚点
+- **THEN** 端点采样高度 SHALL 为 0 英尺（硬锚点）
 
-#### Scenario: 击球边界高度非零
-- **WHEN** 样本位于击球事件锚点
-- **THEN** `estimated_height_ft` SHALL 为接触高度先验值而非 0
-- **AND** MUST NOT 被前端统一高度公式强制置零
+#### Scenario: 击球点高度受先验约束
+- **WHEN** 飞行段以击球事件为端点锚点
+- **THEN** 端点采样高度 SHALL 落在可配置接触高度先验范围内
+- **AND** 超出范围时 SHALL 以先验值钳制并记录不确定度
 
 ### Requirement: 存储路径与 API slug
-系统 SHALL 提供重建产物的固定存储路径与 API 访问方式。
+系统 SHALL 提供重建产物的固定存储路径与 API 访问方式，v2 产物不覆盖 v1。
 
 #### Scenario: 存储路径
 - **WHEN** pipeline 写入重建产物
@@ -113,9 +101,37 @@
 - **AND** 不得以重建产物缺失静默失败
 
 ### Requirement: 重建确定性
-系统 SHALL 保证重建产物中事件 ID、段 ID 与重建结果在相同输入下确定。
+系统 SHALL 对相同输入产生确定性的重建产物。
 
-#### Scenario: 重复运行结果一致
-- **WHEN** 对同一输入重复运行完整重建链
-- **THEN** 事件 ID、`segment_id` 与重建样本序列 SHALL 完全一致
+#### Scenario: 相同输入相同产物
+- **WHEN** 对同一任务重复运行重建
+- **THEN** 段 ID、事件 ID、锚点序列与采样点 SHALL 完全一致
 
+### Requirement: ownership_status 四态语义
+系统 SHALL 严格区分 `shot_id = null`（无 Shot 上下文）与 `ownership_status = unassigned`（有 Shot 但击球者未知）。
+
+#### Scenario: 无 Shot 上下文的孤立段
+- **WHEN** segment 位于视频首拍前或 long loss 后、无任何击球归属
+- **THEN** 该 segment 的 `shot_id` SHALL 为 null，`hitter_player_id` SHALL 为 null
+- **AND** `ownership_status` SHALL 为 `not_applicable`
+- **AND** 该 segment 不参与 Shot 统计
+
+#### Scenario: 有 Shot 但击球者未知
+- **WHEN** Shot 已建立但归属判定为 ambiguous/unassigned
+- **THEN** 该 Shot 内 segment 的 `shot_id` SHALL 非空
+- **AND** `ownership_status` SHALL 为 `ambiguous` 或 `unassigned`，`hitter_player_id` SHALL 为 null
+- **AND** 该 Shot 计入总 Shot 数但不计入任何球员击球数
+
+#### Scenario: 归属确认
+- **WHEN** 归属判定为 confirmed
+- **THEN** segment 的 `ownership_status` SHALL 为 `confirmed`
+- **AND** SHALL 携带 `ownership_confidence` 与 `ownership_source_event_id`
+
+### Requirement: 旧 v1 产物兼容
+系统 SHALL 保证旧 v1 产物在升级后仍可被前端读取，且不伪造球员归属。
+
+#### Scenario: v1 产物正常展示
+- **WHEN** 前端读取 `schema_version = reconstructed_ball_trajectory.v1` 的产物
+- **THEN** 球路 SHALL 正常展示（事件、段、锚点与质量信息）
+- **AND** 球员筛选 SHALL 隐藏或禁用
+- **AND** 前端 SHALL NOT 伪造 `hitter_player_id` 或 `shot_id`

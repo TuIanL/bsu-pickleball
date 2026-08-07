@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text, ForeignKey, Index
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
 
-class BatchStatus(str, enum.Enum):
+class BatchStatus(enum.StrEnum):
     creating = "creating"
     queued = "queued"
     running = "running"
@@ -20,7 +20,7 @@ class BatchStatus(str, enum.Enum):
     failed = "failed"
 
 
-class BatchItemStatus(str, enum.Enum):
+class BatchItemStatus(enum.StrEnum):
     pending = "pending"
     queued = "queued"
     running = "running"
@@ -30,23 +30,15 @@ class BatchItemStatus(str, enum.Enum):
 
 class AnalysisBatch(Base):
     __tablename__ = "analysis_batches"
-    __table_args__ = (
-        Index("idx_batch_take", "capture_take_id"),
-    )
+    __table_args__ = (Index("idx_batch_take", "capture_take_id"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     capture_take_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False
     )
-    status: Mapped[BatchStatus] = mapped_column(
-        Enum(BatchStatus), nullable=False, default=BatchStatus.creating
-    )
-    analysis_profile: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="match_default"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
-    )
+    status: Mapped[BatchStatus] = mapped_column(Enum(BatchStatus), nullable=False, default=BatchStatus.creating)
+    analysis_profile: Mapped[str] = mapped_column(String(64), nullable=False, default="match_default")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
 
 class AnalysisBatchItem(Base):
@@ -73,6 +65,4 @@ class AnalysisBatchItem(Base):
         Enum(BatchItemStatus), nullable=False, default=BatchItemStatus.pending
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))

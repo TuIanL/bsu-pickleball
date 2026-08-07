@@ -12,7 +12,15 @@ from app.vision.detectors.multitarget import (
 
 def test_multitarget_detection_schema_serializes_player():
     detections = [
-        MultiTargetDetection(frame_index=0, timestamp_seconds=0, class_name="player", bbox=[1, 2, 10, 20], confidence=0.9, source_width=96, source_height=96),
+        MultiTargetDetection(
+            frame_index=0,
+            timestamp_seconds=0,
+            class_name="player",
+            bbox=[1, 2, 10, 20],
+            confidence=0.9,
+            source_width=96,
+            source_height=96,
+        ),
     ]
 
     payload = [detection.model_dump(mode="json") for detection in detections]
@@ -41,7 +49,15 @@ def test_multitarget_detection_schema_serializes_ball_point():
 
 def test_multitarget_detection_rejects_invalid_bbox():
     with pytest.raises(ValueError):
-        MultiTargetDetection(frame_index=0, timestamp_seconds=0, class_name="player", bbox=[5, 5, 4, 8], confidence=0.8, source_width=96, source_height=96)
+        MultiTargetDetection(
+            frame_index=0,
+            timestamp_seconds=0,
+            class_name="player",
+            bbox=[5, 5, 4, 8],
+            confidence=0.8,
+            source_width=96,
+            source_height=96,
+        )
 
 
 def test_normalize_raw_multitarget_detections_filters_classes_and_confidence():
@@ -92,7 +108,15 @@ def test_fixture_and_empty_multitarget_detectors():
 
 def test_player_detections_from_multitarget_adapts_players():
     detections = [
-        MultiTargetDetection(frame_index=0, timestamp_seconds=0, class_name="player", bbox=[1, 2, 10, 20], confidence=0.9, source_width=96, source_height=96),
+        MultiTargetDetection(
+            frame_index=0,
+            timestamp_seconds=0,
+            class_name="player",
+            bbox=[1, 2, 10, 20],
+            confidence=0.9,
+            source_width=96,
+            source_height=96,
+        ),
     ]
 
     player_detections = player_detections_from_multitarget(detections)

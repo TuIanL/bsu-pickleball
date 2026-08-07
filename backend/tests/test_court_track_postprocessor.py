@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import math
-
 import pytest
 
-from app.vision.pickleball_game_analysis.court_track_types import (
-    CourtTrackObservation,
-    CourtTrackEvent,
-    ProcessedCourtTracks,
-    RenderFrame,
-)
 from app.vision.pickleball_game_analysis.court_track_postprocessor import (
     CourtTrackPostProcessor,
+)
+from app.vision.pickleball_game_analysis.court_track_types import (
+    CourtTrackEvent,
+    CourtTrackObservation,
+    CourtTrackPostProcessResult,
+    ProcessedCourtTracks,
+    RenderFrame,
 )
 
 
@@ -143,7 +142,7 @@ class TestSpikeRejection:
         pp = CourtTrackPostProcessor(max_spike_displacement_ft=6.0)
         obs = [
             _obs(0, x=5.0, y=10.0),
-            _obs(1, x=25.0, y=10.0),   # spike: 20ft from both neighbors
+            _obs(1, x=25.0, y=10.0),  # spike: 20ft from both neighbors
             _obs(2, x=5.2, y=10.1),
         ]
         result = pp.build_tracks(obs, [], fps=30, total_frames=5)
@@ -157,7 +156,7 @@ class TestSpikeRejection:
         pp = CourtTrackPostProcessor(max_spike_displacement_ft=6.0)
         obs = [
             _obs(0, x=5.0, y=10.0),
-            _obs(1, x=10.0, y=10.0),   # 5ft displacement, within threshold
+            _obs(1, x=10.0, y=10.0),  # 5ft displacement, within threshold
             _obs(2, x=15.0, y=10.0),
         ]
         result = pp.build_tracks(obs, [], fps=30, total_frames=5)
@@ -385,7 +384,7 @@ class TestProcess:
         assert len(result1.players) == len(result2.players)
         assert len(result1.segments) == len(result2.segments)
         assert len(result1.samples) == len(result2.samples)
-        for s1, s2 in zip(result1.samples, result2.samples):
+        for s1, s2 in zip(result1.samples, result2.samples, strict=False):
             assert s1.render_slot == s2.render_slot
             assert s1.segment_id == s2.segment_id
 
@@ -398,11 +397,13 @@ class TestProcess:
             _obs(0, player_id="Player_2", x=10.0, y=10.0),
         ]
         result = _process(observations=obs, total_frames=5)
-        payload = serialize_render_trajectory_v2({
-            "players": result.players,
-            "segments": result.segments,
-            "samples": result.samples,
-        })
+        payload = serialize_render_trajectory_v2(
+            {
+                "players": result.players,
+                "segments": result.segments,
+                "samples": result.samples,
+            }
+        )
         assert payload["schema_version"] == "player-render-trajectory.v2"
         assert len(payload["players"]) == 2
         assert len(payload["segments"]) >= 1
@@ -415,7 +416,7 @@ class TestProcess:
             assert "sequence_index" in sample
 
     def test_v1_field_compatibility(self):
-        """11.15: v1 required fields (frame_index, timestamp_seconds, x_ft, y_ft, source, confidence) are present in samples."""
+        """11.15: v1 required fields (frame_index, timestamp_seconds, x_ft, y_ft, source, confidence) are present in samples."""  # noqa: E501
         obs = [
             _obs(0, player_id="Player_1", x=0.0, y=0.0, confidence=0.9),
             _obs(1, player_id="Player_1", x=5.0, y=5.0, confidence=0.85),
@@ -486,7 +487,6 @@ class TestProcess:
             _obs(5, player_id="Player_1", x=5.0, y=5.0),
         ]
         result = pp.build_tracks(obs, [], fps=30, total_frames=10)
-        from app.vision.pickleball_game_analysis.court_track_types import ProcessedCourtTracks
         assert isinstance(result, ProcessedCourtTracks)
         assert hasattr(result, "render_tracks")
         assert len(result.render_tracks) >= 2
@@ -497,6 +497,7 @@ class TestProcess:
 class TestCanonicalPlayerId:
     def test_importable(self):
         from app.vision.pickleball_game_analysis.visualization_schemas import canonical_player_id
+
         assert canonical_player_id("player_1") == "Player_1"
         assert canonical_player_id("Player_1") == "Player_1"
         assert canonical_player_id("player_2") == "Player_2"
@@ -507,16 +508,32 @@ class TestCanonicalPlayerId:
 class TestPlayerRenderPointsFromArtifact:
     def test_parse_empty(self):
         from app.vision.pickleball_game_analysis.visualization_schemas import player_render_points_from_artifact
+
         assert player_render_points_from_artifact({}) == []
         assert player_render_points_from_artifact({"players": {}}) == []
 
     def test_parse_valid(self):
         from app.vision.pickleball_game_analysis.visualization_schemas import player_render_points_from_artifact
+
         payload = {
             "players": {
                 "Player_1": [
-                    {"frame_index": 0, "timestamp_seconds": 0.0, "x_ft": 5.0, "y_ft": 10.0, "source": "observed", "confidence": 0.9},
-                    {"frame_index": 1, "timestamp_seconds": 0.033, "x_ft": 5.5, "y_ft": 10.5, "source": "interpolated", "confidence": 0.85},
+                    {
+                        "frame_index": 0,
+                        "timestamp_seconds": 0.0,
+                        "x_ft": 5.0,
+                        "y_ft": 10.0,
+                        "source": "observed",
+                        "confidence": 0.9,
+                    },
+                    {
+                        "frame_index": 1,
+                        "timestamp_seconds": 0.033,
+                        "x_ft": 5.5,
+                        "y_ft": 10.5,
+                        "source": "interpolated",
+                        "confidence": 0.85,
+                    },
                 ]
             }
         }

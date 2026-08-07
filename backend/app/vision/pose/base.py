@@ -7,6 +7,7 @@ from typing import Protocol
 @dataclass(frozen=True)
 class PoseKeypoint:
     """单个姿态关键点。"""
+
     name: str  # 关键点名称，例如 "nose"、"left_shoulder"
     x: float  # 关键点在图像中的横向坐标（像素，未归一化）
     y: float  # 关键点在图像中的纵向坐标（像素，未归一化）
@@ -20,6 +21,7 @@ class PoseKeypoint:
 @dataclass(frozen=True)
 class PoseResult:
     """单帧中单个主体的姿态估计结果。"""
+
     frame_index: int  # 所属帧序号（从 0 开始）
     subject_id: str  # 主体（球员）标识，对应跟踪引擎赋予的 track_id
     keypoints: list[PoseKeypoint]  # 该主体在本帧的全部关键点列表
@@ -27,6 +29,7 @@ class PoseResult:
 
 class PoseEstimatorAdapter(Protocol):
     """姿态估计器适配器协议 —— 对指定对象框返回归一化关键点。"""
+
     def estimate(self, frame_path: str, subject_boxes: list[tuple[float, float, float, float]]) -> list[PoseResult]:
         """Return normalized pose keypoints for detected players.
 

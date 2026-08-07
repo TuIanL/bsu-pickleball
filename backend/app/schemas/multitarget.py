@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from math import isfinite
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -51,18 +51,18 @@ class MultiTargetDetection(BaseModel):
     二者互斥，由 class_name 决定需要的几何字段。
     """
 
-    frame_index: int = Field(ge=0)              # 第几帧
-    timestamp_seconds: float = Field(ge=0)      # 该帧对应的时间（秒）
-    class_name: TargetClassName                 # 类别（"player" / "ball"）
-    bbox: Optional[list[float]] = None          # 检测框 [x1, y1, x2, y2]（player 使用）
-    point: Optional[list[float]] = None         # 中心点 [x, y]（ball 使用）
-    confidence: float = Field(ge=0, le=1)       # 置信度（0~1）
-    source_width: int = Field(ge=1)             # 原图宽
-    source_height: int = Field(ge=1)            # 原图高
-    track_id: Optional[str] = None              # 跟踪 id（跨帧关联同一目标，未跟踪则为空）
+    frame_index: int = Field(ge=0)  # 第几帧
+    timestamp_seconds: float = Field(ge=0)  # 该帧对应的时间（秒）
+    class_name: TargetClassName  # 类别（"player" / "ball"）
+    bbox: list[float] | None = None  # 检测框 [x1, y1, x2, y2]（player 使用）
+    point: list[float] | None = None  # 中心点 [x, y]（ball 使用）
+    confidence: float = Field(ge=0, le=1)  # 置信度（0~1）
+    source_width: int = Field(ge=1)  # 原图宽
+    source_height: int = Field(ge=1)  # 原图高
+    track_id: str | None = None  # 跟踪 id（跨帧关联同一目标，未跟踪则为空）
 
     @model_validator(mode="after")
-    def validate_geometry(self) -> "MultiTargetDetection":
+    def validate_geometry(self) -> MultiTargetDetection:
         # 根据类别校验所需几何字段，并做边界检查（不能跑到画面外）
         if self.class_name == "player":
             if self.bbox is None:
@@ -87,6 +87,7 @@ class MultiTargetDetection(BaseModel):
 
 class MultiTargetDetectionFrame(BaseModel):
     """某一帧的全部检测结果集合。"""
+
     frame_index: int = Field(ge=0)
     timestamp_seconds: float = Field(ge=0)
     detections: list[MultiTargetDetection] = Field(default_factory=list)  # 该帧的目标列表

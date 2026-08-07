@@ -23,6 +23,7 @@ from app.vision.courtvision_calibration_engine.court_geometry import (
     PickleballCourtGeometry,
     standard_court,
 )
+
 # 球场坐标 → 像素坐标 的投影函数。
 from app.vision.courtvision_calibration_engine.homography import court_to_image
 
@@ -78,8 +79,8 @@ def draw_court_overlay(
         return frame
 
     court = court or standard_court()
-    output = frame.copy()         # 复制一份，避免改到原图
-    fill_layer = output.copy()    # 单独一层用来画填充色块
+    output = frame.copy()  # 复制一份，避免改到原图
+    fill_layer = output.copy()  # 单独一层用来画填充色块
 
     # 各区域的填充颜色（BGR 顺序，OpenCV 里颜色是蓝-绿-红）
     fill_colors = {
@@ -100,10 +101,10 @@ def draw_court_overlay(
     # 再画球场线（不同线用不同颜色/粗细区分）
     for line in court.lines:
         start, end = _project_line(line, court_to_image_homography)
-        color = (68, 255, 120)   # 默认线颜色（绿）
-        thickness = 2            # 默认线宽
+        color = (68, 255, 120)  # 默认线颜色（绿）
+        thickness = 2  # 默认线宽
         if line.name == "net":
-            color = (50, 70, 255)   # 球网用偏蓝色、更粗
+            color = (50, 70, 255)  # 球网用偏蓝色、更粗
             thickness = 3
         elif "kitchen" in line.name:
             color = (35, 190, 255)  # 厨房线用蓝色
@@ -112,7 +113,9 @@ def draw_court_overlay(
     return output
 
 
-def _project_line(line: CourtLine, homography: list[list[float]] | np.ndarray) -> tuple[tuple[int, int], tuple[int, int]]:
+def _project_line(
+    line: CourtLine, homography: list[list[float]] | np.ndarray
+) -> tuple[tuple[int, int], tuple[int, int]]:
     """把一条球场线的起点、终点分别投影到图像像素坐标（取整）。"""
     start = _project_point(line.start, homography)
     end = _project_point(line.end, homography)

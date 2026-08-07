@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.services import segment_edit_service, analysis_batch_service
+from app.services import analysis_batch_service, segment_edit_service
 from app.services.capture_segment_service import get_segment
 from app.services.capture_take_service import get_capture_take
 
 router = APIRouter(prefix="/api/capture-segments", tags=["segment-editing"])
 
 # ── Segment PATCH ──
+
 
 @router.patch("/{segment_id}")
 def patch_segment(
@@ -29,8 +30,12 @@ def patch_segment(
         raise HTTPException(404, "Segment 不存在")
     try:
         seg = segment_edit_service.patch_segment(
-            db, seg, label=label, corrected_start_ms=corrected_start_ms,
-            corrected_end_ms=corrected_end_ms, is_highlight=is_highlight,
+            db,
+            seg,
+            label=label,
+            corrected_start_ms=corrected_start_ms,
+            corrected_end_ms=corrected_end_ms,
+            is_highlight=is_highlight,
             expected_version=expected_version,
         )
         db.commit()
@@ -38,8 +43,8 @@ def patch_segment(
         db.rollback()
         msg = str(e)
         if "edit_version 冲突" in msg:
-            raise HTTPException(409, msg)
-        raise HTTPException(400, msg)
+            raise HTTPException(409, msg) from e
+        raise HTTPException(400, msg) from e
     return _seg_dict(seg)
 
 
@@ -55,6 +60,7 @@ def reset_boundary(segment_id: str, db: Session = Depends(get_db)):
 
 # ── Split / Merge ──
 
+
 @router.post("/{segment_id}/split")
 def split_segment(segment_id: str, split_ms: int, db: Session = Depends(get_db)):
     seg = get_segment(db, segment_id)
@@ -65,7 +71,7 @@ def split_segment(segment_id: str, split_ms: int, db: Session = Depends(get_db))
         db.commit()
     except ValueError as e:
         db.rollback()
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"segments": [_seg_dict(a), _seg_dict(b)]}
 
 
@@ -82,11 +88,12 @@ def merge_segments(segment_ids: list[str], db: Session = Depends(get_db)):
         db.commit()
     except ValueError as e:
         db.rollback()
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return _seg_dict(merged)
 
 
 # ── Archive / Restore ──
+
 
 @router.post("/{segment_id}/archive")
 def archive_segment(segment_id: str, db: Session = Depends(get_db)):
@@ -118,6 +125,7 @@ def delete_segment(segment_id: str, db: Session = Depends(get_db)):
         raise HTTPException(400, "不能删除该 Segment（有子节点、分析引用或编辑历史），请使用 archive")
     db.commit()
 
+
 # ── AnalysisBatch ──
 
 router2 = APIRouter(prefix="/api/capture-takes", tags=["analysis-batches"])
@@ -135,23 +143,28 @@ def create_batch(
         raise HTTPException(404, "CaptureTake 不存在")
     try:
         batch, items = analysis_batch_service.create_analysis_batch(
-            db, capture_take_id, segment_ids, analysis_profile=analysis_profile,
+            db,
+            capture_take_id,
+            segment_ids,
+            analysis_profile=analysis_profile,
         )
         db.commit()
     except ValueError as e:
         db.rollback()
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {
         "batch_id": batch.id,
         "status": batch.status.value,
         "analysis_profile": batch.analysis_profile,
         "items": [
             {
-                "id": it.id, "segment_id": it.segment_id,
+                "id": it.id,
+                "segment_id": it.segment_id,
                 "segment_version": it.segment_version,
                 "snapshot_start_ms": it.snapshot_start_ms,
                 "snapshot_end_ms": it.snapshot_end_ms,
-                "video_id": it.video_id, "status": it.status.value,
+                "video_id": it.video_id,
+                "status": it.status.value,
             }
             for it in items
         ],
@@ -160,20 +173,25 @@ def create_batch(
 
 @router2.get("/{capture_take_id}/analysis-batches/{batch_id}")
 def get_batch_detail(
-    capture_take_id: str, batch_id: str, db: Session = Depends(get_db),
+    capture_take_id: str,
+    batch_id: str,
+    db: Session = Depends(get_db),
 ):
     batch = analysis_batch_service.get_batch(db, batch_id)
     if batch is None:
         raise HTTPException(404, "AnalysisBatch 不存在")
     items = analysis_batch_service.get_batch_items(db, batch_id)
     return {
-        "batch_id": batch.id, "status": batch.status.value,
+        "batch_id": batch.id,
+        "status": batch.status.value,
         "analysis_profile": batch.analysis_profile,
         "items": [
             {
-                "id": it.id, "segment_id": it.segment_id,
+                "id": it.id,
+                "segment_id": it.segment_id,
                 "analysis_job_id": it.analysis_job_id,
-                "status": it.status.value, "error_message": it.error_message,
+                "status": it.status.value,
+                "error_message": it.error_message,
                 "snapshot_start_ms": it.snapshot_start_ms,
                 "snapshot_end_ms": it.snapshot_end_ms,
             }
@@ -184,19 +202,25 @@ def get_batch_detail(
 
 # ── helpers ──
 
+
 def _seg_dict(seg) -> dict:
     return {
-        "id": seg.id, "capture_take_id": seg.capture_take_id,
-        "segment_type": seg.segment_type.value if hasattr(seg.segment_type, 'value') else seg.segment_type,
+        "id": seg.id,
+        "capture_take_id": seg.capture_take_id,
+        "segment_type": seg.segment_type.value if hasattr(seg.segment_type, "value") else seg.segment_type,
         "parent_segment_id": seg.parent_segment_id,
-        "ordinal": seg.ordinal, "label": seg.label,
-        "start_ms": seg.start_ms, "end_ms": seg.end_ms,
+        "ordinal": seg.ordinal,
+        "label": seg.label,
+        "start_ms": seg.start_ms,
+        "end_ms": seg.end_ms,
         "corrected_start_ms": seg.corrected_start_ms,
         "corrected_end_ms": seg.corrected_end_ms,
-        "effective_start_ms": seg.effective_start_ms if hasattr(seg, 'effective_start_ms') else seg.start_ms,
-        "effective_end_ms": seg.effective_end_ms if hasattr(seg, 'effective_end_ms') else seg.end_ms,
-        "edit_version": seg.edit_version if hasattr(seg, 'edit_version') else 0,
-        "edit_status": seg.edit_status.value if hasattr(seg.edit_status, 'value') else getattr(seg, 'edit_status', 'active'),
-        "status": seg.status.value if hasattr(seg.status, 'value') else seg.status,
+        "effective_start_ms": seg.effective_start_ms if hasattr(seg, "effective_start_ms") else seg.start_ms,
+        "effective_end_ms": seg.effective_end_ms if hasattr(seg, "effective_end_ms") else seg.end_ms,
+        "edit_version": seg.edit_version if hasattr(seg, "edit_version") else 0,
+        "edit_status": seg.edit_status.value
+        if hasattr(seg.edit_status, "value")
+        else getattr(seg, "edit_status", "active"),
+        "status": seg.status.value if hasattr(seg.status, "value") else seg.status,
         "is_highlight": seg.is_highlight,
     }

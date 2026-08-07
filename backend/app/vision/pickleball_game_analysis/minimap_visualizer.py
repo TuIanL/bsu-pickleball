@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 # dataclass：用装饰器快速定义数据结构；Iterable：可接受任意可迭代的点集合。
 from dataclasses import dataclass
-from typing import Iterable
 
 # OpenCV（绘图与图像操作）；numpy（图像数组与几何计算）。# type: ignore 表示忽略类型检查器的导入报错。
 import cv2  # type: ignore
@@ -12,6 +13,7 @@ import numpy as np
 
 # 球场几何：CourtLine（线）、PickleballCourtGeometry（球场几何对象）、standard_court（标准球场工厂）。
 from app.vision.courtvision_calibration_engine.court_geometry import CourtLine, PickleballCourtGeometry, standard_court
+
 # 可视化数据结构：VisualizationConfig（配置）、VisualizationPoint（单个坐标点）。
 from app.vision.pickleball_game_analysis.visualization_schemas import VisualizationConfig, VisualizationPoint
 
@@ -19,25 +21,25 @@ from app.vision.pickleball_game_analysis.visualization_schemas import Visualizat
 @dataclass(frozen=True)
 class MinimapStyle:
     # 小地图各元素的 BGR 颜色（注意 OpenCV 用 BGR 而非 RGB 顺序）。frozen=True 表示不可变配色方案。
-    background: tuple[int, int, int] = (246, 249, 244)       # 背景底色（浅灰绿）
-    court_fill: tuple[int, int, int] = (226, 242, 224)       # 球场填充色（浅绿）
-    line: tuple[int, int, int] = (34, 76, 45)                # 球场线颜色（深绿）
-    kitchen_fill: tuple[int, int, int] = (216, 235, 245)     # 厨房区填充色（浅蓝）
-    player: tuple[int, int, int] = (33, 138, 52)             # 球员轨迹/点颜色（绿）
-    ball: tuple[int, int, int] = (28, 114, 235)              # 球轨迹/点颜色（蓝）
-    bounce: tuple[int, int, int] = (30, 90, 255)             # 弹跳点标记颜色（亮蓝）
+    background: tuple[int, int, int] = (246, 249, 244)  # 背景底色（浅灰绿）
+    court_fill: tuple[int, int, int] = (226, 242, 224)  # 球场填充色（浅绿）
+    line: tuple[int, int, int] = (34, 76, 45)  # 球场线颜色（深绿）
+    kitchen_fill: tuple[int, int, int] = (216, 235, 245)  # 厨房区填充色（浅蓝）
+    player: tuple[int, int, int] = (33, 138, 52)  # 球员轨迹/点颜色（绿）
+    ball: tuple[int, int, int] = (28, 114, 235)  # 球轨迹/点颜色（蓝）
+    bounce: tuple[int, int, int] = (30, 90, 255)  # 弹跳点标记颜色（亮蓝）
     tracking_bounds_fill: tuple[int, int, int] = (236, 244, 234)  # tracking buffer 底色（比 court 更淡）
     tracking_bounds_line: tuple[int, int, int] = (190, 210, 185)  # tracking buffer 虚线框颜色
-    outside_player: tuple[int, int, int] = (160, 200, 165)       # 界外球员点颜色（绿中带灰）
+    outside_player: tuple[int, int, int] = (160, 200, 165)  # 界外球员点颜色（绿中带灰）
 
 
 PLAYER_COLORS: tuple[tuple[int, int, int], ...] = (
-    (33, 138, 52),    # green
-    (224, 95, 36),    # orange
-    (190, 72, 178),   # magenta
-    (42, 128, 214),   # blue
-    (80, 92, 220),    # red-blue
-    (40, 160, 160),   # teal
+    (33, 138, 52),  # green
+    (224, 95, 36),  # orange
+    (190, 72, 178),  # magenta
+    (42, 128, 214),  # blue
+    (80, 92, 220),  # red-blue
+    (40, 160, 160),  # teal
 )
 
 
@@ -53,7 +55,9 @@ class MinimapVisualizer:
         self.court = court or standard_court()
         self.style = style or MinimapStyle()
 
-    def court_to_pixel(self, x_ft: float, y_ft: float, *, clamp: bool = False, bounds: str = "tracking") -> tuple[int, int] | None:
+    def court_to_pixel(
+        self, x_ft: float, y_ft: float, *, clamp: bool = False, bounds: str = "tracking"
+    ) -> tuple[int, int] | None:
         # 把"英尺球场坐标 (x_ft, y_ft)"映射到小地图图像像素坐标。
         # bounds="tracking" 时使用 tracking_bounds 做映射，可显示界外点；
         # bounds="court" 时使用 court_bounds，界外点返回 None。
@@ -91,7 +95,7 @@ class MinimapVisualizer:
             dtype=np.uint8,
         )
         self._draw_tracking_bounds(image)  # 先画 tracking buffer 底纹
-        self._draw_court(image)            # 再画正式球场
+        self._draw_court(image)  # 再画正式球场
         for index, (_label, points) in enumerate(_points_by_label(list(player_points)).items()):
             draw_points = points[-self.config.trail_length :] if limit_player_trails else points
             inside = [p for p in draw_points if self.court.is_in_court_bounds(p.x_ft, p.y_ft)]
@@ -104,7 +108,9 @@ class MinimapVisualizer:
         for point in bounce_points:
             pixel = self.court_to_pixel(point.x_ft, point.y_ft)
             if pixel is not None:
-                cv2.drawMarker(image, pixel, self.style.bounce, markerType=cv2.MARKER_TILTED_CROSS, markerSize=12, thickness=2)
+                cv2.drawMarker(
+                    image, pixel, self.style.bounce, markerType=cv2.MARKER_TILTED_CROSS, markerSize=12, thickness=2
+                )
         return image
 
     def _draw_court(self, image: np.ndarray) -> None:
@@ -119,7 +125,9 @@ class MinimapVisualizer:
         cv2.fillPoly(image, [pts], self.style.court_fill)
         for zone in self.court.kitchen_zones:
             zone_pts = [self.court_to_pixel(p.x, p.y, clamp=True, bounds="court") for p in zone.polygon.points]
-            cv2.fillPoly(image, [np.array([p for p in zone_pts if p is not None], dtype=np.int32)], self.style.kitchen_fill)
+            cv2.fillPoly(
+                image, [np.array([p for p in zone_pts if p is not None], dtype=np.int32)], self.style.kitchen_fill
+            )
         for line in self.court.lines:
             self._draw_line(image, line)
 
@@ -139,22 +147,53 @@ class MinimapVisualizer:
         ]
         pts = np.array([p for p in corners if p is not None], dtype=np.int32)
         cv2.fillPoly(image, [pts], self.style.tracking_bounds_fill)
-        cv2.polylines(image, [pts], isClosed=True, color=self.style.tracking_bounds_line, thickness=1, lineType=cv2.LINE_AA)
+        cv2.polylines(
+            image, [pts], isClosed=True, color=self.style.tracking_bounds_line, thickness=1, lineType=cv2.LINE_AA
+        )
 
-    def _draw_trails(self, image: np.ndarray, points: list[VisualizationPoint], color: tuple[int, int, int], radius: int, *, bounds: str = "tracking") -> None:
+    def _draw_trails(
+        self,
+        image: np.ndarray,
+        points: list[VisualizationPoint],
+        color: tuple[int, int, int],
+        radius: int,
+        *,
+        bounds: str = "tracking",
+    ) -> None:
         pixels = [self.court_to_pixel(point.x_ft, point.y_ft, bounds=bounds) for point in points]
         pixels = [pixel for pixel in pixels if pixel is not None]
         if len(pixels) >= 2:
-            cv2.polylines(image, [np.array(pixels, dtype=np.int32)], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
+            cv2.polylines(
+                image,
+                [np.array(pixels, dtype=np.int32)],
+                isClosed=False,
+                color=color,
+                thickness=2,
+                lineType=cv2.LINE_AA,
+            )
         for pixel in pixels:
             cv2.circle(image, pixel, radius, color, -1, lineType=cv2.LINE_AA)
 
-    def _draw_trails_outside(self, image: np.ndarray, points: list[VisualizationPoint], color: tuple[int, int, int], radius: int, alpha: float) -> None:
+    def _draw_trails_outside(
+        self,
+        image: np.ndarray,
+        points: list[VisualizationPoint],
+        color: tuple[int, int, int],
+        radius: int,
+        alpha: float,
+    ) -> None:
         pixels = [self.court_to_pixel(point.x_ft, point.y_ft) for point in points]
         pixels = [pixel for pixel in pixels if pixel is not None]
         if len(pixels) >= 2:
             overlay = image.copy()
-            cv2.polylines(overlay, [np.array(pixels, dtype=np.int32)], isClosed=False, color=color, thickness=1, lineType=cv2.LINE_AA)
+            cv2.polylines(
+                overlay,
+                [np.array(pixels, dtype=np.int32)],
+                isClosed=False,
+                color=color,
+                thickness=1,
+                lineType=cv2.LINE_AA,
+            )
             cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
         for pixel in pixels:
             cv2.circle(image, pixel, radius, color, -1, lineType=cv2.LINE_AA)

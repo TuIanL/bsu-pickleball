@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.capture_segment import CaptureSegment, SegmentType, SegmentStatus, EditStatus
-from app.models.segment_edit_operation import SegmentEditOperation, EditOperationType
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentStatus, SegmentType
+from app.models.segment_edit_operation import EditOperationType, SegmentEditOperation
 
 _OP_PREFIX = "eo"
 _MIN_RALLY_MS = 500
@@ -22,6 +22,7 @@ def _gen_id(prefix: str) -> str:
 
 # ── effective helpers ──
 
+
 def _eff_start(seg: CaptureSegment) -> int:
     return seg.corrected_start_ms if seg.corrected_start_ms is not None else seg.start_ms
 
@@ -31,6 +32,7 @@ def _eff_end(seg: CaptureSegment) -> int | None:
 
 
 # ── PATCH ──
+
 
 def patch_segment(
     db: Session,
@@ -54,16 +56,16 @@ def patch_segment(
         changed = True
     if corrected_start_ms is not None:
         segment.corrected_start_ms = corrected_start_ms
-        segment.corrected_at = datetime.now(timezone.utc)
+        segment.corrected_at = datetime.now(UTC)
         changed = True
     if corrected_end_ms is not None:
         segment.corrected_end_ms = corrected_end_ms
-        segment.corrected_at = datetime.now(timezone.utc)
+        segment.corrected_at = datetime.now(UTC)
         changed = True
 
     if changed:
         segment.edit_version += 1
-        segment.updated_at = datetime.now(timezone.utc)
+        segment.updated_at = datetime.now(UTC)
 
     db.flush()
     return segment
@@ -74,12 +76,13 @@ def reset_boundary(db: Session, segment: CaptureSegment) -> CaptureSegment:
     segment.corrected_end_ms = None
     segment.corrected_at = None
     segment.edit_version += 1
-    segment.updated_at = datetime.now(timezone.utc)
+    segment.updated_at = datetime.now(UTC)
     db.flush()
     return segment
 
 
 # ── 拆分 ──
+
 
 def split_rally(
     db: Session,
@@ -99,7 +102,7 @@ def split_rally(
     if split_ms - start < _MIN_RALLY_MS or end - split_ms < _MIN_RALLY_MS:
         raise ValueError(f"拆分点 {split_ms} 两侧时长不足 {_MIN_RALLY_MS}ms")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     op_id = _gen_id(_OP_PREFIX)
 
     # 原 segment → superseded
@@ -109,34 +112,53 @@ def split_rally(
 
     # 创建两个新 segment
     seg_a = CaptureSegment(
-        id=_gen_id("sg"), capture_take_id=segment.capture_take_id,
-        segment_type=SegmentType.rally, parent_segment_id=segment.parent_segment_id,
-        ordinal=segment.ordinal, label=f"{segment.label}-A",
-        start_ms=start, end_ms=split_ms,
-        status=SegmentStatus.closed, source=segment.source,
-        edit_status=EditStatus.active, created_by_operation_id=op_id,
+        id=_gen_id("sg"),
+        capture_take_id=segment.capture_take_id,
+        segment_type=SegmentType.rally,
+        parent_segment_id=segment.parent_segment_id,
+        ordinal=segment.ordinal,
+        label=f"{segment.label}-A",
+        start_ms=start,
+        end_ms=split_ms,
+        status=SegmentStatus.closed,
+        source=segment.source,
+        edit_status=EditStatus.active,
+        created_by_operation_id=op_id,
     )
     seg_b = CaptureSegment(
-        id=_gen_id("sg"), capture_take_id=segment.capture_take_id,
-        segment_type=SegmentType.rally, parent_segment_id=segment.parent_segment_id,
-        ordinal=segment.ordinal + 1, label=f"{segment.label}-B",
-        start_ms=split_ms, end_ms=end,
-        status=SegmentStatus.closed, source=segment.source,
-        edit_status=EditStatus.active, created_by_operation_id=op_id,
+        id=_gen_id("sg"),
+        capture_take_id=segment.capture_take_id,
+        segment_type=SegmentType.rally,
+        parent_segment_id=segment.parent_segment_id,
+        ordinal=segment.ordinal + 1,
+        label=f"{segment.label}-B",
+        start_ms=split_ms,
+        end_ms=end,
+        status=SegmentStatus.closed,
+        source=segment.source,
+        edit_status=EditStatus.active,
+        created_by_operation_id=op_id,
     )
     db.add(seg_a)
     db.add(seg_b)
 
     # 审计记录
-    _create_op(db, op_id, segment.capture_take_id, EditOperationType.split,
-               [segment.id], [seg_a.id, seg_b.id],
-               {"split_ms": split_ms, "original_segment_id": segment.id})
+    _create_op(
+        db,
+        op_id,
+        segment.capture_take_id,
+        EditOperationType.split,
+        [segment.id],
+        [seg_a.id, seg_b.id],
+        {"split_ms": split_ms, "original_segment_id": segment.id},
+    )
 
     db.flush()
     return seg_a, seg_b
 
 
 # ── 合并 ──
+
 
 def merge_rallies(
     db: Session,
@@ -174,7 +196,7 @@ def merge_rallies(
     if siblings:
         raise ValueError("两个 Rally 之间存在其他 active Rally")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     op_id = _gen_id(_OP_PREFIX)
 
     seg_a.edit_status = EditStatus.superseded
@@ -185,19 +207,30 @@ def merge_rallies(
     seg_b.updated_at = now
 
     merged = CaptureSegment(
-        id=_gen_id("sg"), capture_take_id=seg_a.capture_take_id,
-        segment_type=SegmentType.rally, parent_segment_id=seg_a.parent_segment_id,
-        ordinal=seg_a.ordinal, label=f"{seg_a.label}+{seg_b.label}",
+        id=_gen_id("sg"),
+        capture_take_id=seg_a.capture_take_id,
+        segment_type=SegmentType.rally,
+        parent_segment_id=seg_a.parent_segment_id,
+        ordinal=seg_a.ordinal,
+        label=f"{seg_a.label}+{seg_b.label}",
         start_ms=min(seg_a.start_ms, seg_b.start_ms),
         end_ms=max(a_end, _eff_end(seg_b) or 0),
-        status=SegmentStatus.closed, source=SegmentStatus.corrected,
-        edit_status=EditStatus.active, created_by_operation_id=op_id,
+        status=SegmentStatus.closed,
+        source=SegmentStatus.corrected,
+        edit_status=EditStatus.active,
+        created_by_operation_id=op_id,
     )
     db.add(merged)
 
-    _create_op(db, op_id, seg_a.capture_take_id, EditOperationType.merge,
-               [seg_a.id, seg_b.id], [merged.id],
-               {"original_ids": [seg_a.id, seg_b.id]})
+    _create_op(
+        db,
+        op_id,
+        seg_a.capture_take_id,
+        EditOperationType.merge,
+        [seg_a.id, seg_b.id],
+        [merged.id],
+        {"original_ids": [seg_a.id, seg_b.id]},
+    )
 
     db.flush()
     return merged
@@ -205,12 +238,12 @@ def merge_rallies(
 
 # ── 归档/恢复 ──
 
+
 def archive_segment(db: Session, segment: CaptureSegment) -> CaptureSegment:
     op_id = _gen_id(_OP_PREFIX)
     segment.edit_status = EditStatus.archived
-    segment.updated_at = datetime.now(timezone.utc)
-    _create_op(db, op_id, segment.capture_take_id, EditOperationType.archive,
-               [segment.id], [segment.id])
+    segment.updated_at = datetime.now(UTC)
+    _create_op(db, op_id, segment.capture_take_id, EditOperationType.archive, [segment.id], [segment.id])
     db.flush()
     return segment
 
@@ -218,9 +251,8 @@ def archive_segment(db: Session, segment: CaptureSegment) -> CaptureSegment:
 def restore_segment(db: Session, segment: CaptureSegment) -> CaptureSegment:
     op_id = _gen_id(_OP_PREFIX)
     segment.edit_status = EditStatus.active
-    segment.updated_at = datetime.now(timezone.utc)
-    _create_op(db, op_id, segment.capture_take_id, EditOperationType.restore,
-               [segment.id], [segment.id])
+    segment.updated_at = datetime.now(UTC)
+    _create_op(db, op_id, segment.capture_take_id, EditOperationType.restore, [segment.id], [segment.id])
     db.flush()
     return segment
 
@@ -229,11 +261,7 @@ def hard_delete_segment(db: Session, segment: CaptureSegment) -> bool:
     if segment.edit_status != EditStatus.active:
         return False
     # 仅无子节点、无分析引用、无编辑历史的临时 segment 可硬删除
-    has_children = (
-        db.query(CaptureSegment)
-        .filter(CaptureSegment.parent_segment_id == segment.id)
-        .count()
-    ) > 0
+    has_children = (db.query(CaptureSegment).filter(CaptureSegment.parent_segment_id == segment.id).count()) > 0
     if has_children:
         return False
     op_count = (
@@ -253,13 +281,19 @@ def hard_delete_segment(db: Session, segment: CaptureSegment) -> bool:
 
 # ── 审计 ──
 
+
 def _create_op(
-    db: Session, op_id: str, capture_take_id: str,
-    op_type: EditOperationType, input_ids: list[str], output_ids: list[str],
+    db: Session,
+    op_id: str,
+    capture_take_id: str,
+    op_type: EditOperationType,
+    input_ids: list[str],
+    output_ids: list[str],
     payload: dict | None = None,
 ) -> SegmentEditOperation:
     op = SegmentEditOperation(
-        id=op_id, capture_take_id=capture_take_id,
+        id=op_id,
+        capture_take_id=capture_take_id,
         operation_type=op_type,
         input_segment_ids=json.dumps(input_ids, ensure_ascii=False),
         output_segment_ids=json.dumps(output_ids, ensure_ascii=False),
@@ -270,6 +304,7 @@ def _create_op(
 
 
 # ── 层级约束校验 ──
+
 
 def validate_bounds_in_take(seg: CaptureSegment, take_duration_ms: int) -> None:
     start = _eff_start(seg)

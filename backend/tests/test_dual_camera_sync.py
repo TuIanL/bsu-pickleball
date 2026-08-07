@@ -1,19 +1,20 @@
 import json
 import math
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from app.services.dual_camera_sync import (
     FrameTiming,
     SyncCalibration,
     build_frame_map,
-    fit_affine_calibration,
     calibrations_from_anchor_rows,
-    write_frame_timing_sidecar,
+    fit_affine_calibration,
     read_frame_timing_sidecar,
     retime_filter_expression,
+    write_frame_timing_sidecar,
 )
 
 
@@ -31,18 +32,14 @@ def test_fit_affine_calibration_reports_offset_and_drift():
 
 
 def test_fit_affine_calibration_rejects_insufficient_anchors():
-    calibration = fit_affine_calibration(
-        [0.0], [0.05], reference_camera="174", camera_id="175"
-    )
+    calibration = fit_affine_calibration([0.0], [0.05], reference_camera="174", camera_id="175")
 
     assert calibration.quality == "unknown"
     assert calibration.anchor_count == 1
 
 
 def test_build_frame_map_applies_camera_mapping():
-    calibration = fit_affine_calibration(
-        [0.0, 10.0], [0.050, 10.050], reference_camera="174", camera_id="175"
-    )
+    calibration = fit_affine_calibration([0.0, 10.0], [0.050, 10.050], reference_camera="174", camera_id="175")
     frames = [FrameTiming(i, i / 60) for i in range(601)]
     selected = build_frame_map([0.0, 1.0], frames, calibration=calibration)
 
@@ -74,9 +71,7 @@ def test_calibrations_from_anchor_rows_fits_each_camera():
 
 
 def test_retime_filter_expression_uses_offset_and_rate():
-    calibration = fit_affine_calibration(
-        [0.0, 10.0], [0.05, 10.051], reference_camera="174", camera_id="175"
-    )
+    calibration = fit_affine_calibration([0.0, 10.0], [0.05, 10.051], reference_camera="174", camera_id="175")
 
     expression = retime_filter_expression(calibration)
 
@@ -88,10 +83,14 @@ def test_write_frame_timing_sidecar_is_atomic(tmp_path: Path):
     sidecar = tmp_path / "frames.jsonl"
     fake = SimpleNamespace(
         returncode=0,
-        stdout=json.dumps({"frames": [
-            {"best_effort_timestamp_time": "1.400000", "pkt_dts_time": "1.400000", "key_frame": 1},
-            {"best_effort_timestamp_time": "1.416667", "pkt_dts_time": "1.416667", "key_frame": 0},
-        ]}),
+        stdout=json.dumps(
+            {
+                "frames": [
+                    {"best_effort_timestamp_time": "1.400000", "pkt_dts_time": "1.400000", "key_frame": 1},
+                    {"best_effort_timestamp_time": "1.416667", "pkt_dts_time": "1.416667", "key_frame": 0},
+                ]
+            }
+        ),
         stderr="",
     )
     with patch("app.services.dual_camera_sync.subprocess.run", return_value=fake):

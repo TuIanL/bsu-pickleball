@@ -75,11 +75,15 @@ def test_court_aware_selector_prefers_target_court_players_over_neighbor_court_m
     for frame in range(6):
         tracks = [
             *[
-                track.model_copy(update={"bbox": [track.bbox[0] + frame, track.bbox[1], track.bbox[2] + frame, track.bbox[3]]})
+                track.model_copy(
+                    update={"bbox": [track.bbox[0] + frame, track.bbox[1], track.bbox[2] + frame, track.bbox[3]]}
+                )
                 for track in target_tracks
             ],
             *[
-                track.model_copy(update={"bbox": [track.bbox[0] + frame, track.bbox[1], track.bbox[2] + frame, track.bbox[3]]})
+                track.model_copy(
+                    update={"bbox": [track.bbox[0] + frame, track.bbox[1], track.bbox[2] + frame, track.bbox[3]]}
+                )
                 for track in neighbor_tracks
             ],
         ]
@@ -104,7 +108,9 @@ def test_court_aware_selector_tolerates_short_boundary_excursion():
     track = Track(track_id=1, bbox=[10, 10, 30, 70], confidence=0.92)
 
     for frame, y in enumerate([42, 43, 44.6, 43.5, 42.5]):
-        selected = selector.select([track], positions=[player_position(1, frame, 10, y)], frame_width=100, frame_height=100)
+        selected = selector.select(
+            [track], positions=[player_position(1, frame, 10, y)], frame_width=100, frame_height=100
+        )
 
     assert [selection.track_id for selection in selected] == [1]
     diagnostic = selector.last_diagnostics[0]

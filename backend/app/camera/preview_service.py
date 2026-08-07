@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import time
-from typing import Generator
+from collections.abc import Generator
 
 import cv2
 
@@ -53,7 +53,7 @@ def _build_auth_stream_url(
     # 将 protocol:// 替换为 protocol://username:password@
     prefix = f"{protocol}://"
     if stream_url.startswith(prefix):
-        rest = stream_url[len(prefix):]
+        rest = stream_url[len(prefix) :]
         return f"{prefix}{username}:{password}@{rest}"
 
     return stream_url
@@ -66,7 +66,7 @@ def preview_frames(
     password: str | None = None,
     fps: float = DEFAULT_PREVIEW_FPS,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
-) -> Generator[bytes, None, None]:
+) -> Generator[bytes]:
     """
     生成摄像头预览帧的生成器。
 

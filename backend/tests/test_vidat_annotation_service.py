@@ -4,18 +4,18 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from app.api.routes_vidat import create_package, list_packages
 from app.database import Base
-from app.models.capture_take import CaptureMode, CaptureTake, CaptureTakeStatus, SourceSessionType
-from app.models.capture_track import CaptureTrack, CaptureTrackSlot, TrackRole
-from app.models.field_session import CaptureMode as FieldCaptureMode, FieldSession, MatchFormat
-from app.models.media_fragment import MediaFragment
-from app.models.timeline_event import SessionTimelineEvent, TimelineEventSource, TimelineEventType
 from app.models.capture_coding_action import CaptureCodingAction
 from app.models.capture_segment import CaptureSegment
-from app.models.live_coding_state import LiveCodingState
+from app.models.capture_take import CaptureMode, CaptureTake, CaptureTakeStatus, SourceSessionType
+from app.models.capture_track import CaptureTrack, CaptureTrackSlot, TrackRole
+from app.models.field_session import CaptureMode as FieldCaptureMode
+from app.models.field_session import FieldSession, MatchFormat
+from app.models.media_fragment import MediaFragment
+from app.models.timeline_event import SessionTimelineEvent, TimelineEventSource, TimelineEventType
 from app.models.vidat_annotation import VidatAnnotationPackage
 from app.services import vidat_annotation_service as service
-from app.api.routes_vidat import create_package, list_packages
 
 
 @pytest.fixture()
@@ -29,12 +29,28 @@ def db():
 def _take_with_video(db: Session, tmp_path: Path) -> CaptureTake:
     video = tmp_path / "match.mp4"
     video.write_bytes(b"sample-video")
-    field_session = FieldSession(id="fs_vidat", title="比赛", capture_mode=FieldCaptureMode.match, match_format=MatchFormat.doubles)
-    take = CaptureTake(id="ct_vidat", field_session_id=field_session.id, capture_mode=CaptureMode.single,
-        source_session_type=SourceSessionType.recording, source_session_id="rec_vidat", status=CaptureTakeStatus.completed)
-    track = CaptureTrack(id="trk_vidat", capture_take_id=take.id, camera_id="cam", role=TrackRole.primary, slot=CaptureTrackSlot.cam_1)
-    fragment = MediaFragment(id="frag_vidat", capture_take_id=take.id, capture_track_id=track.id,
-        fragment_index=0, rotation_index=0, file_path=str(video))
+    field_session = FieldSession(
+        id="fs_vidat", title="比赛", capture_mode=FieldCaptureMode.match, match_format=MatchFormat.doubles
+    )
+    take = CaptureTake(
+        id="ct_vidat",
+        field_session_id=field_session.id,
+        capture_mode=CaptureMode.single,
+        source_session_type=SourceSessionType.recording,
+        source_session_id="rec_vidat",
+        status=CaptureTakeStatus.completed,
+    )
+    track = CaptureTrack(
+        id="trk_vidat", capture_take_id=take.id, camera_id="cam", role=TrackRole.primary, slot=CaptureTrackSlot.cam_1
+    )
+    fragment = MediaFragment(
+        id="frag_vidat",
+        capture_take_id=take.id,
+        capture_track_id=track.id,
+        fragment_index=0,
+        rotation_index=0,
+        file_path=str(video),
+    )
     db.add_all([field_session, take, track, fragment])
     db.commit()
     return take
@@ -42,8 +58,14 @@ def _take_with_video(db: Session, tmp_path: Path) -> CaptureTake:
 
 def test_create_package_is_versioned_and_keeps_prior_snapshot(db, tmp_path, monkeypatch):
     take = _take_with_video(db, tmp_path)
-    monkeypatch.setattr(service, "_probe_video", lambda _: {"fps": 30.0, "duration": 2.0, "width": 1920, "height": 1080})
-    monkeypatch.setattr(service, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})())
+    monkeypatch.setattr(
+        service, "_probe_video", lambda _: {"fps": 30.0, "duration": 2.0, "width": 1920, "height": 1080}
+    )
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})(),
+    )
     first = service.create_annotation_package(db, take.id)
     db.commit()
     second = service.create_annotation_package(db, take.id)
@@ -59,7 +81,11 @@ def test_package_rejects_take_without_ready_video(db, tmp_path, monkeypatch):
     take = _take_with_video(db, tmp_path)
     fragment = db.get(MediaFragment, "frag_vidat")
     Path(fragment.file_path).unlink()
-    monkeypatch.setattr(service, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})())
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})(),
+    )
     with pytest.raises(service.VidatPackageError, match="主机位视频尚未就绪"):
         service.create_annotation_package(db, take.id)
 
@@ -79,14 +105,23 @@ def test_probe_video_falls_back_to_recording_sidecar_on_external_volume_timeout(
 
     monkeypatch.setattr(service.subprocess, "run", timeout)
     assert service._probe_video(video) == {
-        "duration": 698.808333, "fps": 60.0, "width": 1920, "height": 1080,
+        "duration": 698.808333,
+        "fps": 60.0,
+        "width": 1920,
+        "height": 1080,
     }
 
 
 def test_publish_package_links_only_managed_artifacts(db, tmp_path, monkeypatch):
     take = _take_with_video(db, tmp_path)
-    monkeypatch.setattr(service, "_probe_video", lambda _: {"fps": 30.0, "duration": 2.0, "width": 1920, "height": 1080})
-    monkeypatch.setattr(service, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})())
+    monkeypatch.setattr(
+        service, "_probe_video", lambda _: {"fps": 30.0, "duration": 2.0, "width": 1920, "height": 1080}
+    )
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})(),
+    )
     package = service.create_annotation_package(db, take.id)
     legacy_annotation = service.json.loads(package.annotation_json)
     legacy_annotation["annotation"]["actionAnnotationList"] = [
@@ -94,7 +129,8 @@ def test_publish_package_links_only_managed_artifacts(db, tmp_path, monkeypatch)
     ]
     package.annotation_json = service.json.dumps(legacy_annotation)
     dist = tmp_path / "vidat-dist"
-    dist.mkdir(); (dist / "index.html").write_text("ok")
+    dist.mkdir()
+    (dist / "index.html").write_text("ok")
     query = service.publish_annotation_package(package, dist)
     assert package.id in query
     assert f"annotation/{package.id}.json" in query
@@ -113,12 +149,27 @@ def test_publish_package_links_only_managed_artifacts(db, tmp_path, monkeypatch)
 
 def test_export_pairs_rally_boundaries_and_keeps_winner_metadata(db, tmp_path):
     take = _take_with_video(db, tmp_path)
-    db.add_all([
-        SessionTimelineEvent(id="evt_start", field_session_id="fs_vidat", capture_take_id=take.id, timestamp_ms=1000,
-            event_type=TimelineEventType.rally_start, source=TimelineEventSource.manual),
-        SessionTimelineEvent(id="evt_end", field_session_id="fs_vidat", capture_take_id=take.id, timestamp_ms=3500,
-            event_type=TimelineEventType.rally_end, source=TimelineEventSource.manual, payload_json='{"winner":"A","validity":"valid"}'),
-    ])
+    db.add_all(
+        [
+            SessionTimelineEvent(
+                id="evt_start",
+                field_session_id="fs_vidat",
+                capture_take_id=take.id,
+                timestamp_ms=1000,
+                event_type=TimelineEventType.rally_start,
+                source=TimelineEventSource.manual,
+            ),
+            SessionTimelineEvent(
+                id="evt_end",
+                field_session_id="fs_vidat",
+                capture_take_id=take.id,
+                timestamp_ms=3500,
+                event_type=TimelineEventType.rally_end,
+                source=TimelineEventSource.manual,
+                payload_json='{"winner":"A","validity":"valid"}',
+            ),
+        ]
+    )
     db.commit()
     actions = service._event_actions(db, take.id, 10.0)
     assert len(actions) == 1
@@ -128,8 +179,14 @@ def test_export_pairs_rally_boundaries_and_keeps_winner_metadata(db, tmp_path):
 
 def test_package_api_creates_and_lists_versions(db, tmp_path, monkeypatch):
     take = _take_with_video(db, tmp_path)
-    monkeypatch.setattr(service, "_probe_video", lambda _: {"fps": 30.0, "duration": 2.0, "width": 1920, "height": 1080})
-    monkeypatch.setattr(service, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})())
+    monkeypatch.setattr(
+        service, "_probe_video", lambda _: {"fps": 30.0, "duration": 2.0, "width": 1920, "height": 1080}
+    )
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})(),
+    )
     created = create_package(take.id, db)
     packages = list_packages(take.id, db)
     assert created.capture_take_id == take.id
@@ -138,15 +195,36 @@ def test_package_api_creates_and_lists_versions(db, tmp_path, monkeypatch):
 
 def test_import_preview_detects_rally_winner_change(db, tmp_path, monkeypatch):
     take = _take_with_video(db, tmp_path)
-    db.add_all([
-        SessionTimelineEvent(id="rally_start", field_session_id="fs_vidat", capture_take_id=take.id, timestamp_ms=0,
-            event_type=TimelineEventType.rally_start, source=TimelineEventSource.manual),
-        SessionTimelineEvent(id="rally_end", field_session_id="fs_vidat", capture_take_id=take.id, timestamp_ms=1000,
-            event_type=TimelineEventType.rally_end, source=TimelineEventSource.manual, payload_json='{"winner":"A"}'),
-    ])
+    db.add_all(
+        [
+            SessionTimelineEvent(
+                id="rally_start",
+                field_session_id="fs_vidat",
+                capture_take_id=take.id,
+                timestamp_ms=0,
+                event_type=TimelineEventType.rally_start,
+                source=TimelineEventSource.manual,
+            ),
+            SessionTimelineEvent(
+                id="rally_end",
+                field_session_id="fs_vidat",
+                capture_take_id=take.id,
+                timestamp_ms=1000,
+                event_type=TimelineEventType.rally_end,
+                source=TimelineEventSource.manual,
+                payload_json='{"winner":"A"}',
+            ),
+        ]
+    )
     db.commit()
-    monkeypatch.setattr(service, "_probe_video", lambda _: {"fps": 10.0, "duration": 2.0, "width": 1920, "height": 1080})
-    monkeypatch.setattr(service, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})())
+    monkeypatch.setattr(
+        service, "_probe_video", lambda _: {"fps": 10.0, "duration": 2.0, "width": 1920, "height": 1080}
+    )
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})(),
+    )
     package = service.create_annotation_package(db, take.id)
     changed = service.json.loads(package.annotation_json)
     first_action = next(action for action in changed["annotation"]["actionAnnotationList"] if action["action"] != 0)
@@ -161,14 +239,27 @@ def test_import_preview_detects_rally_winner_change(db, tmp_path, monkeypatch):
 
 def _package(db, tmp_path, monkeypatch):
     take = _take_with_video(db, tmp_path)
-    monkeypatch.setattr(service, "_probe_video", lambda _: {"fps": 10.0, "duration": 10.0, "width": 1920, "height": 1080})
-    monkeypatch.setattr(service, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})())
+    monkeypatch.setattr(
+        service, "_probe_video", lambda _: {"fps": 10.0, "duration": 10.0, "width": 1920, "height": 1080}
+    )
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: type("Settings", (), {"data_dir": tmp_path, "resolve_path": lambda self, p: p})(),
+    )
     return service.create_annotation_package(db, take.id)
 
 
 def _action(event_type, start, end, payload=None, index=0):
-    return {"start": start, "end": end, "action": service.EVENT_LABELS[event_type][0], "object": 0,
-            "description": service.json.dumps({"event_type": event_type, "event_ids": [f"e{index}"], "payload": payload or {}})}
+    return {
+        "start": start,
+        "end": end,
+        "action": service.EVENT_LABELS[event_type][0],
+        "object": 0,
+        "description": service.json.dumps(
+            {"event_type": event_type, "event_ids": [f"e{index}"], "payload": payload or {}}
+        ),
+    }
 
 
 def test_parser_rejects_malformed_metadata_fps_bounds_and_hierarchy(db, tmp_path, monkeypatch):
@@ -192,8 +283,9 @@ def test_parser_rejects_malformed_metadata_fps_bounds_and_hierarchy(db, tmp_path
 def test_score_anchor_maps_to_coding_action_and_summary(db, tmp_path, monkeypatch):
     package = _package(db, tmp_path, monkeypatch)
     annotation = service.json.loads(package.annotation_json)
-    annotation["annotation"]["actionAnnotationList"] = [_action("score_correction", 5, 6,
-        {"score_a": 7, "score_b": 4, "server_team": "B", "reason": "review"})]
+    annotation["annotation"]["actionAnnotationList"] = [
+        _action("score_correction", 5, 6, {"score_a": 7, "score_b": 4, "server_team": "B", "reason": "review"})
+    ]
     preview = service.create_import_preview(db, package, annotation)
     payload = service.json.loads(preview.preview_json)
     assert payload["coding_actions"][0]["action"] == "correct_score"
@@ -205,7 +297,8 @@ def test_confirm_checks_content_hash_and_writes_provenance(db, tmp_path, monkeyp
     annotation = service.json.loads(package.annotation_json)
     annotation["annotation"]["actionAnnotationList"] = [_action("rally_start", 0, 10, {"winner": "A"})]
     preview = service.create_import_preview(db, package, annotation)
-    changed = service.json.loads(service.json.dumps(annotation)); changed["annotation"]["actionAnnotationList"][0]["end"] = 9
+    changed = service.json.loads(service.json.dumps(annotation))
+    changed["annotation"]["actionAnnotationList"][0]["end"] = 9
     with pytest.raises(service.VidatPackageError, match="内容与预览不一致"):
         service.confirm_import_preview(db, package, preview.token, changed)
     audit = service.confirm_import_preview(db, package, preview.token, annotation)

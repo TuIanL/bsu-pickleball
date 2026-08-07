@@ -10,18 +10,18 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.timeline_event import (
     TimelineEventCreate,
-    TimelineEventUpdate,
-    TimelineEventSummary,
     TimelineEventDetail,
-)
-from app.services.timeline_event_service import (
-    create_timeline_event,
-    list_timeline_events,
-    get_timeline_event,
-    update_timeline_event,
-    delete_timeline_event,
+    TimelineEventSummary,
+    TimelineEventUpdate,
 )
 from app.services.field_session_service import get_field_session
+from app.services.timeline_event_service import (
+    create_timeline_event,
+    delete_timeline_event,
+    get_timeline_event,
+    list_timeline_events,
+    update_timeline_event,
+)
 
 router = APIRouter(tags=["timeline-events"])
 
@@ -43,14 +43,13 @@ def create(
         raise HTTPException(status_code=404, detail=f"Field Session {field_session_id} 不存在")
 
     try:
-        event = create_timeline_event(
-            db, field_session_id, payload.model_dump(exclude_none=False)
-        )
+        event = create_timeline_event(db, field_session_id, payload.model_dump(exclude_none=False))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     if payload.capture_take_id:
         from app.services.capture_archive_service import snapshot_capture_timeline
+
         snapshot_capture_timeline(db, payload.capture_take_id)
 
     return TimelineEventDetail.model_validate(event)
@@ -77,7 +76,8 @@ def list_for_session(
         raise HTTPException(status_code=404, detail=f"Field Session {field_session_id} 不存在")
 
     events = list_timeline_events(
-        db, field_session_id,
+        db,
+        field_session_id,
         event_type=event_type,
         source=source,
         recording_session_id=recording_session_id,
@@ -116,6 +116,7 @@ def update(
         raise HTTPException(status_code=404, detail=f"Timeline Event {event_id} 不存在")
     if event.capture_take_id:
         from app.services.capture_archive_service import snapshot_capture_timeline
+
         snapshot_capture_timeline(db, event.capture_take_id)
     return TimelineEventDetail.model_validate(event)
 
@@ -133,4 +134,5 @@ def delete(event_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Timeline Event {event_id} 不存在")
     if existing and existing.capture_take_id:
         from app.services.capture_archive_service import snapshot_capture_timeline
+
         snapshot_capture_timeline(db, existing.capture_take_id)

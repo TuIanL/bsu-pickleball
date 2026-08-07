@@ -1,12 +1,13 @@
 """CaptureCompletionService —— 唯一定终态决策"""
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.camera.capture_runtime_coordinator import CaptureRuntimeOutcome
 from app.camera.capture_finalizer import TrackFinalizationResult
+from app.camera.capture_runtime_coordinator import CaptureRuntimeOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,7 @@ class CompletionDecision:
 
 
 class CaptureCompletionService:
-    def decide(self, outcome: CaptureRuntimeOutcome,
-               results: list[TrackFinalizationResult]) -> CompletionDecision:
+    def decide(self, outcome: CaptureRuntimeOutcome, results: list[TrackFinalizationResult]) -> CompletionDecision:
         warnings = list(outcome.runtime_warnings)
         default_track_id = None
         default_video_id = None
@@ -49,9 +49,11 @@ class CaptureCompletionService:
             )
 
         if primary_success:
-            status = "partial" if outcome.restart_budget_exhausted or not all(
-                r.status in ("succeeded", "reused") for r in results
-            ) else "completed"
+            status = (
+                "partial"
+                if outcome.restart_budget_exhausted or not all(r.status in ("succeeded", "reused") for r in results)
+                else "completed"
+            )
             return CompletionDecision(
                 terminal_status=status,
                 warnings=warnings,
@@ -74,13 +76,13 @@ class CaptureCompletionService:
         )
 
     def finalize_and_decide(
-        self, capture_take_id: str,
+        self,
+        capture_take_id: str,
         outcome: CaptureRuntimeOutcome,
         finalizer,
         fragment_infos_by_track: dict[str, list[dict]],
     ) -> CompletionDecision:
         results = []
-        async_mode = len(fragment_infos_by_track) > 0
         for track_id, frags in fragment_infos_by_track.items():
             r = finalizer.finalize_track(track_id, frags, async_mode=True, capture_take_id=capture_take_id)
             results.append(r)
@@ -95,11 +97,14 @@ class CaptureCompletionService:
         try:
             from app.database import get_session_factory
             from app.services import capture_take_service
+
             db = get_session_factory()()
             try:
                 capture_take_service.finalize_capture_take(
-                    db, capture_take_id, decision.terminal_status,
-                    ended_at=datetime.now(timezone.utc),
+                    db,
+                    capture_take_id,
+                    decision.terminal_status,
+                    ended_at=datetime.now(UTC),
                 )
                 db.commit()
             except Exception as e:

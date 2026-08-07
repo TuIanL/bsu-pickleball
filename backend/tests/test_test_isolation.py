@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.core.config import get_settings
@@ -33,7 +33,7 @@ def test_backend_tests_use_temp_runtime_paths():
 
 def test_active_capture_timeout_boundary_is_explicit(isolated_database):
     factory = isolated_database
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     db = factory()
     fresh = _take("fresh", status=CaptureTakeStatus.recording, started_at=now)
     stale = _take("stale", status=CaptureTakeStatus.recording, started_at=now - timedelta(minutes=10))
@@ -49,7 +49,7 @@ def test_orphan_capture_take_recovery_marks_only_active_orphans_failed(isolated_
     from app.camera import capture_recovery
 
     factory = isolated_database
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     db = factory()
     orphan = _take("orphan", status=CaptureTakeStatus.recording, started_at=now)
     completed = _take("completed", status=CaptureTakeStatus.completed, started_at=now)

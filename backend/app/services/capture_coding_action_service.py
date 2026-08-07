@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -27,9 +27,7 @@ def compute_request_hash(action_type: str, payload: dict) -> str:
 
 
 # 按 take 与客户端动作 ID 查找已存在的命令动作（幂等判断）
-def find_existing_action(
-    db: Session, capture_take_id: str, client_action_id: str
-) -> CaptureCodingAction | None:
+def find_existing_action(db: Session, capture_take_id: str, client_action_id: str) -> CaptureCodingAction | None:
     return (
         db.query(CaptureCodingAction)
         .filter(
@@ -52,7 +50,7 @@ def create_action_record(
     request_hash: str,
     revision_before: int,
 ) -> CaptureCodingAction:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     action = CaptureCodingAction(
         id=_generate_id(),
         capture_take_id=capture_take_id,
@@ -81,7 +79,7 @@ def complete_action_record(
     action.status = CodingActionStatus.executed
     action.revision_after = revision_after
     action.result_json = result_json
-    action.completed_at = datetime.now(timezone.utc)
+    action.completed_at = datetime.now(UTC)
     db.flush()
 
 
@@ -94,9 +92,7 @@ def mark_action_undone(db: Session, action: CaptureCodingAction) -> None:
 
 
 # 获取最近一条可撤销的命令动作（非 undo 类型且已执行）
-def get_last_undoable_action(
-    db: Session, capture_take_id: str
-) -> CaptureCodingAction | None:
+def get_last_undoable_action(db: Session, capture_take_id: str) -> CaptureCodingAction | None:
     return (
         db.query(CaptureCodingAction)
         .filter(
@@ -110,9 +106,7 @@ def get_last_undoable_action(
 
 
 # 列出某个 take 下的全部命令动作，按创建时间升序
-def list_actions_for_take(
-    db: Session, capture_take_id: str
-) -> list[CaptureCodingAction]:
+def list_actions_for_take(db: Session, capture_take_id: str) -> list[CaptureCodingAction]:
     return (
         db.query(CaptureCodingAction)
         .filter(CaptureCodingAction.capture_take_id == capture_take_id)

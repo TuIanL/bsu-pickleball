@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.camera.session_service as recording_service_module
 from app.camera.camera_registry import CAMERAS
 from app.camera.models import RecordingSession
 from app.camera.session_service import SESSIONS, session_service
-import app.camera.session_service as recording_service_module
 from app.core import config
 from app.database import Base, get_engine, init_db, reset_database_state
 from app.main import app
@@ -174,7 +174,7 @@ def test_delete_empty_field_session_and_block_protected_sessions(client):
     assert client.get(f"/api/field-sessions/{live['id']}").status_code == 200
 
     linked = _create_field_session(client, title="linked")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session_service._persist(
         RecordingSession(
             session_id="rec_delete_guard",
@@ -203,11 +203,18 @@ def test_recording_start_links_field_session_and_inherits_context(client, monkey
 
     monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
     monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
-    monkeypatch.setattr(recording_service_module.session_service._recorder, "start", lambda **kwargs: starts.append(kwargs))
+    monkeypatch.setattr(
+        recording_service_module.session_service._recorder, "start", lambda **kwargs: starts.append(kwargs)
+    )
 
     response = client.post(
         "/api/recordings/start",
-        json={"camera_id": "cam-a", "field_session_id": created["id"], "court_name": "", "auto_analyze_after_stop": False},
+        json={
+            "camera_id": "cam-a",
+            "field_session_id": created["id"],
+            "court_name": "",
+            "auto_analyze_after_stop": False,
+        },
     )
 
     assert response.status_code == 201
@@ -224,7 +231,9 @@ def test_recording_start_with_missing_field_session_returns_404_without_starting
 
     monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
     monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
-    monkeypatch.setattr(recording_service_module.session_service._recorder, "start", lambda **kwargs: starts.append(kwargs))
+    monkeypatch.setattr(
+        recording_service_module.session_service._recorder, "start", lambda **kwargs: starts.append(kwargs)
+    )
 
     response = client.post(
         "/api/recordings/start",
@@ -262,7 +271,7 @@ def test_recording_start_without_field_session_still_works(client, monkeypatch):
 def test_stop_recording_returns_complete_capture_stop_result(client, monkeypatch):
     created = _create_field_session(client, court_name="stop测试")
     _register_camera(client)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     monkeypatch.setattr("app.api.routes_recording.check_ffmpeg_available", lambda: True)
     monkeypatch.setattr(recording_service_module, "check_ffmpeg_available", lambda: True)
@@ -270,21 +279,34 @@ def test_stop_recording_returns_complete_capture_stop_result(client, monkeypatch
 
     start_resp = client.post(
         "/api/recordings/start",
-        json={"camera_id": "cam-a", "field_session_id": created["id"], "court_name": "", "auto_analyze_after_stop": True},
+        json={
+            "camera_id": "cam-a",
+            "field_session_id": created["id"],
+            "court_name": "",
+            "auto_analyze_after_stop": True,
+        },
     )
     assert start_resp.status_code == 201
     session_id = start_resp.json()["session_id"]
 
-    monkeypatch.setattr(recording_service_module.session_service, "stop_session", lambda sid: type("FakeSession", (), {
-        "session_id": sid,
-        "capture_take_id": "take_test_001",
-        "video_id": "vid_test_001",
-        "duration_sec": 45.0,
-        "status": "completed",
-        "camera_id": "cam-a",
-        "field_session_id": created["id"],
-        "auto_analysis_job_id": "job_test_001",
-    })())
+    monkeypatch.setattr(
+        recording_service_module.session_service,
+        "stop_session",
+        lambda sid: type(
+            "FakeSession",
+            (),
+            {
+                "session_id": sid,
+                "capture_take_id": "take_test_001",
+                "video_id": "vid_test_001",
+                "duration_sec": 45.0,
+                "status": "completed",
+                "camera_id": "cam-a",
+                "field_session_id": created["id"],
+                "auto_analysis_job_id": "job_test_001",
+            },
+        )(),
+    )
 
     class FakeTake:
         id = "take_test_001"
@@ -321,7 +343,7 @@ def test_stop_recording_returns_complete_capture_stop_result(client, monkeypatch
 
 def test_recording_list_filters_by_field_session(client):
     field_session = _create_field_session(client)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     linked = RecordingSession(
         session_id="rec_linked",
         camera_id="cam-a",

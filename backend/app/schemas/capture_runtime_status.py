@@ -6,10 +6,11 @@
   以便前端区分"暂时没有测量结果"和"系统故障"。
 - 不得把目标配置（target_fps、target_width 等）伪装成实测值。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -25,8 +26,8 @@ class MetricValue(BaseModel):
     """通用指标值：每个指标独立表达可用性，避免单项失败掩盖整体。"""
 
     state: MetricAvailability
-    value: Optional[float] = None
-    message: Optional[str] = Field(
+    value: float | None = None
+    message: str | None = Field(
         default=None,
         description="error 或 unavailable 时的可读原因，便于前端诊断展示",
     )
@@ -36,10 +37,10 @@ class StorageCapacity(BaseModel):
     """存储容量快照，基于会话目录所在文件系统。"""
 
     state: MetricAvailability
-    total_bytes: Optional[int] = None
-    used_bytes: Optional[int] = None
-    free_bytes: Optional[int] = None
-    message: Optional[str] = None
+    total_bytes: int | None = None
+    used_bytes: int | None = None
+    free_bytes: int | None = None
+    message: str | None = None
 
 
 class RecordingMetrics(BaseModel):
@@ -53,18 +54,18 @@ class RecordingMetrics(BaseModel):
     phase: str = Field(
         description="CaptureTake 当前阶段：starting/recording/completed/partial/failed/canceled 等",
     )
-    started_at: Optional[datetime] = None
-    elapsed_ms: Optional[int] = Field(
+    started_at: datetime | None = None
+    elapsed_ms: int | None = Field(
         default=None,
         description="当前录制已持续毫秒数（终态时为最后测得值）",
     )
-    duration_ms: Optional[int] = Field(
+    duration_ms: int | None = Field(
         default=None,
         description="终态时的最终时长（毫秒）；活跃状态下为空",
     )
-    target_fps: Optional[float] = Field(default=None, description="目标帧率配置，非实测")
-    target_width: Optional[int] = Field(default=None, description="目标分辨率宽度，非实测")
-    target_height: Optional[int] = Field(default=None, description="目标分辨率高度，非实测")
+    target_fps: float | None = Field(default=None, description="目标帧率配置，非实测")
+    target_width: int | None = Field(default=None, description="目标分辨率宽度，非实测")
+    target_height: int | None = Field(default=None, description="目标分辨率高度，非实测")
     file_size_bytes: MetricValue = Field(
         description="当前会话文件大小（汇总已完成和活动分片）",
     )
@@ -87,7 +88,7 @@ class TrackRuntimeStatus(BaseModel):
     )
     file_size_bytes: MetricValue
     effective_fps: MetricValue
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class SyncRuntimeStatus(BaseModel):
@@ -100,14 +101,14 @@ class SyncRuntimeStatus(BaseModel):
     dual_sync: MetricAvailability = Field(
         description="双路时间同步状态；单摄时为 unavailable",
     )
-    dual_sync_quality: Optional[str] = Field(
+    dual_sync_quality: str | None = Field(
         default=None,
         description="同步质量：good / degraded / unknown",
     )
     event_sync: MetricAvailability = Field(
         description="事件编码 outbox 同步状态；无活跃 outbox 时为 ready",
     )
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class CaptureTakeRuntimeStatus(BaseModel):
@@ -123,5 +124,5 @@ class CaptureTakeRuntimeStatus(BaseModel):
     storage: StorageCapacity
     recording: RecordingMetrics
     tracks: list[TrackRuntimeStatus] = []
-    sync: Optional[SyncRuntimeStatus] = None
+    sync: SyncRuntimeStatus | None = None
     updated_at: datetime = Field(description="本快照生成时间（UTC ISO 8601）")

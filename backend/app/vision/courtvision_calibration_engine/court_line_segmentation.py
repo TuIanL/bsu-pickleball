@@ -13,8 +13,10 @@ from __future__ import annotations
 
 # dataclass：数据类（详见 schemas.py 注释）。
 from dataclasses import dataclass
+
 # Path：路径对象。
 from pathlib import Path
+
 # Any：泛指模型对象等"任意类型"。
 from typing import Any
 
@@ -25,9 +27,10 @@ import numpy as np
 @dataclass(frozen=True)
 class CourtLineSegmentationResult:
     """一次分割的结果：掩码 + 置信度 + 模型路径。"""
-    mask: np.ndarray                  # 分割掩码（H×W 的 uint8，线处为 255）
-    confidence: float                 # 平均置信度（0~1）
-    model_path: str | None = None     # 用的哪个模型
+
+    mask: np.ndarray  # 分割掩码（H×W 的 uint8，线处为 255）
+    confidence: float  # 平均置信度（0~1）
+    model_path: str | None = None  # 用的哪个模型
 
 
 class CourtLineSegmentationUnavailable(RuntimeError):
@@ -37,6 +40,7 @@ class CourtLineSegmentationUnavailable(RuntimeError):
     与 ValueError 不同：这里通常表示"模型没配 / 库没装"，属于运行前置条件不满足，
     而不是参数传错。
     """
+
     pass
 
 
@@ -54,10 +58,10 @@ class CourtLineSegmenter:
         confidence: float = 0.35,
         device: str | None = None,
     ) -> None:
-        self.model_path = model_path        # 模型权重路径（None 表示未配置）
-        self.confidence = confidence        # 检测置信度阈值
-        self.device = device                # 推理设备（"cpu"/"cuda:0"，None 用默认）
-        self._model: Any | None = None      # 已加载的模型缓存（懒加载）
+        self.model_path = model_path  # 模型权重路径（None 表示未配置）
+        self.confidence = confidence  # 检测置信度阈值
+        self.device = device  # 推理设备（"cpu"/"cuda:0"，None 用默认）
+        self._model: Any | None = None  # 已加载的模型缓存（懒加载）
 
     @property
     def configured(self) -> bool:
@@ -115,7 +119,7 @@ def _result_to_mask(results: Any, shape: tuple[int, int]) -> tuple[np.ndarray | 
     - 没有产生任何前景 → 返回 (None, 0.0)。
     """
     height, width = shape
-    combined = np.zeros((height, width), dtype=np.uint8)   # 合并掩码，初始全黑
+    combined = np.zeros((height, width), dtype=np.uint8)  # 合并掩码，初始全黑
     confidences: list[float] = []
 
     for result in results or []:

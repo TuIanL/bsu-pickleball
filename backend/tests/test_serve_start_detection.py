@@ -11,8 +11,8 @@ from app.schemas.tracking import (
     PlayerTrajectorySample,
     TrackingResult,
 )
-from app.vision.events.serve_start_detector import ServeStartDetector
 from app.vision.courtvision_calibration_engine.court_units import normalize_court_unit
+from app.vision.events.serve_start_detector import ServeStartDetector
 
 
 def sample(frame, time, x, y, *, player_id="Player_1", track_id=1, unit="m"):
@@ -57,13 +57,17 @@ def tracking_with_overlay(duration=120):
                 ],
             )
         )
-    return TrackingResult(fps=5, frame_count=duration * 5, processed_frame_count=len(frames), frame_stride=5, overlay_frames=frames)
+    return TrackingResult(
+        fps=5, frame_count=duration * 5, processed_frame_count=len(frames), frame_stride=5, overlay_frames=frames
+    )
 
 
 def metric_court(unit="m"):
     return CourtCoordinateMetadata(
         court_unit=unit,
-        canonical=CourtDimensions(width=6.10 if unit == "m" else 20.0, length=13.41 if unit == "m" else 44.0, unit=unit),
+        canonical=CourtDimensions(
+            width=6.10 if unit == "m" else 20.0, length=13.41 if unit == "m" else 44.0, unit=unit
+        ),
     )
 
 

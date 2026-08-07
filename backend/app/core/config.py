@@ -8,8 +8,8 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -25,165 +25,169 @@ class Settings(BaseModel):
     """
 
     # ---- 应用基本信息 ----
-    app_name: str = "Pre Pickleball Vision API"          # 应用名称
-    app_version: str = "0.2.0"                           # 应用版本号
-    cors_origins: list[str] = Field(                     # 允许跨域访问的前端来源（CORS 白名单）
+    app_name: str = "Pre Pickleball Vision API"  # 应用名称
+    app_version: str = "0.2.0"  # 应用版本号
+    cors_origins: list[str] = Field(  # 允许跨域访问的前端来源（CORS 白名单）
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
 
     # ---- 数据与模型存放目录 ----
-    data_dir: Path = Path("data")                        # 总数据目录
-    database_path: Path = Path("data/app.sqlite3")       # 本地 SQLite 数据库文件
-    uploads_dir: Path = Path("data/uploads")             # 上传视频存放目录
-    outputs_dir: Path = Path("data/outputs")             # 分析结果输出目录
-    calibrations_dir: Path = Path("data/calibrations")   # 标定文件目录
-    recordings_dir: Path = Path("data/recordings")       # 录制视频目录
-    cameras_dir: Path = Path("data/cameras")             # 摄像头配置目录
-    tmp_dir: Path = Path("data/tmp")                     # 临时文件目录
+    data_dir: Path = Path("data")  # 总数据目录
+    database_path: Path = Path("data/app.sqlite3")  # 本地 SQLite 数据库文件
+    uploads_dir: Path = Path("data/uploads")  # 上传视频存放目录
+    outputs_dir: Path = Path("data/outputs")  # 分析结果输出目录
+    calibrations_dir: Path = Path("data/calibrations")  # 标定文件目录
+    recordings_dir: Path = Path("data/recordings")  # 录制视频目录
+    cameras_dir: Path = Path("data/cameras")  # 摄像头配置目录
+    tmp_dir: Path = Path("data/tmp")  # 临时文件目录
     capture_min_free_space_bytes: int = 1024 * 1024 * 1024  # 录制开始前至少保留 1 GiB 空间
-    model_dir: Path = Path("../models")                  # 模型权重所在目录（相对项目根）
+    model_dir: Path = Path("../models")  # 模型权重所在目录（相对项目根）
 
     # ---- 人体检测模型 ----
-    default_detector_model: str = "yolo11n.pt"           # 默认人体检测模型文件名
-    detector_confidence: float = 0.15                    # 检测置信度阈值（低于此值不认为是人）
-    detector_device: str | None = None                   # 推理设备（None=自动/CPU；或 "cuda:0" 等 GPU）
+    default_detector_model: str = "yolo11n.pt"  # 默认人体检测模型文件名
+    detector_confidence: float = 0.15  # 检测置信度阈值（低于此值不认为是人）
+    detector_device: str | None = None  # 推理设备（None=自动/CPU；或 "cuda:0" 等 GPU）
 
     # ---- 姿态（Pose）推理 ----
-    enable_model_inference: bool = True                  # 是否启用模型推理（总开关）
-    enable_pose_inference: bool = False                  # 是否启用姿态（关键点）推理
-    rtmpose_config_path: str | None = None               # RTMPose 配置文件路径
-    rtmpose_checkpoint_path: str | None = None           # RTMPose 权重文件路径
-    rtmpose_device: str | None = None                    # RTMPose 推理设备
-    pose_confidence: float = 0.3                         # 姿态关键点置信度阈值（进入可见）
-    pose_confidence_exit: float = 0.20                   # 姿态关键点置信度阈值（退出可见，hysteresis）
-    pose_keypoint_schema: str = "rtmpose26"              # 姿态关键点方案名（26 点）
+    enable_model_inference: bool = True  # 是否启用模型推理（总开关）
+    enable_pose_inference: bool = False  # 是否启用姿态（关键点）推理
+    rtmpose_config_path: str | None = None  # RTMPose 配置文件路径
+    rtmpose_checkpoint_path: str | None = None  # RTMPose 权重文件路径
+    rtmpose_device: str | None = None  # RTMPose 推理设备
+    pose_confidence: float = 0.3  # 姿态关键点置信度阈值（进入可见）
+    pose_confidence_exit: float = 0.20  # 姿态关键点置信度阈值（退出可见，hysteresis）
+    pose_keypoint_schema: str = "rtmpose26"  # 姿态关键点方案名（26 点）
 
     # ---- 视频 / overlay 渲染 ----
-    overlay_frame_stride: int = 2                        # overlay 抽帧步长（每隔几帧画一次叠加）
+    overlay_frame_stride: int = 2  # overlay 抽帧步长（每隔几帧画一次叠加）
 
     # ---- 主球员筛选（从多人中确定"关注对象"）----
-    primary_player_min_confidence: float = 0.65          # 主球员最低置信度
-    primary_player_max_subjects: int = 4                  # 最多同时关注几个目标
-    primary_player_min_box_area_ratio: float = 0.0005    # 检测框最小面积占比（过滤太小框）
-    primary_player_max_box_area_ratio: float = 0.85      # 检测框最大面积占比（过滤太大框）
-    primary_player_court_margin_ft: float = 12.0         # 球场外扩边距（英尺）
-    primary_player_window_frames: int = 90               # 判定主球员的滑动窗口帧数
-    primary_player_window_seconds: float = 1.0            # 判定主球员的滑动窗口时长
+    primary_player_min_confidence: float = 0.65  # 主球员最低置信度
+    primary_player_max_subjects: int = 4  # 最多同时关注几个目标
+    primary_player_min_box_area_ratio: float = 0.0005  # 检测框最小面积占比（过滤太小框）
+    primary_player_max_box_area_ratio: float = 0.85  # 检测框最大面积占比（过滤太大框）
+    primary_player_court_margin_ft: float = 12.0  # 球场外扩边距（英尺）
+    primary_player_window_frames: int = 90  # 判定主球员的滑动窗口帧数
+    primary_player_window_seconds: float = 1.0  # 判定主球员的滑动窗口时长
     primary_player_target_court_threshold: float = 0.65  # 主球员在目标球场的比例阈值（提高以减少邻场干扰）
-    primary_player_quality_threshold: float = 0.28       # 主球员质量阈值
+    primary_player_quality_threshold: float = 0.28  # 主球员质量阈值
 
     # ---- 注意力式主球员选择器（可选，默认关闭）----
-    enable_attention_player_selector: bool = False        # 是否用注意力模型选主球员
+    enable_attention_player_selector: bool = False  # 是否用注意力模型选主球员
     attention_player_selector_model_path: str | None = None  # 注意力选择器模型路径
-    attention_player_selector_confidence: float = 0.65     # 注意力选择器置信度阈值
+    attention_player_selector_confidence: float = 0.65  # 注意力选择器置信度阈值
 
     # ---- 球检测 / 弹跳检测（默认开启，缺少模型时自动降级为 unavailable）----
-    ball_model_path: str | None = None                    # 球检测模型路径
-    enable_ball_detection: bool = True                    # 是否启用球检测
-    enable_bounce_detection: bool = True                  # 是否启用弹跳检测
-    enable_ball_reconstruction: bool = True               # 是否启用事件切分球轨迹重建（第三套产物）
-    ball_reconstruction_contact_height_m: float = 1.10    # 击球接触高度先验（米）
-    ball_analysis_strict: bool = False                    # 球分析严格模式：true 时球分析异常导致 pipeline failed
-    ball_stationary_blacklist_frames: int = 60             # 球静止候选加入黑名单的累计帧阈值
-    ball_stationary_blacklist_seconds: float = 2.0         # 球静止候选加入黑名单的累计时长
+    ball_model_path: str | None = None  # 球检测模型路径
+    enable_ball_detection: bool = True  # 是否启用球检测
+    enable_bounce_detection: bool = True  # 是否启用弹跳检测
+    enable_ball_reconstruction: bool = True  # 是否启用事件切分球轨迹重建（第三套产物）
+    ball_reconstruction_contact_height_m: float = 1.10  # 击球接触高度先验（米）
+    ball_analysis_strict: bool = False  # 球分析严格模式：true 时球分析异常导致 pipeline failed
+    ball_stationary_blacklist_frames: int = 60  # 球静止候选加入黑名单的累计帧阈值
+    ball_stationary_blacklist_seconds: float = 2.0  # 球静止候选加入黑名单的累计时长
 
     # ---- 可视化输出 ----
-    enable_analysis_overlay_video: bool = False           # 是否生成分析叠加视频（骨架已由前端 SVG 实时渲染）
-    enable_position_visualizations: bool = True           # 是否生成位置可视化图
-    visualization_language: str = "zh-CN"                 # 可视化文字语言
-    kitchen_line_reference_distance_m: float = 0.9        # 平均站位距厨房线"参考基准"（米，硬编码常数，反馈文案标注为参考基准）
-    enable_projection_debug_jsonl: bool = False           # 是否生成逐帧投影诊断 JSONL
-    enable_projection_debug_overlay: bool = False         # 是否生成投影诊断叠加视频
-    near_clip_threshold: float = 0.94                     # bbox 底边裁切检测阈值（画面高度比例）
+    enable_analysis_overlay_video: bool = False  # 是否生成分析叠加视频（骨架已由前端 SVG 实时渲染）
+    enable_position_visualizations: bool = True  # 是否生成位置可视化图
+    visualization_language: str = "zh-CN"  # 可视化文字语言
+    kitchen_line_reference_distance_m: float = (
+        0.9  # 平均站位距厨房线"参考基准"（米，硬编码常数，反馈文案标注为参考基准）
+    )
+    enable_projection_debug_jsonl: bool = False  # 是否生成逐帧投影诊断 JSONL
+    enable_projection_debug_overlay: bool = False  # 是否生成投影诊断叠加视频
+    near_clip_threshold: float = 0.94  # bbox 底边裁切检测阈值（画面高度比例）
 
     # ---- 球员身份跟踪（跨帧保持同一人身份）----
-    player_identity_max_players: int = 4                   # 最多追踪人数
-    player_identity_lost_buffer_frames: int = 90          # 跟丢后保留缓存帧数
-    player_identity_inactive_buffer_frames: int = 180     # 不活跃时保留缓存帧数
-    player_identity_interpolation_buffer_frames: int = 90 # 插值补齐缓存帧数
-    player_identity_lost_buffer_seconds: float = 1.0       # 跟丢后保留缓存时长
-    player_identity_inactive_buffer_seconds: float = 2.0   # 不活跃时保留缓存时长
-    player_identity_interpolation_buffer_seconds: float = 1.0 # 插值补齐缓存时长
-    player_identity_match_threshold: float = 0.55         # 身份匹配阈值
-    player_identity_max_reconnect_distance_m: float = 2.5 # 重连最大距离（米）
-    player_identity_max_speed_mps: float = 7.0            # 最大速度（米/秒，过滤异常跳变）
-    player_identity_court_buffer_m: float = 0.75          # 球场缓冲距离（米）
-    player_identity_smoothing_window: int = 5             # 平滑窗口帧数
+    player_identity_max_players: int = 4  # 最多追踪人数
+    player_identity_lost_buffer_frames: int = 90  # 跟丢后保留缓存帧数
+    player_identity_inactive_buffer_frames: int = 180  # 不活跃时保留缓存帧数
+    player_identity_interpolation_buffer_frames: int = 90  # 插值补齐缓存帧数
+    player_identity_lost_buffer_seconds: float = 1.0  # 跟丢后保留缓存时长
+    player_identity_inactive_buffer_seconds: float = 2.0  # 不活跃时保留缓存时长
+    player_identity_interpolation_buffer_seconds: float = 1.0  # 插值补齐缓存时长
+    player_identity_match_threshold: float = 0.55  # 身份匹配阈值
+    player_identity_max_reconnect_distance_m: float = 2.5  # 重连最大距离（米）
+    player_identity_max_speed_mps: float = 7.0  # 最大速度（米/秒，过滤异常跳变）
+    player_identity_court_buffer_m: float = 0.75  # 球场缓冲距离（米）
+    player_identity_smoothing_window: int = 5  # 平滑窗口帧数
 
     # ---- 球员分析容量（统一硬限制）----
-    player_analysis_hard_limit: int = 4                  # 系统能同时分析的最大球员数（容量上限）
+    player_analysis_hard_limit: int = 4  # 系统能同时分析的最大球员数（容量上限）
 
     # ---- 球员锁定（跨帧保持 Player_1~Player_4 身份稳定性，锁定后硬锁到底）----
-    player_lock_target_player_count: int = 4              # 主球员目标数量（singles=2, doubles=4）【deprecated: 改用 player_analysis_hard_limit】
-    player_lock_bootstrap_min_frames: int = 60            # bootstrap 最短收集帧数
-    player_lock_bootstrap_max_frames: int = 180           # bootstrap 最长收集帧数
-    player_lock_min_observed_frames: int = 8              # 候选最少出现帧数
-    player_lock_lock_min_hits: int = 5                    # 锁定所需连续命中帧数
-    player_lock_plausible_min_hits: int = 3               # 进入 tentative 所需连续帧数
-    player_lock_lost_grace_frames: int = 3                # 从 locked 到 lost 的容错帧数
-    player_lock_lost_max_frames_locked: int = 300         # lost 状态最长容忍帧数【deprecated: 硬锁到底后不再触发回退】
-    player_lock_bootstrap_min_seconds: float = 1.0         # bootstrap 最短收集时长
-    player_lock_bootstrap_max_seconds: float = 3.0         # bootstrap 最长收集时长
-    player_lock_lost_grace_seconds: float = 0.1            # 从 locked 到 lost 的容错时长
-    player_lock_lost_max_seconds_locked: float = 10.0      # lost 状态最长容忍时长
-    player_lock_locked_conf: float = 0.06                 # locked 状态最低置信度
-    player_lock_tentative_conf: float = 0.12              # tentative 状态最低置信度
-    player_lock_searching_conf: float = 0.20              # searching 状态最低置信度
-    player_lock_reconnect_threshold: float = 0.45         # 重连评分阈值
-    player_lock_court_margin_ft: float = 12.0             # 近场区域外扩边距（英尺）
-    player_lock_max_reconnect_distance_ft: float = 15.0   # 重连最大距离（英尺）
-    player_lock_bootstrap_court_margin_ft: float = 12.0   # bootstrap 期间球场外扩（英尺）
+    player_lock_target_player_count: int = (
+        4  # 主球员目标数量（singles=2, doubles=4）【deprecated: 改用 player_analysis_hard_limit】
+    )
+    player_lock_bootstrap_min_frames: int = 60  # bootstrap 最短收集帧数
+    player_lock_bootstrap_max_frames: int = 180  # bootstrap 最长收集帧数
+    player_lock_min_observed_frames: int = 8  # 候选最少出现帧数
+    player_lock_lock_min_hits: int = 5  # 锁定所需连续命中帧数
+    player_lock_plausible_min_hits: int = 3  # 进入 tentative 所需连续帧数
+    player_lock_lost_grace_frames: int = 3  # 从 locked 到 lost 的容错帧数
+    player_lock_lost_max_frames_locked: int = 300  # lost 状态最长容忍帧数【deprecated: 硬锁到底后不再触发回退】
+    player_lock_bootstrap_min_seconds: float = 1.0  # bootstrap 最短收集时长
+    player_lock_bootstrap_max_seconds: float = 3.0  # bootstrap 最长收集时长
+    player_lock_lost_grace_seconds: float = 0.1  # 从 locked 到 lost 的容错时长
+    player_lock_lost_max_seconds_locked: float = 10.0  # lost 状态最长容忍时长
+    player_lock_locked_conf: float = 0.06  # locked 状态最低置信度
+    player_lock_tentative_conf: float = 0.12  # tentative 状态最低置信度
+    player_lock_searching_conf: float = 0.20  # searching 状态最低置信度
+    player_lock_reconnect_threshold: float = 0.45  # 重连评分阈值
+    player_lock_court_margin_ft: float = 12.0  # 近场区域外扩边距（英尺）
+    player_lock_max_reconnect_distance_ft: float = 15.0  # 重连最大距离（英尺）
+    player_lock_bootstrap_court_margin_ft: float = 12.0  # bootstrap 期间球场外扩（英尺）
     player_lock_lost_reconnect_court_margin_ft: float = 20.0  # lost 重连球场外扩（英尺）
-    player_lock_enable_appearance_score: bool = False     # 是否启用人脸/外观特征重连评分
+    player_lock_enable_appearance_score: bool = False  # 是否启用人脸/外观特征重连评分
 
     # ---- 重复重叠 track 抑制（同一目标被跟踪器分身时的去重）----
-    player_duplicate_track_iou_threshold: float = 0.6     # 判定同一目标所需的最小 bbox 重叠度
-    player_duplicate_track_sustain_frames: int = 3        # 重叠需持续的连续帧数（含缺席容错）
+    player_duplicate_track_iou_threshold: float = 0.6  # 判定同一目标所需的最小 bbox 重叠度
+    player_duplicate_track_sustain_frames: int = 3  # 重叠需持续的连续帧数（含缺席容错）
 
     # ---- 场地线检测（用于自动标定）----
-    court_line_model_path: str | None = None              # 场地线分割模型路径
-    court_line_device: str | None = None                  # 场地线模型推理设备
-    court_line_confidence: float = 0.35                    # 场地线置信度阈值
-    court_line_geometry_min_area_ratio: float = 0.03       # 场地线最小面积占比
-    court_line_frame_ratio: float = 0.1                    # 场地线检测抽帧比例
+    court_line_model_path: str | None = None  # 场地线分割模型路径
+    court_line_device: str | None = None  # 场地线模型推理设备
+    court_line_confidence: float = 0.35  # 场地线置信度阈值
+    court_line_geometry_min_area_ratio: float = 0.03  # 场地线最小面积占比
+    court_line_frame_ratio: float = 0.1  # 场地线检测抽帧比例
 
     # ---- 任务队列 / Worker ----
-    enable_job_worker: bool = True                         # 是否启用后台任务 Worker
-    max_cpu_jobs: int = 1                                  # 最大并行 CPU 任务数
-    max_gpu_jobs: int = 1                                  # 最大并行 GPU 任务数
-    enable_gpu_jobs: bool = False                          # 是否启用 GPU 任务
-    job_stage_timeout_seconds: int = 0                     # 单个阶段超时秒数（0=不限制）
-    job_max_retries: int = 1                               # 任务失败最大重试次数
-    job_zombie_timeout_seconds: int = 120                  # 僵尸任务判定阈值（秒，启动时超此时间未更新的 running 任务标为 failed）
-    capture_take_late_event_grace_minutes: int = 5         # CaptureTake 完成后允许补传事件的宽限期（分钟）
+    enable_job_worker: bool = True  # 是否启用后台任务 Worker
+    max_cpu_jobs: int = 1  # 最大并行 CPU 任务数
+    max_gpu_jobs: int = 1  # 最大并行 GPU 任务数
+    enable_gpu_jobs: bool = False  # 是否启用 GPU 任务
+    job_stage_timeout_seconds: int = 0  # 单个阶段超时秒数（0=不限制）
+    job_max_retries: int = 1  # 任务失败最大重试次数
+    job_zombie_timeout_seconds: int = 120  # 僵尸任务判定阈值（秒，启动时超此时间未更新的 running 任务标为 failed）
+    capture_take_late_event_grace_minutes: int = 5  # CaptureTake 完成后允许补传事件的宽限期（分钟）
 
     # ---- 发球（serve）检测相关 ----
-    serve_baseline_margin_ft: float = 6.0                  # 发球基线边距（英尺）
-    serve_pre_still_window_seconds: float = 1.5           # 发球前静止窗口（秒）
-    serve_pre_still_gap_seconds: float = 0.2              # 发球前静止间隔（秒）
-    serve_post_rally_window_seconds: float = 3.0          # 发球后回合窗口（秒）
-    serve_min_gap_seconds: float = 6.0                    # 发球之间最小间隔（秒）
-    serve_pose_smooth_window_frames: int = 5              # 发球姿态平滑窗口帧数
-    serve_clip_pre_seconds: float = 2.0                   # 发球片段前置秒数
-    serve_clip_post_seconds: float = 4.0                  # 发球片段后置秒数
-    enable_serve_debug_artifacts: bool = True             # 是否生成发球调试产物
-    enable_serve_debug_clips: bool = False                # 是否生成发球调试片段
-    enable_serve_debug_overlay: bool = False              # 是否生成发球调试叠加视频
-    serve_debug_clip_limit: int = 20                      # 发球调试片段数量上限
+    serve_baseline_margin_ft: float = 6.0  # 发球基线边距（英尺）
+    serve_pre_still_window_seconds: float = 1.5  # 发球前静止窗口（秒）
+    serve_pre_still_gap_seconds: float = 0.2  # 发球前静止间隔（秒）
+    serve_post_rally_window_seconds: float = 3.0  # 发球后回合窗口（秒）
+    serve_min_gap_seconds: float = 6.0  # 发球之间最小间隔（秒）
+    serve_pose_smooth_window_frames: int = 5  # 发球姿态平滑窗口帧数
+    serve_clip_pre_seconds: float = 2.0  # 发球片段前置秒数
+    serve_clip_post_seconds: float = 4.0  # 发球片段后置秒数
+    enable_serve_debug_artifacts: bool = True  # 是否生成发球调试产物
+    enable_serve_debug_clips: bool = False  # 是否生成发球调试片段
+    enable_serve_debug_overlay: bool = False  # 是否生成发球调试叠加视频
+    serve_debug_clip_limit: int = 20  # 发球调试片段数量上限
 
     # ---- 场地视角（court view）门控 ----
-    enable_court_view_gate: bool = True                   # 是否启用场地视角门控
-    court_view_match_threshold: float = 0.75              # 场地视角匹配阈值
-    court_view_start_frames: int = 5                      # 场地视角起始帧数
-    court_view_end_frames: int = 5                        # 场地视角结束帧数
-    court_view_match_width: int = 320                     # 场地视角匹配宽度（像素）
-    court_view_diagnostic_only: bool = False              # 仅诊断模式（不输出正式结果）
-    court_view_skip_non_court_frames: bool = True         # 跳过非球场帧
+    enable_court_view_gate: bool = True  # 是否启用场地视角门控
+    court_view_match_threshold: float = 0.75  # 场地视角匹配阈值
+    court_view_start_frames: int = 5  # 场地视角起始帧数
+    court_view_end_frames: int = 5  # 场地视角结束帧数
+    court_view_match_width: int = 320  # 场地视角匹配宽度（像素）
+    court_view_diagnostic_only: bool = False  # 仅诊断模式（不输出正式结果）
+    court_view_skip_non_court_frames: bool = True  # 跳过非球场帧
 
     # ---- 检测 ROI 过滤 ----
-    enable_detection_roi_filter: bool = True              # 是否启用检测 ROI 过滤（只检测球场附近）
-    detection_roi_padding_ratio: float = 0.15             # ROI 外扩比例
-    detection_roi_min_padding_px: int = 24                # ROI 最小外扩像素
+    enable_detection_roi_filter: bool = True  # 是否启用检测 ROI 过滤（只检测球场附近）
+    detection_roi_padding_ratio: float = 0.15  # ROI 外扩比例
+    detection_roi_min_padding_px: int = 24  # ROI 最小外扩像素
 
     def resolve_path(self, path: Path) -> Path:
         # 把相对路径解析成基于"当前工作目录"的绝对路径；绝对路径原样返回
@@ -284,8 +288,7 @@ def get_settings() -> Settings:
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
         detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.15")),
         detector_device=os.getenv("PICKLEBALL_DETECTOR_DEVICE") or None,
-        enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "true").lower()
-        in {"1", "true", "yes"},
+        enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "true").lower() in {"1", "true", "yes"},
         # 姿态推理开关：显式设了环境变量就用它；否则根据配置文件/权重是否齐全自动判断
         enable_pose_inference=_env_bool(pose_inference_env)
         if pose_inference_env is not None
@@ -328,20 +331,15 @@ def get_settings() -> Settings:
             1.0,
         ),
         ball_model_path=ball_model_path,
-        enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "true").lower()
-        in {"1", "true", "yes"},
-        enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "true").lower()
-        in {"1", "true", "yes"},
+        enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "true").lower() in {"1", "true", "yes"},
+        enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "true").lower() in {"1", "true", "yes"},
         enable_ball_reconstruction=os.getenv("PICKLEBALL_ENABLE_BALL_RECONSTRUCTION", "true").lower()
         in {"1", "true", "yes"},
         ball_reconstruction_contact_height_m=float(
             os.getenv("PICKLEBALL_BALL_RECONSTRUCTION_CONTACT_HEIGHT_M", "1.10")
         ),
-        ball_analysis_strict=os.getenv("PICKLEBALL_BALL_ANALYSIS_STRICT", "false").lower()
-        in {"1", "true", "yes"},
-        ball_stationary_blacklist_frames=max(
-            1, int(os.getenv("PICKLEBALL_BALL_STATIONARY_BLACKLIST_FRAMES", "60"))
-        ),
+        ball_analysis_strict=os.getenv("PICKLEBALL_BALL_ANALYSIS_STRICT", "false").lower() in {"1", "true", "yes"},
+        ball_stationary_blacklist_frames=max(1, int(os.getenv("PICKLEBALL_BALL_STATIONARY_BLACKLIST_FRAMES", "60"))),
         ball_stationary_blacklist_seconds=_seconds_env(
             "PICKLEBALL_BALL_STATIONARY_BLACKLIST_SECONDS",
             "PICKLEBALL_BALL_STATIONARY_BLACKLIST_FRAMES",
@@ -414,7 +412,9 @@ def get_settings() -> Settings:
         player_lock_lock_min_hits=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOCK_MIN_HITS", "5"))),
         player_lock_plausible_min_hits=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_PLAUSIBLE_MIN_HITS", "3"))),
         player_lock_lost_grace_frames=max(0, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_GRACE_FRAMES", "3"))),
-        player_lock_lost_max_frames_locked=max(1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_MAX_FRAMES_LOCKED", "300"))),
+        player_lock_lost_max_frames_locked=max(
+            1, int(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_MAX_FRAMES_LOCKED", "300"))
+        ),
         player_lock_bootstrap_min_seconds=_seconds_env(
             "PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MIN_SECONDS",
             "PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_MIN_FRAMES",
@@ -442,14 +442,27 @@ def get_settings() -> Settings:
         player_lock_locked_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_LOCKED_CONF", "0.06")),
         player_lock_tentative_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_TENTATIVE_CONF", "0.12")),
         player_lock_searching_conf=float(os.getenv("PICKLEBALL_PLAYER_LOCK_SEARCHING_CONF", "0.20")),
-        player_lock_reconnect_threshold=_clamp_float(os.getenv("PICKLEBALL_PLAYER_LOCK_RECONNECT_THRESHOLD", "0.45"), 0.0, 1.0),
+        player_lock_reconnect_threshold=_clamp_float(
+            os.getenv("PICKLEBALL_PLAYER_LOCK_RECONNECT_THRESHOLD", "0.45"), 0.0, 1.0
+        ),
         player_lock_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_COURT_MARGIN_FT", "12.0")),
-        player_lock_max_reconnect_distance_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_MAX_RECONNECT_DISTANCE_FT", "15.0")),
-        player_lock_bootstrap_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_COURT_MARGIN_FT", "12.0")),
-        player_lock_lost_reconnect_court_margin_ft=float(os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_RECONNECT_COURT_MARGIN_FT", "20.0")),
-        player_lock_enable_appearance_score=os.getenv("PICKLEBALL_PLAYER_LOCK_ENABLE_APPEARANCE_SCORE", "false").lower() in {"1", "true", "yes"},
-        player_duplicate_track_iou_threshold=_clamp_float(os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_IOU_THRESHOLD", "0.6"), 0.0, 1.0),
-        player_duplicate_track_sustain_frames=max(1, int(os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_SUSTAIN_FRAMES", "3"))),
+        player_lock_max_reconnect_distance_ft=float(
+            os.getenv("PICKLEBALL_PLAYER_LOCK_MAX_RECONNECT_DISTANCE_FT", "15.0")
+        ),
+        player_lock_bootstrap_court_margin_ft=float(
+            os.getenv("PICKLEBALL_PLAYER_LOCK_BOOTSTRAP_COURT_MARGIN_FT", "12.0")
+        ),
+        player_lock_lost_reconnect_court_margin_ft=float(
+            os.getenv("PICKLEBALL_PLAYER_LOCK_LOST_RECONNECT_COURT_MARGIN_FT", "20.0")
+        ),
+        player_lock_enable_appearance_score=os.getenv("PICKLEBALL_PLAYER_LOCK_ENABLE_APPEARANCE_SCORE", "false").lower()
+        in {"1", "true", "yes"},
+        player_duplicate_track_iou_threshold=_clamp_float(
+            os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_IOU_THRESHOLD", "0.6"), 0.0, 1.0
+        ),
+        player_duplicate_track_sustain_frames=max(
+            1, int(os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_SUSTAIN_FRAMES", "3"))
+        ),
         court_line_model_path=os.getenv("PICKLEBALL_COURT_LINE_MODEL_PATH")
         or _first_existing_path(model_dir, ["court-line/best.pt", "court-line/court-line-seg.pt"]),
         court_line_device=os.getenv("PICKLEBALL_COURT_LINE_DEVICE") or None,
@@ -463,7 +476,9 @@ def get_settings() -> Settings:
         job_stage_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_STAGE_TIMEOUT_SECONDS", "0"))),
         job_max_retries=max(0, int(os.getenv("PICKLEBALL_JOB_MAX_RETRIES", "1"))),
         job_zombie_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_ZOMBIE_TIMEOUT_SECONDS", "120"))),
-        capture_take_late_event_grace_minutes=max(0, int(os.getenv("PICKLEBALL_CAPTURE_TAKE_LATE_EVENT_GRACE_MINUTES", "5"))),
+        capture_take_late_event_grace_minutes=max(
+            0, int(os.getenv("PICKLEBALL_CAPTURE_TAKE_LATE_EVENT_GRACE_MINUTES", "5"))
+        ),
         serve_baseline_margin_ft=float(os.getenv("PICKLEBALL_SERVE_BASELINE_MARGIN_FT", "6.0")),
         serve_pre_still_window_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_WINDOW_SECONDS", "1.5")),
         serve_pre_still_gap_seconds=float(os.getenv("PICKLEBALL_SERVE_PRE_STILL_GAP_SECONDS", "0.2")),
@@ -479,8 +494,7 @@ def get_settings() -> Settings:
         enable_serve_debug_overlay=os.getenv("PICKLEBALL_ENABLE_SERVE_DEBUG_OVERLAY", "false").lower()
         in {"1", "true", "yes"},
         serve_debug_clip_limit=max(0, int(os.getenv("PICKLEBALL_SERVE_DEBUG_CLIP_LIMIT", "20"))),
-        enable_court_view_gate=os.getenv("PICKLEBALL_ENABLE_COURT_VIEW_GATE", "true").lower()
-        in {"1", "true", "yes"},
+        enable_court_view_gate=os.getenv("PICKLEBALL_ENABLE_COURT_VIEW_GATE", "true").lower() in {"1", "true", "yes"},
         court_view_match_threshold=_clamp_float(
             os.getenv("PICKLEBALL_COURT_VIEW_MATCH_THRESHOLD", "0.75"),
             0.0,
@@ -497,7 +511,9 @@ def get_settings() -> Settings:
         in {"1", "true", "yes"},
         detection_roi_padding_ratio=max(0.0, float(os.getenv("PICKLEBALL_DETECTION_ROI_PADDING_RATIO", "0.15"))),
         detection_roi_min_padding_px=max(0, int(os.getenv("PICKLEBALL_DETECTION_ROI_MIN_PADDING_PX", "24"))),
-        capture_min_free_space_bytes=max(0, int(os.getenv("PICKLEBALL_CAPTURE_MIN_FREE_SPACE_BYTES", str(1024 * 1024 * 1024)))),
+        capture_min_free_space_bytes=max(
+            0, int(os.getenv("PICKLEBALL_CAPTURE_MIN_FREE_SPACE_BYTES", str(1024 * 1024 * 1024)))
+        ),
         # CORS 来源：把环境变量里逗号分隔的字符串拆成列表；未设置则用默认值
         cors_origins=[origin.strip() for origin in cors_origins.split(",")]
         if cors_origins

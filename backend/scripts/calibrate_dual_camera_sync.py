@@ -19,7 +19,7 @@ import argparse
 import json
 from pathlib import Path
 
-from app.services.dual_camera_sync import calibrations_from_anchor_rows, calibration_to_dict
+from app.services.dual_camera_sync import calibration_to_dict, calibrations_from_anchor_rows
 
 
 def main() -> int:

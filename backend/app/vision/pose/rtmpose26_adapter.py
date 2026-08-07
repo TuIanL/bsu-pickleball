@@ -2,18 +2,18 @@
 
 """Optional RTMPose adapter with lazy heavyweight imports."""
 
-from math import isfinite
-from pathlib import Path
-from typing import Any, Sequence
+from collections.abc import Sequence  # noqa: E402
+from math import isfinite  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
 
-from app.schemas.pose import (
+from app.schemas.pose import (  # noqa: E402
     RTMPOSE26_KEYPOINT_NAMES,
     PoseKeypoint,
     PoseOverlayFrame,
     PoseSubject,
 )
-from app.schemas.tracking import FrameDetection
-
+from app.schemas.tracking import FrameDetection  # noqa: E402
 
 SUPPORTED_KEYPOINT_SCHEMA = "rtmpose26"  # 本适配器只支持 rtmpose26 这一种关键点编号体系
 EXPECTED_KEYPOINT_COUNT = len(RTMPOSE26_KEYPOINT_NAMES)  # 期望输出的关键点数量（26）
@@ -85,7 +85,9 @@ class RTMPose26Adapter:
                     track_id=track_id,  # 优先用跟踪 id，缺失时回退生成
                     bbox=subject.bbox,
                     confidence=subject.confidence,
-                    keypoints=self._normalize_keypoints(keypoints, scores, track_id),  # 归一化并附名称/可见性（含 hysteresis）
+                    keypoints=self._normalize_keypoints(
+                        keypoints, scores, track_id
+                    ),  # 归一化并附名称/可见性（含 hysteresis）
                 )
             )
 
@@ -114,8 +116,8 @@ class RTMPose26Adapter:
         # PyTorch >= 2.6 默认 weights_only=True，但 mmpose 检查点包含 numpy 对象，
         # 需要将 numpy 的序列化全局加入安全列表。
         try:
-            import torch  # type: ignore
             import numpy as _np  # type: ignore
+            import torch  # type: ignore
 
             if hasattr(torch.serialization, "add_safe_globals"):
                 torch.serialization.add_safe_globals([_np.core.multiarray._reconstruct])
@@ -171,7 +173,9 @@ class RTMPose26Adapter:
         return (normalized_keypoints, normalized_scores)
 
     # 把原始坐标/分数转换成带名称、可见性标记的 PoseKeypoint 列表，并校验数量。
-    def _normalize_keypoints(self, keypoints: list[list[float]], scores: list[float], track_id: str = "") -> list[PoseKeypoint]:
+    def _normalize_keypoints(
+        self, keypoints: list[list[float]], scores: list[float], track_id: str = ""
+    ) -> list[PoseKeypoint]:
         self._validate_schema()
         if keypoints and len(keypoints) != EXPECTED_KEYPOINT_COUNT:
             raise RuntimeError(
@@ -183,8 +187,8 @@ class RTMPose26Adapter:
             self._visible_states[track_id] = {name: False for name in names}
         states = self._visible_states.get(track_id, {})
         normalized: list[PoseKeypoint] = []
-        enter = self.conf_threshold          # 进入阈值（默认 0.30）
-        exit_t = self.conf_exit_threshold     # 退出阈值（默认 0.20）
+        enter = self.conf_threshold  # 进入阈值（默认 0.30）
+        exit_t = self.conf_exit_threshold  # 退出阈值（默认 0.20）
         for index, point in enumerate(keypoints):
             # 把置信度裁剪到 [0, 1]，防止模型给出越界值。
             confidence = min(max(scores[index] if index < len(scores) else 0.0, 0.0), 1.0)

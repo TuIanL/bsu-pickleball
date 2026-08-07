@@ -5,11 +5,11 @@ import pytest
 
 from app.services.capture_storage_service import (
     CaptureStorageError,
+    capture_storage_is_available,
     create_capture_storage_plan,
     normalize_storage_root,
-    write_json_atomic,
-    capture_storage_is_available,
     validate_storage_root,
+    write_json_atomic,
 )
 from app.services.storage_service import StorageService
 
@@ -48,21 +48,23 @@ def test_analysis_artifact_paths_use_logical_capture_references(tmp_path: Path):
     try:
         path = storage.ball_overlay_json_path("job_artifacts")
         assert path == plan.analysis_dir / "job_artifacts" / "ball_overlay.json"
-        assert storage.logical_artifact_reference("job_artifacts", path) == (
-            "analysis/job_artifacts/ball_overlay.json"
-        )
+        assert storage.logical_artifact_reference("job_artifacts", path) == ("analysis/job_artifacts/ball_overlay.json")
     finally:
         StorageService.unregister_capture_job("job_artifacts")
 
 
 def test_storage_service_keeps_legacy_artifact_paths(tmp_path: Path):
-    settings = type("SettingsStub", (), {
-        "ensure_data_dirs": lambda self: None,
-        "resolved_uploads_dir": tmp_path / "uploads",
-        "resolved_outputs_dir": tmp_path / "outputs",
-        "resolved_calibrations_dir": tmp_path / "calibrations",
-        "resolved_tmp_dir": tmp_path / "tmp",
-    })()
+    settings = type(
+        "SettingsStub",
+        (),
+        {
+            "ensure_data_dirs": lambda self: None,
+            "resolved_uploads_dir": tmp_path / "uploads",
+            "resolved_outputs_dir": tmp_path / "outputs",
+            "resolved_calibrations_dir": tmp_path / "calibrations",
+            "resolved_tmp_dir": tmp_path / "tmp",
+        },
+    )()
     storage = StorageService(settings)
     assert storage.logical_artifact_reference("legacy_job", tmp_path / "outputs" / "legacy_job.json") == str(
         tmp_path / "outputs" / "legacy_job.json"
@@ -83,15 +85,18 @@ def test_atomic_event_file_write_preserves_previous_snapshot_on_replace_error(tm
     assert target.read_text(encoding="utf-8") == '{"version": 1}'
 
 
-@pytest.mark.parametrize("method_name", [
-    "analysis_overlay_video_path",
-    "ball_overlay_json_path",
-    "detections_jsonl_path",
-    "heatmaps_manifest_json_path",
-    "heatmaps_dir",
-    "scatter_plots_manifest_json_path",
-    "player_render_trajectory_path",
-])
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "analysis_overlay_video_path",
+        "ball_overlay_json_path",
+        "detections_jsonl_path",
+        "heatmaps_manifest_json_path",
+        "heatmaps_dir",
+        "scatter_plots_manifest_json_path",
+        "player_render_trajectory_path",
+    ],
+)
 def test_all_analysis_artifact_kinds_are_under_capture_analysis_directory(tmp_path: Path, method_name: str):
     plan = create_capture_storage_plan("take_all_artifacts", str(tmp_path))
     storage = StorageService()

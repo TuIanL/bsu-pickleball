@@ -87,7 +87,7 @@ def _player_stats(
     dist_weighted_sum = 0.0
     dist_weight = 0.0
 
-    for previous, current in zip(tracked, tracked[1:]):
+    for previous, current in zip(tracked, tracked[1:], strict=False):
         delta = max(0.0, (current.timestamp_seconds or 0.0) - (previous.timestamp_seconds or 0.0))
         if delta <= 0:
             continue

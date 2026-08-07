@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
     FlightSegment,
@@ -58,7 +58,7 @@ class BallFlightSegmenter:
 
         segments: list[FlightSegment] = []
         for order, (start, end, start_boundary, end_boundary) in enumerate(segment_indices):
-            segment_points = points[start:end + 1]
+            segment_points = points[start : end + 1]
             if len(segment_points) < self.config.min_points_per_segment:
                 continue
             segment_id = f"flight-{order + 1}"
@@ -102,7 +102,9 @@ class BallFlightSegmenter:
                         event_type=event.event_type,
                         event=event,
                         boundary_reason=(
-                            "serve_reset" if event.event_type == TrajectoryEventType.SERVE_RESET else event.event_type.value
+                            "serve_reset"
+                            if event.event_type == TrajectoryEventType.SERVE_RESET
+                            else event.event_type.value
                         ),
                         priority=_BOUNDARY_PRIORITY[event.event_type],
                     ),
@@ -110,7 +112,7 @@ class BallFlightSegmenter:
 
         # 2) 长时间丢失边界：有效点之间的帧缺口超过阈值
         valid_indices = [i for i, p in enumerate(points) if p.image_xy is not None]
-        for left, right in zip(valid_indices[:-1], valid_indices[1:]):
+        for left, right in zip(valid_indices[:-1], valid_indices[1:], strict=False):
             gap = points[right].frame_index - points[left].frame_index
             if gap > self.config.long_loss_gap_frames:
                 self._upsert_boundary(

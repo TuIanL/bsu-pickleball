@@ -4,8 +4,8 @@ from __future__ import annotations
 
 # defaultdict：热力图网格计数；Path：文件路径；Iterable：可接受任意可迭代点集合。
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import cv2  # type: ignore
 import numpy as np
@@ -13,6 +13,7 @@ import numpy as np
 # 球场几何与标准球场；小地图渲染器（复用其渲染能力生成静态图）。
 from app.vision.courtvision_calibration_engine.court_geometry import PickleballCourtGeometry, standard_court
 from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisualizer, player_color
+
 # 清单条目、配置、坐标点、结果对象、标签函数、清单写出函数。
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     ManifestItem,
@@ -94,8 +95,12 @@ class PositionVisualizer:
             items=scatter_items,
         )
         return (
-            VisualizationResult(heat_status, heat_detail, str(heatmaps_manifest_path), heatmaps_artifact_url, len(heat_items)),
-            VisualizationResult(scatter_status, scatter_detail, str(scatter_manifest_path), scatter_artifact_url, len(scatter_items)),
+            VisualizationResult(
+                heat_status, heat_detail, str(heatmaps_manifest_path), heatmaps_artifact_url, len(heat_items)
+            ),
+            VisualizationResult(
+                scatter_status, scatter_detail, str(scatter_manifest_path), scatter_artifact_url, len(scatter_items)
+            ),
         )
 
     def _generate_heatmaps(
@@ -227,8 +232,8 @@ class PositionVisualizer:
         grid: VisualGrid | None = None,
     ) -> np.ndarray:
         # 基于小地图底图，叠加"网格密度着色"得到热力图。
-        base = self.minimap.render()                      # 干净的球场底图
-        overlay = np.zeros_like(base, dtype=np.uint8)     # 同尺寸空叠加层
+        base = self.minimap.render()  # 干净的球场底图
+        overlay = np.zeros_like(base, dtype=np.uint8)  # 同尺寸空叠加层
         rows = self.config.heatmap_rows
         cols = self.config.heatmap_cols
         if grid is not None:
@@ -248,11 +253,22 @@ class PositionVisualizer:
                 counts[(row, col)] += 1
             max_count = max(counts.values(), default=1)
         for (row, col), count in counts.items():
-            x1 = int(self.config.minimap_padding + col / cols * (self.config.minimap_width - self.config.minimap_padding * 2))
-            x2 = int(self.config.minimap_padding + (col + 1) / cols * (self.config.minimap_width - self.config.minimap_padding * 2))
-            y1 = int(self.config.minimap_padding + row / rows * (self.config.minimap_height - self.config.minimap_padding * 2))
-            y2 = int(self.config.minimap_padding + (row + 1) / rows * (self.config.minimap_height - self.config.minimap_padding * 2))
-            intensity = int(255 * count / max_count)
+            x1 = int(
+                self.config.minimap_padding + col / cols * (self.config.minimap_width - self.config.minimap_padding * 2)
+            )
+            x2 = int(
+                self.config.minimap_padding
+                + (col + 1) / cols * (self.config.minimap_width - self.config.minimap_padding * 2)
+            )
+            y1 = int(
+                self.config.minimap_padding
+                + row / rows * (self.config.minimap_height - self.config.minimap_padding * 2)
+            )
+            y2 = int(
+                self.config.minimap_padding
+                + (row + 1) / rows * (self.config.minimap_height - self.config.minimap_padding * 2)
+            )
+            int(255 * count / max_count)
             color = tuple(int(channel * (0.35 + 0.65 * count / max_count)) for channel in heat_color)
             cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
         # 把底图与密度叠加层加权混合（底图 0.68 + 叠加 0.32）。

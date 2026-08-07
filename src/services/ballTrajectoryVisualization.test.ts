@@ -9,6 +9,9 @@ import type {
 import {
   buildBallTrajectoryVisualization,
   buildReconstructedBallTrajectoryVisualization,
+  buildShots,
+  filterTrajectories,
+  type EstimatedBallTrajectory,
 } from "./ballTrajectoryVisualization";
 
 function artifact(samples: BallTrajectorySample[]): BallTrajectoryArtifact {
@@ -176,12 +179,117 @@ describe("buildReconstructedBallTrajectoryVisualization", () => {
       reconstructedSegment({ segment_id: "flight-3", quality: { overall: 0.5, display_level: "low" } }),
     ]));
 
-    expect(result.trajectories.map((trajectory) => trajectory.id)).toEqual(["trajectory-1"]);
+    // 轨迹 ID 使用后端稳定 segment_id（不变量：不使用前端自生成序号）
+    expect(result.trajectories.map((trajectory) => trajectory.id)).toEqual(["flight-1"]);
   });
 
   it("returns empty data when reconstruction is unavailable", () => {
     const result = buildReconstructedBallTrajectoryVisualization(null);
     expect(result.trajectories).toEqual([]);
     expect(result.bounces).toEqual([]);
+    expect(result.shots).toEqual([]);
+    expect(result.playerRoster).toEqual([]);
+  });
+});
+
+function trajectoryWithOwnership(
+  id: string,
+  shotId: string | null,
+  hitter: string | null,
+  ownership: "confirmed" | "ambiguous" | "unassigned" | "not_applicable",
+  start: number,
+  highConfidence = true,
+): EstimatedBallTrajectory {
+  return {
+    id,
+    sequence: 1,
+    direction: "near-to-far",
+    startTimeSeconds: start,
+    endTimeSeconds: start + 0.5,
+    durationSeconds: 0.5,
+    pointCount: 5,
+    averageConfidence: 0.8,
+    interpolatedRatio: 0.1,
+    highConfidence,
+    peakEstimatedHeightFt: 4,
+    points: [],
+    shotId,
+    hitterPlayerId: hitter,
+    hitterRenderSlot: hitter ? hitter.replace("Player_", "slot_") : null,
+    ownershipStatus: ownership,
+    ownershipConfidence: ownership === "confirmed" ? 0.9 : null,
+  };
+}
+
+describe("Shot 级聚合与筛选（I5）", () => {
+  it("聚合同一 shot_id 的多段为一个 Shot，且统计按 shot 去重", () => {
+    const trajectories = [
+      trajectoryWithOwnership("flight-3", "shot-7", "Player_1", "confirmed", 1.0),
+      trajectoryWithOwnership("flight-4", "shot-7", "Player_1", "confirmed", 1.6),
+      trajectoryWithOwnership("flight-5", "shot-8", "Player_3", "confirmed", 2.5),
+    ];
+    const shots = buildShots(trajectories);
+    expect(shots.map((shot) => shot.shotId)).toEqual(["shot-7", "shot-8"]);
+    expect(shots[0].segments.map((segment) => segment.id)).toEqual(["flight-3", "flight-4"]);
+    expect(shots[0].hitterPlayerId).toBe("Player_1");
+    expect(shots[0].sequence).toBe(1);
+  });
+
+  it("P3 筛选：可见球路的 hitter_player_id 均为 Player_3", () => {
+    const trajectories = [
+      trajectoryWithOwnership("flight-1", "shot-1", "Player_1", "confirmed", 0.0),
+      trajectoryWithOwnership("flight-2", "shot-2", "Player_3", "confirmed", 1.0),
+      trajectoryWithOwnership("flight-3", "shot-2", "Player_3", "confirmed", 1.5),
+    ];
+    const shots = buildShots(trajectories);
+    const { trajectories: filtered, shots: filteredShots } = filterTrajectories(trajectories, shots, {
+      playerFilter: "Player_3",
+      confidence: "all",
+      displayLimit: "all",
+    });
+    expect(filtered.every((trajectory) => trajectory.hitterPlayerId === "Player_3")).toBe(true);
+    expect(filteredShots.map((shot) => shot.shotId)).toEqual(["shot-2"]);
+  });
+
+  it("未归属筛选包含击球者不明与无 Shot 上下文两类", () => {
+    const trajectories = [
+      trajectoryWithOwnership("flight-1", "shot-1", "Player_1", "confirmed", 0.0),
+      trajectoryWithOwnership("flight-2", "shot-2", null, "unassigned", 1.0),
+      trajectoryWithOwnership("flight-3", null, null, "not_applicable", 2.0),
+    ];
+    const shots = buildShots(trajectories);
+    const { trajectories: filtered } = filterTrajectories(trajectories, shots, {
+      playerFilter: "unassigned",
+      confidence: "all",
+      displayLimit: "all",
+    });
+    expect(filtered.map((trajectory) => trajectory.id)).toEqual(["flight-2", "flight-3"]);
+  });
+
+  it("筛选顺序：球员 → 可信度 → 最近 N 条", () => {
+    const trajectories = [
+      trajectoryWithOwnership("flight-1", "shot-1", "Player_3", "confirmed", 0.0, false),
+      trajectoryWithOwnership("flight-2", "shot-2", "Player_3", "confirmed", 1.0),
+      trajectoryWithOwnership("flight-3", "shot-3", "Player_3", "confirmed", 2.0),
+    ];
+    const shots = buildShots(trajectories);
+    const { trajectories: filtered } = filterTrajectories(trajectories, shots, {
+      playerFilter: "Player_3",
+      confidence: "high",
+      displayLimit: 1,
+    });
+    expect(filtered.map((trajectory) => trajectory.id)).toEqual(["flight-3"]);
+  });
+});
+
+describe("v1 产物兼容", () => {
+  it("v1 产物无归属字段：球路正常展示且不伪造归属", () => {
+    const result = buildReconstructedBallTrajectoryVisualization(reconstructedArtifact([reconstructedSegment()]));
+    const trajectory = result.trajectories[0];
+    expect(trajectory.hitterPlayerId).toBeNull();
+    expect(trajectory.shotId).toBeNull();
+    expect(trajectory.ownershipStatus).toBe("not_applicable");
+    expect(result.playerRoster).toEqual([]);
+    expect(result.shots).toEqual([]);
   });
 });

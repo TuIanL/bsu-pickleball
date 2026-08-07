@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import statistics
-from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from math import hypot
-from typing import Sequence
 
 from app.schemas.tracking import (
     PlayerFramePosition,
     PlayerIdentityDiagnostic,
 )
-from app.vision.courtvision_calibration_engine.court_geometry import standard_court, PickleballCourtGeometry
+from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.courtvision_calibration_engine.court_units import meters_to_feet
 from app.vision.player_tracking_engine.player_lock_types import (
     PlayerLockConfig,
@@ -113,19 +112,21 @@ class PlayerLockManager:
             self._track_to_slot[candidate.track_id] = slot.identity_id
             track_hints[candidate.track_id] = slot.identity_id
             self._update_slot_from_position(slot, candidate, frame_index)
-            diagnostics.append(PlayerIdentityDiagnostic(
-                frame_index=frame_index,
-                event=(
-                    "player_reconnected_from_lost"
-                    if previous_state == "lost"
-                    else "player_reconnected_after_track_change"
-                ),
-                player_id=slot.identity_id,
-                track_id=candidate.track_id,
-                score=score,
-                reason=score_details,
-                court_position_m=list(candidate.court_position) if candidate.court_position else None,
-            ))
+            diagnostics.append(
+                PlayerIdentityDiagnostic(
+                    frame_index=frame_index,
+                    event=(
+                        "player_reconnected_from_lost"
+                        if previous_state == "lost"
+                        else "player_reconnected_after_track_change"
+                    ),
+                    player_id=slot.identity_id,
+                    track_id=candidate.track_id,
+                    score=score,
+                    reason=score_details,
+                    court_position_m=list(candidate.court_position) if candidate.court_position else None,
+                )
+            )
             if previous_state == "lost":
                 newly_locked.append(slot.identity_id)
 
@@ -150,25 +151,28 @@ class PlayerLockManager:
                 continue
             matched = self._find_new_candidate(slot, positions, locked_track_ids | reconnect_candidates)
             if matched is not None:
-                if slot.state == "fallback_tentative" and self._can_replace_fallback(slot, matched.track_id, matched.confidence):
-                    diagnostics.append(PlayerIdentityDiagnostic(
-                        frame_index=frame_index,
-                        event="side_quota_fallback_replaced",
-                        player_id=slot.identity_id,
-                        track_id=matched.track_id,
-                        reason=f"fallback_replaced; old_track={slot.current_track_id}",
-                        court_position_m=list(matched.court_position) if matched.court_position else None,
-                    ))
+                if slot.state == "fallback_tentative" and self._can_replace_fallback(
+                    slot, matched.track_id, matched.confidence
+                ):
+                    diagnostics.append(
+                        PlayerIdentityDiagnostic(
+                            frame_index=frame_index,
+                            event="side_quota_fallback_replaced",
+                            player_id=slot.identity_id,
+                            track_id=matched.track_id,
+                            reason=f"fallback_replaced; old_track={slot.current_track_id}",
+                            court_position_m=list(matched.court_position) if matched.court_position else None,
+                        )
+                    )
                     slot.state = "searching"
                     slot.current_track_id = None
-                self._try_lock_slot(slot, matched, frame_index, locked_track_ids, track_hints, diagnostics, newly_locked)
+                self._try_lock_slot(
+                    slot, matched, frame_index, locked_track_ids, track_hints, diagnostics, newly_locked
+                )
 
         eligible_track_ids = locked_track_ids | reconnect_candidates
 
-        player_states = {
-            slot.identity_id: slot.state
-            for slot in self.slots.values()
-        }
+        player_states = {slot.identity_id: slot.state for slot in self.slots.values()}
 
         return PlayerLockUpdate(
             eligible_track_ids=eligible_track_ids,
@@ -189,17 +193,17 @@ class PlayerLockManager:
     @property
     def near_occupancy(self) -> int:
         return sum(
-            1 for slot in self.slots.values()
-            if slot.assignment_side == "near"
-            and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
+            1
+            for slot in self.slots.values()
+            if slot.assignment_side == "near" and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
         )
 
     @property
     def far_occupancy(self) -> int:
         return sum(
-            1 for slot in self.slots.values()
-            if slot.assignment_side == "far"
-            and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
+            1
+            for slot in self.slots.values()
+            if slot.assignment_side == "far" and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
         )
 
     def _side_has_capacity(self, side: str | None) -> bool:
@@ -273,9 +277,7 @@ class PlayerLockManager:
                 tl.court_xs.append(pos.court_position[0])
                 tl.court_ys.append(pos.court_position[1])
             if pos.bbox is not None and len(pos.bbox) >= 4:
-                tl.bbox_centers.append(
-                    ((pos.bbox[0] + pos.bbox[2]) / 2.0, (pos.bbox[1] + pos.bbox[3]) / 2.0)
-                )
+                tl.bbox_centers.append(((pos.bbox[0] + pos.bbox[2]) / 2.0, (pos.bbox[1] + pos.bbox[3]) / 2.0))
 
     def _try_early_lock(self, frame_index: int) -> None:
         self._assign_bootstrap_candidates(frame_index)
@@ -430,8 +432,7 @@ class PlayerLockManager:
     def _is_in_court_neighborhood(self, court_position: list[float], margin_ft: float) -> bool:
         x, y = court_position[0], court_position[1]
         return (
-            -margin_ft <= x <= self.court.width_ft + margin_ft
-            and -margin_ft <= y <= self.court.length_ft + margin_ft
+            -margin_ft <= x <= self.court.width_ft + margin_ft and -margin_ft <= y <= self.court.length_ft + margin_ft
         )
 
     def _classify_candidate(self, court_position: list[float], slot_state: str) -> str:
@@ -450,7 +451,9 @@ class PlayerLockManager:
 
     # ---------- position matching ----------
 
-    def _find_matching_position(self, slot: PlayerSlot, positions: Sequence[PlayerFramePosition]) -> PlayerFramePosition | None:
+    def _find_matching_position(
+        self, slot: PlayerSlot, positions: Sequence[PlayerFramePosition]
+    ) -> PlayerFramePosition | None:
         if slot.current_track_id is not None:
             for pos in positions:
                 if pos.track_id == slot.current_track_id and self._is_identity_candidate(pos):
@@ -570,9 +573,14 @@ class PlayerLockManager:
             slot.state = "locked"
 
     def _try_lock_slot(
-        self, slot: PlayerSlot, pos: PlayerFramePosition, frame_index: int,
-        locked_track_ids: set[int], track_hints: dict[int, str],
-        diagnostics: list[PlayerIdentityDiagnostic], newly_locked: list[str],
+        self,
+        slot: PlayerSlot,
+        pos: PlayerFramePosition,
+        frame_index: int,
+        locked_track_ids: set[int],
+        track_hints: dict[int, str],
+        diagnostics: list[PlayerIdentityDiagnostic],
+        newly_locked: list[str],
     ) -> None:
         half_length = self.court.length_ft / 2.0
         if pos.court_position is not None:
@@ -592,26 +600,30 @@ class PlayerLockManager:
                 slot.locked_since_frame = frame_index
                 slot.lost_frames = 0
                 newly_locked.append(slot.identity_id)
-                diagnostics.append(PlayerIdentityDiagnostic(
-                    frame_index=frame_index,
-                    event="player_locked",
-                    player_id=slot.identity_id,
-                    track_id=pos.track_id,
-                    reason=f"consecutive_hits={slot.observed_frames}",
-                    court_position_m=list(pos.court_position) if pos.court_position else None,
-                ))
+                diagnostics.append(
+                    PlayerIdentityDiagnostic(
+                        frame_index=frame_index,
+                        event="player_locked",
+                        player_id=slot.identity_id,
+                        track_id=pos.track_id,
+                        reason=f"consecutive_hits={slot.observed_frames}",
+                        court_position_m=list(pos.court_position) if pos.court_position else None,
+                    )
+                )
         elif slot.state == "fallback_tentative":
             slot.observed_frames += 1
             if slot.observed_frames >= self.config.fallback_promotion_frames:
                 slot.state = "tentative"
-                diagnostics.append(PlayerIdentityDiagnostic(
-                    frame_index=frame_index,
-                    event="fallback_tentative_promoted",
-                    player_id=slot.identity_id,
-                    track_id=pos.track_id,
-                    reason=f"fallback_promotion_frames={slot.observed_frames}",
-                    court_position_m=list(pos.court_position) if pos.court_position else None,
-                ))
+                diagnostics.append(
+                    PlayerIdentityDiagnostic(
+                        frame_index=frame_index,
+                        event="fallback_tentative_promoted",
+                        player_id=slot.identity_id,
+                        track_id=pos.track_id,
+                        reason=f"fallback_promotion_frames={slot.observed_frames}",
+                        court_position_m=list(pos.court_position) if pos.court_position else None,
+                    )
+                )
         locked_track_ids.add(pos.track_id)
         track_hints[pos.track_id] = slot.identity_id
         self._track_to_slot[pos.track_id] = slot.identity_id
@@ -620,8 +632,12 @@ class PlayerLockManager:
     # ---------- lost / reconnect ----------
 
     def _handle_lost_slot(
-        self, slot: PlayerSlot, frame_index: int, positions: Sequence[PlayerFramePosition],
-        reconnect_candidates: set[int], track_hints: dict[int, str],
+        self,
+        slot: PlayerSlot,
+        frame_index: int,
+        positions: Sequence[PlayerFramePosition],
+        reconnect_candidates: set[int],
+        track_hints: dict[int, str],
         diagnostics: list[PlayerIdentityDiagnostic],
     ) -> str:
         # 硬锁到底：LOST 是持久状态，槽位身份永久保留，绝不回退 SEARCHING、绝不让位。
@@ -636,15 +652,17 @@ class PlayerLockManager:
             track_hints[best_candidate.track_id] = slot.identity_id
             slot.lost_frames = 0
             details = self._reconnect_score_details(slot, best_candidate)
-            diagnostics.append(PlayerIdentityDiagnostic(
-                frame_index=frame_index,
-                event="player_reconnected_from_lost",
-                player_id=slot.identity_id,
-                track_id=best_candidate.track_id,
-                score=best_score,
-                reason=details,
-                court_position_m=list(best_candidate.court_position) if best_candidate.court_position else None,
-            ))
+            diagnostics.append(
+                PlayerIdentityDiagnostic(
+                    frame_index=frame_index,
+                    event="player_reconnected_from_lost",
+                    player_id=slot.identity_id,
+                    track_id=best_candidate.track_id,
+                    score=best_score,
+                    reason=details,
+                    court_position_m=list(best_candidate.court_position) if best_candidate.court_position else None,
+                )
+            )
             self._update_slot_from_position(slot, best_candidate, frame_index)
             return "recovered"
 
@@ -742,6 +760,7 @@ class PlayerLockManager:
 
 
 # ---------- internal helpers ----------
+
 
 def _cosine_score(a: list[float], b: list[float]) -> float:
     norm_a = hypot(a[0], a[1])

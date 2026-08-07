@@ -1,3 +1,5 @@
+from datetime import UTC
+
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -24,7 +26,6 @@ from app.services.storage_service import StorageService
 from app.services.video_service import VIDEOS
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
-
 
 client = TestClient(app)
 
@@ -246,7 +247,10 @@ def test_serve_events_artifact_route_returns_json(monkeypatch, tmp_path):
 
     job = make_job_summary("job-serve-events-route", status="completed")
     JOBS[job.id] = job
-    storage.write_json(storage.serve_events_json_path(job.id), {"job_id": job.id, "status": "no_candidates", "detail": "none", "events": []})
+    storage.write_json(
+        storage.serve_events_json_path(job.id),
+        {"job_id": job.id, "status": "no_candidates", "detail": "none", "events": []},
+    )
 
     try:
         response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/serve-events")
@@ -264,7 +268,10 @@ def test_storage_service_resolves_extended_analysis_artifact_paths(tmp_path):
     assert storage.ball_overlay_json_path(job_id) == storage.outputs_dir / job_id / "ball_overlay.json"
     assert storage.detections_jsonl_path(job_id) == storage.outputs_dir / job_id / "detections.jsonl"
     assert storage.ball_trajectory_json_path(job_id) == storage.outputs_dir / job_id / "ball_trajectory.json"
-    assert storage.cleaned_ball_trajectory_json_path(job_id) == storage.outputs_dir / job_id / "cleaned_ball_trajectory.json"
+    assert (
+        storage.cleaned_ball_trajectory_json_path(job_id)
+        == storage.outputs_dir / job_id / "cleaned_ball_trajectory.json"
+    )
     assert storage.bounce_events_json_path(job_id) == storage.outputs_dir / job_id / "bounce_events.json"
     assert storage.analysis_overlay_video_path(job_id) == storage.outputs_dir / job_id / "analysis_overlay.mp4"
     assert storage.heatmaps_manifest_json_path(job_id) == (
@@ -853,8 +860,9 @@ def test_pipeline_job_records_failed_stage(monkeypatch):
             pass
 
         def run(self, job_id, video_id, calibration_id=None, frame_stride=None, progress_callback=None):
+            from datetime import datetime
+
             from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
-            from datetime import datetime, timezone
 
             failed_stage = PipelineStageResult(
                 id="video-read",
@@ -869,7 +877,7 @@ def test_pipeline_job_records_failed_stage(monkeypatch):
                 video_id=video_id,
                 calibration_id=calibration_id,
                 status="failed",
-                generated_at=datetime.now(timezone.utc),
+                generated_at=datetime.now(UTC),
                 stages=[failed_stage],
                 tracks=[],
                 metrics=AnalysisPipeline(detector=EmptyPersonDetector())._compute_metrics([]),
@@ -926,7 +934,10 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert result.artifacts.source_video_url == f"/api/videos/{video_id}/stream"
     assert result.artifacts.tracking_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/tracking-overlay"
     assert result.artifacts.player_selection_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-selection"
-    assert result.artifacts.player_selection_training_samples_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-selection-training-samples"
+    assert (
+        result.artifacts.player_selection_training_samples_url
+        == "/api/analysis/jobs/job-overlay-test/artifacts/player-selection-training-samples"
+    )
     assert result.artifacts.pose_overlay_url == "/api/analysis/jobs/job-overlay-test/artifacts/pose-overlay"
     assert result.artifacts.player_trajectory_url == "/api/analysis/jobs/job-overlay-test/artifacts/player-trajectories"
     assert result.artifacts.serve_events_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-events"
@@ -943,7 +954,9 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     storage = StorageService()
     tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-overlay-test"))
     player_selection = storage.read_json(storage.player_selection_json_path("job-overlay-test"))
-    player_selection_samples = storage.read_json(storage.player_selection_training_samples_json_path("job-overlay-test"))
+    player_selection_samples = storage.read_json(
+        storage.player_selection_training_samples_json_path("job-overlay-test")
+    )
     player_trajectories = storage.read_json(storage.player_trajectory_json_path("job-overlay-test"))
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-overlay-test"))
     serve_events = storage.read_json(storage.serve_events_json_path("job-overlay-test"))
@@ -952,12 +965,7 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     # bootstrap 完成前（早期帧）检测无身份
     assert tracking_overlay["frames"][0]["detections"][0].get("player_id") is None
     # bootstrap 完成后：检测携带 canonical 身份，标签只含 P{n}，不含原始 track_id
-    labelled = [
-        det
-        for frame in tracking_overlay["frames"]
-        for det in frame["detections"]
-        if det.get("player_id")
-    ]
+    labelled = [det for frame in tracking_overlay["frames"] for det in frame["detections"] if det.get("player_id")]
     assert labelled
     locked_player = sorted({det["player_id"] for det in labelled})[0]
     assert locked_player in {"Player_1", "Player_2", "Player_3", "Player_4"}
@@ -974,7 +982,10 @@ def test_pipeline_generates_tracking_and_pose_overlay_artifacts(tmp_path):
     assert serve_events["detector_version"] == "serve-moment-context-v1"
     assert court_view_roi["diagnostics"]["semantic_boundary"] == "court_view_candidates_are_not_rally_segmentation"
     assert court_view_roi["roi"]["status"] == "available"
-    assert result.artifacts.serve_debug_candidates_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-debug-candidates"
+    assert (
+        result.artifacts.serve_debug_candidates_url
+        == "/api/analysis/jobs/job-overlay-test/artifacts/serve-debug-candidates"
+    )
     assert result.artifacts.serve_score_series_url == "/api/analysis/jobs/job-overlay-test/artifacts/serve-score-series"
     assert storage.serve_debug_candidates_json_path("job-overlay-test").exists()
     assert storage.serve_score_series_json_path("job-overlay-test").exists()
@@ -1121,15 +1132,9 @@ def test_pipeline_filters_low_confidence_people_from_overlay_and_pose_inputs(tmp
     tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-filtered-overlay"))
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-filtered-overlay"))
     overlay_track_ids = {
-        detection["track_id"]
-        for frame in tracking_overlay["frames"]
-        for detection in frame["detections"]
+        detection["track_id"] for frame in tracking_overlay["frames"] for detection in frame["detections"]
     }
-    pose_track_ids = {
-        subject["track_id"]
-        for frame in pose_overlay["frames"]
-        for subject in frame["subjects"]
-    }
+    pose_track_ids = {subject["track_id"] for frame in pose_overlay["frames"] for subject in frame["subjects"]}
 
     assert len(tracking_result["detections"]) == 6
     assert {track["track_id"] for track in tracking_result["tracks"]} == {1, 2}
@@ -1184,15 +1189,9 @@ def test_pipeline_keeps_high_confidence_line_out_players_for_overlay_and_pose(tm
     tracking_overlay = storage.read_json(storage.tracking_overlay_json_path("job-line-out-overlay"))
     pose_overlay = storage.read_json(storage.pose_overlay_json_path("job-line-out-overlay"))
     overlay_track_ids = {
-        detection["track_id"]
-        for frame in tracking_overlay["frames"]
-        for detection in frame["detections"]
+        detection["track_id"] for frame in tracking_overlay["frames"] for detection in frame["detections"]
     }
-    pose_track_ids = {
-        subject["track_id"]
-        for frame in pose_overlay["frames"]
-        for subject in frame["subjects"]
-    }
+    pose_track_ids = {subject["track_id"] for frame in pose_overlay["frames"] for subject in frame["subjects"]}
 
     assert len(tracking_result["detections"]) == 3
     assert len(tracking_result["positions"]) == 3
@@ -1716,7 +1715,7 @@ def test_inline_content_disposition_handles_chinese_filename():
     assert "%E6%B5%8B%E8%AF%95" in cd  # "测试" 的 UTF-8 百分号编码
 
     plain = _inline_content_disposition("match.mp4")
-    assert plain == 'inline; filename="match.mp4"; filename*=UTF-8\'\'match.mp4'
+    assert plain == "inline; filename=\"match.mp4\"; filename*=UTF-8''match.mp4"
 
     empty = _inline_content_disposition("视频.mp4")
     assert 'filename="video.mp4"' in empty  # 全中文 → fallback 到 video.mp4

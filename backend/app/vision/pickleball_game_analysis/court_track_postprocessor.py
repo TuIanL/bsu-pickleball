@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.vision.pickleball_game_analysis.court_track_types import (
-    CourtTrackObservation,
+    MAX_RENDER_SLOTS,
     CourtTrackEvent,
+    CourtTrackObservation,
     CourtTrackPostProcessResult,
     CourtTrackSegment,
     ProcessedCourtTracks,
@@ -16,7 +17,6 @@ from app.vision.pickleball_game_analysis.court_track_types import (
     RenderSlotOverflowError,
     RenderSource,
     SegmentBreakReason,
-    MAX_RENDER_SLOTS,
     canonical_player_id,
 )
 
@@ -65,12 +65,16 @@ class CourtTrackPostProcessor:
         player_metadata = self._build_player_metadata(roster, slot_map, normalized_obs)
 
         segments_meta, samples = self._build_segments_and_samples(
-            normalized_obs, events_normalized, slot_map, fps, total_frames,
+            normalized_obs,
+            events_normalized,
+            slot_map,
+            fps,
+            total_frames,
         )
 
         samples.sort(key=lambda rf: (rf.timestamp_seconds, rf.frame_index, rf.player_id))
         for i, s in enumerate(samples):
-            object.__setattr__(s, 'sequence_index', i)
+            object.__setattr__(s, "sequence_index", i)
 
         return CourtTrackPostProcessResult(
             players=player_metadata,
@@ -97,7 +101,8 @@ class CourtTrackPostProcessor:
         return ProcessedCourtTracks(render_tracks=render_tracks)
 
     def _normalize_player_ids(
-        self, observations: list[CourtTrackObservation],
+        self,
+        observations: list[CourtTrackObservation],
     ) -> list[CourtTrackObservation]:
         return [
             CourtTrackObservation(
@@ -145,7 +150,9 @@ class CourtTrackPostProcessor:
             obs_list = by_player.get(pid, [])
             obs_list.sort(key=lambda o: o.frame_index)
             detected = [o for o in obs_list if o.tracking_status == "detected"]
-            first_reliable = next((o for o in obs_list if o.tracking_status == "detected"), obs_list[0] if obs_list else None)
+            first_reliable = next(
+                (o for o in obs_list if o.tracking_status == "detected"), obs_list[0] if obs_list else None
+            )
             sides = [_classify_court_side(o.raw_y_ft) for o in detected]
             near_count = sides.count("near")
             far_count = sides.count("far")
@@ -158,17 +165,17 @@ class CourtTrackPostProcessor:
             else:
                 dominant = "unknown"
             initial = _classify_court_side(first_reliable.raw_y_ft) if first_reliable else "unknown"
-            source_track_ids = list(dict.fromkeys(
-                o.track_id for o in obs_list if o.track_id is not None
-            ))
-            result.append(RenderPlayerMetadata(
-                player_id=pid,
-                render_slot=slot_map[pid],
-                initial_side=initial,
-                dominant_side=dominant,
-                first_frame_index=first_reliable.frame_index if first_reliable else 0,
-                source_track_ids=source_track_ids,
-            ))
+            source_track_ids = list(dict.fromkeys(o.track_id for o in obs_list if o.track_id is not None))
+            result.append(
+                RenderPlayerMetadata(
+                    player_id=pid,
+                    render_slot=slot_map[pid],
+                    initial_side=initial,
+                    dominant_side=dominant,
+                    first_frame_index=first_reliable.frame_index if first_reliable else 0,
+                    source_track_ids=source_track_ids,
+                )
+            )
         return result
 
     def _build_segments_and_samples(
@@ -209,32 +216,47 @@ class CourtTrackPostProcessor:
 
                     seg_id = f"{player_id}:e{epoch}:s{segment_index}"
                     break_reason = self._determine_break_reason(
-                        seg_obs, epoch_obs, segment_index, frame_events.get(player_id, set()),
+                        seg_obs,
+                        epoch_obs,
+                        segment_index,
+                        frame_events.get(player_id, set()),
                     )
 
                     for rf in rendered:
-                        object.__setattr__(rf, 'render_slot', slot_map.get(player_id, ''))
-                        object.__setattr__(rf, 'segment_id', seg_id)
-                        object.__setattr__(rf, 'identity_epoch', epoch)
-                        object.__setattr__(rf, 'side', self._resolve_side(rf, seg_obs, rendered))
-                        object.__setattr__(rf, 'source_track_id', seg_obs[0].track_id if rf.source == "observed" else None)
-                        object.__setattr__(rf, 'projection_status', seg_obs[0].projection_status if rf.source == "observed" else None)
-                        object.__setattr__(rf, 'projection_confidence', seg_obs[0].projection_confidence if rf.source == "observed" else None)
-                        object.__setattr__(rf, 'footpoint_method', seg_obs[0].footpoint_method if rf.source == "observed" else None)
+                        object.__setattr__(rf, "render_slot", slot_map.get(player_id, ""))
+                        object.__setattr__(rf, "segment_id", seg_id)
+                        object.__setattr__(rf, "identity_epoch", epoch)
+                        object.__setattr__(rf, "side", self._resolve_side(rf, seg_obs, rendered))
+                        object.__setattr__(
+                            rf, "source_track_id", seg_obs[0].track_id if rf.source == "observed" else None
+                        )
+                        object.__setattr__(
+                            rf, "projection_status", seg_obs[0].projection_status if rf.source == "observed" else None
+                        )
+                        object.__setattr__(
+                            rf,
+                            "projection_confidence",
+                            seg_obs[0].projection_confidence if rf.source == "observed" else None,
+                        )
+                        object.__setattr__(
+                            rf, "footpoint_method", seg_obs[0].footpoint_method if rf.source == "observed" else None
+                        )
 
                     all_samples.extend(rendered)
 
-                    all_segments.append(RenderSegmentMetadata(
-                        segment_id=seg_id,
-                        player_id=player_id,
-                        identity_epoch=epoch,
-                        start_frame_index=rendered[0].frame_index,
-                        end_frame_index=rendered[-1].frame_index,
-                        start_timestamp_seconds=rendered[0].timestamp_seconds,
-                        end_timestamp_seconds=rendered[-1].timestamp_seconds,
-                        break_before=break_reason,
-                        sample_count=len(rendered),
-                    ))
+                    all_segments.append(
+                        RenderSegmentMetadata(
+                            segment_id=seg_id,
+                            player_id=player_id,
+                            identity_epoch=epoch,
+                            start_frame_index=rendered[0].frame_index,
+                            end_frame_index=rendered[-1].frame_index,
+                            start_timestamp_seconds=rendered[0].timestamp_seconds,
+                            end_timestamp_seconds=rendered[-1].timestamp_seconds,
+                            break_before=break_reason,
+                            sample_count=len(rendered),
+                        )
+                    )
                     segment_index += 1
 
         return all_segments, all_samples
@@ -276,8 +298,10 @@ class CourtTrackPostProcessor:
         seg_index: int,
         event_frames: set[int],
     ) -> SegmentBreakReason:
-        is_first_segment_in_epoch = (seg_index == 0)
-        is_very_first_segment = is_first_segment_in_epoch and (seg_obs[0].frame_index == all_epoch_obs[0].frame_index if all_epoch_obs else True)
+        is_first_segment_in_epoch = seg_index == 0
+        is_very_first_segment = is_first_segment_in_epoch and (
+            seg_obs[0].frame_index == all_epoch_obs[0].frame_index if all_epoch_obs else True
+        )
         if is_very_first_segment and is_first_segment_in_epoch and seg_index == 0:
             first_frame = seg_obs[0].frame_index
             for ev_frame in event_frames:
@@ -290,9 +314,11 @@ class CourtTrackPostProcessor:
         if first_gap > 0:
             return "visible_gap"
         if seg_obs:
-            dist = _dist(
-                seg_obs[0].raw_x_ft, seg_obs[0].raw_y_ft,
-                seg_obs[0].raw_x_ft, seg_obs[0].raw_y_ft,
+            _dist(
+                seg_obs[0].raw_x_ft,
+                seg_obs[0].raw_y_ft,
+                seg_obs[0].raw_x_ft,
+                seg_obs[0].raw_y_ft,
             )
             return "visible_gap"
         return "visible_gap"
@@ -342,28 +368,32 @@ class CourtTrackPostProcessor:
                     current_epoch = obs.identity_epoch
                 elif obs.identity_epoch != current_epoch:
                     if current:
-                        segments.append(CourtTrackSegment(
-                            player_id=player_id,
-                            epoch=current_epoch,
-                            observations=current,
-                        ))
+                        segments.append(
+                            CourtTrackSegment(
+                                player_id=player_id,
+                                epoch=current_epoch,
+                                observations=current,
+                            )
+                        )
                         current = []
                     current_epoch = obs.identity_epoch
                 current.append(obs)
             if current and current_epoch is not None:
-                segments.append(CourtTrackSegment(
-                    player_id=player_id,
-                    epoch=current_epoch,
-                    observations=current,
-                ))
+                segments.append(
+                    CourtTrackSegment(
+                        player_id=player_id,
+                        epoch=current_epoch,
+                        observations=current,
+                    )
+                )
         return segments
 
     def _filter_spikes(self, observations: list[CourtTrackObservation]) -> list[CourtTrackObservation]:
         if len(observations) < 3:
             return [
-                o for o in observations
-                if o.projection_status != "projection_failed"
-                and _is_finite(o.raw_x_ft) and _is_finite(o.raw_y_ft)
+                o
+                for o in observations
+                if o.projection_status != "projection_failed" and _is_finite(o.raw_x_ft) and _is_finite(o.raw_y_ft)
             ]
 
         filtered: list[CourtTrackObservation] = []
@@ -384,9 +414,11 @@ class CourtTrackPostProcessor:
                 d_prev_curr = _dist(prev.raw_x_ft, prev.raw_y_ft, obs.raw_x_ft, obs.raw_y_ft)
                 d_curr_next = _dist(obs.raw_x_ft, obs.raw_y_ft, nxt.raw_x_ft, nxt.raw_y_ft)
                 d_prev_next = _dist(prev.raw_x_ft, prev.raw_y_ft, nxt.raw_x_ft, nxt.raw_y_ft)
-                if (d_prev_curr > self.max_spike_displacement_ft
-                        and d_curr_next > self.max_spike_displacement_ft
-                        and d_prev_next < self.max_spike_displacement_ft):
+                if (
+                    d_prev_curr > self.max_spike_displacement_ft
+                    and d_curr_next > self.max_spike_displacement_ft
+                    and d_prev_next < self.max_spike_displacement_ft
+                ):
                     continue
             filtered.append(obs)
         return filtered
@@ -408,15 +440,17 @@ class CourtTrackPostProcessor:
             gap_frames = right.frame_index - left.frame_index
             gap_seconds = gap_frames / fps if fps > 0 else float("inf")
 
-            result.append(RenderFrame(
-                frame_index=left.frame_index,
-                timestamp_seconds=left.timestamp_seconds,
-                x_ft=left.raw_x_ft,
-                y_ft=left.raw_y_ft,
-                source="observed",
-                confidence=left.confidence,
-                player_id=player_id,
-            ))
+            result.append(
+                RenderFrame(
+                    frame_index=left.frame_index,
+                    timestamp_seconds=left.timestamp_seconds,
+                    x_ft=left.raw_x_ft,
+                    y_ft=left.raw_y_ft,
+                    source="observed",
+                    confidence=left.confidence,
+                    player_id=player_id,
+                )
+            )
 
             if gap_frames <= 1:
                 continue
@@ -443,26 +477,30 @@ class CourtTrackPostProcessor:
                     decay = max(0.3, decay)
                     conf = min(left.confidence, right.confidence) * decay
 
-                result.append(RenderFrame(
-                    frame_index=mid_frame,
-                    timestamp_seconds=mid_time,
-                    x_ft=x,
-                    y_ft=y,
-                    source=source,
-                    confidence=conf,
-                    player_id=player_id,
-                ))
+                result.append(
+                    RenderFrame(
+                        frame_index=mid_frame,
+                        timestamp_seconds=mid_time,
+                        x_ft=x,
+                        y_ft=y,
+                        source=source,
+                        confidence=conf,
+                        player_id=player_id,
+                    )
+                )
 
         last = observations[-1]
-        result.append(RenderFrame(
-            frame_index=last.frame_index,
-            timestamp_seconds=last.timestamp_seconds,
-            x_ft=last.raw_x_ft,
-            y_ft=last.raw_y_ft,
-            source="observed",
-            confidence=last.confidence,
-            player_id=player_id,
-        ))
+        result.append(
+            RenderFrame(
+                frame_index=last.frame_index,
+                timestamp_seconds=last.timestamp_seconds,
+                x_ft=last.raw_x_ft,
+                y_ft=last.raw_y_ft,
+                source="observed",
+                confidence=last.confidence,
+                player_id=player_id,
+            )
+        )
         return result
 
 

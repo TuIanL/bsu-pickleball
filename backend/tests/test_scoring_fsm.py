@@ -111,18 +111,14 @@ def test_reducer_server_team_none_replay():
 
 def test_hybrid_rally_scoring_awards_receiver_and_serve():
     state = initial_game_state(ScoringState(None, 0, 0), "A")
-    result = reduce_scoring_state_for_ruleset(
-        state, ScoringAction(type="rally_result", winner="B"), HYBRID_21_RULESET
-    )
+    result = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", winner="B"), HYBRID_21_RULESET)
     assert (result.score_a, result.score_b, result.server_team) == (0, 1, "B")
     assert result.serving_side == "left"
 
 
 def test_hybrid_enters_serve_only_at_twenty_all():
     state = ScoringState("A", 20, 19, scoring_phase="rally", match_status="in_progress")
-    result = reduce_scoring_state_for_ruleset(
-        state, ScoringAction(type="rally_result", winner="B"), HYBRID_21_RULESET
-    )
+    result = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", winner="B"), HYBRID_21_RULESET)
     assert (result.score_a, result.score_b) == (20, 20)
     assert result.scoring_phase == "serve_only"
     assert result.server_team == "B"
@@ -130,21 +126,22 @@ def test_hybrid_enters_serve_only_at_twenty_all():
 
 def test_hybrid_serve_only_receiver_wins_side_out_without_point():
     state = ScoringState("A", 20, 20, scoring_phase="serve_only", match_status="in_progress")
-    result = reduce_scoring_state_for_ruleset(
-        state, ScoringAction(type="rally_result", winner="B"), HYBRID_21_RULESET
-    )
+    result = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", winner="B"), HYBRID_21_RULESET)
     assert (result.score_a, result.score_b, result.server_team) == (20, 20, "B")
     assert result.game_completed is False
 
 
 def test_hybrid_serve_only_server_wins_game_and_third_game_wins_match():
     state = ScoringState(
-        "A", 20, 20, games_won_a=2, games_won_b=1,
-        scoring_phase="serve_only", match_status="in_progress",
+        "A",
+        20,
+        20,
+        games_won_a=2,
+        games_won_b=1,
+        scoring_phase="serve_only",
+        match_status="in_progress",
     )
-    result = reduce_scoring_state_for_ruleset(
-        state, ScoringAction(type="rally_result", winner="A"), HYBRID_21_RULESET
-    )
+    result = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", winner="A"), HYBRID_21_RULESET)
     assert result.score_a == 21
     assert result.game_completed and result.game_winner == "A"
     assert result.games_won_a == 3
@@ -154,11 +151,7 @@ def test_hybrid_serve_only_server_wins_game_and_third_game_wins_match():
 def test_hybrid_even_score_serves_right_and_odd_score_serves_left():
     state = initial_game_state(ScoringState(None, 0, 0), "A")
     assert state.serving_side == "right"
-    first = reduce_scoring_state_for_ruleset(
-        state, ScoringAction(type="rally_result", winner="A"), HYBRID_21_RULESET
-    )
+    first = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", winner="A"), HYBRID_21_RULESET)
     assert first.serving_side == "left"
-    second = reduce_scoring_state_for_ruleset(
-        first, ScoringAction(type="rally_result", winner="A"), HYBRID_21_RULESET
-    )
+    second = reduce_scoring_state_for_ruleset(first, ScoringAction(type="rally_result", winner="A"), HYBRID_21_RULESET)
     assert second.serving_side == "right"

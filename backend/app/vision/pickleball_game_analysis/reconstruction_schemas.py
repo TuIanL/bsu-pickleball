@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from app.vision.pickleball_game_analysis.schemas import Point2D
 
@@ -19,7 +19,7 @@ from app.vision.pickleball_game_analysis.schemas import Point2D
 M_TO_FT = 3.28084
 
 
-class TrajectoryEventType(str, Enum):
+class TrajectoryEventType(StrEnum):
     """飞行段边界事件的类型。"""
 
     HIT = "hit"
@@ -29,7 +29,7 @@ class TrajectoryEventType(str, Enum):
     END_OF_STREAM = "end_of_stream"
 
 
-class EventSource(str, Enum):
+class EventSource(StrEnum):
     """事件来源（第一版只用 heuristic / bounce_detector / tracking / manual）。"""
 
     HEURISTIC = "heuristic"
@@ -40,16 +40,16 @@ class EventSource(str, Enum):
     SERVE = "serve"
 
 
-class AnchorType(str, Enum):
+class AnchorType(StrEnum):
     """空间锚点类型（可信度分级）。"""
 
-    BOUNCE = "bounce"          # 硬锚点：z=0，单应映射最可信
-    CONTACT = "contact"        # 软锚点：击球点，保存不确定度
+    BOUNCE = "bounce"  # 硬锚点：z=0，单应映射最可信
+    CONTACT = "contact"  # 软锚点：击球点，保存不确定度
     RAW_ENDPOINT = "raw_endpoint"  # 弱约束：普通检测段端点
-    LOSS = "loss"              # 非空间锚点：丢失边界
+    LOSS = "loss"  # 非空间锚点：丢失边界
 
 
-class ReconstructionMode(str, Enum):
+class ReconstructionMode(StrEnum):
     """球场空间重建模式（锚点数量降级）。"""
 
     DUAL_ANCHOR_WARP = "dual_anchor_warp"
@@ -58,7 +58,7 @@ class ReconstructionMode(str, Enum):
     LOCAL_VISUAL_ARC = "local_visual_arc"
 
 
-class SampleSource(str, Enum):
+class SampleSource(StrEnum):
     """重建样本的来源分类。"""
 
     DETECTED = "detected"
@@ -67,7 +67,7 @@ class SampleSource(str, Enum):
     ANCHOR = "anchor"
 
 
-class NetCrossingStatus(str, Enum):
+class NetCrossingStatus(StrEnum):
     """过网状态软诊断取值。"""
 
     NOT_EXPECTED = "not_expected"
@@ -77,9 +77,46 @@ class NetCrossingStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+class OwnershipStatus(StrEnum):
+    """击球归属状态（区分"是否为可信击球"与"能否确定击球者"）。"""
+
+    CONFIRMED = "confirmed"
+    AMBIGUOUS = "ambiguous"
+    UNASSIGNED = "unassigned"
+    NOT_APPLICABLE = "not_applicable"
+
+
+@dataclass(frozen=True)
+class PlayerCandidateScore:
+    """归属候选评分明细。"""
+
+    player_id: str
+    score: float
+
+
+@dataclass(frozen=True)
+class PlayerAttribution:
+    """一次击球候选的球员归属结果。"""
+
+    candidate_id: str
+    status: str = OwnershipStatus.UNASSIGNED.value  # confirmed / ambiguous / unassigned
+    player_id: str | None = None
+    render_slot: str | None = None
+    confidence: float = 0.0
+    score_margin: float = 0.0
+    attributed_frame_index: int | None = None
+    method: str = "none"  # pose_bbox_fused / bbox_fused / serve_seeded / none
+    candidate_scores: list[PlayerCandidateScore] = field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class TrajectoryEvent:
-    """一个飞行段边界事件（击球 / 弹地 / 丢失 / serve 重置 / 流结束）。"""
+    """一个飞行段边界事件（击球 / 弹地 / 丢失 / serve 重置 / 流结束）。
+
+    `event_status` 与 `ownership_status` 严格分离：
+      - event_status：这是不是一次可信击球；
+      - ownership_status：即使是击球，能不能确定是哪名球员。
+    """
 
     event_id: str
     event_type: TrajectoryEventType
@@ -90,6 +127,13 @@ class TrajectoryEvent:
     confidence: float = 0.0
     source: str = EventSource.HEURISTIC.value
     diagnostics: dict = field(default_factory=dict)
+    event_status: str = "confirmed"  # confirmed / ambiguous
+    hitter_player_id: str | None = None
+    hitter_render_slot: str | None = None
+    ownership_status: str = OwnershipStatus.UNASSIGNED.value
+    ownership_confidence: float | None = None
+    ownership_source_event_id: str | None = None
+    attribution: PlayerAttribution | None = None
 
     @property
     def is_anchor_capable(self) -> bool:
@@ -123,6 +167,7 @@ class FlightSegment:
 
     语义上硬切段（击球/弹地/丢失等边界产生独立段），几何上相邻段可共享锚点。
     point_indices 指向 cleaned trajectory 中的下标（含 None 的缺失点）。
+    归属字段由 BallShotAssembler 在重建后回填。
     """
 
     segment_id: str
@@ -136,6 +181,12 @@ class FlightSegment:
     start_anchor_id: str | None = None
     end_anchor_id: str | None = None
     point_indices: list[int] = field(default_factory=list)
+    shot_id: str | None = None
+    hitter_player_id: str | None = None
+    hitter_render_slot: str | None = None
+    ownership_status: str = OwnershipStatus.NOT_APPLICABLE.value
+    ownership_confidence: float | None = None
+    ownership_source_event_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +223,12 @@ class ReconstructedSegment:
     anchors: list[dict] = field(default_factory=list)
     quality: dict = field(default_factory=dict)
     samples: list[ReconstructedSample] = field(default_factory=list)
+    shot_id: str | None = None
+    hitter_player_id: str | None = None
+    hitter_render_slot: str | None = None
+    ownership_status: str = OwnershipStatus.NOT_APPLICABLE.value
+    ownership_confidence: float | None = None
+    ownership_source_event_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -188,27 +245,27 @@ class ReconstructionConfig:
     contact_height_uncertainty_m: float = 0.60
 
     # 段切分
-    long_loss_gap_frames: int = 12        # 帧间隔超过此值视为长时间丢失（与 cleaner 最大插值缺口一致）
+    long_loss_gap_frames: int = 12  # 帧间隔超过此值视为长时间丢失（与 cleaner 最大插值缺口一致）
     serve_confidence_threshold: float = 0.6  # 高可信 serve 事件阈值
     min_points_per_segment: int = 3
 
     # 击球候选检测（D2）
-    hit_context_points: int = 4           # 突变前后各需的连续有效点数
+    hit_context_points: int = 4  # 突变前后各需的连续有效点数
     hit_direction_change_deg: float = 35.0  # 方向突变角度阈值
-    hit_speed_change_ratio: float = 1.8   # 速度幅值突变比例阈值
-    hit_fit_residual_px: float = 18.0     # 突变前后拟合残差上限（低于此才算可靠）
-    hit_min_event_gap_sec: float = 0.35   # 击球候选 refractory period
+    hit_speed_change_ratio: float = 1.8  # 速度幅值突变比例阈值
+    hit_fit_residual_px: float = 18.0  # 突变前后拟合残差上限（低于此才算可靠）
+    hit_min_event_gap_sec: float = 0.35  # 击球候选 refractory period
     bounce_suppression_window_sec: float = 0.25  # 高可信弹地抑制击球的窗口
 
     # 事件仲裁
-    ambiguous_margin_sec: float = 0.10    # 低可信弹地与击球候选同窗判定余量
+    ambiguous_margin_sec: float = 0.10  # 低可信弹地与击球候选同窗判定余量
     player_proximity_strong_ft: float = 12.0  # 击球点距球员区域近的证据（第一版用 weak evidence）
 
     # 重建
     minimum_anchor_distance_ft: float = 2.0
     max_lateral_residual_ft: float = 4.0
     lateral_smooth_window: int = 5
-    flight_peak_height_ft: float = 5.5    # 无事件锚定时飞行弧线峰值上限（估算）
+    flight_peak_height_ft: float = 5.5  # 无事件锚定时飞行弧线峰值上限（估算）
 
     # 展示阈值（D4 / 质量评估）
     high_confidence_threshold: float = 0.80
@@ -234,6 +291,22 @@ class ReconstructionConfig:
 
 def event_to_payload(event: TrajectoryEvent) -> dict:
     """TrajectoryEvent → JSON 安全的字典。"""
+    attribution = None
+    if event.attribution is not None:
+        attribution = {
+            "candidate_id": event.attribution.candidate_id,
+            "status": event.attribution.status,
+            "player_id": event.attribution.player_id,
+            "render_slot": event.attribution.render_slot,
+            "confidence": round(float(event.attribution.confidence), 3),
+            "score_margin": round(float(event.attribution.score_margin), 3),
+            "attributed_frame_index": event.attribution.attributed_frame_index,
+            "method": event.attribution.method,
+            "candidate_scores": [
+                {"player_id": score.player_id, "score": round(float(score.score), 3)}
+                for score in event.attribution.candidate_scores
+            ],
+        }
     return {
         "event_id": event.event_id,
         "event_type": event.event_type.value,
@@ -244,4 +317,13 @@ def event_to_payload(event: TrajectoryEvent) -> dict:
         "confidence": round(float(event.confidence), 3),
         "source": event.source,
         "diagnostics": event.diagnostics,
+        "event_status": event.event_status,
+        "hitter_player_id": event.hitter_player_id,
+        "hitter_render_slot": event.hitter_render_slot,
+        "ownership_status": event.ownership_status,
+        "ownership_confidence": round(float(event.ownership_confidence), 3)
+        if event.ownership_confidence is not None
+        else None,
+        "ownership_source_event_id": event.ownership_source_event_id,
+        "attribution": attribution,
     }

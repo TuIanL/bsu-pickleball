@@ -27,16 +27,14 @@ from app.vision.courtvision_calibration_engine.court_geometry import PickleballC
 from app.vision.courtvision_calibration_engine.homography import HomographyError, image_to_court
 from app.vision.pickleball_game_analysis.image_space_trajectory_fitter import (
     FitConfig,
-    FitResult,
     ImageSpaceTrajectoryFitter,
 )
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
-    M_TO_FT,
     AnchorType,
-    ReconstructionConfig,
-    ReconstructionMode,
     ReconstructedSample,
     ReconstructedSegment,
+    ReconstructionConfig,
+    ReconstructionMode,
     SampleSource,
     SpatialAnchor,
     TrajectoryEvent,
@@ -74,8 +72,12 @@ class EventAnchoredTrajectoryReconstructor:
         fit = self.fitter.fit(seg_points)
 
         # 2) 锚点推导
-        start_anchor = self._derive_anchor(segment, start=True, event=events_by_id.get(segment.start_event_id or ""), homography=homography)
-        end_anchor = self._derive_anchor(segment, start=False, event=events_by_id.get(segment.end_event_id or ""), homography=homography)
+        start_anchor = self._derive_anchor(
+            segment, start=True, event=events_by_id.get(segment.start_event_id or ""), homography=homography
+        )
+        end_anchor = self._derive_anchor(
+            segment, start=False, event=events_by_id.get(segment.end_event_id or ""), homography=homography
+        )
         start_anchor, end_anchor = self._resolve_anchor_conflict(start_anchor, end_anchor, segment, events_by_id)
 
         # 3) 重建模式
@@ -92,8 +94,15 @@ class EventAnchoredTrajectoryReconstructor:
 
         # 6) 采样点
         samples = self._build_samples(
-            seg_points, fit, court_path, z0, z1, height_sources,
-            start_anchor, end_anchor, segment,
+            seg_points,
+            fit,
+            court_path,
+            z0,
+            z1,
+            height_sources,
+            start_anchor,
+            end_anchor,
+            segment,
         )
 
         return ReconstructedSegment(
@@ -126,13 +135,11 @@ class EventAnchoredTrajectoryReconstructor:
             return None
         anchor_type: AnchorType | None = None
         height_ft: float | None = None
-        height_source = ""
         uncertainty = 0.0
 
         if event.event_type == TrajectoryEventType.BOUNCE:
             anchor_type = AnchorType.BOUNCE
             height_ft = 0.0
-            height_source = "bounce"
             uncertainty = 0.3
         elif event.event_type in (
             TrajectoryEventType.HIT,
@@ -140,7 +147,6 @@ class EventAnchoredTrajectoryReconstructor:
         ):
             anchor_type = AnchorType.CONTACT
             height_ft = round(self.config.default_contact_height_ft, 3)
-            height_source = "serve_prior" if event.event_type == TrajectoryEventType.SERVE_RESET else "global_contact_prior"
             uncertainty = self.config.contact_height_uncertainty_ft
         else:
             return None  # loss / end_of_stream 不是空间锚点
@@ -427,8 +433,7 @@ class EventAnchoredTrajectoryReconstructor:
                     height_source=height_src,
                     height_confidence=round(height_conf, 3) if height_conf is not None else None,
                     height_uncertainty_ft=(
-                        round(self.config.contact_height_uncertainty_ft, 3)
-                        if height_ft is not None else None
+                        round(self.config.contact_height_uncertainty_ft, 3) if height_ft is not None else None
                     ),
                     gap_length_frames=gap_length,
                     reprojection_error_px=reproj,
@@ -441,18 +446,21 @@ class EventAnchoredTrajectoryReconstructor:
         for anchor in (start, end):
             if anchor is None:
                 continue
-            payloads.append({
-                "anchor_id": anchor.anchor_id,
-                "anchor_type": anchor.anchor_type.value,
-                "frame_index": int(anchor.frame_index),
-                "court_xy": (
-                    [round(anchor.court_xy[0], 4), round(anchor.court_xy[1], 4)]
-                    if anchor.court_xy is not None else None
-                ),
-                "height_ft": round(anchor.height_ft, 3) if anchor.height_ft is not None else None,
-                "confidence": round(anchor.confidence, 3),
-                "uncertainty_ft": round(anchor.uncertainty_ft, 3),
-            })
+            payloads.append(
+                {
+                    "anchor_id": anchor.anchor_id,
+                    "anchor_type": anchor.anchor_type.value,
+                    "frame_index": int(anchor.frame_index),
+                    "court_xy": (
+                        [round(anchor.court_xy[0], 4), round(anchor.court_xy[1], 4)]
+                        if anchor.court_xy is not None
+                        else None
+                    ),
+                    "height_ft": round(anchor.height_ft, 3) if anchor.height_ft is not None else None,
+                    "confidence": round(anchor.confidence, 3),
+                    "uncertainty_ft": round(anchor.uncertainty_ft, 3),
+                }
+            )
         return payloads
 
     # ---- 工具 ----
@@ -510,10 +518,12 @@ class EventAnchoredTrajectoryReconstructor:
                 merged = (block_val[-1] * block_cnt[-1] + block_val[-2] * block_cnt[-2]) / total_cnt
                 block_val.pop()
                 block_cnt.pop()
+                block_val.pop()
+                block_cnt.pop()
                 block_val.append(merged)
                 block_cnt.append(total_cnt)
         idx = 0
-        for val, cnt in zip(block_val, block_cnt):
+        for val, cnt in zip(block_val, block_cnt, strict=False):
             for _ in range(cnt):
                 if idx < n:
                     out[idx] = val

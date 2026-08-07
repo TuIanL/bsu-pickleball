@@ -5,16 +5,14 @@ from __future__ import annotations
 # 作用：检查 Python 版本与依赖（torch/mmpose/mmcv/mmengine/numpy/cv2）是否就绪，
 # 校验 config/checkpoint/图片等资产是否存在，并跑一次单帧姿态推理验证真正能出结果。
 # 支持只做「检查」（--check-only）而不真正加载模型。
-
 import argparse
 import importlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import sys
-from typing import Any, Optional
-
+from pathlib import Path
+from typing import Any
 
 # backend 根目录（scripts/ 的上一级），加入 sys.path 以便导入 app 模块。
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -60,7 +58,7 @@ def parse_bbox(value: str) -> list[float]:
     return bbox
 
 
-def resolve_path(value: Optional[str], env_name: str, alias_name: str) -> Optional[Path]:
+def resolve_path(value: str | None, env_name: str, alias_name: str) -> Path | None:
     # 解析路径：优先级为 显式值 > 环境变量(env_name) > 别名环境变量(alias_name)。
     raw = value or os.getenv(env_name) or os.getenv(alias_name)
     if not raw:
@@ -68,7 +66,7 @@ def resolve_path(value: Optional[str], env_name: str, alias_name: str) -> Option
     return Path(raw).expanduser().resolve()
 
 
-def load_frame(image_path: Optional[Path]) -> Any:
+def load_frame(image_path: Path | None) -> Any:
     # 读取图像为 numpy 数组；若未提供图片，则生成一张带灰色矩形（模拟人体框）的合成帧。
     import numpy as np  # type: ignore
 

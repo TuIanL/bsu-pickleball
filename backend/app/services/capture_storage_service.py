@@ -8,7 +8,7 @@ import re
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +68,9 @@ def _is_take_dir(path: Path) -> bool:
 
 
 # 规范化存储根目录，返回 (根目录, captures 目录) 元组
-def normalize_storage_root(storage_root: str | os.PathLike[str] | None, settings: Settings | None = None) -> tuple[Path, Path]:
+def normalize_storage_root(
+    storage_root: str | os.PathLike[str] | None, settings: Settings | None = None
+) -> tuple[Path, Path]:
     settings = settings or get_settings()
     selected = _absolute(Path(storage_root) if storage_root else settings.resolved_recordings_dir)
     if _is_take_dir(selected):
@@ -125,7 +127,7 @@ def create_capture_storage_plan(
     settings: Settings | None = None,
 ) -> CaptureStoragePlan:
     root, captures_root = validate_storage_root(storage_root, settings=settings)
-    date_name = (started_at or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%d")
+    date_name = (started_at or datetime.now(UTC)).astimezone(UTC).strftime("%Y-%m-%d")
     take_dir = captures_root / date_name / capture_take_id
     if take_dir.exists() and any(take_dir.iterdir()):
         raise CaptureStorageError(f"录制会话目录已存在且非空：{take_dir}")
@@ -162,7 +164,9 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 # 写入采集会话元数据（清单 manifest + 会话信息 session）
-def write_capture_metadata(plan: CaptureStoragePlan, *, manifest: dict[str, Any], session: dict[str, Any] | None = None) -> None:
+def write_capture_metadata(
+    plan: CaptureStoragePlan, *, manifest: dict[str, Any], session: dict[str, Any] | None = None
+) -> None:
     write_json_atomic(plan.take_dir / "manifest.json", manifest)
     if session is not None:
         write_json_atomic(plan.metadata_dir / "recording_session.json", session)

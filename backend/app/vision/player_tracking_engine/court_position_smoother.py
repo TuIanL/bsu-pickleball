@@ -81,7 +81,9 @@ class CourtPositionSmoother:
             # 异常帧仍更新"原始观测基线"，避免追赶 smoothed 时被连续误判
             state.last_raw_x = x_ft
             state.last_raw_y = y_ft
-            return CourtPositionResult(x=state.smoothed_x, y=state.smoothed_y, smoothing_status="outlier_clamped", raw_x=x_ft, raw_y=y_ft)
+            return CourtPositionResult(
+                x=state.smoothed_x, y=state.smoothed_y, smoothing_status="outlier_clamped", raw_x=x_ft, raw_y=y_ft
+            )
 
         gap = frame_index - state.last_frame - self.frame_stride
         if gap > 0:
@@ -100,7 +102,9 @@ class CourtPositionSmoother:
             state.last_timestamp = timestamp
             state.last_raw_x = x_ft
             state.last_raw_y = y_ft
-            return CourtPositionResult(x=state.smoothed_x, y=state.smoothed_y, smoothing_status="gap_hold", raw_x=x_ft, raw_y=y_ft)
+            return CourtPositionResult(
+                x=state.smoothed_x, y=state.smoothed_y, smoothing_status="gap_hold", raw_x=x_ft, raw_y=y_ft
+            )
 
         state.smoothed_x = self.alpha * x_ft + (1.0 - self.alpha) * state.smoothed_x
         state.smoothed_y = self.alpha * y_ft + (1.0 - self.alpha) * state.smoothed_y
@@ -111,7 +115,9 @@ class CourtPositionSmoother:
         state.last_raw_x = x_ft
         state.last_raw_y = y_ft
 
-        return CourtPositionResult(x=state.smoothed_x, y=state.smoothed_y, smoothing_status="smoothed", raw_x=x_ft, raw_y=y_ft)
+        return CourtPositionResult(
+            x=state.smoothed_x, y=state.smoothed_y, smoothing_status="smoothed", raw_x=x_ft, raw_y=y_ft
+        )
 
     def _is_outlier(self, state: SmoothState, x: float, y: float, timestamp: float) -> bool:
         # 用相邻两帧的原始观测位移判定异常（真实运动速度），

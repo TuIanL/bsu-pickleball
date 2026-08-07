@@ -3,12 +3,10 @@ from __future__ import annotations
 # 动作分类数据集导出脚本。
 # 作用：把「目标球员」的视频裁剪片段，处理成可供动作分类模型训练的 clip（短视频片段）数据集。
 # 支持的预处理包括：ROI 裁剪、CLAHE 光照增强、降噪、人体检测、目标球员选择、正方形裁剪、滑窗切片等。
-
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 # 把项目根目录（backend/）加入模块搜索路径，使得后续 `from app...` 能正常导入。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,9 +23,7 @@ from app.vision.action_classification_preprocessing import (  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Export target-player crops as action-classification training clips."
-    )
+    parser = argparse.ArgumentParser(description="Export target-player crops as action-classification training clips.")
     # 位置参数：输入视频文件，或包含多个视频文件的目录。
     parser.add_argument("input", help="Source video file or directory containing video files.")
     # 必填：数据集输出根目录。

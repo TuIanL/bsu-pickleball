@@ -16,6 +16,7 @@ from __future__ import annotations
 # - CalibrationCreate：更通用的标定创建请求；
 # - CalibrationResult：标定结果。
 from app.schemas.calibration import CalibrationCreate, CalibrationResult, ManualKeypointCalibrationRequest
+
 # 真正执行标定计算的 service 层。
 from app.services.calibration_service import CalibrationService
 

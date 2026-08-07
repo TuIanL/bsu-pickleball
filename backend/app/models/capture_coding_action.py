@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
 
-class CodingActionStatus(str, enum.Enum):
+class CodingActionStatus(enum.StrEnum):
     executed = "executed"
     undone = "undone"
     rejected = "rejected"
@@ -48,7 +48,5 @@ class CaptureCodingAction(Base):
     annotation_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     vidat_import_audit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

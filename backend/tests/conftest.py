@@ -17,7 +17,6 @@ import pytest
 
 from app.core.config import Settings
 
-
 _ISOLATION_ENV_KEYS = (
     "PICKLEBALL_DATA_DIR",
     "PICKLEBALL_DATABASE_PATH",

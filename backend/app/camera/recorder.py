@@ -12,9 +12,9 @@ import logging
 import os
 import subprocess
 import threading
-import time
+from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
-from typing import Callable
 
 from app.camera.recorder_exit import RecorderExit
 
@@ -82,13 +82,19 @@ class Recorder:
             cmd = [
                 "ffmpeg",
                 "-re",
-                "-f", "lavfi",
-                "-i", f"color=c=black:s={width}x{height}:r={fps}",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={width}x{height}:r={fps}",
                 "-an",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
                 "-y",
                 str(output_path),
             ]
@@ -98,15 +104,23 @@ class Recorder:
             # 周期性卡顿。这里不再强制 -r/-vsync，而是让摄像头自己决定真实帧率。
             cmd = [
                 "ffmpeg",
-                "-rtsp_transport", "tcp",
-                "-timeout", "5000000",
-                "-fflags", "+genpts",
-                "-i", url,
-                "-map", "0:v:0",
+                "-rtsp_transport",
+                "tcp",
+                "-timeout",
+                "5000000",
+                "-fflags",
+                "+genpts",
+                "-i",
+                url,
+                "-map",
+                "0:v:0",
                 "-an",
-                "-c:v", "copy",
-                "-fps_mode", "passthrough",
-                "-movflags", "+faststart",
+                "-c:v",
+                "copy",
+                "-fps_mode",
+                "passthrough",
+                "-movflags",
+                "+faststart",
                 "-y",
                 str(output_path),
             ]
@@ -197,16 +211,21 @@ class Recorder:
         if not self.pid or not self.pgid:
             return
         try:
+            from datetime import datetime
+
             from app.database import get_session_factory
             from app.models.ffmpeg_registry import FFmpegProcessRegistry
-            from datetime import datetime, timezone as tz
+
             db = get_session_factory()()
             try:
                 rec = FFmpegProcessRegistry(
-                    capture_take_id=capture_take_id, track_id=track_id,
-                    pid=self.pid, pgid=self.pgid,
+                    capture_take_id=capture_take_id,
+                    track_id=track_id,
+                    pid=self.pid,
+                    pgid=self.pgid,
                     command_fingerprint=self.command_fingerprint or "",
-                    output_path="", started_at=datetime.now(tz.utc),
+                    output_path="",
+                    started_at=datetime.now(UTC),
                 )
                 db.add(rec)
                 db.commit()
@@ -221,15 +240,17 @@ class Recorder:
         if not self.pid:
             return
         try:
-            from datetime import datetime, timezone as tz
+            from datetime import datetime
+
             from app.database import get_session_factory
             from app.models.ffmpeg_registry import FFmpegProcessRegistry
+
             db = get_session_factory()()
             try:
                 db.query(FFmpegProcessRegistry).filter(
                     FFmpegProcessRegistry.pid == self.pid,
                     FFmpegProcessRegistry.ended_at.is_(None),
-                ).update({"ended_at": datetime.now(tz.utc)})
+                ).update({"ended_at": datetime.now(UTC)})
                 db.commit()
             except Exception:
                 db.rollback()

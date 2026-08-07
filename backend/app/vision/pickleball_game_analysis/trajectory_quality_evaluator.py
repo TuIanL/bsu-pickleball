@@ -20,12 +20,10 @@ from app.vision.courtvision_calibration_engine.court_geometry import PickleballC
 from app.vision.pickleball_game_analysis.image_space_trajectory_fitter import FitResult
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
     NetCrossingStatus,
-    ReconstructionConfig,
-    ReconstructionMode,
     ReconstructedSegment,
+    ReconstructionMode,
     SampleSource,
     TrajectoryEvent,
-    TrajectoryEventType,
 )
 
 
@@ -33,8 +31,8 @@ from app.vision.pickleball_game_analysis.reconstruction_schemas import (
 class QualityConfig:
     """质量评分超参数。"""
 
-    max_rmse_px: float = 20.0              # 残差满分对应的像素上限
-    single_anchor_cap: float = 0.75        # single_anchor_warp 总体质量上限
+    max_rmse_px: float = 20.0  # 残差满分对应的像素上限
+    single_anchor_cap: float = 0.75  # single_anchor_warp 总体质量上限
     height_prior_confidence: float = 0.25  # 全局接触高度先验的可信度
     low_confidence_threshold: float = 0.40  # image_only 段质量硬上限基准
 
@@ -59,11 +57,16 @@ class TrajectoryQualityEvaluator:
         """返回段质量字典（含 overall 与各维度）。"""
         samples = segment.samples
         total = len(samples)
-        detected = [s for s in samples if s.source in (
-            SampleSource.DETECTED.value,
-            SampleSource.ANCHOR.value,
-        )]
-        interpolated = [s for s in samples if s.source == SampleSource.INTERPOLATED.value]
+        detected = [
+            s
+            for s in samples
+            if s.source
+            in (
+                SampleSource.DETECTED.value,
+                SampleSource.ANCHOR.value,
+            )
+        ]
+        [s for s in samples if s.source == SampleSource.INTERPOLATED.value]
         predicted = [s for s in samples if s.source == SampleSource.MODEL_PREDICTED.value]
 
         coverage = round(len(detected) / total, 4) if total else 0.0
@@ -134,7 +137,7 @@ class TrajectoryQualityEvaluator:
 
     def _net_crossing_diagnostics(self, segment: ReconstructedSegment) -> tuple[NetCrossingStatus, float]:
         """过网软诊断：起止锚点是否分居网两侧、路径是否跨网、跨网高度是否可疑。"""
-        anchors = {a["anchor_type"]: a for a in segment.anchors}
+        {a["anchor_type"]: a for a in segment.anchors}
         ys = []
         for a in segment.anchors:
             court = a.get("court_xy")
@@ -158,7 +161,7 @@ class TrajectoryQualityEvaluator:
     def _height_at_net(self, segment: ReconstructedSegment, net_y: float) -> float | None:
         """在球场路径跨越网线处的估算高度；未跨网或无高度返回 None。"""
         crossing = None
-        for left, right in zip(segment.samples[:-1], segment.samples[1:]):
+        for left, right in zip(segment.samples[:-1], segment.samples[1:], strict=False):
             ly = left.court_xy[1] if left.court_xy else None
             ry = right.court_xy[1] if right.court_xy else None
             if ly is None or ry is None:

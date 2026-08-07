@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.capture_take import CaptureTake, CaptureTakeStatus
 from app.models.capture_coding_action import CaptureCodingAction
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentStatus
+from app.models.capture_take import CaptureTake, CaptureTakeStatus
 from app.models.live_coding_state import LiveCodingState
 from app.models.timeline_event import SessionTimelineEvent
-from app.models.capture_segment import CaptureSegment, EditStatus, SegmentStatus
-
-from app.services import capture_take_service
 from app.services import capture_coding_action_service as coding_svc
-from app.services import live_coding_state_service as state_svc
 from app.services import capture_segment_service as seg_svc
+from app.services import capture_take_service
+from app.services import live_coding_state_service as state_svc
 from app.services import timeline_event_service as event_svc
 from app.services.scoring_fsm import (
     HYBRID_21_RULESET,
@@ -30,12 +29,25 @@ from app.services.scoring_fsm import (
 
 # ── 公开 action 列表 ──
 
-VALID_ACTIONS = frozenset({
-    "start_set", "start_game", "start_next_rally",
-    "end_rally", "end_game", "end_set",
-    "toggle_non_play", "start_timeout", "change_side", "add_note", "undo",
-    "rally_result_a", "rally_result_b", "rally_replay", "correct_score",
-})
+VALID_ACTIONS = frozenset(
+    {
+        "start_set",
+        "start_game",
+        "start_next_rally",
+        "end_rally",
+        "end_game",
+        "end_set",
+        "toggle_non_play",
+        "start_timeout",
+        "change_side",
+        "add_note",
+        "undo",
+        "rally_result_a",
+        "rally_result_b",
+        "rally_replay",
+        "correct_score",
+    }
+)
 
 # ── 主入口 ──
 
@@ -56,18 +68,20 @@ def execute_coding_action(
         raise ValueError(f"CaptureTake {capture_take_id} 不存在")
 
     # 允许 recording 或 completed (宽限期内) 接收事件
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
+
     try:
         from app.core.config import get_settings
+
         _GRACE_MINUTES = get_settings().capture_take_late_event_grace_minutes
     except Exception:
         _GRACE_MINUTES = 5
     if take.status == CaptureTakeStatus.completed:
         if take.ended_at is None:
             raise ValueError(f"CaptureTake {capture_take_id} 已完成但缺少 ended_at")
-        grace_deadline = take.ended_at.replace(tzinfo=timezone.utc) if take.ended_at.tzinfo is None else take.ended_at
+        grace_deadline = take.ended_at.replace(tzinfo=UTC) if take.ended_at.tzinfo is None else take.ended_at
         grace_deadline = grace_deadline + timedelta(minutes=_GRACE_MINUTES)
-        if datetime.now(timezone.utc) > grace_deadline:
+        if datetime.now(UTC) > grace_deadline:
             raise ValueError(f"CaptureTake {capture_take_id} 已完成且超出补传宽限期")
         if not (0 <= timestamp_ms <= (take.duration_ms or 0)):
             raise ValueError(f"timestamp_ms {timestamp_ms} 超出录制时长范围")
@@ -81,13 +95,17 @@ def execute_coding_action(
         if existing.request_hash != req_hash:
             raise ValueError("duplicate_action_mismatched_payload")
         state = state_svc.get_state(db, capture_take_id)
-        return _with_snapshot(db, take, {
-            "revision": existing.revision_after or existing.revision_before,
-            "created_events": [],
-            "updated_segments": [],
-            "live_state": state_svc.state_to_dict(state) if state else _empty_state(),
-            "duplicate": True,
-        })
+        return _with_snapshot(
+            db,
+            take,
+            {
+                "revision": existing.revision_after or existing.revision_before,
+                "created_events": [],
+                "updated_segments": [],
+                "live_state": state_svc.state_to_dict(state) if state else _empty_state(),
+                "duplicate": True,
+            },
+        )
 
     # revision 冲突检查
     if take.revision != expected_revision:
@@ -113,11 +131,25 @@ def execute_coding_action(
 
 # 返回空状态字典（默认值）
 def _empty_state() -> dict:
-    return {"revision": 0, "set_ordinal": 0, "game_ordinal": 0, "rally_ordinal": 0, "non_play": False,
-            "score_a": 0, "score_b": 0, "server_team": None, "scoring_mode": "none",
-            "scoring_ruleset_version": None, "recent_results": [], "games_won_a": 0,
-            "games_won_b": 0, "scoring_phase": "rally", "serving_side": None,
-            "match_status": "not_started", "match_winner": None}
+    return {
+        "revision": 0,
+        "set_ordinal": 0,
+        "game_ordinal": 0,
+        "rally_ordinal": 0,
+        "non_play": False,
+        "score_a": 0,
+        "score_b": 0,
+        "server_team": None,
+        "scoring_mode": "none",
+        "scoring_ruleset_version": None,
+        "recent_results": [],
+        "games_won_a": 0,
+        "games_won_b": 0,
+        "scoring_phase": "rally",
+        "serving_side": None,
+        "match_status": "not_started",
+        "match_winner": None,
+    }
 
 
 # 确保 take 存在状态快照，不存在则初始化
@@ -178,54 +210,68 @@ def _apply_action(
         created_events, updated_segments = _handle_undo(db, take, state, timestamp_ms, action_record)
     elif action in ("rally_result_a", "rally_result_b"):
         winner = "A" if action == "rally_result_a" else "B"
-        created_events, updated_segments = _handle_rally_result(db, take, state, timestamp_ms, winner=winner, validity="valid")
+        created_events, updated_segments = _handle_rally_result(
+            db, take, state, timestamp_ms, winner=winner, validity="valid"
+        )
     elif action == "rally_replay":
-        created_events, updated_segments = _handle_rally_result(db, take, state, timestamp_ms, winner=None, validity="replay")
+        created_events, updated_segments = _handle_rally_result(
+            db, take, state, timestamp_ms, winner=None, validity="replay"
+        )
     elif action == "correct_score":
         created_events, updated_segments = _handle_correct_score(db, take, state, timestamp_ms, payload)
 
     new_revision = take.revision + 1
     take.revision = new_revision
     state.revision = new_revision
-    take.updated_at = datetime.now(timezone.utc)
+    take.updated_at = datetime.now(UTC)
 
-    result_json = json.dumps({
-        "created_events": [e["id"] for e in created_events],
-        "updated_segments": [s["id"] for s in updated_segments],
-    }, ensure_ascii=False)
+    result_json = json.dumps(
+        {
+            "created_events": [e["id"] for e in created_events],
+            "updated_segments": [s["id"] for s in updated_segments],
+        },
+        ensure_ascii=False,
+    )
 
     coding_svc.complete_action_record(
-        db, action_record,
+        db,
+        action_record,
         revision_after=new_revision,
         result_json=result_json,
     )
 
-    result = _with_snapshot(db, take, {
-        "revision": new_revision,
-        "created_events": created_events,
-        "updated_segments": updated_segments,
-        "live_state": state_svc.state_to_dict(state),
-    })
+    result = _with_snapshot(
+        db,
+        take,
+        {
+            "revision": new_revision,
+            "created_events": created_events,
+            "updated_segments": updated_segments,
+            "live_state": state_svc.state_to_dict(state),
+        },
+    )
 
     # 迟到事件：completed take 收到事件后重投影时间线
     if take.status == CaptureTakeStatus.completed:
         try:
-            reproject_coding_timeline(db, capture_take_id)
+            reproject_coding_timeline(db, take.id)
         except Exception:
             pass
 
     return result
 
 
-def _validate_match_action(
-    db: Session, take: CaptureTake, state: LiveCodingState, action: str, payload: dict
-) -> None:
+def _validate_match_action(db: Session, take: CaptureTake, state: LiveCodingState, action: str, payload: dict) -> None:
     if getattr(state, "scoring_ruleset_version", None) != HYBRID_21_RULESET:
         return
     open_game = seg_svc.get_open_segment_by_type(db, take.id, "game")
     open_rally = seg_svc.get_open_segment_by_type(db, take.id, "rally")
     if getattr(state, "match_status", "not_started") == "completed" and action in {
-        "start_game", "start_next_rally", "rally_result_a", "rally_result_b", "rally_replay"
+        "start_game",
+        "start_next_rally",
+        "rally_result_a",
+        "rally_result_b",
+        "rally_replay",
     }:
         raise ValueError("比赛已结束，不能继续开局或计分")
     if action == "start_game":
@@ -247,9 +293,7 @@ def _validate_match_action(
 # ── Action handlers ──
 
 
-def _close_all_open(
-    db: Session, take: CaptureTake, timestamp_ms: int
-) -> tuple[list[dict], list[dict]]:
+def _close_all_open(db: Session, take: CaptureTake, timestamp_ms: int) -> tuple[list[dict], list[dict]]:
     """关闭所有 open 的 rally、game、set，返回 (events, segments)。"""
     events: list[dict] = []
     segments: list[dict] = []
@@ -260,11 +304,15 @@ def _close_all_open(
     for seg in open_segs:
         end_type = f"{seg.segment_type.value}_end"
         event = event_svc._add_timeline_event(
-            db, take.field_session_id, end_type,
-            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            db,
+            take.field_session_id,
+            end_type,
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
         )
-        seg_svc.close_segment(db, seg, end_ms=timestamp_ms, end_event_id=event.id,
-                              status="closed", close_reason="user_action")
+        seg_svc.close_segment(
+            db, seg, end_ms=timestamp_ms, end_event_id=event.id, status="closed", close_reason="user_action"
+        )
         events.append(_event_to_dict(event))
         segments.append(_segment_to_dict(seg))
     return events, segments
@@ -278,28 +326,45 @@ def _handle_start_set(
     events.extend(_close_intermission(db, take, state, timestamp_ms))
 
     event = event_svc._add_timeline_event(
-        db, take.field_session_id, "set_start",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        "set_start",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
     )
     seg = seg_svc.create_segment(
-        db, capture_take_id=take.id, segment_type="set",
-        ordinal=state.set_ordinal + 1, start_ms=timestamp_ms,
-        start_event_id=event.id, label=f"第{state.set_ordinal + 1}盘",
+        db,
+        capture_take_id=take.id,
+        segment_type="set",
+        ordinal=state.set_ordinal + 1,
+        start_ms=timestamp_ms,
+        start_event_id=event.id,
+        label=f"第{state.set_ordinal + 1}盘",
     )
     events.append(_event_to_dict(event))
     segments.append(_segment_to_dict(seg))
 
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-                           set_ordinal=state.set_ordinal + 1, game_ordinal=0, rally_ordinal=0, match_phase="idle",
-                           current_set_segment_id=seg.id,
-                           current_game_segment_id=None,
-                           current_rally_segment_id=None)
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal + 1,
+        game_ordinal=0,
+        rally_ordinal=0,
+        match_phase="idle",
+        current_set_segment_id=seg.id,
+        current_game_segment_id=None,
+        current_rally_segment_id=None,
+    )
     return events, segments
 
 
 # 处理开始新局：关闭 intermission 与 rally，确保 set 存在，创建 game 区间，重置比分
 def _handle_start_game(
-    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
+    db: Session,
+    take: CaptureTake,
+    state: LiveCodingState,
+    timestamp_ms: int,
     payload: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     events: list[dict] = []
@@ -321,14 +386,22 @@ def _handle_start_game(
         current_set = seg_svc.get_open_segment_by_type(db, take.id, "set")
     if current_set is None:
         ev = event_svc._add_timeline_event(
-            db, take.field_session_id, "set_start",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms, source="algorithm",
+            db,
+            take.field_session_id,
+            "set_start",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
+            source="algorithm",
         )
         set_seg = seg_svc.create_segment(
-            db, capture_take_id=take.id, segment_type="set",
+            db,
+            capture_take_id=take.id,
+            segment_type="set",
             ordinal=state.set_ordinal + 1 if state.set_ordinal > 0 else 1,
-            start_ms=timestamp_ms, start_event_id=ev.id,
-            label=f"第{state.set_ordinal + 1 if state.set_ordinal > 0 else 1}盘", source="algorithm",
+            start_ms=timestamp_ms,
+            start_event_id=ev.id,
+            label=f"第{state.set_ordinal + 1 if state.set_ordinal > 0 else 1}盘",
+            source="algorithm",
         )
         state.set_ordinal = set_seg.ordinal
         state.current_set_segment_id = set_seg.id
@@ -341,13 +414,20 @@ def _handle_start_game(
         state.set_ordinal = current_set.ordinal
 
     event = event_svc._add_timeline_event(
-        db, take.field_session_id, "game_start",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        "game_start",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
     )
     seg = seg_svc.create_segment(
-        db, capture_take_id=take.id, segment_type="game",
-        ordinal=state.game_ordinal + 1, start_ms=timestamp_ms,
-        start_event_id=event.id, label=f"第{state.game_ordinal + 1}局",
+        db,
+        capture_take_id=take.id,
+        segment_type="game",
+        ordinal=state.game_ordinal + 1,
+        start_ms=timestamp_ms,
+        start_event_id=event.id,
+        label=f"第{state.game_ordinal + 1}局",
         parent_segment_id=state.current_set_segment_id,
     )
     events.append(_event_to_dict(event))
@@ -358,19 +438,28 @@ def _handle_start_game(
         initial = initial_game_state(_state_from_model(state), initial_server)
         state.serving_side = initial.serving_side
         state.match_winner = None
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-                           set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal + 1,
-                           rally_ordinal=0, non_play=False, match_phase="idle",
-                           current_game_segment_id=seg.id,
-                           current_set_segment_id=state.current_set_segment_id,
-                           current_rally_segment_id=None,
-                           server_team=initial_server,
-                           score_a=0, score_b=0,
-                           games_won_a=getattr(state, "games_won_a", 0),
-                           games_won_b=getattr(state, "games_won_b", 0),
-                           scoring_phase="rally", serving_side="right",
-                           match_status="in_progress",
-                           recent_results=[])
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal + 1,
+        rally_ordinal=0,
+        non_play=False,
+        match_phase="idle",
+        current_game_segment_id=seg.id,
+        current_set_segment_id=state.current_set_segment_id,
+        current_rally_segment_id=None,
+        server_team=initial_server,
+        score_a=0,
+        score_b=0,
+        games_won_a=getattr(state, "games_won_a", 0),
+        games_won_b=getattr(state, "games_won_b", 0),
+        scoring_phase="rally",
+        serving_side="right",
+        match_status="in_progress",
+        recent_results=[],
+    )
     return events, segments
 
 
@@ -387,22 +476,38 @@ def _handle_start_next_rally(
     # A rally can be the first action in a game. Treat a closed/missing current
     # game as absent even when game_ordinal still contains the previous game.
     current_game = seg_svc.get_segment(db, state.current_game_segment_id) if state.current_game_segment_id else None
-    if current_game is None or current_game.edit_status != EditStatus.active or current_game.status != SegmentStatus.open:
+    if (
+        current_game is None
+        or current_game.edit_status != EditStatus.active
+        or current_game.status != SegmentStatus.open
+    ):
         current_game = seg_svc.get_open_segment_by_type(db, take.id, "game")
     if current_game is None:
         current_set = seg_svc.get_segment(db, state.current_set_segment_id) if state.current_set_segment_id else None
-        if current_set is None or current_set.edit_status != EditStatus.active or current_set.status != SegmentStatus.open:
+        if (
+            current_set is None
+            or current_set.edit_status != EditStatus.active
+            or current_set.status != SegmentStatus.open
+        ):
             current_set = seg_svc.get_open_segment_by_type(db, take.id, "set")
         if current_set is None:
             ev = event_svc._add_timeline_event(
-                db, take.field_session_id, "set_start",
-                capture_take_id=take.id, timestamp_ms=timestamp_ms, source="algorithm",
+                db,
+                take.field_session_id,
+                "set_start",
+                capture_take_id=take.id,
+                timestamp_ms=timestamp_ms,
+                source="algorithm",
             )
             set_seg = seg_svc.create_segment(
-                db, capture_take_id=take.id, segment_type="set",
+                db,
+                capture_take_id=take.id,
+                segment_type="set",
                 ordinal=state.set_ordinal + 1 if state.set_ordinal > 0 else 1,
-                start_ms=timestamp_ms, start_event_id=ev.id,
-                label=f"第{state.set_ordinal + 1 if state.set_ordinal > 0 else 1}盘", source="algorithm",
+                start_ms=timestamp_ms,
+                start_event_id=ev.id,
+                label=f"第{state.set_ordinal + 1 if state.set_ordinal > 0 else 1}盘",
+                source="algorithm",
             )
             state.set_ordinal = set_seg.ordinal
             state.current_set_segment_id = set_seg.id
@@ -416,13 +521,22 @@ def _handle_start_next_rally(
 
         game_ordinal = state.game_ordinal + 1 if state.game_ordinal > 0 else 1
         ev = event_svc._add_timeline_event(
-            db, take.field_session_id, "game_start",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms, source="algorithm",
+            db,
+            take.field_session_id,
+            "game_start",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
+            source="algorithm",
         )
         game_seg = seg_svc.create_segment(
-            db, capture_take_id=take.id, segment_type="game",
-            ordinal=game_ordinal, start_ms=timestamp_ms, start_event_id=ev.id,
-            label=f"第{game_ordinal}局", source="algorithm",
+            db,
+            capture_take_id=take.id,
+            segment_type="game",
+            ordinal=game_ordinal,
+            start_ms=timestamp_ms,
+            start_event_id=ev.id,
+            label=f"第{game_ordinal}局",
+            source="algorithm",
             parent_segment_id=state.current_set_segment_id,
         )
         state.game_ordinal = game_ordinal
@@ -435,32 +549,49 @@ def _handle_start_next_rally(
 
     if state.non_play:
         ev = event_svc._add_timeline_event(
-            db, take.field_session_id, "non_play_end",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            db,
+            take.field_session_id,
+            "non_play_end",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
             payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"},
         )
         events.append(_event_to_dict(ev))
         state.non_play = False
 
     event = event_svc._add_timeline_event(
-        db, take.field_session_id, "rally_start",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        "rally_start",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
     )
     seg = seg_svc.create_segment(
-        db, capture_take_id=take.id, segment_type="rally",
-        ordinal=state.rally_ordinal + 1, start_ms=timestamp_ms,
-        start_event_id=event.id, label=f"第{state.rally_ordinal + 1}分",
+        db,
+        capture_take_id=take.id,
+        segment_type="rally",
+        ordinal=state.rally_ordinal + 1,
+        start_ms=timestamp_ms,
+        start_event_id=event.id,
+        label=f"第{state.rally_ordinal + 1}分",
         parent_segment_id=state.current_game_segment_id,
     )
     events.append(_event_to_dict(event))
     segments.append(_segment_to_dict(seg))
 
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-                           set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
-                           rally_ordinal=state.rally_ordinal + 1, non_play=False, match_phase="rally_active",
-                           current_rally_segment_id=seg.id,
-                           current_game_segment_id=state.current_game_segment_id,
-                           current_set_segment_id=state.current_set_segment_id)
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal + 1,
+        non_play=False,
+        match_phase="rally_active",
+        current_rally_segment_id=seg.id,
+        current_game_segment_id=state.current_game_segment_id,
+        current_set_segment_id=state.current_set_segment_id,
+    )
     return events, segments
 
 
@@ -474,19 +605,25 @@ def _handle_end_level(
 
     if level == "set":
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "rally")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "game")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "set")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
     elif level == "game":
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "rally")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "game")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
     else:  # rally
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "rally")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
 
     if level in ("game", "set"):
         # 把刚结束的局比分写进 game_end，供计分板展示上一局结果。
@@ -497,6 +634,7 @@ def _handle_end_level(
             "winner": "A" if state.score_a > state.score_b else "B" if state.score_b > state.score_a else None,
         }
         from app.models.timeline_event import SessionTimelineEvent
+
         for event_dict in events:
             if event_dict.get("event_type") != "game_end":
                 continue
@@ -515,14 +653,22 @@ def _handle_end_level(
     # a rally, so the timeline remains gray until the next start action.
     if level in ("game", "set"):
         intermission = event_svc._add_timeline_event(
-            db, take.field_session_id, "non_play_start",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            db,
+            take.field_session_id,
+            "non_play_start",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
             payload_json={"intermission_kind": "between_rallies"},
         )
         events.append(_event_to_dict(intermission))
 
-    state_svc.upsert_state(db, take.id, revision=take.revision, set_ordinal=state.set_ordinal,
-        game_ordinal=state.game_ordinal, rally_ordinal=state.rally_ordinal,
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal,
         non_play=level in ("game", "set"),
         match_phase="intermission" if level in ("game", "set") else "idle",
         intermission_kind="between_rallies" if level in ("game", "set") else None,
@@ -532,7 +678,8 @@ def _handle_end_level(
         server_team=state.server_team,
         score_a=state.score_a,
         score_b=state.score_b,
-        recent_results=[] if level in ("game", "set") else None)
+        recent_results=[] if level in ("game", "set") else None,
+    )
     return events, segments
 
 
@@ -546,8 +693,11 @@ def _handle_toggle_non_play(
     if state.non_play:
         # 结束 non_play
         event = event_svc._add_timeline_event(
-            db, take.field_session_id, "non_play_end",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            db,
+            take.field_session_id,
+            "non_play_end",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
             payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"},
         )
         events.append(_event_to_dict(event))
@@ -555,23 +705,33 @@ def _handle_toggle_non_play(
     else:
         # 开启 non_play：关闭 rally 但保留 set/game
         ev, sg = _close_open_by_type(db, take, timestamp_ms, "rally")
-        events.extend(ev); segments.extend(sg)
+        events.extend(ev)
+        segments.extend(sg)
         event = event_svc._add_timeline_event(
-            db, take.field_session_id, "non_play_start",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms,
+            db,
+            take.field_session_id,
+            "non_play_start",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
             payload_json={"intermission_kind": "between_rallies"},
         )
         events.append(_event_to_dict(event))
         state.non_play = True
 
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-                           set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
-                           rally_ordinal=state.rally_ordinal, non_play=state.non_play,
-                           match_phase="intermission" if state.non_play else "idle",
-                           intermission_kind="between_rallies" if state.non_play else None,
-                           current_set_segment_id=state.current_set_segment_id,
-                           current_game_segment_id=state.current_game_segment_id,
-                           current_rally_segment_id=state.current_rally_segment_id if not state.non_play else None)
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal,
+        non_play=state.non_play,
+        match_phase="intermission" if state.non_play else "idle",
+        intermission_kind="between_rallies" if state.non_play else None,
+        current_set_segment_id=state.current_set_segment_id,
+        current_game_segment_id=state.current_game_segment_id,
+        current_rally_segment_id=state.current_rally_segment_id if not state.non_play else None,
+    )
     return events, segments
 
 
@@ -581,18 +741,30 @@ def _handle_change_side(
 ) -> tuple[list[dict], list[dict]]:
     events, segments = _handle_end_rally(db, take, state, timestamp_ms, "side_change")
     event = event_svc._add_timeline_event(
-        db, take.field_session_id, "side_change",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        "side_change",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
     )
     # 重写 upsert 确保比分和发球权不变
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-        set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
-        rally_ordinal=state.rally_ordinal, non_play=True,
-        match_phase="intermission", intermission_kind="side_change",
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal,
+        non_play=True,
+        match_phase="intermission",
+        intermission_kind="side_change",
         current_set_segment_id=state.current_set_segment_id,
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=None,
-        server_team=state.server_team, score_a=state.score_a, score_b=state.score_b)
+        server_team=state.server_team,
+        score_a=state.score_a,
+        score_b=state.score_b,
+    )
     return [_event_to_dict(event), *events], segments
 
 
@@ -602,16 +774,38 @@ def _handle_end_rally(
 ) -> tuple[list[dict], list[dict]]:
     events, segments = _close_open_by_type(db, take, timestamp_ms, "rally")
     if state.non_play:
-        end = event_svc._add_timeline_event(db, take.field_session_id, "non_play_end", capture_take_id=take.id,
-            timestamp_ms=timestamp_ms, payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"})
+        end = event_svc._add_timeline_event(
+            db,
+            take.field_session_id,
+            "non_play_end",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
+            payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"},
+        )
         events.append(_event_to_dict(end))
-    start = event_svc._add_timeline_event(db, take.field_session_id, "non_play_start", capture_take_id=take.id,
-        timestamp_ms=timestamp_ms, payload_json={"intermission_kind": kind})
+    start = event_svc._add_timeline_event(
+        db,
+        take.field_session_id,
+        "non_play_start",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
+        payload_json={"intermission_kind": kind},
+    )
     events.append(_event_to_dict(start))
-    state_svc.upsert_state(db, take.id, revision=take.revision, set_ordinal=state.set_ordinal,
-        game_ordinal=state.game_ordinal, rally_ordinal=state.rally_ordinal, non_play=True,
-        match_phase="intermission", intermission_kind=kind, current_set_segment_id=state.current_set_segment_id,
-        current_game_segment_id=state.current_game_segment_id, current_rally_segment_id=None)
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal,
+        non_play=True,
+        match_phase="intermission",
+        intermission_kind=kind,
+        current_set_segment_id=state.current_set_segment_id,
+        current_game_segment_id=state.current_game_segment_id,
+        current_rally_segment_id=None,
+    )
     return events, segments
 
 
@@ -620,7 +814,11 @@ def _close_intermission(db: Session, take: CaptureTake, state: LiveCodingState, 
     if not state.non_play:
         return []
     event = event_svc._add_timeline_event(
-        db, take.field_session_id, "non_play_end", capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        "non_play_end",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
         payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"},
     )
     state.non_play = False
@@ -639,8 +837,13 @@ def _with_snapshot(db: Session, take: CaptureTake, result: dict) -> dict:
 
 # 处理回合结果（A胜 / B胜 / 重打）：关 rally + 写事件 + FSM + recent_results
 def _handle_rally_result(
-    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
-    *, winner: str | None, validity: str,
+    db: Session,
+    take: CaptureTake,
+    state: LiveCodingState,
+    timestamp_ms: int,
+    *,
+    winner: str | None,
+    validity: str,
 ) -> tuple[list[dict], list[dict]]:
     # Legacy rules preserve the old no-op behavior. Hybrid actions are gated above.
     events, segments = _close_open_by_type(db, take, timestamp_ms, "rally")
@@ -650,6 +853,7 @@ def _handle_rally_result(
     # rally_end 事件带结果 — 更新 DB 记录
     rally_end_payload = {"winner": winner, "validity": validity, "reason": ""}
     from app.models.timeline_event import SessionTimelineEvent
+
     for ev_dict in events:
         if ev_dict.get("event_type") == "rally_end":
             ev_db = db.query(SessionTimelineEvent).filter(SessionTimelineEvent.id == ev_dict["id"]).first()
@@ -681,7 +885,9 @@ def _handle_rally_result(
 
     # recent_results
     try:
-        recent = json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or [])
+        recent = (
+            json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or [])
+        )
     except (json.JSONDecodeError, TypeError):
         recent = []
     recent.append({"winner": winner, "validity": validity})
@@ -690,13 +896,23 @@ def _handle_rally_result(
 
     # 关 intermission + 开 non_play
     if state.non_play:
-        end = event_svc._add_timeline_event(db, take.field_session_id, "non_play_end",
-            capture_take_id=take.id, timestamp_ms=timestamp_ms,
-            payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"})
+        end = event_svc._add_timeline_event(
+            db,
+            take.field_session_id,
+            "non_play_end",
+            capture_take_id=take.id,
+            timestamp_ms=timestamp_ms,
+            payload_json={"intermission_kind": getattr(state, "intermission_kind", None) or "between_rallies"},
+        )
         events.append(_event_to_dict(end))
-    start_np = event_svc._add_timeline_event(db, take.field_session_id, "non_play_start",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
-        payload_json={"intermission_kind": "between_rallies"})
+    start_np = event_svc._add_timeline_event(
+        db,
+        take.field_session_id,
+        "non_play_start",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
+        payload_json={"intermission_kind": "between_rallies"},
+    )
     events.append(_event_to_dict(start_np))
 
     if ruleset == HYBRID_21_RULESET and new_state.game_completed:
@@ -724,26 +940,39 @@ def _handle_rally_result(
             segments.extend(set_segments)
             state.current_set_segment_id = None
 
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-        set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
-        rally_ordinal=state.rally_ordinal, non_play=True,
-        match_phase="intermission", intermission_kind="between_rallies",
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal,
+        non_play=True,
+        match_phase="intermission",
+        intermission_kind="between_rallies",
         current_set_segment_id=state.current_set_segment_id,
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=None,
-        server_team=state.server_team, score_a=state.score_a, score_b=state.score_b,
-        games_won_a=getattr(state, "games_won_a", 0), games_won_b=getattr(state, "games_won_b", 0),
+        server_team=state.server_team,
+        score_a=state.score_a,
+        score_b=state.score_b,
+        games_won_a=getattr(state, "games_won_a", 0),
+        games_won_b=getattr(state, "games_won_b", 0),
         scoring_phase=getattr(state, "scoring_phase", "rally"),
         serving_side=getattr(state, "serving_side", None),
         match_status=getattr(state, "match_status", "not_started"),
         match_winner=getattr(state, "match_winner", None),
-        recent_results=recent)
+        recent_results=recent,
+    )
     return events, segments
 
 
 # 处理比分修正：注入锚点，不操作段
 def _handle_correct_score(
-    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int,
+    db: Session,
+    take: CaptureTake,
+    state: LiveCodingState,
+    timestamp_ms: int,
     payload: dict,
 ) -> tuple[list[dict], list[dict]]:
     score_a = payload.get("score_a")
@@ -765,8 +994,11 @@ def _handle_correct_score(
     score_after = {"a": score_a, "b": score_b, "server_team": server_team}
 
     ev = event_svc._add_timeline_event(
-        db, take.field_session_id, "score_correction",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        "score_correction",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
         source="corrected",
         payload_json={
             "score_before": score_before,
@@ -795,35 +1027,60 @@ def _handle_correct_score(
         state.match_winner = "A" if state.games_won_a == 3 else "B" if state.games_won_b == 3 else None
         state.match_status = "completed" if state.match_winner else "in_progress"
         game_events, game_segments = _close_open_by_type(db, take, timestamp_ms, "game")
-        _set_event_payload(db, game_events, "game_end", {
-            "score_a": score_a, "score_b": score_b, "winner": winner,
-            "games_won_a": state.games_won_a, "games_won_b": state.games_won_b,
-        })
+        _set_event_payload(
+            db,
+            game_events,
+            "game_end",
+            {
+                "score_a": score_a,
+                "score_b": score_b,
+                "winner": winner,
+                "games_won_a": state.games_won_a,
+                "games_won_b": state.games_won_b,
+            },
+        )
         events.extend(game_events)
         segments.extend(game_segments)
         state.current_game_segment_id = None
         if state.match_winner:
             set_events, set_segments = _close_open_by_type(db, take, timestamp_ms, "set")
-            _set_event_payload(db, set_events, "set_end", {
-                "winner": state.match_winner,
-                "games_won_a": state.games_won_a, "games_won_b": state.games_won_b,
-            })
+            _set_event_payload(
+                db,
+                set_events,
+                "set_end",
+                {
+                    "winner": state.match_winner,
+                    "games_won_a": state.games_won_a,
+                    "games_won_b": state.games_won_b,
+                },
+            )
             events.extend(set_events)
             segments.extend(set_segments)
             state.current_set_segment_id = None
 
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-        set_ordinal=state.set_ordinal, game_ordinal=state.game_ordinal,
-        rally_ordinal=state.rally_ordinal, non_play=state.non_play,
-        match_phase=state.match_phase, intermission_kind=state.intermission_kind,
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=state.set_ordinal,
+        game_ordinal=state.game_ordinal,
+        rally_ordinal=state.rally_ordinal,
+        non_play=state.non_play,
+        match_phase=state.match_phase,
+        intermission_kind=state.intermission_kind,
         current_set_segment_id=state.current_set_segment_id,
         current_game_segment_id=state.current_game_segment_id,
         current_rally_segment_id=state.current_rally_segment_id,
-        server_team=server_team, score_a=score_a, score_b=score_b,
-        games_won_a=getattr(state, "games_won_a", 0), games_won_b=getattr(state, "games_won_b", 0),
-        scoring_phase=state.scoring_phase, serving_side=state.serving_side,
+        server_team=server_team,
+        score_a=score_a,
+        score_b=score_b,
+        games_won_a=getattr(state, "games_won_a", 0),
+        games_won_b=getattr(state, "games_won_b", 0),
+        scoring_phase=state.scoring_phase,
+        serving_side=state.serving_side,
         match_status=getattr(state, "match_status", "not_started"),
-        match_winner=getattr(state, "match_winner", None))
+        match_winner=getattr(state, "match_winner", None),
+    )
     return events, segments
 
 
@@ -841,9 +1098,7 @@ def _state_from_model(state: LiveCodingState) -> ScoringState:
     )
 
 
-def _set_event_payload(
-    db: Session, events: list[dict], event_type: str, payload: dict
-) -> None:
+def _set_event_payload(db: Session, events: list[dict], event_type: str, payload: dict) -> None:
     for event_dict in events:
         if event_dict.get("event_type") != event_type:
             continue
@@ -861,14 +1116,15 @@ def _find_last_event(events: list[dict], event_type: str) -> dict | None:
 
 
 # 处理添加笔记：创建 timeline 笔记事件
-def _handle_add_note(
-    db: Session, take: CaptureTake, timestamp_ms: int, payload: dict
-) -> tuple[list[dict], list[dict]]:
+def _handle_add_note(db: Session, take: CaptureTake, timestamp_ms: int, payload: dict) -> tuple[list[dict], list[dict]]:
     event = event_svc._add_timeline_event(
-        db, take.field_session_id,
+        db,
+        take.field_session_id,
         event_type=payload.get("event_type", "session_note"),
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
-        note=payload.get("note", ""), label=payload.get("label", ""),
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
+        note=payload.get("note", ""),
+        label=payload.get("label", ""),
         payload_json=payload.get("payload", {}),
     )
     return [_event_to_dict(event)], []
@@ -894,9 +1150,7 @@ def _handle_undo(
         for event in affected_events:
             event.is_undone = True
 
-        affected_segments = db.query(CaptureSegment).filter(
-            CaptureSegment.capture_take_id == take.id
-        ).all()
+        affected_segments = db.query(CaptureSegment).filter(CaptureSegment.capture_take_id == take.id).all()
         archived_segment_ids: set[str] = set()
         for segment in affected_segments:
             if segment.start_event_id in event_ids:
@@ -914,10 +1168,7 @@ def _handle_undo(
         while changed:
             changed = False
             for segment in affected_segments:
-                if (
-                    segment.edit_status == EditStatus.active
-                    and segment.parent_segment_id in archived_segment_ids
-                ):
+                if segment.edit_status == EditStatus.active and segment.parent_segment_id in archived_segment_ids:
                     segment.edit_status = EditStatus.archived
                     archived_segment_ids.add(segment.id)
                     changed = True
@@ -926,9 +1177,13 @@ def _handle_undo(
 
     # 标记 undo action 创建的 undo coding action
     undo_event = event_svc._add_timeline_event(
-        db, take.field_session_id, "session_note",
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
-        note=f"撤销操作: {last.action_type}", source="corrected",
+        db,
+        take.field_session_id,
+        "session_note",
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
+        note=f"撤销操作: {last.action_type}",
+        source="corrected",
     )
     events.append(_event_to_dict(undo_event))
 
@@ -956,7 +1211,9 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
     # 恢复状态时只把未关闭的层级视为当前层级；已结束的最后一局
     # 仍通过 game_end 事件展示历史比分，不能继续作为当前局参与按钮状态判断。
     active_sets = [s for s in seg_svc.list_segments(db, take.id, segment_type="set") if s.status == SegmentStatus.open]
-    active_games = [s for s in seg_svc.list_segments(db, take.id, segment_type="game") if s.status == SegmentStatus.open]
+    active_games = [
+        s for s in seg_svc.list_segments(db, take.id, segment_type="game") if s.status == SegmentStatus.open
+    ]
 
     def latest(items):
         return max(items, key=lambda segment: (segment.start_ms, segment.created_at)) if items else None
@@ -964,12 +1221,14 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
     current_set = latest(active_sets)
     games_in_set = (
         [segment for segment in active_games if segment.parent_segment_id == current_set.id]
-        if current_set else active_games
+        if current_set
+        else active_games
     )
     current_game = latest(games_in_set)
     rallies_in_game = (
         [segment for segment in active_rallies if segment.parent_segment_id == current_game.id]
-        if current_game else active_rallies
+        if current_game
+        else active_rallies
     )
     open_rallies = [segment for segment in rallies_in_game if segment.status == SegmentStatus.open]
     open_rally = latest(open_rallies)
@@ -1024,26 +1283,30 @@ def _rebuild_projection_state(db: Session, take: CaptureTake, state: LiveCodingS
     state.serving_side = scoring_state.serving_side
     state.match_winner = scoring_state.match_winner
 
-    state_svc.upsert_state(db, take.id, revision=take.revision,
-                           set_ordinal=current_set.ordinal if current_set else 0,
-                           game_ordinal=current_game.ordinal if current_game else 0,
-                           rally_ordinal=max((segment.ordinal for segment in rallies_in_game), default=0),
-                           non_play=not bool(open_rally) and active_intermission,
-                           match_phase=phase,
-                           intermission_kind=kind if active_intermission and not open_rally else None,
-                           current_set_segment_id=current_set.id if current_set else None,
-                           current_game_segment_id=current_game.id if current_game else None,
-                           current_rally_segment_id=open_rally.id if open_rally else None,
-                           server_team=scoring_state.server_team,
-                           score_a=scoring_state.score_a,
-                           score_b=scoring_state.score_b,
-                           games_won_a=scoring_state.games_won_a,
-                           games_won_b=scoring_state.games_won_b,
-                           scoring_phase=scoring_state.scoring_phase,
-                           serving_side=scoring_state.serving_side,
-                           match_status=scoring_state.match_status,
-                           match_winner=scoring_state.match_winner,
-                           recent_results=recent_results)
+    state_svc.upsert_state(
+        db,
+        take.id,
+        revision=take.revision,
+        set_ordinal=current_set.ordinal if current_set else 0,
+        game_ordinal=current_game.ordinal if current_game else 0,
+        rally_ordinal=max((segment.ordinal for segment in rallies_in_game), default=0),
+        non_play=not bool(open_rally) and active_intermission,
+        match_phase=phase,
+        intermission_kind=kind if active_intermission and not open_rally else None,
+        current_set_segment_id=current_set.id if current_set else None,
+        current_game_segment_id=current_game.id if current_game else None,
+        current_rally_segment_id=open_rally.id if open_rally else None,
+        server_team=scoring_state.server_team,
+        score_a=scoring_state.score_a,
+        score_b=scoring_state.score_b,
+        games_won_a=scoring_state.games_won_a,
+        games_won_b=scoring_state.games_won_b,
+        scoring_phase=scoring_state.scoring_phase,
+        serving_side=scoring_state.serving_side,
+        match_status=scoring_state.match_status,
+        match_winner=scoring_state.match_winner,
+        recent_results=recent_results,
+    )
 
 
 # ── 辅助 ──
@@ -1058,11 +1321,15 @@ def _close_open_by_type(
         return [], []
     end_type = f"{segment_type}_end"
     event = event_svc._add_timeline_event(
-        db, take.field_session_id, end_type,
-        capture_take_id=take.id, timestamp_ms=timestamp_ms,
+        db,
+        take.field_session_id,
+        end_type,
+        capture_take_id=take.id,
+        timestamp_ms=timestamp_ms,
     )
-    seg_svc.close_segment(db, seg, end_ms=timestamp_ms, end_event_id=event.id,
-                          status="closed", close_reason="user_action")
+    seg_svc.close_segment(
+        db, seg, end_ms=timestamp_ms, end_event_id=event.id, status="closed", close_reason="user_action"
+    )
     return [_event_to_dict(event)], [_segment_to_dict(seg)]
 
 
@@ -1073,9 +1340,14 @@ def _event_to_dict(ev) -> dict:
     except (TypeError, json.JSONDecodeError):
         payload = {}
     return {
-        "id": ev.id, "event_type": ev.event_type.value, "label": ev.label,
-        "timestamp_ms": ev.timestamp_ms, "source": ev.source.value, "note": ev.note,
-        "payload_json": payload, "is_undone": ev.is_undone,
+        "id": ev.id,
+        "event_type": ev.event_type.value,
+        "label": ev.label,
+        "timestamp_ms": ev.timestamp_ms,
+        "source": ev.source.value,
+        "note": ev.note,
+        "payload_json": payload,
+        "is_undone": ev.is_undone,
         "annotation_package_id": getattr(ev, "annotation_package_id", None),
         "vidat_import_audit_id": getattr(ev, "vidat_import_audit_id", None),
     }
@@ -1084,9 +1356,13 @@ def _event_to_dict(ev) -> dict:
 # 将 CaptureSegment 对象转换为字典
 def _segment_to_dict(seg) -> dict:
     return {
-        "id": seg.id, "segment_type": seg.segment_type.value,
-        "ordinal": seg.ordinal, "start_ms": seg.start_ms, "end_ms": seg.end_ms,
-        "status": seg.status.value, "label": seg.label,
+        "id": seg.id,
+        "segment_type": seg.segment_type.value,
+        "ordinal": seg.ordinal,
+        "start_ms": seg.start_ms,
+        "end_ms": seg.end_ms,
+        "status": seg.status.value,
+        "label": seg.label,
     }
 
 
@@ -1103,14 +1379,11 @@ def reproject_coding_timeline(db, capture_take_id: str) -> None:
     actions.sort(key=lambda a: (a.revision_before, a.created_at))
 
     # 删除旧的 TimelineEvent 和 CaptureSegment 投影
-    from app.models.timeline_event import SessionTimelineEvent
     from app.models.capture_segment import CaptureSegment
-    db.query(SessionTimelineEvent).filter(
-        SessionTimelineEvent.capture_take_id == capture_take_id
-    ).delete()
-    db.query(CaptureSegment).filter(
-        CaptureSegment.capture_take_id == capture_take_id
-    ).delete()
+    from app.models.timeline_event import SessionTimelineEvent
+
+    db.query(SessionTimelineEvent).filter(SessionTimelineEvent.capture_take_id == capture_take_id).delete()
+    db.query(CaptureSegment).filter(CaptureSegment.capture_take_id == capture_take_id).delete()
     db.flush()
 
     # 按序重放
@@ -1123,10 +1396,14 @@ def reproject_coding_timeline(db, capture_take_id: str) -> None:
     # 裁剪仍 open 的 segment 到 duration_ms
     duration_ms = take.duration_ms or 0
     if duration_ms > 0:
-        open_segs = db.query(CaptureSegment).filter(
-            CaptureSegment.capture_take_id == capture_take_id,
-            CaptureSegment.end_ms.is_(None),
-        ).all()
+        open_segs = (
+            db.query(CaptureSegment)
+            .filter(
+                CaptureSegment.capture_take_id == capture_take_id,
+                CaptureSegment.end_ms.is_(None),
+            )
+            .all()
+        )
         for seg in open_segs:
             seg.end_ms = duration_ms
         db.flush()
@@ -1135,7 +1412,6 @@ def reproject_coding_timeline(db, capture_take_id: str) -> None:
 def _apply_action_to_timeline(db, take, action):
     """将单个 CodingAction 应用到 Timeline/Segment。"""
     from app.models.timeline_event import SessionTimelineEvent, TimelineEventSource
-    from app.models.capture_segment import CaptureSegment, SegmentStatus
 
     payload = action.payload or {}
     event_type = _action_to_event_type(action.action)
@@ -1153,17 +1429,27 @@ def _apply_action_to_timeline(db, take, action):
     db.add(event)
     db.flush()
 
-    if action.action in ("start_game", "start_set", "start_next_rally", "start_rally",
-                         "end_rally", "end_game", "end_set"):
+    if action.action in (
+        "start_game",
+        "start_set",
+        "start_next_rally",
+        "start_rally",
+        "end_rally",
+        "end_game",
+        "end_set",
+    ):
         _update_segments_from_action(db, take, action)
 
 
 # 将 action 类型映射为 timeline 事件类型
 def _action_to_event_type(action: str) -> str:
     mapping = {
-        "start_set": "set_start", "end_set": "set_end",
-        "start_game": "game_start", "end_game": "game_end",
-        "start_next_rally": "rally_start", "start_rally": "rally_start",
+        "start_set": "set_start",
+        "end_set": "set_end",
+        "start_game": "game_start",
+        "end_game": "game_end",
+        "start_next_rally": "rally_start",
+        "start_rally": "rally_start",
         "end_rally": "rally_end",
         "toggle_non_play": "non_play_start",
         "change_side": "side_change",
@@ -1175,8 +1461,9 @@ def _action_to_event_type(action: str) -> str:
 
 # 根据动作类型创建或关闭 CaptureSegment（用于重放投影）
 def _update_segments_from_action(db, take, action):
-    from app.models.capture_segment import CaptureSegment, SegmentStatus
     from uuid import uuid4
+
+    from app.models.capture_segment import CaptureSegment, SegmentStatus
 
     payload = action.payload or {}
     now_ms = action.timestamp_ms
@@ -1195,10 +1482,15 @@ def _update_segments_from_action(db, take, action):
         db.add(seg)
     elif action.action in ("end_rally", "end_game", "end_set"):
         seg_type = "rally" if "rally" in action.action else ("game" if "game" in action.action else "set")
-        segs = db.query(CaptureSegment).filter(
-            CaptureSegment.capture_take_id == take.id,
-            CaptureSegment.end_ms.is_(None),
-            CaptureSegment.segment_type == seg_type,
-        ).order_by(CaptureSegment.start_ms.desc()).all()
+        segs = (
+            db.query(CaptureSegment)
+            .filter(
+                CaptureSegment.capture_take_id == take.id,
+                CaptureSegment.end_ms.is_(None),
+                CaptureSegment.segment_type == seg_type,
+            )
+            .order_by(CaptureSegment.start_ms.desc())
+            .all()
+        )
         if segs:
             segs[0].end_ms = now_ms

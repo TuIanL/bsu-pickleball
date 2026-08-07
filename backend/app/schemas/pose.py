@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -81,21 +81,24 @@ DEFAULT_SKELETON_EDGES = [
 
 class PoseKeypoint(BaseModel):
     """单个姿态关键点。"""
+
     name: str
     x: float
     y: float
     confidence: float = Field(ge=0, le=1)  # 该点置信度（0~1）
-    visible: bool = True                    # 是否可见
+    visible: bool = True  # 是否可见
 
 
 class SkeletonEdge(BaseModel):
     """一条骨架连线：从某关键点到某关键点。"""
+
     from_keypoint: str
     to_keypoint: str
 
 
 class PoseSubject(BaseModel):
     """一帧里一个人的姿态：检测框 + 置信度 + 所有关键点。"""
+
     track_id: str
     bbox: list[float] = Field(min_length=4, max_length=4)
     confidence: float = Field(ge=0, le=1)
@@ -112,6 +115,7 @@ class PoseSubject(BaseModel):
 
 class PoseOverlayFrame(BaseModel):
     """某一帧的姿态叠加数据：包含该帧所有人。"""
+
     frame_index: int = Field(ge=0)
     timestamp_seconds: float = Field(ge=0)
     subjects: list[PoseSubject] = Field(default_factory=list)
@@ -119,12 +123,13 @@ class PoseOverlayFrame(BaseModel):
 
 class PoseOverlayArtifact(BaseModel):
     """一次分析的完整姿态叠加产物（给前端画骨架用）。"""
+
     job_id: str
-    video_id: Optional[str] = None
+    video_id: str | None = None
     status: PoseArtifactStatus = "unavailable"
     detail: str
-    keypoint_schema: str = "rtmpose26"        # 关键点方案名
-    source: SourceFrameSize                   # 原图尺寸
+    keypoint_schema: str = "rtmpose26"  # 关键点方案名
+    source: SourceFrameSize  # 原图尺寸
     skeleton_edges: list[SkeletonEdge] = Field(default_factory=list)  # 骨架连线定义
     frames: list[PoseOverlayFrame] = Field(default_factory=list)
 

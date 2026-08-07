@@ -49,7 +49,9 @@ def test_footpoint_bbox_method_does_not_flag_pose_unavailable():
     """直接 bbox_bottom_center 方法不标记 pose_unavailable。"""
     bbox = BoundingBox(x1=10, y1=20, x2=30, y2=80)
 
-    estimate = FootpointEstimator(method="bbox_bottom_center").estimate(bbox, pose_keypoints=None, frame_shape=(100, 100))
+    estimate = FootpointEstimator(method="bbox_bottom_center").estimate(
+        bbox, pose_keypoints=None, frame_shape=(100, 100)
+    )
 
     assert estimate.method == "bbox_bottom_center"
     assert estimate.metadata is None or "pose_unavailable" not in (estimate.metadata or {})

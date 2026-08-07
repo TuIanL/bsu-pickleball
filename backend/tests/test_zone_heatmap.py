@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.pickleball_game_analysis.effective_time_windows import (
     rally_windows_from_events,
     resolve_effective_windows,
@@ -24,10 +23,7 @@ from app.vision.pickleball_performance_engine.zone_metrics import zone_for
 
 def _points(samples: list[tuple[str, float, float, float]]) -> list[VisualizationPoint]:
     """构造轨迹点：[(label, x_ft, y_ft, timestamp_seconds), ...]"""
-    return [
-        VisualizationPoint(x_ft=x, y_ft=y, timestamp_seconds=t, label=label)
-        for label, x, y, t in samples
-    ]
+    return [VisualizationPoint(x_ft=x, y_ft=y, timestamp_seconds=t, label=label) for label, x, y, t in samples]
 
 
 # ── 6.1 builder：每球员网格 + 标签 + 空数据 ─────────────────────────
@@ -82,7 +78,9 @@ def test_zone_for_three_bands_and_out_of_court():
 
 
 def test_kcr_with_effective_windows():
-    points = _points([("Player_1", 10, 20, 0.0), ("Player_1", 10, 20, 1.0), ("Player_1", 10, 20, 2.0), ("Player_1", 10, 20, 3.0)])
+    points = _points(
+        [("Player_1", 10, 20, 0.0), ("Player_1", 10, 20, 1.0), ("Player_1", 10, 20, 2.0), ("Player_1", 10, 20, 3.0)]
+    )
     stats = compute_zone_stats(points, effective_windows=[(0.0, 4.0)])
     player = stats[0]
     # 三对相邻帧均在窗口内 → kitchen 3s；分母=窗口总长 4s
@@ -170,7 +168,9 @@ def test_rally_windows_clamp_dangling_to_video_end():
 
 def test_rally_windows_drop_invalid_pairs():
     assert rally_windows_from_events([("rally_end", 1000)]) == []
-    assert rally_windows_from_events([("rally_start", 5000), ("rally_start", 6000), ("rally_end", 7000)]) == [(5.0, 7.0)]
+    assert rally_windows_from_events([("rally_start", 5000), ("rally_start", 6000), ("rally_end", 7000)]) == [
+        (5.0, 7.0)
+    ]
 
 
 # ── 6.4 序列化契约：新字段存在 + 旧字段保留 ────────────────────────

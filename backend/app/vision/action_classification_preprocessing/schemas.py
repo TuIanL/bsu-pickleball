@@ -22,11 +22,12 @@ from __future__ import annotations
 # asdict：把一个 dataclass 实例转成普通的 dict（方便写 JSON）。
 # dataclass / field：上面讲过的装饰器和字段配置工具。
 from dataclasses import asdict, dataclass, field
+
 # Path：Python 标准库里表示"文件路径"的对象，比裸字符串更安全、好用。
 from pathlib import Path
+
 # Any：表示"任意类型"；Literal：上面讲过的"只能是固定几个值之一"。
 from typing import Any, Literal
-
 
 # 目标球员的选择策略：只能取下面这几个字符串之一。
 # - largest：每帧都选"框最大（面积最大）"的那个人；
@@ -87,9 +88,9 @@ class CLAHEConfig:
     在光照不好的比赛视频里很有用。它在 LAB 颜色空间的 L（亮度）通道上做。
     """
 
-    enabled: bool = True          # 是否开启 CLAHE
-    clip_limit: float = 2.0       # 对比度裁剪上限，越大对比越强
-    tile_grid_size: int = 8       # 把图切成多少格来做局部均衡（8 表示 8x8 格）
+    enabled: bool = True  # 是否开启 CLAHE
+    clip_limit: float = 2.0  # 对比度裁剪上限，越大对比越强
+    tile_grid_size: int = 8  # 把图切成多少格来做局部均衡（8 表示 8x8 格）
 
     def __post_init__(self) -> None:
         if self.clip_limit <= 0:
@@ -106,9 +107,9 @@ class DenoiseConfig:
     用高斯模糊做简单去噪。默认关闭（enabled=False），因为去噪会稍微模糊细节。
     """
 
-    enabled: bool = False   # 是否开启去噪
-    kernel_size: int = 3    # 高斯核大小，必须是正奇数（如 3、5、7）
-    sigma: float = 0.0      # 高斯核的标准差，0 表示由 kernel_size 自动推算
+    enabled: bool = False  # 是否开启去噪
+    kernel_size: int = 3  # 高斯核大小，必须是正奇数（如 3、5、7）
+    sigma: float = 0.0  # 高斯核的标准差，0 表示由 kernel_size 自动推算
 
     def __post_init__(self) -> None:
         if self.kernel_size <= 0 or self.kernel_size % 2 == 0:
@@ -126,29 +127,29 @@ class ActionPreprocessingConfig:
     下面每个字段都标注了含义与默认值。
     """
 
-    input_path: Path | str                       # 输入：单个视频文件，或一个装着多个视频的文件夹
-    output_root: Path | str                      # 输出根目录：导出的图片和 manifest 都写在这里面
-    label: str                                   # 这个数据集的类别标签（如 "serve"、"forehand"），会作为子文件夹名
-    target_fps: float = 20.0                     # 目标采样帧率：从原视频里按这个帧率抽帧
-    roi: ROIConfig = field(default_factory=ROIConfig)             # 场地 ROI 配置（默认全屏略裁剪）
-    clahe: CLAHEConfig = field(default_factory=CLAHEConfig)       # CLAHE 增强配置
-    detect_on_enhanced: bool = False             # 是否在"增强后"的画面上做人检测（默认在原始 ROI 上检测）
-    denoise: DenoiseConfig = field(default_factory=DenoiseConfig) # 去噪配置
-    detector_model_path: str = "yolo11n.pt"      # 人检测模型权重路径（YOLO11 nano）
-    detector_confidence: float = 0.5             # 检测置信度阈值，低于此分数的框不要
-    detector_device: str | None = None           # 推理设备（如 "cpu" / "cuda:0"），None 表示用默认
+    input_path: Path | str  # 输入：单个视频文件，或一个装着多个视频的文件夹
+    output_root: Path | str  # 输出根目录：导出的图片和 manifest 都写在这里面
+    label: str  # 这个数据集的类别标签（如 "serve"、"forehand"），会作为子文件夹名
+    target_fps: float = 20.0  # 目标采样帧率：从原视频里按这个帧率抽帧
+    roi: ROIConfig = field(default_factory=ROIConfig)  # 场地 ROI 配置（默认全屏略裁剪）
+    clahe: CLAHEConfig = field(default_factory=CLAHEConfig)  # CLAHE 增强配置
+    detect_on_enhanced: bool = False  # 是否在"增强后"的画面上做人检测（默认在原始 ROI 上检测）
+    denoise: DenoiseConfig = field(default_factory=DenoiseConfig)  # 去噪配置
+    detector_model_path: str = "yolo11n.pt"  # 人检测模型权重路径（YOLO11 nano）
+    detector_confidence: float = 0.5  # 检测置信度阈值，低于此分数的框不要
+    detector_device: str | None = None  # 推理设备（如 "cpu" / "cuda:0"），None 表示用默认
     selection_strategy: SelectionStrategy = "largest"  # 目标球员选择策略（见 SelectionStrategy）
-    manual_initial_bbox: list[float] | None = None     # 当策略为 manual-initial-bbox 时，必须给的初始框 [x1,y1,x2,y2]
+    manual_initial_bbox: list[float] | None = None  # 当策略为 manual-initial-bbox 时，必须给的初始框 [x1,y1,x2,y2]
     missing_frame_policy: MissingFramePolicy = "skip"  # 缺帧处理策略（目前仅 "skip"）
-    bbox_expand_scale: float = 1.4               # 裁剪球员时，把检测框放大多少倍（留点余量）
-    output_size: int = 224                       # 每张裁剪出的球员图，最终 resize 成多少像素（正方形）
-    clip_length: int = 16                        # 一个 clip（动作片段）由多少连续帧组成
-    clip_stride: int = 16                        # 相邻 clip 之间跳多少帧（=clip_length 表示不重叠）
-    jpeg_quality: int = 95                       # 导出 JPEG 的质量（1~100，越大越清晰、文件越大）
-    overwrite: bool = False                      # 输出已存在时，是否覆盖（False 则报错）
-    start_seconds: float = 0.0                   # 只处理从这一秒开始的画面
-    end_seconds: float | None = None             # 处理到这一秒结束（None 表示到视频末尾）
-    manifest_name: str = "manifest.json"         # 清单文件名
+    bbox_expand_scale: float = 1.4  # 裁剪球员时，把检测框放大多少倍（留点余量）
+    output_size: int = 224  # 每张裁剪出的球员图，最终 resize 成多少像素（正方形）
+    clip_length: int = 16  # 一个 clip（动作片段）由多少连续帧组成
+    clip_stride: int = 16  # 相邻 clip 之间跳多少帧（=clip_length 表示不重叠）
+    jpeg_quality: int = 95  # 导出 JPEG 的质量（1~100，越大越清晰、文件越大）
+    overwrite: bool = False  # 输出已存在时，是否覆盖（False 则报错）
+    start_seconds: float = 0.0  # 只处理从这一秒开始的画面
+    end_seconds: float | None = None  # 处理到这一秒结束（None 表示到视频末尾）
+    manifest_name: str = "manifest.json"  # 清单文件名
 
     def __post_init__(self) -> None:
         """
@@ -209,10 +210,10 @@ class ActionPreprocessingConfig:
 class ROIRecord:
     """单次裁剪场地 ROI 的记录：存下比例、像素框、原图尺寸，方便后续追溯。"""
 
-    ratios: dict[str, float]   # 用到的四个比例（x1_ratio 等）
-    bbox: list[int]            # 实际裁剪的像素框 [x1, y1, x2, y2]
-    source_width: int          # 原图宽度（像素）
-    source_height: int         # 原图高度（像素）
+    ratios: dict[str, float]  # 用到的四个比例（x1_ratio 等）
+    bbox: list[int]  # 实际裁剪的像素框 [x1, y1, x2, y2]
+    source_width: int  # 原图宽度（像素）
+    source_height: int  # 原图高度（像素）
 
     @property
     def offset(self) -> list[int]:
@@ -228,16 +229,16 @@ class ROIRecord:
 class FrameSample:
     """单帧样本的记录：一张裁剪好的球员图 + 它的各种坐标/元信息。"""
 
-    source_path: str          # 来源视频路径
-    frame_index: int          # 在原视频中的帧序号
+    source_path: str  # 来源视频路径
+    frame_index: int  # 在原视频中的帧序号
     timestamp_seconds: float  # 该帧对应的时间戳（秒）
-    output_path: str          # 导出后的图片路径（写出前可能为空字符串占位）
-    file_name: str            # 导出的文件名
-    roi: dict[str, Any]       # 该帧的 ROI 记录（dict 形式）
-    detection_count: int      # 这一帧共检测到几个人
-    selection_strategy: str   # 用的是哪种目标选择策略
-    confidence: float         # 选中目标的检测置信度
-    bbox_roi: list[float]     # 选中目标在"ROI 画面"里的框 [x1,y1,x2,y2]
+    output_path: str  # 导出后的图片路径（写出前可能为空字符串占位）
+    file_name: str  # 导出的文件名
+    roi: dict[str, Any]  # 该帧的 ROI 记录（dict 形式）
+    detection_count: int  # 这一帧共检测到几个人
+    selection_strategy: str  # 用的是哪种目标选择策略
+    confidence: float  # 选中目标的检测置信度
+    bbox_roi: list[float]  # 选中目标在"ROI 画面"里的框 [x1,y1,x2,y2]
     bbox_source: list[float]  # 选中目标在"整张原图"里的框
     crop_bbox_roi: list[int]  # 实际裁剪框（已放大）在 ROI 画面里的坐标
     crop_bbox_source: list[int]  # 实际裁剪框在整张原图里的坐标
@@ -247,10 +248,10 @@ class FrameSample:
 class ClipRecord:
     """一个 clip（动作片段）的记录：由若干连续帧组成，属于某个 label。"""
 
-    label: str              # 类别标签
-    video_stem: str         # 来源视频名（不含扩展名）
-    clip_index: int         # 该视频内第几个 clip
-    output_dir: str         # 这个 clip 的输出目录
+    label: str  # 类别标签
+    video_stem: str  # 来源视频名（不含扩展名）
+    clip_index: int  # 该视频内第几个 clip
+    output_dir: str  # 这个 clip 的输出目录
     frames: list[FrameSample]  # 组成这个 clip 的帧样本列表
 
 
@@ -258,20 +259,20 @@ class ClipRecord:
 class VideoManifest:
     """单个视频的导出清单（manifest）：汇总统计信息 + 所有 clip。"""
 
-    source_path: str        # 来源视频路径
-    source_name: str        # 来源视频文件名
-    output_stem: str        # 输出名（不含扩展名，可能带去重后缀）
-    fps: float | None = None            # 视频帧率
-    frame_count: int | None = None      # 视频总帧数
+    source_path: str  # 来源视频路径
+    source_name: str  # 来源视频文件名
+    output_stem: str  # 输出名（不含扩展名，可能带去重后缀）
+    fps: float | None = None  # 视频帧率
+    frame_count: int | None = None  # 视频总帧数
     duration_seconds: float | None = None  # 视频时长（秒）
-    width: int | None = None            # 视频宽
-    height: int | None = None           # 视频高
-    processed_frame_count: int = 0      # 实际读取处理过的帧数
-    selected_frame_count: int = 0       # 成功选中目标并保留的帧数
-    skipped_frame_count: int = 0        # 因读不出/无目标而跳过的帧数
-    clips_written: int = 0              # 成功写出的 clip 数
-    frames_written: int = 0             # 成功写出的帧图片数
-    clips: list[ClipRecord] = field(default_factory=list)   # 所有 clip 记录
+    width: int | None = None  # 视频宽
+    height: int | None = None  # 视频高
+    processed_frame_count: int = 0  # 实际读取处理过的帧数
+    selected_frame_count: int = 0  # 成功选中目标并保留的帧数
+    skipped_frame_count: int = 0  # 因读不出/无目标而跳过的帧数
+    clips_written: int = 0  # 成功写出的 clip 数
+    frames_written: int = 0  # 成功写出的帧图片数
+    clips: list[ClipRecord] = field(default_factory=list)  # 所有 clip 记录
     errors: list[dict[str, Any]] = field(default_factory=list)  # 处理过程中的错误记录
 
 

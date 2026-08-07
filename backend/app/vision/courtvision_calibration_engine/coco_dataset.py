@@ -23,9 +23,9 @@ import os
 import re
 import shutil
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
-
+from typing import Any
 
 # 默认会去检查的"数据集划分"名称：训练 / 验证 / 测试
 DEFAULT_SPLITS = ("train", "val", "test")
@@ -56,6 +56,7 @@ class COCODatasetValidationError(ValueError):
 
 class COCODatasetConversionError(ValueError):
     """数据集转换（COCO → YOLO）失败时抛出的异常。"""
+
     pass
 
 
@@ -140,9 +141,7 @@ def validate_coco_segmentation_dataset(
     leakage_report = _detect_split_leakage(split_reports)
     warnings = list(target_readiness["warnings"])
     if leakage_report["risk"]:
-        warnings.append(
-            f"{leakage_report['token_count']} likely source token(s) appear in multiple dataset splits"
-        )
+        warnings.append(f"{leakage_report['token_count']} likely source token(s) appear in multiple dataset splits")
 
     # 对外公开的每个划分报告（去掉内部用的 "_" 开头字段）
     public_splits = [_public_split_report(item) for item in split_reports]
@@ -380,18 +379,13 @@ def _detect_split_leakage(split_reports: Sequence[dict[str, Any]], max_examples:
 
     # 出现在超过 1 个划分里的 token 才算"危险"
     risky_tokens = {
-        token: split_examples
-        for token, split_examples in splits_by_token.items()
-        if len(split_examples) > 1
+        token: split_examples for token, split_examples in splits_by_token.items() if len(split_examples) > 1
     }
     examples = [
         {
             "source_token": token,
             "splits": sorted(split_examples),
-            "examples": {
-                split: values[:2]
-                for split, values in sorted(split_examples.items())
-            },
+            "examples": {split: values[:2] for split, values in sorted(split_examples.items())},
         }
         for token, split_examples in sorted(risky_tokens.items())
     ][:max_examples]

@@ -8,8 +8,8 @@ type CameraView = "oblique" | "top" | "side" | "end";
 
 interface BallTrajectorySceneProps {
   trajectories: EstimatedBallTrajectory[];
-  selectedTrajectoryId: string | null;
-  onSelectTrajectory: (trajectoryId: string) => void;
+  selectedShotId: string | null;
+  onSelectShot: (shotId: string | null) => void;
   onWebGlError: (message: string) => void;
 }
 
@@ -121,11 +121,11 @@ function splitSolidDashed(trajectory: EstimatedBallTrajectory): SolidDashedRun[]
 function addTrajectories(
   scene: THREE.Scene,
   trajectories: EstimatedBallTrajectory[],
-  selectedId: string | null,
+  selectedShotId: string | null,
 ): THREE.Line[] {
   const selectableLines: THREE.Line[] = [];
   for (const trajectory of trajectories) {
-    const selected = trajectory.id === selectedId;
+    const selected = trajectory.shotId !== null && trajectory.shotId === selectedShotId;
     const color = selected ? "#111827" : DIRECTION_COLORS[trajectory.direction];
     const opacity = selected ? 1 : trajectory.highConfidence ? 0.9 : 0.34;
 
@@ -147,6 +147,7 @@ function addTrajectories(
         const material = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
         line = new THREE.Line(geometry, material);
       }
+      line.userData.shotId = trajectory.shotId;
       line.userData.trajectoryId = trajectory.id;
       line.renderOrder = selected ? 3 : 2;
       scene.add(line);
@@ -161,6 +162,7 @@ function addTrajectories(
       if (!endpoint) continue;
       const marker = new THREE.Mesh(new THREE.SphereGeometry(selected ? 0.24 : 0.17, 14, 10), endpointMaterial);
       marker.position.copy(endpoint);
+      marker.userData.shotId = trajectory.shotId;
       marker.userData.trajectoryId = trajectory.id;
       scene.add(marker);
     }
@@ -201,8 +203,8 @@ function disposeScene(scene: THREE.Scene) {
 
 export function BallTrajectoryScene({
   trajectories,
-  selectedTrajectoryId,
-  onSelectTrajectory,
+  selectedShotId,
+  onSelectShot,
   onWebGlError,
 }: BallTrajectorySceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -263,7 +265,7 @@ export function BallTrajectoryScene({
     controls.maxPolarAngle = Math.PI / 2.02;
     controls.target.set(0, 1.2, 0);
 
-    const selectableLines = addTrajectories(scene, trajectories, selectedTrajectoryId);
+    const selectableLines = addTrajectories(scene, trajectories, selectedShotId);
 
     const resize = () => {
       const width = Math.max(1, mount.clientWidth);
@@ -291,8 +293,11 @@ export function BallTrajectoryScene({
       pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(selectableLines, false)[0];
+      // 点击任意飞行段 → 选中整个 Shot（无 shotId 的孤立段按自身选中）
+      const shotId = hit?.object.userData.shotId;
       const trajectoryId = hit?.object.userData.trajectoryId;
-      if (typeof trajectoryId === "string") onSelectTrajectory(trajectoryId);
+      if (typeof shotId === "string") onSelectShot(shotId);
+      else if (typeof trajectoryId === "string") onSelectShot(trajectoryId);
     };
     renderer.domElement.addEventListener("click", handleClick);
 
@@ -323,7 +328,7 @@ export function BallTrajectoryScene({
       cameraRef.current = null;
       controlsRef.current = null;
     };
-  }, [activeView, applyView, onSelectTrajectory, onWebGlError, selectedTrajectoryId, trajectories]);
+  }, [activeView, applyView, onSelectShot, onWebGlError, selectedShotId, trajectories]);
 
   useEffect(() => {
     const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === containerRef.current);

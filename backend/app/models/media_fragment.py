@@ -1,16 +1,17 @@
 """MediaFragment ORM —— 录制分片持久化"""
+
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy import DateTime, Enum, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
 
-class FragmentStatus(str, enum.Enum):
+class FragmentStatus(enum.StrEnum):
     starting = "starting"
     recording = "recording"
     completed = "completed"
@@ -39,9 +40,7 @@ class MediaFragment(Base):
         Enum(FragmentStatus), nullable=False, default=FragmentStatus.starting
     )
 
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     take_start_offset_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

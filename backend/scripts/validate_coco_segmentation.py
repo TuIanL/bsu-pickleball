@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 # COCO 分割数据集「校验」脚本（用于球场线训练前检查数据是否合格）。
-
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 # 把项目根目录（backend/）加入模块搜索路径，使 `from app...` 可用。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,7 +23,9 @@ def main() -> int:
     # 需要校验的 split（可多个），默认 train/val/test。
     parser.add_argument("--splits", nargs="*", default=None, help="Splits to validate, default: train val test.")
     # 期望的 COCO 类别名称（用于类别目标校验）。
-    parser.add_argument("--target-category", default=None, help="Expected COCO category name for category target validation.")
+    parser.add_argument(
+        "--target-category", default=None, help="Expected COCO category name for category target validation."
+    )
     # 目标校验策略：category / merge / unspecified。
     parser.add_argument(
         "--target-strategy",

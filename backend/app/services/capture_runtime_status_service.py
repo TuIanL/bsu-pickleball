@@ -9,21 +9,21 @@
   不得回退为目标 fps 并标记为实测。
 - 只读取已由 CaptureTake 记录并校验过的会话目录，不接受任意客户端路径。
 """
+
 from __future__ import annotations
 
 import os
 import shutil
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from app.models.capture_take import CaptureTake, CaptureTakeStatus
 from app.models.capture_track import CaptureTrack, SyncQuality
-from app.models.media_fragment import MediaFragment, FragmentStatus
+from app.models.media_fragment import FragmentStatus, MediaFragment
 from app.schemas.capture_runtime_status import (
     CaptureTakeRuntimeStatus,
     MetricAvailability,
@@ -34,7 +34,6 @@ from app.schemas.capture_runtime_status import (
     TrackRuntimeStatus,
 )
 from app.services import capture_take_service, capture_track_service
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 状态枚举映射
@@ -63,6 +62,7 @@ _COUNTED_FRAGMENT_STATUSES = {
 # 码率采样缓存（进程内）
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class _BitrateSample:
     """上一次码率采样点：文件大小 + 单调时间戳。"""
@@ -82,6 +82,7 @@ _BITRATE_MIN_WINDOW_SEC = 0.5
 # ─────────────────────────────────────────────────────────────────────────────
 # 公共入口
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_capture_take_runtime_status(
     db: Session,
@@ -162,13 +163,14 @@ def get_capture_take_runtime_status(
         recording=recording,
         tracks=track_statuses,
         sync=sync,
-        updated_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(UTC),
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 轨道级指标
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _build_track_status(
     track: CaptureTrack,
@@ -257,7 +259,7 @@ def _derive_track_phase(fragments: list[MediaFragment]) -> str:
     return "completed"
 
 
-def _derive_track_error(fragments: list[MediaFragment]) -> Optional[str]:
+def _derive_track_error(fragments: list[MediaFragment]) -> str | None:
     """提取轨道级可读错误（来自失败分片的 error_message）。"""
     for frag in fragments:
         if frag.status in (FragmentStatus.failed, FragmentStatus.interrupted) and frag.error_message:
@@ -268,6 +270,7 @@ def _derive_track_error(fragments: list[MediaFragment]) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Take 级聚合
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _aggregate_take_file_size(
     track_results: list[tuple[TrackRuntimeStatus, int | None]],
@@ -316,14 +319,14 @@ def _compute_take_effective_fps(
     return MetricValue(state="unavailable", message="当前录制链路暂无有效帧率诊断来源")
 
 
-def _compute_elapsed_ms(take: CaptureTake) -> Optional[int]:
+def _compute_elapsed_ms(take: CaptureTake) -> int | None:
     """计算已录制毫秒数：活跃状态用 now - started_at，终态用 duration_ms。"""
     if take.started_at is None:
         return None
     if take.status in _TERMINAL_PHASES:
         return take.duration_ms
     started = _ensure_utc(take.started_at)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return max(0, int((now - started).total_seconds() * 1000))
 
 
@@ -331,9 +334,10 @@ def _compute_elapsed_ms(take: CaptureTake) -> Optional[int]:
 # 存储容量
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _compute_storage_capacity(
-    session_dir: Optional[str],
-    storage_root: Optional[str],
+    session_dir: str | None,
+    storage_root: str | None,
 ) -> StorageCapacity:
     """基于会话目录所在文件系统读取容量。
 
@@ -384,6 +388,7 @@ def _compute_storage_capacity(
 # ─────────────────────────────────────────────────────────────────────────────
 # 平均写入码率
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _compute_avg_bitrate(
     capture_take_id: str,
@@ -446,10 +451,11 @@ def reset_bitrate_sample(capture_take_id: str) -> None:
 # 同步状态
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _build_sync_status(
     take: CaptureTake,
     tracks: list[CaptureTrack],
-) -> Optional[SyncRuntimeStatus]:
+) -> SyncRuntimeStatus | None:
     """构建同步状态摘要。
 
     - 单摄：sync 为 None（spec 允许）
@@ -494,9 +500,10 @@ def _build_sync_status(
 # 目标配置查询
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _lookup_target_config(
     take: CaptureTake,
-) -> tuple[Optional[float], Optional[int], Optional[int]]:
+) -> tuple[float | None, int | None, int | None]:
     """从源录制会话查询目标 fps 和分辨率。
 
     返回 (target_fps, target_width, target_height)。
@@ -505,6 +512,7 @@ def _lookup_target_config(
     try:
         if take.source_session_type.value == "recording":
             from app.camera.session_service import session_service
+
             session = session_service.get_session(take.source_session_id)
             if session is None:
                 return None, None, None
@@ -514,6 +522,7 @@ def _lookup_target_config(
 
         if take.source_session_type.value == "sync_recording":
             from app.camera.sync_recorder_service import sync_recording_service
+
             session = sync_recording_service.get_session(take.source_session_id)
             if session is None:
                 return None, None, None
@@ -527,7 +536,7 @@ def _lookup_target_config(
     return None, None, None
 
 
-def _parse_resolution(resolution: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+def _parse_resolution(resolution: str | None) -> tuple[int | None, int | None]:
     """解析 '1920x1080' 格式的分辨率字符串。"""
     if not resolution or "x" not in resolution:
         return None, None
@@ -542,10 +551,11 @@ def _parse_resolution(resolution: Optional[str]) -> tuple[Optional[int], Optiona
 # 工具
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
     """确保 datetime 带 UTC 时区信息。"""
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)

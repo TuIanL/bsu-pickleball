@@ -1,69 +1,75 @@
 # ball-trajectory-visualization Specification
 
 ## Purpose
-TBD - created by archiving change add-ball-trajectory-visualization. Update Purpose after archive.
+定义前端球路视图从"按 segment 展示"升级为"按 Shot 筛选、选中与统计"：动态球员筛选（来自产物 `player_roster`）、点击任意飞行段高亮整个 Shot、列表与统计按 `shot_id` 聚合、未归属分组双语义、旧 v1 产物兼容。
 ## Requirements
 ### Requirement: 任务级球路视图
-系统 SHALL 为具有任务 ID 的分析任务提供独立球路可视化路由，并 SHALL 优先从重建产物 `reconstructed_ball_trajectory.json` 加载数据；重建产物不可用时，再回退到清洗球轨迹、原始球轨迹和弹跳候选 artifact。
+系统 SHALL 将重建产物渲染为任务级球路视图，包含球场、球路、弹地与击球点标记。
 
-#### Scenario: 从视觉分析进入球路页面
-- **WHEN** 用户在已完成任务的视觉分析页面选择球路可视化
-- **THEN** 系统导航到 `/analysis/{jobId}/trajectory` 并读取同一任务的重建轨迹数据
+#### Scenario: 渲染重建球路
+- **WHEN** 任务存在重建产物
+- **THEN** 页面 SHALL 以 2.5D 球场渲染飞行段球路
+- **AND** 球路 SHALL 来自重建产物，不自行分段
 
-#### Scenario: 重建产物缺失时回退
-- **WHEN** 任务没有重建产物但具有原始球轨迹
-- **THEN** 系统使用现有分析 API 返回的原始球轨迹以降级模式构建视图
+#### Scenario: 无重建产物
+- **WHEN** 任务没有重建产物
+- **THEN** 页面 SHALL 显示明确的重建不可用状态或降级提示
+- **AND** MUST NOT 静默失败
 
 ### Requirement: 确定性球路分段
-系统 SHALL 直接消费后端重建产物中的飞行段，不再自行分段。系统 SHALL 清理非有限的球场坐标，按段内时间排序，并 SHALL 保留每个重建样本的时间、置信度、插值来源与段归属。
+系统 SHALL 使用后端产物的稳定 ID 标识球路，保证分段确定性。
 
-#### Scenario: 分段由后端负责
-- **WHEN** 球路页加载重建产物
-- **THEN** 页面 SHALL 按产物中的 `segments` 渲染，每个段对应独立 geometry
-- **AND** 页面 SHALL NOT 自行按时间间隙或平面跳变重新分段
+#### Scenario: 后端稳定 ID
+- **WHEN** 前端构建球路
+- **THEN** 轨迹绘制 ID SHALL 使用后端 `segment_id`
+- **AND** 业务击球 ID SHALL 使用后端 `shot_id`
+- **AND** MUST NOT 使用前端自生成的序号（如 `trajectory-${sequence}`）作为稳定标识
 
-#### Scenario: 无效点不进入渲染数据
-- **WHEN** 重建样本缺少有限的球场坐标或时间
-- **THEN** 系统丢弃该样本且不向 Three.js 场景传递非有限坐标
-
-#### Scenario: 段级渲染不共享样条
-- **WHEN** 两个飞行段相邻
-- **THEN** 场景 SHALL 为每段创建独立 geometry，不得让单一样条跨越事件边界平滑
+#### Scenario: 旧任务回退
+- **WHEN** 产物缺失 `segment_id` 或 `shot_id`
+- **THEN** 前端 SHALL 回退到顺序 ID 仅用于展示，不参与统计
 
 ### Requirement: 估算高度的可信表达
-系统 SHALL 仅使用重建产物中后端生成的估算高度用于展示，并 SHALL 在页面中明确说明高度不是双摄测量结果。系统 MUST NOT 将估算高度显示为真实最高点、真实过网高度或真实三维速度。
+系统 SHALL 以可信方式表达估算高度，低可信高度与推算点必须与实测区分。
 
-#### Scenario: 高度来自后端重建
-- **WHEN** 球路页渲染轨迹
-- **THEN** 每个点的 `estimated_height_ft` 与 `height_source` SHALL 来自重建产物
-- **AND** 页面 SHALL NOT 自行生成统一高度弧线或把段端点强制置零
+#### Scenario: 推算点样式区分
+- **WHEN** 重建样本 `source` 为 `interpolated` 或 `model_predicted`
+- **THEN** 场景 SHALL 以虚线或浅色样式绘制，与 `detected` 点可区分
 
-#### Scenario: 用户查看数据说明
-- **WHEN** 球路页面成功显示轨迹
-- **THEN** 页面可见区域说明该视图基于单摄二维投影和估算高度，不代表真实三维测量
+#### Scenario: 高度不可信提示
+- **WHEN** 样本高度置信度低于展示阈值
+- **THEN** 场景 SHALL 弱化该段高度信息
+- **AND** 说明该高度为视觉估计
 
 ### Requirement: 交互式标准球场渲染
-系统 SHALL 使用 Three.js 按标准 20 ft × 44 ft 比例渲染球场、边线、非截击区和球网，并 SHALL 按重建段渲染有效球路及其锚点。系统 SHALL 提供斜视、俯视、侧视和端线预设视角以及旋转、缩放和全屏操作。
+系统 SHALL 提供标准 2.5D 球场交互渲染。
 
-#### Scenario: 切换预设视角
-- **WHEN** 用户选择任一预设视角
-- **THEN** 相机移动到对应的稳定构图且球场和可见球路保持在画面内
-
-#### Scenario: 调整观察位置
-- **WHEN** 用户在支持指针操作的设备上拖动或缩放场景
-- **THEN** 系统更新相机观察位置且不改变页面其余布局尺寸
-
-#### Scenario: 按段构造渲染几何
-- **WHEN** 场景渲染一条轨迹
-- **THEN** 系统 SHALL 以重建段的密集采样点构造 line strip
-- **AND** 系统 SHALL NOT 使用跨越击球或弹地事件边界的 Catmull-Rom 单一样条
+#### Scenario: 球场渲染
+- **WHEN** 球路页加载
+- **THEN** 场景 SHALL 渲染标准匹克球球场，包含发球线、非截击区与网
+- **AND** 支持平移、缩放、旋转视角
 
 ### Requirement: 轨迹筛选与视觉编码
-系统 SHALL 允许用户在全部轨迹和较高可信度轨迹之间筛选，并 SHALL 使用颜色、透明度和点型区分方向、低可信度、推算点和弹跳候选。可信度判定 SHALL 使用后端质量评分，而非前端平均置信度。
+系统 SHALL 允许用户在全部轨迹、较高可信度轨迹与球员球路之间筛选，并 SHALL 使用颜色、透明度和点型区分方向、低可信度、推算点和弹跳候选。可信度判定 SHALL 使用后端质量评分，而非前端平均置信度。球员筛选选项 SHALL 来自产物 `player_roster`，不得硬编码。
 
 #### Scenario: 仅显示较高可信度轨迹
 - **WHEN** 用户启用高可信度筛选
 - **THEN** 场景仅显示后端质量评分达到规定阈值且推算比例未超过规定值的重建段
+
+#### Scenario: 按球员筛选
+- **WHEN** 用户选择某球员（如 P3）
+- **THEN** 场景仅显示 `hitter_player_id == Player_3` 的 Shot 内所有 segment
+- **AND** 可见球路的 `hitter_player_id` SHALL 均为 `Player_3`
+
+#### Scenario: 单打双打自适应
+- **WHEN** 产物 `player_roster` 只有两名球员
+- **THEN** 球员筛选 SHALL 只显示两名球员选项
+- **AND** SHALL NOT 显示硬编码的 P1—P4
+
+#### Scenario: 旧任务无归属字段
+- **WHEN** 产物为 v1 或无球员归属字段
+- **THEN** 球员筛选 SHALL 隐藏或禁用
+- **AND** 球路仍正常展示，不伪造归属
 
 #### Scenario: 选择单条轨迹
 - **WHEN** 用户从轨迹列表选择一条球路
@@ -111,3 +117,48 @@ TBD - created by archiving change add-ball-trajectory-visualization. Update Purp
 - **WHEN** 两个重建段共享同一击球或弹地锚点
 - **THEN** 场景 SHALL 在共享锚点处保持几何连续（两段各自独立 geometry，但端点重合）
 
+### Requirement: Shot 级选中
+系统 SHALL 以 Shot 为选中单位：点击任意飞行段高亮该 Shot 内的全部 segment。
+
+#### Scenario: 点击 segment 高亮整个 Shot
+- **WHEN** 用户点击某个 flight segment
+- **THEN** 系统 SHALL 通过该 segment 的 `shotId` 选中对应 Shot
+- **AND** 该 Shot 内所有 segment SHALL 同时高亮
+
+#### Scenario: 渲染保持独立段
+- **WHEN** 一个 Shot 包含多个 segment
+- **THEN** 3D 渲染 SHALL 保持独立 segment line strip，不拼接成单一几何线
+- **AND** 选中状态 SHALL 通过共享 `shotId` 判定
+
+### Requirement: Shot 级列表与统计
+系统 SHALL 按 Shot 聚合列表与统计，列表项展示击球者、飞行段数与时长，统计按 `shot_id` 去重。
+
+#### Scenario: Shot 列表项
+- **WHEN** 右侧列表渲染
+- **THEN** 列表项 SHALL 按 Shot 展示（如"球路 7 · P2 · 2 个飞行段 · 3.8 秒"）
+- **AND** MUST NOT 按 flight segment 逐条列示同一 Shot
+
+#### Scenario: 统计按 Shot 去重
+- **WHEN** 页面统计球路总数与球员击球数
+- **THEN** 总数 SHALL 按 `shot_id` 去重计数（含 unassigned，不含 `shotId = null`）
+- **AND** 球员击球数 SHALL 按 `hitter_player_id` 匹配的 Shot 去重计数
+
+#### Scenario: 筛选顺序
+- **WHEN** 用户同时启用球员筛选、可信度筛选与数量限制
+- **THEN** 筛选顺序 SHALL 为：球员归属筛选 → 可信度筛选 → 最近 N 条限制
+
+### Requirement: 未归属双语义分组
+系统 SHALL 在"未归属"筛选下区分"击球者不明"与"无 Shot 上下文"两类，避免误解。
+
+#### Scenario: 击球者不明
+- **WHEN** Shot 存在但 `ownershipStatus ∈ {ambiguous, unassigned}`
+- **THEN** 该类 SHALL 归入"未归属"且标签为"击球者不明"
+
+#### Scenario: 无 Shot 上下文
+- **WHEN** segment 的 `shotId` 为 null
+- **THEN** 该类 SHALL 归入"未归属"且标签为"无 Shot 上下文"
+- **AND** 调试模式下两类 SHALL 可区分展示
+
+#### Scenario: 两类均不计入球员统计
+- **WHEN** 系统计算球员击球数
+- **THEN** 击球者不明与无 Shot 上下文的轨迹 SHALL 均不计入任何球员

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 # deque：定长历史窗口；dataclass / field：数据结构；hypot 距离、isfinite 有限性判断。
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import hypot, isfinite
 
 # 轨迹相关 schema：PlayerFramePosition（单帧位置）、PlayerSelectionDiagnostic（诊断）、
 # PlayerTrackletFeature（tracklet 特征）、Track（跟踪框）。
 from app.schemas.analysis import PlayerGroupProfile, _count_match_score
 from app.schemas.tracking import PlayerFramePosition, PlayerSelectionDiagnostic, PlayerTrackletFeature, Track
+
 # 标准球场几何：用于边界判定与半场划分。
 from app.vision.courtvision_calibration_engine.court_geometry import StandardPickleballCourt, standard_court
 
@@ -147,11 +148,11 @@ class PrimaryPlayerSelector:
             far_side_quota=far_side_quota,
         )
         self.court = court or standard_court()
-        self._qualities: dict[int, _TrackQuality] = {}   # track_id -> 质量累计
+        self._qualities: dict[int, _TrackQuality] = {}  # track_id -> 质量累计
         self._history: dict[int, deque[_Observation]] = {}  # track_id -> 定长历史窗口
         self.last_diagnostics: list[PlayerSelectionDiagnostic] = []
         self.last_training_samples: list[PlayerTrackletFeature] = []
-        self.last_selection_mode: str = "rule"   # 当前选择模式：rule / attention / fallback
+        self.last_selection_mode: str = "rule"  # 当前选择模式：rule / attention / fallback
         self.last_fallback_reason: str | None = None
         self.attention_adapter = attention_adapter or AttentionPlayerSelectorAdapter(
             model_path=attention_model_path,
@@ -218,12 +219,16 @@ class PrimaryPlayerSelector:
                     feature,
                     selected=selected,
                     group_score=group_scores.get(feature.track_id, 0.0),
-                    final_score=selection.score if selection else self._raw_score(feature, group_scores.get(feature.track_id, 0.0)),
+                    final_score=selection.score
+                    if selection
+                    else self._raw_score(feature, group_scores.get(feature.track_id, 0.0)),
                     attention_result=attention_result,
                 )
             )
         # 按 (综合分, 滚动置信度, 置信度) 降序排序。
-        candidates.sort(key=lambda selection: (selection.score, selection.rolling_confidence, selection.confidence), reverse=True)
+        candidates.sort(
+            key=lambda selection: (selection.score, selection.rolling_confidence, selection.confidence), reverse=True
+        )
         # 使用 quota-aware 最终组合选择（覆盖 rule 和 attention 两条路径）。
         selected_candidates = self._select_balanced_candidates(
             candidates=candidates,
@@ -242,7 +247,9 @@ class PrimaryPlayerSelector:
             )
         # 回填诊断中的"是否最终被选中"标记，并缓存训练样本。
         self.last_diagnostics = [
-            diagnostic.model_copy(update={"selected": diagnostic.track_id in {selection.track_id for selection in selected_candidates}})
+            diagnostic.model_copy(
+                update={"selected": diagnostic.track_id in {selection.track_id for selection in selected_candidates}}
+            )
             for diagnostic in diagnostics
         ]
         self.last_training_samples = features
@@ -260,7 +267,11 @@ class PrimaryPlayerSelector:
             return None
         if not (self.min_box_area_ratio <= feature.mean_bbox_area_ratio <= self.max_box_area_ratio):
             return None
-        if feature.valid_positions > 0 and feature.target_court_occupancy < self.config.target_court_threshold and group_score < 0.75:
+        if (
+            feature.valid_positions > 0
+            and feature.target_court_occupancy < self.config.target_court_threshold
+            and group_score < 0.75
+        ):
             return None
         if self._tracklet_quality_score(feature) < self.config.quality_threshold:
             return None
@@ -409,7 +420,9 @@ class PrimaryPlayerSelector:
         result = self.attention_adapter.select(features, self.max_subjects)
         if result is None:
             self.last_selection_mode = "fallback"
-            self.last_fallback_reason = self.attention_adapter.last_fallback_reason or "attention selector returned no result"
+            self.last_fallback_reason = (
+                self.attention_adapter.last_fallback_reason or "attention selector returned no result"
+            )
             return None
         if result.confidence < self.config.attention_confidence_threshold:
             self.last_selection_mode = "fallback"
@@ -430,11 +443,19 @@ class PrimaryPlayerSelector:
         # 为单个特征生成选择诊断（含各项分、attention 概率、最终分、标签与拒绝原因）。
         target_score = self._target_court_score(feature)
         quality_score = self._tracklet_quality_score(feature)
-        reason = "selected target-court player" if selected else self._rejection_reason(feature, target_score, quality_score, group_score)
+        reason = (
+            "selected target-court player"
+            if selected
+            else self._rejection_reason(feature, target_score, quality_score, group_score)
+        )
         label = (
             "target_player"
             if selected
-            else ("neighbor_court_player" if feature.valid_positions > 0 and target_score < self.config.target_court_threshold else "uncertain")
+            else (
+                "neighbor_court_player"
+                if feature.valid_positions > 0 and target_score < self.config.target_court_threshold
+                else "uncertain"
+            )
         )
         return PlayerSelectionDiagnostic(
             track_id=feature.track_id,
@@ -444,8 +465,12 @@ class PrimaryPlayerSelector:
             target_court_score=target_score,
             tracklet_quality_score=quality_score,
             group_consistency_score=group_score,
-            attention_target_probability=attention_result.target_probabilities.get(feature.track_id) if attention_result else None,
-            attention_non_target_probability=attention_result.non_target_probabilities.get(feature.track_id) if attention_result else None,
+            attention_target_probability=attention_result.target_probabilities.get(feature.track_id)
+            if attention_result
+            else None,
+            attention_non_target_probability=attention_result.non_target_probabilities.get(feature.track_id)
+            if attention_result
+            else None,
             final_score=final_score,
             candidate_label=label,
             reason=reason,
@@ -460,7 +485,9 @@ class PrimaryPlayerSelector:
             },
         )
 
-    def _rejection_reason(self, feature: PlayerTrackletFeature, target_score: float, quality_score: float, group_score: float) -> str:
+    def _rejection_reason(
+        self, feature: PlayerTrackletFeature, target_score: float, quality_score: float, group_score: float
+    ) -> str:
         # 按优先级返回被拒绝的原因（用于诊断展示）。
         if feature.latest_confidence < self.min_confidence:
             return "confidence below threshold"
@@ -522,10 +549,7 @@ class PrimaryPlayerSelector:
             return True
         x, y = position.court_position
         margin = self.court_margin_ft
-        return (
-            -margin <= x <= self.court.width_ft + margin
-            and -margin <= y <= self.court.length_ft + margin
-        )
+        return -margin <= x <= self.court.width_ft + margin and -margin <= y <= self.court.length_ft + margin
 
     def _tracklet_feature(
         self,
@@ -555,7 +579,7 @@ class PrimaryPlayerSelector:
         )
         # 基于相邻观测位置差与时间间隔估计速度序列。
         speeds = []
-        for previous, current in zip(history, history[1:]):
+        for previous, current in zip(history, history[1:], strict=False):
             if previous.court_position is None or current.court_position is None:
                 continue
             elapsed = current.timestamp - previous.timestamp
@@ -581,7 +605,9 @@ class PrimaryPlayerSelector:
             court_position=latest.court_position,
             mean_court_position=mean_position,
             target_court_occupancy=target_occupancy,
-            mean_target_court_distance=sum(distances) / len(distances) if distances else float(self.court_margin_ft or 0.0) + 1.0,
+            mean_target_court_distance=sum(distances) / len(distances)
+            if distances
+            else float(self.court_margin_ft or 0.0) + 1.0,
             max_target_court_distance=max(distances) if distances else float(self.court_margin_ft or 0.0) + 1.0,
             mean_speed=sum(speeds) / len(speeds) if speeds else 0.0,
             continuity=continuity,

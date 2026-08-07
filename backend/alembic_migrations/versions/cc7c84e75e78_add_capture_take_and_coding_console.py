@@ -4,15 +4,16 @@ Revision ID: cc7c84e75e78
 Revises:
 Create Date: 2026-07-10 15:02:07.679199
 """
-from typing import Sequence, Union
-from alembic import op
+
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 
-
-revision: str = 'cc7c84e75e78'
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "cc7c84e75e78"
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _table_exists(name: str) -> bool:
@@ -62,7 +63,9 @@ def upgrade() -> None:
         op.create_table(
             "capture_tracks",
             sa.Column("id", sa.String(64), primary_key=True),
-            sa.Column("capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False),
+            sa.Column(
+                "capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False
+            ),
             sa.Column("camera_id", sa.String(128), nullable=False),
             sa.Column("role", sa.String(9), nullable=False),
             sa.Column("video_id", sa.String(128), nullable=True),
@@ -79,7 +82,9 @@ def upgrade() -> None:
         op.create_table(
             "capture_coding_actions",
             sa.Column("id", sa.String(64), primary_key=True),
-            sa.Column("capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False),
+            sa.Column(
+                "capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False
+            ),
             sa.Column("client_action_id", sa.String(128), nullable=False),
             sa.Column("action_type", sa.String(64), nullable=False),
             sa.Column("timestamp_ms", sa.Integer(), nullable=False),
@@ -101,7 +106,12 @@ def upgrade() -> None:
     if not _table_exists("live_coding_states"):
         op.create_table(
             "live_coding_states",
-            sa.Column("capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="CASCADE"), primary_key=True),
+            sa.Column(
+                "capture_take_id",
+                sa.String(64),
+                sa.ForeignKey("capture_takes.id", ondelete="CASCADE"),
+                primary_key=True,
+            ),
             sa.Column("revision", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("set_ordinal", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("game_ordinal", sa.Integer(), nullable=False, server_default="0"),
@@ -118,9 +128,16 @@ def upgrade() -> None:
         op.create_table(
             "capture_segments",
             sa.Column("id", sa.String(64), primary_key=True),
-            sa.Column("capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False),
+            sa.Column(
+                "capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False
+            ),
             sa.Column("segment_type", sa.String(6), nullable=False),
-            sa.Column("parent_segment_id", sa.String(64), sa.ForeignKey("capture_segments.id", ondelete="SET NULL"), nullable=True),
+            sa.Column(
+                "parent_segment_id",
+                sa.String(64),
+                sa.ForeignKey("capture_segments.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
             sa.Column("ordinal", sa.Integer(), nullable=False, server_default="1"),
             sa.Column("label", sa.String(256), nullable=False, server_default=""),
             sa.Column("start_event_id", sa.String(64), nullable=True),
@@ -141,11 +158,18 @@ def upgrade() -> None:
     # 为时间线事件表添加拍摄片段关联
     if not _col_exists("session_timeline_events", "capture_take_id"):
         op.add_column("session_timeline_events", sa.Column("capture_take_id", sa.String(length=64), nullable=True))
-        op.create_index(op.f("ix_session_timeline_events_capture_take_id"), "session_timeline_events", ["capture_take_id"], unique=False)
+        op.create_index(
+            op.f("ix_session_timeline_events_capture_take_id"),
+            "session_timeline_events",
+            ["capture_take_id"],
+            unique=False,
+        )
 
     # 为时间线事件表添加撤销标记
     if not _col_exists("session_timeline_events", "is_undone"):
-        op.add_column("session_timeline_events", sa.Column("is_undone", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+        op.add_column(
+            "session_timeline_events", sa.Column("is_undone", sa.Boolean(), nullable=False, server_default=sa.text("0"))
+        )
 
 
 def downgrade() -> None:
@@ -157,6 +181,12 @@ def downgrade() -> None:
         op.drop_column("session_timeline_events", "capture_take_id")
 
     # 回滚：按依赖顺序删除所有新建表
-    for table in ["capture_segments", "live_coding_states", "capture_coding_actions", "capture_tracks", "capture_takes"]:
+    for table in [
+        "capture_segments",
+        "live_coding_states",
+        "capture_coding_actions",
+        "capture_tracks",
+        "capture_takes",
+    ]:
         if _table_exists(table):
             op.drop_table(table)

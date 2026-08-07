@@ -12,14 +12,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import inspect
 import json
 import logging
 import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -27,7 +27,6 @@ from app.schemas.analysis import (
     ANALYSIS_ERROR_CODES,
     STABLE_ANALYSIS_STAGE_IDS,
     AnalysisCanonicalStatus,
-    AnalysisDeleteResult,
     AnalysisJobCreate,
     AnalysisJobStatus,
     AnalysisJobSummary,
@@ -38,7 +37,6 @@ from app.schemas.analysis import (
 )
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
 from app.services.storage_service import StorageService
-
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +69,7 @@ STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
 
 def utc_now() -> str:
     # 返回当前 UTC 时间的 ISO8601 字符串（带时区）
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def canonical_to_display_status(status: AnalysisCanonicalStatus) -> AnalysisJobStatus:
@@ -231,7 +229,9 @@ def merge_stage_progress(stages: list[AnalysisStage], stage: AnalysisStage) -> l
         payload["startedAt"] = payload.get("startedAt") or (prior.startedAt if prior else now)
         payload["endedAt"] = payload.get("endedAt") or now
         payload["progress"] = payload.get("progress") or 100
-        payload["durationMs"] = payload.get("durationMs") or _duration_ms(payload.get("startedAt"), payload.get("endedAt"))
+        payload["durationMs"] = payload.get("durationMs") or _duration_ms(
+            payload.get("startedAt"), payload.get("endedAt")
+        )
     payload["publicMessage"] = payload.get("publicMessage") or payload.get("detail")
     existing[stage.id] = AnalysisStage.model_validate(payload)
 
@@ -246,8 +246,7 @@ def merge_stage_progress(stages: list[AnalysisStage], stage: AnalysisStage) -> l
                     {
                         "status": "done",
                         "endedAt": now,
-                        "durationMs": prior_stage.durationMs
-                        or _duration_ms(prior_stage.startedAt, now),
+                        "durationMs": prior_stage.durationMs or _duration_ms(prior_stage.startedAt, now),
                         "progress": 100,
                     }
                 )
@@ -285,9 +284,7 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
             else settings.enable_model_inference
         ),
         "enablePoseInference": (
-            payload.enablePoseInference
-            if payload.enablePoseInference is not None
-            else settings.enable_pose_inference
+            payload.enablePoseInference if payload.enablePoseInference is not None else settings.enable_pose_inference
         ),
         "detectorModel": settings.default_detector_model,
         "detectorDevice": settings.detector_device,
@@ -318,7 +315,9 @@ class JobStore:
         self._lock = threading.RLock()  # 可重入锁：同一线程可多次加锁
         self._jobs: dict[str, AnalysisJobSummary] = {}
 
-    def create_job(self, payload: AnalysisJobCreate, *, job_id: str | None = None, report_id: str | None = None) -> AnalysisJobSummary:
+    def create_job(
+        self, payload: AnalysisJobCreate, *, job_id: str | None = None, report_id: str | None = None
+    ) -> AnalysisJobSummary:
         # 新建一个任务，初始状态为 queued（排队中）。
         now = utc_now()
         input_sig, config_sig = analysis_signature(payload)
@@ -624,7 +623,11 @@ class JobStore:
                 "status": display,
                 "displayStatus": display,
                 "stage": stage or current_stage_from_stages(stages, fallback=job.stage),
-                "progress": 100 if progress is None and canonical_status in {"succeeded", "canceled"} else progress if progress is not None else job.progress,
+                "progress": 100
+                if progress is None and canonical_status in {"succeeded", "canceled"}
+                else progress
+                if progress is not None
+                else job.progress,
                 "updatedAt": now,
                 "finishedAt": now,
                 "stages": stages,
@@ -772,8 +775,8 @@ class AnalysisWorkerRuntime:
             frameStride=job.frameStride,
             sourceFps=job.sourceFps or job.metadata.sourceFps,
             priority=job.priority,
-            clipStartMs=getattr(job, 'clipStartMs', None),
-            clipEndMs=getattr(job, 'clipEndMs', None),
+            clipStartMs=getattr(job, "clipStartMs", None),
+            clipEndMs=getattr(job, "clipEndMs", None),
         )
         latest = job
         retry_attempts = 0
@@ -792,9 +795,11 @@ class AnalysisWorkerRuntime:
                 # 调用流水线（兼容旧版本：没有 cancellation_token 参数时退化为不带它调用）。
                 if job.metadata.capture_take_id:
                     from app.services.storage_service import StorageService
+
                     StorageService.register_capture_job_from_take(job.id, job.metadata.capture_take_id)
                 elif job.metadata.session_dir:
                     from app.services.storage_service import StorageService
+
                     StorageService.register_capture_job(job.id, job.metadata.session_dir)
                 pipeline = self.pipeline_factory(
                     analysis_options={
@@ -821,15 +826,10 @@ class AnalysisWorkerRuntime:
                 }
                 signature = inspect.signature(pipeline.run)
                 accepts_kwargs = any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD
-                    for parameter in signature.parameters.values()
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
                 )
                 if not accepts_kwargs:
-                    run_kwargs = {
-                        key: value
-                        for key, value in run_kwargs.items()
-                        if key in signature.parameters
-                    }
+                    run_kwargs = {key: value for key, value in run_kwargs.items() if key in signature.parameters}
                 return pipeline.run(**run_kwargs)
 
             while True:
@@ -925,7 +925,7 @@ class AnalysisWorkerRuntime:
             started = datetime.fromisoformat(active_stage.startedAt)
         except ValueError:
             return
-        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        elapsed = (datetime.now(UTC) - started).total_seconds()
         if elapsed > timeout_seconds:
             raise StageTimeoutError(f"Stage {active_stage.id} exceeded {timeout_seconds}s")
 

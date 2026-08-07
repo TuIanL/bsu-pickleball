@@ -19,6 +19,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class CourtPoint:
     """球场上的一个点（x, y），坐标单位是英尺。"""
+
     x: float
     y: float
 
@@ -26,6 +27,7 @@ class CourtPoint:
 @dataclass(frozen=True)
 class CourtLine:
     """球场上的一条线（有名字 + 起点 + 终点）。例如球网、边线、厨房线。"""
+
     name: str
     start: CourtPoint
     end: CourtPoint
@@ -34,6 +36,7 @@ class CourtLine:
 @dataclass(frozen=True)
 class CourtPolygon:
     """一个多边形区域（有名字 + 一串顶点），用于区域填充/判断。"""
+
     name: str
     points: tuple[CourtPoint, ...]
 
@@ -47,6 +50,7 @@ class CourtZone:
     - contains：判断某点是否落在这个矩形区域内；
     - polygon 属性：把它转成 CourtPolygon（供画线/填充用）。
     """
+
     name: str
     x_min: float
     x_max: float
@@ -86,13 +90,13 @@ class PickleballCourtGeometry:
     """
 
     unit: str = "feet"
-    width_ft: float = 20.0          # 球场宽（英尺）
-    length_ft: float = 44.0         # 球场长（英尺）
-    net_y_ft: float = 22.0          # 球网所在的 y 坐标（球场正中）
-    kitchen_depth_ft: float = 7.0   # 厨房区（非截击区）深度（英尺）
+    width_ft: float = 20.0  # 球场宽（英尺）
+    length_ft: float = 44.0  # 球场长（英尺）
+    net_y_ft: float = 22.0  # 球网所在的 y 坐标（球场正中）
+    kitchen_depth_ft: float = 7.0  # 厨房区（非截击区）深度（英尺）
     tracking_x_margin: float = 4.0  # 左右 tracking buffer 宽度（英尺）
     tracking_y_near_margin: float = 8.0  # 近端底线外 tracking buffer（英尺）
-    tracking_y_far_margin: float = 8.0   # 远端底线外 tracking buffer（英尺）
+    tracking_y_far_margin: float = 8.0  # 远端底线外 tracking buffer（英尺）
 
     @property
     def near_kitchen_y_ft(self) -> float:

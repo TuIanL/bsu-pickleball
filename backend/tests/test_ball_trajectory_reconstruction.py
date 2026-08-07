@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from app.vision.courtvision_calibration_engine.homography import compute_homography
@@ -10,7 +9,7 @@ from app.vision.pickleball_game_analysis.ball_contact_event_detector import (
     BallContactEventDetector,
     ContactDetectorConfig,
 )
-from app.vision.pickleball_game_analysis.ball_event_resolver import BallEventResolver, ResolverConfig
+from app.vision.pickleball_game_analysis.ball_event_resolver import BallEventResolver
 from app.vision.pickleball_game_analysis.ball_flight_segmenter import BallFlightSegmenter
 from app.vision.pickleball_game_analysis.event_anchored_trajectory_reconstructor import (
     EventAnchoredTrajectoryReconstructor,
@@ -20,7 +19,6 @@ from app.vision.pickleball_game_analysis.reconstruction_engine import reconstruc
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
     ReconstructionConfig,
     ReconstructionMode,
-    SampleSource,
     TrajectoryEvent,
     TrajectoryEventType,
 )
@@ -60,6 +58,7 @@ def _bounce(frame: int, u: float, v: float, conf: float = 0.9) -> BounceEvent:
 # 8.1 图像空间鲁棒拟合
 # ---------------------------------------------------------------------------
 
+
 class TestImageSpaceTrajectoryFitter:
     def test_fits_smooth_parabola_with_low_residual(self):
         fitter = ImageSpaceTrajectoryFitter()
@@ -90,6 +89,7 @@ class TestImageSpaceTrajectoryFitter:
 # 8.1 击球候选检测 + 事件仲裁
 # ---------------------------------------------------------------------------
 
+
 class TestBallContactEventDetector:
     def test_direction_reversal_produces_confirmed_hit(self):
         detector = BallContactEventDetector(ContactDetectorConfig(context_points=3))
@@ -113,7 +113,7 @@ class TestBallContactEventDetector:
         candidates = detector.detect(points, fps=30)
         assert not [c for c in candidates if c.status == "confirmed_hit"]
 
-    def test_bounce_window_suppresses_candidate(self):
+    def test_detector_does_not_consume_bounce_events(self):
         detector = BallContactEventDetector(ContactDetectorConfig(context_points=3))
         points = []
         for i in range(24):
@@ -121,23 +121,24 @@ class TestBallContactEventDetector:
                 points.append(_point(i, 100 + i * 4, 200 + i * 2))
             else:
                 points.append(_point(i, 100 + 90 - (i - 12) * 4, 200 + 60 - (i - 12) * 2))
-        # 在方向反转点附近放一个高可信弹地事件
-        bounce = _bounce(13, 140.0, 226.0, conf=0.95)
-        candidates = detector.detect(points, bounce_events=[bounce], fps=30)
-        assert not [c for c in candidates if c.status == "confirmed_hit"]
+        candidates = detector.detect(points, fps=30)
+        # 不变量 I7：Detector 不读取 bounce_events，弹地抑制只由 Resolver.prefilter 执行
+        assert any(c.status == "confirmed_hit" for c in candidates)
 
 
 class TestBallEventResolver:
     def test_high_confidence_bounce_suppresses_hit(self):
-        resolver = BallEventResolver(ResolverConfig(bounce_suppression_window_frames=6))
+        resolver = BallEventResolver()
         from app.vision.pickleball_game_analysis.ball_contact_event_detector import HitCandidate
 
-        candidate = HitCandidate(16, 0.53, (140.0, 226.0), 0.8, status="confirmed_hit")
+        candidate = HitCandidate(16, 16 / 30.0, (140.0, 226.0), 0.8, status="confirmed_hit")
         bounce = _bounce(13, 140.0, 226.0, conf=0.95)
-        events = resolver.resolve([candidate], [bounce])
+        prefiltered = resolver.prefilter([candidate], [bounce])
+        assert prefiltered[0].prefilter_status == "suppressed"
+        # 不变量 I1：suppressed 候选不得生成正式 HIT 事件
+        events = resolver.finalize(prefiltered, [bounce])
         hits = [e for e in events if e.event_type == TrajectoryEventType.HIT]
-        assert hits
-        assert hits[0].diagnostics.get("status") == "suppressed_by_bounce"
+        assert not hits
 
     def test_no_bounce_confirms_hit(self):
         resolver = BallEventResolver()
@@ -148,11 +149,13 @@ class TestBallEventResolver:
         hits = [e for e in events if e.event_type == TrajectoryEventType.HIT]
         assert len(hits) == 1
         assert hits[0].source == "heuristic"
+        assert hits[0].ownership_status == "unassigned"
 
 
 # ---------------------------------------------------------------------------
 # 8.1 飞行段切分
 # ---------------------------------------------------------------------------
+
 
 class TestBallFlightSegmenter:
     def test_bounce_cuts_into_two_segments_sharing_anchor(self):
@@ -192,6 +195,7 @@ class TestBallFlightSegmenter:
 # 8.1 事件锚定 2.5D 重建（含锚点降级与高度边界）
 # ---------------------------------------------------------------------------
 
+
 class TestEventAnchoredTrajectoryReconstructor:
     def _segment_with_events(self, events):
         segmenter = BallFlightSegmenter(ReconstructionConfig())
@@ -204,7 +208,9 @@ class TestEventAnchoredTrajectoryReconstructor:
         reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig())
         # 段：hit（开始）→ bounce（结束）
         hit = TrajectoryEvent("hit-0", TrajectoryEventType.HIT, 0, 0.0, image_xy=(120.0, 168.0), confidence=0.8)
-        bounce = TrajectoryEvent("bounce-29", TrajectoryEventType.BOUNCE, 29, 29 / 30.0, image_xy=(207.0, 175.6), confidence=0.9)
+        bounce = TrajectoryEvent(
+            "bounce-29", TrajectoryEventType.BOUNCE, 29, 29 / 30.0, image_xy=(207.0, 175.6), confidence=0.9
+        )
         segment, points, events_by_id = self._segment_with_events([hit, bounce])
         reconstructed = reconstructor.reconstruct(segment, points, events_by_id, HOMOGRAPHY)
         assert reconstructed.reconstruction_mode == ReconstructionMode.DUAL_ANCHOR_WARP.value
@@ -227,7 +233,9 @@ class TestEventAnchoredTrajectoryReconstructor:
         reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig(minimum_anchor_distance_ft=5.0))
         # 两个几乎重合的锚点
         hit = TrajectoryEvent("hit-0", TrajectoryEventType.HIT, 0, 0.0, image_xy=(120.0, 168.0), confidence=0.8)
-        bounce = TrajectoryEvent("bounce-29", TrajectoryEventType.BOUNCE, 29, 29 / 30.0, image_xy=(121.0, 169.0), confidence=0.9)
+        bounce = TrajectoryEvent(
+            "bounce-29", TrajectoryEventType.BOUNCE, 29, 29 / 30.0, image_xy=(121.0, 169.0), confidence=0.9
+        )
         segment, points, events_by_id = self._segment_with_events([hit, bounce])
         reconstructed = reconstructor.reconstruct(segment, points, events_by_id, HOMOGRAPHY)
         assert reconstructed.reconstruction_mode in {
@@ -235,17 +243,34 @@ class TestEventAnchoredTrajectoryReconstructor:
             ReconstructionMode.DUAL_ANCHOR_WARP.value,
         }
 
+    def test_isotonic_increasing_terminates_on_inverted_input(self):
+        # 回归：PAVA 合并逆序块时必须同时弹出两个块；旧实现只弹一个会死循环
+        # （reconstruct 的 dual-anchor warp 对球场路径调用它，遇逆序对即挂起）。
+        import numpy as np
+
+        f = EventAnchoredTrajectoryReconstructor._isotonic_increasing
+        # 逆序对（原 bug 触发条件）：修复后必须终止且输出非降
+        out = f(np.asarray([3.0, 2.0, 1.0]))
+        assert list(out) == [2.0, 2.0, 2.0]
+        out2 = f(np.asarray([5.0, 3.0, 4.0, 1.0, 2.0]))
+        assert all(out2[i] <= out2[i + 1] + 1e-9 for i in range(len(out2) - 1))
+        # 已有序输入不受影响
+        assert list(f(np.asarray([1.0, 2.0, 3.0]))) == [1.0, 2.0, 3.0]
+
 
 # ---------------------------------------------------------------------------
 # 8.1 质量评估
 # ---------------------------------------------------------------------------
+
 
 class TestTrajectoryQualityEvaluator:
     def test_quality_overall_and_display_level(self):
         segmenter = BallFlightSegmenter(ReconstructionConfig())
         points = [_point(i, 120 + i * 3.0, 160 + (i - 15) ** 2 * 0.08) for i in range(30)]
         hit = TrajectoryEvent("hit-0", TrajectoryEventType.HIT, 0, 0.0, image_xy=(120.0, 168.0), confidence=0.8)
-        bounce = TrajectoryEvent("bounce-29", TrajectoryEventType.BOUNCE, 29, 29 / 30.0, image_xy=(207.0, 175.6), confidence=0.9)
+        bounce = TrajectoryEvent(
+            "bounce-29", TrajectoryEventType.BOUNCE, 29, 29 / 30.0, image_xy=(207.0, 175.6), confidence=0.9
+        )
         segment = segmenter.segment(points, [hit, bounce])[0]
         events_by_id = {e.event_id: e for e in [hit, bounce]}
         reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig())
@@ -273,6 +298,7 @@ class TestTrajectoryQualityEvaluator:
 # 8.1 重建产物序列化
 # ---------------------------------------------------------------------------
 
+
 class TestReconstructionArtifact:
     def test_payload_structure_and_sources(self):
         points = [_point(i, 120 + i * 3.0, 160 + (i - 15) ** 2 * 0.08) for i in range(30)]
@@ -285,14 +311,18 @@ class TestReconstructionArtifact:
             homography=HOMOGRAPHY,
             fps=30,
         )
-        assert payload["schema_version"] == "reconstructed_ball_trajectory.v1"
+        assert payload["schema_version"] == "reconstructed_ball_trajectory.v2"
         assert payload["reconstruction_mode"] == "event_anchored_2_5d"
         assert payload["coordinate_semantics"]["metric_validity"] == "visualization_only"
         assert payload["status"] == "available"
+        assert "player_roster" in payload
+        assert payload["suppression_snapshot"]["bounce_suppress_before_sec"] == 0.07
         assert payload["segments"]
         segment = payload["segments"][0]
         assert segment["model"] == "weighted_huber_anchor_constrained"
         assert segment["fit_space"] == "image_px"
+        assert "shot_id" in segment
+        assert segment["ownership_status"] in {"confirmed", "ambiguous", "unassigned", "not_applicable"}
         sources = {sample["source"] for sample in segment["samples"]}
         assert sources <= {"detected", "interpolated", "model_predicted", "anchor"}
         assert "overall" in segment["quality"]
@@ -319,6 +349,7 @@ class TestReconstructionArtifact:
 # 8.2 确定性
 # ---------------------------------------------------------------------------
 
+
 class TestDeterminism:
     def test_repeated_run_produces_identical_results(self):
         points = [_point(i, 120 + i * 3.0, 160 + (i - 15) ** 2 * 0.08) for i in range(30)]
@@ -341,6 +372,7 @@ class TestDeterminism:
 # ---------------------------------------------------------------------------
 # 8.3 验收不变量
 # ---------------------------------------------------------------------------
+
 
 class TestAcceptanceInvariants:
     def test_bounce_and_long_loss_always_produce_new_segment_id(self):

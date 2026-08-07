@@ -26,7 +26,9 @@ def test_overlay_frame_stride_env_override_is_preserved(monkeypatch):
 def test_pose_inference_auto_enables_when_rtmpose_assets_are_discovered(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     config_path = model_dir / "rtmpose" / "rtmpose-m_8xb512-700e_body8-halpe26-256x192.py"
-    checkpoint_path = model_dir / "rtmpose" / "rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth"
+    checkpoint_path = (
+        model_dir / "rtmpose" / "rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth"
+    )
     config_path.parent.mkdir(parents=True)
     config_path.write_text("# config", encoding="utf-8")
     checkpoint_path.write_text("checkpoint", encoding="utf-8")
@@ -48,7 +50,9 @@ def test_pose_inference_auto_enables_when_rtmpose_assets_are_discovered(monkeypa
 def test_pose_inference_env_can_disable_discovered_assets(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     config_path = model_dir / "rtmpose" / "rtmpose-m_8xb512-700e_body8-halpe26-256x192.py"
-    checkpoint_path = model_dir / "rtmpose" / "rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth"
+    checkpoint_path = (
+        model_dir / "rtmpose" / "rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth"
+    )
     config_path.parent.mkdir(parents=True)
     config_path.write_text("# config", encoding="utf-8")
     checkpoint_path.write_text("checkpoint", encoding="utf-8")

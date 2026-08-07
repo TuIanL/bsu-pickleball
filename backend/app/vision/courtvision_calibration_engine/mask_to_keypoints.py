@@ -28,6 +28,7 @@ from app.schemas.calibration import AutomaticCalibrationKeypoints, ImagePoint
 @dataclass(frozen=True)
 class LineCandidate:
     """一条被检测到的直线候选：极坐标参数 + 两个端点 + 朝向（horizontal/vertical）。"""
+
     rho: float
     theta: float
     points: tuple[tuple[int, int], tuple[int, int]]
@@ -37,6 +38,7 @@ class LineCandidate:
 @dataclass(frozen=True)
 class MaskToKeypointsResult:
     """掩码转关键点的结果：四角 keypoints + 置信度 + 掩码占比 + 线数 + 各线候选。"""
+
     keypoints: AutomaticCalibrationKeypoints
     confidence: float
     mask_area_ratio: float
@@ -46,6 +48,7 @@ class MaskToKeypointsResult:
 
 class MaskGeometryError(ValueError):
     """掩码几何处理相关的错误（继承自 ValueError）。"""
+
     pass
 
 
@@ -107,10 +110,10 @@ def mask_to_court_keypoints(
     left_line = vertical[0]
     right_line = vertical[-1]
     corners = [
-        _intersect(left_line, top_line),       # 左上
-        _intersect(right_line, top_line),      # 右上
-        _intersect(right_line, bottom_line),   # 右下
-        _intersect(left_line, bottom_line),    # 左下
+        _intersect(left_line, top_line),  # 左上
+        _intersect(right_line, top_line),  # 右上
+        _intersect(right_line, bottom_line),  # 右下
+        _intersect(left_line, bottom_line),  # 左下
     ]
     if any(point is None for point in corners):
         # 有交点算不出（平行线）→ 退回外接矩形
@@ -181,10 +184,10 @@ def extract_line_candidates(mask: np.ndarray) -> list[LineCandidate]:
         # 判断朝向：|dx| >= |dy| 算水平线，否则竖直线
         orientation = "horizontal" if abs(dx) >= abs(dy) else "vertical"
         if orientation == "horizontal":
-            rho = float((y1 + y2) / 2.0)    # 用中点的 y 作为"水平位置"
+            rho = float((y1 + y2) / 2.0)  # 用中点的 y 作为"水平位置"
             theta = float(np.arctan2(dy, dx))
         else:
-            rho = float((x1 + x2) / 2.0)    # 用中点的 x 作为"垂直位置"
+            rho = float((x1 + x2) / 2.0)  # 用中点的 x 作为"垂直位置"
             theta = float(np.arctan2(dy, dx))
         candidates.append(LineCandidate(rho=rho, theta=theta, points=((x1, y1), (x2, y2)), orientation=orientation))
 
@@ -252,8 +255,8 @@ def _contour_keypoints(mask: np.ndarray) -> AutomaticCalibrationKeypoints:
         raise MaskGeometryError("Court-line mask has no contours")
 
     points = np.vstack(contours).reshape(-1, 2).astype(np.float32)
-    rect = cv2.minAreaRect(points)   # 最小面积外接矩形（旋转矩形）
-    box = cv2.boxPoints(rect)        # 取出四个角点
+    rect = cv2.minAreaRect(points)  # 最小面积外接矩形（旋转矩形）
+    box = cv2.boxPoints(rect)  # 取出四个角点
     return _ordered_points_to_keypoints([(float(x), float(y)) for x, y in box])
 
 
@@ -349,7 +352,19 @@ def _quadrilateral_confidence(
     line_score = min(line_count / 4.0, 1.0)
     area_score = min(max(area_ratio / 0.35, 0.0), 1.0)
     mask_score = min(max(mask_area_ratio / 0.08, 0.0), 1.0)
-    return float(max(0.0, min(1.0, 0.35 * opposite_balance + 0.2 * height_balance + 0.2 * line_score + 0.15 * area_score + 0.1 * mask_score)))
+    return float(
+        max(
+            0.0,
+            min(
+                1.0,
+                0.35 * opposite_balance
+                + 0.2 * height_balance
+                + 0.2 * line_score
+                + 0.15 * area_score
+                + 0.1 * mask_score,
+            ),
+        )
+    )
 
 
 def _polygon_area(points: np.ndarray) -> float:

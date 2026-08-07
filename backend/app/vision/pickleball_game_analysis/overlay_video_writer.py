@@ -4,14 +4,16 @@ from __future__ import annotations
 
 # defaultdict：按帧序号分组时默认空列表；Path：面向对象的文件路径；Any：宽松类型标注（叠加数据为 dict）。
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import cv2  # type: ignore
 import numpy as np
 
 # 小地图渲染器，用于在视频角落叠加球场俯视小地图。
 from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisualizer
+
 # 可视化配置、坐标点、结果对象，以及按语言取标签的函数。
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     VisualizationConfig,
@@ -81,11 +83,16 @@ class OverlayVideoWriter:
             if pp.frame_index is not None:
                 label = pp.label or ""
                 player_frame_table[pp.frame_index][label] = pp
-        trail_frames = round(self.config.minimap_player_trail_seconds * fps) if hasattr(self.config, "minimap_player_trail_seconds") else 0
+        trail_frames = (
+            round(self.config.minimap_player_trail_seconds * fps)
+            if hasattr(self.config, "minimap_player_trail_seconds")
+            else 0
+        )
         has_render_track = bool(player_frame_table)
         frame_index = 0
         written = 0
         from collections import deque
+
         player_trails: dict[str, deque[VisualizationPoint]] = defaultdict(deque)
         try:
             # 逐帧读取、绘制、写回。
@@ -97,7 +104,9 @@ class OverlayVideoWriter:
                 self._draw_tracking(frame, tracking_by_frame.get(frame_index))
                 self._draw_pose(frame, pose_by_frame.get(frame_index))
                 self._draw_ball_overlay(frame, ball_by_frame.get(frame_index))
-                self._draw_court_points(frame, points_by_frame.get(frame_index, []), bounces_by_frame.get(frame_index, []))
+                self._draw_court_points(
+                    frame, points_by_frame.get(frame_index, []), bounces_by_frame.get(frame_index, [])
+                )
                 # 在角落叠加小地图面板。
                 if has_render_track and trail_frames > 0:
                     # 使用帧索引表 + deque 方式（渲染轨迹路径）
@@ -111,7 +120,11 @@ class OverlayVideoWriter:
                                 trail.clear()
                         trail.append(pt)
                     for pid in list(player_trails):
-                        while player_trails[pid] and player_trails[pid][0].frame_index is not None and player_trails[pid][0].frame_index < frame_index - trail_frames:
+                        while (
+                            player_trails[pid]
+                            and player_trails[pid][0].frame_index is not None
+                            and player_trails[pid][0].frame_index < frame_index - trail_frames
+                        ):
                             player_trails[pid].popleft()
                     minimap_player_points = [p for trail in player_trails.values() for p in trail]
                 else:
@@ -151,7 +164,9 @@ class OverlayVideoWriter:
         # 一帧都没写出视为失败；否则返回成功结果与帧数。
         if written == 0:
             return VisualizationResult("failed", "未写出任何视频帧")
-        return VisualizationResult("available", f"已生成 {written} 帧分析叠加视频", str(output_path), item_count=written)
+        return VisualizationResult(
+            "available", f"已生成 {written} 帧分析叠加视频", str(output_path), item_count=written
+        )
 
     def _draw_tracking(self, frame: np.ndarray, overlay_frame: dict[str, Any] | None) -> None:
         # 绘制该帧的人物检测框与标签。
@@ -167,7 +182,9 @@ class OverlayVideoWriter:
             # 标签优先级：label > player_id > 默认“球员”文案。
             # 不展示原始 track_id：身份契约要求用户可见标签只呈现 canonical 身份。
             label = str(detection.get("label") or detection.get("player_id") or self.labels["player"])
-            cv2.putText(frame, label, (x1, max(16, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (35, 190, 90), 2, cv2.LINE_AA)
+            cv2.putText(
+                frame, label, (x1, max(16, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (35, 190, 90), 2, cv2.LINE_AA
+            )
 
     def _draw_pose(self, frame: np.ndarray, overlay_frame: dict[str, Any] | None) -> None:
         # 绘制该帧的姿态关键点（低置信度点被过滤）。
@@ -178,7 +195,11 @@ class OverlayVideoWriter:
             pixels: list[tuple[int, int]] = []
             for point in keypoints:
                 # 跳过置信度缺失或低于 0.2 的关键点。
-                if not isinstance(point, dict) or point.get("confidence", 0) is None or float(point.get("confidence", 0)) < 0.2:
+                if (
+                    not isinstance(point, dict)
+                    or point.get("confidence", 0) is None
+                    or float(point.get("confidence", 0)) < 0.2
+                ):
                     continue
                 try:
                     pixels.append((int(round(float(point["x"]))), int(round(float(point["y"])))))
@@ -188,7 +209,7 @@ class OverlayVideoWriter:
             for pixel in pixels:
                 cv2.circle(frame, pixel, 3, (255, 210, 70), -1, lineType=cv2.LINE_AA)
             # 关键点之间按顺序连成折线（这里只是相邻连接，非骨架拓扑）。
-            for start, end in zip(pixels, pixels[1:]):
+            for start, end in zip(pixels, pixels[1:], strict=False):
                 cv2.line(frame, start, end, (255, 210, 70), 1, lineType=cv2.LINE_AA)
 
     def _draw_ball_overlay(self, frame: np.ndarray, overlay_frame: dict[str, Any] | None) -> None:
@@ -202,9 +223,20 @@ class OverlayVideoWriter:
         if isinstance(center, dict) and center.get("x") is not None and center.get("y") is not None:
             pixel = (int(round(float(center["x"]))), int(round(float(center["y"]))))
             cv2.circle(frame, pixel, 6, (50, 130, 255), -1, lineType=cv2.LINE_AA)  # 蓝色实心圆
-            cv2.putText(frame, self.labels["ball"], (pixel[0] + 8, pixel[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (50, 130, 255), 2, cv2.LINE_AA)
+            cv2.putText(
+                frame,
+                self.labels["ball"],
+                (pixel[0] + 8, pixel[1]),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (50, 130, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
-    def _draw_court_points(self, frame: np.ndarray, ball_points: list[VisualizationPoint], bounce_points: list[VisualizationPoint]) -> None:
+    def _draw_court_points(
+        self, frame: np.ndarray, ball_points: list[VisualizationPoint], bounce_points: list[VisualizationPoint]
+    ) -> None:
         # Court-coordinate points are drawn in the minimap. This hook keeps frame-level alignment explicit.
         # 球场坐标点实际画在小地图里，这里仅保留“逐帧对齐”的占位接口，不做主画面绘制。
         _ = (frame, ball_points, bounce_points)
@@ -261,14 +293,12 @@ def _points_by_frame(points: list[VisualizationPoint]) -> dict[int, list[Visuali
 
 
 def _points_until_time(points: list[VisualizationPoint], current_time: float) -> list[VisualizationPoint]:
-    return [
-        point
-        for point in points
-        if point.timestamp_seconds is None or point.timestamp_seconds <= current_time
-    ]
+    return [point for point in points if point.timestamp_seconds is None or point.timestamp_seconds <= current_time]
 
 
-def _points_near_time(points: list[VisualizationPoint], current_time: float, *, window_seconds: float) -> list[VisualizationPoint]:
+def _points_near_time(
+    points: list[VisualizationPoint], current_time: float, *, window_seconds: float
+) -> list[VisualizationPoint]:
     return [
         point
         for point in points

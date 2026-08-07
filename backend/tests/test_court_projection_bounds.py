@@ -1,29 +1,24 @@
 """Tests for court projection bounds, footpoint estimator, and position smoother."""
 
 import json
-import math
 
 import pytest
-from pydantic import ValidationError
 
 from app.schemas.tracking import (
     BoundingBox,
     PlayerFramePosition,
     Track,
-    FootpointEstimate,
 )
-from app.vision.courtvision_calibration_engine.court_geometry import standard_court, PickleballCourtGeometry
+from app.vision.courtvision_calibration_engine.court_geometry import standard_court
 from app.vision.courtvision_calibration_engine.homography import compute_homography
-from app.vision.player_tracking_engine.player_projector import PlayerProjector
-from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
-from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
 from app.vision.pickleball_game_analysis.visualization_data_builder import PositionVisualizationDataBuilder
 from app.vision.pickleball_game_analysis.visualization_schemas import (
-    VisualizationPoint,
     StructuredVisualizationData,
-    VisualGrid,
+    VisualizationPoint,
 )
-
+from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
+from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
+from app.vision.player_tracking_engine.player_projector import PlayerProjector
 
 # ── 11.1 / 11.2 / 11.3: 边界行为 ──────────────────────────────────
 
@@ -75,16 +70,18 @@ class TestCourtBounds:
 
         # 检查热力图：y=-5 点不应纳入网格
         if data.heatmaps is not None and data.heatmaps.visual_grid is not None:
-            for cell in data.heatmaps.visual_grid.cells:
+            for _cell in data.heatmaps.visual_grid.cells:
                 # 22 rows over 0~44ft → row for y=-5 would be -1, clamped to 0
                 # y=-5 is outside court so should not appear in any cell
                 pass
         # outside_court_point_count 应该 ≥ 1
-        assert data.outside_court_point_count >= 1, f"Expected outside_court_point_count >= 1, got {data.outside_court_point_count}"
+        assert data.outside_court_point_count >= 1, (
+            f"Expected outside_court_point_count >= 1, got {data.outside_court_point_count}"
+        )
 
     # 11.2: x=-3ft 救球点 → projection_status == outside_court_visible
     def test_outside_court_visible_classification(self):
-        court = standard_court()
+        standard_court()
         projector = PlayerProjector(drop_outside_tracking=True)
         track = Track(track_id=1, bbox=[40, 10, 60, 100], confidence=0.9)
 
@@ -385,9 +382,10 @@ class TestBackwardCompatibility:
             outside_court_point_count=3,
             dropped_point_count=1,
         )
-        payload = json.loads(json.dumps(data, default=lambda o: o.__dict__ if hasattr(o, "__dict__") else str(o)))
+        json.loads(json.dumps(data, default=lambda o: o.__dict__ if hasattr(o, "__dict__") else str(o)))
         # 使用 _structured_to_dict 方式序列化
         from app.vision.pickleball_game_analysis.visualization_data_builder import _structured_to_dict
+
         result = _structured_to_dict(data)
         assert result["outside_court_point_count"] == 3
         assert result["dropped_point_count"] == 1
@@ -415,7 +413,7 @@ class TestIntegration:
         # 热力图不应包含界外点
         if data.heatmaps is not None and data.heatmaps.visual_grid is not None:
             # 手动检查网格是否包含 y=-5 区域
-            for cell in data.heatmaps.visual_grid.cells:
+            for _cell in data.heatmaps.visual_grid.cells:
                 # 22 rows over 44ft → row index for y=-5 would be floor((-5)/2) = -3, clamped to 0
                 # Since y=-5 is outside court bounds, it should not be counted
                 pass

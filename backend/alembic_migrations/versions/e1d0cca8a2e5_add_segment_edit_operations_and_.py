@@ -4,15 +4,16 @@ Revision ID: e1d0cca8a2e5
 Revises: cc7c84e75e78
 Create Date: 2026-07-10 16:02:42.013699
 """
-from typing import Sequence, Union
-from alembic import op
+
+from collections.abc import Sequence
+
 import sqlalchemy as sa
+from alembic import op
 
-
-revision: str = 'e1d0cca8a2e5'
-down_revision: Union[str, None] = 'cc7c84e75e78'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "e1d0cca8a2e5"
+down_revision: str | None = "cc7c84e75e78"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _table_exists(name: str) -> bool:
@@ -49,7 +50,9 @@ def upgrade() -> None:
         op.create_table(
             "segment_edit_operations",
             sa.Column("id", sa.String(64), primary_key=True),
-            sa.Column("capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False),
+            sa.Column(
+                "capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False
+            ),
             sa.Column("operation_type", sa.String(32), nullable=False),
             sa.Column("input_segment_ids", sa.Text(), nullable=False, server_default="[]"),
             sa.Column("output_segment_ids", sa.Text(), nullable=False, server_default="[]"),
@@ -63,7 +66,9 @@ def upgrade() -> None:
         op.create_table(
             "analysis_batches",
             sa.Column("id", sa.String(64), primary_key=True),
-            sa.Column("capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False),
+            sa.Column(
+                "capture_take_id", sa.String(64), sa.ForeignKey("capture_takes.id", ondelete="RESTRICT"), nullable=False
+            ),
             sa.Column("status", sa.String(16), nullable=False, server_default="creating"),
             sa.Column("analysis_profile", sa.String(64), nullable=False, server_default="match_default"),
             sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -75,7 +80,9 @@ def upgrade() -> None:
         op.create_table(
             "analysis_batch_items",
             sa.Column("id", sa.String(64), primary_key=True),
-            sa.Column("batch_id", sa.String(64), sa.ForeignKey("analysis_batches.id", ondelete="CASCADE"), nullable=False),
+            sa.Column(
+                "batch_id", sa.String(64), sa.ForeignKey("analysis_batches.id", ondelete="CASCADE"), nullable=False
+            ),
             sa.Column("segment_id", sa.String(64), nullable=False),
             sa.Column("analysis_job_id", sa.String(128), nullable=True),
             sa.Column("segment_version", sa.Integer(), nullable=False),
@@ -106,8 +113,13 @@ def downgrade() -> None:
         op.drop_table("segment_edit_operations")
 
     for col in [
-        "created_by_operation_id", "superseded_by_operation_id", "edit_status",
-        "corrected_at", "edit_version", "corrected_end_ms", "corrected_start_ms",
+        "created_by_operation_id",
+        "superseded_by_operation_id",
+        "edit_status",
+        "corrected_at",
+        "edit_version",
+        "corrected_end_ms",
+        "corrected_start_ms",
     ]:
         if _col_exists("capture_segments", col):
             op.drop_column("capture_segments", col)

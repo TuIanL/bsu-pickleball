@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,17 +22,18 @@ PipelineStageStatus = Literal["pending", "active", "done", "partial", "failed", 
 
 class PipelineStageResult(BaseModel):
     """单个流水线阶段的执行结果。"""
+
     id: str
     label: str
     status: PipelineStageStatus
     detail: str
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    duration_ms: Optional[int] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
     progress: int = Field(default=0, ge=0, le=100)  # 进度百分比
-    error_code: Optional[str] = None
-    public_message: Optional[str] = None            # 给用户看的信息
-    internal_message: Optional[str] = None          # 内部调试信息
+    error_code: str | None = None
+    public_message: str | None = None  # 给用户看的信息
+    internal_message: str | None = None  # 内部调试信息
     retry_count: int = Field(default=0, ge=0)
     counters: dict[str, Any] = Field(default_factory=dict)
 
@@ -43,99 +44,101 @@ class AnalysisArtifacts(BaseModel):
     每个产物通常有 *_path（磁盘路径）和 *_url（访问地址）两对字段，
     以及 *_status / *_detail（生成状态与说明）。这里集中列出，便于前端按名取用。
     """
-    result_json_path: Optional[str] = None
-    tracking_result_json_path: Optional[str] = None
-    tracking_overlay_json_path: Optional[str] = None
-    tracking_overlay_url: Optional[str] = None
-    player_selection_json_path: Optional[str] = None
-    player_selection_url: Optional[str] = None
-    player_selection_training_samples_json_path: Optional[str] = None
-    player_selection_training_samples_url: Optional[str] = None
-    detections_jsonl_path: Optional[str] = None
-    detections_url: Optional[str] = None
-    ball_overlay_json_path: Optional[str] = None
-    ball_overlay_url: Optional[str] = None
-    ball_trajectory_json_path: Optional[str] = None
-    ball_trajectory_url: Optional[str] = None
-    cleaned_ball_trajectory_json_path: Optional[str] = None
-    cleaned_ball_trajectory_url: Optional[str] = None
-    bounce_events_json_path: Optional[str] = None
-    bounce_events_url: Optional[str] = None
-    reconstructed_ball_trajectory_json_path: Optional[str] = None
-    reconstructed_ball_trajectory_url: Optional[str] = None
-    analysis_overlay_video_path: Optional[str] = None
-    analysis_overlay_video_url: Optional[str] = None
-    heatmaps_manifest_json_path: Optional[str] = None
-    heatmaps_url: Optional[str] = None
-    scatter_plots_manifest_json_path: Optional[str] = None
-    scatter_plots_url: Optional[str] = None
-    pose_overlay_json_path: Optional[str] = None
-    pose_overlay_url: Optional[str] = None
-    serve_events_json_path: Optional[str] = None
-    serve_events_url: Optional[str] = None
-    serve_debug_candidates_json_path: Optional[str] = None
-    serve_debug_candidates_url: Optional[str] = None
-    serve_score_series_json_path: Optional[str] = None
-    serve_score_series_url: Optional[str] = None
-    serve_clips_manifest_json_path: Optional[str] = None
-    serve_clips_manifest_url: Optional[str] = None
-    serve_debug_overlay_path: Optional[str] = None
-    serve_debug_overlay_url: Optional[str] = None
-    player_trajectory_json_path: Optional[str] = None
-    player_trajectory_csv_path: Optional[str] = None
-    player_trajectory_url: Optional[str] = None
-    player_render_trajectory_json_path: Optional[str] = None
-    player_render_trajectory_url: Optional[str] = None
-    court_view_roi_json_path: Optional[str] = None
-    court_view_roi_url: Optional[str] = None
-    source_video_url: Optional[str] = None
-    calibration_diagnostics_json_path: Optional[str] = None
-    calibration_diagnostics_url: Optional[str] = None
+
+    result_json_path: str | None = None
+    tracking_result_json_path: str | None = None
+    tracking_overlay_json_path: str | None = None
+    tracking_overlay_url: str | None = None
+    player_selection_json_path: str | None = None
+    player_selection_url: str | None = None
+    player_selection_training_samples_json_path: str | None = None
+    player_selection_training_samples_url: str | None = None
+    detections_jsonl_path: str | None = None
+    detections_url: str | None = None
+    ball_overlay_json_path: str | None = None
+    ball_overlay_url: str | None = None
+    ball_trajectory_json_path: str | None = None
+    ball_trajectory_url: str | None = None
+    cleaned_ball_trajectory_json_path: str | None = None
+    cleaned_ball_trajectory_url: str | None = None
+    bounce_events_json_path: str | None = None
+    bounce_events_url: str | None = None
+    reconstructed_ball_trajectory_json_path: str | None = None
+    reconstructed_ball_trajectory_url: str | None = None
+    analysis_overlay_video_path: str | None = None
+    analysis_overlay_video_url: str | None = None
+    heatmaps_manifest_json_path: str | None = None
+    heatmaps_url: str | None = None
+    scatter_plots_manifest_json_path: str | None = None
+    scatter_plots_url: str | None = None
+    pose_overlay_json_path: str | None = None
+    pose_overlay_url: str | None = None
+    serve_events_json_path: str | None = None
+    serve_events_url: str | None = None
+    serve_debug_candidates_json_path: str | None = None
+    serve_debug_candidates_url: str | None = None
+    serve_score_series_json_path: str | None = None
+    serve_score_series_url: str | None = None
+    serve_clips_manifest_json_path: str | None = None
+    serve_clips_manifest_url: str | None = None
+    serve_debug_overlay_path: str | None = None
+    serve_debug_overlay_url: str | None = None
+    player_trajectory_json_path: str | None = None
+    player_trajectory_csv_path: str | None = None
+    player_trajectory_url: str | None = None
+    player_render_trajectory_json_path: str | None = None
+    player_render_trajectory_url: str | None = None
+    court_view_roi_json_path: str | None = None
+    court_view_roi_url: str | None = None
+    source_video_url: str | None = None
+    calibration_diagnostics_json_path: str | None = None
+    calibration_diagnostics_url: str | None = None
     # 下面是各产物的状态/说明（用于前端判断某个 overlay 是否可用）
-    tracking_overlay_status: Optional[str] = None
-    tracking_overlay_detail: Optional[str] = None
-    player_selection_status: Optional[str] = None
-    player_selection_detail: Optional[str] = None
-    detections_status: Optional[str] = None
-    detections_detail: Optional[str] = None
-    ball_overlay_status: Optional[str] = None
-    ball_overlay_detail: Optional[str] = None
-    ball_trajectory_status: Optional[str] = None
-    ball_trajectory_detail: Optional[str] = None
-    cleaned_ball_trajectory_status: Optional[str] = None
-    cleaned_ball_trajectory_detail: Optional[str] = None
-    bounce_events_status: Optional[str] = None
-    bounce_events_detail: Optional[str] = None
-    reconstructed_ball_trajectory_status: Optional[str] = None
-    reconstructed_ball_trajectory_detail: Optional[str] = None
-    analysis_overlay_video_status: Optional[str] = None
-    analysis_overlay_video_detail: Optional[str] = None
-    position_visualizations_status: Optional[str] = None
-    position_visualizations_detail: Optional[str] = None
-    pose_overlay_status: Optional[str] = None
-    pose_overlay_detail: Optional[str] = None
-    serve_events_status: Optional[str] = None
-    serve_events_detail: Optional[str] = None
-    serve_debug_artifacts_status: Optional[str] = None
-    serve_debug_artifacts_detail: Optional[str] = None
-    player_trajectory_status: Optional[str] = None
-    player_trajectory_detail: Optional[str] = None
-    court_view_roi_status: Optional[str] = None
-    court_view_roi_detail: Optional[str] = None
-    overlay_video_path: Optional[str] = None
+    tracking_overlay_status: str | None = None
+    tracking_overlay_detail: str | None = None
+    player_selection_status: str | None = None
+    player_selection_detail: str | None = None
+    detections_status: str | None = None
+    detections_detail: str | None = None
+    ball_overlay_status: str | None = None
+    ball_overlay_detail: str | None = None
+    ball_trajectory_status: str | None = None
+    ball_trajectory_detail: str | None = None
+    cleaned_ball_trajectory_status: str | None = None
+    cleaned_ball_trajectory_detail: str | None = None
+    bounce_events_status: str | None = None
+    bounce_events_detail: str | None = None
+    reconstructed_ball_trajectory_status: str | None = None
+    reconstructed_ball_trajectory_detail: str | None = None
+    analysis_overlay_video_status: str | None = None
+    analysis_overlay_video_detail: str | None = None
+    position_visualizations_status: str | None = None
+    position_visualizations_detail: str | None = None
+    pose_overlay_status: str | None = None
+    pose_overlay_detail: str | None = None
+    serve_events_status: str | None = None
+    serve_events_detail: str | None = None
+    serve_debug_artifacts_status: str | None = None
+    serve_debug_artifacts_detail: str | None = None
+    player_trajectory_status: str | None = None
+    player_trajectory_detail: str | None = None
+    court_view_roi_status: str | None = None
+    court_view_roi_detail: str | None = None
+    overlay_video_path: str | None = None
 
 
 class AnalysisPipelineResult(BaseModel):
     """一次分析的完整流水线结果（前端读 /jobs/{id}/result 时返回这个）。"""
+
     job_id: str
-    video_id: Optional[str] = None
-    calibration_id: Optional[str] = None
-    status: Literal["completed", "failed"]    # 整体结果状态
-    generated_at: datetime                     # 生成时间
-    stages: List[PipelineStageResult]          # 各阶段执行情况
-    tracks: List[ProjectedTrackPoint] = Field(default_factory=list)  # 球场投影后的轨迹点
-    metrics: PerformanceMetrics                # 运动指标
-    artifacts: AnalysisArtifacts               # 产物路径清单
-    message: str                               # 结果说明
-    match_context: Optional[MatchAnalysisContext] = None  # 比赛分析上下文
-    observed_player_count: Optional[int] = None            # 实际观察到的球员数
+    video_id: str | None = None
+    calibration_id: str | None = None
+    status: Literal["completed", "failed"]  # 整体结果状态
+    generated_at: datetime  # 生成时间
+    stages: list[PipelineStageResult]  # 各阶段执行情况
+    tracks: list[ProjectedTrackPoint] = Field(default_factory=list)  # 球场投影后的轨迹点
+    metrics: PerformanceMetrics  # 运动指标
+    artifacts: AnalysisArtifacts  # 产物路径清单
+    message: str  # 结果说明
+    match_context: MatchAnalysisContext | None = None  # 比赛分析上下文
+    observed_player_count: int | None = None  # 实际观察到的球员数

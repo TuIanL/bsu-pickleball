@@ -5,13 +5,13 @@
 本地 CI 环境无硬件时，这些测试会被标记为 skip。
 """
 
-import os
-import sys
 import json
-import pytest
+from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
+
+import pytest
 from pydantic import ValidationError
 
 
@@ -19,6 +19,7 @@ from pydantic import ValidationError
 def _check_ffmpeg():
     try:
         import subprocess
+
         subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         return True
     except Exception:
@@ -29,12 +30,14 @@ def _check_ffmpeg():
 # SyncRecorder 单元测试
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestSyncRecorderUnit:
     """SyncRecorder 初始化与状态管理测试（不需要 FFmpeg/摄像头）"""
 
     def test_sync_recorder_initial_state(self):
         """验证初始状态为未录制"""
         from app.camera.sync_recorder_service import SyncRecorder
+
         recorder = SyncRecorder()
         assert recorder.is_recording is False
         assert recorder.processes == []
@@ -103,10 +106,27 @@ class TestSyncRecorderUnit:
                 "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
                 "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
             },
-            segments=[SyncSegment(segment_index=1, files=[
-                SyncSegmentFile(camera_id="174", role="cam_1", file_path="174.ts", media_duration_sec=28.633333, input_start_time=100.118133),
-                SyncSegmentFile(camera_id="175", role="cam_2", file_path="175.ts", media_duration_sec=28.616667, input_start_time=100.0),
-            ])],
+            segments=[
+                SyncSegment(
+                    segment_index=1,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174.ts",
+                            media_duration_sec=28.633333,
+                            input_start_time=100.118133,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175.ts",
+                            media_duration_sec=28.616667,
+                            input_start_time=100.0,
+                        ),
+                    ],
+                )
+            ],
             fps=60,
         )
 
@@ -126,18 +146,44 @@ class TestSyncRecorderUnit:
                 "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
             },
             segments=[
-                SyncSegment(segment_index=1, files=[
-                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s1.ts",
-                                    media_duration_sec=10.0, input_start_time=100.0),
-                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s1.ts",
-                                    media_duration_sec=9.5, input_start_time=100.5),
-                ]),
-                SyncSegment(segment_index=2, files=[
-                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s2.ts",
-                                    media_duration_sec=10.0, input_start_time=150.0),
-                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s2.ts",
-                                    media_duration_sec=10.0, input_start_time=151.0),
-                ]),
+                SyncSegment(
+                    segment_index=1,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174_s1.ts",
+                            media_duration_sec=10.0,
+                            input_start_time=100.0,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175_s1.ts",
+                            media_duration_sec=9.5,
+                            input_start_time=100.5,
+                        ),
+                    ],
+                ),
+                SyncSegment(
+                    segment_index=2,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174_s2.ts",
+                            media_duration_sec=10.0,
+                            input_start_time=150.0,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175_s2.ts",
+                            media_duration_sec=10.0,
+                            input_start_time=151.0,
+                        ),
+                    ],
+                ),
             ],
             fps=60,
         )
@@ -169,18 +215,44 @@ class TestSyncRecorderUnit:
                 "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
             },
             segments=[
-                SyncSegment(segment_index=1, files=[
-                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s1.ts",
-                                    media_duration_sec=10.0, input_start_time=100.0),
-                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s1.ts",
-                                    media_duration_sec=10.0, input_start_time=100.0),
-                ]),
-                SyncSegment(segment_index=2, files=[
-                    SyncSegmentFile(camera_id="174", role="cam_1", file_path="174_s2.ts",
-                                    media_duration_sec=5.0, input_start_time=200.0),
-                    SyncSegmentFile(camera_id="175", role="cam_2", file_path="175_s2.ts",
-                                    media_duration_sec=5.0, input_start_time=300.0),
-                ]),
+                SyncSegment(
+                    segment_index=1,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174_s1.ts",
+                            media_duration_sec=10.0,
+                            input_start_time=100.0,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175_s1.ts",
+                            media_duration_sec=10.0,
+                            input_start_time=100.0,
+                        ),
+                    ],
+                ),
+                SyncSegment(
+                    segment_index=2,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174_s2.ts",
+                            media_duration_sec=5.0,
+                            input_start_time=200.0,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175_s2.ts",
+                            media_duration_sec=5.0,
+                            input_start_time=300.0,
+                        ),
+                    ],
+                ),
             ],
             fps=60,
         )
@@ -203,12 +275,27 @@ class TestSyncRecorderUnit:
                 "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
                 "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
             },
-            segments=[SyncSegment(segment_index=1, files=[
-                SyncSegmentFile(camera_id="174", role="cam_1", file_path="174.ts",
-                                media_duration_sec=20.0, input_start_time=100.0),
-                SyncSegmentFile(camera_id="175", role="cam_2", file_path="175.ts",
-                                media_duration_sec=20.0, input_start_time=99.5),
-            ])],
+            segments=[
+                SyncSegment(
+                    segment_index=1,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174.ts",
+                            media_duration_sec=20.0,
+                            input_start_time=100.0,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175.ts",
+                            media_duration_sec=20.0,
+                            input_start_time=99.5,
+                        ),
+                    ],
+                )
+            ],
             fps=30,
         )
 
@@ -237,7 +324,11 @@ class TestSyncRecorderUnit:
 
         with patch("app.camera.sync_recorder_service.subprocess.run", side_effect=fake_run):
             result = SyncRecordingService()._merge_segments(
-                [str(source)], str(output), trim_start=0.0, target_frames=120, fps=60,
+                [str(source)],
+                str(output),
+                trim_start=0.0,
+                target_frames=120,
+                fps=60,
             )
 
         assert result == str(output)
@@ -264,7 +355,11 @@ class TestSyncRecorderUnit:
 
         with patch("app.camera.sync_recorder_service.subprocess.run", side_effect=fake_run):
             SyncRecordingService()._merge_segments(
-                [str(source)], str(output), trim_start=5 / 60, target_frames=120, fps=60,
+                [str(source)],
+                str(output),
+                trim_start=5 / 60,
+                target_frames=120,
+                fps=60,
             )
 
         cmd = commands[0]
@@ -273,6 +368,7 @@ class TestSyncRecorderUnit:
     def test_sync_recorder_cannot_start_twice(self):
         """验证不能重复启动录制（模拟状态检查）"""
         from app.camera.sync_recorder_service import SyncRecorder
+
         recorder = SyncRecorder()
         recorder.is_recording = True  # 模拟已录制
         with pytest.raises(RuntimeError, match="已在运行"):
@@ -291,12 +387,29 @@ class TestSyncRecorderUnit:
                 "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
                 "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
             },
-            segments=[SyncSegment(segment_index=1, files=[
-                SyncSegmentFile(camera_id="174", role="cam_1", file_path="174.ts", media_duration_sec=18.65,
-                                input_start_time=100.035, media_start_time_sec=1.4),
-                SyncSegmentFile(camera_id="175", role="cam_2", file_path="175.ts", media_duration_sec=18.75,
-                                input_start_time=100.0, media_start_time_sec=1.4),
-            ])],
+            segments=[
+                SyncSegment(
+                    segment_index=1,
+                    files=[
+                        SyncSegmentFile(
+                            camera_id="174",
+                            role="cam_1",
+                            file_path="174.ts",
+                            media_duration_sec=18.65,
+                            input_start_time=100.035,
+                            media_start_time_sec=1.4,
+                        ),
+                        SyncSegmentFile(
+                            camera_id="175",
+                            role="cam_2",
+                            file_path="175.ts",
+                            media_duration_sec=18.75,
+                            input_start_time=100.0,
+                            media_start_time_sec=1.4,
+                        ),
+                    ],
+                )
+            ],
             fps=60,
         )
 
@@ -308,6 +421,7 @@ class TestSyncRecorderUnit:
     def test_sync_recorder_stop_when_not_recording(self):
         """验证未录制时停止不报错"""
         from app.camera.sync_recorder_service import SyncRecorder
+
         recorder = SyncRecorder()
         # 不应抛异常
         recorder.stop_recording()
@@ -315,12 +429,14 @@ class TestSyncRecorderUnit:
     def test_parse_ip_from_url(self):
         """验证从 RTSP URL 提取 IP"""
         from app.camera.sync_recorder_service import _parse_ip_from_url
+
         assert _parse_ip_from_url("rtsp://192.168.1.160:8554/0") == "192.168.1.160"
         assert _parse_ip_from_url("rtsp://10.0.0.1:554/stream") == "10.0.0.1"
 
     def test_get_stream_output_name(self):
         """验证分段输出文件名生成"""
         from app.camera.sync_recorder_service import SyncRecorder
+
         recorder = SyncRecorder()
         recorder.segment_index = 3
         name = recorder._get_stream_output_name(
@@ -333,6 +449,7 @@ class TestSyncRecorderUnit:
     def test_terminate_all_processes_empty(self):
         """验证无进程时 terminate 不报错"""
         from app.camera.sync_recorder_service import SyncRecorder
+
         recorder = SyncRecorder()
         recorder._terminate_all_processes()  # 不应抛异常
 
@@ -400,18 +517,22 @@ class TestSyncRecorderUnit:
 
     def test_pts_sidecar_round_trip_matches_frame_timing(self, tmp_path):
         from app.services.dual_camera_sync import (
-            write_frame_timing_sidecar,
             read_frame_timing_sidecar,
+            write_frame_timing_sidecar,
         )
 
         sidecar = tmp_path / "frames.jsonl"
         fake = SimpleNamespace(
             returncode=0,
-            stdout=json.dumps({"frames": [
-                {"best_effort_timestamp_time": "1.400000", "pkt_dts_time": "1.400000", "key_frame": 1},
-                {"best_effort_timestamp_time": "1.416667", "pkt_dts_time": "1.416667", "key_frame": 0},
-                {"best_effort_timestamp_time": "1.433333", "pkt_dts_time": "1.433333", "key_frame": 0},
-            ]}),
+            stdout=json.dumps(
+                {
+                    "frames": [
+                        {"best_effort_timestamp_time": "1.400000", "pkt_dts_time": "1.400000", "key_frame": 1},
+                        {"best_effort_timestamp_time": "1.416667", "pkt_dts_time": "1.416667", "key_frame": 0},
+                        {"best_effort_timestamp_time": "1.433333", "pkt_dts_time": "1.433333", "key_frame": 0},
+                    ]
+                }
+            ),
             stderr="",
         )
         with patch("app.services.dual_camera_sync.subprocess.run", return_value=fake):
@@ -433,11 +554,15 @@ class TestSyncRecorderUnit:
         sidecar = tmp_path / "frames.jsonl"
         fake = SimpleNamespace(
             returncode=0,
-            stdout=json.dumps({"frames": [
-                {"best_effort_timestamp_time": "1.400", "pkt_dts_time": "1.400", "key_frame": 1},
-                {"best_effort_timestamp_time": "1.417", "pkt_dts_time": "1.416", "key_frame": 0},
-                {"best_effort_timestamp_time": "1.433", "pkt_dts_time": "1.433", "key_frame": 0},
-            ]}),
+            stdout=json.dumps(
+                {
+                    "frames": [
+                        {"best_effort_timestamp_time": "1.400", "pkt_dts_time": "1.400", "key_frame": 1},
+                        {"best_effort_timestamp_time": "1.417", "pkt_dts_time": "1.416", "key_frame": 0},
+                        {"best_effort_timestamp_time": "1.433", "pkt_dts_time": "1.433", "key_frame": 0},
+                    ]
+                }
+            ),
             stderr="",
         )
         with patch("app.services.dual_camera_sync.subprocess.run", return_value=fake):
@@ -456,11 +581,11 @@ class TestSyncRecorderUnit:
         recorder.fps = 60
         cmd = recorder._build_record_command("rtsp://camera/live", "/tmp/cam.ts", duration=5)
 
-        assert ["-rtsp_transport", "udp"] == cmd[cmd.index("-rtsp_transport"):cmd.index("-rtsp_transport") + 2]
-        assert ["-timeout", "5000000"] == cmd[cmd.index("-timeout"):cmd.index("-timeout") + 2]
-        assert ["-fflags", "+genpts"] == cmd[cmd.index("-fflags"):cmd.index("-fflags") + 2]
-        assert ["-map", "0:v:0"] == cmd[cmd.index("-map"):cmd.index("-map") + 2]
-        assert ["-c:v", "copy"] == cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2]
+        assert ["-rtsp_transport", "udp"] == cmd[cmd.index("-rtsp_transport") : cmd.index("-rtsp_transport") + 2]
+        assert ["-timeout", "5000000"] == cmd[cmd.index("-timeout") : cmd.index("-timeout") + 2]
+        assert ["-fflags", "+genpts"] == cmd[cmd.index("-fflags") : cmd.index("-fflags") + 2]
+        assert ["-map", "0:v:0"] == cmd[cmd.index("-map") : cmd.index("-map") + 2]
+        assert ["-c:v", "copy"] == cmd[cmd.index("-c:v") : cmd.index("-c:v") + 2]
         assert "-use_wallclock_as_timestamps" not in cmd
         assert "-vf" not in cmd
         assert "-fps_mode" not in cmd
@@ -484,18 +609,21 @@ class TestSyncRecorderUnit:
 # SyncRecordingService 单元测试
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestSyncRecordingService:
     """SyncRecordingService 业务逻辑测试（不需要 FFmpeg/摄像头）"""
 
     def test_service_initial_state(self):
         """验证服务初始状态"""
         from app.camera.sync_recorder_service import sync_recording_service
+
         assert sync_recording_service.is_recording() is False
         assert sync_recording_service.get_active_session() is None
 
     def test_generate_session_id_format(self):
         """验证会话 ID 格式"""
         from app.camera.sync_recorder_service import sync_recording_service
+
         sid = sync_recording_service._generate_session_id()
         assert sid.startswith("sync_")
         assert len(sid) > 10
@@ -503,6 +631,7 @@ class TestSyncRecordingService:
     def test_output_dir_path(self):
         """验证输出目录路径格式"""
         from app.camera.sync_recorder_service import sync_recording_service
+
         path = sync_recording_service._output_dir("sync_20260708_120000")
         assert "sync-recordings" in str(path)
         assert "sync_20260708_120000" in str(path)
@@ -520,12 +649,14 @@ class TestSyncRecordingService:
     def test_get_nonexistent_session(self):
         """验证查询不存在会话返回 None"""
         from app.camera.sync_recorder_service import sync_recording_service
+
         result = sync_recording_service.get_session("nonexistent_id")
         assert result is None
 
     def test_list_empty_sessions(self):
         """验证空列表返回"""
         from app.camera.sync_recorder_service import sync_recording_service
+
         # 清理状态后查询
         result = sync_recording_service.list_sessions()
         assert isinstance(result, list)
@@ -587,9 +718,11 @@ class TestSyncRecordingService:
         )
         module.SYNC_SESSIONS[session.session_id] = session
         try:
-            with patch.object(module, "capture_storage_is_available", return_value=False), \
-                 patch.object(service, "_persist"), \
-                 patch.object(service, "_finalize_capture_take"):
+            with (
+                patch.object(module, "capture_storage_is_available", return_value=False),
+                patch.object(service, "_persist"),
+                patch.object(service, "_finalize_capture_take"),
+            ):
                 service._recorder = recorder
                 service._handle_storage_failure(session.session_id, "介质不可访问")
 
@@ -602,7 +735,8 @@ class TestSyncRecordingService:
             module.SYNC_SESSIONS.pop(session.session_id, None)
 
     def test_stop_does_not_register_or_merge_videos(self, tmp_path):
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from app.camera import sync_recorder_service as module
         from app.camera.models import SyncRecordingSession
 
@@ -616,14 +750,16 @@ class TestSyncRecordingService:
             status="recording",
             camera_slots={},
             output_dir=str(tmp_path),
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         module.SYNC_SESSIONS[session.session_id] = session
         try:
-            with patch.object(service, "_persist"), \
-                 patch.object(service, "_finalize_capture_take"), \
-                 patch.object(service, "_materialize_staged_media", return_value=session), \
-                 patch.object(service, "_register_session_videos") as register:
+            with (
+                patch.object(service, "_persist"),
+                patch.object(service, "_finalize_capture_take"),
+                patch.object(service, "_materialize_staged_media", return_value=session),
+                patch.object(service, "_register_session_videos") as register,
+            ):
                 stopped = service.stop_session(session.session_id)
 
             assert stopped.session.merge_status == "pending"
@@ -645,11 +781,13 @@ class TestSyncRecordingService:
                 "cam_1": CameraSlotConfig(role="cam_1", camera_id="cam_a"),
                 "cam_2": CameraSlotConfig(role="cam_2", camera_id="cam_b"),
             },
-            segments=[SyncSegment(
-                segment_index=1,
-                status="completed",
-                files=[SyncSegmentFile(camera_id="cam_a", role="cam_1", file_path=str(ts_path), file_size=2)],
-            )],
+            segments=[
+                SyncSegment(
+                    segment_index=1,
+                    status="completed",
+                    files=[SyncSegmentFile(camera_id="cam_a", role="cam_1", file_path=str(ts_path), file_size=2)],
+                )
+            ],
             output_dir=str(tmp_path),
         )
         service = module.SyncRecordingService(sync_recorder_factory=lambda: object())
@@ -680,17 +818,21 @@ class TestSyncRecordingService:
         )
         service = module.SyncRecordingService(sync_recorder_factory=lambda: object())
         module.SYNC_SESSIONS[session.session_id] = session
-        merged = session.model_copy(update={
-            "registered_video_ids": {"cam_1": "video-a", "cam_2": "video-b"},
-            "merge_results": {
-                "cam_1": {"status": "succeeded", "video_id": "video-a"},
-                "cam_2": {"status": "succeeded", "video_id": "video-b"},
-            },
-        })
+        merged = session.model_copy(
+            update={
+                "registered_video_ids": {"cam_1": "video-a", "cam_2": "video-b"},
+                "merge_results": {
+                    "cam_1": {"status": "succeeded", "video_id": "video-a"},
+                    "cam_2": {"status": "succeeded", "video_id": "video-b"},
+                },
+            }
+        )
         try:
-            with patch.object(service, "_persist"), \
-                 patch.object(service, "_persist_capture_manifest"), \
-                 patch.object(service, "_register_session_videos", return_value=(merged, None, False, None)):
+            with (
+                patch.object(service, "_persist"),
+                patch.object(service, "_persist_capture_manifest"),
+                patch.object(service, "_register_session_videos", return_value=(merged, None, False, None)),
+            ):
                 service._merge_session_videos_background(session.session_id)
 
             completed = module.SYNC_SESSIONS[session.session_id]
@@ -704,12 +846,14 @@ class TestSyncRecordingService:
 # SyncRecording 模型测试
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestSyncModels:
     """Pydantic 模型验证测试"""
 
     def test_sync_start_request_validation(self):
         """验证 SyncStartRequest 模型"""
         from app.camera.models import SyncStartRequest
+
         req = SyncStartRequest(
             cam_1_id="cam_a",
             cam_2_id="cam_b",
@@ -722,6 +866,7 @@ class TestSyncModels:
     def test_recording_start_request_fps_cap(self):
         """验证单摄录制 FPS 默认值和上限"""
         from app.camera.models import RecordingStartRequest
+
         req = RecordingStartRequest(camera_id="cam_a")
         assert req.fps == 60
 
@@ -734,6 +879,7 @@ class TestSyncModels:
     def test_sync_start_request_fps_cap(self):
         """验证双摄录制 FPS 默认值和上限"""
         from app.camera.models import SyncStartRequest
+
         req = SyncStartRequest(cam_1_id="cam_a", cam_2_id="cam_b")
         assert req.fps == 60
 
@@ -746,6 +892,7 @@ class TestSyncModels:
     def test_sync_test_request_validation(self):
         """验证 SyncTestRequest 模型"""
         from app.camera.models import SyncTestRequest
+
         req = SyncTestRequest(
             cam_1_id="cam_a",
             cam_2_id="cam_b",
@@ -756,6 +903,7 @@ class TestSyncModels:
     def test_sync_recording_session_model(self):
         """验证 SyncRecordingSession 模型字段"""
         from app.camera.models import SyncRecordingSession
+
         session = SyncRecordingSession(
             session_id="sync_test",
             status="recording",
@@ -770,21 +918,25 @@ class TestSyncModels:
     def test_legacy_session_merge_status_is_derived(self):
         from app.camera.models import CameraSlotConfig, SyncRecordingSession
 
-        session = SyncRecordingSession.model_validate({
-            "session_id": "legacy_sync",
-            "status": "completed",
-            "camera_slots": {
-                "cam_1": CameraSlotConfig(role="cam_1", camera_id="cam_a").model_dump(),
-                "cam_2": CameraSlotConfig(role="cam_2", camera_id="cam_b").model_dump(),
-            },
-            "registered_video_ids": {"cam_1": "video-a", "cam_2": "video-b"},
-        })
+        session = SyncRecordingSession.model_validate(
+            {
+                "session_id": "legacy_sync",
+                "status": "completed",
+                "camera_slots": {
+                    "cam_1": CameraSlotConfig(role="cam_1", camera_id="cam_a").model_dump(),
+                    "cam_2": CameraSlotConfig(role="cam_2", camera_id="cam_b").model_dump(),
+                },
+                "registered_video_ids": {"cam_1": "video-a", "cam_2": "video-b"},
+            }
+        )
         assert session.merge_status == "completed"
 
     def test_sync_test_result_all_online(self):
         """验证测试结果模型"""
+        from datetime import datetime
+
         from app.camera.models import SyncTestResult
-        from datetime import datetime, timezone
+
         result = SyncTestResult(
             success=True,
             cam_1_id="cam_a",
@@ -794,16 +946,18 @@ class TestSyncModels:
             cam_2_online=True,
             cam_1_file_size=1024,
             cam_2_file_size=2048,
-            test_completed_at=datetime.now(timezone.utc),
+            test_completed_at=datetime.now(UTC),
         )
         assert result.success is True
         assert result.cam_1_file_size == 1024
 
     def test_sync_segment_model(self):
         """验证 SyncSegment 模型"""
+        from datetime import datetime
+
         from app.camera.models import SyncSegment, SyncSegmentFile
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
+
+        now = datetime.now(UTC)
         segment = SyncSegment(
             segment_index=1,
             status="completed",
@@ -830,6 +984,7 @@ class TestSyncModels:
 # 集成测试（需要 FFmpeg + 真实 RTSP 流 — 本地硬件验证用）
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 @pytest.mark.skipif(
     not _check_ffmpeg(),
     reason="需要 FFmpeg 才能进行集成测试",
@@ -840,12 +995,15 @@ class TestSyncRecorderIntegration:
     def test_ffmpeg_available(self):
         """验证 FFmpeg 可用"""
         from app.camera.sync_recorder_service import check_ffmpeg_available
+
         assert check_ffmpeg_available() is True
 
     def test_sync_recorder_with_invalid_url(self):
         """验证无效 RTSP 地址的处理——不应抛出异常"""
-        from app.camera.sync_recorder_service import SyncRecorder
         import tempfile
+
+        from app.camera.sync_recorder_service import SyncRecorder
+
         recorder = SyncRecorder()
         with tempfile.TemporaryDirectory() as tmpdir:
             result = recorder.start_test(

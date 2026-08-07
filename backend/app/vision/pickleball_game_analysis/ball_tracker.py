@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import hypot
 from typing import Any
 
@@ -308,7 +308,11 @@ class BallTracker:
                     reject_reasons.append("invalid_box")
                     continue
                 area_ratio = area_ratio if area_ratio is not None else (float(width) * float(height)) / frame_area
-                aspect_ratio = aspect_ratio if aspect_ratio is not None else max(float(width) / float(height), float(height) / float(width))
+                aspect_ratio = (
+                    aspect_ratio
+                    if aspect_ratio is not None
+                    else max(float(width) / float(height), float(height) / float(width))
+                )
             if area_ratio is not None and area_ratio > self.config.max_box_area_ratio:
                 reject_reasons.append("box_too_large")
                 continue
@@ -416,12 +420,7 @@ class BallTracker:
             else 0.0
         )
         missing_component = self.config.missing_factor * min(self.missing_frames, 5)
-        raw_gate = (
-            self.config.base_gate_pixels
-            + speed_component
-            + missing_component
-            + self._perspective_adjustment()
-        )
+        raw_gate = self.config.base_gate_pixels + speed_component + missing_component + self._perspective_adjustment()
         return max(self.config.min_gate_pixels, min(self.config.max_gate_pixels, raw_gate))
 
     def _compute_recent_speed(self) -> float:

@@ -1,7 +1,5 @@
 """球员锁定管理器测试 —— bootstrap 中心优先+象限唯一、硬锁到底、重连保持身份。"""
 
-import pytest
-
 from app.schemas.tracking import PlayerFramePosition
 from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
 from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
@@ -54,7 +52,7 @@ def test_bootstrap_quadrant_unique_assigns_each_home_slot():
     # 四个象限各一个候选 → 各自锁定到对应槽位（Player_1..4 = 近左/近右/远左/远右）
     manager = PlayerLockManager(_doubles_config())
     candidates = [
-        (101, 5.0, 5.0),   # near_left
+        (101, 5.0, 5.0),  # near_left
         (102, 15.0, 5.0),  # near_right
         (103, 5.0, 39.0),  # far_left
         (104, 15.0, 39.0),  # far_right
@@ -89,14 +87,16 @@ def test_bootstrap_accepts_visible_boundary_player_inside_tracking_area():
             far_side_quota=0,
         )
     )
-    boundary_position = lambda frame: pos(
-        105,
-        frame,
-        10.0,
-        -2.5,
-        valid=False,
-        projection_status="outside_court_visible",
-    )
+
+    def boundary_position(frame):
+        return pos(
+            105,
+            frame,
+            10.0,
+            -2.5,
+            valid=False,
+            projection_status="outside_court_visible",
+        )
 
     for frame in range(10):
         manager.update(frame, positions=[boundary_position(frame)])
@@ -110,7 +110,7 @@ def test_bootstrap_same_quadrant_picks_center_closest():
     # 同一象限（近左）两个候选：track 201 更靠近画面中心，应被优先锁定
     manager = PlayerLockManager(_doubles_config())
     center_bbox = [480, 200, 560, 400]  # bbox 中心 (520, 300) → 距画面中心 (640, 360) 约 134px
-    edge_bbox = [120, 200, 200, 400]    # bbox 中心 (160, 300) → 距画面中心约 484px
+    edge_bbox = [120, 200, 200, 400]  # bbox 中心 (160, 300) → 距画面中心约 484px
     for frame in range(10):
         manager.update(
             frame,

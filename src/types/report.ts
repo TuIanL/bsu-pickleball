@@ -1044,6 +1044,8 @@ export interface ReconstructedTrajectoryQuality {
   display_level?: "high" | "medium" | "low" | "none";
 }
 
+export type ShotOwnershipStatus = "confirmed" | "ambiguous" | "unassigned" | "not_applicable";
+
 export interface ReconstructedBallTrajectorySegment {
   segment_id: string;
   reconstruction_mode: "dual_anchor_warp" | "single_anchor_warp" | "image_only" | "local_visual_arc";
@@ -1058,6 +1060,24 @@ export interface ReconstructedBallTrajectorySegment {
   anchors: ReconstructedTrajectoryAnchor[];
   quality?: ReconstructedTrajectoryQuality;
   samples: ReconstructedBallTrajectorySample[];
+  shot_id?: string | null;
+  hitter_player_id?: string | null;
+  hitter_render_slot?: string | null;
+  ownership_status?: ShotOwnershipStatus;
+  ownership_confidence?: number | null;
+  ownership_source_event_id?: string | null;
+}
+
+export interface ReconstructedBallTrajectoryAttribution {
+  candidate_id?: string;
+  status?: ShotOwnershipStatus;
+  player_id?: string | null;
+  render_slot?: string | null;
+  confidence?: number;
+  score_margin?: number;
+  attributed_frame_index?: number | null;
+  method?: string;
+  candidate_scores?: Array<{ player_id: string; score: number }>;
 }
 
 export interface ReconstructedBallTrajectoryEvent {
@@ -1070,6 +1090,19 @@ export interface ReconstructedBallTrajectoryEvent {
   confidence?: number;
   source?: string;
   diagnostics?: Record<string, unknown>;
+  event_status?: "confirmed" | "ambiguous";
+  hitter_player_id?: string | null;
+  hitter_render_slot?: string | null;
+  ownership_status?: ShotOwnershipStatus;
+  ownership_confidence?: number | null;
+  ownership_source_event_id?: string | null;
+  attribution?: ReconstructedBallTrajectoryAttribution | null;
+}
+
+export interface PlayerRosterEntry {
+  player_id: string;
+  render_slot?: string | null;
+  initial_side?: string | null;
 }
 
 export interface ReconstructedBallTrajectoryArtifact {
@@ -1083,6 +1116,7 @@ export interface ReconstructedBallTrajectoryArtifact {
     z?: string;
     metric_validity?: string;
   };
+  player_roster?: PlayerRosterEntry[];
   events: ReconstructedBallTrajectoryEvent[];
   segments: ReconstructedBallTrajectorySegment[];
 }

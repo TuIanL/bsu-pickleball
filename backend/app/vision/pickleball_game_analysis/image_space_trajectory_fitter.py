@@ -21,24 +21,24 @@ from app.vision.pickleball_game_analysis.schemas import TrajectoryPoint
 class FitConfig:
     """图像拟合超参数。"""
 
-    min_observation_points: int = 6          # 低于此数量不输出正式拟合曲线
-    ransac_iterations: int = 120             # RANSAC 迭代次数
-    ransac_inlier_threshold_px: float = 12.0 # RANSAC 内点阈值（像素）
-    ransac_random_seed: int = 0              # 固定随机种子（确定性）
-    huber_delta_px: float = 10.0             # Huber 损失的拐点（像素）
-    huber_iterations: int = 8                # IRLS 迭代次数
-    interpolated_weight: float = 0.3         # 插值点的低权重（置信度不可信）
+    min_observation_points: int = 6  # 低于此数量不输出正式拟合曲线
+    ransac_iterations: int = 120  # RANSAC 迭代次数
+    ransac_inlier_threshold_px: float = 12.0  # RANSAC 内点阈值（像素）
+    ransac_random_seed: int = 0  # 固定随机种子（确定性）
+    huber_delta_px: float = 10.0  # Huber 损失的拐点（像素）
+    huber_iterations: int = 8  # IRLS 迭代次数
+    interpolated_weight: float = 0.3  # 插值点的低权重（置信度不可信）
 
 
 @dataclass
 class FitResult:
     """一次图像拟合的结果。"""
 
-    u_coeff: tuple[float, float, float] = (0.0, 0.0, 0.0)   # u(t) = a0 + a1*t + a2*t²
-    v_coeff: tuple[float, float, float] = (0.0, 0.0, 0.0)   # v(t) = b0 + b1*t + b2*t²
-    t_offset: float = 0.0                    # t 时间原点（减去首观测时间，秒）
-    residual_rmse_px: float = 0.0            # 图像拟合残差（像素）
-    coverage: float = 0.0                    # 观测覆盖率（有效观测帧 / 段跨度帧）
+    u_coeff: tuple[float, float, float] = (0.0, 0.0, 0.0)  # u(t) = a0 + a1*t + a2*t²
+    v_coeff: tuple[float, float, float] = (0.0, 0.0, 0.0)  # v(t) = b0 + b1*t + b2*t²
+    t_offset: float = 0.0  # t 时间原点（减去首观测时间，秒）
+    residual_rmse_px: float = 0.0  # 图像拟合残差（像素）
+    coverage: float = 0.0  # 观测覆盖率（有效观测帧 / 段跨度帧）
     observed_count: int = 0
     expected_count: int = 0
     outlier_indices: list[int] = field(default_factory=list)  # 判定为离群点的局部下标
@@ -101,11 +101,7 @@ class ImageSpaceTrajectoryFitter:
 
         residual = np.hypot(u - fitted_u, v - fitted_v)
         rmse = float(np.sqrt(float(np.mean(residual**2))))
-        outlier_indices = [
-            obs_indices[index]
-            for index in range(observed_count)
-            if not inlier_mask[index]
-        ]
+        outlier_indices = [obs_indices[index] for index in range(observed_count) if not inlier_mask[index]]
 
         # 覆盖率：段内（首末有效观测之间）有多少比例被观测覆盖
         span = max(1, int(points[-1].frame_index) - int(points[0].frame_index) + 1)
@@ -131,7 +127,7 @@ class ImageSpaceTrajectoryFitter:
         """在任意时间点上评估拟合曲线，返回 [(u, v)] 与 u/v 数组。"""
         tn = np.asarray(timestamps_sec, dtype=np.float64) - result.t_offset
         u, v = self._evaluate(tn, result.u_coeff, result.v_coeff)
-        points = [(float(ui), float(vi)) for ui, vi in zip(u, v)]
+        points = [(float(ui), float(vi)) for ui, vi in zip(u, v, strict=False)]
         return points, u, v
 
     # ---- 内部实现 ----

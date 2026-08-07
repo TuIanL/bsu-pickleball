@@ -32,6 +32,7 @@ from app.schemas.calibration import (
 from app.services.calibration_service import CalibrationService
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoService
+
 # 视觉引擎里的"边线分割"与"掩码转关键点"工具
 from app.vision.courtvision_calibration_engine.court_line_segmentation import (
     CourtLineSegmentationResult,
@@ -152,10 +153,10 @@ class AutomaticCalibrationService:
 
         # 第三步：计算"参考边线支持度"（球场边线是否彼此吻合）
         from app.vision.courtvision_calibration_engine.reference_line_support import (
+            DEFAULT_REFERENCE_REJECT_THRESHOLD,
             build_confidence_breakdown,
             build_reference_diagnostics,
             compute_reference_line_support,
-            DEFAULT_REFERENCE_REJECT_THRESHOLD,
         )
 
         reference_result = compute_reference_line_support(
@@ -167,9 +168,7 @@ class AutomaticCalibrationService:
         # 组合置信度：seg(0.3) + geo(0.3) + ref(0.4)
         # 三个子分数各占不同权重，最后裁剪到 [0, 1]
         combined_confidence = (
-            0.3 * segmentation.confidence
-            + 0.3 * geometry.confidence
-            + 0.4 * reference_result.reference_score
+            0.3 * segmentation.confidence + 0.3 * geometry.confidence + 0.4 * reference_result.reference_score
         )
         combined_confidence = float(max(0.0, min(1.0, combined_confidence)))
 
@@ -183,13 +182,13 @@ class AutomaticCalibrationService:
         # 判定逻辑：geometry 必须通过基础验证，reference 低于下限直接 reject
         if reference_result.reference_score < DEFAULT_REFERENCE_REJECT_THRESHOLD:
             status = "rejected"
-            detail = f"Reference line support too low ({reference_result.reference_score:.2f} < {DEFAULT_REFERENCE_REJECT_THRESHOLD:.2f})"
+            detail = f"Reference line support too low ({reference_result.reference_score:.2f} < {DEFAULT_REFERENCE_REJECT_THRESHOLD:.2f})"  # noqa: E501
         elif combined_confidence >= self.settings.court_line_confidence:
             status = "available"
             detail = "Automatic court calibration suggestion is ready"
         else:
             status = "rejected"
-            detail = f"Combined confidence ({combined_confidence:.2f}) below threshold ({self.settings.court_line_confidence:.2f})"
+            detail = f"Combined confidence ({combined_confidence:.2f}) below threshold ({self.settings.court_line_confidence:.2f})"  # noqa: E501
 
         preview_url = self._write_preview(
             extracted.frame,
@@ -325,7 +324,7 @@ class AutomaticCalibrationService:
         expected = [(0, 0), (20, 0), (20, 44), (0, 44)]
         errors = [
             float(np.linalg.norm(np.asarray(point, dtype=float) - np.asarray(target, dtype=float)))
-            for point, target in zip(projected, expected)
+            for point, target in zip(projected, expected, strict=False)
         ]
         reprojection_error = float(np.mean(errors)) if errors else 0.0
         return CalibrationQuality(
@@ -376,8 +375,9 @@ class AutomaticCalibrationService:
 
                 # 绘制 projected court lines 高亮
                 from app.vision.courtvision_calibration_engine.court_overlay import court_line_image_points
+
                 projected_lines = court_line_image_points(inverse)
-                for line_name, start, end in projected_lines:
+                for _line_name, start, end in projected_lines:
                     cv2.line(output, start, end, (255, 200, 40), 2)
             except Exception:
                 # 画球场线失败不影响预览图本身
@@ -395,16 +395,22 @@ class AutomaticCalibrationService:
             y_offset = 30
             for line_text in lines:
                 cv2.putText(
-                    output, line_text,
+                    output,
+                    line_text,
                     (12, y_offset),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (255, 255, 255), 1,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
                 cv2.putText(
-                    output, line_text,
+                    output,
+                    line_text,
                     (12, y_offset),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (0, 0, 0), 1,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 0),
+                    1,
                 )
                 y_offset += 22
 

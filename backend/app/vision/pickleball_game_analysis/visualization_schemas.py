@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json  # JSON 序列化（写出清单文件）
+
 # dataclass 相关：asdict（转字典）、dataclass、field（自定义字段）、is_dataclass（判断）。
 from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum  # 枚举类型（处理枚举值的序列化）
@@ -15,6 +16,7 @@ from app.vision.courtvision_calibration_engine.court_units import (
     meters_to_feet,
     normalize_court_unit,
 )
+
 # 二维点类型 Point2D（用于 court_xy 属性返回）。
 from app.vision.pickleball_game_analysis.schemas import Point2D
 
@@ -62,12 +64,14 @@ class VisualizationPoint:
 @dataclass(frozen=True)
 class CourtVisualizationStyleProfile:
     version: str = "court-visual-theme.v1"
-    players: dict[str, str] = field(default_factory=lambda: {
-        "slot_1": "#22D3EE",
-        "slot_2": "#FBBF24",
-        "slot_3": "#A78BFA",
-        "slot_4": "#F97316",
-    })
+    players: dict[str, str] = field(
+        default_factory=lambda: {
+            "slot_1": "#22D3EE",
+            "slot_2": "#FBBF24",
+            "slot_3": "#A78BFA",
+            "slot_4": "#F97316",
+        }
+    )
     ball: str = "#67E8F9"
     bounce: str = "#FB923C"
     outside_player: str = "#94A3B8"
@@ -85,18 +89,14 @@ class CourtTrackSegmentationProfile:
     max_visible_gap_seconds: float = 0.75
 
 
-@dataclass(frozen=True)
-class CourtTrackSegmentationProfile:
-    version: str = "court-track-segmentation.v1"
-    jump_threshold_ft: float = 9.84
-    max_visible_gap_seconds: float = 0.75
-
-
 def load_render_profiles() -> tuple[CourtVisualizationStyleProfile, CourtTrackSegmentationProfile]:
     """从 package resource 加载渲染 profile，不可用时使用内置默认值。"""
     try:
         from importlib.resources import files as resource_files
-        profile_json = resource_files("app.resources").joinpath("court_render_profile.v1.json").read_text(encoding="utf-8")
+
+        profile_json = (
+            resource_files("app.resources").joinpath("court_render_profile.v1.json").read_text(encoding="utf-8")
+        )
         raw = json.loads(profile_json)
     except Exception:
         return CourtVisualizationStyleProfile(), CourtTrackSegmentationProfile()
@@ -158,6 +158,7 @@ class VisualizationResult:
 @dataclass(frozen=True)
 class CourtGeometry:
     """球场物理尺寸（英尺）。"""
+
     court_width_ft: float = 20.0
     court_length_ft: float = 44.0
 
@@ -165,6 +166,7 @@ class CourtGeometry:
 @dataclass(frozen=True)
 class HeatmapCell:
     """热力图网格中的一个单元格。"""
+
     row: int
     col: int
     count: int
@@ -173,6 +175,7 @@ class HeatmapCell:
 @dataclass(frozen=True)
 class VisualGrid:
     """22×10 热力图网格，用于前端 SVG 渲染。"""
+
     rows: int = 22
     cols: int = 10
     max_count: int = 0
@@ -182,6 +185,7 @@ class VisualGrid:
 @dataclass(frozen=True)
 class HeatmapPlayerGrid:
     """热力图中的一个球员图层（独立 22×10 网格 + 展示标签/颜色）。"""
+
     id: str
     label: str
     color: str
@@ -191,6 +195,7 @@ class HeatmapPlayerGrid:
 @dataclass(frozen=True)
 class VisualHeatmaps:
     """热力图数据：合并视图（visual_grid）+ 每球员独立网格。"""
+
     visual_grid: VisualGrid | None = None
     players: list[HeatmapPlayerGrid] = field(default_factory=list)
 
@@ -198,29 +203,32 @@ class VisualHeatmaps:
 @dataclass(frozen=True)
 class ZoneStat:
     """单个球场区域的占用统计。"""
-    zone: str           # kitchen / transition / backcourt
-    label: str          # 网前区 / 过渡区 / 后场区
-    seconds: float      # 有效时间内停留秒数
-    occupancy: float    # seconds / denominator_seconds
+
+    zone: str  # kitchen / transition / backcourt
+    label: str  # 网前区 / 过渡区 / 后场区
+    seconds: float  # 有效时间内停留秒数
+    occupancy: float  # seconds / denominator_seconds
 
 
 @dataclass(frozen=True)
 class ZoneFeedback:
     """网前控制反馈（等级 + 文案）。"""
-    level: str          # excellent / good / insufficient
-    summary: str        # 中文反馈文案
+
+    level: str  # excellent / good / insufficient
+    summary: str  # 中文反馈文案
 
 
 @dataclass(frozen=True)
 class PlayerZoneStats:
     """单名球员的区域占用统计与网前控制指标。"""
+
     id: str
     label: str
     color: str
-    denominator_seconds: float          # 分母：Σ窗口长度 或 总时长
-    tracked_seconds: float              # 窗口内实际跟踪到的时间
-    data_sufficiency: str               # sufficient / insufficient
-    kitchen_control_rate: float         # kitchen_seconds / denominator_seconds
+    denominator_seconds: float  # 分母：Σ窗口长度 或 总时长
+    tracked_seconds: float  # 窗口内实际跟踪到的时间
+    data_sufficiency: str  # sufficient / insufficient
+    kitchen_control_rate: float  # kitchen_seconds / denominator_seconds
     avg_distance_to_kitchen_line_m: float
     zones: list[ZoneStat] = field(default_factory=list)
     feedback: ZoneFeedback | None = None
@@ -229,12 +237,14 @@ class PlayerZoneStats:
 @dataclass(frozen=True)
 class ZoneStats:
     """球员空间热力图数据：每名球员一段统计。"""
+
     players: list[PlayerZoneStats] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class ScatterPlayer:
     """散点图中的一个球员。"""
+
     id: str
     label: str
     color: str
@@ -244,6 +254,7 @@ class ScatterPlayer:
 @dataclass(frozen=True)
 class ScatterPlots:
     """散点图数据：球员 + 球 + 弹跳点。"""
+
     players: list[ScatterPlayer] = field(default_factory=list)
     ball: list[tuple[float, float]] = field(default_factory=list)
     bounces: list[tuple[float, float]] = field(default_factory=list)
@@ -252,6 +263,7 @@ class ScatterPlots:
 @dataclass(frozen=True)
 class PlayerTrajectory:
     """单个球员的轨迹路径。"""
+
     id: str
     label: str
     path: list[tuple[float, float]] = field(default_factory=list)
@@ -265,6 +277,7 @@ class StructuredVisualizationData:
     写入 position_visualizations/structured/ 目录，
     通过 GET /visualization-data 端点暴露给前端。
     """
+
     court: CourtGeometry = field(default_factory=CourtGeometry)
     heatmaps: VisualHeatmaps | None = None
     scatter_plots: ScatterPlots = field(default_factory=ScatterPlots)
@@ -440,7 +453,9 @@ def player_points_from_artifact(payload: dict[str, Any]) -> list[VisualizationPo
     return points
 
 
-def ball_points_from_artifact(payload: dict[str, Any], *, source: str = "cleaned_ball_trajectory") -> list[VisualizationPoint]:
+def ball_points_from_artifact(
+    payload: dict[str, Any], *, source: str = "cleaned_ball_trajectory"
+) -> list[VisualizationPoint]:
     # 从球轨迹 artifact（{samples: [...]}）解析出 VisualizationPoint 列表。
     points: list[VisualizationPoint] = []
     default_unit = artifact_court_unit(payload, "ft")  # 球轨迹默认按英尺
@@ -513,15 +528,17 @@ def player_render_points_from_artifact(payload: dict[str, Any]) -> list[Visualiz
             y = safe_float(sample.get("y_ft"))
             if x is None or y is None:
                 continue
-            points.append(VisualizationPoint(
-                x_ft=x,
-                y_ft=y,
-                frame_index=_safe_int(sample.get("frame_index")),
-                timestamp_seconds=safe_float(sample.get("timestamp_seconds")),
-                label=str(player_id),
-                source=sample.get("source", "render"),
-                confidence=safe_float(sample.get("confidence")),
-            ))
+            points.append(
+                VisualizationPoint(
+                    x_ft=x,
+                    y_ft=y,
+                    frame_index=_safe_int(sample.get("frame_index")),
+                    timestamp_seconds=safe_float(sample.get("timestamp_seconds")),
+                    label=str(player_id),
+                    source=sample.get("source", "render"),
+                    confidence=safe_float(sample.get("confidence")),
+                )
+            )
     return points
 
 
@@ -535,19 +552,21 @@ def _parse_render_samples(samples: list[dict[str, Any]]) -> list[VisualizationPo
         if x is None or y is None:
             continue
         player_id = str(sample.get("player_id", "unknown"))
-        points.append(VisualizationPoint(
-            x_ft=x,
-            y_ft=y,
-            frame_index=_safe_int(sample.get("frame_index")),
-            timestamp_seconds=safe_float(sample.get("timestamp_seconds")),
-            label=player_id,
-            source=sample.get("source", "render"),
-            confidence=safe_float(sample.get("confidence")),
-            projection_status=sample.get("projection_status"),
-            footpoint_method=sample.get("footpoint_method"),
-            projection_confidence=safe_float(sample.get("projection_confidence")),
-            segment_id=sample.get("segment_id"),
-        ))
+        points.append(
+            VisualizationPoint(
+                x_ft=x,
+                y_ft=y,
+                frame_index=_safe_int(sample.get("frame_index")),
+                timestamp_seconds=safe_float(sample.get("timestamp_seconds")),
+                label=player_id,
+                source=sample.get("source", "render"),
+                confidence=safe_float(sample.get("confidence")),
+                projection_status=sample.get("projection_status"),
+                footpoint_method=sample.get("footpoint_method"),
+                projection_confidence=safe_float(sample.get("projection_confidence")),
+                segment_id=sample.get("segment_id"),
+            )
+        )
     return points
 
 
@@ -560,16 +579,25 @@ def serialize_render_trajectory_v2(
         RenderPlayerMetadata,
         RenderSegmentMetadata,
     )
+
     payload: dict[str, Any] = {
         "schema_version": "player-render-trajectory.v2",
         "players": [
             {
                 "player_id": p.player_id if isinstance(p, RenderPlayerMetadata) else p.get("player_id", ""),
                 "render_slot": p.render_slot if isinstance(p, RenderPlayerMetadata) else p.get("render_slot", ""),
-                "initial_side": p.initial_side if isinstance(p, RenderPlayerMetadata) else p.get("initial_side", "unknown"),
-                "dominant_side": p.dominant_side if isinstance(p, RenderPlayerMetadata) else p.get("dominant_side", "unknown"),
-                "first_frame_index": p.first_frame_index if isinstance(p, RenderPlayerMetadata) else p.get("first_frame_index", 0),
-                "source_track_ids": p.source_track_ids if isinstance(p, RenderPlayerMetadata) else p.get("source_track_ids", []),
+                "initial_side": p.initial_side
+                if isinstance(p, RenderPlayerMetadata)
+                else p.get("initial_side", "unknown"),
+                "dominant_side": p.dominant_side
+                if isinstance(p, RenderPlayerMetadata)
+                else p.get("dominant_side", "unknown"),
+                "first_frame_index": p.first_frame_index
+                if isinstance(p, RenderPlayerMetadata)
+                else p.get("first_frame_index", 0),
+                "source_track_ids": p.source_track_ids
+                if isinstance(p, RenderPlayerMetadata)
+                else p.get("source_track_ids", []),
             }
             for p in result.get("players", [])
         ],
@@ -577,19 +605,29 @@ def serialize_render_trajectory_v2(
             {
                 "segment_id": s.segment_id if isinstance(s, RenderSegmentMetadata) else s.get("segment_id", ""),
                 "player_id": s.player_id if isinstance(s, RenderSegmentMetadata) else s.get("player_id", ""),
-                "identity_epoch": s.identity_epoch if isinstance(s, RenderSegmentMetadata) else s.get("identity_epoch", 0),
-                "start_frame_index": s.start_frame_index if isinstance(s, RenderSegmentMetadata) else s.get("start_frame_index", 0),
-                "end_frame_index": s.end_frame_index if isinstance(s, RenderSegmentMetadata) else s.get("end_frame_index", 0),
-                "start_timestamp_seconds": s.start_timestamp_seconds if isinstance(s, RenderSegmentMetadata) else s.get("start_timestamp_seconds", 0),
-                "end_timestamp_seconds": s.end_timestamp_seconds if isinstance(s, RenderSegmentMetadata) else s.get("end_timestamp_seconds", 0),
-                "break_before": s.break_before if isinstance(s, RenderSegmentMetadata) else s.get("break_before", "start"),
+                "identity_epoch": s.identity_epoch
+                if isinstance(s, RenderSegmentMetadata)
+                else s.get("identity_epoch", 0),
+                "start_frame_index": s.start_frame_index
+                if isinstance(s, RenderSegmentMetadata)
+                else s.get("start_frame_index", 0),
+                "end_frame_index": s.end_frame_index
+                if isinstance(s, RenderSegmentMetadata)
+                else s.get("end_frame_index", 0),
+                "start_timestamp_seconds": s.start_timestamp_seconds
+                if isinstance(s, RenderSegmentMetadata)
+                else s.get("start_timestamp_seconds", 0),
+                "end_timestamp_seconds": s.end_timestamp_seconds
+                if isinstance(s, RenderSegmentMetadata)
+                else s.get("end_timestamp_seconds", 0),
+                "break_before": s.break_before
+                if isinstance(s, RenderSegmentMetadata)
+                else s.get("break_before", "start"),
                 "sample_count": s.sample_count if isinstance(s, RenderSegmentMetadata) else s.get("sample_count", 0),
             }
             for s in result.get("segments", [])
         ],
-        "samples": [
-            _sample_to_dict(s) for s in result.get("samples", [])
-        ],
+        "samples": [_sample_to_dict(s) for s in result.get("samples", [])],
     }
     if style_profile is not None:
         payload["style_profile"] = {
@@ -615,6 +653,7 @@ def serialize_render_trajectory_v2(
 
 def _sample_to_dict(sample: Any) -> dict[str, Any]:
     from app.vision.pickleball_game_analysis.court_track_types import RenderFrame
+
     if isinstance(sample, RenderFrame):
         return {
             "sequence_index": sample.sequence_index,
@@ -666,7 +705,7 @@ def canonical_player_number(value: str) -> int | None:
     """解析 canonical 球员 id（Player_1 / player_1）为数字 1..4；非 canonical 返回 None。"""
     for prefix in ("Player_", "player_"):
         if value.startswith(prefix):
-            suffix = value[len(prefix):]
+            suffix = value[len(prefix) :]
             if suffix.isdigit():
                 return int(suffix)
     return None
@@ -676,7 +715,7 @@ def display_player_label(label: str) -> str:
     """把 canonical 球员 id（Player_1 / player_1）映射为展示标签 P1..P4；解析失败回退原始 label。"""
     for prefix in ("Player_", "player_"):
         if label.startswith(prefix):
-            suffix = label[len(prefix):]
+            suffix = label[len(prefix) :]
             if suffix.isdigit():
                 return f"P{suffix}"
     return label

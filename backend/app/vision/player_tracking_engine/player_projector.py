@@ -17,8 +17,10 @@ from app.schemas.tracking import (
     ProjectedTrackPoint,
     Track,
 )
+
 # 单应性变换工具：image_to_court（脚点→球场坐标）、project_point（单点投影）。
 from app.vision.courtvision_calibration_engine.homography import image_to_court, project_point
+
 # 脚点估计器（默认用检测框底边中点）。
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
 

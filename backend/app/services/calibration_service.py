@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -35,6 +35,7 @@ from app.schemas.calibration import (
 )
 from app.services.storage_service import StorageService
 from app.services.video_service import video_service
+
 # 下面是"视觉引擎"里的标定相关工具：
 # - PickleballCourtGeometry / standard_court：标准匹克球场地的几何定义
 # - draw_court_overlay：把球场线画到图像上
@@ -42,7 +43,6 @@ from app.services.video_service import video_service
 from app.vision.courtvision_calibration_engine.court_geometry import PickleballCourtGeometry, standard_court
 from app.vision.courtvision_calibration_engine.court_overlay import draw_court_overlay
 from app.vision.courtvision_calibration_engine.homography import compute_homography, image_to_court, project_point
-
 
 # 内存中的标定结果缓存：calibration_id -> CalibrationResult
 CALIBRATIONS: dict[str, CalibrationResult] = {}
@@ -78,7 +78,7 @@ class CalibrationService:
             court_coordinate_system=CourtCoordinateSystem(**self.court.coordinate_system),
             quality=quality,
             method=payload.method,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         return self._save_calibration(result)
 
@@ -149,7 +149,9 @@ class CalibrationService:
         inverse = calibration.inverse_homography
         if inverse is None:
             # 逆矩阵缺失时现场算一个
-            inverse = HomographyMatrix(values=np.linalg.inv(np.asarray(calibration.homography.values, dtype=float)).tolist())
+            inverse = HomographyMatrix(
+                values=np.linalg.inv(np.asarray(calibration.homography.values, dtype=float)).tolist()
+            )
 
         return ManualCalibrationResponse(
             calibration_id=calibration.id,
@@ -238,7 +240,7 @@ class CalibrationService:
         projected_points = projected if isinstance(projected, list) else [projected]
         errors = [
             float(np.linalg.norm(np.asarray(projected_point, dtype=float) - np.asarray(court_point, dtype=float)))
-            for projected_point, court_point in zip(projected_points, court_points)
+            for projected_point, court_point in zip(projected_points, court_points, strict=False)
         ]
         reprojection_error = float(np.mean(errors)) if errors else 0.0
         # 平均误差 <= 1.0（球场坐标单位）算 ok，否则 warning

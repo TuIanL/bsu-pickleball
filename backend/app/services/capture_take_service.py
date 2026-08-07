@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app.models.capture_take import (
+    CaptureMode,
     CaptureTake,
     CaptureTakeStatus,
-    CaptureMode,
     SourceSessionType,
 )
 
@@ -24,9 +24,9 @@ def _generate_id() -> str:
 
 
 # 初始化采集 take 的时间线：创建初始 non_play 状态和事件
-def initialize_capture_take_timeline(db: Session, take: CaptureTake, *,
-                                      scoring_mode: str = "none",
-                                      scoring_ruleset_version: str | None = None) -> None:
+def initialize_capture_take_timeline(
+    db: Session, take: CaptureTake, *, scoring_mode: str = "none", scoring_ruleset_version: str | None = None
+) -> None:
     """Create the initial non-play state/event for every recording take."""
     from app.services import live_coding_state_service, timeline_event_service
 
@@ -64,7 +64,7 @@ def create_capture_take(
     storage_root: str | None = None,
     session_dir: str | None = None,
 ) -> CaptureTake:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     take = CaptureTake(
         id=_generate_id(),
         field_session_id=field_session_id,
@@ -83,6 +83,7 @@ def create_capture_take(
 
     # 根据场次的 match_format 设置计分模式
     from app.models.field_session import FieldSession
+
     fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
     if fs and fs.match_format in ("singles", "doubles"):
         scoring_mode = "hybrid_21_best_of_5_v1"
@@ -91,9 +92,9 @@ def create_capture_take(
         scoring_mode = "none"
         scoring_ruleset_version = None
 
-    initialize_capture_take_timeline(db, take,
-                                     scoring_mode=scoring_mode,
-                                     scoring_ruleset_version=scoring_ruleset_version)
+    initialize_capture_take_timeline(
+        db, take, scoring_mode=scoring_mode, scoring_ruleset_version=scoring_ruleset_version
+    )
     return take
 
 
@@ -121,9 +122,7 @@ def get_capture_take(db: Session, take_id: str) -> CaptureTake | None:
 
 
 # 按来源会话类型与 ID 查找采集 take（用于去重/关联旧数据）
-def get_capture_take_by_source(
-    db: Session, source_session_type: str, source_session_id: str
-) -> CaptureTake | None:
+def get_capture_take_by_source(db: Session, source_session_type: str, source_session_id: str) -> CaptureTake | None:
     return (
         db.query(CaptureTake)
         .filter(
@@ -153,7 +152,7 @@ def list_capture_takes(
 
 # 将无时区信息的 datetime 补全为 UTC 时区
 def _ensure_aware(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
 # 完成采集 take：置为 completed 并计算时长
@@ -161,7 +160,7 @@ def complete_capture_take(db: Session, take_id: str) -> CaptureTake | None:
     take = get_capture_take(db, take_id)
     if take is None:
         return None
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     take.status = CaptureTakeStatus.completed
     take.ended_at = now
     if take.started_at:
@@ -177,7 +176,7 @@ def fail_capture_take(db: Session, take_id: str) -> CaptureTake | None:
     take = get_capture_take(db, take_id)
     if take is None:
         return None
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     take.status = CaptureTakeStatus.failed
     take.ended_at = now
     if take.started_at:
@@ -193,7 +192,7 @@ def cancel_capture_take(db: Session, take_id: str) -> CaptureTake | None:
     take = get_capture_take(db, take_id)
     if take is None:
         return None
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     take.status = CaptureTakeStatus.canceled
     take.ended_at = now
     if take.started_at:
@@ -209,8 +208,8 @@ def archive_capture_take(db: Session, take_id: str) -> CaptureTake | None:
     take = get_capture_take(db, take_id)
     if take is None:
         return None
-    take.archived_at = datetime.now(timezone.utc)
-    take.updated_at = datetime.now(timezone.utc)
+    take.archived_at = datetime.now(UTC)
+    take.updated_at = datetime.now(UTC)
     db.flush()
     return take
 
@@ -234,7 +233,7 @@ _ACTIVE_TIMEOUT_SEC = 3 * 3600
 
 def get_active_capture_take(db: Session) -> CaptureTake | None:
     """查询当前活跃（starting/recording）的 CaptureTake，超时视为不活跃。"""
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_ACTIVE_TIMEOUT_SEC)
+    cutoff = datetime.now(UTC) - timedelta(seconds=_ACTIVE_TIMEOUT_SEC)
     return (
         db.query(CaptureTake)
         .filter(CaptureTake.status.in_(_ACTIVE_STATUSES))
@@ -264,7 +263,7 @@ def finalize_capture_take(
     if take.status in _TERMINAL_STATUSES:
         return take
 
-    now = ended_at or datetime.now(timezone.utc)
+    now = ended_at or datetime.now(UTC)
     try:
         take.status = CaptureTakeStatus(terminal_status)
     except ValueError:
@@ -275,7 +274,7 @@ def finalize_capture_take(
     elif take.started_at:
         started = _ensure_aware(take.started_at)
         take.duration_ms = int((now - started).total_seconds() * 1000)
-    take.updated_at = datetime.now(timezone.utc)
+    take.updated_at = datetime.now(UTC)
     db.flush()
     return take
 
@@ -291,7 +290,7 @@ def adapt_from_recording_session(
     existing = get_capture_take_by_source(db, "recording", recording_session_id)
     if existing:
         return existing
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     take = CaptureTake(
         id=_generate_id(),
         field_session_id=field_session_id,

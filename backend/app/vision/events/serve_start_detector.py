@@ -39,23 +39,29 @@ from typing import Any  # 任意类型，主要用于调试信息字典
 # ---------------------------------------------------------------------------
 # 事件相关的数据模型（发球信号、候选事件、完整产物、覆盖度诊断、调试引用等）
 from app.schemas.events import (
-    ServeCoverageDiagnostics,      # 各信号源"覆盖度"诊断模型
-    ServeDebugArtifactRefs,        # 调试产物（各种调试文件 URL）的引用
-    ServeEventCandidate,           # 单个发球事件候选
-    ServeEventsArtifact,           # 一次分析的完整发球事件产物
-    ServeSignal,                   # 信号来源类型（tracking/pose/trajectory/roi/video）
-    ServeSignalScores,             # 各类信号的得分（0~1）
+    ServeCoverageDiagnostics,  # 各信号源"覆盖度"诊断模型
+    ServeDebugArtifactRefs,  # 调试产物（各种调试文件 URL）的引用
+    ServeEventCandidate,  # 单个发球事件候选
+    ServeEventsArtifact,  # 一次分析的完整发球事件产物
+    ServeSignal,  # 信号来源类型（tracking/pose/trajectory/roi/video）
+    ServeSignalScores,  # 各类信号的得分（0~1）
 )
+
 # 姿态相关数据模型（姿态叠加帧、姿态对象）
-from app.schemas.pose import PoseOverlayFrame, PoseSubject
+from app.schemas.pose import PoseOverlayFrame
+
 # 追踪相关数据模型（球员轨迹产物、轨迹采样点、追踪结果）
 from app.schemas.tracking import PlayerTrajectoryArtifact, PlayerTrajectorySample, TrackingResult
+
 # 球场单位换算工具（英尺↔米、标准球场尺寸）
 from app.vision.courtvision_calibration_engine.court_units import (
     court_dimensions_for_unit,  # 根据单位返回球场 (宽, 长)
-    feet_value_for_unit,        # 把"英尺值"换算成目标单位下的值
-    normalize_court_unit,       # 把各种单位写法统一成 "m" / "ft" / None
+    feet_value_for_unit,  # 把"英尺值"换算成目标单位下的值
+    normalize_court_unit,  # 把各种单位写法统一成 "m" / "ft" / None
 )
+
+# 共享上肢证据模块（腕/肘关键点索引与运动强度，与击球归属共用）
+from app.vision.pickleball_game_analysis.upper_limb_evidence import upper_limb_motion_by_track
 
 
 @dataclass(frozen=True)
@@ -67,20 +73,20 @@ class ServeStartDetectorConfig:
     frozen=True 表示这个配置对象创建后不可修改，保证检测过程参数稳定。
     """
 
-    min_gap_seconds: float = 6.0             # 两个候选事件之间的最小时间间隔（秒），用于去重
-    pre_roll_seconds: float = 1.5            # 事件发生前多少秒作为"跳转/定位"时间点
-    min_confidence: float = 0.35             # 候选事件的最低置信度门槛
-    baseline_margin_ft: float = 6.0          # 底线判定容差（英尺）：距底线多近才算"在底线附近"
-    pre_still_window_seconds: float = 1.5    # 发球前"静止期"观察窗口长度（秒）
-    pre_still_gap_seconds: float = 0.2       # 静止窗口与发球时刻之间的间隔（秒），避免把动作本身算进静止
-    post_rally_window_seconds: float = 3.0   # 发球后"回合"观察窗口长度（秒）
-    still_speed_threshold: float = 0.8       # 判定"静止"的速度阈值（单位/秒以下算静止）
-    rally_speed_threshold: float = 0.9       # 判定"进入回合"的速度阈值（单位/秒以上算活跃）
+    min_gap_seconds: float = 6.0  # 两个候选事件之间的最小时间间隔（秒），用于去重
+    pre_roll_seconds: float = 1.5  # 事件发生前多少秒作为"跳转/定位"时间点
+    min_confidence: float = 0.35  # 候选事件的最低置信度门槛
+    baseline_margin_ft: float = 6.0  # 底线判定容差（英尺）：距底线多近才算"在底线附近"
+    pre_still_window_seconds: float = 1.5  # 发球前"静止期"观察窗口长度（秒）
+    pre_still_gap_seconds: float = 0.2  # 静止窗口与发球时刻之间的间隔（秒），避免把动作本身算进静止
+    post_rally_window_seconds: float = 3.0  # 发球后"回合"观察窗口长度（秒）
+    still_speed_threshold: float = 0.8  # 判定"静止"的速度阈值（单位/秒以下算静止）
+    rally_speed_threshold: float = 0.9  # 判定"进入回合"的速度阈值（单位/秒以上算活跃）
     arm_speed_peak_threshold: float = 120.0  # 手臂动作峰值阈值（用于把 pose 运动归一到 0~1）
-    roi_speed_peak_threshold: float = 30.0   # ROI/轨迹运动峰值阈值（用于归一到 0~1）
-    pose_smooth_window_frames: int = 5       # 姿态运动平滑的窗口帧数（取前后各半做滑动平均）
-    clip_pre_seconds: float = 2.0            # 候选事件片段（clip）开始前时长（秒）
-    clip_post_seconds: float = 4.0           # 候选事件片段开始后时长（秒）
+    roi_speed_peak_threshold: float = 30.0  # ROI/轨迹运动峰值阈值（用于归一到 0~1）
+    pose_smooth_window_frames: int = 5  # 姿态运动平滑的窗口帧数（取前后各半做滑动平均）
+    clip_pre_seconds: float = 2.0  # 候选事件片段（clip）开始前时长（秒）
+    clip_post_seconds: float = 4.0  # 候选事件片段开始后时长（秒）
 
 
 @dataclass
@@ -92,13 +98,13 @@ class ServeDetectionDebug:
     方便排查为什么某些时刻没被识别为发球。
     """
 
-    candidates: list[dict[str, Any]] = field(default_factory=list)   # 通过筛选的候选样本明细
-    rejected: list[dict[str, Any]] = field(default_factory=list)     # 被拒样本明细（最多保留 200 条）
+    candidates: list[dict[str, Any]] = field(default_factory=list)  # 通过筛选的候选样本明细
+    rejected: list[dict[str, Any]] = field(default_factory=list)  # 被拒样本明细（最多保留 200 条）
     score_series: list[dict[str, Any]] = field(default_factory=list)  # 每个采样点的各信号评分序列
     rejected_buckets: list[dict[str, Any]] = field(default_factory=list)  # 被拒样本按时间分桶统计
-    coverage: dict[str, Any] = field(default_factory=dict)           # 覆盖度诊断（转 dict 形式）
-    thresholds: dict[str, Any] = field(default_factory=dict)         # 本次使用的阈值快照
-    debug_artifacts: ServeDebugArtifactRefs | None = None            # 调试产物文件引用
+    coverage: dict[str, Any] = field(default_factory=dict)  # 覆盖度诊断（转 dict 形式）
+    thresholds: dict[str, Any] = field(default_factory=dict)  # 本次使用的阈值快照
+    debug_artifacts: ServeDebugArtifactRefs | None = None  # 调试产物文件引用
 
 
 @dataclass(frozen=True)
@@ -110,9 +116,9 @@ class _CourtContext:
     后续所有距离比较都基于这个对象，避免反复换算。
     """
 
-    unit: str               # 单位："m" 或 "ft"
-    width: float            # 球场宽度
-    length: float           # 球场长度
+    unit: str  # 单位："m" 或 "ft"
+    width: float  # 球场宽度
+    length: float  # 球场长度
     baseline_margin: float  # 底线判定容差（与 unit 同单位）
 
 
@@ -125,12 +131,12 @@ class _CandidateDraft:
     便于打分、记录调试信息；最终通过 _candidate() 转成对外模型。
     """
 
-    sample: PlayerTrajectorySample          # 触发该候选的轨迹采样点
-    confidence: float                       # 综合置信度
-    reason: str                             # 人类可读的判定理由
-    source_signals: list[ServeSignal]       # 本次判定用到的信号来源
-    detection_mode: str                     # 主检测模式：pose / roi / trajectory
-    signals: ServeSignalScores              # 各信号得分明细
+    sample: PlayerTrajectorySample  # 触发该候选的轨迹采样点
+    confidence: float  # 综合置信度
+    reason: str  # 人类可读的判定理由
+    source_signals: list[ServeSignal]  # 本次判定用到的信号来源
+    detection_mode: str  # 主检测模式：pose / roi / trajectory
+    signals: ServeSignalScores  # 各信号得分明细
 
 
 class ServeStartDetector:
@@ -229,14 +235,19 @@ class ServeStartDetector:
             )
 
         # 预计算每个 track 的姿态运动（手腕/肘部速度），用于 pose 信号打分
-        pose_by_track = self._pose_motion_by_track(pose_frames or [])
+        pose_by_track = upper_limb_motion_by_track(
+            pose_frames or [],
+            smooth_window_frames=self.config.pose_smooth_window_frames,
+        )
 
         # 情况 3（主路径）：既有轨迹数据，又能识别球场单位 → 走"上下文打分"检测
         if samples_by_player and court_context is not None:
             # 3a. 对所有轨迹采样点打分，生成候选草稿
             drafts = self._drafts_from_context(samples_by_player, court_context, pose_by_track)
             # 3b. 把草稿转成正式候选事件，并按置信度/时间做去重
-            context_events = self._dedupe([self._candidate(index + 1, draft, duration_seconds) for index, draft in enumerate(drafts)])
+            context_events = self._dedupe(
+                [self._candidate(index + 1, draft, duration_seconds) for index, draft in enumerate(drafts)]
+            )
             fallback_events = []
             # 3c. 若轨迹在中途就中断了（比 tracking 早很多结束），降级用 tracking/pose 信号补一段候选
             if self._trajectory_ends_before_tracking(player_trajectories, tracking):
@@ -251,7 +262,13 @@ class ServeStartDetector:
             # 3e. 决定整体检测模式（优先 pose → roi → tracking → trajectory）
             detection_mode = self._artifact_detection_mode(events)
             # 3f. 根据是否有候选、是否含 pose 模式，确定最终状态
-            status = "available" if events and any(event.detection_mode == "pose" for event in events) else "partial" if events else "no_candidates"
+            status = (
+                "available"
+                if events and any(event.detection_mode == "pose" for event in events)
+                else "partial"
+                if events
+                else "no_candidates"
+            )
             # 3g. 构建覆盖度诊断
             coverage = self._build_coverage(
                 tracking=tracking,
@@ -412,7 +429,9 @@ class ServeStartDetector:
                     self._record_rejection(sample, "low_confidence", confidence=confidence)
                     continue
                 # 决定主检测模式：优先 pose（手臂峰值更高且>0），其次 roi，否则 trajectory
-                detection_mode = "pose" if arm_score >= roi_score and arm_score > 0 else "roi" if roi_score > 0 else "trajectory"
+                detection_mode = (
+                    "pose" if arm_score >= roi_score and arm_score > 0 else "roi" if roi_score > 0 else "trajectory"
+                )
                 # 打包各信号得分（保留 3 位小数）
                 signals = ServeSignalScores(
                     baseline_position_score=round(baseline_score, 3),
@@ -542,7 +561,7 @@ class ServeStartDetector:
             if len(points) < 3:
                 continue
             # 用连续三点 (前、中、后) 做一次"静止→爆发"判断
-            for previous, current, next_point in zip(points, points[1:], points[2:]):
+            for previous, current, next_point in zip(points, points[1:], points[2:], strict=False):
                 # previous 与 current 之间的速度（静止期）
                 still_speed = self._point_speed(previous, current)
                 # current 与 next 之间的速度（爆发期）
@@ -552,9 +571,7 @@ class ServeStartDetector:
                 pose_score = self._clamp01(pose_motion / max(1.0, self.config.arm_speed_peak_threshold))
                 # 排除：静止期速度过大（一直在动，不是发球准备）；
                 # 或爆发期速度过小且姿态动作也不明显（没有发球动作）
-                if still_speed > 25.0 or (
-                    burst_speed < self.config.roi_speed_peak_threshold and pose_score < 0.35
-                ):
+                if still_speed > 25.0 or (burst_speed < self.config.roi_speed_peak_threshold and pose_score < 0.35):
                     continue
                 # 把爆发速度归一到 0~1 作为 roi 分
                 roi_score = self._clamp01(burst_speed / max(1.0, self.config.roi_speed_peak_threshold * 2))
@@ -600,11 +617,16 @@ class ServeStartDetector:
         """
         result: list[ServeEventCandidate] = []
         for candidate in sorted(candidates, key=lambda item: (-item.confidence, item.timestamp_seconds)):
-            if any(abs(candidate.timestamp_seconds - existing.timestamp_seconds) < self.config.min_gap_seconds for existing in result):
+            if any(
+                abs(candidate.timestamp_seconds - existing.timestamp_seconds) < self.config.min_gap_seconds
+                for existing in result
+            ):
                 continue
             result.append(candidate)
         result.sort(key=lambda item: item.timestamp_seconds)
-        return [candidate.model_copy(update={"id": f"serve-{index:03d}"}) for index, candidate in enumerate(result, start=1)]
+        return [
+            candidate.model_copy(update={"id": f"serve-{index:03d}"}) for index, candidate in enumerate(result, start=1)
+        ]
 
     def _court_context(self, player_trajectories: PlayerTrajectoryArtifact | None) -> _CourtContext | None:
         """
@@ -622,7 +644,9 @@ class ServeStartDetector:
         return _CourtContext(unit=unit, width=dimensions[0], length=dimensions[1], baseline_margin=margin)
 
     @staticmethod
-    def _trajectory_samples(player_trajectories: PlayerTrajectoryArtifact | None) -> dict[str, list[PlayerTrajectorySample]]:
+    def _trajectory_samples(
+        player_trajectories: PlayerTrajectoryArtifact | None,
+    ) -> dict[str, list[PlayerTrajectorySample]]:
         """
         把轨迹产物按球员分组，并过滤/排序：
 
@@ -668,10 +692,10 @@ class ServeStartDetector:
         end = current.timestamp_seconds - self.config.pre_still_gap_seconds
         window = [sample for sample in samples[: index + 1] if start <= sample.timestamp_seconds <= end]
         if len(window) < 2 and index >= 2:
-            window = samples[max(0, index - 2):index]
+            window = samples[max(0, index - 2) : index]
         if len(window) < 2:
             return 0.0
-        speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:])]
+        speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:], strict=False)]
         if not speeds:
             return 0.0
         mean_speed = sum(speeds) / len(speeds)
@@ -699,10 +723,14 @@ class ServeStartDetector:
         """
         active_players = 0
         for samples in samples_by_player.values():
-            window = [sample for sample in samples if timestamp <= sample.timestamp_seconds <= timestamp + self.config.post_rally_window_seconds]
+            window = [
+                sample
+                for sample in samples
+                if timestamp <= sample.timestamp_seconds <= timestamp + self.config.post_rally_window_seconds
+            ]
             if len(window) < 2:
                 continue
-            speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:])]
+            speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:], strict=False)]
             if speeds and sum(speeds) / len(speeds) >= self.config.rally_speed_threshold:
                 active_players += 1
         return self._clamp01(active_players / 2.0)
@@ -731,7 +759,7 @@ class ServeStartDetector:
             if len(window) < 2:
                 continue
             considered += 1
-            speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:])]
+            speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:], strict=False)]
             if speeds and sum(speeds) / len(speeds) <= self.config.still_speed_threshold:
                 waiting += 1
         if considered == 0:
@@ -752,80 +780,6 @@ class ServeStartDetector:
             return 0.0
         raw = track_motion.get(sample.frame_index, 0.0)
         return self._clamp01(raw / max(1.0, self.config.arm_speed_peak_threshold))
-
-    def _pose_motion_by_track(self, pose_frames: list[PoseOverlayFrame]) -> dict[str, dict[int, float]]:
-        """
-        预计算每个 track、每一帧的"手臂运动强度"（0 表示静止）。
-
-        方法：
-          1. 从姿态帧中取出每个 subject 的 4 个关键点（左/右手腕、左/右肘）；
-          2. 按帧顺序，计算相邻帧之间这些关键点的平均速度，取最大值作为该帧运动强度；
-          3. 用滑动平均（pose_smooth_window_frames）平滑，抑制单帧抖动。
-
-        返回：track_id -> { frame_index: 平滑后的运动强度 }。
-        """
-        raw: dict[str, list[tuple[int, float, dict[str, tuple[float, float]]]]] = defaultdict(list)
-        keypoint_names = {"left_wrist", "right_wrist", "left_elbow", "right_elbow"}
-        for frame in pose_frames:
-            for subject in frame.subjects:
-                points = self._subject_points(subject, keypoint_names)
-                if points:
-                    raw[subject.track_id].append((frame.frame_index, frame.timestamp_seconds, points))
-        motion_by_track: dict[str, dict[int, float]] = {}
-        for track_id, items in raw.items():
-            items.sort(key=lambda item: item[1])
-            frame_motion: dict[int, float] = {}
-            previous = None
-            for frame_index, timestamp, points in items:
-                if previous is None:
-                    previous = (timestamp, points)
-                    continue
-                previous_timestamp, previous_points = previous
-                dt = timestamp - previous_timestamp
-                if dt <= 0:
-                    previous = (timestamp, points)
-                    continue
-                speeds = []
-                for name, point in points.items():
-                    previous_point = previous_points.get(name)
-                    if previous_point is None:
-                        continue
-                    speeds.append(hypot(point[0] - previous_point[0], point[1] - previous_point[1]) / dt)
-                frame_motion[frame_index] = max(speeds) if speeds else 0.0
-                previous = (timestamp, points)
-            motion_by_track[track_id] = self._smooth_motion(frame_motion)
-        return motion_by_track
-
-    @staticmethod
-    def _subject_points(subject: PoseSubject, names: set[str]) -> dict[str, tuple[float, float]]:
-        """
-        从一个姿态对象里取出指定名称、且可见、且置信度达标的关键点坐标。
-
-        返回：关键点名 -> (x, y)。只挑出"左手腕/右手腕/左肘/右肘"且可靠的那些。
-        """
-        return {
-            keypoint.name: (keypoint.x, keypoint.y)
-            for keypoint in subject.keypoints
-            if keypoint.name in names and keypoint.visible and keypoint.confidence >= 0.25
-        }
-
-    def _smooth_motion(self, motion: dict[int, float]) -> dict[int, float]:
-        """
-        对每帧运动强度做"以自身为中心"的滑动平均平滑，半径 = pose_smooth_window_frames // 2。
-
-        目的：消除单帧噪声（比如某帧关键点抖动），让运动峰值更平滑可信。
-        """
-        if not motion:
-            return {}
-        items = sorted(motion.items())
-        radius = max(0, self.config.pose_smooth_window_frames // 2)
-        smoothed: dict[int, float] = {}
-        for index, (frame_index, _value) in enumerate(items):
-            start = max(0, index - radius)
-            end = min(len(items), index + radius + 1)
-            values = [value for _frame, value in items[start:end]]
-            smoothed[frame_index] = sum(values) / len(values)
-        return smoothed
 
     @staticmethod
     def _sample_speed(current: PlayerTrajectorySample, next_sample: PlayerTrajectorySample) -> float:

@@ -19,14 +19,14 @@ class BounceDetectorConfig:
     "轨迹是否出现折返（y 方向斜率反转或极值）"来识别弹跳。
     """
 
-    fps: float = 30.0                       # 帧率，用于把"帧间距离"换算成速度（像素/秒）
-    window_size: int = 20                   # 滑动窗口大小（帧）
-    center_offset: int = 10                 # 窗口中心相对窗口末尾的偏移（窗口中心 = 末尾 - 10）
-    min_event_gap_sec: float = 0.45         # 两个弹跳事件之间的最小时间间隔（秒），用于去重
-    min_score: float = 0.34                 # 弹跳得分门槛
-    max_center_velocity: float = 2500.0     # 中心点的速度上限（过快视为不稳定）
-    max_speed_ratio: float = 12.0           # 窗口内峰值速度/中位速度的比值上限
-    court_margin_ft: float = 3.0            # 球场边界外允许的容差（英尺），用于校验弹跳点是否在合理位置
+    fps: float = 30.0  # 帧率，用于把"帧间距离"换算成速度（像素/秒）
+    window_size: int = 20  # 滑动窗口大小（帧）
+    center_offset: int = 10  # 窗口中心相对窗口末尾的偏移（窗口中心 = 末尾 - 10）
+    min_event_gap_sec: float = 0.45  # 两个弹跳事件之间的最小时间间隔（秒），用于去重
+    min_score: float = 0.34  # 弹跳得分门槛
+    max_center_velocity: float = 2500.0  # 中心点的速度上限（过快视为不稳定）
+    max_speed_ratio: float = 12.0  # 窗口内峰值速度/中位速度的比值上限
+    court_margin_ft: float = 3.0  # 球场边界外允许的容差（英尺），用于校验弹跳点是否在合理位置
 
 
 class BounceDetector:
@@ -56,9 +56,13 @@ class BounceDetector:
           4. 得分达标且球场位置合理 → 生成一个候选弹跳事件；
           5. 最后按时间间隔去重。
         """
-        coords = np.array([point.image_xy if point.image_xy is not None else (np.nan, np.nan) for point in points], dtype=np.float32)
+        coords = np.array(
+            [point.image_xy if point.image_xy is not None else (np.nan, np.nan) for point in points], dtype=np.float32
+        )
         velocity = self._velocity(coords)
-        court_coords = np.array([point.court_xy if point.court_xy is not None else (np.nan, np.nan) for point in points], dtype=np.float32)
+        court_coords = np.array(
+            [point.court_xy if point.court_xy is not None else (np.nan, np.nan) for point in points], dtype=np.float32
+        )
         raw_events: list[BounceEvent] = []
 
         # 窗口末尾 end_index 从 window_size-1 开始，逐步右移
@@ -68,11 +72,11 @@ class BounceDetector:
             # 中心索引需落在有效范围内（两端各留 1 帧，避免越界）
             if center_index <= 0 or center_index >= len(points) - 1:
                 continue
-            window = coords[start_index:end_index + 1]
-            window_v = velocity[start_index:end_index + 1]
+            window = coords[start_index : end_index + 1]
+            window_v = velocity[start_index : end_index + 1]
             if np.isnan(window).any() or np.isnan(window_v).any():
                 continue
-            court_window = court_coords[start_index:end_index + 1]
+            court_window = court_coords[start_index : end_index + 1]
             score, diagnostics = self._score_window(
                 window,
                 window_v,
@@ -128,8 +132,8 @@ class BounceDetector:
         normalized = centered / scale
         smooth = self._smooth(window)
         center_point = smooth[center]
-        before = smooth[max(0, center - 5):center]
-        after = smooth[center + 1:min(len(smooth), center + 6)]
+        before = smooth[max(0, center - 5) : center]
+        after = smooth[center + 1 : min(len(smooth), center + 6)]
         if len(before) < 3 or len(after) < 3:
             return 0.0, {}
 
@@ -141,7 +145,7 @@ class BounceDetector:
         deviation = self._point_line_distance(center_point, before_center, after_center)
 
         v_center = float(velocity[center])
-        local_v = velocity[max(0, center - 4):min(len(velocity), center + 5)]
+        local_v = velocity[max(0, center - 4) : min(len(velocity), center + 5)]
         median_v = float(np.nanmedian(local_v))
         peak_v = float(np.nanmax(local_v))
         speed_ratio = peak_v / max(median_v, 1.0)
@@ -156,10 +160,10 @@ class BounceDetector:
 
         # y 方向（图像纵向）分析：弹跳点通常表现为"先上升后下降"的斜率反转，或局部峰/谷
         y = normalized[:, 1]
-        y_slope_in = self._line_slope(np.arange(center + 1), y[:center + 1])
+        y_slope_in = self._line_slope(np.arange(center + 1), y[: center + 1])
         y_slope_out = self._line_slope(np.arange(len(y) - center), y[center:])
         y_reversal = y_slope_in > 0.05 and y_slope_out < -0.05
-        local_y = window[max(0, center - 5):min(len(window), center + 6), 1]
+        local_y = window[max(0, center - 5) : min(len(window), center + 6), 1]
         local_y_peak = window[center, 1] >= np.max(local_y) - 4.0
         local_y_valley = window[center, 1] <= np.min(local_y) + 4.0
         y_extreme = bool(local_y_peak or local_y_valley)
@@ -169,8 +173,8 @@ class BounceDetector:
         if court_window is not None:
             court_smooth = self._smooth(court_window)
             court_center = court_smooth[center]
-            court_before = np.mean(court_smooth[max(0, center - 5):center], axis=0)
-            court_after = np.mean(court_smooth[center + 1:min(len(court_smooth), center + 6)], axis=0)
+            court_before = np.mean(court_smooth[max(0, center - 5) : center], axis=0)
+            court_after = np.mean(court_smooth[center + 1 : min(len(court_smooth), center + 6)], axis=0)
             court_turn = self._angle_between(court_center - court_before, court_after - court_center)
             court_deviation = self._point_line_distance(court_center, court_before, court_after)
 

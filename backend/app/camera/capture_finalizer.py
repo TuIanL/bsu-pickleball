@@ -1,4 +1,5 @@
 """CaptureFinalizer —— 片段合并、校验、Video 注册"""
+
 from __future__ import annotations
 
 import hashlib
@@ -7,13 +8,12 @@ import os
 import subprocess
 import threading
 import uuid
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.database import get_session_factory
-from app.models.media_fragment import MediaFragment, FragmentStatus
-from app.models.track_finalization import TrackFinalization, FinalizationStatus
+from app.models.track_finalization import FinalizationStatus, TrackFinalization
 from app.models.track_timeline_span import TrackTimelineSpan
 
 logger = logging.getLogger(__name__)
@@ -52,10 +52,13 @@ class CaptureFinalizer:
     def __init__(self, finalizer_timeout: int = 600):
         self._timeout = finalizer_timeout
 
-    def finalize_track(self, capture_track_id: str,
-                       fragment_infos: list[dict],
-                       async_mode: bool = False,
-                       capture_take_id: str | None = None) -> TrackFinalizationResult:
+    def finalize_track(
+        self,
+        capture_track_id: str,
+        fragment_infos: list[dict],
+        async_mode: bool = False,
+        capture_take_id: str | None = None,
+    ) -> TrackFinalizationResult:
         valid = []
         for f in fragment_infos:
             path = f.get("file_path", "")
@@ -81,7 +84,8 @@ class CaptureFinalizer:
             t.start()
             return TrackFinalizationResult(
                 capture_track_id=capture_track_id,
-                status="pending", fragment_count=len(valid),
+                status="pending",
+                fragment_count=len(valid),
                 warnings=["合并已在后台进行"],
             )
 
@@ -91,7 +95,8 @@ class CaptureFinalizer:
         if existing and existing.status == FinalizationStatus.completed:
             return TrackFinalizationResult(
                 capture_track_id=capture_track_id,
-                status="reused", video_id=existing.video_id,
+                status="reused",
+                video_id=existing.video_id,
                 output_path=existing.output_path,
                 fragment_count=len(valid),
             )
@@ -114,7 +119,8 @@ class CaptureFinalizer:
                 self._mark_finalization_failed(finalization_id, "concat failed")
                 return TrackFinalizationResult(
                     capture_track_id=capture_track_id,
-                    status="failed", fragment_count=len(valid),
+                    status="failed",
+                    fragment_count=len(valid),
                     warnings=["合并失败"],
                 )
 
@@ -122,7 +128,8 @@ class CaptureFinalizer:
                 self._mark_finalization_failed(finalization_id, "ffprobe validation failed")
                 return TrackFinalizationResult(
                     capture_track_id=capture_track_id,
-                    status="failed", fragment_count=len(valid),
+                    status="failed",
+                    fragment_count=len(valid),
                     warnings=["输出校验失败"],
                 )
 
@@ -136,8 +143,10 @@ class CaptureFinalizer:
 
             return TrackFinalizationResult(
                 capture_track_id=capture_track_id,
-                status="succeeded", video_id=video_id,
-                output_path=str(output_path), fragment_count=len(valid),
+                status="succeeded",
+                video_id=video_id,
+                output_path=str(output_path),
+                fragment_count=len(valid),
             )
         finally:
             if concat_file.exists():
@@ -152,8 +161,12 @@ class CaptureFinalizer:
             manifest_hash = self._compute_manifest_hash(valid)
             existing = self._find_existing_finalization(capture_track_id, manifest_hash)
             if existing and existing.status == FinalizationStatus.completed:
-                set_merge_status(capture_take_id, "completed", "已复用已有合并", {
-                    "video_id": existing.video_id, "output_path": existing.output_path})
+                set_merge_status(
+                    capture_take_id,
+                    "completed",
+                    "已复用已有合并",
+                    {"video_id": existing.video_id, "output_path": existing.output_path},
+                )
                 return
 
             finalization_id = self._create_finalization_record(capture_track_id, manifest_hash)
@@ -182,8 +195,9 @@ class CaptureFinalizer:
                 video_id = self._register_video(output_path, capture_track_id)
                 self._generate_timeline_spans(finalization_id, valid)
                 self._mark_finalization_completed(finalization_id, str(output_path), video_id)
-                set_merge_status(capture_take_id, "completed", "合并完成", {
-                    "video_id": video_id, "output_path": str(output_path)})
+                set_merge_status(
+                    capture_take_id, "completed", "合并完成", {"video_id": video_id, "output_path": str(output_path)}
+                )
             except Exception as e:
                 logger.exception("后台合并失败: %s", e)
                 set_merge_status(capture_take_id, "failed", f"合并异常: {e}")
@@ -203,10 +217,14 @@ class CaptureFinalizer:
     def _find_existing_finalization(self, track_id: str, manifest_hash: str) -> TrackFinalization | None:
         db = get_session_factory()()
         try:
-            return db.query(TrackFinalization).filter(
-                TrackFinalization.capture_track_id == track_id,
-                TrackFinalization.manifest_hash == manifest_hash,
-            ).first()
+            return (
+                db.query(TrackFinalization)
+                .filter(
+                    TrackFinalization.capture_track_id == track_id,
+                    TrackFinalization.manifest_hash == manifest_hash,
+                )
+                .first()
+            )
         finally:
             db.close()
 
@@ -215,7 +233,8 @@ class CaptureFinalizer:
         db = get_session_factory()()
         try:
             f = TrackFinalization(
-                id=fid, capture_track_id=track_id,
+                id=fid,
+                capture_track_id=track_id,
                 manifest_hash=manifest_hash,
                 status=FinalizationStatus.running,
             )
@@ -236,9 +255,9 @@ class CaptureFinalizer:
     def _run_concat(self, manifest: Path, output: Path) -> bool:
         try:
             result = subprocess.run(
-                ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(manifest),
-                 "-c", "copy", "-y", str(output)],
-                capture_output=True, timeout=self._timeout,
+                ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(manifest), "-c", "copy", "-y", str(output)],
+                capture_output=True,
+                timeout=self._timeout,
             )
             return result.returncode == 0 and output.exists() and output.stat().st_size > 0
         except Exception as e:
@@ -248,9 +267,9 @@ class CaptureFinalizer:
     def _validate_output(self, path: Path) -> bool:
         try:
             result = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-print_format", "json",
-                 "-show_format", str(path)],
-                capture_output=True, timeout=10,
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(path)],
+                capture_output=True,
+                timeout=10,
             )
             return result.returncode == 0 and path.exists() and path.stat().st_size > 0
         except Exception:
@@ -259,6 +278,7 @@ class CaptureFinalizer:
     def _register_video(self, path: Path, track_id: str) -> str | None:
         try:
             from app.services.video_service import video_service
+
             vid = video_service.register_recording(
                 file_path=path,
                 original_filename=path.name,
@@ -301,9 +321,18 @@ class CaptureFinalizer:
     def _get_fragment_duration(self, file_path: str) -> int:
         try:
             result = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                 "-of", "default=noprint_wrappers=1:nokey=1", file_path],
-                capture_output=True, timeout=10,
+                [
+                    "ffprobe",
+                    "-v",
+                    "quiet",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    file_path,
+                ],
+                capture_output=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 return int(float(result.stdout.decode().strip()) * 1000)
@@ -318,7 +347,7 @@ class CaptureFinalizer:
             if f:
                 f.status = FinalizationStatus.failed
                 f.error_message = error
-                f.completed_at = datetime.now(timezone.utc)
+                f.completed_at = datetime.now(UTC)
                 db.commit()
         except Exception:
             db.rollback()
@@ -333,7 +362,7 @@ class CaptureFinalizer:
                 f.status = FinalizationStatus.completed
                 f.output_path = output_path
                 f.video_id = video_id
-                f.completed_at = datetime.now(timezone.utc)
+                f.completed_at = datetime.now(UTC)
                 db.commit()
         except Exception:
             db.rollback()

@@ -15,10 +15,13 @@ from starlette.responses import StreamingResponse
 
 # 摄像头登记中心：负责在内存/文件里维护一份"已登记摄像头"的清单
 from app.camera.camera_registry import VIRTUAL_CAMERA_ID, camera_registry
+
 # 摄像头相关的数据模型（请求/响应格式）
 from app.camera.models import CameraCreateRequest, CameraDeleteResponse, CameraInfo, CameraUpdateRequest, ProbeResult
+
 # 预览服务：将摄像头流转换为 MJPEG over HTTP
 from app.camera.preview_service import preview_frames
+
 # 连接探测工具：尝试连上摄像头，返回能否播放、分辨率、帧率等信息
 from app.camera.stream_probe import probe_camera
 
@@ -90,7 +93,9 @@ def update_camera(camera_id: str, payload: CameraUpdateRequest) -> CameraInfo:
         raise HTTPException(status_code=422, detail="摄像头 ID 和名称不能为空")
     if payload.camera_id != camera_id and camera_registry.exists(payload.camera_id):
         raise HTTPException(status_code=409, detail=f"摄像头 {payload.camera_id} 已存在")
-    if session_service.find_active_session(camera_id) is not None or sync_recording_service.is_camera_in_sync_recording(camera_id):
+    if session_service.find_active_session(camera_id) is not None or sync_recording_service.is_camera_in_sync_recording(
+        camera_id
+    ):
         raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 正在录制中，无法修改")
 
     updated = camera_registry.update(camera_id, payload.camera_id.strip(), payload.name.strip())
@@ -178,16 +183,14 @@ def preview_stream(camera_id: str):
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
                     b"Content-Length: " + str(len(jpeg_bytes)).encode() + b"\r\n"
-                    b"\r\n"
-                    + jpeg_bytes
-                    + b"\r\n"
+                    b"\r\n" + jpeg_bytes + b"\r\n"
                 )
         except RuntimeError as exc:
             # 流不可达或读帧失败：记录错误信息
             raise HTTPException(
                 status_code=502,
                 detail=f"摄像头 {camera_id} 预览不可用: {exc}",
-            )
+            ) from exc
 
     return StreamingResponse(
         generate(),

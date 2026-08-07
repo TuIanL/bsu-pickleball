@@ -28,13 +28,23 @@ def db(monkeypatch, tmp_path):
 
 
 def make_take(db, match_format: str = "singles") -> str:
-    field_session = create_field_session(db, FieldSessionCreate(
-        title="hybrid", venue="court", court_name="1", capture_mode="match",
-        match_format=match_format, camera_setup="single",
-    ))
+    field_session = create_field_session(
+        db,
+        FieldSessionCreate(
+            title="hybrid",
+            venue="court",
+            court_name="1",
+            capture_mode="match",
+            match_format=match_format,
+            camera_setup="single",
+        ),
+    )
     take = create_capture_take(
-        db, field_session_id=field_session.id, capture_mode="single",
-        source_session_type="recording", source_session_id=f"hybrid-{match_format}",
+        db,
+        field_session_id=field_session.id,
+        capture_mode="single",
+        source_session_type="recording",
+        source_session_id=f"hybrid-{match_format}",
     )
     db.commit()
     return take.id
@@ -42,8 +52,13 @@ def make_take(db, match_format: str = "singles") -> str:
 
 def run(db, take_id: str, action: str, revision: int, timestamp: int, payload=None):
     return execute_coding_action(
-        db, take_id, action=action, client_action_id=f"{action}-{revision}-{timestamp}",
-        expected_revision=revision, timestamp_ms=timestamp, payload=payload or {},
+        db,
+        take_id,
+        action=action,
+        client_action_id=f"{action}-{revision}-{timestamp}",
+        expected_revision=revision,
+        timestamp_ms=timestamp,
+        payload=payload or {},
     )
 
 
@@ -65,9 +80,18 @@ def test_start_game_requires_initial_server_without_revision_change(db):
 def test_twenty_all_receiver_only_changes_serve_then_server_wins_game(db):
     take_id = make_take(db)
     result = run(db, take_id, "start_game", 0, 1000, {"initial_server_team": "A"})
-    result = run(db, take_id, "correct_score", result["revision"], 2000, {
-        "score_a": 20, "score_b": 20, "server_team": "A",
-    })
+    result = run(
+        db,
+        take_id,
+        "correct_score",
+        result["revision"],
+        2000,
+        {
+            "score_a": 20,
+            "score_b": 20,
+            "server_team": "A",
+        },
+    )
     result = run(db, take_id, "start_next_rally", result["revision"], 3000)
     result = run(db, take_id, "rally_result_b", result["revision"], 4000)
     assert (result["live_state"]["score_a"], result["live_state"]["score_b"]) == (20, 20)
@@ -87,9 +111,18 @@ def test_three_game_wins_complete_match_and_block_next_game(db):
     for game in range(3):
         result = run(db, take_id, "start_game", revision, timestamp, {"initial_server_team": "A"})
         timestamp += 1000
-        result = run(db, take_id, "correct_score", result["revision"], timestamp, {
-            "score_a": 20, "score_b": 0, "server_team": "A",
-        })
+        result = run(
+            db,
+            take_id,
+            "correct_score",
+            result["revision"],
+            timestamp,
+            {
+                "score_a": 20,
+                "score_b": 0,
+                "server_team": "A",
+            },
+        )
         timestamp += 1000
         result = run(db, take_id, "start_next_rally", result["revision"], timestamp)
         timestamp += 1000
@@ -108,9 +141,18 @@ def test_three_game_wins_complete_match_and_block_next_game(db):
 def test_undo_winning_point_restores_open_game(db):
     take_id = make_take(db)
     result = run(db, take_id, "start_game", 0, 1000, {"initial_server_team": "A"})
-    result = run(db, take_id, "correct_score", result["revision"], 2000, {
-        "score_a": 20, "score_b": 0, "server_team": "A",
-    })
+    result = run(
+        db,
+        take_id,
+        "correct_score",
+        result["revision"],
+        2000,
+        {
+            "score_a": 20,
+            "score_b": 0,
+            "server_team": "A",
+        },
+    )
     result = run(db, take_id, "start_next_rally", result["revision"], 3000)
     result = run(db, take_id, "rally_result_a", result["revision"], 4000)
     assert result["live_state"]["games_won_a"] == 1
@@ -124,9 +166,18 @@ def test_undo_winning_point_restores_open_game(db):
 def test_score_correction_to_twenty_one_closes_game(db):
     take_id = make_take(db)
     result = run(db, take_id, "start_game", 0, 1000, {"initial_server_team": "B"})
-    result = run(db, take_id, "correct_score", result["revision"], 2000, {
-        "score_a": 8, "score_b": 21, "server_team": "B",
-    })
+    result = run(
+        db,
+        take_id,
+        "correct_score",
+        result["revision"],
+        2000,
+        {
+            "score_a": 8,
+            "score_b": 21,
+            "server_team": "B",
+        },
+    )
     assert result["live_state"]["games_won_b"] == 1
     assert result["live_state"]["current_game_segment_id"] is None
     assert any(event["event_type"] == "game_end" for event in result["created_events"])

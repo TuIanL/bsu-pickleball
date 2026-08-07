@@ -4,13 +4,13 @@ Revision ID: 9a4b2c8d3e6f
 Revises: e1d0cca8a2e5
 Create Date: 2026-07-15 00:00:00.000000
 """
+
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "9a4b2c8d3e6f"
 down_revision: str | None = "e1d0cca8a2e5"

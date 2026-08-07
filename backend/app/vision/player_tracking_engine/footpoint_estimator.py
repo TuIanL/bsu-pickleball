@@ -44,7 +44,10 @@ class FootpointEstimator:
         # bbox_bottom_center 或 hybrid fallback
         # 进入 bbox fallback 且本应是 pose 方法时，显式标记 pose_unavailable，便于诊断区分
         pose_unavailable = self.method in (
-            "hybrid", "pose_ankle_midpoint", "pose_ankle_single", "knee_extrapolated",
+            "hybrid",
+            "pose_ankle_midpoint",
+            "pose_ankle_single",
+            "knee_extrapolated",
         )
         return self._estimate_from_bbox(bbox_or_track, frame_shape=frame_shape, pose_unavailable=pose_unavailable)
 
@@ -56,8 +59,14 @@ class FootpointEstimator:
         right_ankle = keypoints.get(_RIGHT_ANKLE)
 
         # 优先级 1：双踝中点
-        if (left_ankle and left_ankle.get("confidence", 0) is not None and left_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD
-                and right_ankle and right_ankle.get("confidence", 0) is not None and right_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD):
+        if (
+            left_ankle
+            and left_ankle.get("confidence", 0) is not None
+            and left_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD
+            and right_ankle
+            and right_ankle.get("confidence", 0) is not None
+            and right_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD
+        ):
             return FootpointEstimate(
                 image_footpoint=[
                     float(left_ankle["x"] + right_ankle["x"]) / 2.0,
@@ -69,9 +78,17 @@ class FootpointEstimator:
 
         # 优先级 2：单踝
         single_ankle = None
-        if left_ankle and left_ankle.get("confidence", 0) is not None and left_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD:
+        if (
+            left_ankle
+            and left_ankle.get("confidence", 0) is not None
+            and left_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD
+        ):
             single_ankle = left_ankle
-        elif right_ankle and right_ankle.get("confidence", 0) is not None and right_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD:
+        elif (
+            right_ankle
+            and right_ankle.get("confidence", 0) is not None
+            and right_ankle["confidence"] >= _ANKLE_CONF_THRESHOLD
+        ):
             single_ankle = right_ankle
         if single_ankle is not None:
             return FootpointEstimate(
@@ -83,8 +100,14 @@ class FootpointEstimator:
         # 优先级 3：膝外推
         left_knee = keypoints.get(_LEFT_KNEE)
         right_knee = keypoints.get(_RIGHT_KNEE)
-        if (left_knee and left_knee.get("confidence", 0) is not None and left_knee["confidence"] >= _KNEE_CONF_THRESHOLD
-                and right_knee and right_knee.get("confidence", 0) is not None and right_knee["confidence"] >= _KNEE_CONF_THRESHOLD):
+        if (
+            left_knee
+            and left_knee.get("confidence", 0) is not None
+            and left_knee["confidence"] >= _KNEE_CONF_THRESHOLD
+            and right_knee
+            and right_knee.get("confidence", 0) is not None
+            and right_knee["confidence"] >= _KNEE_CONF_THRESHOLD
+        ):
             knee_mid_x = (left_knee["x"] + right_knee["x"]) / 2.0
             knee_mid_y = (left_knee["y"] + right_knee["y"]) / 2.0
             # 从双膝中点向下外推估算脚点 y
@@ -125,7 +148,9 @@ class FootpointEstimator:
             metadata=metadata or None,
         )
 
-    def _check_near_frame_bottom(self, bbox_y2: float, frame_shape: tuple[int, int] | None, threshold: float = 0.94) -> tuple[bool, bool]:
+    def _check_near_frame_bottom(
+        self, bbox_y2: float, frame_shape: tuple[int, int] | None, threshold: float = 0.94
+    ) -> tuple[bool, bool]:
         if frame_shape is None:
             return False, False
         _, frame_height = frame_shape
@@ -154,7 +179,9 @@ def estimate_footpoint(bbox: BoundingBox | list[float] | tuple[float, float, flo
     return (estimate.image_footpoint[0], estimate.image_footpoint[1])
 
 
-def _bbox_values(bbox_or_track: BoundingBox | Track | list[float] | tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+def _bbox_values(
+    bbox_or_track: BoundingBox | Track | list[float] | tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     if isinstance(bbox_or_track, Track):
         x1, y1, x2, y2 = bbox_or_track.bbox
     elif isinstance(bbox_or_track, BoundingBox):

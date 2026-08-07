@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
@@ -18,6 +17,7 @@ router = APIRouter(prefix="/api/storage", tags=["storage"])
 
 class StoragePathRequest(BaseModel):
     """存储路径验证请求体。"""
+
     path: str
 
 
@@ -26,17 +26,26 @@ def _run_picker() -> str | None:
     system = platform.system()
     if system == "Darwin":
         result = subprocess.run(
-            ["osascript", "-e", "POSIX path of (choose folder with prompt \"选择录制保存位置\")"],
-            capture_output=True, text=True, timeout=120, check=False,
+            ["osascript", "-e", 'POSIX path of (choose folder with prompt "选择录制保存位置")'],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
         )
         return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
     if system == "Windows":
-        script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){ $d.SelectedPath }"
-        result = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=120, check=False)
+        script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){ $d.SelectedPath }"  # noqa: E501
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=120, check=False
+        )
         return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
     for command in ("zenity", "kdialog"):
         if shutil.which(command):
-            args = [command, "--file-selection", "--directory", "--title=选择录制保存位置"] if command == "zenity" else [command, "--getexistingdirectory", str(Path.home())]
+            args = (
+                [command, "--file-selection", "--directory", "--title=选择录制保存位置"]
+                if command == "zenity"
+                else [command, "--getexistingdirectory", str(Path.home())]
+            )
             result = subprocess.run(args, capture_output=True, text=True, timeout=120, check=False)
             return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
     raise RuntimeError("当前系统没有可用的原生目录选择器")
@@ -46,6 +55,7 @@ def _run_picker() -> str | None:
 def get_default_storage() -> dict[str, str]:
     """获取系统默认存储根目录。"""
     from app.core.config import get_settings
+
     return {"storage_root": str(get_settings().resolved_recordings_dir), "source": "default"}
 
 

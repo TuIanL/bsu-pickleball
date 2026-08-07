@@ -3,33 +3,35 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.camera.capture_finalizer import get_merge_status
+from app.database import get_db
+from app.models.field_session import FieldSession
+from app.schemas.capture_runtime_status import CaptureTakeRuntimeStatus
 from app.schemas.coding_actions import (
+    CaptureTakeSummary,
     CodingActionRequest,
     CodingActionResponse,
     LiveCodingStateResponse,
-    CaptureTakeSummary,
 )
-from app.services import coding_actions_service
-from app.services import capture_take_service
-from app.services import capture_runtime_status_service
-from app.models.field_session import FieldSession
-from app.schemas.capture_runtime_status import CaptureTakeRuntimeStatus
-from datetime import datetime, timezone
+from app.services import capture_runtime_status_service, capture_take_service, coding_actions_service
+
 
 def _ensure_utc(value: datetime | None) -> datetime | None:
     """确保 datetime 带 UTC 时区信息。"""
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-from app.services import live_coding_state_service as state_svc
-from app.services import capture_segment_service as seg_svc
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+from app.services import capture_segment_service as seg_svc  # noqa: E402
+from app.services import live_coding_state_service as state_svc  # noqa: E402
 
 router = APIRouter(prefix="/api/capture-takes", tags=["capture-takes"])
 
@@ -43,7 +45,7 @@ def get_active_capture_take(db: Session = Depends(get_db)):
 
     fs = db.query(FieldSession).filter(FieldSession.id == take.field_session_id).first()
     started = _ensure_utc(take.started_at)
-    server_now = datetime.now(timezone.utc)
+    server_now = datetime.now(UTC)
 
     return {
         "takeId": take.id,
@@ -79,12 +81,14 @@ def force_finalize_active_capture_take(db: Session = Depends(get_db)):
     try:
         if source_session_type == "sync_recording":
             from app.camera.sync_recorder_service import sync_recording_service
+
             try:
                 sync_recording_service.cancel_session(source_session_id)
             except Exception:
                 pass
         else:
             from app.camera.session_service import session_service
+
             try:
                 session_service.cancel_session(source_session_id)
             except Exception:
@@ -93,6 +97,8 @@ def force_finalize_active_capture_take(db: Session = Depends(get_db)):
         pass
 
     return {"ok": True, "detail": f"已强制终止录制 {take_id}"}
+
+
 @router.post("/{capture_take_id}/coding-actions", response_model=CodingActionResponse)
 def execute_action(
     capture_take_id: str,
@@ -113,21 +119,25 @@ def execute_action(
     except ValueError as exc:
         msg = str(exc)
         if "duplicate_action_mismatched_payload" in msg:
-            raise HTTPException(status_code=409, detail="客户动作 ID 重复但 payload 不匹配")
+            raise HTTPException(status_code=409, detail="客户动作 ID 重复但 payload 不匹配") from exc
         if "revision_conflict" in msg:
-            raise HTTPException(status_code=409, detail="revision 冲突")
+            raise HTTPException(status_code=409, detail="revision 冲突") from exc
         if "不在录制中" in msg:
-            raise HTTPException(status_code=400, detail=msg)
-        raise HTTPException(status_code=400, detail=msg)
+            raise HTTPException(status_code=400, detail=msg) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
 
     if "error" in result:
-        raise HTTPException(status_code=409, detail={
-            "error": result["error"],
-            "current_revision": result["current_revision"],
-            "live_state": result["live_state"],
-        })
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": result["error"],
+                "current_revision": result["current_revision"],
+                "live_state": result["live_state"],
+            },
+        )
 
     from app.services.capture_archive_service import snapshot_capture_timeline
+
     snapshot_capture_timeline(db, capture_take_id)
 
     return CodingActionResponse(**result)
@@ -159,7 +169,9 @@ def get_live_state(
         score_b=getattr(state, "score_b", 0),
         scoring_mode=getattr(state, "scoring_mode", "none"),
         scoring_ruleset_version=getattr(state, "scoring_ruleset_version", None),
-        recent_results=json.loads(state.recent_results) if isinstance(state.recent_results, str) else (state.recent_results or []),
+        recent_results=json.loads(state.recent_results)
+        if isinstance(state.recent_results, str)
+        else (state.recent_results or []),
         games_won_a=getattr(state, "games_won_a", 0),
         games_won_b=getattr(state, "games_won_b", 0),
         scoring_phase=getattr(state, "scoring_phase", "rally"),
@@ -220,7 +232,8 @@ def get_capture_take_runtime_status(
     不接受任意客户端路径；CaptureTake 不存在时返回 404。
     """
     status = capture_runtime_status_service.get_capture_take_runtime_status(
-        db, capture_take_id,
+        db,
+        capture_take_id,
     )
     if status is None:
         raise HTTPException(status_code=404, detail="CaptureTake 不存在")
@@ -237,10 +250,14 @@ def list_segments(
     segs = seg_svc.list_segments(db, capture_take_id, segment_type=segment_type)
     return [
         {
-            "id": s.id, "segment_type": s.segment_type.value,
-            "ordinal": s.ordinal, "label": s.label,
-            "start_ms": s.start_ms, "end_ms": s.end_ms,
-            "status": s.status.value, "source": s.source.value,
+            "id": s.id,
+            "segment_type": s.segment_type.value,
+            "ordinal": s.ordinal,
+            "label": s.label,
+            "start_ms": s.start_ms,
+            "end_ms": s.end_ms,
+            "status": s.status.value,
+            "source": s.source.value,
             "is_highlight": s.is_highlight,
             "parent_segment_id": s.parent_segment_id,
         }

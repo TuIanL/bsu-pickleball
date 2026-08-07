@@ -10,7 +10,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class Detection:
     y1: float
     x2: float
     y2: float
-    track_hint: Optional[str] = None
+    track_hint: str | None = None
 
 
 class DetectorAdapter(Protocol):

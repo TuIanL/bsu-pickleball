@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from secrets import token_urlsafe
 from uuid import uuid4
@@ -23,15 +23,20 @@ from app.models.track_finalization import FinalizationStatus, TrackFinalization
 from app.models.vidat_annotation import VidatAnnotationPackage, VidatImportAudit, VidatImportPreview
 from app.services.video_service import video_service
 
-
 VIDAT_SCHEMA_VERSION = "pickleball-vidat-v1"
 EVENT_LABELS = {
-    "set_start": (1, "盘开始", "#E74C3C"), "set_end": (2, "盘结束", "#C0392B"),
-    "game_start": (3, "局开始", "#3498DB"), "game_end": (4, "局结束", "#2980B9"),
-    "rally_start": (5, "回合", "#2ECC71"), "rally_end": (6, "回合结果", "#27AE60"),
-    "score_correction": (7, "比分修正", "#F39C12"), "timeout_start": (8, "暂停", "#95A5A6"),
-    "non_play_start": (9, "非比赛", "#BDC3C7"), "side_change": (10, "换边", "#9B59B6"),
-    "session_note": (11, "备注", "#7F8C8D"), "custom_marker": (12, "自定义标记", "#888888"),
+    "set_start": (1, "盘开始", "#E74C3C"),
+    "set_end": (2, "盘结束", "#C0392B"),
+    "game_start": (3, "局开始", "#3498DB"),
+    "game_end": (4, "局结束", "#2980B9"),
+    "rally_start": (5, "回合", "#2ECC71"),
+    "rally_end": (6, "回合结果", "#27AE60"),
+    "score_correction": (7, "比分修正", "#F39C12"),
+    "timeout_start": (8, "暂停", "#95A5A6"),
+    "non_play_start": (9, "非比赛", "#BDC3C7"),
+    "side_change": (10, "换边", "#9B59B6"),
+    "session_note": (11, "备注", "#7F8C8D"),
+    "custom_marker": (12, "自定义标记", "#888888"),
 }
 
 
@@ -57,14 +62,18 @@ def _validate_hierarchy(operations: list[dict]) -> None:
     level = {"set_start": 0, "game_start": 1, "rally_start": 2}
     ranges = [item for item in operations if item["event_type"] in level]
     for event_type in level:
-        same = sorted((item for item in ranges if item["event_type"] == event_type), key=lambda x: (x["start_ms"], x["end_ms"]))
-        for previous, current in zip(same, same[1:]):
+        same = sorted(
+            (item for item in ranges if item["event_type"] == event_type), key=lambda x: (x["start_ms"], x["end_ms"])
+        )
+        for previous, current in zip(same, same[1:], strict=False):
             if current["start_ms"] < previous["end_ms"]:
                 raise VidatPackageError(f"{event_type} 范围存在同层重叠")
     for child_type, parent_type in (("game_start", "set_start"), ("rally_start", "game_start")):
         parents = [item for item in ranges if item["event_type"] == parent_type]
         for child in (item for item in ranges if item["event_type"] == child_type):
-            if parents and not any(parent["start_ms"] <= child["start_ms"] and child["end_ms"] <= parent["end_ms"] for parent in parents):
+            if parents and not any(
+                parent["start_ms"] <= child["start_ms"] and child["end_ms"] <= parent["end_ms"] for parent in parents
+            ):
                 raise VidatPackageError(f"{child_type} 未完整包含在 {parent_type} 范围内")
 
 
@@ -74,32 +83,88 @@ def _coding_actions(operations: list[dict]) -> list[dict]:
         event_type, payload = operation["event_type"], operation["payload"]
         common = {"operation_index": operation["index"], "event_ids": operation["event_ids"]}
         if event_type == "set_start":
-            actions.extend([{"action": "start_set", "timestamp_ms": operation["start_ms"], "payload": common},
-                            {"action": "end_set", "timestamp_ms": operation["end_ms"], "payload": common}])
+            actions.extend(
+                [
+                    {"action": "start_set", "timestamp_ms": operation["start_ms"], "payload": common},
+                    {"action": "end_set", "timestamp_ms": operation["end_ms"], "payload": common},
+                ]
+            )
         elif event_type == "game_start":
-            actions.extend([{"action": "start_game", "timestamp_ms": operation["start_ms"], "payload": {**common, "initial_server_team": payload.get("initial_server_team", "A")}},
-                            {"action": "end_game", "timestamp_ms": operation["end_ms"], "payload": common}])
+            actions.extend(
+                [
+                    {
+                        "action": "start_game",
+                        "timestamp_ms": operation["start_ms"],
+                        "payload": {**common, "initial_server_team": payload.get("initial_server_team", "A")},
+                    },
+                    {"action": "end_game", "timestamp_ms": operation["end_ms"], "payload": common},
+                ]
+            )
         elif event_type == "rally_start":
             validity, winner = payload.get("validity", "valid"), payload.get("winner")
             result = "rally_replay" if validity == "replay" else f"rally_result_{str(winner or 'A').lower()}"
-            actions.extend([{"action": "start_next_rally", "timestamp_ms": operation["start_ms"], "payload": common},
-                            {"action": result, "timestamp_ms": operation["end_ms"], "payload": common}])
+            actions.extend(
+                [
+                    {"action": "start_next_rally", "timestamp_ms": operation["start_ms"], "payload": common},
+                    {"action": result, "timestamp_ms": operation["end_ms"], "payload": common},
+                ]
+            )
         elif event_type == "score_correction":
             score = payload.get("score_after", payload)
-            actions.append({"action": "correct_score", "timestamp_ms": operation["start_ms"], "payload": {
-                **common, "score_a": score.get("a", score.get("score_a")), "score_b": score.get("b", score.get("score_b")),
-                "server_team": score.get("server_team"), "reason": payload.get("reason", "Vidat 导入")}})
+            actions.append(
+                {
+                    "action": "correct_score",
+                    "timestamp_ms": operation["start_ms"],
+                    "payload": {
+                        **common,
+                        "score_a": score.get("a", score.get("score_a")),
+                        "score_b": score.get("b", score.get("score_b")),
+                        "server_team": score.get("server_team"),
+                        "reason": payload.get("reason", "Vidat 导入"),
+                    },
+                }
+            )
         elif event_type in {"session_note", "custom_marker", "side_change"}:
             action = "change_side" if event_type == "side_change" else "add_note"
-            actions.append({"action": action, "timestamp_ms": operation["start_ms"], "payload": {
-                **common, "event_type": event_type, "label": operation["label"], "note": operation["note"], "payload": payload}})
-    priority = {"start_set": 0, "start_game": 1, "start_next_rally": 2, "correct_score": 3,
-                "rally_result_a": 4, "rally_result_b": 4, "rally_replay": 4, "end_game": 5, "end_set": 6}
-    return sorted(actions, key=lambda item: (item["timestamp_ms"], priority.get(item["action"], 3), item["payload"]["operation_index"]))
+            actions.append(
+                {
+                    "action": action,
+                    "timestamp_ms": operation["start_ms"],
+                    "payload": {
+                        **common,
+                        "event_type": event_type,
+                        "label": operation["label"],
+                        "note": operation["note"],
+                        "payload": payload,
+                    },
+                }
+            )
+    priority = {
+        "start_set": 0,
+        "start_game": 1,
+        "start_next_rally": 2,
+        "correct_score": 3,
+        "rally_result_a": 4,
+        "rally_result_b": 4,
+        "rally_replay": 4,
+        "end_game": 5,
+        "end_set": 6,
+    }
+    return sorted(
+        actions,
+        key=lambda item: (item["timestamp_ms"], priority.get(item["action"], 3), item["payload"]["operation_index"]),
+    )
 
 
 def _score_summary(coding_actions: list[dict], ruleset: str | None = None) -> dict:
-    from app.services.scoring_fsm import HYBRID_21_RULESET, ScoringAction, ScoringState, initial_game_state, reduce_scoring_state_for_ruleset
+    from app.services.scoring_fsm import (
+        HYBRID_21_RULESET,
+        ScoringAction,
+        ScoringState,
+        initial_game_state,
+        reduce_scoring_state_for_ruleset,
+    )
+
     ruleset = ruleset or HYBRID_21_RULESET
     state = ScoringState(server_team=None, score_a=0, score_b=0)
     affected = []
@@ -109,22 +174,51 @@ def _score_summary(coding_actions: list[dict], ruleset: str | None = None) -> di
             if action == "start_game":
                 state = initial_game_state(state, payload.get("initial_server_team", "A"))
             elif action in {"rally_result_a", "rally_result_b"}:
-                state = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", winner=action[-1].upper(), validity="valid"), ruleset)
-                affected.append({"timestamp_ms": item["timestamp_ms"], "score_a": state.score_a, "score_b": state.score_b,
-                                 "games_won_a": state.games_won_a, "games_won_b": state.games_won_b})
+                state = reduce_scoring_state_for_ruleset(
+                    state, ScoringAction(type="rally_result", winner=action[-1].upper(), validity="valid"), ruleset
+                )
+                affected.append(
+                    {
+                        "timestamp_ms": item["timestamp_ms"],
+                        "score_a": state.score_a,
+                        "score_b": state.score_b,
+                        "games_won_a": state.games_won_a,
+                        "games_won_b": state.games_won_b,
+                    }
+                )
             elif action == "rally_replay":
-                state = reduce_scoring_state_for_ruleset(state, ScoringAction(type="rally_result", validity="replay"), ruleset)
+                state = reduce_scoring_state_for_ruleset(
+                    state, ScoringAction(type="rally_result", validity="replay"), ruleset
+                )
             elif action == "correct_score":
-                state = reduce_scoring_state_for_ruleset(state, ScoringAction(type="correct_score", target_server_team=payload["server_team"],
-                    target_score_a=payload["score_a"], target_score_b=payload["score_b"]), ruleset)
+                state = reduce_scoring_state_for_ruleset(
+                    state,
+                    ScoringAction(
+                        type="correct_score",
+                        target_server_team=payload["server_team"],
+                        target_score_a=payload["score_a"],
+                        target_score_b=payload["score_b"],
+                    ),
+                    ruleset,
+                )
         except (TypeError, ValueError) as exc:
             raise VidatPackageError(f"候选计分动作无法重放: {exc}") from exc
-    return {"affected_scores": affected, "final": {"score_a": state.score_a, "score_b": state.score_b,
-        "games_won_a": state.games_won_a, "games_won_b": state.games_won_b, "match_status": state.match_status,
-        "match_winner": state.match_winner}}
+    return {
+        "affected_scores": affected,
+        "final": {
+            "score_a": state.score_a,
+            "score_b": state.score_b,
+            "games_won_a": state.games_won_a,
+            "games_won_b": state.games_won_b,
+            "match_status": state.match_status,
+            "match_winner": state.match_winner,
+        },
+    }
 
 
-def parse_vidat_annotation(package: VidatAnnotationPackage, annotation: dict, *, validate_hierarchy: bool = True) -> list[dict]:
+def parse_vidat_annotation(
+    package: VidatAnnotationPackage, annotation: dict, *, validate_hierarchy: bool = True
+) -> list[dict]:
     """校验 Vidat action，并转换成稳定排序的语义操作。"""
     manifest = json.loads(package.manifest_json)
     identity = annotation.get("pickleball_manifest") or {}
@@ -147,9 +241,15 @@ def parse_vidat_annotation(package: VidatAnnotationPackage, annotation: dict, *,
             # Vidat requires a default action as the first annotation. It is
             # a visual baseline, not a project timeline event.
             continue
-        if (action_id not in allowed_ids or isinstance(start, bool) or isinstance(end, bool)
-                or not isinstance(start, (int, float)) or not isinstance(end, (int, float))
-                or start < 0 or end <= start):
+        if (
+            action_id not in allowed_ids
+            or isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+            or start < 0
+            or end <= start
+        ):
             raise VidatPackageError(f"第 {index + 1} 个 action 的标签或时间范围无效")
         max_seconds = float(video.get("duration") or manifest["video"]["duration"])
         if end > max_seconds + 0.001:
@@ -164,9 +264,18 @@ def parse_vidat_annotation(package: VidatAnnotationPackage, annotation: dict, *,
             raise VidatPackageError(f"第 {index + 1} 个 action payload 无效")
         if meta["event_type"] == "rally_start" and payload.get("winner") not in (None, "A", "B"):
             raise VidatPackageError(f"第 {index + 1} 个回合胜者必须为 A、B 或空")
-        operations.append({"index": index, "event_ids": meta.get("event_ids") or [], "event_type": meta["event_type"],
-            "start_ms": round(float(start) * 1000), "end_ms": round(float(end) * 1000),
-            "payload": payload, "label": meta.get("label", ""), "note": meta.get("note", "")})
+        operations.append(
+            {
+                "index": index,
+                "event_ids": meta.get("event_ids") or [],
+                "event_type": meta["event_type"],
+                "start_ms": round(float(start) * 1000),
+                "end_ms": round(float(end) * 1000),
+                "payload": payload,
+                "label": meta.get("label", ""),
+                "note": meta.get("note", ""),
+            }
+        )
     operations = sorted(operations, key=lambda item: (item["start_ms"], item["end_ms"], item["index"]))
     if validate_hierarchy:
         _validate_hierarchy(operations)
@@ -183,7 +292,9 @@ def create_import_preview(db: Session, package: VidatAnnotationPackage, annotati
         old = old_by_id.pop(tuple(operation["event_ids"]), None)
         if old is None:
             changes.append({"kind": "added", "after": operation})
-        elif {key: operation[key] for key in ("event_type", "start_ms", "end_ms", "payload")} != {key: old[key] for key in ("event_type", "start_ms", "end_ms", "payload")}:
+        elif {key: operation[key] for key in ("event_type", "start_ms", "end_ms", "payload")} != {
+            key: old[key] for key in ("event_type", "start_ms", "end_ms", "payload")
+        }:
             winner_changed = old["payload"].get("winner") != operation["payload"].get("winner")
             score_changed = old["event_type"] == "score_correction" and old["payload"] != operation["payload"]
             if old["event_type"] != operation["event_type"]:
@@ -201,45 +312,83 @@ def create_import_preview(db: Session, package: VidatAnnotationPackage, annotati
     canonical = _canonical_json(annotation)
     coding_actions = _coding_actions(operations)
     from app.models.live_coding_state import LiveCodingState
+
     live_state = db.get(LiveCodingState, package.capture_take_id)
     ruleset = getattr(live_state, "scoring_ruleset_version", None)
     summary = _score_summary(coding_actions, ruleset)
     conflicts = []
     if coding_actions:
         from app.models.capture_coding_action import CaptureCodingAction
+
         start_ms = min(item["timestamp_ms"] for item in coding_actions)
         end_ms = max(item["timestamp_ms"] for item in coding_actions)
-        manual = db.query(CaptureCodingAction).filter(
-            CaptureCodingAction.capture_take_id == package.capture_take_id,
-            CaptureCodingAction.timestamp_ms.between(start_ms, end_ms),
-            CaptureCodingAction.annotation_package_id.is_(None),
-        ).all()
-        conflicts = [{"coding_action_id": item.id, "action": item.action_type, "timestamp_ms": item.timestamp_ms,
-                      "resolution": "preserved"} for item in manual]
-    preview = VidatImportPreview(id=f"vip_{uuid4().hex[:12]}", package_id=package.id,
-        content_hash=hashlib.sha256(canonical.encode()).hexdigest(), token=token_urlsafe(24),
+        manual = (
+            db.query(CaptureCodingAction)
+            .filter(
+                CaptureCodingAction.capture_take_id == package.capture_take_id,
+                CaptureCodingAction.timestamp_ms.between(start_ms, end_ms),
+                CaptureCodingAction.annotation_package_id.is_(None),
+            )
+            .all()
+        )
+        conflicts = [
+            {
+                "coding_action_id": item.id,
+                "action": item.action_type,
+                "timestamp_ms": item.timestamp_ms,
+                "resolution": "preserved",
+            }
+            for item in manual
+        ]
+    preview = VidatImportPreview(
+        id=f"vip_{uuid4().hex[:12]}",
+        package_id=package.id,
+        content_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+        token=token_urlsafe(24),
         annotation_json=canonical,
-        preview_json=json.dumps({"operations": operations, "coding_actions": coding_actions, "changes": changes,
-                                 "blocking_errors": [], "conflicts": conflicts, "score_summary": summary}, ensure_ascii=False),
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30))
+        preview_json=json.dumps(
+            {
+                "operations": operations,
+                "coding_actions": coding_actions,
+                "changes": changes,
+                "blocking_errors": [],
+                "conflicts": conflicts,
+                "score_summary": summary,
+            },
+            ensure_ascii=False,
+        ),
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
     db.add(preview)
     db.flush()
     return preview
 
 
-def confirm_import_preview(db: Session, package: VidatAnnotationPackage, token: str, annotation: dict | None = None) -> VidatImportAudit:
-    preview = db.query(VidatImportPreview).filter(
-        VidatImportPreview.package_id == package.id, VidatImportPreview.token == token,
-    ).first()
-    now = datetime.now(timezone.utc)
-    if preview is None or preview.consumed or preview.expires_at.replace(tzinfo=timezone.utc) <= now:
+def confirm_import_preview(
+    db: Session, package: VidatAnnotationPackage, token: str, annotation: dict | None = None
+) -> VidatImportAudit:
+    preview = (
+        db.query(VidatImportPreview)
+        .filter(
+            VidatImportPreview.package_id == package.id,
+            VidatImportPreview.token == token,
+        )
+        .first()
+    )
+    now = datetime.now(UTC)
+    if preview is None or preview.consumed or preview.expires_at.replace(tzinfo=UTC) <= now:
         raise VidatPackageError("确认令牌无效、已使用或已过期")
     submitted = _canonical_json(annotation) if annotation is not None else preview.annotation_json
     if hashlib.sha256(submitted.encode()).hexdigest() != preview.content_hash:
         raise VidatPackageError("确认内容与预览不一致，请重新生成预览")
     snapshot = json.loads(preview.preview_json)
-    audit = VidatImportAudit(id=f"via_{uuid4().hex[:12]}", package_id=package.id, preview_id=preview.id,
-        content_hash=preview.content_hash, operations_json=json.dumps(snapshot["operations"], ensure_ascii=False))
+    audit = VidatImportAudit(
+        id=f"via_{uuid4().hex[:12]}",
+        package_id=package.id,
+        preview_id=preview.id,
+        content_hash=preview.content_hash,
+        operations_json=json.dumps(snapshot["operations"], ensure_ascii=False),
+    )
     db.add(audit)
     db.flush()
     _apply_import_plan(db, package, audit, snapshot)
@@ -264,26 +413,44 @@ def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: Vida
     if take is None:
         raise VidatPackageError("CaptureTake 不存在")
     # 只替换该包上一次导入的投影，其他人工/算法数据保留。
-    db.query(CaptureCodingAction).filter(CaptureCodingAction.annotation_package_id == package.id).delete(synchronize_session=False)
-    db.query(SessionTimelineEvent).filter(SessionTimelineEvent.annotation_package_id == package.id).delete(synchronize_session=False)
-    db.query(CaptureSegment).filter(CaptureSegment.annotation_package_id == package.id).delete(synchronize_session=False)
+    db.query(CaptureCodingAction).filter(CaptureCodingAction.annotation_package_id == package.id).delete(
+        synchronize_session=False
+    )
+    db.query(SessionTimelineEvent).filter(SessionTimelineEvent.annotation_package_id == package.id).delete(
+        synchronize_session=False
+    )
+    db.query(CaptureSegment).filter(CaptureSegment.annotation_package_id == package.id).delete(
+        synchronize_session=False
+    )
 
     base_revision = take.revision
     for offset, item in enumerate(plan["coding_actions"]):
         payload = item["payload"]
-        record = CaptureCodingAction(id=f"ca_vidat_{audit.id[-8:]}_{offset:04d}", capture_take_id=take.id,
-            client_action_id=f"vidat:{package.id}:{audit.id}:{offset}", action_type=item["action"],
-            timestamp_ms=item["timestamp_ms"], payload_json=json.dumps(payload, ensure_ascii=False),
-            request_hash=compute_request_hash(item["action"], payload), status=CodingActionStatus.executed,
-            revision_before=base_revision + offset, revision_after=base_revision + offset + 1,
-            result_json="{}", completed_at=datetime.now(timezone.utc), source="vidat_import",
-            annotation_package_id=package.id, vidat_import_audit_id=audit.id)
+        record = CaptureCodingAction(
+            id=f"ca_vidat_{audit.id[-8:]}_{offset:04d}",
+            capture_take_id=take.id,
+            client_action_id=f"vidat:{package.id}:{audit.id}:{offset}",
+            action_type=item["action"],
+            timestamp_ms=item["timestamp_ms"],
+            payload_json=json.dumps(payload, ensure_ascii=False),
+            request_hash=compute_request_hash(item["action"], payload),
+            status=CodingActionStatus.executed,
+            revision_before=base_revision + offset,
+            revision_after=base_revision + offset + 1,
+            result_json="{}",
+            completed_at=datetime.now(UTC),
+            source="vidat_import",
+            annotation_package_id=package.id,
+            vidat_import_audit_id=audit.id,
+        )
         db.add(record)
     take.revision = base_revision + len(plan["coding_actions"])
 
-    range_types = {"set_start": (TimelineEventType.set_start, TimelineEventType.set_end, SegmentType.set),
-                   "game_start": (TimelineEventType.game_start, TimelineEventType.game_end, SegmentType.game),
-                   "rally_start": (TimelineEventType.rally_start, TimelineEventType.rally_end, SegmentType.rally)}
+    range_types = {
+        "set_start": (TimelineEventType.set_start, TimelineEventType.set_end, SegmentType.set),
+        "game_start": (TimelineEventType.game_start, TimelineEventType.game_end, SegmentType.game),
+        "rally_start": (TimelineEventType.rally_start, TimelineEventType.rally_end, SegmentType.rally),
+    }
     segment_rows: list[tuple[dict, CaptureSegment]] = []
     ordinals = {SegmentType.set: 0, SegmentType.game: 0, SegmentType.rally: 0}
     for operation in plan["operations"]:
@@ -291,21 +458,52 @@ def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: Vida
         if event_type in range_types:
             start_type, end_type, segment_type = range_types[event_type]
             ordinals[segment_type] += 1
-            start_id, end_id = f"te_vidat_{audit.id[-8:]}_{operation['index']:04d}_s", f"te_vidat_{audit.id[-8:]}_{operation['index']:04d}_e"
-            start_event = SessionTimelineEvent(id=start_id, field_session_id=take.field_session_id, capture_take_id=take.id,
-                recording_session_id=take.source_session_id, timestamp_ms=operation["start_ms"], event_type=start_type,
-                source=TimelineEventSource.vidat_import, label=operation["label"], note=operation["note"],
-                payload_json=json.dumps(operation["payload"], ensure_ascii=False), annotation_package_id=package.id,
-                vidat_import_audit_id=audit.id)
-            end_event = SessionTimelineEvent(id=end_id, field_session_id=take.field_session_id, capture_take_id=take.id,
-                recording_session_id=take.source_session_id, timestamp_ms=operation["end_ms"], event_type=end_type,
-                source=TimelineEventSource.vidat_import, payload_json=json.dumps(operation["payload"], ensure_ascii=False),
-                annotation_package_id=package.id, vidat_import_audit_id=audit.id)
-            segment = CaptureSegment(id=f"seg_vidat_{audit.id[-8:]}_{operation['index']:04d}", capture_take_id=take.id,
-                segment_type=segment_type, ordinal=ordinals[segment_type], label=operation["label"], start_event_id=start_id,
-                end_event_id=end_id, start_ms=operation["start_ms"], end_ms=operation["end_ms"], status=SegmentStatus.corrected,
-                edit_status=EditStatus.active, source=SegmentSource.vidat_import, annotation_package_id=package.id,
-                vidat_import_audit_id=audit.id)
+            start_id, end_id = (
+                f"te_vidat_{audit.id[-8:]}_{operation['index']:04d}_s",
+                f"te_vidat_{audit.id[-8:]}_{operation['index']:04d}_e",
+            )
+            start_event = SessionTimelineEvent(
+                id=start_id,
+                field_session_id=take.field_session_id,
+                capture_take_id=take.id,
+                recording_session_id=take.source_session_id,
+                timestamp_ms=operation["start_ms"],
+                event_type=start_type,
+                source=TimelineEventSource.vidat_import,
+                label=operation["label"],
+                note=operation["note"],
+                payload_json=json.dumps(operation["payload"], ensure_ascii=False),
+                annotation_package_id=package.id,
+                vidat_import_audit_id=audit.id,
+            )
+            end_event = SessionTimelineEvent(
+                id=end_id,
+                field_session_id=take.field_session_id,
+                capture_take_id=take.id,
+                recording_session_id=take.source_session_id,
+                timestamp_ms=operation["end_ms"],
+                event_type=end_type,
+                source=TimelineEventSource.vidat_import,
+                payload_json=json.dumps(operation["payload"], ensure_ascii=False),
+                annotation_package_id=package.id,
+                vidat_import_audit_id=audit.id,
+            )
+            segment = CaptureSegment(
+                id=f"seg_vidat_{audit.id[-8:]}_{operation['index']:04d}",
+                capture_take_id=take.id,
+                segment_type=segment_type,
+                ordinal=ordinals[segment_type],
+                label=operation["label"],
+                start_event_id=start_id,
+                end_event_id=end_id,
+                start_ms=operation["start_ms"],
+                end_ms=operation["end_ms"],
+                status=SegmentStatus.corrected,
+                edit_status=EditStatus.active,
+                source=SegmentSource.vidat_import,
+                annotation_package_id=package.id,
+                vidat_import_audit_id=audit.id,
+            )
             db.add_all([start_event, end_event, segment])
             segment_rows.append((operation, segment))
         else:
@@ -313,18 +511,47 @@ def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: Vida
                 timeline_type = TimelineEventType(event_type)
             except ValueError:
                 timeline_type = TimelineEventType.custom_marker
-            db.add(SessionTimelineEvent(id=f"te_vidat_{audit.id[-8:]}_{operation['index']:04d}", field_session_id=take.field_session_id,
-                capture_take_id=take.id, recording_session_id=take.source_session_id, timestamp_ms=operation["start_ms"],
-                event_type=timeline_type, source=TimelineEventSource.vidat_import, label=operation["label"], note=operation["note"],
-                payload_json=json.dumps(operation["payload"], ensure_ascii=False), annotation_package_id=package.id,
-                vidat_import_audit_id=audit.id))
+            db.add(
+                SessionTimelineEvent(
+                    id=f"te_vidat_{audit.id[-8:]}_{operation['index']:04d}",
+                    field_session_id=take.field_session_id,
+                    capture_take_id=take.id,
+                    recording_session_id=take.source_session_id,
+                    timestamp_ms=operation["start_ms"],
+                    event_type=timeline_type,
+                    source=TimelineEventSource.vidat_import,
+                    label=operation["label"],
+                    note=operation["note"],
+                    payload_json=json.dumps(operation["payload"], ensure_ascii=False),
+                    annotation_package_id=package.id,
+                    vidat_import_audit_id=audit.id,
+                )
+            )
     db.flush()
     for operation, segment in segment_rows:
         if segment.segment_type == SegmentType.game:
-            parent = next((row for op, row in segment_rows if row.segment_type == SegmentType.set and op["start_ms"] <= operation["start_ms"] and operation["end_ms"] <= op["end_ms"]), None)
+            parent = next(
+                (
+                    row
+                    for op, row in segment_rows
+                    if row.segment_type == SegmentType.set
+                    and op["start_ms"] <= operation["start_ms"]
+                    and operation["end_ms"] <= op["end_ms"]
+                ),
+                None,
+            )
             segment.parent_segment_id = parent.id if parent else None
         elif segment.segment_type == SegmentType.rally:
-            parent = next((row for op, row in segment_rows if row.segment_type == SegmentType.game and op["start_ms"] <= operation["start_ms"] and operation["end_ms"] <= op["end_ms"]), None)
+            parent = next(
+                (
+                    row
+                    for op, row in segment_rows
+                    if row.segment_type == SegmentType.game
+                    and op["start_ms"] <= operation["start_ms"]
+                    and operation["end_ms"] <= op["end_ms"]
+                ),
+                None,
+            )
             segment.parent_segment_id = parent.id if parent else None
 
     final = plan["score_summary"]["final"]
@@ -336,7 +563,11 @@ def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: Vida
     state.score_a, state.score_b = final["score_a"], final["score_b"]
     state.games_won_a, state.games_won_b = final["games_won_a"], final["games_won_b"]
     state.match_status, state.match_winner = final["match_status"], final["match_winner"]
-    state.set_ordinal, state.game_ordinal, state.rally_ordinal = ordinals[SegmentType.set], ordinals[SegmentType.game], ordinals[SegmentType.rally]
+    state.set_ordinal, state.game_ordinal, state.rally_ordinal = (
+        ordinals[SegmentType.set],
+        ordinals[SegmentType.game],
+        ordinals[SegmentType.rally],
+    )
     state.current_set_segment_id = state.current_game_segment_id = state.current_rally_segment_id = None
     state.match_phase = "completed" if final["match_status"] == "completed" else "idle"
 
@@ -406,24 +637,45 @@ def _probe_video(path: Path) -> dict:
     timeout_seconds = max(15, int(os.getenv("PICKLEBALL_VIDAT_PROBE_TIMEOUT_SECONDS", "120")))
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "format=duration:stream=width,height,r_frame_rate",
-             "-of", "json", str(path)], capture_output=True, text=True, check=True,
-             timeout=timeout_seconds,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "format=duration:stream=width,height,r_frame_rate",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout_seconds,
         )
         payload = json.loads(result.stdout)
         stream = payload["streams"][0]
         numerator, denominator = stream.get("r_frame_rate", "30/1").split("/", 1)
-        return {"fps": float(numerator) / float(denominator), "duration": float(payload["format"]["duration"]),
-                "width": int(stream.get("width", 0)), "height": int(stream.get("height", 0))}
+        return {
+            "fps": float(numerator) / float(denominator),
+            "duration": float(payload["format"]["duration"]),
+            "width": int(stream.get("width", 0)),
+            "height": int(stream.get("height", 0)),
+        }
     except subprocess.TimeoutExpired as exc:
         fallback = _probe_recording_sidecar(path)
         if fallback is not None:
             return fallback
-        raise VidatPackageError(
-            f"读取视频元数据超时（{timeout_seconds} 秒），且录制元数据不可用: {path}"
-        ) from exc
-    except (FileNotFoundError, subprocess.SubprocessError, KeyError, StopIteration, ValueError, json.JSONDecodeError) as exc:
+        raise VidatPackageError(f"读取视频元数据超时（{timeout_seconds} 秒），且录制元数据不可用: {path}") from exc
+    except (
+        FileNotFoundError,
+        subprocess.SubprocessError,
+        KeyError,
+        StopIteration,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
         raise VidatPackageError(f"无法读取视频元数据: {exc}") from exc
 
 
@@ -438,7 +690,12 @@ def _probe_recording_sidecar(path: Path) -> dict | None:
         duration = payload.get("duration_sec")
         fps = payload.get("fps")
         resolution = str(payload.get("resolution") or "")
-        if not isinstance(duration, (int, float)) or float(duration) <= 0 or not isinstance(fps, (int, float)) or float(fps) <= 0:
+        if (
+            not isinstance(duration, (int, float))
+            or float(duration) <= 0
+            or not isinstance(fps, (int, float))
+            or float(fps) <= 0
+        ):
             continue
         try:
             width, height = (int(value) for value in resolution.lower().split("x", 1))
@@ -458,14 +715,25 @@ def _fingerprint(path: Path) -> str:
 
 
 def resolve_primary_video(db: Session, take: CaptureTake) -> Path:
-    track = db.query(CaptureTrack).filter(
-        CaptureTrack.capture_take_id == take.id, CaptureTrack.role == TrackRole.primary,
-    ).first()
+    track = (
+        db.query(CaptureTrack)
+        .filter(
+            CaptureTrack.capture_take_id == take.id,
+            CaptureTrack.role == TrackRole.primary,
+        )
+        .first()
+    )
     if track is None:
         raise VidatPackageError("没有可用主机位轨道")
-    finalization = db.query(TrackFinalization).filter(
-        TrackFinalization.capture_track_id == track.id, TrackFinalization.status == FinalizationStatus.completed,
-    ).order_by(TrackFinalization.completed_at.desc()).first()
+    finalization = (
+        db.query(TrackFinalization)
+        .filter(
+            TrackFinalization.capture_track_id == track.id,
+            TrackFinalization.status == FinalizationStatus.completed,
+        )
+        .order_by(TrackFinalization.completed_at.desc())
+        .first()
+    )
     candidates: list[Path] = []
     if finalization and finalization.output_path:
         candidates.append(Path(finalization.output_path))
@@ -481,9 +749,14 @@ def resolve_primary_video(db: Session, take: CaptureTake) -> Path:
             camera_prefix = str(track.camera_id).split("_")[0]
             candidates.extend(sorted(session_dir.glob(f"{camera_prefix}_merged.mp4")))
             candidates.extend(sorted(session_dir.glob("*_merged.mp4")))
-    fragment = db.query(MediaFragment).filter(
-        MediaFragment.capture_track_id == track.id,
-    ).order_by(MediaFragment.fragment_index).first()
+    fragment = (
+        db.query(MediaFragment)
+        .filter(
+            MediaFragment.capture_track_id == track.id,
+        )
+        .order_by(MediaFragment.fragment_index)
+        .first()
+    )
     if fragment:
         candidates.append(Path(fragment.file_path))
     for candidate in candidates:
@@ -494,13 +767,23 @@ def resolve_primary_video(db: Session, take: CaptureTake) -> Path:
 
 def _event_actions(db: Session, take_id: str, fps: float) -> list[dict]:
     from app.models.timeline_event import SessionTimelineEvent
-    events = db.query(SessionTimelineEvent).filter(
-        SessionTimelineEvent.capture_take_id == take_id, SessionTimelineEvent.is_undone.is_(False),
-    ).order_by(SessionTimelineEvent.timestamp_ms).all()
+
+    events = (
+        db.query(SessionTimelineEvent)
+        .filter(
+            SessionTimelineEvent.capture_take_id == take_id,
+            SessionTimelineEvent.is_undone.is_(False),
+        )
+        .order_by(SessionTimelineEvent.timestamp_ms)
+        .all()
+    )
     actions = []
     pair_end = {
-        "set_start": "set_end", "game_start": "game_end", "rally_start": "rally_end",
-        "timeout_start": "timeout_end", "non_play_start": "non_play_end",
+        "set_start": "set_end",
+        "game_start": "game_end",
+        "rally_start": "rally_end",
+        "timeout_start": "timeout_end",
+        "non_play_start": "non_play_end",
     }
     pending = {start: [] for start in pair_end}
 
@@ -517,12 +800,23 @@ def _event_actions(db: Session, take_id: str, fps: float) -> list[dict]:
         payload = json.loads(start_event.payload_json or "{}")
         if end_event:
             payload.update(json.loads(end_event.payload_json or "{}"))
-        metadata = {"event_ids": [start_event.id] + ([end_event.id] if end_event else []), "event_type": event_type,
-                    "payload": payload, "label": start_event.label or (end_event.label if end_event else ""),
-                    "note": start_event.note or (end_event.note if end_event else "")}
-        actions.append({"start": start_time, "end": max(start_time + 0.001, end_time), "action": action_id,
-                        "object": 0, "color": color,
-                        "description": json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))})
+        metadata = {
+            "event_ids": [start_event.id] + ([end_event.id] if end_event else []),
+            "event_type": event_type,
+            "payload": payload,
+            "label": start_event.label or (end_event.label if end_event else ""),
+            "note": start_event.note or (end_event.note if end_event else ""),
+        }
+        actions.append(
+            {
+                "start": start_time,
+                "end": max(start_time + 0.001, end_time),
+                "action": action_id,
+                "object": 0,
+                "color": color,
+                "description": json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+            }
+        )
 
     for event in events:
         event_type = event.event_type.value
@@ -551,8 +845,12 @@ def create_annotation_package(db: Session, capture_take_id: str, *, copy_video: 
     video = resolve_primary_video(db, take)
     info = _probe_video(video)
     root = get_settings().resolve_path(get_settings().data_dir) / "vidat-annotations" / take.id
-    version = (db.query(func.max(VidatAnnotationPackage.version)).filter(
-        VidatAnnotationPackage.capture_take_id == take.id).scalar() or 0) + 1
+    version = (
+        db.query(func.max(VidatAnnotationPackage.version))
+        .filter(VidatAnnotationPackage.capture_take_id == take.id)
+        .scalar()
+        or 0
+    ) + 1
     package_id = f"vap_{uuid4().hex[:12]}"
     package_dir = root / f"v{version:03d}-{package_id[-6:]}"
     package_dir.mkdir(parents=True, exist_ok=False)
@@ -566,25 +864,69 @@ def create_annotation_package(db: Session, capture_take_id: str, *, copy_video: 
     actions = [action for action in actions if action["start"] < info["duration"]]
     for action in actions:
         action["end"] = min(round(info["duration"], 3), max(action["start"] + 0.001, action["end"]))
-    actions.insert(0, {"start": 0, "end": round(info["duration"], 3), "action": 0, "object": 0,
-                       "color": "#00FF00", "description": ""})
-    annotation = {"version": "2.0.5", "annotation": {"video": {
-        "src": f"video/{video_path.name}", "fps": round(info["fps"], 6), "frames": frames,
-        "duration": round(info["duration"], 3), "width": info["width"], "height": info["height"]},
-        "keyframeList": sorted({0, frames, *(round(a["start"] * info["fps"]) for a in actions),
-                                  *(round(a["end"] * info["fps"]) for a in actions)}),
-        "objectAnnotationListMap": {}, "regionAnnotationListMap": {}, "skeletonAnnotationListMap": {},
-        "actionAnnotationList": actions}, "config": vidat_config()}
-    manifest = {"schema_version": VIDAT_SCHEMA_VERSION, "package_id": package_id, "capture_take_id": take.id,
-                "version": version, "created_at": datetime.now(timezone.utc).isoformat(), "timeline_revision": take.revision,
-                "video": {"file": video_path.name, "source": str(video), "fingerprint": _fingerprint(video), **info}}
-    annotation["pickleball_manifest"] = {"schema_version": VIDAT_SCHEMA_VERSION, "package_id": package_id,
-                                         "capture_take_id": take.id, "video_fingerprint": manifest["video"]["fingerprint"]}
+    actions.insert(
+        0,
+        {
+            "start": 0,
+            "end": round(info["duration"], 3),
+            "action": 0,
+            "object": 0,
+            "color": "#00FF00",
+            "description": "",
+        },
+    )
+    annotation = {
+        "version": "2.0.5",
+        "annotation": {
+            "video": {
+                "src": f"video/{video_path.name}",
+                "fps": round(info["fps"], 6),
+                "frames": frames,
+                "duration": round(info["duration"], 3),
+                "width": info["width"],
+                "height": info["height"],
+            },
+            "keyframeList": sorted(
+                {
+                    0,
+                    frames,
+                    *(round(a["start"] * info["fps"]) for a in actions),
+                    *(round(a["end"] * info["fps"]) for a in actions),
+                }
+            ),
+            "objectAnnotationListMap": {},
+            "regionAnnotationListMap": {},
+            "skeletonAnnotationListMap": {},
+            "actionAnnotationList": actions,
+        },
+        "config": vidat_config(),
+    }
+    manifest = {
+        "schema_version": VIDAT_SCHEMA_VERSION,
+        "package_id": package_id,
+        "capture_take_id": take.id,
+        "version": version,
+        "created_at": datetime.now(UTC).isoformat(),
+        "timeline_revision": take.revision,
+        "video": {"file": video_path.name, "source": str(video), "fingerprint": _fingerprint(video), **info},
+    }
+    annotation["pickleball_manifest"] = {
+        "schema_version": VIDAT_SCHEMA_VERSION,
+        "package_id": package_id,
+        "capture_take_id": take.id,
+        "video_fingerprint": manifest["video"]["fingerprint"],
+    }
     (package_dir / "annotation.json").write_text(json.dumps(annotation, ensure_ascii=False, indent=2), encoding="utf-8")
     (package_dir / "config.json").write_text(json.dumps(vidat_config(), ensure_ascii=False, indent=2), encoding="utf-8")
     (package_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    package = VidatAnnotationPackage(id=package_id, capture_take_id=take.id, version=version, package_dir=str(package_dir),
-        manifest_json=json.dumps(manifest, ensure_ascii=False), annotation_json=json.dumps(annotation, ensure_ascii=False))
+    package = VidatAnnotationPackage(
+        id=package_id,
+        capture_take_id=take.id,
+        version=version,
+        package_dir=str(package_dir),
+        manifest_json=json.dumps(manifest, ensure_ascii=False),
+        annotation_json=json.dumps(annotation, ensure_ascii=False),
+    )
     db.add(package)
     return package
 
@@ -606,8 +948,17 @@ def publish_annotation_package(package: VidatAnnotationPackage, dist_root: Path)
     actions = annotation_payload.setdefault("actionAnnotationList", [])
     if not actions or actions[0].get("action") != 0:
         duration = float(annotation_payload.get("video", {}).get("duration") or manifest["video"].get("duration", 0))
-        actions.insert(0, {"start": 0, "end": max(0.001, round(duration, 3)), "action": 0, "object": 0,
-                           "color": "#00FF00", "description": ""})
+        actions.insert(
+            0,
+            {
+                "start": 0,
+                "end": max(0.001, round(duration, 3)),
+                "action": 0,
+                "object": 0,
+                "color": "#00FF00",
+                "description": "",
+            },
+        )
     suffix = source_video.suffix.lower()
     video_name = f"{package.id}{suffix}"
     annotation_name = f"{package.id}.json"
@@ -629,9 +980,9 @@ def publish_annotation_package(package: VidatAnnotationPackage, dist_root: Path)
     # Vidat resolves query parameters from the static site root. Include the
     # managed subdirectories so its loader requests the files we published.
     # V2 decodes the media in a worker and fills the shared frame cache used by
-    # both canvases. Keep the worker FPS aligned with annotation.video.fps;
+    # both canvases. Keep the worker FPS aligned with annotation.video.fps
     # otherwise a 60 FPS annotation asks for frame ids the 30 FPS worker never
     # produces, leaving the right canvas blank.
     # showObjects=true 暴露 object 模式（双关键帧 left/right 画面 + copy 按钮）；
     # mode=object 让标注包直接打开到双关键帧视图。showActions 仍保留，可下拉切回。
-    return f"?video=video/{video_name}&config=config/{config_name}&annotation=annotation/{annotation_name}&mode=object&showActions=true&showObjects=true&showRegions=false&showSkeletons=true&decoder=v2&defaultfps={worker_fps}"
+    return f"?video=video/{video_name}&config=config/{config_name}&annotation=annotation/{annotation_name}&mode=object&showActions=true&showObjects=true&showRegions=false&showSkeletons=true&decoder=v2&defaultfps={worker_fps}"  # noqa: E501

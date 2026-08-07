@@ -2,25 +2,23 @@
 
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
-from sqlalchemy.engine import Connection
-
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-from app.database import Base
-import app.models.field_session  # noqa: F401
-import app.models.timeline_event  # noqa: F401
-import app.models.capture_take  # noqa: F401
-import app.models.capture_track  # noqa: F401
-import app.models.capture_coding_action  # noqa: F401
-import app.models.live_coding_state  # noqa: F401
-import app.models.capture_segment  # noqa: F401
-import app.models.vidat_annotation  # noqa: F401
+import app.models.capture_coding_action  # noqa: F401, E402
+import app.models.capture_segment  # noqa: F401, E402
+import app.models.capture_take  # noqa: F401, E402
+import app.models.capture_track  # noqa: F401, E402
+import app.models.field_session  # noqa: F401, E402
+import app.models.live_coding_state  # noqa: F401, E402
+import app.models.timeline_event  # noqa: F401, E402
+import app.models.vidat_annotation  # noqa: F401, E402
+from app.database import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

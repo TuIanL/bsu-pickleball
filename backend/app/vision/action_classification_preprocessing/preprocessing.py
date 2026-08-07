@@ -57,13 +57,13 @@ def sample_frame_indices(
     if end < start_seconds:
         return []
 
-    samples: list[tuple[int, float]] = []   # 结果列表
-    seen: set[int] = set()                  # 已选过的帧序号集合，防止同一帧被选两次
+    samples: list[tuple[int, float]] = []  # 结果列表
+    seen: set[int] = set()  # 已选过的帧序号集合，防止同一帧被选两次
     timestamp = start_seconds
-    step = 1.0 / target_fps                 # 相邻抽样点之间的时间间隔（秒）
+    step = 1.0 / target_fps  # 相邻抽样点之间的时间间隔（秒）
     # 按时间步进：每走一步算一个"期望时间戳"，再换算成"最近的帧序号"
-    while timestamp <= end + 1e-9:          # +1e-9 是为了抵消浮点误差，确保边界帧不错过
-        frame_index = int(round(timestamp * fps))   # 时间戳 × 帧率 ≈ 帧序号，四舍五入取整
+    while timestamp <= end + 1e-9:  # +1e-9 是为了抵消浮点误差，确保边界帧不错过
+        frame_index = int(round(timestamp * fps))  # 时间戳 × 帧率 ≈ 帧序号，四舍五入取整
         if frame_index >= frame_count:
             break
         if frame_index not in seen:
@@ -79,7 +79,7 @@ def crop_court_roi(frame: Any, roi: ROIConfig) -> tuple[Any, ROIRecord]:
 
     返回：(裁好的子图, 这次裁剪的记录 ROIRecord)。
     """
-    height, width = frame.shape[:2]   # 取图的高和宽（shape 前两个维度）
+    height, width = frame.shape[:2]  # 取图的高和宽（shape 前两个维度）
     # 把"比例"换算成"像素坐标"，并用 max/min 夹紧到合法范围，避免越界
     x1 = max(0, min(width - 1, int(round(width * roi.x1_ratio))))
     y1 = max(0, min(height - 1, int(round(height * roi.y1_ratio))))
@@ -116,7 +116,7 @@ def apply_clahe_bgr(frame: Any, *, clip_limit: float = 2.0, tile_grid_size: int 
 
     # BGR → LAB 颜色空间；LAB 分 L（亮度）、A、B 三个通道
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    l_channel, a_channel, b_channel = cv2.split(lab)   # 拆成三个单通道图
+    l_channel, a_channel, b_channel = cv2.split(lab)  # 拆成三个单通道图
     # 创建 CLAHE 对象并作用在亮度通道上
     clahe = cv2.createCLAHE(clipLimit=float(clip_limit), tileGridSize=(int(tile_grid_size), int(tile_grid_size)))
     enhanced_l = clahe.apply(l_channel)
@@ -145,11 +145,11 @@ def expand_box(box: list[float], frame_shape: tuple[int, ...], *, scale: float =
     返回放大后的整数像素框 [nx1, ny1, nx2, ny2]。
     """
     height, width = frame_shape[:2]
-    x1, y1, x2, y2 = [float(value) for value in box[:4]]   # 取前 4 个数作为框
-    cx = (x1 + x2) / 2.0   # 框中心 x
-    cy = (y1 + y2) / 2.0   # 框中心 y
-    box_width = max(1.0, (x2 - x1) * scale)    # 放大后的宽（至少 1 像素）
-    box_height = max(1.0, (y2 - y1) * scale)   # 放大后的高（至少 1 像素）
+    x1, y1, x2, y2 = [float(value) for value in box[:4]]  # 取前 4 个数作为框
+    cx = (x1 + x2) / 2.0  # 框中心 x
+    cy = (y1 + y2) / 2.0  # 框中心 y
+    box_width = max(1.0, (x2 - x1) * scale)  # 放大后的宽（至少 1 像素）
+    box_height = max(1.0, (y2 - y1) * scale)  # 放大后的高（至少 1 像素）
     # 以中心为基准，向两边各扩一半，再夹紧到 [0, 宽/高] 内
     nx1 = max(0, int(round(cx - box_width / 2.0)))
     ny1 = max(0, int(round(cy - box_height / 2.0)))
@@ -188,9 +188,9 @@ def crop_player(frame: Any, box: list[float], *, output_size: int = 224, scale: 
     """
     import cv2  # type: ignore
 
-    crop_box = expand_box(box, frame.shape, scale=scale)   # 先放大框
+    crop_box = expand_box(box, frame.shape, scale=scale)  # 先放大框
     x1, y1, x2, y2 = crop_box
-    crop = frame[y1:y2, x1:x2]                             # 按框裁出子图
+    crop = frame[y1:y2, x1:x2]  # 按框裁出子图
     resized = cv2.resize(crop, (int(output_size), int(output_size)))  # 缩放到固定尺寸
     return resized, crop_box
 

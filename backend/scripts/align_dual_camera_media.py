@@ -30,11 +30,30 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     command = [
-        "ffmpeg", "-y", "-v", "error", "-i", str(args.input),
-        "-map", "0:v:0", "-an", "-vf", retime_filter_expression(calibration),
-        "-fps_mode", "cfr", "-r", str(args.fps),
-        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart", str(args.output),
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        str(args.input),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-vf",
+        retime_filter_expression(calibration),
+        "-fps_mode",
+        "cfr",
+        "-r",
+        str(args.fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(args.output),
     ]
     result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=900)
     if result.returncode != 0:

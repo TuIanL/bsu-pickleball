@@ -4,14 +4,17 @@ from __future__ import annotations
 
 # defaultdict：按“场地方位（side）”分组收集 track_id 列表。
 from collections import defaultdict
+
 # hypot：计算同一帧两名球员之间的欧几里得距离（站位间距）。
 from math import hypot
 
 # DoublesSpacingSample：某一帧的间距采样（时间戳、双方 track_id、间距英尺）。
 # DoublesSpacingSummary：一对球员（组合）的间距汇总（平均/最小/最大间距 + 全部采样）。
 from app.schemas.metrics import DoublesSpacingSample, DoublesSpacingSummary
+
 # ProjectedTrackPoint：投影到标准球场坐标系（英尺）的轨迹点。
 from app.schemas.tracking import ProjectedTrackPoint
+
 # group_tracks：按球员分组并排序轨迹点的工具函数。
 from app.vision.pickleball_performance_engine.trajectory_metrics import group_tracks
 

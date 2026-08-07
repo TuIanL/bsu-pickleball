@@ -87,10 +87,10 @@ def _near_score(box: list[float], frame_shape: tuple[int, ...], *, prefer_left: 
     """
     height, width = frame_shape[:2]
     x1, y1, x2, y2 = box
-    cx = (x1 + x2) / 2.0          # 框中心 x
+    cx = (x1 + x2) / 2.0  # 框中心 x
     area = _area(box)
-    horizontal = (width - cx) if prefer_left else cx   # 偏左/偏右的距离度量
-    lower = y2                    # 框底部位置
+    horizontal = (width - cx) if prefer_left else cx  # 偏左/偏右的距离度量
+    lower = y2  # 框底部位置
     return area + horizontal * height * 0.25 + lower * height * 0.001
 
 
@@ -109,8 +109,8 @@ def _iou(a: list[float], b: list[float]) -> float:
     inter_y1 = max(ay1, by1)
     inter_x2 = min(ax2, bx2)
     inter_y2 = min(ay2, by2)
-    inter_w = max(0.0, inter_x2 - inter_x1)   # 交集宽（为负则无交集，归零）
-    inter_h = max(0.0, inter_y2 - inter_y1)   # 交集高
+    inter_w = max(0.0, inter_x2 - inter_x1)  # 交集宽（为负则无交集，归零）
+    inter_h = max(0.0, inter_y2 - inter_y1)  # 交集高
     intersection = inter_w * inter_h
     union = _area(a) + _area(b) - intersection
     if union <= 0:

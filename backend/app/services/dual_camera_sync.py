@@ -12,9 +12,9 @@ import math
 import os
 import subprocess
 import tempfile
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 
 @dataclass(frozen=True)
@@ -63,10 +63,14 @@ def write_frame_timing_sidecar(
     result = subprocess.run(
         [
             ffprobe_bin,
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "frame=best_effort_timestamp_time,pkt_dts_time,key_frame",
-            "-of", "json",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=best_effort_timestamp_time,pkt_dts_time,key_frame",
+            "-of",
+            "json",
             str(media_path),
         ],
         capture_output=True,
@@ -83,8 +87,12 @@ def write_frame_timing_sidecar(
     last: float | None = None
     count = 0
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=target.parent,
-        prefix=f".{target.name}.", suffix=".part", delete=False,
+        mode="w",
+        encoding="utf-8",
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".part",
+        delete=False,
     ) as handle:
         temp_path = Path(handle.name)
         try:
@@ -126,12 +134,14 @@ def read_frame_timing_sidecar(sidecar_path: str | os.PathLike[str]) -> list[Fram
     with Path(sidecar_path).open(encoding="utf-8") as handle:
         for line in handle:
             row = json.loads(line)
-            frames.append(FrameTiming(
-                frame_index=int(row["frame_index"]),
-                pts_seconds=float(row["pts_seconds"]),
-                dts_seconds=None if row.get("dts_seconds") is None else float(row["dts_seconds"]),
-                keyframe=bool(row.get("keyframe", False)),
-            ))
+            frames.append(
+                FrameTiming(
+                    frame_index=int(row["frame_index"]),
+                    pts_seconds=float(row["pts_seconds"]),
+                    dts_seconds=None if row.get("dts_seconds") is None else float(row["dts_seconds"]),
+                    keyframe=bool(row.get("keyframe", False)),
+                )
+            )
     return frames
 
 
@@ -146,10 +156,17 @@ def fit_affine_calibration(
     """Fit ``camera_time = offset + rate * reference_time`` from anchors."""
     if len(reference_times) != len(camera_times) or len(reference_times) < 2:
         return SyncCalibration(
-            reference_camera, camera_id, 0.0, 1.0, 0.0, math.inf,
-            min(len(reference_times), len(camera_times)), "unknown", "at least two paired anchors are required",
+            reference_camera,
+            camera_id,
+            0.0,
+            1.0,
+            0.0,
+            math.inf,
+            min(len(reference_times), len(camera_times)),
+            "unknown",
+            "at least two paired anchors are required",
         )
-    pairs = list(zip(reference_times, camera_times))
+    pairs = list(zip(reference_times, camera_times, strict=False))
     x_mean = sum(x for x, _ in pairs) / len(pairs)
     y_mean = sum(y for _, y in pairs) / len(pairs)
     denominator = sum((x - x_mean) ** 2 for x, _ in pairs)
@@ -233,7 +250,9 @@ def calibration_from_dict(payload: dict[str, object]) -> SyncCalibration:
         anchor_count=int(payload.get("anchor_count", 0)),
         quality=str(payload.get("quality", "unknown")),
         reason=payload.get("reason") if isinstance(payload.get("reason"), str) else None,
-        valid_start_seconds=None if payload.get("valid_start_seconds") is None else float(payload["valid_start_seconds"]),
+        valid_start_seconds=None
+        if payload.get("valid_start_seconds") is None
+        else float(payload["valid_start_seconds"]),
         valid_end_seconds=None if payload.get("valid_end_seconds") is None else float(payload["valid_end_seconds"]),
     )
 
@@ -258,7 +277,10 @@ def build_frame_map(
     selections: list[FrameSelection] = []
     for target in target_times:
         local_target = target if calibration is None else map_reference_time(calibration, target)
-        if local_target < ordered[0].pts_seconds - max_selection_error_seconds or local_target > ordered[-1].pts_seconds + max_selection_error_seconds:
+        if (
+            local_target < ordered[0].pts_seconds - max_selection_error_seconds
+            or local_target > ordered[-1].pts_seconds + max_selection_error_seconds
+        ):
             selections.append(FrameSelection(target, None, None, None, "unavailable"))
             continue
         nearest = min(ordered, key=lambda frame: abs(frame.pts_seconds - local_target))

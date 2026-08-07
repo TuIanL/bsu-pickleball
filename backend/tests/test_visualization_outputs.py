@@ -4,13 +4,14 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import app
 from app.schemas.analysis import AnalysisJobSummary as AnalysisJobSummarySchema
 from app.schemas.tracking import Detection
-from app.services.storage_service import StorageService
 from app.services.analysis_pipeline import AnalysisPipeline
+from app.services.storage_service import StorageService
 from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisualizer
 from app.vision.pickleball_game_analysis.overlay_video_writer import OverlayVideoWriter
 from app.vision.pickleball_game_analysis.position_visualizer import PositionVisualizer
@@ -21,8 +22,6 @@ from app.vision.pickleball_game_analysis.visualization_schemas import (
     normalize_court_point,
     player_points_from_artifact,
 )
-from fastapi.testclient import TestClient
-
 
 client = TestClient(app)
 
@@ -183,9 +182,7 @@ def test_overlay_writer_with_segment_id_changes_deque(tmp_path):
         VisualizationPoint(11, 23, frame_index=1, label="P1", segment_id="s1"),
         VisualizationPoint(12, 24, frame_index=2, label="P1", segment_id="s1"),
     ]
-    result = OverlayVideoWriter(
-        VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)
-    ).write(
+    result = OverlayVideoWriter(VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)).write(
         source_video_path=source,
         output_path=output,
         player_points=points,
@@ -204,9 +201,7 @@ def test_overlay_writer_without_segment_id_backward_compat(tmp_path):
         VisualizationPoint(11, 23, frame_index=1, label="P1"),
         VisualizationPoint(12, 24, frame_index=2, label="P1"),
     ]
-    result = OverlayVideoWriter(
-        VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)
-    ).write(
+    result = OverlayVideoWriter(VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)).write(
         source_video_path=source,
         output_path=output,
         player_points=points,
@@ -237,7 +232,14 @@ def test_overlay_writer_reports_unavailable_source(tmp_path):
 def test_position_visualization_image_route_returns_png(monkeypatch, tmp_path):
     from app.services.mock_analysis import JOBS
 
-    storage = StorageService(Settings(uploads_dir=tmp_path / "uploads", outputs_dir=tmp_path / "outputs", calibrations_dir=tmp_path / "calibrations", tmp_dir=tmp_path / "tmp"))
+    storage = StorageService(
+        Settings(
+            uploads_dir=tmp_path / "uploads",
+            outputs_dir=tmp_path / "outputs",
+            calibrations_dir=tmp_path / "calibrations",
+            tmp_dir=tmp_path / "tmp",
+        )
+    )
     monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
     snapshot = JOBS.copy()
     JOBS.clear()
@@ -301,7 +303,10 @@ def test_pipeline_generates_position_visualization_when_enabled(tmp_path):
 
     assert result.status == "completed"
     assert result.artifacts.heatmaps_url == "/api/analysis/jobs/job-position-visualization/artifacts/position-heatmaps"
-    assert result.artifacts.scatter_plots_url == "/api/analysis/jobs/job-position-visualization/artifacts/position-scatter-plots"
+    assert (
+        result.artifacts.scatter_plots_url
+        == "/api/analysis/jobs/job-position-visualization/artifacts/position-scatter-plots"
+    )
     assert result.artifacts.position_visualizations_status == "available"
     assert result.artifacts.analysis_overlay_video_url is None
     assert any(stage.id == "visualization" and stage.status == "done" for stage in result.stages)

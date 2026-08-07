@@ -8,12 +8,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.camera.models import CameraInfo
 from app.services.storage_service import StorageService
-
 
 # 全局内存缓存：camera_id -> CameraInfo
 CAMERAS: dict[str, CameraInfo] = {}
@@ -26,7 +25,7 @@ def _virtual_camera() -> CameraInfo:
         name="测试摄像头（虚拟）",
         stream_url="virtual://black",
         protocol="http",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -44,7 +43,15 @@ class CameraRegistry:
         # 拼出某个摄像头的 JSON 文件路径
         return self.cameras_dir / f"{camera_id}.json"
 
-    def create(self, camera_id: str, name: str, stream_url: str, protocol: str, username: str | None = None, password: str | None = None) -> CameraInfo:
+    def create(
+        self,
+        camera_id: str,
+        name: str,
+        stream_url: str,
+        protocol: str,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> CameraInfo:
         # 构造一条摄像头记录，写入磁盘并放入内存缓存
         camera = CameraInfo(
             camera_id=camera_id,
@@ -53,7 +60,7 @@ class CameraRegistry:
             protocol=protocol,
             username=username,
             password=password,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         self._storage.write_json(self._camera_path(camera_id), camera.model_dump(mode="json"))
         CAMERAS[camera_id] = camera

@@ -1,7 +1,5 @@
 """测试 RTMPose26Adapter 的关键点可见性 hysteresis 机制。"""
 
-import pytest
-
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 

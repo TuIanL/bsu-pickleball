@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 # dataclass / field：数据结构与可变默认工厂；Counter：统计状态计数；
 # feet_to_meters / meters_to_feet：英制与公制互转；
 # 标准球场尺寸常量 PICKLEBALL_COURT_WIDTH_M / LENGTH_M。
 from dataclasses import dataclass, field
-from collections import Counter
 from math import hypot
 
 from app.schemas.tracking import (
     CourtCoordinateMetadata,
     PlayerFramePosition,
     PlayerIdentityDiagnostic,
+    PlayerTrajectoryArtifact,
     PlayerTrajectoryCoverage,
     PlayerTrajectoryCoverageDiagnostics,
-    PlayerTrajectoryArtifact,
     PlayerTrajectorySample,
     PlayerTrajectoryState,
     ProjectedTrackPoint,
@@ -98,10 +99,10 @@ class PlayerIdentityManager:
 
     def __init__(self, config: PlayerIdentityConfig | None = None) -> None:
         self.config = config or PlayerIdentityConfig()
-        self.players: dict[str, PlayerState] = {}        # player_id -> 状态
-        self.track_to_player: dict[int, str] = {}        # track_id -> player_id 映射
+        self.players: dict[str, PlayerState] = {}  # player_id -> 状态
+        self.track_to_player: dict[int, str] = {}  # track_id -> player_id 映射
         self.diagnostics: list[PlayerIdentityDiagnostic] = []  # 诊断事件累积
-        self._current_hints: dict[int, str] = {}          # lock manager 提示
+        self._current_hints: dict[int, str] = {}  # lock manager 提示
 
     def update(
         self,
@@ -113,9 +114,7 @@ class PlayerIdentityManager:
         self._current_hints = track_identity_hints or {}
         # 处理一帧：把有效位置转成观测，按资格过滤，再逐个分配到球员身份并产出轨迹样本。
         observations = [
-            self._position_to_observation(position)
-            for position in positions
-            if self._is_identity_candidate(position)
+            self._position_to_observation(position) for position in positions if self._is_identity_candidate(position)
         ]
         # 若指定了“合格 track 集合”，先记录被过滤掉的观测，再丢弃它们。
         if eligible_track_ids is not None:
@@ -139,9 +138,8 @@ class PlayerIdentityManager:
         observations.sort(key=self._assignment_priority)
         for observation in observations:
             # 落在度量边界外的点跳过并记录诊断。
-            if (
-                not self._in_metric_bounds(observation.court_position_m)
-                and not self._in_tracking_bounds(observation.court_position_m)
+            if not self._in_metric_bounds(observation.court_position_m) and not self._in_tracking_bounds(
+                observation.court_position_m
             ):
                 self._diagnose(
                     frame_index,
@@ -317,7 +315,9 @@ class PlayerIdentityManager:
                 best_player_id = player_id
         return best_player_id
 
-    def _update_player(self, player: PlayerState, observation: PlayerObservation, tentative: bool = False) -> list[PlayerTrajectorySample]:
+    def _update_player(
+        self, player: PlayerState, observation: PlayerObservation, tentative: bool = False
+    ) -> list[PlayerTrajectorySample]:
         # 用一次观测更新球员状态，并产出（含插值）轨迹样本。
         # tentative=True 表示软接管就近指派：样本标记为低置信度 tentative，等待 lock hint 校正。
         inserted = self._interpolate(player, observation)
@@ -356,7 +356,9 @@ class PlayerIdentityManager:
             image_footpoint=observation.image_footpoint,
             court_x=observation.court_position_m[0],
             court_y=observation.court_position_m[1],
-            confidence=min(observation.confidence, self.config.soft_takeover_confidence) if tentative else observation.confidence,
+            confidence=min(observation.confidence, self.config.soft_takeover_confidence)
+            if tentative
+            else observation.confidence,
             tracking_status="tentative" if tentative else "detected",
             is_interpolated=False,
             source="detector",
@@ -551,7 +553,9 @@ class PlayerIdentityManager:
             tracking_last_timestamp_seconds=source_duration,
             trajectory_first_timestamp_seconds=min(first_values) if first_values else None,
             trajectory_last_timestamp_seconds=trajectory_last,
-            coverage_ratio=min(1.0, trajectory_last / source_duration) if source_duration and trajectory_last is not None else None,
+            coverage_ratio=min(1.0, trajectory_last / source_duration)
+            if source_duration and trajectory_last is not None
+            else None,
             players=player_coverages,
             diagnostic_event_counts=dict(Counter(item.event for item in self.diagnostics)),
             warnings=warnings,

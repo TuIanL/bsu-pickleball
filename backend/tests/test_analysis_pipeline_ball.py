@@ -3,33 +3,26 @@
 from __future__ import annotations
 
 import json
-import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.schemas.ball import BallOverlayArtifact
-from app.schemas.pipeline import AnalysisArtifacts, PipelineStageResult
-from app.schemas.tracking import ProjectedTrackPoint
-from app.schemas.multitarget import MultiTargetDetection
+from app.schemas.pipeline import PipelineStageResult
 from app.services.analysis_pipeline import (
     AnalysisPipeline,
     _BallArtifactFields,
     _BallRunContext,
     _BallRunOutput,
-    _BounceRunOutput,
-    _TrackingRunOutput,
 )
 from app.vision.pickleball_game_analysis.detection_writer import build_ball_overlay_payload
 from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceEvent, TrajectoryPoint
 
-
 # ---------------------------------------------------------------------------
 # 测试用 helper
 # ---------------------------------------------------------------------------
+
 
 def _make_sample(
     frame_index: int = 0,
@@ -102,6 +95,7 @@ def _make_storage_mock(tmp_path: Path) -> MagicMock:
 # 1. ball_overlay.json payload builder 测试
 # ---------------------------------------------------------------------------
 
+
 class TestBallOverlayPayload:
     def test_build_with_accepted_samples(self):
         samples = [
@@ -159,6 +153,7 @@ class TestBallOverlayPayload:
 # 2. _BallRunContext 测试
 # ---------------------------------------------------------------------------
 
+
 class TestBallRunContext:
     def test_default_context_is_empty(self):
         ctx = _BallRunContext()
@@ -178,6 +173,7 @@ class TestBallRunContext:
 # ---------------------------------------------------------------------------
 # 3. _finalize_ball_analysis() 测试
 # ---------------------------------------------------------------------------
+
 
 class TestFinalizeBallAnalysis:
     @pytest.fixture
@@ -357,6 +353,7 @@ class TestFinalizeBallAnalysis:
 # 4. _run_bounce_detection() 测试
 # ---------------------------------------------------------------------------
 
+
 class TestRunBounceDetection:
     @pytest.fixture
     def pipeline(self):
@@ -371,9 +368,7 @@ class TestRunBounceDetection:
 
     def test_no_tracker_no_samples_returns_none(self, pipeline):
         ctx = _BallRunContext(tracker=None)
-        result = pipeline._run_bounce_detection(
-            job_id="j", video_id="v", ball_ctx=ctx, fps=30.0
-        )
+        result = pipeline._run_bounce_detection(job_id="j", video_id="v", ball_ctx=ctx, fps=30.0)
         # ball_detector is None but ball_detection_enabled → unavailable
         assert result is not None
         assert result.status == "unavailable"
@@ -387,9 +382,7 @@ class TestRunBounceDetection:
         pipeline.ball_detection_enabled = True
         pipeline.ball_detector = MagicMock()  # 非 None
 
-        result = pipeline._run_bounce_detection(
-            job_id="j", video_id="v", ball_ctx=ctx, fps=30.0
-        )
+        result = pipeline._run_bounce_detection(job_id="j", video_id="v", ball_ctx=ctx, fps=30.0)
         assert result is not None
         assert result.status == "available"
         assert result.raw_points is not None
@@ -400,15 +393,13 @@ class TestRunBounceDetection:
         assert result.bounce_events is not None
 
     def test_tracker_fails_midway_returns_partial(self, pipeline):
-        fake_tracker = MagicMock()
+        MagicMock()
         samples = [_make_sample(0), _make_sample(1)]
         ctx = _BallRunContext(tracker=None, samples=samples, error="球检测运行时失败")
         pipeline.ball_detection_enabled = True
         pipeline.ball_detector = MagicMock()
 
-        result = pipeline._run_bounce_detection(
-            job_id="j", video_id="v", ball_ctx=ctx, fps=30.0
-        )
+        result = pipeline._run_bounce_detection(job_id="j", video_id="v", ball_ctx=ctx, fps=30.0)
         assert result is not None
         # tracker is None but has samples with error → failed
         assert result.status == "failed"
@@ -422,9 +413,7 @@ class TestRunBounceDetection:
         pipeline.ball_detection_enabled = True
         pipeline.ball_detector = MagicMock()
 
-        result = pipeline._run_bounce_detection(
-            job_id="j", video_id="v", ball_ctx=ctx, fps=30.0
-        )
+        result = pipeline._run_bounce_detection(job_id="j", video_id="v", ball_ctx=ctx, fps=30.0)
         # 正常路径应该成功
         assert result is not None
         assert result.status == "available"
@@ -433,6 +422,7 @@ class TestRunBounceDetection:
 # ---------------------------------------------------------------------------
 # 5. strict mode 测试（通过 run() 验证）
 # ---------------------------------------------------------------------------
+
 
 def _mock_settings(**overrides: Any) -> MagicMock:
     """构造一个包含 AnalysisPipeline.__init__ 所需全部字段的 settings mock。"""
@@ -525,6 +515,7 @@ class TestStrictMode:
 # 6. 现有 tracking / pose / serve 兼容性检查（无回归）
 # ---------------------------------------------------------------------------
 
+
 class TestBackwardCompatibility:
     def test_pipeline_initializes_without_ball_model(self):
         """即使没有 ball_detector，AnalysisPipeline 也能正常初始化。"""
@@ -601,6 +592,7 @@ class TestProjectedTracksAllowOutOfBoundsPlayers:
 
     def _make_position(self, court_x: float, court_y: float, *, status: str = "outside_court_visible"):
         from app.schemas.tracking import PlayerFramePosition
+
         return PlayerFramePosition(
             frame_index=0,
             timestamp=0.0,

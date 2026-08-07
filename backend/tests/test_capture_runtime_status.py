@@ -12,12 +12,12 @@
 通过手动构造 CaptureTake / CaptureTrack / MediaFragment 和 tmp_path 上的真实分片文件
 验证文件大小、存储容量、码率、有效帧率、同步状态的聚合逻辑。
 """
+
 from __future__ import annotations
 
-import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -29,35 +29,44 @@ from app.database import get_session_factory, init_db  # noqa: E402
 
 init_db()
 
-from app.models.capture_take import CaptureTake, CaptureTakeStatus, CaptureMode, SourceSessionType  # noqa: E402
-from app.models.capture_track import CaptureTrack, TrackRole, CaptureTrackSlot, AnalysisRole, OffsetSource, SyncQuality  # noqa: E402
-from app.models.media_fragment import MediaFragment, FragmentStatus  # noqa: E402
+from app.models.capture_take import CaptureMode, CaptureTake, CaptureTakeStatus, SourceSessionType  # noqa: E402
+from app.models.capture_track import (  # noqa: E402
+    AnalysisRole,
+    CaptureTrack,
+    CaptureTrackSlot,
+    OffsetSource,
+    SyncQuality,
+    TrackRole,
+)
 from app.models.field_session import FieldSession  # noqa: E402
+from app.models.media_fragment import FragmentStatus, MediaFragment  # noqa: E402
 from app.services import capture_runtime_status_service as runtime_svc  # noqa: E402
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 测试夹具
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def db():
     """提供独立数据库会话，测试结束清理创建的活跃 CaptureTake，避免污染其他测试。"""
     session = get_session_factory()()
-    created_take_ids: list[str] = []
     try:
         # 包装 _make_take 以追踪创建的 take id
         yield session
     finally:
         # 清理本测试创建的所有 CaptureTake（含关联的 track/fragment 由外键级联或手动删）
         try:
-            from app.models.capture_take import CaptureTake as _CT, CaptureTakeStatus as _CTS
-            from app.models.capture_track import CaptureTrack as _TR
-            from app.models.media_fragment import MediaFragment as _MF
-            from app.models.field_session import FieldSession as _FS
             # 查找本测试产生的活跃 take（started_at 在近 4 小时内、status 为活跃）
-            from datetime import datetime, timezone, timedelta
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+            from datetime import datetime, timedelta
+
+            from app.models.capture_take import CaptureTake as _CT
+            from app.models.capture_take import CaptureTakeStatus as _CTS
+            from app.models.capture_track import CaptureTrack as _TR
+            from app.models.field_session import FieldSession as _FS
+            from app.models.media_fragment import MediaFragment as _MF
+
+            cutoff = datetime.now(UTC) - timedelta(hours=4)
             active_takes = (
                 session.query(_CT)
                 .filter(_CT.status.in_([_CTS.starting, _CTS.recording]))
@@ -82,6 +91,7 @@ def db():
 def _make_field_session(db, court_name: str = "test-court") -> FieldSession:
     """创建一个最小化的 FieldSession 记录。"""
     import uuid
+
     fs = FieldSession(
         id=f"fs_{uuid.uuid4().hex[:8]}",
         title="runtime-status-test",
@@ -111,6 +121,7 @@ def _make_take(
 ) -> CaptureTake:
     """创建一个 CaptureTake 记录。"""
     import uuid
+
     take = CaptureTake(
         id=f"ct_{uuid.uuid4().hex[:8]}",
         field_session_id=fs.id,
@@ -121,11 +132,16 @@ def _make_take(
         session_dir=session_dir,
         storage_status="available",
         status=status,
-        started_at=started_at or datetime.now(timezone.utc),
-        ended_at=datetime.now(timezone.utc) if status in {
-            CaptureTakeStatus.completed, CaptureTakeStatus.failed,
-            CaptureTakeStatus.canceled, CaptureTakeStatus.partial,
-        } else None,
+        started_at=started_at or datetime.now(UTC),
+        ended_at=datetime.now(UTC)
+        if status
+        in {
+            CaptureTakeStatus.completed,
+            CaptureTakeStatus.failed,
+            CaptureTakeStatus.canceled,
+            CaptureTakeStatus.partial,
+        }
+        else None,
         duration_ms=duration_ms,
         revision=0,
     )
@@ -144,6 +160,7 @@ def _make_track(
 ) -> CaptureTrack:
     """创建一个 CaptureTrack 记录。"""
     import uuid
+
     track = CaptureTrack(
         id=f"tr_{uuid.uuid4().hex[:8]}",
         capture_take_id=take.id,
@@ -174,6 +191,7 @@ def _make_fragment(
 ) -> MediaFragment:
     """创建一个 MediaFragment 记录。"""
     import uuid
+
     frag = MediaFragment(
         id=f"frag_{uuid.uuid4().hex[:8]}",
         capture_take_id=take.id,
@@ -182,10 +200,14 @@ def _make_fragment(
         rotation_index=0,
         file_path=file_path,
         status=status,
-        started_at=datetime.now(timezone.utc),
-        ended_at=datetime.now(timezone.utc) if status not in {
-            FragmentStatus.starting, FragmentStatus.recording,
-        } else None,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC)
+        if status
+        not in {
+            FragmentStatus.starting,
+            FragmentStatus.recording,
+        }
+        else None,
         file_size=file_size,
         error_message=error_message,
     )
@@ -198,13 +220,16 @@ def _make_fragment(
 # 1. 单摄活跃录制
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_single_camera_active_recording_returns_storage_and_file_size(db, tmp_path):
     """单摄 recording 状态：应返回存储容量、文件大小（含活动分片）和 collecting 帧率。"""
     session_dir = tmp_path / "session"
     session_dir.mkdir()
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="single",
+        db,
+        fs=fs,
+        capture_mode="single",
         status=CaptureTakeStatus.recording,
         session_dir=str(session_dir),
         storage_root=str(tmp_path),
@@ -213,7 +238,9 @@ def test_single_camera_active_recording_returns_storage_and_file_size(db, tmp_pa
 
     # 已完成分片：DB 已有 file_size
     _make_fragment(
-        db, track=track, take=take,
+        db,
+        track=track,
+        take=take,
         file_path=str(session_dir / "frag_0.ts"),
         status=FragmentStatus.completed,
         file_size=1024 * 1024,  # 1 MB
@@ -223,7 +250,9 @@ def test_single_camera_active_recording_returns_storage_and_file_size(db, tmp_pa
     active_frag_path = session_dir / "frag_1.ts"
     active_frag_path.write_bytes(b"x" * (512 * 1024))  # 512 KB
     _make_fragment(
-        db, track=track, take=take,
+        db,
+        track=track,
+        take=take,
         file_path=str(active_frag_path),
         status=FragmentStatus.recording,
         file_size=None,
@@ -274,13 +303,16 @@ def test_single_camera_active_recording_returns_storage_and_file_size(db, tmp_pa
 # 2. 双摄活跃录制
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_dual_camera_active_recording_returns_per_track_status(db, tmp_path):
     """双摄 recording：应返回 cam_1/cam_2 独立状态和 dual_sync 摘要。"""
     session_dir = tmp_path / "session_dual"
     session_dir.mkdir()
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="dual",
+        db,
+        fs=fs,
+        capture_mode="dual",
         status=CaptureTakeStatus.recording,
         session_dir=str(session_dir),
     )
@@ -291,15 +323,25 @@ def test_dual_camera_active_recording_returns_per_track_status(db, tmp_path):
     frag1 = session_dir / "cam1_0.ts"
     frag1.write_bytes(b"a" * 2048)
     _make_fragment(
-        db, track=track1, take=take, file_path=str(frag1),
-        status=FragmentStatus.completed, file_size=2048, fragment_index=0,
+        db,
+        track=track1,
+        take=take,
+        file_path=str(frag1),
+        status=FragmentStatus.completed,
+        file_size=2048,
+        fragment_index=0,
     )
     # cam_2 分片
     frag2 = session_dir / "cam2_0.ts"
     frag2.write_bytes(b"b" * 1024)
     _make_fragment(
-        db, track=track2, take=take, file_path=str(frag2),
-        status=FragmentStatus.recording, file_size=None, fragment_index=0,
+        db,
+        track=track2,
+        take=take,
+        file_path=str(frag2),
+        status=FragmentStatus.recording,
+        file_size=None,
+        fragment_index=0,
     )
 
     db.commit()
@@ -327,22 +369,29 @@ def test_dual_camera_active_recording_returns_per_track_status(db, tmp_path):
 # 3. 终态录制
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_terminal_take_returns_last_metrics_and_stops_bitrate_updates(db, tmp_path):
     """终态录制：应返回 duration_ms、unavailable 帧率，且不再更新码率缓存。"""
     session_dir = tmp_path / "session_done"
     session_dir.mkdir()
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="single",
+        db,
+        fs=fs,
+        capture_mode="single",
         status=CaptureTakeStatus.completed,
         session_dir=str(session_dir),
         duration_ms=60_000,
     )
     track = _make_track(db, take=take, slot="cam_1")
     _make_fragment(
-        db, track=track, take=take,
+        db,
+        track=track,
+        take=take,
         file_path=str(session_dir / "done.ts"),
-        status=FragmentStatus.completed, file_size=5000, fragment_index=0,
+        status=FragmentStatus.completed,
+        file_size=5000,
+        fragment_index=0,
     )
 
     db.commit()
@@ -365,13 +414,16 @@ def test_terminal_take_returns_last_metrics_and_stops_bitrate_updates(db, tmp_pa
 # 4. 部分轨道失败
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_partial_track_failure_reports_error_but_keeps_ready_total(db, tmp_path):
     """一个轨道活动分片不可读（os.stat 失败）时：该轨道 error，take 总大小仍 ready。"""
     session_dir = tmp_path / "session_partial"
     session_dir.mkdir()
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="dual",
+        db,
+        fs=fs,
+        capture_mode="dual",
         status=CaptureTakeStatus.recording,
         session_dir=str(session_dir),
     )
@@ -382,14 +434,23 @@ def test_partial_track_failure_reports_error_but_keeps_ready_total(db, tmp_path)
     frag1 = session_dir / "cam1.ts"
     frag1.write_bytes(b"x" * 1000)
     _make_fragment(
-        db, track=track1, take=take, file_path=str(frag1),
-        status=FragmentStatus.completed, file_size=1000, fragment_index=0,
+        db,
+        track=track1,
+        take=take,
+        file_path=str(frag1),
+        status=FragmentStatus.completed,
+        file_size=1000,
+        fragment_index=0,
     )
     # cam_2 活动分片指向不存在的路径 → os.stat 失败
     _make_fragment(
-        db, track=track2, take=take,
+        db,
+        track=track2,
+        take=take,
         file_path=str(session_dir / "missing.ts"),
-        status=FragmentStatus.recording, file_size=None, fragment_index=0,
+        status=FragmentStatus.recording,
+        file_size=None,
+        fragment_index=0,
     )
 
     db.commit()
@@ -416,13 +477,16 @@ def test_partial_track_failure_reports_error_but_keeps_ready_total(db, tmp_path)
 # 5. 存储错误
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_storage_error_when_disk_usage_fails(db, tmp_path, monkeypatch):
     """shutil.disk_usage 抛 OSError：返回 storage error，不回退到默认目录。"""
     session_dir = tmp_path / "session"
     session_dir.mkdir()
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="single",
+        db,
+        fs=fs,
+        capture_mode="single",
         status=CaptureTakeStatus.recording,
         session_dir=str(session_dir),
     )
@@ -432,6 +496,7 @@ def test_storage_error_when_disk_usage_fails(db, tmp_path, monkeypatch):
     # 模拟磁盘读取失败
     def _fail_disk_usage(_path):
         raise OSError("simulated storage failure")
+
     monkeypatch.setattr(
         "app.services.capture_runtime_status_service.shutil.disk_usage",
         _fail_disk_usage,
@@ -450,7 +515,9 @@ def test_storage_unavailable_when_session_dir_is_none(db):
     """CaptureTake 尚未绑定 session_dir：返回 unavailable，不抛异常。"""
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="single",
+        db,
+        fs=fs,
+        capture_mode="single",
         status=CaptureTakeStatus.starting,
         session_dir=None,
     )
@@ -468,6 +535,7 @@ def test_storage_unavailable_when_session_dir_is_none(db):
 # 6. 不存在的 Take
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_nonexistent_take_returns_none(db):
     """不存在的 CaptureTake ID：聚合服务返回 None（路由层映射为 404）。"""
     status = runtime_svc.get_capture_take_runtime_status(db, "ct_does_not_exist")
@@ -478,13 +546,16 @@ def test_nonexistent_take_returns_none(db):
 # 7. 码率缓存逻辑
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_bitrate_computed_on_second_snapshot(db, tmp_path):
     """两次快照间隔足够时：第二次返回 ready 码率。"""
     session_dir = tmp_path / "session_bitrate"
     session_dir.mkdir()
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="single",
+        db,
+        fs=fs,
+        capture_mode="single",
         status=CaptureTakeStatus.recording,
         session_dir=str(session_dir),
     )
@@ -494,8 +565,13 @@ def test_bitrate_computed_on_second_snapshot(db, tmp_path):
     frag_path = session_dir / "frag.ts"
     frag_path.write_bytes(b"x" * 1024)
     _make_fragment(
-        db, track=track, take=take, file_path=str(frag_path),
-        status=FragmentStatus.recording, file_size=None, fragment_index=0,
+        db,
+        track=track,
+        take=take,
+        file_path=str(frag_path),
+        status=FragmentStatus.recording,
+        file_size=None,
+        fragment_index=0,
     )
     db.commit()
     runtime_svc.reset_bitrate_sample(take.id)
@@ -522,6 +598,7 @@ def test_bitrate_computed_on_second_snapshot(db, tmp_path):
 # 8. 安全边界：不接受客户端路径覆盖
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_runtime_status_uses_only_take_session_dir_not_client_path(db, tmp_path):
     """runtime status 只读取 CaptureTake.session_dir，客户端无法注入任意路径。"""
     real_dir = tmp_path / "real_session"
@@ -533,7 +610,9 @@ def test_runtime_status_uses_only_take_session_dir_not_client_path(db, tmp_path)
 
     fs = _make_field_session(db)
     take = _make_take(
-        db, fs=fs, capture_mode="single",
+        db,
+        fs=fs,
+        capture_mode="single",
         status=CaptureTakeStatus.recording,
         session_dir=str(real_dir),
     )
@@ -541,8 +620,13 @@ def test_runtime_status_uses_only_take_session_dir_not_client_path(db, tmp_path)
     frag_path = real_dir / "frag.ts"
     frag_path.write_bytes(b"y" * 500)
     _make_fragment(
-        db, track=track, take=take, file_path=str(frag_path),
-        status=FragmentStatus.recording, file_size=None, fragment_index=0,
+        db,
+        track=track,
+        take=take,
+        file_path=str(frag_path),
+        status=FragmentStatus.recording,
+        file_size=None,
+        fragment_index=0,
     )
     db.commit()
     runtime_svc.reset_bitrate_sample(take.id)

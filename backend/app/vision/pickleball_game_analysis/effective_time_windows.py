@@ -10,7 +10,8 @@ DB 访问封装在 _rally_windows_from_capture_take 内（惰性导入，避免�
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 # 这些事件类型表示"非比赛状态"：出现在未闭合的 rally 窗口内时终止该窗口。
 NON_PLAY_EVENT_TYPES = {

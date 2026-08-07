@@ -31,23 +31,25 @@ from app.vision.courtvision_calibration_engine.homography import compute_homogra
 @dataclass(frozen=True)
 class ReferenceLineResult:
     """单条球线投影后的支持度评估。"""
-    line_name: str                          # 该球线名称（如 "baseline_left"）
-    start_image: tuple[int, int]            # 投影回图像后的起点像素坐标 (x, y)
-    end_image: tuple[int, int]              # 投影回图像后的终点像素坐标 (x, y)
-    support_ratio: float                    # 沿线采样点落在 mask 上的比例（0~1）
-    sample_count: int                       # 沿线采样点数
+
+    line_name: str  # 该球线名称（如 "baseline_left"）
+    start_image: tuple[int, int]  # 投影回图像后的起点像素坐标 (x, y)
+    end_image: tuple[int, int]  # 投影回图像后的终点像素坐标 (x, y)
+    support_ratio: float  # 沿线采样点落在 mask 上的比例（0~1）
+    sample_count: int  # 沿线采样点数
 
 
 @dataclass
 class ReferenceDiagnosticResult:
     """reference line support 的完整诊断结果。"""
-    reference_score: float                     # 0.0 ~ 1.0，综合可信度评分
-    coverage: float                            # 9 条线中有支持度的比例
-    supported_lines: int                       # support_ratio >= threshold 的线数
-    total_lines: int                           # 总投影线数（固定 9）
-    line_results: list[ReferenceLineResult]    # 每条线的详细结果
+
+    reference_score: float  # 0.0 ~ 1.0，综合可信度评分
+    coverage: float  # 9 条线中有支持度的比例
+    supported_lines: int  # support_ratio >= threshold 的线数
+    total_lines: int  # 总投影线数（固定 9）
+    line_results: list[ReferenceLineResult]  # 每条线的详细结果
     rejection_reasons: list[str] = field(default_factory=list)  # 不通过的原因列表
-    summary: str = ""                          # 一句话汇总
+    summary: str = ""  # 一句话汇总
 
 
 # 容忍像素：projected line 上采样点距离 mask 轮廓的允许偏差
@@ -133,9 +135,7 @@ def compute_reference_line_support(
 
     rejection_reasons: list[str] = []
     if reference_score < reference_reject_threshold:
-        rejection_reasons.append(
-            f"reference_score ({reference_score:.2f}) 低于下限 ({reference_reject_threshold:.2f})"
-        )
+        rejection_reasons.append(f"reference_score ({reference_score:.2f}) 低于下限 ({reference_reject_threshold:.2f})")
 
     summary_parts = [
         f"reference_score={reference_score:.2f}",
@@ -181,8 +181,7 @@ def build_reference_diagnostics(result: ReferenceDiagnosticResult) -> ReferenceL
         tolerance_px=DEFAULT_TOLERANCE_PX,
         line_count_supported=result.supported_lines,
         passing_line_names=[
-            r.line_name for r in result.line_results
-            if r.support_ratio >= DEFAULT_LINE_SUPPORT_THRESHOLD
+            r.line_name for r in result.line_results if r.support_ratio >= DEFAULT_LINE_SUPPORT_THRESHOLD
         ],
         rejection_reason=result.rejection_reasons[0] if result.rejection_reasons else None,
         summary=result.summary,
@@ -196,7 +195,6 @@ def _evaluate_line(
     tolerance_px: float,
 ) -> ReferenceLineResult:
     """把单条球场线从 court 坐标投影到图像，沿线采样并统计落在掩码上的比例。"""
-    import cv2
 
     from app.vision.courtvision_calibration_engine.court_overlay import _project_point as project_court_point
 

@@ -1,7 +1,7 @@
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,7 +12,6 @@ from app.vision.courtvision_calibration_engine.real_video_frame_extraction impor
     extract_real_video_frames,
     sanitize_video_stem,
 )
-
 
 cv2 = pytest.importorskip("cv2")
 

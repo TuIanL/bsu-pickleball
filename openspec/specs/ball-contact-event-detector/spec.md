@@ -1,10 +1,10 @@
 # ball-contact-event-detector Specification
 
 ## Purpose
-定义启发式击球候选检测（hit_candidate / confirmed_hit / rejected_hit）与击球/弹地候选的事件仲裁（BallEventResolver），为飞行段切分提供 confirmed_hit 边界事件。
+定义启发式击球候选检测（raw hit candidate）与事件仲裁的两阶段职责：`BallContactEventDetector` 只负责球运动突变检测，`BallEventResolver.prefilter` 成为弹地抑制的唯一权威，`finalize` 结合球员归属输出最终事件。suppressed/rejected 候选不进入正式事件列表。
 ## Requirements
 ### Requirement: 启发式击球候选检测
-系统 SHALL 提供基于轨迹运动特征而非姿态关键点的启发式击球候选检测器，输出候选事件状态。
+系统 SHALL 提供基于轨迹运动特征而非姿态关键点的启发式击球候选检测器，输出原始候选事件状态。检测器 SHALL 只负责球运动突变检测，不读取 `bounce_events`，不执行弹地抑制。
 
 #### Scenario: 输出击球候选
 - **WHEN** 检测器在突变前后均检测到连续有效观测，且速度方向变化达到阈值或速度幅值发生明显变化
@@ -21,15 +21,15 @@
 - **THEN** 检测器 SHALL NOT 将该帧标记为击球候选
 - **AND** 该帧仅作为轨迹恢复点处理
 
-#### Scenario: 已确认弹地抑制窗口内的候选
-- **WHEN** 击球候选落在已确认弹地事件的抑制窗口内
-- **THEN** 检测器 SHALL 抑制该候选
-- **AND** 抑制原因 SHALL 记录为 `within_bounce_suppression_window`
-
 #### Scenario: 满足最小事件间隔
 - **WHEN** 连续两个击球候选的时间间隔小于配置的最小事件间隔（refractory period）
 - **THEN** 检测器 SHALL 保留置信度更高的候选
 - **AND** 丢弃间隔内的另一个候选
+
+#### Scenario: 检测器不读取弹地事件
+- **WHEN** 检测器执行候选检测
+- **THEN** 检测器 SHALL NOT 接收或读取 `bounce_events`
+- **AND** 弹地抑制 SHALL 只由 `BallEventResolver.prefilter` 执行
 
 ### Requirement: 突变上下文与拟合残差校验
 系统 SHALL 在突变前后分别校验轨迹拟合残差，确认突变不是孤立误检造成的假象。
@@ -45,35 +45,39 @@
 - **AND** 拒绝原因 SHALL 记录为 `high_fit_residual`
 
 ### Requirement: 击球与弹地候选仲裁
-系统 SHALL 通过事件仲裁层解决同一时间窗口内击球候选与弹地候选的冲突，不武断分类。
+系统 SHALL 通过 `BallEventResolver` 两阶段仲裁解决击球候选与弹地候选的冲突：`prefilter` 为弹地抑制唯一权威，`finalize` 结合球员归属输出最终事件。弹地抑制 SHALL 使用有符号非对称时间窗口。
 
 #### Scenario: 高可信弹地存在时抑制击球
-- **WHEN** 同一时间窗口内已存在高可信 bounce 事件
-- **THEN** 仲裁层 SHALL 抑制对应的 hit candidate
-- **AND** 仅保留 bounce 事件作为该时刻的边界事件
+- **WHEN** 候选时间与已确认 bounce 的有符号时间差位于非对称窗口内（bounce 前 0.07 秒内或 bounce 后 0.10 秒内），且 bounce 置信度达标
+- **THEN** prefilter SHALL 标记该候选为 `suppressed`
+- **AND** 该候选 SHALL 只进入 diagnostics，MUST NOT 生成正式边界事件
 
-#### Scenario: 靠近球员区域且弹地证据弱时接受击球
-- **WHEN** 击球候选明显靠近球员区域且同窗口弹地证据较弱
-- **THEN** 仲裁层 SHALL 接受 hit candidate
-- **AND** 事件来源 SHALL 标记为 `heuristic`
+#### Scenario: bounce 后超出容差的候选放行
+- **WHEN** 候选时间晚于 bounce 超过配置的 after 容差（如 +0.12 秒）
+- **THEN** prefilter SHALL NOT 仅凭时间接近抑制该候选
+- **AND** 候选 SHALL 进入球员归属阶段，由球员时空证据继续判断
 
-#### Scenario: 两者证据都不充分
-- **WHEN** 同窗口内击球候选与弹地候选的证据均不充分
-- **THEN** 仲裁层 SHALL 输出 `event_type = ambiguous`
-- **AND** 该事件 SHALL 仅用于切段或降低质量评分，不武断分类为击球或弹地
+#### Scenario: 最终事件只含确认结果
+- **WHEN** prefilter 与 finalize 完成
+- **THEN** 正式事件列表 SHALL 只包含 `event_status ∈ {confirmed, ambiguous}` 的击球事件
+- **AND** 事件列表 SHALL NOT 包含 `suppressed_by_bounce` 类型的 HIT 事件
 
-#### Scenario: 球员运动仅作弱证据
-- **WHEN** `player_motion_pixels` 可用时
-- **THEN** 仲裁层 SHALL 将其作为弱证据参与击球候选评估
-- **AND** MUST NOT 仅凭 player_motion_pixels 将候选确定为击球
+#### Scenario: 抑制窗口配置快照
+- **WHEN** 系统执行弹地抑制
+- **THEN** 配置快照 SHALL 记录 `bounce_suppress_before_sec`、`bounce_suppress_after_sec`、`effective_fps` 与 `frame_stride`
+- **AND** 快照 SHALL 写入产物 diagnostics 以便数据集调参
 
 ### Requirement: 击球事件来源标注
-系统 SHALL 为每个被确认的击球事件记录事件来源类型，第一版仅使用 `heuristic`。
+系统 SHALL 为每个被确认的击球事件记录事件来源类型与归属方法。
 
-#### Scenario: 第一版使用启发式来源
-- **WHEN** 击球事件由纯启发式规则确认
-- **THEN** 事件 `event_source` SHALL 为 `heuristic`
-- **AND** 后续版本接入手腕/球拍区域后 SHALL 支持 `pose_assisted` 与 `manual_corrected` 来源
+#### Scenario: 启发式来源
+- **WHEN** 击球事件由纯启发式规则确认且无球员归属
+- **THEN** 事件 `source` SHALL 为 `heuristic`
+
+#### Scenario: 归属来源标注
+- **WHEN** 击球事件完成球员归属
+- **THEN** 事件 SHALL 记录归属方法（如 `pose_bbox_fused`、`bbox_fused`、`serve_seeded`）
+- **AND** 归属方法 SHALL 区分是否使用了姿态证据
 
 ### Requirement: 确定性输出
 系统 SHALL 对相同输入产生确定性的候选事件序列。
@@ -81,4 +85,3 @@
 #### Scenario: 相同输入产生相同事件
 - **WHEN** 对同一份轨迹输入重复运行击球检测
 - **THEN** 击球候选、仲裁结果与事件 ID 序列 SHALL 完全一致
-

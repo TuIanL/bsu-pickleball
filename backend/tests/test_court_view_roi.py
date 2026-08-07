@@ -1,5 +1,3 @@
-import numpy as np
-
 from app.schemas.court_view import CourtViewThresholds
 from app.schemas.tracking import Detection
 from app.vision.court_view import (

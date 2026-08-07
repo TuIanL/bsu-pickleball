@@ -1,6 +1,12 @@
 import pytest
 
-from app.schemas.tracking import PlayerFramePosition, PlayerIdentityDiagnostic, PlayerTrajectoryArtifact, PlayerTrajectorySample, PlayerTrajectoryState
+from app.schemas.tracking import (
+    PlayerFramePosition,
+    PlayerIdentityDiagnostic,
+    PlayerTrajectoryArtifact,
+    PlayerTrajectorySample,
+    PlayerTrajectoryState,
+)
 from app.vision.courtvision_calibration_engine.court_units import (
     PICKLEBALL_COURT_LENGTH_M,
     PICKLEBALL_COURT_WIDTH_M,
@@ -206,7 +212,9 @@ def test_identity_never_creates_identity_beyond_locked_slots():
     assert samples == []
     assert len(manager.players) == 4
     assert 5 not in manager.track_to_player
-    assert any(diagnostic.event in {"filtered", "unmatched"} and diagnostic.track_id == 5 for diagnostic in manager.diagnostics)
+    assert any(
+        diagnostic.event in {"filtered", "unmatched"} and diagnostic.track_id == 5 for diagnostic in manager.diagnostics
+    )
 
 
 def test_identity_updates_lost_and_inactive_statuses():
@@ -305,9 +313,7 @@ def test_identity_filters_non_target_court_tracks_from_eligible_set():
     assert [sample.track_id for sample in samples] == [1]
     assert 2 not in manager.track_to_player
     assert any(
-        diagnostic.event == "filtered"
-        and diagnostic.track_id == 2
-        and diagnostic.reason == "not target-court eligible"
+        diagnostic.event == "filtered" and diagnostic.track_id == 2 and diagnostic.reason == "not target-court eligible"
         for diagnostic in manager.diagnostics
     )
 
@@ -317,7 +323,7 @@ def test_trajectory_player_id_schema_rejects_non_canonical_and_out_of_range():
     PlayerTrajectorySample(frame_index=0, timestamp_seconds=0, player_id="Player_1", court_x=0, court_y=0)
     PlayerTrajectoryState(player_id="Player_4")
     for bad in ("Player_0", "Player_5", "player_1", "164", "T164"):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             PlayerTrajectorySample(frame_index=0, timestamp_seconds=0, player_id=bad, court_x=0, court_y=0)
 
 

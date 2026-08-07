@@ -1,9 +1,9 @@
 """CaptureStartCoordinator —— 统一录制启动编排，单事务创建 Take + Tracks + Leases。"""
+
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models.capture_take import CaptureMode, CaptureTakeStatus, SourceSessionType
 
@@ -50,7 +50,6 @@ class CaptureStartCoordinator:
         session_dir: str | None = None,
     ) -> PreparedCapture:
         """在单事务中创建 CaptureTake + N CaptureTrack + N CameraLease。"""
-        from app.database import get_session_factory
 
         take_id = self._generate_take_id(source_session_type, source_session_id)
         camera_ids = [t.camera_id for t in tracks]
@@ -58,7 +57,7 @@ class CaptureStartCoordinator:
         db = self._db_factory()
         try:
             from app.models.capture_take import CaptureTake
-            from app.models.capture_track import CaptureTrack, CaptureTrackSlot, AnalysisRole, TrackRole
+            from app.models.capture_track import AnalysisRole, CaptureTrack, CaptureTrackSlot, TrackRole
 
             take = CaptureTake(
                 id=take_id,
@@ -69,12 +68,13 @@ class CaptureStartCoordinator:
                 storage_root=storage_root,
                 session_dir=session_dir,
                 status=CaptureTakeStatus.starting,
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
             )
             db.add(take)
             db.flush()
-            from app.services.capture_take_service import initialize_capture_take_timeline
             from app.models.field_session import FieldSession
+            from app.services.capture_take_service import initialize_capture_take_timeline
+
             fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
             if fs and fs.match_format in ("singles", "doubles"):
                 scoring_mode = "hybrid_21_best_of_5_v1"
@@ -82,9 +82,9 @@ class CaptureStartCoordinator:
             else:
                 scoring_mode = "none"
                 scoring_ruleset_version = None
-            initialize_capture_take_timeline(db, take,
-                                             scoring_mode=scoring_mode,
-                                             scoring_ruleset_version=scoring_ruleset_version)
+            initialize_capture_take_timeline(
+                db, take, scoring_mode=scoring_mode, scoring_ruleset_version=scoring_ruleset_version
+            )
 
             prepared_tracks: list[PreparedTrack] = []
             for spec in tracks:
@@ -98,12 +98,14 @@ class CaptureStartCoordinator:
                     analysis_role=AnalysisRole(spec.analysis_role),
                 )
                 db.add(track)
-                prepared_tracks.append(PreparedTrack(
-                    capture_track_id=track_id,
-                    slot=spec.slot,
-                    camera_id=spec.camera_id,
-                    analysis_role=spec.analysis_role,
-                ))
+                prepared_tracks.append(
+                    PreparedTrack(
+                        capture_track_id=track_id,
+                        slot=spec.slot,
+                        camera_id=spec.camera_id,
+                        analysis_role=spec.analysis_role,
+                    )
+                )
 
             db.commit()
         except Exception:
@@ -141,6 +143,7 @@ class CaptureStartCoordinator:
         db = self._db_factory()
         try:
             from app.models.capture_take import CaptureTake, CaptureTakeStatus
+
             take = db.query(CaptureTake).filter(CaptureTake.id == capture_take_id).first()
             if take and take.status == CaptureTakeStatus.starting:
                 take.status = CaptureTakeStatus.recording
@@ -155,10 +158,11 @@ class CaptureStartCoordinator:
         db = self._db_factory()
         try:
             from app.models.capture_take import CaptureTake, CaptureTakeStatus
+
             take = db.query(CaptureTake).filter(CaptureTake.id == capture_take_id).first()
             if take:
                 take.status = CaptureTakeStatus.failed
-                take.ended_at = datetime.now(timezone.utc)
+                take.ended_at = datetime.now(UTC)
                 db.commit()
         except Exception:
             db.rollback()

@@ -4,18 +4,19 @@
 所有替身均为内存实现，不启动真实 FFmpeg 进程，不访问真实数据库。
 通过构造函数配置行为，提供可控的录制生命周期供业务逻辑测试使用。
 """
+
 from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from app.camera.recorder_exit import RecorderExit
 
-
 # ── FakeRecorder ────────────────────────────────────────────────
+
 
 class FakeRecorder:
     """可控的单摄 Recorder 替身。"""
@@ -126,6 +127,7 @@ class FakeRecorder:
 
 # ── FakeSyncRecorder ────────────────────────────────────────────
 
+
 @dataclass
 class FakeSyncSegment:
     segment_index: int
@@ -192,6 +194,7 @@ class FakeSyncRecorder:
 
 
 # ── FakeLeaseManager ────────────────────────────────────────────
+
 
 @dataclass
 class FakeLease:

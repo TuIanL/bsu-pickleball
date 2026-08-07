@@ -17,11 +17,11 @@
 from __future__ import annotations
 
 from math import isfinite
-from typing import Any, List, Literal, Optional
-
-from app.schemas.analysis import MatchAnalysisContext
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.analysis import MatchAnalysisContext
 
 # 从 calibration 模块导入"图像坐标点"模型（x, y 的二维点）。
 # 这里只导入类型定义，不会触发任何相机/标定的运行时逻辑。
@@ -41,10 +41,20 @@ from app.schemas.calibration import ImagePoint
 # - knee_extrapolated：从双膝向下外推估算脚点（脚踝不可见时）
 # - segmentation_mask_bottom：取人体分割掩码的最底部（最准但最慢）
 # - hybrid：自动优先级选择（pose_ankle_midpoint > pose_ankle_single > knee_extrapolated > bbox_bottom_center）
-FootpointMethod = Literal["bbox_bottom_center", "pose_ankle_average", "pose_ankle_midpoint", "pose_ankle_single", "knee_extrapolated", "segmentation_mask_bottom", "hybrid"]
+FootpointMethod = Literal[
+    "bbox_bottom_center",
+    "pose_ankle_average",
+    "pose_ankle_midpoint",
+    "pose_ankle_single",
+    "knee_extrapolated",
+    "segmentation_mask_bottom",
+    "hybrid",
+]
 
 # 投影状态枚举：描述投影点相对于球场和跟踪缓冲区的空间关系
-ProjectionStatus = Literal["inside_court", "outside_court_visible", "outside_tracking_area", "projection_failed", "unknown"]
+ProjectionStatus = Literal[
+    "inside_court", "outside_court_visible", "outside_tracking_area", "projection_failed", "unknown"
+]
 
 # 某个坐标/位置是否有效（valid=有效，invalid=无效，例如被判定为异常抖动）
 PositionValidity = Literal["valid", "invalid"]
@@ -128,9 +138,9 @@ def _validate_player_id(value: str) -> str:
     原始 tracker track_id 不得作为 player_id 进入最终产物。
     """
     text = str(value)
-    if not text.startswith("Player_") or not text[len("Player_"):].isdigit():
+    if not text.startswith("Player_") or not text[len("Player_") :].isdigit():
         raise ValueError(f"player_id must be canonical Player_1..Player_4, got {text!r}")
-    number = int(text[len("Player_"):])
+    number = int(text[len("Player_") :])
     if not 1 <= number <= 4:
         raise ValueError(f"player_id must be Player_1..Player_4, got {text!r}")
     return text
@@ -200,11 +210,11 @@ class FrameDetection(BaseModel):
     confidence: float = Field(ge=0, le=1)
     class_name: Literal["person"] = "person"
     # 跟踪算法给这条检测分配的轨迹 ID（还没关联时为 None）
-    track_id: Optional[str] = None
+    track_id: str | None = None
     # 这条检测对应到的最终"球员身份"ID（还没判定时为 None）
-    player_id: Optional[str] = None
+    player_id: str | None = None
     # 额外的文字标签（例如 "target"），可选
-    label: Optional[str] = None
+    label: str | None = None
     # 该帧的原始宽度/高度，用于把坐标换算回原图比例
     source_width: int = Field(ge=1)
     source_height: int = Field(ge=1)
@@ -228,7 +238,7 @@ class DetectionOverlayFrame(BaseModel):
 
 
 class TrackingOverlayArtifact(BaseModel):
-    """"检测叠加"这个产物的完整描述（多帧 + 元信息）。
+    """ "检测叠加"这个产物的完整描述（多帧 + 元信息）。
 
     Artifact（产物）指的是分析流程跑完后留下的一团结果数据。
     这里是把所有帧的检测叠加数据汇总起来，并附带视频的元信息。
@@ -236,7 +246,7 @@ class TrackingOverlayArtifact(BaseModel):
 
     # 任务 ID（analysis 任务的唯一标识）
     job_id: str
-    video_id: Optional[str] = None
+    video_id: str | None = None
     # 产物状态：available=可用 / no_detections=没检测到人 / unavailable=不可用
     status: Literal["available", "no_detections", "unavailable"] = "unavailable"
     # 对状态的人类可读说明（例如"未找到任何检测框"）
@@ -293,7 +303,7 @@ class PlayerFramePosition(BaseModel):
     # 画面上的脚点 [x, y]
     image_footpoint: list[float] = Field(min_length=2, max_length=2)
     # 球场坐标系中的位置 [x, y]（可能还没换算出来，所以可为 None）
-    court_position: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    court_position: list[float] | None = Field(default=None, min_length=2, max_length=2)
     # 球场坐标的单位（米或英尺）
     court_unit: CourtUnit = "ft"
     confidence: float = Field(ge=0, le=1)
@@ -326,7 +336,7 @@ class PlayerFramePosition(BaseModel):
 
     @field_validator("court_position")
     @classmethod
-    def validate_court_position(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+    def validate_court_position(cls, value: list[float] | None) -> list[float] | None:
         # 球场位置可能为 None（还没投影出来），这时直接放行
         if value is None:
             return None
@@ -339,9 +349,9 @@ class TrackingResult(BaseModel):
     把检测、轨迹、逐帧位置等所有产物集中在一起返回。
     """
 
-    video_id: Optional[str] = None
+    video_id: str | None = None
     # 本次跟踪使用的标定（相机标定）ID；没做标定时为 None
-    calibration_id: Optional[str] = None
+    calibration_id: str | None = None
     fps: float = Field(default=0.0, ge=0)
     frame_count: int = Field(default=0, ge=0)
     frame_width: int = Field(default=0, ge=0)
@@ -382,8 +392,8 @@ class PlayerTrackletFeature(BaseModel):
     # 平均检测框面积占整个画面的比例（越大说明人离镜头越近）
     mean_bbox_area_ratio: float = Field(default=0.0, ge=0)
     # 该片段在球场上的位置（均值 / 平均均值），可为 None
-    court_position: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
-    mean_court_position: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    court_position: list[float] | None = Field(default=None, min_length=2, max_length=2)
+    mean_court_position: list[float] | None = Field(default=None, min_length=2, max_length=2)
     court_unit: CourtUnit = "ft"
     # 该片段在"目标半场"的占用比例（0~1），用于判断是否目标球员
     target_court_occupancy: float = Field(default=0.0, ge=0, le=1)
@@ -409,7 +419,7 @@ class PlayerTrackletFeature(BaseModel):
 
     @field_validator("court_position", "mean_court_position")
     @classmethod
-    def validate_tracklet_court_position(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+    def validate_tracklet_court_position(cls, value: list[float] | None) -> list[float] | None:
         # 两个球场位置字段都可能为 None
         if value is None:
             return None
@@ -417,7 +427,7 @@ class PlayerTrackletFeature(BaseModel):
 
 
 class PlayerSelectionDiagnostic(BaseModel):
-    """"球员身份判定"对某条轨迹的决策诊断。
+    """ "球员身份判定"对某条轨迹的决策诊断。
 
     当系统要从一堆轨迹里挑出"谁是我们的目标球员"时，
     会为每条轨迹算一个综合分数（final_score），并给出理由。
@@ -430,14 +440,14 @@ class PlayerSelectionDiagnostic(BaseModel):
     # 判定时使用的方法（rule / attention / fallback）
     selection_mode: PlayerSelectionMode = "rule"
     # 如果走了兜底策略，这里说明原因
-    fallback_reason: Optional[str] = None
+    fallback_reason: str | None = None
     # 各项评分（都是 0~1 的小数）：
     target_court_score: float = Field(default=0.0, ge=0, le=1)  # 在目标半场的活动程度
     tracklet_quality_score: float = Field(default=0.0, ge=0, le=1)  # 轨迹质量
     group_consistency_score: float = Field(default=0.0, ge=0, le=1)  # 与同组其他人的一致程度
     # 注意力模型给出的"是/不是目标"的概率（可选）
-    attention_target_probability: Optional[float] = Field(default=None, ge=0, le=1)
-    attention_non_target_probability: Optional[float] = Field(default=None, ge=0, le=1)
+    attention_target_probability: float | None = Field(default=None, ge=0, le=1)
+    attention_non_target_probability: float | None = Field(default=None, ge=0, le=1)
     # 综合最终得分（0~1）
     final_score: float = Field(default=0.0, ge=0, le=1)
     # 给这条轨迹贴的身份标签
@@ -451,14 +461,14 @@ class PlayerSelectionDiagnostic(BaseModel):
 
 
 class PlayerSelectionArtifact(BaseModel):
-    """"球员身份判定"产物的完整描述。"""
+    """ "球员身份判定"产物的完整描述。"""
 
     job_id: str
-    video_id: Optional[str] = None
+    video_id: str | None = None
     status: Literal["available", "unavailable"] = "available"
     detail: str
     selection_mode: PlayerSelectionMode = "rule"
-    fallback_reason: Optional[str] = None
+    fallback_reason: str | None = None
     # 最多判定几名"参与者"（双打通常最多 4 人）
     participant_limit: int = Field(default=4, ge=1)
     # 每条轨迹的诊断信息
@@ -486,9 +496,7 @@ class CourtCoordinateMetadata(BaseModel):
     # 规范单位（内部统一使用的长度单位）
     court_unit: CourtUnit = "m"
     # 标准球场尺寸（米）：单打宽 6.10m，长 13.41m
-    canonical: CourtDimensions = Field(
-        default_factory=lambda: CourtDimensions(width=6.10, length=13.41, unit="m")
-    )
+    canonical: CourtDimensions = Field(default_factory=lambda: CourtDimensions(width=6.10, length=13.41, unit="m"))
     # 英制参考尺寸（英尺）：宽 20ft，长 44ft
     imperial_reference: CourtDimensions = Field(
         default_factory=lambda: CourtDimensions(width=20.0, length=44.0, unit="ft")
@@ -510,17 +518,17 @@ class PlayerTrajectorySample(BaseModel):
     # 球员身份 ID（字符串）
     player_id: str
     # 对应的轨迹 ID（可选）
-    track_id: Optional[int] = None
+    track_id: int | None = None
     # 原始检测框（可选，因为插值点可能没有框）
-    bbox: Optional[list[float]] = Field(default=None, min_length=4, max_length=4)
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     # 画面脚点（可选）
-    image_footpoint: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    image_footpoint: list[float] | None = Field(default=None, min_length=2, max_length=2)
     # 球场坐标 x / y（必填）
     court_x: float
     court_y: float
     # 平滑（降噪）后的坐标，可选
-    smoothed_court_x: Optional[float] = None
-    smoothed_court_y: Optional[float] = None
+    smoothed_court_x: float | None = None
+    smoothed_court_y: float | None = None
     court_unit: CourtUnit = "m"
     confidence: float = Field(default=0.0, ge=0, le=1)
     # 跟踪状态（见顶部 PlayerTrackingStatus 说明）
@@ -537,14 +545,14 @@ class PlayerTrajectorySample(BaseModel):
 
     @field_validator("bbox")
     @classmethod
-    def validate_optional_bbox(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+    def validate_optional_bbox(cls, value: list[float] | None) -> list[float] | None:
         if value is None:
             return None
         return _validate_bbox(value)
 
     @field_validator("image_footpoint")
     @classmethod
-    def validate_optional_image_footpoint(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+    def validate_optional_image_footpoint(cls, value: list[float] | None) -> list[float] | None:
         if value is None:
             return None
         return _validate_point(value, "image_footpoint")
@@ -567,7 +575,7 @@ class PlayerTrajectoryState(BaseModel):
     # 最后一次被看到时的帧序号（-1 表示还没出现过）
     last_seen_frame: int = -1
     # 最后已知位置（米），可选
-    last_position_m: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    last_position_m: list[float] | None = Field(default=None, min_length=2, max_length=2)
     # 最后已知速度（米/秒），默认 [0.0, 0.0]
     last_velocity_mps: list[float] = Field(default_factory=lambda: [0.0, 0.0], min_length=2, max_length=2)
     confidence: float = Field(default=0.0, ge=0, le=1)
@@ -579,7 +587,7 @@ class PlayerTrajectoryState(BaseModel):
 
     @field_validator("last_position_m")
     @classmethod
-    def validate_last_position(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+    def validate_last_position(cls, value: list[float] | None) -> list[float] | None:
         if value is None:
             return None
         return _validate_point(value, "last_position_m")
@@ -609,24 +617,38 @@ class PlayerIdentityDiagnostic(BaseModel):
     #           fallback_tentative_promoted=侧配额降级候选升级 /
     #           soft_takeover_assigned=位置连续性软接管就近指派
     event: Literal[
-        "created", "assigned", "reconnected", "lost", "inactive", "unmatched", "filtered",
-        "player_locked", "player_reconnected_from_lost", "player_reconnected_after_track_change",
-        "player_slot_filled", "rejected_low_conf_unlocked", "rejected_outside_near_court",
-        "rejected_outside_tracking", "rejected_bbox_size", "retained_by_lock",
-        "side_quota_fallback_replaced", "fallback_tentative_promoted", "soft_takeover_assigned",
+        "created",
+        "assigned",
+        "reconnected",
+        "lost",
+        "inactive",
+        "unmatched",
+        "filtered",
+        "player_locked",
+        "player_reconnected_from_lost",
+        "player_reconnected_after_track_change",
+        "player_slot_filled",
+        "rejected_low_conf_unlocked",
+        "rejected_outside_near_court",
+        "rejected_outside_tracking",
+        "rejected_bbox_size",
+        "retained_by_lock",
+        "side_quota_fallback_replaced",
+        "fallback_tentative_promoted",
+        "soft_takeover_assigned",
     ]
-    player_id: Optional[str] = None
-    track_id: Optional[int] = None
+    player_id: str | None = None
+    track_id: int | None = None
     # 该事件的评分（可选）
-    score: Optional[float] = None
+    score: float | None = None
     # 人类可读的原因说明
     reason: str
     # 事件发生时球场坐标（米），可选
-    court_position_m: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
+    court_position_m: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
     @field_validator("court_position_m")
     @classmethod
-    def validate_diagnostic_position(cls, value: Optional[list[float]]) -> Optional[list[float]]:
+    def validate_diagnostic_position(cls, value: list[float] | None) -> list[float] | None:
         if value is None:
             return None
         return _validate_point(value, "court_position_m")
@@ -645,11 +667,11 @@ class PlayerTrajectoryCoverage(BaseModel):
     detected_count: int = Field(default=0, ge=0)
     interpolated_count: int = Field(default=0, ge=0)
     # 首/尾出现的时间（秒），可选
-    first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
-    last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    first_timestamp_seconds: float | None = Field(default=None, ge=0)
+    last_timestamp_seconds: float | None = Field(default=None, ge=0)
     # 首/尾出现的帧序号，可选
-    first_frame_index: Optional[int] = Field(default=None, ge=0)
-    last_frame_index: Optional[int] = Field(default=None, ge=0)
+    first_frame_index: int | None = Field(default=None, ge=0)
+    last_frame_index: int | None = Field(default=None, ge=0)
     # 各状态出现的次数统计（例如 {"detected": 120, "lost": 5}）
     status_counts: dict[str, int] = Field(default_factory=dict)
     # 该球员用过的轨迹 ID 历史
@@ -665,13 +687,13 @@ class PlayerTrajectoryCoverageDiagnostics(BaseModel):
     """所有球员轨迹覆盖率的汇总诊断。"""
 
     # 原始视频时长（秒），可选
-    source_duration_seconds: Optional[float] = Field(default=None, ge=0)
+    source_duration_seconds: float | None = Field(default=None, ge=0)
     # 跟踪结束时间 / 轨迹开始时间 / 轨迹结束时间（秒），均可选
-    tracking_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
-    trajectory_first_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
-    trajectory_last_timestamp_seconds: Optional[float] = Field(default=None, ge=0)
+    tracking_last_timestamp_seconds: float | None = Field(default=None, ge=0)
+    trajectory_first_timestamp_seconds: float | None = Field(default=None, ge=0)
+    trajectory_last_timestamp_seconds: float | None = Field(default=None, ge=0)
     # 整体覆盖率（0~1）：轨迹覆盖的时间 / 视频总时长
-    coverage_ratio: Optional[float] = Field(default=None, ge=0, le=1)
+    coverage_ratio: float | None = Field(default=None, ge=0, le=1)
     # 每位球员的覆盖率明细
     players: list[PlayerTrajectoryCoverage] = Field(default_factory=list)
     # 各类身份事件的总次数
@@ -681,10 +703,10 @@ class PlayerTrajectoryCoverageDiagnostics(BaseModel):
 
 
 class PlayerTrajectoryArtifact(BaseModel):
-    """"球员轨迹"产物的完整描述。"""
+    """ "球员轨迹"产物的完整描述。"""
 
     job_id: str
-    video_id: Optional[str] = None
+    video_id: str | None = None
     fps: float = Field(default=0.0, ge=0)
     frame_count: int = Field(default=0, ge=0)
     processed_frame_count: int = Field(default=0, ge=0)
@@ -698,10 +720,10 @@ class PlayerTrajectoryArtifact(BaseModel):
     # 身份管理事件诊断列表
     diagnostics: list[PlayerIdentityDiagnostic] = Field(default_factory=list)
     # 覆盖率诊断（可选，可能还没计算）
-    coverage: Optional[PlayerTrajectoryCoverageDiagnostics] = None
+    coverage: PlayerTrajectoryCoverageDiagnostics | None = None
     # 比赛分析上下文
-    match_context: Optional[MatchAnalysisContext] = None
-    observed_player_count: Optional[int] = None
+    match_context: MatchAnalysisContext | None = None
+    observed_player_count: int | None = None
 
 
 class BoundingBox(BaseModel):
@@ -726,7 +748,7 @@ class PersonDetection(BaseModel):
     # 使用上面的 BoundingBox 而不是 list[float]
     bbox: BoundingBox
     # 提示这个检测应归属到哪条轨迹（可选，仅做提示，不强制）
-    track_hint: Optional[str] = None
+    track_hint: str | None = None
 
 
 class ImageTrackPoint(BaseModel):
@@ -788,4 +810,4 @@ class PlayerTrack(BaseModel):
     # 该轨迹主要在球场的哪一侧
     side: Literal["near", "far", "unknown"] = "unknown"
     # 这条轨迹上的所有投影点（用 typing.List 写法，和上面一致）
-    points: List[ProjectedTrackPoint]
+    points: list[ProjectedTrackPoint]

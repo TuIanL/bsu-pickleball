@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.analysis_batch import AnalysisBatch, AnalysisBatchItem, BatchStatus, BatchItemStatus
+from app.models.analysis_batch import AnalysisBatch, AnalysisBatchItem, BatchItemStatus, BatchStatus
 from app.models.capture_segment import CaptureSegment, EditStatus
 from app.models.capture_track import CaptureTrack
 
@@ -71,7 +71,7 @@ def create_analysis_batch(
     track_id = track.id
 
     # 创建 Batch
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     batch = AnalysisBatch(
         id=_gen_id(_BATCH_PREFIX),
         capture_take_id=capture_take_id,

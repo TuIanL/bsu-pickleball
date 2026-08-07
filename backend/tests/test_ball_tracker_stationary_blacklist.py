@@ -3,7 +3,6 @@
 from collections.abc import Sequence
 
 import numpy as np
-import pytest
 
 from app.vision.pickleball_game_analysis.ball_tracker import BallTracker, BallTrackerConfig
 from app.vision.pickleball_game_analysis.court_adapter import BallCourtAdapter
@@ -179,12 +178,8 @@ def test_different_positions_independent() -> None:
         detector._call_count = 0  # type: ignore[attr-defined]
 
     # 两个位置的帧数各为 8，应达到阈值（纯累积，无衰减）
-    count_a = tracker._stationary_blacklist.get(
-        (int(pos_a[0] / 5) * 5, int(pos_a[1] / 5) * 5), 0
-    )
-    count_b = tracker._stationary_blacklist.get(
-        (int(pos_b[0] / 5) * 5, int(pos_b[1] / 5) * 5), 0
-    )
+    count_a = tracker._stationary_blacklist.get((int(pos_a[0] / 5) * 5, int(pos_a[1] / 5) * 5), 0)
+    count_b = tracker._stationary_blacklist.get((int(pos_b[0] / 5) * 5, int(pos_b[1] / 5) * 5), 0)
     # 两处应分别累加
     assert count_a >= 8, f"交替出现时，位置A应累加到8，实际={count_a}"
     assert count_b >= 8, f"交替出现时，位置B应累加到8，实际={count_b}"

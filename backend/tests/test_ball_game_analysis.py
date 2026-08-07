@@ -76,7 +76,9 @@ def test_schema_and_writer_serialize_numpy_and_empty_events(tmp_path):
         candidate_count=np.int64(2),
     )
     raw_payload = build_raw_trajectory_payload(job_id="job-ball", samples=[raw_sample])
-    cleaned_payload = build_cleaned_trajectory_payload(job_id="job-ball", samples=[TrajectoryPoint.from_sample(raw_sample)])
+    cleaned_payload = build_cleaned_trajectory_payload(
+        job_id="job-ball", samples=[TrajectoryPoint.from_sample(raw_sample)]
+    )
     empty_events = build_bounce_events_payload(job_id="job-ball", events=[])
 
     assert raw_payload["coordinate_system"]["court"] == "feet"

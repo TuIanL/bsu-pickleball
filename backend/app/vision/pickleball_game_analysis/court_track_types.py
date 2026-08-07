@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-
 MAX_RENDER_SLOTS = 4
 
 RenderSlot = Literal["slot_1", "slot_2", "slot_3", "slot_4"]

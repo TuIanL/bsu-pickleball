@@ -6,25 +6,22 @@
   - 速度方向突变或幅值突变达到阈值；
   - 突变前后局部拟合残差低（排除孤立误检）；
   - 不是长缺失后的首次重新锁定；
-  - 不位于已确认弹地事件的抑制窗口内；
   - 满足最小事件间隔（refractory period）。
 
-输出 `hit_candidate / confirmed_hit / rejected_hit` 及结构化拒绝原因。
+弹地抑制不在本模块执行：bounce suppression 是 `BallEventResolver.prefilter`
+的唯一权威（不变量 I7），本模块不接收 `bounce_events`。
+
+输出 `hit_candidate / rejected_hit` 及结构化拒绝原因。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import acos, atan2, cos, degrees, hypot, isfinite, sin, sqrt
+from math import acos, degrees, hypot, isfinite
 
 import numpy as np
 
-from app.vision.pickleball_game_analysis.reconstruction_schemas import (
-    TrajectoryEvent,
-    TrajectoryEventType,
-    EventSource,
-)
-from app.vision.pickleball_game_analysis.schemas import BounceEvent, Point2D, TrajectoryPoint
+from app.vision.pickleball_game_analysis.schemas import Point2D, TrajectoryPoint
 
 
 @dataclass(frozen=True)
@@ -35,8 +32,7 @@ class ContactDetectorConfig:
     direction_change_deg: float = 35.0
     speed_change_ratio: float = 1.8
     fit_residual_px: float = 18.0
-    min_event_gap_frames: int = 10        # refractory period（帧）
-    bounce_suppression_window_frames: int = 8  # 弹地抑制窗口（帧）
+    min_event_gap_frames: int = 10  # refractory period（帧）
 
 
 @dataclass
@@ -47,7 +43,7 @@ class HitCandidate:
     timestamp_sec: float
     image_xy: Point2D
     confidence: float
-    status: str = "hit_candidate"   # hit_candidate / confirmed_hit / rejected_hit / ambiguous
+    status: str = "hit_candidate"  # hit_candidate / confirmed_hit / rejected_hit / ambiguous
     rejection_reason: str | None = None
     diagnostics: dict = field(default_factory=dict)
 
@@ -61,10 +57,12 @@ class BallContactEventDetector:
     def detect(
         self,
         points: list[TrajectoryPoint],
-        bounce_events: list[BounceEvent] | None = None,
         fps: float = 30.0,
     ) -> list[HitCandidate]:
-        """对整条清洗轨迹扫描，返回击球候选列表（按帧序）。"""
+        """对整条清洗轨迹扫描，返回击球候选列表（按帧序）。
+
+        弹地抑制不在本模块执行（I7），候选状态只由运动突变与局部拟合判定。
+        """
         valid = [i for i, p in enumerate(points) if self._valid_xy(p.image_xy)]
         if len(valid) < 2 * self.config.context_points + 2:
             return []
@@ -75,8 +73,8 @@ class BallContactEventDetector:
             # 前后各需足够连续有效观测
             if pos < ctx or pos + ctx >= len(valid):
                 continue
-            before_indices = valid[pos - ctx:pos]
-            after_indices = valid[pos + 1:pos + ctx + 1]
+            before_indices = valid[pos - ctx : pos]
+            after_indices = valid[pos + 1 : pos + ctx + 1]
 
             before_pts = [points[i] for i in before_indices]
             after_pts = [points[i] for i in after_indices]
@@ -97,7 +95,9 @@ class BallContactEventDetector:
             speed_out = hypot(v_out[0], v_out[1])
             speed_ratio = max(speed_in, speed_out) / max(min(speed_in, speed_out), 1e-6)
 
-            motion_breach = turn_deg >= self.config.direction_change_deg or speed_ratio >= self.config.speed_change_ratio
+            motion_breach = (
+                turn_deg >= self.config.direction_change_deg or speed_ratio >= self.config.speed_change_ratio
+            )
             if not motion_breach:
                 continue
 
@@ -141,26 +141,13 @@ class BallContactEventDetector:
                 )
             )
 
-        # 弹地抑制窗口：候选落在已确认弹地附近 → 抑制
-        bounce_frames = [e.frame_index for e in (bounce_events or [])]
-        for candidate in candidates:
-            if candidate.status != "hit_candidate":
-                continue
-            if any(
-                abs(candidate.frame_index - bf) <= self.config.bounce_suppression_window_frames
-                for bf in bounce_frames
-            ):
-                candidate.status = "rejected_hit"
-                candidate.rejection_reason = "within_bounce_suppression_window"
-
         # refractory period：保留置信度更高的候选
         confirmed = [c for c in candidates if c.status == "hit_candidate"]
         confirmed.sort(key=lambda c: c.confidence, reverse=True)
         selected: list[HitCandidate] = []
         for candidate in confirmed:
             if any(
-                abs(candidate.frame_index - kept.frame_index) < self.config.min_event_gap_frames
-                for kept in selected
+                abs(candidate.frame_index - kept.frame_index) < self.config.min_event_gap_frames for kept in selected
             ):
                 continue
             selected.append(candidate)
@@ -186,7 +173,7 @@ class BallContactEventDetector:
             return None
         total = [0.0, 0.0]
         count = 0
-        for left, right in zip(points[:-1], points[1:]):
+        for left, right in zip(points[:-1], points[1:], strict=False):
             if left.image_xy is None or right.image_xy is None:
                 continue
             gap = max(1, right.frame_index - left.frame_index)

@@ -1,4 +1,5 @@
 """CaptureRuntimeCoordinator —— 运行期轨道协调器"""
+
 from __future__ import annotations
 
 import logging
@@ -7,15 +8,21 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 from app.camera.recording_policy import (
-    CoordinatorActionType, TrackRuntimeEvent, CaptureRuntimeSnapshot,
-    TrackRuntimeState, RecordingPolicy, RESTART_BUDGET,
+    RESTART_BUDGET,
+    CaptureRuntimeSnapshot,
+    CoordinatorActionType,
+    RecordingPolicy,
+    TrackRuntimeEvent,
+    TrackRuntimeState,
 )
 from app.camera.track_recorder import (
-    TrackRecorder, FragmentStartSpec, FragmentExit, FragmentHandle,
+    FragmentExit,
+    FragmentHandle,
+    FragmentStartSpec,
+    TrackRecorder,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,49 +31,51 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CaptureRuntimeOutcome:
     """录制运行期最终结果汇总"""
-    stopped_by_user: bool = False              # 是否由用户主动停止
-    primary_track_lost: bool = False           # 主轨道是否丢失
+
+    stopped_by_user: bool = False  # 是否由用户主动停止
+    primary_track_lost: bool = False  # 主轨道是否丢失
     unavailable_track_ids: list[str] = field(default_factory=list)  # 不可用轨道列表
-    restart_budget_exhausted: bool = False     # 重启预算是否耗尽
-    runtime_warnings: list[str] = field(default_factory=list)       # 运行时警告列表
+    restart_budget_exhausted: bool = False  # 重启预算是否耗尽
+    runtime_warnings: list[str] = field(default_factory=list)  # 运行时警告列表
 
 
 @dataclass
 class TrackRuntimeInfo:
     """单条轨道的运行时配置与状态"""
+
     track_id: str
-    slot: str                        # 机位槽位：cam_1 / cam_2
-    camera_id: str                   # 摄像头 ID
-    analysis_role: str               # 分析角色：default / supplementary
-    stream_url: str                  # RTSP 流地址
-    output_dir: str                  # 输出目录
+    slot: str  # 机位槽位：cam_1 / cam_2
+    camera_id: str  # 摄像头 ID
+    analysis_role: str  # 分析角色：default / supplementary
+    stream_url: str  # RTSP 流地址
+    output_dir: str  # 输出目录
     fps: int = 60
-    sync_to_host_clock: bool = False # 是否使用本机时钟同步
-    fragment_index: int = 0          # 当前分段序号
-    rotation_index: int = 0          # 轮转序号（重启后递增）
-    restart_count: int = 0           # 累计重启次数
-    is_running: bool = False         # 当前是否正在录制
-    current_fragment_id: str = ""    # 当前分段 ID
+    sync_to_host_clock: bool = False  # 是否使用本机时钟同步
+    fragment_index: int = 0  # 当前分段序号
+    rotation_index: int = 0  # 轮转序号（重启后递增）
+    restart_count: int = 0  # 累计重启次数
+    is_running: bool = False  # 当前是否正在录制
+    current_fragment_id: str = ""  # 当前分段 ID
     current_fragment_start_offset_ms: int = 0  # 当前分段在录制时间轴中的起始偏移
 
 
 class CaptureRuntimeCoordinator:
     """运行期轨道协调器：管理多个 TrackRecorder 实例，根据故障策略自动恢复"""
-    def __init__(self, fragment_repo=None, clock=None):
-        self._fragment_repo = fragment_repo      # 片段仓储（可选）
-        self._clock = clock                      # 时钟源（可选）
-        self._tracks: dict[str, TrackRuntimeInfo] = {}    # 轨道 ID -> 运行时信息
-        self._recorders: dict[str, TrackRecorder] = {}    # 轨道 ID -> TrackRecorder
-        self._handles: dict[str, FragmentHandle] = {}     # 轨道 ID -> 当前分段句柄
-        self._event_queue: queue.Queue[TrackRuntimeEvent] = queue.Queue()  # 事件队列
-        self._policy: RecordingPolicy | None = None       # 故障恢复策略
-        self._stopping = False                # 是否正在停止
-        self._outcome = CaptureRuntimeOutcome()           # 最终结果
-        self._take_id = ""                    # CaptureTake ID
-        self._started_at_ms: int = 0          # 启动时的单调时钟（毫秒）
 
-    def start_tracks(self, take_id: str, tracks_info: list[TrackRuntimeInfo],
-                     policy: RecordingPolicy) -> None:
+    def __init__(self, fragment_repo=None, clock=None):
+        self._fragment_repo = fragment_repo  # 片段仓储（可选）
+        self._clock = clock  # 时钟源（可选）
+        self._tracks: dict[str, TrackRuntimeInfo] = {}  # 轨道 ID -> 运行时信息
+        self._recorders: dict[str, TrackRecorder] = {}  # 轨道 ID -> TrackRecorder
+        self._handles: dict[str, FragmentHandle] = {}  # 轨道 ID -> 当前分段句柄
+        self._event_queue: queue.Queue[TrackRuntimeEvent] = queue.Queue()  # 事件队列
+        self._policy: RecordingPolicy | None = None  # 故障恢复策略
+        self._stopping = False  # 是否正在停止
+        self._outcome = CaptureRuntimeOutcome()  # 最终结果
+        self._take_id = ""  # CaptureTake ID
+        self._started_at_ms: int = 0  # 启动时的单调时钟（毫秒）
+
+    def start_tracks(self, take_id: str, tracks_info: list[TrackRuntimeInfo], policy: RecordingPolicy) -> None:
         """启动所有轨道的录制，注册故障策略并启动事件循环"""
         self._take_id = take_id
         self._policy = policy
@@ -273,6 +282,7 @@ class CaptureRuntimeCoordinator:
     @staticmethod
     def _request_stops_together(handles: list[FragmentHandle], reason: str) -> None:
         """并行向所有句柄发送停止请求"""
+
         def request_stop(handle: FragmentHandle) -> None:
             try:
                 handle.request_stop(reason)
@@ -302,18 +312,20 @@ class CaptureRuntimeCoordinator:
             try:
                 result = handle.wait(timeout=30)
                 info = self._tracks.get(tid, TrackRuntimeInfo("", "", "", "", "", ""))
-                fragments.append({
-                    "track_id": tid,
-                    "slot": info.slot,
-                    "fragment_id": result.fragment_id,
-                    "status": result.status,
-                    "file_size": result.file_size,
-                    "file_path": f"{info.output_dir}/{info.track_id}_s{info.fragment_index}.ts",
-                    "fragment_index": info.fragment_index,
-                    "rotation_index": info.rotation_index,
-                    "restart_count": info.restart_count,
-                    "take_start_offset_ms": self._tracks[tid].current_fragment_start_offset_ms,
-                })
+                fragments.append(
+                    {
+                        "track_id": tid,
+                        "slot": info.slot,
+                        "fragment_id": result.fragment_id,
+                        "status": result.status,
+                        "file_size": result.file_size,
+                        "file_path": f"{info.output_dir}/{info.track_id}_s{info.fragment_index}.ts",
+                        "fragment_index": info.fragment_index,
+                        "rotation_index": info.rotation_index,
+                        "restart_count": info.restart_count,
+                        "take_start_offset_ms": self._tracks[tid].current_fragment_start_offset_ms,
+                    }
+                )
             except Exception as e:
                 logger.warning("stop track %s failed: %s", tid, e)
 

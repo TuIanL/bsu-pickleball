@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -11,24 +11,24 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
-class CaptureMode(str, enum.Enum):
+class CaptureMode(enum.StrEnum):
     practice = "practice"
     match = "match"
     engineering = "engineering"
 
 
-class MatchFormat(str, enum.Enum):
+class MatchFormat(enum.StrEnum):
     singles = "singles"
     doubles = "doubles"
 
 
-class CameraSetup(str, enum.Enum):
+class CameraSetup(enum.StrEnum):
     single = "single"
     dual = "dual"
     debug_single = "debug_single"
 
 
-class FieldSessionStatus(str, enum.Enum):
+class FieldSessionStatus(enum.StrEnum):
     planned = "planned"
     live = "live"
     completed = "completed"
@@ -45,15 +45,17 @@ class FieldSession(Base):
     capture_mode: Mapped[CaptureMode] = mapped_column(Enum(CaptureMode), nullable=False, default=CaptureMode.practice)
     match_format: Mapped[MatchFormat] = mapped_column(Enum(MatchFormat), nullable=False, default=MatchFormat.doubles)
     camera_setup: Mapped[CameraSetup] = mapped_column(Enum(CameraSetup), nullable=False, default=CameraSetup.single)
-    status: Mapped[FieldSessionStatus] = mapped_column(Enum(FieldSessionStatus), nullable=False, default=FieldSessionStatus.planned)
+    status: Mapped[FieldSessionStatus] = mapped_column(
+        Enum(FieldSessionStatus), nullable=False, default=FieldSessionStatus.planned
+    )
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

@@ -3,7 +3,6 @@ from __future__ import annotations
 # 把已生成的 pose_overlay.json（骨架叠加数据）「烧录」成叠加视频。
 # 作用：读取一段视频 + 对应的姿态叠加数据，逐帧把骨架/边界框/标签画到画面上并写出 mp4。
 # 支持：按帧索引匹配、缺失帧线性插值、置信度过滤、是否画框/画标签等开关。
-
 import argparse
 import json
 import math
@@ -13,7 +12,6 @@ from typing import Any
 
 import cv2  # type: ignore
 import numpy as np
-
 
 # 支持作为源/上传视频的后缀。
 VIDEO_EXTENSIONS = (".mov", ".mp4", ".avi", ".mkv", ".webm")

@@ -61,7 +61,7 @@ def snapshot_capture_timeline(
         return False
     try:
         plan = capture_storage_plan_from_dir(take.session_dir)
-        # Event edits can trigger another snapshot after media registration;
+        # Event edits can trigger another snapshot after media registration
         # preserve the finalized timebase/source mapping when callers omit it.
         existing_annotation: dict[str, Any] = {}
         try:
@@ -76,75 +76,113 @@ def snapshot_capture_timeline(
             existing_sources = existing_annotation.get("sources")
             if isinstance(existing_sources, list):
                 video_sources = existing_sources
-        events = db.query(SessionTimelineEvent).filter(
-            SessionTimelineEvent.capture_take_id == capture_take_id
-        ).order_by(SessionTimelineEvent.timestamp_ms.asc(), SessionTimelineEvent.created_at.asc()).all()
-        segments = db.query(CaptureSegment).filter(
-            CaptureSegment.capture_take_id == capture_take_id
-        ).order_by(CaptureSegment.start_ms.asc(), CaptureSegment.created_at.asc()).all()
-        state = db.query(LiveCodingState).filter(
-            LiveCodingState.capture_take_id == capture_take_id
-        ).first()
+        events = (
+            db.query(SessionTimelineEvent)
+            .filter(SessionTimelineEvent.capture_take_id == capture_take_id)
+            .order_by(SessionTimelineEvent.timestamp_ms.asc(), SessionTimelineEvent.created_at.asc())
+            .all()
+        )
+        segments = (
+            db.query(CaptureSegment)
+            .filter(CaptureSegment.capture_take_id == capture_take_id)
+            .order_by(CaptureSegment.start_ms.asc(), CaptureSegment.created_at.asc())
+            .all()
+        )
+        state = db.query(LiveCodingState).filter(LiveCodingState.capture_take_id == capture_take_id).first()
         event_rows = [_event_payload(event, fps=fps) for event in events]
-        segment_rows = [{
-            "id": segment.id,
-            "segment_type": segment.segment_type.value,
-            "parent_segment_id": segment.parent_segment_id,
-            "ordinal": segment.ordinal,
-            "label": segment.label,
-            "start_ms": segment.start_ms,
-            "end_ms": segment.end_ms,
-            "start_frame_index": _frame_index(segment.start_ms, fps),
-            "end_frame_index": _frame_index(segment.end_ms, fps),
-            "effective_start_ms": segment.effective_start_ms,
-            "effective_end_ms": segment.effective_end_ms,
-            "status": segment.status.value,
-            "source": segment.source.value,
-            "is_highlight": segment.is_highlight,
-        } for segment in segments]
-        state_row = None if state is None else {
-            "capture_take_id": state.capture_take_id,
-            "revision": state.revision,
-            "set_ordinal": state.set_ordinal,
-            "game_ordinal": state.game_ordinal,
-            "rally_ordinal": state.rally_ordinal,
-            "non_play": state.non_play,
-            "match_phase": state.match_phase,
-            "intermission_kind": state.intermission_kind,
-            "current_set_segment_id": state.current_set_segment_id,
-            "current_game_segment_id": state.current_game_segment_id,
-            "current_rally_segment_id": state.current_rally_segment_id,
-        }
-        write_json_atomic(plan.timeline_dir / "events.json", {"schema_version": "capture_events.v1", "capture_take_id": capture_take_id, "events": event_rows})
-        write_json_atomic(plan.timeline_dir / "markers.json", {"schema_version": "capture_markers.v1", "capture_take_id": capture_take_id, "markers": [e for e in event_rows if e["event_type"] == "custom_marker"]})
-        write_json_atomic(plan.timeline_dir / "segments.json", {"schema_version": "capture_segments.v1", "capture_take_id": capture_take_id, "segments": segment_rows})
-        write_json_atomic(plan.timeline_dir / "live_state.json", {"schema_version": "capture_live_state.v1", "capture_take_id": capture_take_id, "state": state_row})
-        tracks = db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == capture_take_id).order_by(CaptureTrack.slot.asc()).all()
-        track_sources = video_sources or [{
-            "track_id": track.id,
-            "slot": track.slot.value,
-            "camera_id": track.camera_id,
-            "video_id": track.video_id,
-            "offset_ms": track.offset_ms,
-        } for track in tracks]
-        write_json_atomic(plan.timeline_dir / "annotation_manifest.json", {
-            "schema_version": "capture_annotation.v1",
-            "capture_take_id": capture_take_id,
-            "timebase": {
-                "unit": "milliseconds",
-                "origin": "capture_take_start",
-                "fps": fps,
-                "frame_index_rounding": "nearest",
+        segment_rows = [
+            {
+                "id": segment.id,
+                "segment_type": segment.segment_type.value,
+                "parent_segment_id": segment.parent_segment_id,
+                "ordinal": segment.ordinal,
+                "label": segment.label,
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "start_frame_index": _frame_index(segment.start_ms, fps),
+                "end_frame_index": _frame_index(segment.end_ms, fps),
+                "effective_start_ms": segment.effective_start_ms,
+                "effective_end_ms": segment.effective_end_ms,
+                "status": segment.status.value,
+                "source": segment.source.value,
+                "is_highlight": segment.is_highlight,
+            }
+            for segment in segments
+        ]
+        state_row = (
+            None
+            if state is None
+            else {
+                "capture_take_id": state.capture_take_id,
+                "revision": state.revision,
+                "set_ordinal": state.set_ordinal,
+                "game_ordinal": state.game_ordinal,
+                "rally_ordinal": state.rally_ordinal,
+                "non_play": state.non_play,
+                "match_phase": state.match_phase,
+                "intermission_kind": state.intermission_kind,
+                "current_set_segment_id": state.current_set_segment_id,
+                "current_game_segment_id": state.current_game_segment_id,
+                "current_rally_segment_id": state.current_rally_segment_id,
+            }
+        )
+        write_json_atomic(
+            plan.timeline_dir / "events.json",
+            {"schema_version": "capture_events.v1", "capture_take_id": capture_take_id, "events": event_rows},
+        )
+        write_json_atomic(
+            plan.timeline_dir / "markers.json",
+            {
+                "schema_version": "capture_markers.v1",
+                "capture_take_id": capture_take_id,
+                "markers": [e for e in event_rows if e["event_type"] == "custom_marker"],
             },
-            "sync_calibration": {
-                "schema_version": "dual_camera_sync_calibration.v1",
-                "status": "unknown",
-                "reason": "cross-camera calibration anchors unavailable",
+        )
+        write_json_atomic(
+            plan.timeline_dir / "segments.json",
+            {"schema_version": "capture_segments.v1", "capture_take_id": capture_take_id, "segments": segment_rows},
+        )
+        write_json_atomic(
+            plan.timeline_dir / "live_state.json",
+            {"schema_version": "capture_live_state.v1", "capture_take_id": capture_take_id, "state": state_row},
+        )
+        tracks = (
+            db.query(CaptureTrack)
+            .filter(CaptureTrack.capture_take_id == capture_take_id)
+            .order_by(CaptureTrack.slot.asc())
+            .all()
+        )
+        track_sources = video_sources or [
+            {
+                "track_id": track.id,
+                "slot": track.slot.value,
+                "camera_id": track.camera_id,
+                "video_id": track.video_id,
+                "offset_ms": track.offset_ms,
+            }
+            for track in tracks
+        ]
+        write_json_atomic(
+            plan.timeline_dir / "annotation_manifest.json",
+            {
+                "schema_version": "capture_annotation.v1",
+                "capture_take_id": capture_take_id,
+                "timebase": {
+                    "unit": "milliseconds",
+                    "origin": "capture_take_start",
+                    "fps": fps,
+                    "frame_index_rounding": "nearest",
+                },
+                "sync_calibration": {
+                    "schema_version": "dual_camera_sync_calibration.v1",
+                    "status": "unknown",
+                    "reason": "cross-camera calibration anchors unavailable",
+                },
+                "sources": track_sources,
+                "events_file": "events.json",
+                "segments_file": "segments.json",
             },
-            "sources": track_sources,
-            "events_file": "events.json",
-            "segments_file": "segments.json",
-        })
+        )
         return True
     except OSError as exc:
         logger.error("写入 CaptureTake %s 时间线归档失败: %s", capture_take_id, exc)

@@ -11,21 +11,19 @@
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
-import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
-from uuid import uuid4
 
 import cv2
 
@@ -34,16 +32,20 @@ from app.camera.models import (
     CameraSlotConfig,
     CameraSlotRole,
     SyncRecordingSession,
-    SyncRecordingStatus,
     SyncSegment,
     SyncSegmentFile,
-    SyncSegmentStatus,
     SyncStartRequest,
     SyncStopResponse,
     SyncTestRequest,
     SyncTestResult,
 )
-from app.services.capture_storage_service import CaptureStorageError, capture_storage_is_available, capture_storage_plan_from_dir, create_capture_storage_plan, write_capture_metadata
+from app.services.capture_storage_service import (
+    CaptureStorageError,
+    capture_storage_is_available,
+    capture_storage_plan_from_dir,
+    create_capture_storage_plan,
+    write_capture_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +73,15 @@ def _duration_from_segments(segments: list[SyncSegment], fallback: float) -> flo
 # 工具函数
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def check_ffmpeg_available() -> bool:
     """检查系统是否安装了 FFmpeg"""
     try:
         subprocess.run(
             ["ffmpeg", "-version"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
         )
         return True
     except Exception:
@@ -159,9 +164,17 @@ def _probe_media_diagnostics(video_file: str) -> tuple[int, float, float]:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
-                "-show_entries", "stream=nb_read_packets:format=duration",
-                "-of", "json", video_file,
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_packets",
+                "-show_entries",
+                "stream=nb_read_packets:format=duration",
+                "-of",
+                "json",
+                video_file,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -192,9 +205,16 @@ def _probe_media_start_time(video_file: str) -> float | None:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "frame=best_effort_timestamp_time",
-                "-of", "csv=p=0", video_file,
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=best_effort_timestamp_time",
+                "-of",
+                "csv=p=0",
+                video_file,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -210,6 +230,7 @@ def _probe_media_start_time(video_file: str) -> float | None:
 # ═══════════════════════════════════════════════════════════════════════════
 # SyncRecorder —— 双摄同步录制引擎
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class SyncRecorder:
     """
@@ -233,17 +254,17 @@ class SyncRecorder:
         self.recording_threads: list[threading.Thread] = []
         self.fps: int = 30
         self.resolution: str = "1920x1080"
-        self._segment_callback: Optional[callable] = None
+        self._segment_callback: callable | None = None
 
     # ── 生命周期回调 ────────────────────────────────────────────────
-    on_segment_start: Optional[callable] = None
-    on_segment_end: Optional[callable] = None
-    on_stream_error: Optional[callable] = None
-    on_all_complete: Optional[callable] = None
+    on_segment_start: callable | None = None
+    on_segment_end: callable | None = None
+    on_stream_error: callable | None = None
+    on_all_complete: callable | None = None
 
     def _get_stream_output_name(self, url: str, camera_id: str, segment_idx: int) -> str:
         """生成分段输出文件名"""
-        ip = _parse_ip_from_url(url)
+        _parse_ip_from_url(url)
         return f"{camera_id}_s{segment_idx}.ts"
 
     def _normalize_stream_config(
@@ -268,18 +289,25 @@ class SyncRecorder:
         cmd = [
             _get_ffmpeg_path(),
             "-y",
-            "-rtsp_transport", "udp",
-            "-timeout", "5000000",
-            "-fflags", "+genpts",
-            "-i", url,
-            "-map", "0:v:0",
+            "-rtsp_transport",
+            "udp",
+            "-timeout",
+            "5000000",
+            "-fflags",
+            "+genpts",
+            "-i",
+            url,
+            "-map",
+            "0:v:0",
             "-an",
             # Recording-time CFR conversion duplicates the previous image
             # whenever RTSP delivery is late, permanently encoding visible
-            # freezes into the raw TS. Preserve the camera bitstream here;
+            # freezes into the raw TS. Preserve the camera bitstream here
             # alignment and resampling belong in derived outputs.
-            "-c:v", "copy",
-            "-f", "mpegts",
+            "-c:v",
+            "copy",
+            "-f",
+            "mpegts",
         ]
         if duration:
             cmd.extend(["-t", str(duration)])
@@ -287,7 +315,11 @@ class SyncRecorder:
         return cmd
 
     def _record_segment_for_stream(
-        self, url: str, camera_id: str, role: CameraSlotRole, duration: int | None,
+        self,
+        url: str,
+        camera_id: str,
+        role: CameraSlotRole,
+        duration: int | None,
         launch_barrier: threading.Barrier | None = None,
     ) -> SyncSegmentFile:
         """录制单个 RTSP 流的一个分段。"""
@@ -298,7 +330,7 @@ class SyncRecorder:
 
         logger.debug("[%s] FFmpeg cmd: %s", camera_id, " ".join(cmd))
 
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
         process = None
         error_msg: str | None = None
 
@@ -321,7 +353,7 @@ class SyncRecorder:
                     time.sleep(0.2)
 
                 return_code = process.returncode
-                ended_at = datetime.now(timezone.utc)
+                ended_at = datetime.now(UTC)
 
                 is_failure = return_code is not None and return_code != 0 and not self.stop_event.is_set()
 
@@ -336,7 +368,7 @@ class SyncRecorder:
             logger.exception("🔥 [%s] 录制异常: %s", camera_id, e)
             error_msg = str(e)
             self.failure_event.set()
-            ended_at = datetime.now(timezone.utc)
+            ended_at = datetime.now(UTC)
         finally:
             if process is not None:
                 with self._processes_lock:
@@ -354,7 +386,12 @@ class SyncRecorder:
         media_start_time_sec = _probe_media_start_time(output_file)
         logger.info(
             "[%s] 分段 %d 诊断: packets=%d duration=%.3fs effective_fps=%.2f target_fps=%d",
-            camera_id, self.segment_index, packet_count, media_duration_sec, effective_fps, self.fps,
+            camera_id,
+            self.segment_index,
+            packet_count,
+            media_duration_sec,
+            effective_fps,
+            self.fps,
         )
 
         return SyncSegmentFile(
@@ -367,7 +404,7 @@ class SyncRecorder:
             effective_fps=effective_fps,
             ffmpeg_log_path=log_file,
             started_at=started_at,
-            ended_at=ended_at or datetime.now(timezone.utc),
+            ended_at=ended_at or datetime.now(UTC),
             error_message=error_msg,
             input_start_time=input_start_time,
             media_start_time_sec=media_start_time_sec,
@@ -427,7 +464,7 @@ class SyncRecorder:
             self.failure_event.clear()
             self.recording_threads = []
 
-            segment_started = datetime.now(timezone.utc)
+            segment_started = datetime.now(UTC)
             logger.info("--- 🎬 开始同步录制 第 %d 段 (重启次数=%d) ---", self.segment_index, restart_count)
 
             if self.on_segment_start:
@@ -440,10 +477,18 @@ class SyncRecorder:
 
             for index, (camera_id, config) in enumerate(stream_urls.items()):
                 stream_url, role = self._normalize_stream_config(camera_id, config, index)
-                def _record_with_result(cid: str, surl: str, slot_role: CameraSlotRole) -> None:
-                    result = self._record_segment_for_stream(surl, cid, slot_role, duration, launch_barrier)
-                    with results_lock:
-                        results[cid] = result
+
+                def _record_with_result(
+                    cid: str,
+                    surl: str,
+                    slot_role: CameraSlotRole,
+                    _barrier: threading.Barrier | None = launch_barrier,
+                    _lock: threading.Lock = results_lock,
+                    _results: dict[str, SyncSegmentFile] = results,
+                ) -> None:
+                    result = self._record_segment_for_stream(surl, cid, slot_role, duration, _barrier)
+                    with _lock:
+                        _results[cid] = result
 
                 thread = threading.Thread(
                     target=_record_with_result,
@@ -478,7 +523,7 @@ class SyncRecorder:
                 status="completed",
                 files=list(results.values()),
                 started_at=segment_started,
-                ended_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(UTC),
                 restart_count=restart_count,
             )
 
@@ -564,6 +609,7 @@ class SyncRecorder:
 
         for index, (camera_id, config) in enumerate(stream_configs.items()):
             stream_url, role = self._normalize_stream_config(camera_id, config, index)
+
             def _record_with_result(cid: str, surl: str, slot_role: CameraSlotRole) -> None:
                 result = self._record_segment_for_stream(surl, cid, slot_role, duration, launch_barrier)
                 with results_lock:
@@ -585,12 +631,22 @@ class SyncRecorder:
         cam_1_id = list(stream_configs.keys())[0] if stream_configs else "cam_1"
         cam_2_id = list(stream_configs.keys())[1] if len(stream_configs) > 1 else "cam_2"
 
-        cam_1_result = results.get(cam_1_id, SyncSegmentFile(
-            camera_id=cam_1_id, role="cam_1", file_path="",
-        ))
-        cam_2_result = results.get(cam_2_id, SyncSegmentFile(
-            camera_id=cam_2_id, role="cam_2", file_path="",
-        ))
+        cam_1_result = results.get(
+            cam_1_id,
+            SyncSegmentFile(
+                camera_id=cam_1_id,
+                role="cam_1",
+                file_path="",
+            ),
+        )
+        cam_2_result = results.get(
+            cam_2_id,
+            SyncSegmentFile(
+                camera_id=cam_2_id,
+                role="cam_2",
+                file_path="",
+            ),
+        )
 
         # 提取首尾帧
         p_first, p_last = None, None
@@ -625,7 +681,7 @@ class SyncRecorder:
             cam_2_file_size=cam_2_result.file_size,
             cam_1_error=cam_1_result.error_message,
             cam_2_error=cam_2_result.error_message,
-            test_completed_at=datetime.now(timezone.utc),
+            test_completed_at=datetime.now(UTC),
         )
 
     def stop_recording(self) -> None:
@@ -654,6 +710,7 @@ class SyncRecorder:
 # SyncRecordingService —— 会话生命周期 + 业务逻辑
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class SyncRecordingService:
     """双摄同步录制服务，管理会话生命周期、持久化、摄像头占用。"""
 
@@ -665,7 +722,7 @@ class SyncRecordingService:
         cleanup_service=None,
     ) -> None:
         self._sync_recorder_factory = sync_recorder_factory
-        self._recorder = (sync_recorder_factory() if sync_recorder_factory else SyncRecorder())
+        self._recorder = sync_recorder_factory() if sync_recorder_factory else SyncRecorder()
         self._lease_manager = lease_manager
         self._coordinator = coordinator
         self._cleanup_service = cleanup_service
@@ -690,6 +747,7 @@ class SyncRecordingService:
 
         # 检查单摄占用
         from app.camera.session_service import session_service
+
         active = session_service.find_active_session(camera_id)
         if active is not None:
             raise RuntimeError(f"摄像头 {camera_id} 正在单摄录制中")
@@ -712,7 +770,7 @@ class SyncRecordingService:
         if storage_root:
             plan = create_capture_storage_plan(capture_take_id or f"take_{session_id}", storage_root)
             return plan.take_dir
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
         return Path("data/sync-recordings") / date_str / session_id
 
     @staticmethod
@@ -753,11 +811,15 @@ class SyncRecordingService:
                     source_sidecar = Path(f"{source}.pts.jsonl")
                     if source_sidecar.exists():
                         shutil.copy2(source_sidecar, output_dir / source_sidecar.name)
-                    updated_files.append(item.model_copy(update={
-                        "file_path": str(target),
-                        "file_size": target.stat().st_size,
-                        "ffmpeg_log_path": log_path,
-                    }))
+                    updated_files.append(
+                        item.model_copy(
+                            update={
+                                "file_path": str(target),
+                                "file_size": target.stat().st_size,
+                                "ffmpeg_log_path": log_path,
+                            }
+                        )
+                    )
                 updated_segments.append(segment.model_copy(update={"files": updated_files}))
         except Exception:
             # The staging files may be the only copy. Keep them for manual
@@ -769,13 +831,14 @@ class SyncRecordingService:
         return session.model_copy(update={"segments": updated_segments})
 
     def _generate_session_id(self) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return f"sync_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
     def _persist(self, session: SyncRecordingSession) -> None:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         path = self._session_path(session.session_id)
         import json
+
         with open(path, "w", encoding="utf-8") as f:
             json.dump(session.model_dump(mode="json"), f, indent=2, default=str)
 
@@ -785,7 +848,8 @@ class SyncRecordingService:
             return None
         try:
             import json
-            with open(path, "r", encoding="utf-8") as f:
+
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
 
             # 旧 JSON 兼容映射：primary → cam_1, secondary → cam_2
@@ -846,6 +910,7 @@ class SyncRecordingService:
         if field_session_id:
             from app.database import get_session_factory
             from app.services.field_session_service import get_field_session
+
             db = get_session_factory()()
             try:
                 fs = get_field_session(db, field_session_id)
@@ -891,7 +956,7 @@ class SyncRecordingService:
             fps=request.fps,
             resolution=request.resolution,
             auto_analyze_after_stop=request.auto_analyze_after_stop,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             storage_root=str(plan.storage_root),
             session_dir=str(plan.take_dir),
         )
@@ -900,6 +965,7 @@ class SyncRecordingService:
         try:
             from app.database import get_session_factory as _get_sf
             from app.services.capture_take_service import has_active_capture_take
+
             _check_db = _get_sf()()
             try:
                 if has_active_capture_take(_check_db):
@@ -921,19 +987,29 @@ class SyncRecordingService:
                 db = get_session_factory()()
                 try:
                     take = capture_take_service.create_capture_take(
-                        db, field_session_id=field_session_id,
-                        capture_mode="dual", source_session_type="sync_recording",
+                        db,
+                        field_session_id=field_session_id,
+                        capture_mode="dual",
+                        source_session_type="sync_recording",
                         source_session_id=session_id,
                         storage_root=str(plan.storage_root),
                         session_dir=str(plan.take_dir),
                     )
                     capture_track_service.create_track(
-                        db, capture_take_id=take.id, camera_id=request.cam_1_id,
-                        role="primary", slot="cam_1", analysis_role="default",
+                        db,
+                        capture_take_id=take.id,
+                        camera_id=request.cam_1_id,
+                        role="primary",
+                        slot="cam_1",
+                        analysis_role="default",
                     )
                     capture_track_service.create_track(
-                        db, capture_take_id=take.id, camera_id=request.cam_2_id,
-                        role="secondary", slot="cam_2", analysis_role="supplementary",
+                        db,
+                        capture_take_id=take.id,
+                        camera_id=request.cam_2_id,
+                        role="secondary",
+                        slot="cam_2",
+                        analysis_role="supplementary",
                     )
                     db.commit()
                     session = session.model_copy(update={"capture_take_id": take.id})
@@ -944,6 +1020,7 @@ class SyncRecordingService:
                     db.close()
             except Exception as exc:
                 import shutil
+
                 shutil.rmtree(output_dir, ignore_errors=True)
                 raise RuntimeError(f"创建双摄录制标记任务失败，未启动录制: {exc}") from exc
 
@@ -966,10 +1043,12 @@ class SyncRecordingService:
             current = SYNC_SESSIONS.get(session_id)
             if current is None or current.status != "recording":
                 return
-            updated = current.model_copy(update={
-                "segments": list(self._segments),
-                "total_restarts": sum(s.restart_count for s in self._segments),
-            })
+            updated = current.model_copy(
+                update={
+                    "segments": list(self._segments),
+                    "total_restarts": sum(s.restart_count for s in self._segments),
+                }
+            )
             SYNC_SESSIONS[session_id] = updated
             self._persist(updated)
 
@@ -1008,7 +1087,15 @@ class SyncRecordingService:
         self._persist(session)
         write_capture_metadata(
             plan,
-            manifest={"schema_version": "capture_manifest.v1", "capture_take_id": session.capture_take_id or f"take_{session_id}", "source_session_id": session_id, "capture_mode": "dual", "status": "recording", "storage_root": str(plan.storage_root), "session_dir": str(plan.take_dir)},
+            manifest={
+                "schema_version": "capture_manifest.v1",
+                "capture_take_id": session.capture_take_id or f"take_{session_id}",
+                "source_session_id": session_id,
+                "capture_mode": "dual",
+                "status": "recording",
+                "storage_root": str(plan.storage_root),
+                "session_dir": str(plan.take_dir),
+            },
             session=session.model_dump(mode="json"),
         )
         self._start_storage_monitor(session_id)
@@ -1026,6 +1113,7 @@ class SyncRecordingService:
                 if not capture_storage_is_available(session.session_dir or session.output_dir):
                     self._handle_storage_failure(session_id, "录制存储位置不可访问，双摄录制已立即停止")
                     return
+
         thread = threading.Thread(target=monitor, daemon=True)
         self._storage_monitor_threads[session_id] = thread
         thread.start()
@@ -1041,12 +1129,15 @@ class SyncRecordingService:
                 self._recorder.stop_recording()
         except Exception as exc:
             logger.warning("存储故障停止双摄录制失败: %s", exc)
-        failed = session.model_copy(update={
-            "status": "failed", "storage_status": "failed",
-            "stopped_at": datetime.now(timezone.utc),
-            "duration_sec": (datetime.now(timezone.utc) - session.started_at).total_seconds() if session.started_at else 0,
-            "error_message": message,
-        })
+        failed = session.model_copy(
+            update={
+                "status": "failed",
+                "storage_status": "failed",
+                "stopped_at": datetime.now(UTC),
+                "duration_sec": (datetime.now(UTC) - session.started_at).total_seconds() if session.started_at else 0,
+                "error_message": message,
+            }
+        )
         SYNC_SESSIONS[session_id] = failed
         self._persist(failed)
         global _ACTIVE_SYNC_SESSION_ID, _ACTIVE_SYNC_CAMERAS
@@ -1073,27 +1164,31 @@ class SyncRecordingService:
 
         # 停止录制器
         self._recorder.stop_recording()
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         wall_duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
         duration = _duration_from_segments(self._segments, wall_duration)
 
         # 更新会话
-        session = session.model_copy(update={
-            "status": "completed",
-            "stopped_at": stopped_at,
-            "duration_sec": duration,
-            "segments": self._segments,
-            "total_restarts": sum(s.restart_count for s in self._segments),
-        })
+        session = session.model_copy(
+            update={
+                "status": "completed",
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+                "segments": self._segments,
+                "total_restarts": sum(s.restart_count for s in self._segments),
+            }
+        )
         try:
             session = self._materialize_staged_media(session)
         except Exception as exc:
             logger.exception("移动存储归档失败: %s", exc)
-            session = session.model_copy(update={
-                "status": "failed",
-                "storage_status": "failed",
-                "error_message": f"录制已完成但无法写入目标存储: {exc}",
-            })
+            session = session.model_copy(
+                update={
+                    "status": "failed",
+                    "storage_status": "failed",
+                    "error_message": f"录制已完成但无法写入目标存储: {exc}",
+                }
+            )
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
@@ -1106,15 +1201,17 @@ class SyncRecordingService:
         # 视频封装属于停止后的媒体后处理，不应继续占用“录制中”状态。
         self._finalize_capture_take(session, session.status)
 
-        session = session.model_copy(update={
-            "merge_status": "pending",
-            "merge_error": None,
-            "merge_started_at": None,
-            "merge_completed_at": None,
-            "merge_results": {},
-            "default_analysis_video_id": None,
-            "registered_video_ids": {},
-        })
+        session = session.model_copy(
+            update={
+                "merge_status": "pending",
+                "merge_error": None,
+                "merge_started_at": None,
+                "merge_completed_at": None,
+                "merge_results": {},
+                "default_analysis_video_id": None,
+                "registered_video_ids": {},
+            }
+        )
         default_analysis_video_id = None
         analysis_available = False
         analysis_blocked_reason = "视频尚未合并，请在任务管理中手动合并"
@@ -1125,6 +1222,7 @@ class SyncRecordingService:
             try:
                 from app.database import get_session_factory
                 from app.services.capture_archive_service import snapshot_capture_timeline
+
                 db = get_session_factory()()
                 try:
                     sources = []
@@ -1144,26 +1242,28 @@ class SyncRecordingService:
                             for source_path in source_paths
                             if os.path.exists(f"{source_path}.pts.jsonl")
                         ]
-                        sources.append({
-                            "slot": role,
-                            "camera_id": slot.camera_id,
-                            "video_id": session.registered_video_ids.get(role),
-                            "source_media_paths": source_paths,
-                            "timing_sidecar_paths": timing_sidecars,
-                            "pts_scope": "per_file_local",
-                            "pts_shared_epoch": False,
-                            "derived_media_path": str(Path(session.output_dir) / f"{slot.camera_id}_merged.mp4"),
-                            "raw_source_offset_ms": round(alignment.get(role, (0.0, None))[0] * 1000, 3),
-                            "aligned_media_trim_start_ms": round(alignment.get(role, (0.0, None))[0] * 1000, 3),
-                            # The current TS PTS spike proved local PTS is not
-                            # a shared epoch; do not advertise a cross-camera
-                            # drift estimate until explicit anchors are fitted.
-                            "reference_camera": "174",
-                            "drift_ppm": None,
-                            "sync_quality": "unknown",
-                            "mapping_artifact": None,
-                            "sync_quality_reason": "cross-camera calibration anchors unavailable",
-                        })
+                        sources.append(
+                            {
+                                "slot": role,
+                                "camera_id": slot.camera_id,
+                                "video_id": session.registered_video_ids.get(role),
+                                "source_media_paths": source_paths,
+                                "timing_sidecar_paths": timing_sidecars,
+                                "pts_scope": "per_file_local",
+                                "pts_shared_epoch": False,
+                                "derived_media_path": str(Path(session.output_dir) / f"{slot.camera_id}_merged.mp4"),
+                                "raw_source_offset_ms": round(alignment.get(role, (0.0, None))[0] * 1000, 3),
+                                "aligned_media_trim_start_ms": round(alignment.get(role, (0.0, None))[0] * 1000, 3),
+                                # The current TS PTS spike proved local PTS is not
+                                # a shared epoch; do not advertise a cross-camera
+                                # drift estimate until explicit anchors are fitted.
+                                "reference_camera": "174",
+                                "drift_ppm": None,
+                                "sync_quality": "unknown",
+                                "mapping_artifact": None,
+                                "sync_quality_reason": "cross-camera calibration anchors unavailable",
+                            }
+                        )
                     snapshot_capture_timeline(
                         db,
                         session.capture_take_id,
@@ -1197,8 +1297,9 @@ class SyncRecordingService:
             except OSError as exc:
                 logger.warning("更新双摄录制 manifest 失败: %s", exc)
 
-        logger.info("双摄同步录制已停止: %s (duration=%.1fs, analysis_available=%s)",
-                     session_id, duration, analysis_available)
+        logger.info(
+            "双摄同步录制已停止: %s (duration=%.1fs, analysis_available=%s)", session_id, duration, analysis_available
+        )
 
         return SyncStopResponse(
             session=session,
@@ -1213,18 +1314,23 @@ class SyncRecordingService:
             return
         try:
             from app.database import get_session_factory
-            from app.services import capture_take_service, capture_segment_service
+            from app.services import capture_segment_service, capture_take_service
+
             db = get_session_factory()()
             try:
                 duration_ms = int((session.duration_sec or 0) * 1000)
-                ended = session.stopped_at or datetime.now(timezone.utc)
+                ended = session.stopped_at or datetime.now(UTC)
                 capture_take_service.finalize_capture_take(
-                    db, take_id, terminal_status,
-                    ended_at=ended, duration_ms=duration_ms,
+                    db,
+                    take_id,
+                    terminal_status,
+                    ended_at=ended,
+                    duration_ms=duration_ms,
                 )
                 if duration_ms > 0:
                     capture_segment_service.close_all_open_for_take(db, take_id, duration_ms)
                 from app.services.capture_archive_service import snapshot_capture_timeline
+
                 snapshot_capture_timeline(db, take_id)
                 db.commit()
             except Exception as exc:
@@ -1243,18 +1349,20 @@ class SyncRecordingService:
         if not session or session.status != "recording":
             return
 
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         wall_duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
         duration = _duration_from_segments(self._segments, wall_duration)
 
-        session = session.model_copy(update={
-            "status": "failed",
-            "stopped_at": stopped_at,
-            "duration_sec": duration,
-            "segments": self._segments,
-            "error_message": "录制器异常退出",
-            "total_restarts": sum(s.restart_count for s in self._segments),
-        })
+        session = session.model_copy(
+            update={
+                "status": "failed",
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+                "segments": self._segments,
+                "error_message": "录制器异常退出",
+                "total_restarts": sum(s.restart_count for s in self._segments),
+            }
+        )
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
@@ -1288,12 +1396,14 @@ class SyncRecordingService:
             if not self._session_has_ts(session):
                 raise RuntimeError("没有找到可合并的 TS 分段")
 
-            session = session.model_copy(update={
-                "merge_status": "running",
-                "merge_error": None,
-                "merge_started_at": datetime.now(timezone.utc),
-                "merge_completed_at": None,
-            })
+            session = session.model_copy(
+                update={
+                    "merge_status": "running",
+                    "merge_error": None,
+                    "merge_started_at": datetime.now(UTC),
+                    "merge_completed_at": None,
+                }
+            )
             SYNC_SESSIONS[session_id] = session
             self._persist(session)
             threading.Thread(
@@ -1316,12 +1426,18 @@ class SyncRecordingService:
         try:
             from app.database import get_session_factory
             from app.models.media_fragment import MediaFragment
+
             db = get_session_factory()()
             try:
-                return db.query(MediaFragment).filter(
-                    MediaFragment.capture_take_id == session.capture_take_id,
-                    MediaFragment.file_size > 0,
-                ).count() > 0
+                return (
+                    db.query(MediaFragment)
+                    .filter(
+                        MediaFragment.capture_take_id == session.capture_take_id,
+                        MediaFragment.file_size > 0,
+                    )
+                    .count()
+                    > 0
+                )
             finally:
                 db.close()
         except Exception:
@@ -1342,27 +1458,33 @@ class SyncRecordingService:
                     results[role] = result
                     if result.get("video_id"):
                         registered[role] = result["video_id"]
-                session = session.model_copy(update={
-                    "registered_video_ids": registered,
-                    "default_analysis_video_id": registered.get("cam_1"),
-                    "merge_results": results,
-                })
+                session = session.model_copy(
+                    update={
+                        "registered_video_ids": registered,
+                        "default_analysis_video_id": registered.get("cam_1"),
+                        "merge_results": results,
+                    }
+                )
 
             missing = [role for role in session.camera_slots if role not in session.registered_video_ids]
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if missing:
-                session = session.model_copy(update={
-                    "merge_status": "failed",
-                    "merge_error": f"机位 {', '.join(missing)} 合并失败，可重试",
-                    "merge_completed_at": now,
-                })
+                session = session.model_copy(
+                    update={
+                        "merge_status": "failed",
+                        "merge_error": f"机位 {', '.join(missing)} 合并失败，可重试",
+                        "merge_completed_at": now,
+                    }
+                )
             else:
-                session = session.model_copy(update={
-                    "merge_status": "completed",
-                    "merge_error": None,
-                    "merge_completed_at": now,
-                    "default_analysis_video_id": session.registered_video_ids.get("cam_1"),
-                })
+                session = session.model_copy(
+                    update={
+                        "merge_status": "completed",
+                        "merge_error": None,
+                        "merge_completed_at": now,
+                        "default_analysis_video_id": session.registered_video_ids.get("cam_1"),
+                    }
+                )
             SYNC_SESSIONS[session_id] = session
             self._persist(session)
             self._persist_capture_manifest(session)
@@ -1370,11 +1492,13 @@ class SyncRecordingService:
             logger.exception("双摄任务 %s 合并失败", session_id)
             session = self._load(session_id) or SYNC_SESSIONS.get(session_id)
             if session is not None:
-                failed = session.model_copy(update={
-                    "merge_status": "failed",
-                    "merge_error": str(exc),
-                    "merge_completed_at": datetime.now(timezone.utc),
-                })
+                failed = session.model_copy(
+                    update={
+                        "merge_status": "failed",
+                        "merge_error": str(exc),
+                        "merge_completed_at": datetime.now(UTC),
+                    }
+                )
                 SYNC_SESSIONS[session_id] = failed
                 self._persist(failed)
 
@@ -1383,23 +1507,26 @@ class SyncRecordingService:
         take_id = session.capture_take_id
         if not take_id:
             return None
-        from app.database import get_session_factory
         from app.camera.capture_finalizer import CaptureFinalizer
+        from app.database import get_session_factory
         from app.models.capture_track import CaptureTrack
-        from app.models.media_fragment import MediaFragment, FragmentStatus
+        from app.models.media_fragment import FragmentStatus, MediaFragment
 
         db = get_session_factory()()
         try:
             tracks = db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == take_id).all()
             fragments = db.query(MediaFragment).filter(MediaFragment.capture_take_id == take_id).all()
             track_rows = [(track.id, track.slot.value) for track in tracks]
-            fragment_rows = [{
-                "track_id": fragment.capture_track_id,
-                "file_path": fragment.file_path,
-                "fragment_index": fragment.fragment_index,
-                "take_start_offset_ms": fragment.take_start_offset_ms,
-                "status": fragment.status.value,
-            } for fragment in fragments]
+            fragment_rows = [
+                {
+                    "track_id": fragment.capture_track_id,
+                    "file_path": fragment.file_path,
+                    "fragment_index": fragment.fragment_index,
+                    "take_start_offset_ms": fragment.take_start_offset_ms,
+                    "status": fragment.status.value,
+                }
+                for fragment in fragments
+            ]
         finally:
             db.close()
         if not track_rows or not fragment_rows:
@@ -1407,22 +1534,25 @@ class SyncRecordingService:
         finalizer = CaptureFinalizer()
         results: dict[str, dict] = {}
         for track_id, slot in sorted(track_rows, key=lambda item: item[1]):
-            infos = [{
+            infos = [
+                {
                     "file_path": fragment["file_path"],
                     "fragment_index": fragment["fragment_index"],
                     "take_start_offset_ms": fragment["take_start_offset_ms"],
                     "status": fragment["status"],
-                } for fragment in fragment_rows
-                    if fragment["track_id"] == track_id
-                    and fragment["status"] in (FragmentStatus.completed.value, FragmentStatus.interrupted.value)]
+                }
+                for fragment in fragment_rows
+                if fragment["track_id"] == track_id
+                and fragment["status"] in (FragmentStatus.completed.value, FragmentStatus.interrupted.value)
+            ]
             result = finalizer.finalize_track(track_id, infos)
             results[slot] = {
-                    "status": result.status,
-                    "video_id": result.video_id,
-                    "output_path": result.output_path,
-                    "fragment_count": result.fragment_count,
-                    "error": "; ".join(result.warnings) if result.warnings else None,
-                }
+                "status": result.status,
+                "video_id": result.video_id,
+                "output_path": result.output_path,
+                "fragment_count": result.fragment_count,
+                "error": "; ".join(result.warnings) if result.warnings else None,
+            }
         return results
 
     def _persist_capture_manifest(self, session: SyncRecordingSession) -> None:
@@ -1481,7 +1611,9 @@ class SyncRecordingService:
             if files:
                 trim_start, target_frames = alignment.get(role, (0.0, None))
                 video_id = self._register_recorded_slot_video(
-                    session, files, slot,
+                    session,
+                    files,
+                    slot,
                     trim_start=trim_start,
                     target_frames=target_frames,
                 )
@@ -1495,21 +1627,24 @@ class SyncRecordingService:
             elif role == "cam_1":
                 analysis_blocked_reason = "底线机位 A 无有效分段文件"
 
-        session = session.model_copy(update={
-            "default_analysis_video_id": default_analysis_video_id,
-            "registered_video_ids": registered_video_ids,
-            "associated_video_paths": associated_video_paths,
-        })
+        session = session.model_copy(
+            update={
+                "default_analysis_video_id": default_analysis_video_id,
+                "registered_video_ids": registered_video_ids,
+                "associated_video_paths": associated_video_paths,
+            }
+        )
         # 将派生视频 ID 回写到 CaptureTrack，保证数据库、会话快照和训练清单一致。
         if session.capture_take_id and registered_video_ids:
             try:
                 from app.database import get_session_factory
                 from app.models.capture_track import CaptureTrack
+
                 db = get_session_factory()()
                 try:
-                    tracks = db.query(CaptureTrack).filter(
-                        CaptureTrack.capture_take_id == session.capture_take_id
-                    ).all()
+                    tracks = (
+                        db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == session.capture_take_id).all()
+                    )
                     for track in tracks:
                         video_id = registered_video_ids.get(track.slot.value)
                         if video_id:
@@ -1605,7 +1740,8 @@ class SyncRecordingService:
         if diagnostics:
             logger.info(
                 "双摄分段间隙诊断: %s segments, %s gaps/overlaps detected",
-                len(observations), len(diagnostics),
+                len(observations),
+                len(diagnostics),
             )
             for seg_idx, info in diagnostics.items():
                 logger.info("  分段 %d: %s", seg_idx, info)
@@ -1629,15 +1765,21 @@ class SyncRecordingService:
         )
 
     def _register_recorded_slot_video(
-        self, session: SyncRecordingSession, file_paths: list[str], slot: CameraSlotConfig,
-        *, trim_start: float = 0.0, target_frames: int | None = None,
+        self,
+        session: SyncRecordingSession,
+        file_paths: list[str],
+        slot: CameraSlotConfig,
+        *,
+        trim_start: float = 0.0,
+        target_frames: int | None = None,
     ) -> str | None:
         """登记一个机位的视频到 VideoService"""
         from app.camera.capture_finalizer import set_merge_status
+
         take_id = getattr(session, "capture_take_id", None)
 
         try:
-            from app.services.video_service import video_service, SUPPORTED_VIDEO_SUFFIXES
+            from app.services.video_service import SUPPORTED_VIDEO_SUFFIXES, video_service
 
             if take_id:
                 set_merge_status(take_id, "merging", f"合并 {slot.camera_id}…")
@@ -1686,12 +1828,25 @@ class SyncRecordingService:
     def _find_keyframe_after(self, file_path: str, time_sec: float) -> float:
         """查找指定时间之后最近的关键帧时间位置"""
         try:
-            result = subprocess.run([
-                "ffprobe", "-v", "error", "-select_streams", "v",
-                "-read_intervals", f"{time_sec}%+#1",
-                "-show_entries", "frame=key_frame,pts_time",
-                "-of", "csv=p=0", file_path,
-            ], capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-read_intervals",
+                    f"{time_sec}%+#1",
+                    "-show_entries",
+                    "frame=key_frame,pts_time",
+                    "-of",
+                    "csv=p=0",
+                    file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             for line in (result.stdout or "").strip().split("\n"):
                 if not line.strip():
                     continue
@@ -1709,18 +1864,36 @@ class SyncRecordingService:
         try:
             # 向前找 5 秒范围内的关键帧
             start = max(0.0, time_sec - 5.0)
-            result = subprocess.run([
-                "ffprobe", "-v", "error", "-select_streams", "v",
-                "-read_intervals", f"{start}%{time_sec + 0.1}",
-                "-show_entries", "frame=key_frame,pts_time",
-                "-of", "csv=p=0", file_path,
-            ], capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-read_intervals",
+                    f"{start}%{time_sec + 0.1}",
+                    "-show_entries",
+                    "frame=key_frame,pts_time",
+                    "-of",
+                    "csv=p=0",
+                    file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             last_kf = 0.0
             for line in (result.stdout or "").strip().split("\n"):
                 if not line.strip():
                     continue
                 parts = line.split(",")
-                if len(parts) >= 2 and parts[0].strip() == "1" and parts[1].strip() and float(parts[1].strip()) <= time_sec:
+                if (
+                    len(parts) >= 2
+                    and parts[0].strip() == "1"
+                    and parts[1].strip()
+                    and float(parts[1].strip()) <= time_sec
+                ):
                     last_kf = max(last_kf, float(parts[1].strip()))
             return last_kf
         except Exception:
@@ -1754,9 +1927,22 @@ class SyncRecordingService:
             """Reject MP4 files whose container exists but whose H.264 is damaged."""
             try:
                 result = subprocess.run(
-                    ["ffmpeg", "-v", "error", "-fflags", "+discardcorrupt",
-                     "-err_detect", "ignore_err", "-i", path,
-                     "-map", "0:v:0", "-f", "null", "-"],
+                    [
+                        "ffmpeg",
+                        "-v",
+                        "error",
+                        "-fflags",
+                        "+discardcorrupt",
+                        "-err_detect",
+                        "ignore_err",
+                        "-i",
+                        path,
+                        "-map",
+                        "0:v:0",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=merge_timeout,
@@ -1793,10 +1979,22 @@ class SyncRecordingService:
                 with open(concat_file, "w", encoding="utf-8") as f:
                     for fp in file_paths:
                         f.write(f"file '{os.path.abspath(fp)}'\n")
-                run_ffmpeg([
-                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                    "-i", concat_file, "-c", "copy", temp_concat,
-                ], "TS 分段预合并")
+                run_ffmpeg(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        concat_file,
+                        "-c",
+                        "copy",
+                        temp_concat,
+                    ],
+                    "TS 分段预合并",
+                )
                 if not os.path.exists(temp_concat):
                     raise RuntimeError("TS 分段预合并没有生成输出文件")
                 input_file = temp_concat
@@ -1811,22 +2009,55 @@ class SyncRecordingService:
             # 边界在 MP4 中并不总是可靠，不能只用 ffprobe 的时长判断成功。
             temp_mp4 = f"{mp4_path}.{uuid.uuid4().hex}.part.mp4"
             try:
-                run_ffmpeg([
-                    "ffmpeg", "-y", "-i", input_file,
-                    "-map", "0:v:0", "-an", "-c", "copy",
-                    "-movflags", "+frag_keyframe+empty_moov+default_base_moof", temp_mp4,
-                ], "TS 转 MP4")
+                run_ffmpeg(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        input_file,
+                        "-map",
+                        "0:v:0",
+                        "-an",
+                        "-c",
+                        "copy",
+                        "-movflags",
+                        "+frag_keyframe+empty_moov+default_base_moof",
+                        temp_mp4,
+                    ],
+                    "TS 转 MP4",
+                )
                 if not (os.path.exists(temp_mp4) and os.path.getsize(temp_mp4) > 0 and is_decodable(temp_mp4)):
                     logger.warning("TS 无损封装输出不可解码，回退到 H.264 重编码: %s", input_file)
                     Path(temp_mp4).unlink(missing_ok=True)
-                    run_ffmpeg([
-                        "ffmpeg", "-y", "-fflags", "+discardcorrupt", "-err_detect", "ignore_err",
-                        "-i", input_file,
-                        "-map", "0:v:0", "-an", "-c:v", "libx264",
-                        "-preset", "veryfast", "-pix_fmt", "yuv420p",
-                        "-fps_mode", "cfr", "-r", str(max(fps, 1)),
-                        "-movflags", "+frag_keyframe+empty_moov+default_base_moof", temp_mp4,
-                    ], "TS 重编码并转 MP4")
+                    run_ffmpeg(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-fflags",
+                            "+discardcorrupt",
+                            "-err_detect",
+                            "ignore_err",
+                            "-i",
+                            input_file,
+                            "-map",
+                            "0:v:0",
+                            "-an",
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "veryfast",
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-fps_mode",
+                            "cfr",
+                            "-r",
+                            str(max(fps, 1)),
+                            "-movflags",
+                            "+frag_keyframe+empty_moov+default_base_moof",
+                            temp_mp4,
+                        ],
+                        "TS 重编码并转 MP4",
+                    )
                 if not (os.path.exists(temp_mp4) and os.path.getsize(temp_mp4) > 0 and is_decodable(temp_mp4)):
                     raise RuntimeError("TS 转 MP4 输出无法解码")
                 os.replace(temp_mp4, mp4_path)
@@ -1843,24 +2074,44 @@ class SyncRecordingService:
         # 有同步裁剪需求时，一次性从共同起点输出目标帧数。
         # 旧逻辑会把完整 TS 和尾部 MP4 放进同一个 concat 清单，导致
         # FFmpeg 输入格式不一致并稳定失败；这里不再拼接混合格式片段。
-        encoder = self._recorder._sync_encoder() if hasattr(self, "_recorder") else (
-            "h264_videotoolbox" if platform.system() == "Darwin" else "libx264"
+        encoder = (
+            self._recorder._sync_encoder()
+            if hasattr(self, "_recorder")
+            else ("h264_videotoolbox" if platform.system() == "Darwin" else "libx264")
         )
-        encoder_opts = [
-            "-preset", "veryfast",
-            # 将摄像头常见的 full-range yuvj420p 转为 Finder/Quick Look
-            # 和浏览器都更稳定支持的标准 limited-range yuv420p。
-            "-vf", "scale=in_range=full:out_range=tv,format=yuv420p",
-            "-pix_fmt", "yuv420p",
-            "-color_range", "tv",
-            "-profile:v", "main",
-            "-level", "4.2",
-            "-fps_mode", "cfr",
-            "-video_track_timescale", "90000",
-        ] if encoder == "libx264" else []
+        encoder_opts = (
+            [
+                "-preset",
+                "veryfast",
+                # 将摄像头常见的 full-range yuvj420p 转为 Finder/Quick Look
+                # 和浏览器都更稳定支持的标准 limited-range yuv420p。
+                "-vf",
+                "scale=in_range=full:out_range=tv,format=yuv420p",
+                "-pix_fmt",
+                "yuv420p",
+                "-color_range",
+                "tv",
+                "-profile:v",
+                "main",
+                "-level",
+                "4.2",
+                "-fps_mode",
+                "cfr",
+                "-video_track_timescale",
+                "90000",
+            ]
+            if encoder == "libx264"
+            else []
+        )
         cmd = [
-            "ffmpeg", "-y", "-fflags", "+discardcorrupt", "-err_detect", "ignore_err",
-            "-i", input_file,
+            "ffmpeg",
+            "-y",
+            "-fflags",
+            "+discardcorrupt",
+            "-err_detect",
+            "ignore_err",
+            "-i",
+            input_file,
         ]
         # 放在 -i 之后进行精确解码剪切。输入前的快速 seek 会跳到关键帧，
         # 在 TS 片段中可能额外丢掉数帧，反而放大双摄首帧误差。
@@ -1870,16 +2121,24 @@ class SyncRecordingService:
         if target_frames is not None:
             cmd.extend(["-frames:v", str(max(1, target_frames))])
         temp_mp4 = f"{mp4_path}.{uuid.uuid4().hex}.part.mp4"
-        cmd.extend([
-            "-c:v", encoder, *encoder_opts,
-            "-r", str(max(fps, 1)),
-            "-avoid_negative_ts", "make_zero",
-            "-fflags", "+genpts",
-            # Fragmented MP4 writes its moov metadata incrementally and avoids
-            # faststart's second pass, which can fail on damaged tail packets.
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            temp_mp4,
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                encoder,
+                *encoder_opts,
+                "-r",
+                str(max(fps, 1)),
+                "-avoid_negative_ts",
+                "make_zero",
+                "-fflags",
+                "+genpts",
+                # Fragmented MP4 writes its moov metadata incrementally and avoids
+                # faststart's second pass, which can fail on damaged tail packets.
+                "-movflags",
+                "+frag_keyframe+empty_moov+default_base_moof",
+                temp_mp4,
+            ]
+        )
         try:
             run_ffmpeg(cmd, "同步裁剪并转 MP4")
             if not (os.path.exists(temp_mp4) and os.path.getsize(temp_mp4) > 0 and is_decodable(temp_mp4)):
@@ -1908,7 +2167,7 @@ class SyncRecordingService:
             raise ValueError("两个摄像头不能相同")
 
         # 测试输出目录（使用临时目录，不创建正式会话）
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         test_dir = str(Path("data/sync-recordings/tests") / timestamp)
 
         stream_configs = {
@@ -1944,15 +2203,17 @@ class SyncRecordingService:
             coordinator.stop_tracks()
         else:
             self._recorder.stop_recording()
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
 
-        session = session.model_copy(update={
-            "status": "canceled",
-            "stopped_at": stopped_at,
-            "duration_sec": duration,
-            "segments": self._segments,
-        })
+        session = session.model_copy(
+            update={
+                "status": "canceled",
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+                "segments": self._segments,
+            }
+        )
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
@@ -1964,6 +2225,7 @@ class SyncRecordingService:
 
         # “取消”表示放弃这次录制：所有双摄片段、合并视频和临时文件均不保留。
         import shutil
+
         shutil.rmtree(Path(session.output_dir), ignore_errors=True)
 
         logger.info("双摄同步录制已取消: %s", session_id)
@@ -1973,9 +2235,9 @@ class SyncRecordingService:
 
     def _start_with_track_recorder(self, request: SyncStartRequest):
         """使用 TrackRecorder × 2 + StrictSyncPolicy 启动双摄。"""
-        from app.services.capture_start_coordinator import CaptureTrackSpec
-        from app.camera.recording_policy import StrictSyncPolicy
         from app.camera.capture_runtime_coordinator import CaptureRuntimeCoordinator, TrackRuntimeInfo
+        from app.camera.recording_policy import StrictSyncPolicy
+        from app.services.capture_start_coordinator import CaptureTrackSpec
 
         cam_1 = camera_registry.get(request.cam_1_id)
         cam_2 = camera_registry.get(request.cam_2_id)
@@ -1990,6 +2252,7 @@ class SyncRecordingService:
         if field_session_id and not court_name:
             from app.database import get_session_factory
             from app.services.field_session_service import get_field_session
+
             db = get_session_factory()()
             try:
                 fs = get_field_session(db, field_session_id)
@@ -2022,34 +2285,56 @@ class SyncRecordingService:
         coord.start_tracks(
             take_id=prep.capture_take_id,
             tracks_info=[
-                TrackRuntimeInfo(track_id=prep.tracks[0].capture_track_id, slot="cam_1",
-                                 camera_id=request.cam_1_id, analysis_role="default",
-                                 stream_url=cam_1.stream_url, output_dir=str(output_dir),
-                                 fps=request.fps, sync_to_host_clock=True),
-                TrackRuntimeInfo(track_id=prep.tracks[1].capture_track_id, slot="cam_2",
-                                 camera_id=request.cam_2_id, analysis_role="supplementary",
-                                 stream_url=cam_2.stream_url, output_dir=str(output_dir),
-                                 fps=request.fps, sync_to_host_clock=True),
+                TrackRuntimeInfo(
+                    track_id=prep.tracks[0].capture_track_id,
+                    slot="cam_1",
+                    camera_id=request.cam_1_id,
+                    analysis_role="default",
+                    stream_url=cam_1.stream_url,
+                    output_dir=str(output_dir),
+                    fps=request.fps,
+                    sync_to_host_clock=True,
+                ),
+                TrackRuntimeInfo(
+                    track_id=prep.tracks[1].capture_track_id,
+                    slot="cam_2",
+                    camera_id=request.cam_2_id,
+                    analysis_role="supplementary",
+                    stream_url=cam_2.stream_url,
+                    output_dir=str(output_dir),
+                    fps=request.fps,
+                    sync_to_host_clock=True,
+                ),
             ],
             policy=StrictSyncPolicy(),
         )
 
         session = SyncRecordingSession(
-            session_id=session_id, field_session_id=field_session_id,
-            status="recording", capture_take_id=prep.capture_take_id,
+            session_id=session_id,
+            field_session_id=field_session_id,
+            status="recording",
+            capture_take_id=prep.capture_take_id,
             camera_slots={
-                "cam_1": CameraSlotConfig(role="cam_1", camera_id=request.cam_1_id,
-                                          camera_angle=request.cam_1_angle or "baseline_high",
-                                          stream_url_snapshot=cam_1.stream_url),
-                "cam_2": CameraSlotConfig(role="cam_2", camera_id=request.cam_2_id,
-                                          camera_angle=request.cam_2_angle or "baseline_high",
-                                          stream_url_snapshot=cam_2.stream_url),
+                "cam_1": CameraSlotConfig(
+                    role="cam_1",
+                    camera_id=request.cam_1_id,
+                    camera_angle=request.cam_1_angle or "baseline_high",
+                    stream_url_snapshot=cam_1.stream_url,
+                ),
+                "cam_2": CameraSlotConfig(
+                    role="cam_2",
+                    camera_id=request.cam_2_id,
+                    camera_angle=request.cam_2_angle or "baseline_high",
+                    stream_url_snapshot=cam_2.stream_url,
+                ),
             },
-            output_dir=str(output_dir), court_name=court_name,
-            match_format=match_format, fps=request.fps,
+            output_dir=str(output_dir),
+            court_name=court_name,
+            match_format=match_format,
+            fps=request.fps,
             resolution=request.resolution,
             auto_analyze_after_stop=request.auto_analyze_after_stop,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             storage_root=str(plan.storage_root),
             session_dir=str(plan.take_dir),
         )
@@ -2072,18 +2357,21 @@ class SyncRecordingService:
 
         _, outcome = coordinator.stop_tracks()
 
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
         terminal_status = "failed" if getattr(outcome, "primary_track_lost", False) else "completed"
-        session = session.model_copy(update={
-            "status": terminal_status,
-            "stopped_at": stopped_at, "duration_sec": duration,
-            "default_analysis_video_id": None,
-            "registered_video_ids": {},
-            "merge_status": "pending",
-            "merge_error": None,
-            "merge_results": {},
-        })
+        session = session.model_copy(
+            update={
+                "status": terminal_status,
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+                "default_analysis_video_id": None,
+                "registered_video_ids": {},
+                "merge_status": "pending",
+                "merge_error": None,
+                "merge_results": {},
+            }
+        )
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
 
@@ -2100,14 +2388,11 @@ class SyncRecordingService:
     def delete_session(self, session_id: str) -> dict:
         session = self.get_session(session_id)
         if session is None:
-            return {"session_id": session_id, "status": "not_found",
-                    "detail": "同步录制会话不存在"}
+            return {"session_id": session_id, "status": "not_found", "detail": "同步录制会话不存在"}
         if session.status == "recording":
-            return {"session_id": session_id, "status": "blocked",
-                    "detail": "录制进行中，无法删除"}
+            return {"session_id": session_id, "status": "blocked", "detail": "录制进行中，无法删除"}
         if session.merge_status == "running":
-            return {"session_id": session_id, "status": "blocked",
-                    "detail": "视频合并进行中，无法删除"}
+            return {"session_id": session_id, "status": "blocked", "detail": "视频合并进行中，无法删除"}
 
         # 优先使用 CleanupService
         take_id = getattr(session, "capture_take_id", None)
@@ -2122,7 +2407,11 @@ class SyncRecordingService:
             )
             SYNC_SESSIONS.pop(session_id, None)
             for slot in ("cam_1", "cam_2"):
-                slot_info = session.camera_slots.get(slot) if hasattr(session, 'camera_slots') and session.camera_slots else None
+                slot_info = (
+                    session.camera_slots.get(slot)
+                    if hasattr(session, "camera_slots") and session.camera_slots
+                    else None
+                )
                 cam_id = getattr(slot_info, "camera_id", None) if slot_info else None
                 if cam_id:
                     global _ACTIVE_SYNC_CAMERAS
@@ -2135,6 +2424,7 @@ class SyncRecordingService:
         output_dir = Path(session.output_dir) if session.output_dir else self._output_dir(session_id)
         if output_dir.exists():
             import shutil
+
             shutil.rmtree(output_dir)
 
         # 清理与会话关联的其他视频路径
@@ -2150,11 +2440,10 @@ class SyncRecordingService:
         try:
             from app.database import get_session_factory
             from app.models.timeline_event import SessionTimelineEvent
+
             db = get_session_factory()()
             try:
-                db.query(SessionTimelineEvent).filter(
-                    SessionTimelineEvent.recording_session_id == session_id
-                ).delete()
+                db.query(SessionTimelineEvent).filter(SessionTimelineEvent.recording_session_id == session_id).delete()
                 db.commit()
             except Exception as exc:
                 db.rollback()
@@ -2180,8 +2469,7 @@ class SyncRecordingService:
                 _ACTIVE_SYNC_CAMERAS.discard(cam_id)
 
         logger.info("同步录制会话已删除: %s", session_id)
-        return {"session_id": session_id, "status": "deleted",
-                "detail": "同步录制会话已删除"}
+        return {"session_id": session_id, "status": "deleted", "detail": "同步录制会话已删除"}
 
     # ── 查询接口 ──────────────────────────────────────────────────
 
@@ -2203,20 +2491,24 @@ class SyncRecordingService:
             for path in sorted(self.sessions_dir.glob("*.json"), reverse=True):
                 try:
                     import json
-                    with open(path, "r", encoding="utf-8") as f:
+
+                    with open(path, encoding="utf-8") as f:
                         data = json.load(f)
                     session = SyncRecordingSession.model_validate(data)
                     if session.status == "recording" and not self.is_recording():
-                        session = session.model_copy(update={
-                            "status": "failed",
-                            "stopped_at": datetime.now(timezone.utc),
-                            "error_message": "服务中没有对应的活动录制进程，会话已恢复为失败状态",
-                        })
+                        session = session.model_copy(
+                            update={
+                                "status": "failed",
+                                "stopped_at": datetime.now(UTC),
+                                "error_message": "服务中没有对应的活动录制进程，会话已恢复为失败状态",
+                            }
+                        )
                         self._persist(session)
                         if getattr(session, "capture_take_id", None):
                             try:
                                 from app.database import get_session_factory
                                 from app.services.capture_take_service import finalize_capture_take
+
                                 db = get_session_factory()()
                                 try:
                                     finalize_capture_take(db, session.capture_take_id, "failed")

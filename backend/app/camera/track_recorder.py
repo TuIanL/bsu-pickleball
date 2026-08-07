@@ -1,4 +1,5 @@
 """TrackRecorder —— 独立单轨分片录制组件"""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,12 +9,10 @@ import platform
 import subprocess
 import threading
 from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Optional
-
-from app.camera.recording_protocols import ProcessFactory, ProcessRegistry, Clock
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class FragmentStartSpec:
     """启动一个 FFmpeg 分段录制所需的完整参数"""
+
     capture_take_id: str
     capture_track_id: str
     fragment_id: str
@@ -38,6 +38,7 @@ class FragmentStartSpec:
 @dataclass
 class FragmentExit:
     """FFmpeg 进程退出时的基本信息"""
+
     fragment_id: str
     return_code: int
     unexpected: bool = False
@@ -47,6 +48,7 @@ class FragmentExit:
 @dataclass
 class FragmentResult:
     """分段录制结果：成功/失败/丢弃"""
+
     fragment_id: str
     status: str  # completed / failed / discarded
     return_code: int
@@ -58,7 +60,8 @@ class FragmentResult:
 
 class FragmentHandle:
     """分段录制句柄，用于向录制器发送停止/等待/取消指令"""
-    def __init__(self, fragment_id: str, recorder: "TrackRecorder"):
+
+    def __init__(self, fragment_id: str, recorder: TrackRecorder):
         self._fragment_id = fragment_id
         self._recorder = recorder
 
@@ -80,28 +83,31 @@ class TrackRecorder:
 
     def __init__(self, *, process_registry=None, clock=None):
         self._process_registry = process_registry  # 进程注册表，用于记录进程生命周期
-        self._clock = clock or _DefaultClock()      # 时钟源，默认使用系统单调时钟
+        self._clock = clock or _DefaultClock()  # 时钟源，默认使用系统单调时钟
         self._process: subprocess.Popen[bytes] | None = None  # 当前 FFmpeg 进程
-        self._lock = threading.Lock()      # 保护共享状态的锁
+        self._lock = threading.Lock()  # 保护共享状态的锁
         self._completed = threading.Event()  # 录制完成信号量
-        self._callback_emitted = False     # 是否已发送退出回调
+        self._callback_emitted = False  # 是否已发送退出回调
         self._result: FragmentResult | None = None  # 录制结果
         self._on_exit: Callable[[FragmentExit], None] | None = None  # 退出回调函数
-        self._stop_reason = ""             # 停止原因
+        self._stop_reason = ""  # 停止原因
         self._spec: FragmentStartSpec | None = None  # 当前分段规格
         self._monitor_thread: threading.Thread | None = None  # 监控线程
-        self._start_ms: int = 0            # 启动时的单调时钟（毫秒）
-        self._fragment_id: str = ""        # 当前分段 ID
-        self._pid: int = 0                 # FFmpeg 进程 PID
-        self._pgid: int = 0                # FFmpeg 进程组 ID
-        self._fingerprint: str = ""        # 命令指纹（用于去重/追踪）
-        self._registration_id: int = 0     # 进程注册表返回的注册 ID
+        self._start_ms: int = 0  # 启动时的单调时钟（毫秒）
+        self._fragment_id: str = ""  # 当前分段 ID
+        self._pid: int = 0  # FFmpeg 进程 PID
+        self._pgid: int = 0  # FFmpeg 进程组 ID
+        self._fingerprint: str = ""  # 命令指纹（用于去重/追踪）
+        self._registration_id: int = 0  # 进程注册表返回的注册 ID
         self._stderr_tail: deque[str] = deque(maxlen=40)
         self._stderr_thread: threading.Thread | None = None
 
-    def start_fragment(self, spec: FragmentStartSpec,
-                       on_exit: Callable[[FragmentExit], None],
-                       launch_barrier: threading.Barrier | None = None) -> FragmentHandle:
+    def start_fragment(
+        self,
+        spec: FragmentStartSpec,
+        on_exit: Callable[[FragmentExit], None],
+        launch_barrier: threading.Barrier | None = None,
+    ) -> FragmentHandle:
         """启动新的 FFmpeg 分段录制，返回操作句柄"""
         with self._lock:
             self._spec = spec
@@ -124,8 +130,11 @@ class TrackRecorder:
                 launch_barrier.wait()
 
             self._process = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE, start_new_session=True,
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
             )
             self._pid = self._process.pid or 0
             try:
@@ -151,7 +160,8 @@ class TrackRecorder:
                         capture_take_id=spec.capture_take_id,
                         capture_track_id=spec.capture_track_id,
                         fragment_id=spec.fragment_id,
-                        pid=self._pid, pgid=self._pgid,
+                        pid=self._pid,
+                        pgid=self._pgid,
                         command_fingerprint=self._fingerprint,
                         output_path=str(output_path),
                     )
@@ -188,25 +198,39 @@ class TrackRecorder:
         """根据分段规格构建 FFmpeg 命令行"""
         cmd = [
             "ffmpeg",
-            "-rtsp_transport", "udp",
-            "-timeout", "5000000",
+            "-rtsp_transport",
+            "udp",
+            "-timeout",
+            "5000000",
         ]
         if spec.sync_to_host_clock:
-            cmd.extend([
-                "-fflags", "+genpts",
-                "-i", spec.stream_url,
-                "-map", "0:v:0",
-                "-an",
-                "-c:v", "copy",
-            ])
+            cmd.extend(
+                [
+                    "-fflags",
+                    "+genpts",
+                    "-i",
+                    spec.stream_url,
+                    "-map",
+                    "0:v:0",
+                    "-an",
+                    "-c:v",
+                    "copy",
+                ]
+            )
         else:
-            cmd.extend([
-                "-fflags", "+genpts",
-                "-i", spec.stream_url,
-                "-map", "0:v:0",
-                "-an",
-                "-c", "copy",
-            ])
+            cmd.extend(
+                [
+                    "-fflags",
+                    "+genpts",
+                    "-i",
+                    spec.stream_url,
+                    "-map",
+                    "0:v:0",
+                    "-an",
+                    "-c",
+                    "copy",
+                ]
+            )
         cmd.extend(["-f", "mpegts", "-y", str(spec.output_path)])
         return cmd
 
@@ -228,9 +252,11 @@ class TrackRecorder:
             if self._process_registry:
                 try:
                     self._process_registry.register_ended(
-                        self._registration_id, return_code=return_code,
-                        exit_reason=self._stop_reason or ("unexpected" if return_code != 0 or not self._stop_reason else "stopped"),
-                        ended_at=datetime.now(timezone.utc),
+                        self._registration_id,
+                        return_code=return_code,
+                        exit_reason=self._stop_reason
+                        or ("unexpected" if return_code != 0 or not self._stop_reason else "stopped"),
+                        ended_at=datetime.now(UTC),
                     )
                 except Exception:
                     pass
@@ -250,19 +276,23 @@ class TrackRecorder:
                 file_size=file_size,
                 media_duration_ms=elapsed_ms,
                 take_end_offset_ms=(self._spec.take_start_offset_ms + elapsed_ms) if self._spec else elapsed_ms,
-                error_message=("" if status == "completed" else
-                               f"FFmpeg exit code={return_code}" +
-                               (f": {stderr_tail}" if stderr_tail else "")),
+                error_message=(
+                    ""
+                    if status == "completed"
+                    else f"FFmpeg exit code={return_code}" + (f": {stderr_tail}" if stderr_tail else "")
+                ),
             )
 
             if not self._callback_emitted and self._on_exit:
                 self._callback_emitted = True
-                self._on_exit(FragmentExit(
-                    fragment_id=self._fragment_id,
-                    return_code=return_code,
-                    unexpected=is_unexpected,
-                    stderr_tail=stderr_tail,
-                ))
+                self._on_exit(
+                    FragmentExit(
+                        fragment_id=self._fragment_id,
+                        return_code=return_code,
+                        unexpected=is_unexpected,
+                        stderr_tail=stderr_tail,
+                    )
+                )
 
             self._completed.set()
             self._process = None
@@ -300,7 +330,8 @@ class TrackRecorder:
             self._process.wait()
         return FragmentResult(
             fragment_id=self._fragment_id,
-            status="failed", return_code=-1,
+            status="failed",
+            return_code=-1,
             error_message="timeout waiting for exit",
         )
 
@@ -311,8 +342,11 @@ class TrackRecorder:
 
 class _DefaultClock:
     """默认时钟实现，基于 time 模块"""
+
     import time as _time
+
     def utc_now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
+
     def monotonic_ms(self) -> int:
         return int(self._time.monotonic() * 1000)

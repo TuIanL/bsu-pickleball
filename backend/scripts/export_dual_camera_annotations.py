@@ -45,7 +45,9 @@ def main() -> int:
             camera_mappings[camera_id] = {
                 "frame_index": selection.source_frame_index,
                 "source_pts_seconds": selection.source_pts_seconds,
-                "selection_error_ms": None if selection.selection_error_seconds is None else selection.selection_error_seconds * 1000.0,
+                "selection_error_ms": None
+                if selection.selection_error_seconds is None
+                else selection.selection_error_seconds * 1000.0,
                 "status": selection.status,
             }
         exported_events.append({**event, "camera_mappings": camera_mappings})

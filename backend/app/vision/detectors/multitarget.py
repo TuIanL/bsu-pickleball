@@ -42,7 +42,7 @@ class MultiTargetDetector(Protocol):
 
 
 class EmptyMultiTargetDetector:
-    """"空"多目标检测器：什么都不检测，直接返回空列表。
+    """ "空"多目标检测器：什么都不检测，直接返回空列表。
 
     用途：当系统没有配置真正的检测器时，用这个占位实现，
     让上层流程可以无差异地调用 `detect_frame` 而不报错。
@@ -64,7 +64,7 @@ class EmptyMultiTargetDetector:
 
 
 class FixtureMultiTargetDetector:
-    """"固定夹具"多目标检测器：用预先准备好的检测结果喂给上层。
+    """ "固定夹具"多目标检测器：用预先准备好的检测结果喂给上层。
 
     用途：测试或演示时，不需要真的跑模型，而是把事先写好的
     `detections_by_frame`（帧序号 -> 该帧的检测列表）直接返回。

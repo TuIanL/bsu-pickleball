@@ -12,7 +12,13 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.vidat_annotation import VidatAnnotationPackage
-from app.services.vidat_annotation_service import VidatPackageError, confirm_import_preview, create_annotation_package, create_import_preview, publish_annotation_package
+from app.services.vidat_annotation_service import (
+    VidatPackageError,
+    confirm_import_preview,
+    create_annotation_package,
+    create_import_preview,
+    publish_annotation_package,
+)
 from app.services.vidat_server import VidatServiceError, ensure_vidat_service
 
 router = APIRouter(prefix="/api/vidat", tags=["vidat"])
@@ -23,10 +29,12 @@ def _vidat_dist() -> Path:
     configured = os.getenv("PICKLEBALL_VIDAT_DIST")
     if configured:
         return Path(configured).expanduser()
-    vidat_dir = Path(os.getenv(
-        "PICKLEBALL_VIDAT_DIR",
-        str(Path.home() / "Documents/大学/竞赛/大创/匹克球/摄像头录制/tennistest"),
-    )).expanduser()
+    vidat_dir = Path(
+        os.getenv(
+            "PICKLEBALL_VIDAT_DIR",
+            str(Path.home() / "Documents/大学/竞赛/大创/匹克球/摄像头录制/tennistest"),
+        )
+    ).expanduser()
     return vidat_dir / "dist"
 
 
@@ -49,15 +57,24 @@ class ConfirmRequest(BaseModel):
 
 
 def _serialize(package: VidatAnnotationPackage) -> PackageResponse:
-    return PackageResponse(id=package.id, capture_take_id=package.capture_take_id, version=package.version,
-        package_dir=package.package_dir, manifest=json.loads(package.manifest_json),
-        imported_at=package.imported_at.isoformat() if package.imported_at else None)
+    return PackageResponse(
+        id=package.id,
+        capture_take_id=package.capture_take_id,
+        version=package.version,
+        package_dir=package.package_dir,
+        manifest=json.loads(package.manifest_json),
+        imported_at=package.imported_at.isoformat() if package.imported_at else None,
+    )
 
 
 @router.get("/capture-takes/{capture_take_id}/packages", response_model=list[PackageResponse])
 def list_packages(capture_take_id: str, db: Session = Depends(get_db)) -> list[PackageResponse]:
-    packages = db.query(VidatAnnotationPackage).filter(
-        VidatAnnotationPackage.capture_take_id == capture_take_id).order_by(VidatAnnotationPackage.version.desc()).all()
+    packages = (
+        db.query(VidatAnnotationPackage)
+        .filter(VidatAnnotationPackage.capture_take_id == capture_take_id)
+        .order_by(VidatAnnotationPackage.version.desc())
+        .all()
+    )
     return [_serialize(package) for package in packages]
 
 
@@ -110,8 +127,12 @@ def preview_import(package_id: str, request: PreviewRequest, db: Session = Depen
     except VidatPackageError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"preview_id": preview.id, "confirmation_token": preview.token,
-            "expires_at": preview.expires_at.isoformat(), **json.loads(preview.preview_json)}
+    return {
+        "preview_id": preview.id,
+        "confirmation_token": preview.token,
+        "expires_at": preview.expires_at.isoformat(),
+        **json.loads(preview.preview_json),
+    }
 
 
 @router.post("/packages/{package_id}/import-confirmations")

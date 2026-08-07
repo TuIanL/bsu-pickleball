@@ -21,7 +21,6 @@ import sys
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 # backend 目录（scripts/ 的上两级），并加入 sys.path。
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -143,10 +142,10 @@ def main() -> int:
     check_dependencies()
 
     # 重载模块后导入项目内模块
+    from app.schemas.pose import DEFAULT_SKELETON_EDGES
+    from app.schemas.tracking import FrameDetection
     from app.vision.player_tracking_engine.person_detector import PersonDetector
     from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
-    from app.schemas.tracking import FrameDetection
-    from app.schemas.pose import DEFAULT_SKELETON_EDGES
 
     # ---- 输入验证 ----
     video_path = args.video.expanduser().resolve()
@@ -255,9 +254,7 @@ def main() -> int:
 
         # Step 4: RTMPose 姿态估计
         try:
-            pose_frame = pose_adapter.estimate_frame(
-                frame, frame_detections, frame_index, timestamp
-            )
+            pose_frame = pose_adapter.estimate_frame(frame, frame_detections, frame_index, timestamp)
         except Exception:
             pose_frame = None
 

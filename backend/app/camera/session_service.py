@@ -16,21 +16,21 @@ import logging
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.camera.camera_registry import camera_registry
+from app.camera.ffmpeg_utils import check_ffmpeg_available
 from app.camera.models import RecordingSession, RecordingStartRequest
 from app.camera.recorder import Recorder
-from app.camera.ffmpeg_utils import check_ffmpeg_available
-from app.services.storage_service import StorageService
 from app.services.capture_storage_service import (
     CaptureStorageError,
-    create_capture_storage_plan,
-    capture_storage_plan_from_dir,
     capture_storage_is_available,
+    capture_storage_plan_from_dir,
+    create_capture_storage_plan,
     write_capture_metadata,
 )
+from app.services.storage_service import StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +80,14 @@ class SessionService:
 
     def _generate_session_id(self) -> str:
         # 用当前时间生成形如 rec_20260706_210000 的会话 id
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return f"rec_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
     def _output_path(self, session_id: str, camera_id: str, session: RecordingSession | None = None) -> Path:
         # 输出路径：data/recordings/{日期}/{摄像头id}/{会话id}.mp4
         if session and session.session_dir:
             return Path(session.session_dir) / "media" / f"{session_id}.mp4"
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
         return self.recordings_dir / date_str / camera_id / f"{session_id}.mp4"
 
     def find_active_session(self, camera_id: str) -> RecordingSession | None:
@@ -115,6 +115,7 @@ class SessionService:
 
         # 检查是否被双摄同步录制占用
         from app.camera.sync_recorder_service import sync_recording_service
+
         if sync_recording_service.is_camera_in_sync_recording(request.camera_id):
             raise RuntimeError(f"摄像头 {request.camera_id} 正在参与双摄同步录制，无法单独开始录制")
 
@@ -130,6 +131,7 @@ class SessionService:
         if field_session_id:
             from app.database import get_session_factory
             from app.services.field_session_service import get_field_session
+
             db = get_session_factory()()
             try:
                 fs = get_field_session(db, field_session_id)
@@ -163,7 +165,7 @@ class SessionService:
             resolution=request.resolution,
             auto_analyze_after_stop=request.auto_analyze_after_stop,
             status="recording",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             storage_root=str(plan.storage_root),
             session_dir=str(plan.take_dir),
         )
@@ -201,7 +203,7 @@ class SessionService:
 
         # 启动心跳线程 + ffmpeg_registry 登记
         self._start_heartbeat(session_id)
-        if hasattr(self._recorder, '_insert_ffmpeg_registry'):
+        if hasattr(self._recorder, "_insert_ffmpeg_registry"):
             self._recorder._insert_ffmpeg_registry(
                 capture_take_id=getattr(session, "capture_take_id", "") or "",
                 track_id=session_id,
@@ -237,7 +239,13 @@ class SessionService:
                         "status": "recording",
                         "storage_root": updated.storage_root,
                         "session_dir": updated.session_dir,
-                        "tracks": [{"slot": "cam_1", "camera_id": updated.camera_id, "file": str(plan.media_dir / f"{updated.session_id}.mp4")}],
+                        "tracks": [
+                            {
+                                "slot": "cam_1",
+                                "camera_id": updated.camera_id,
+                                "file": str(plan.media_dir / f"{updated.session_id}.mp4"),
+                            }
+                        ],
                     },
                     session=updated.model_dump(mode="json"),
                 )
@@ -261,8 +269,10 @@ class SessionService:
 
         # 活跃录制唯一性约束：全局最多一个 active CaptureTake
         from app.services.capture_take_service import has_active_capture_take
+
         try:
             from app.database import get_session_factory
+
             check_db = get_session_factory()()
             try:
                 if has_active_capture_take(check_db):
@@ -275,6 +285,7 @@ class SessionService:
             logger.warning("检查活跃录制失败（跳过约束）: %s", exc)
         if self._coordinator:
             from app.services.capture_start_coordinator import CaptureTrackSpec
+
             spec = CaptureTrackSpec(slot="cam_1", camera_id=camera_id, analysis_role="default")
             try:
                 prepared = self._coordinator.prepare_start(
@@ -288,18 +299,17 @@ class SessionService:
                 )
                 session = SESSIONS.get(session_id)
                 if session:
-                    SESSIONS[session_id] = session.model_copy(
-                        update={"capture_take_id": prepared.capture_take_id}
-                    )
+                    SESSIONS[session_id] = session.model_copy(update={"capture_take_id": prepared.capture_take_id})
                 self._coordinator.activate(prepared.capture_take_id)
             except Exception as exc:
                 logger.error("CaptureStartCoordinator 创建 CaptureTake 失败: %s", exc)
-                raise RuntimeError(f"创建 CaptureTake 失败: {exc}")
+                raise RuntimeError(f"创建 CaptureTake 失败: {exc}") from exc
         else:
             # Fallback: 原有直连数据库逻辑
             try:
                 from app.database import get_session_factory
                 from app.services import capture_take_service, capture_track_service
+
                 db = get_session_factory()()
                 try:
                     take = capture_take_service.create_capture_take(
@@ -323,9 +333,7 @@ class SessionService:
                     db.commit()
                     session = SESSIONS.get(session_id)
                     if session:
-                        SESSIONS[session_id] = session.model_copy(
-                            update={"capture_take_id": take.id}
-                        )
+                        SESSIONS[session_id] = session.model_copy(update={"capture_take_id": take.id})
                 except Exception as exc:
                     db.rollback()
                     logger.warning("创建 CaptureTake 失败（录制不受影响）: %s", exc)
@@ -350,6 +358,7 @@ class SessionService:
                         self._lease_manager.heartbeat(tid)
                 except Exception:
                     pass
+
         t = threading.Thread(target=_beat, daemon=True)
         self._heartbeat_threads[session_id] = t
         t.start()
@@ -362,13 +371,15 @@ class SessionService:
             self._recorder.cancel()
         except Exception as exc:
             logger.warning("存储故障停止单摄 FFmpeg 失败: %s", exc)
-        failed = session.model_copy(update={
-            "status": "failed",
-            "storage_status": "failed",
-            "stopped_at": datetime.now(timezone.utc),
-            "duration_sec": (datetime.now(timezone.utc) - session.started_at).total_seconds(),
-            "error_message": message,
-        })
+        failed = session.model_copy(
+            update={
+                "status": "failed",
+                "storage_status": "failed",
+                "stopped_at": datetime.now(UTC),
+                "duration_sec": (datetime.now(UTC) - session.started_at).total_seconds(),
+                "error_message": message,
+            }
+        )
         SESSIONS[session_id] = failed
         self._persist(failed)
         self._clear_active(failed.camera_id)
@@ -399,7 +410,7 @@ class SessionService:
 
         # 优雅停止 FFmpeg
         self._recorder.stop()
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds()
 
         output_path = self._output_path(session_id, session.camera_id, session)
@@ -408,8 +419,7 @@ class SessionService:
         video_id = None
         if output_path.exists():
             try:
-                from app.services.video_service import video_service, SUPPORTED_VIDEO_SUFFIXES
-                from app.schemas.video import VideoMetadata
+                from app.services.video_service import SUPPORTED_VIDEO_SUFFIXES, video_service
 
                 file_size = output_path.stat().st_size
                 suffix = output_path.suffix.lower()
@@ -435,14 +445,16 @@ class SessionService:
                 logger.error("自动创建分析任务失败: %s", exc)
 
         # 更新会话为 completed，并保存
-        session = session.model_copy(update={
-            "status": "completed",
-            "stopped_at": stopped_at,
-            "duration_sec": duration,
-            "video_path": str(output_path) if output_path.exists() else None,
-            "video_id": video_id,
-            "auto_analysis_job_id": job_id,
-        })
+        session = session.model_copy(
+            update={
+                "status": "completed",
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+                "video_path": str(output_path) if output_path.exists() else None,
+                "video_id": video_id,
+                "auto_analysis_job_id": job_id,
+            }
+        )
 
         SESSIONS[session_id] = session
         self._persist(session)
@@ -450,7 +462,17 @@ class SessionService:
             try:
                 write_capture_metadata(
                     capture_storage_plan_from_dir(session.session_dir),
-                    manifest={"schema_version": "capture_manifest.v1", "capture_take_id": session.capture_take_id, "source_session_id": session.session_id, "capture_mode": "single", "status": session.status, "storage_root": session.storage_root, "session_dir": session.session_dir, "video_path": session.video_path, "video_id": session.video_id},
+                    manifest={
+                        "schema_version": "capture_manifest.v1",
+                        "capture_take_id": session.capture_take_id,
+                        "source_session_id": session.session_id,
+                        "capture_mode": "single",
+                        "status": session.status,
+                        "storage_root": session.storage_root,
+                        "session_dir": session.session_dir,
+                        "video_path": session.video_path,
+                        "video_id": session.video_id,
+                    },
                     session=session.model_dump(mode="json"),
                 )
             except OSError as exc:
@@ -481,7 +503,7 @@ class SessionService:
 
         # 直接杀掉 FFmpeg（取消 = 放弃本次录制）
         self._recorder.cancel()
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds()
 
         output_path = self._output_path(session_id, session.camera_id, session)
@@ -492,11 +514,13 @@ class SessionService:
             except Exception as exc:
                 logger.warning("删除部分录制文件失败: %s", exc)
 
-        session = session.model_copy(update={
-            "status": "canceled",
-            "stopped_at": stopped_at,
-            "duration_sec": duration,
-        })
+        session = session.model_copy(
+            update={
+                "status": "canceled",
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+            }
+        )
 
         SESSIONS[session_id] = session
         self._persist(session)
@@ -509,7 +533,6 @@ class SessionService:
         return session
 
     def delete_session(self, session_id: str) -> dict:
-        from app.camera.models import RecordingDeleteResult
 
         session = self.get_session(session_id)
         if session is None:
@@ -539,33 +562,23 @@ class SessionService:
         if take_id:
             try:
                 from app.database import get_session_factory
-                from app.models.timeline_event import SessionTimelineEvent
-                from app.models.capture_track import CaptureTrack
                 from app.models.capture_coding_action import CaptureCodingAction
                 from app.models.capture_segment import CaptureSegment
                 from app.models.capture_take import CaptureTake
+                from app.models.capture_track import CaptureTrack
+                from app.models.timeline_event import SessionTimelineEvent
 
                 db = get_session_factory()()
                 try:
                     # 按外键依赖顺序：先删引用方，再删被引用方
-                    db.query(SessionTimelineEvent).filter(
-                        SessionTimelineEvent.capture_take_id == take_id
-                    ).delete()
+                    db.query(SessionTimelineEvent).filter(SessionTimelineEvent.capture_take_id == take_id).delete()
                     db.query(SessionTimelineEvent).filter(
                         SessionTimelineEvent.recording_session_id == session_id
                     ).delete()
-                    db.query(CaptureTrack).filter(
-                        CaptureTrack.capture_take_id == take_id
-                    ).delete()
-                    db.query(CaptureCodingAction).filter(
-                        CaptureCodingAction.capture_take_id == take_id
-                    ).delete()
-                    db.query(CaptureSegment).filter(
-                        CaptureSegment.capture_take_id == take_id
-                    ).delete()
-                    db.query(CaptureTake).filter(
-                        CaptureTake.id == take_id
-                    ).delete()
+                    db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == take_id).delete()
+                    db.query(CaptureCodingAction).filter(CaptureCodingAction.capture_take_id == take_id).delete()
+                    db.query(CaptureSegment).filter(CaptureSegment.capture_take_id == take_id).delete()
+                    db.query(CaptureTake).filter(CaptureTake.id == take_id).delete()
                     db.commit()
                 except Exception as exc:
                     db.rollback()
@@ -618,7 +631,9 @@ class SessionService:
             return cached
         return self._load(session_id)
 
-    def list_sessions(self, camera_id: str | None = None, status: str | None = None, field_session_id: str | None = None) -> list[RecordingSession]:
+    def list_sessions(
+        self, camera_id: str | None = None, status: str | None = None, field_session_id: str | None = None
+    ) -> list[RecordingSession]:
         result: list[RecordingSession] = []
 
         # 遍历所有会话 JSON（按文件名倒序，新的在前）
@@ -630,23 +645,29 @@ class SessionService:
 
                     # 自愈：session JSON 为 recording 但内存中无活跃进程 → 标记 failed
                     if session.status == "recording" and self.find_active_session(session.camera_id) is None:
-                        session = session.model_copy(update={
-                            "status": "failed",
-                            "stopped_at": datetime.now(timezone.utc),
-                            "error_message": "服务中没有对应的活动录制进程，会话已恢复为失败状态",
-                        })
+                        session = session.model_copy(
+                            update={
+                                "status": "failed",
+                                "stopped_at": datetime.now(UTC),
+                                "error_message": "服务中没有对应的活动录制进程，会话已恢复为失败状态",
+                            }
+                        )
                         self._persist(session)
                         SESSIONS[session.session_id] = session
                         if session.capture_take_id:
                             try:
                                 from app.database import get_session_factory
                                 from app.services.capture_take_service import finalize_capture_take
+
                                 db = get_session_factory()()
                                 try:
                                     finalize_capture_take(db, session.capture_take_id, "failed")
                                     db.commit()
-                                    logger.info("自愈：单路 session %s CaptureTake %s 终态化为 failed",
-                                                session.session_id, session.capture_take_id)
+                                    logger.info(
+                                        "自愈：单路 session %s CaptureTake %s 终态化为 failed",
+                                        session.session_id,
+                                        session.capture_take_id,
+                                    )
                                 finally:
                                     db.close()
                             except Exception as exc:
@@ -669,33 +690,36 @@ class SessionService:
 
     def _on_recorder_exit(self, session_id: str, exit_info) -> None:
         from app.camera.recorder_exit import RecorderExit
+
         session = SESSIONS.get(session_id)
         if session is None or session.status != "recording":
             return
 
         if isinstance(exit_info, RecorderExit):
             if exit_info.stop_requested or exit_info.cancel_requested:
-                logger.info("录制会话 %s FFmpeg 已由用户请求退出, returncode=%d",
-                            session_id, exit_info.returncode)
+                logger.info("录制会话 %s FFmpeg 已由用户请求退出, returncode=%d", session_id, exit_info.returncode)
                 return
-            logger.error("录制会话 %s FFmpeg 意外退出, returncode=%d",
-                          session_id, exit_info.returncode)
-            session = session.model_copy(update={
-                "status": "failed",
-                "stopped_at": datetime.now(timezone.utc),
-                "duration_sec": (datetime.now(timezone.utc) - session.started_at).total_seconds(),
-                "error_message": f"FFmpeg 意外退出, returncode={exit_info.returncode}",
-            })
+            logger.error("录制会话 %s FFmpeg 意外退出, returncode=%d", session_id, exit_info.returncode)
+            session = session.model_copy(
+                update={
+                    "status": "failed",
+                    "stopped_at": datetime.now(UTC),
+                    "duration_sec": (datetime.now(UTC) - session.started_at).total_seconds(),
+                    "error_message": f"FFmpeg 意外退出, returncode={exit_info.returncode}",
+                }
+            )
         else:
             returncode = exit_info
             if returncode != 0:
                 logger.error("录制会话 %s FFmpeg 异常退出, returncode=%d", session_id, returncode)
-                session = session.model_copy(update={
-                    "status": "failed",
-                    "stopped_at": datetime.now(timezone.utc),
-                    "duration_sec": (datetime.now(timezone.utc) - session.started_at).total_seconds(),
-                    "error_message": f"FFmpeg 进程异常退出, returncode={returncode}",
-                })
+                session = session.model_copy(
+                    update={
+                        "status": "failed",
+                        "stopped_at": datetime.now(UTC),
+                        "duration_sec": (datetime.now(UTC) - session.started_at).total_seconds(),
+                        "error_message": f"FFmpeg 进程异常退出, returncode={returncode}",
+                    }
+                )
         SESSIONS[session_id] = session
         self._persist(session)
         self._clear_active(session.camera_id)
@@ -717,25 +741,29 @@ class SessionService:
         duration_ms = int((session.duration_sec or 0) * 1000)
         self._try_close_capture_take(session, terminal_status, duration_ms)
 
-    def _try_close_capture_take(self, session, terminal_status: str = "completed",
-                                 duration_ms: int = 0) -> None:
+    def _try_close_capture_take(self, session, terminal_status: str = "completed", duration_ms: int = 0) -> None:
         """关闭关联的 CaptureTake 和 open segments（幂等）。"""
         take_id = session.capture_take_id
         if not take_id:
             return
         try:
             from app.database import get_session_factory
-            from app.services import capture_take_service, capture_segment_service
+            from app.services import capture_segment_service, capture_take_service
+
             db = get_session_factory()()
             try:
-                ended = session.stopped_at or datetime.now(timezone.utc)
+                ended = session.stopped_at or datetime.now(UTC)
                 capture_take_service.finalize_capture_take(
-                    db, take_id, terminal_status,
-                    ended_at=ended, duration_ms=duration_ms,
+                    db,
+                    take_id,
+                    terminal_status,
+                    ended_at=ended,
+                    duration_ms=duration_ms,
                 )
                 if duration_ms > 0:
                     capture_segment_service.close_all_open_for_take(db, take_id, duration_ms)
                 from app.services.capture_archive_service import snapshot_capture_timeline
+
                 snapshot_capture_timeline(db, take_id, fps=getattr(session, "fps", None))
                 db.commit()
             except Exception as exc:
@@ -781,12 +809,14 @@ class SessionService:
         )
 
         # 调用分析模块创建任务
-        job = create_analysis_job(AnalysisJobCreate(
-            metadata=metadata,
-            videoId=video_id,
-            sourceFps=float(session.fps),
-            frameStride=1,
-        ))
+        job = create_analysis_job(
+            AnalysisJobCreate(
+                metadata=metadata,
+                videoId=video_id,
+                sourceFps=float(session.fps),
+                frameStride=1,
+            )
+        )
 
         return job.id
 
@@ -807,9 +837,9 @@ def _map_camera_angle(angle: str) -> str:
 
     def start_with_track_recorder(self, request: RecordingStartRequest):
         """使用 TrackRecorder + Coordinator + Finalizer 启动单摄录制。"""
-        from app.services.capture_start_coordinator import CaptureTrackSpec
-        from app.camera.recording_policy import SingleTrackRestartPolicy
         from app.camera.capture_runtime_coordinator import CaptureRuntimeCoordinator, TrackRuntimeInfo
+        from app.camera.recording_policy import SingleTrackRestartPolicy
+        from app.services.capture_start_coordinator import CaptureTrackSpec
 
         # 复用现有校验和上下文继承
         if not check_ffmpeg_available():
@@ -836,35 +866,45 @@ def _map_camera_angle(angle: str) -> str:
         output_dir = str(plan.fragments_dir)
         coord.start_tracks(
             take_id=prep.capture_take_id,
-            tracks_info=[TrackRuntimeInfo(
-                track_id=prep.tracks[0].capture_track_id,
-                slot="cam_1", camera_id=request.camera_id,
-                analysis_role="default",
-                stream_url=camera.stream_url,
-                output_dir=output_dir,
-                fps=request.fps,
-            )],
+            tracks_info=[
+                TrackRuntimeInfo(
+                    track_id=prep.tracks[0].capture_track_id,
+                    slot="cam_1",
+                    camera_id=request.camera_id,
+                    analysis_role="default",
+                    stream_url=camera.stream_url,
+                    output_dir=output_dir,
+                    fps=request.fps,
+                )
+            ],
             policy=SingleTrackRestartPolicy(),
         )
 
         session = RecordingSession(
-            session_id=session_id, camera_id=request.camera_id,
+            session_id=session_id,
+            camera_id=request.camera_id,
             field_session_id=field_session_id,
             capture_take_id=prep.capture_take_id,
             court_name=request.court_name or "",
             match_format=request.match_format or "doubles",
             camera_angle=request.camera_angle or "baseline_high",
-            fps=request.fps, resolution=request.resolution,
+            fps=request.fps,
+            resolution=request.resolution,
             auto_analyze_after_stop=request.auto_analyze_after_stop,
-            status="recording", started_at=datetime.now(timezone.utc),
-            storage_root=str(plan.storage_root), session_dir=str(plan.take_dir),
+            status="recording",
+            started_at=datetime.now(UTC),
+            storage_root=str(plan.storage_root),
+            session_dir=str(plan.take_dir),
         )
         try:
             from app.database import get_session_factory
             from app.services.capture_take_service import set_capture_take_storage
+
             db = get_session_factory()()
             try:
-                set_capture_take_storage(db, prep.capture_take_id, storage_root=str(plan.storage_root), session_dir=str(plan.take_dir))
+                set_capture_take_storage(
+                    db, prep.capture_take_id, storage_root=str(plan.storage_root), session_dir=str(plan.take_dir)
+                )
                 db.commit()
             finally:
                 db.close()
@@ -883,8 +923,8 @@ def _map_camera_angle(angle: str) -> str:
 
     def stop_with_track_recorder(self, session_id: str, coordinator):
         """使用 TrackRecorder + Finalizer 停止单摄录制。"""
-        from app.camera.capture_finalizer import CaptureFinalizer
         from app.camera.capture_completion_service import CaptureCompletionService
+        from app.camera.capture_finalizer import CaptureFinalizer
 
         session = SESSIONS.get(session_id)
         if not session:
@@ -901,17 +941,19 @@ def _map_camera_angle(angle: str) -> str:
 
         take_id = getattr(session, "capture_take_id", "") or ""
         decision = comp.finalize_and_decide(
-            capture_take_id=take_id,
-            outcome=outcome, finalizer=fin, fragment_infos_by_track=by_track)
+            capture_take_id=take_id, outcome=outcome, finalizer=fin, fragment_infos_by_track=by_track
+        )
 
-        stopped_at = datetime.now(timezone.utc)
+        stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
-        session = session.model_copy(update={
-            "status": decision.terminal_status,
-            "stopped_at": stopped_at,
-            "duration_sec": duration,
-            "video_id": decision.default_analysis_video_id,
-        })
+        session = session.model_copy(
+            update={
+                "status": decision.terminal_status,
+                "stopped_at": stopped_at,
+                "duration_sec": duration,
+                "video_id": decision.default_analysis_video_id,
+            }
+        )
         SESSIONS[session_id] = session
         self._persist(session)
         self._clear_active(session.camera_id)

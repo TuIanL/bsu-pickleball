@@ -15,14 +15,16 @@ from __future__ import annotations
 # Query：用于从网址的查询参数（形如 ?camera_id=xxx&status=done）里取可选的过滤条件
 from fastapi import APIRouter, HTTPException, Query
 
-from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest
-from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 # 检查当前系统是否安装了 FFmpeg 这个外部工具
 from app.camera.ffmpeg_utils import check_ffmpeg_available
+from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest
+
 # 录制会话服务：真正管理录制生命周期（开始/停止/取消/查询）的对象
 from app.camera.session_service import session_service
+
 # 数据库会话工厂，用于停止时查询 CaptureTake
 from app.database import get_session_factory
+from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 
 # 创建路由表，前缀 /api/recordings
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
@@ -58,10 +60,10 @@ def start_recording(payload: RecordingStartRequest) -> RecordingSession:
         return session_service.start_session(payload)
     except ValueError as e:
         # 业务层用 ValueError 表示"找不到目标"（如摄像头不存在）
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
         # 业务层用 RuntimeError 表示"状态冲突"（如已在录制）
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/{session_id}/stop", response_model=CaptureStopResult)
@@ -75,18 +77,20 @@ def stop_recording(session_id: str) -> CaptureStopResult:
             db = get_session_factory()()
             try:
                 from app.services.capture_take_service import get_capture_take
+
                 take = get_capture_take(db, tid)
             finally:
                 db.close()
         return CaptureStopResultBuilder.from_single_session(
-            session, capture_take=take,
+            session,
+            capture_take=take,
             video_id=getattr(session, "video_id", None),
             duration_ms=int((getattr(session, "duration_sec", 0) or 0) * 1000),
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{session_id}/cancel", response_model=RecordingSession)
@@ -101,9 +105,9 @@ def cancel_recording(session_id: str) -> RecordingSession:
     try:
         return session_service.cancel_session(session_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("", response_model=list[RecordingSession])

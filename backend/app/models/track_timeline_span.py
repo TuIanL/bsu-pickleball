@@ -1,7 +1,8 @@
 """TrackTimelineSpan ORM —— CaptureTake 时间到合并 MP4 时间的映射"""
+
 from __future__ import annotations
 
-from sqlalchemy import Integer, String, Index
+from sqlalchemy import Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base

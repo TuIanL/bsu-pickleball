@@ -44,7 +44,10 @@ def ensure_vidat_service() -> dict[str, str | bool]:
 
     checked = subprocess.run(
         [str(nginx_path), "-t", "-c", str(config_path)],
-        capture_output=True, text=True, timeout=5, check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
     )
     if checked.returncode != 0:
         detail = (checked.stderr or checked.stdout).strip().splitlines()
@@ -53,7 +56,9 @@ def ensure_vidat_service() -> dict[str, str | bool]:
     try:
         subprocess.Popen(
             [str(nginx_path), "-c", str(config_path)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise VidatServiceError(f"Vidat 服务启动失败：{exc}") from exc

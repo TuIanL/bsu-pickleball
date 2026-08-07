@@ -1,7 +1,7 @@
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -21,7 +21,6 @@ from app.vision.action_classification_preprocessing import (
     sample_frame_indices,
     select_target_detection,
 )
-
 
 cv2 = pytest.importorskip("cv2")
 
@@ -90,25 +89,24 @@ def test_select_target_detection_strategies():
 
     assert select_target_detection(detections, strategy="largest", frame_shape=(100, 100, 3)).bbox == [70, 20, 95, 90]
     assert select_target_detection(detections, strategy="near-left", frame_shape=(100, 100, 3)).bbox == [5, 10, 25, 80]
-    assert select_target_detection(detections, strategy="near-right", frame_shape=(100, 100, 3)).bbox == [70, 20, 95, 90]
-    assert (
-        select_target_detection(
-            detections,
-            strategy="track-iou",
-            frame_shape=(100, 100, 3),
-            previous_bbox=[38, 8, 56, 46],
-        ).bbox
-        == [40, 10, 55, 45]
-    )
-    assert (
-        select_target_detection(
-            detections,
-            strategy="manual-initial-bbox",
-            frame_shape=(100, 100, 3),
-            manual_initial_bbox=[4, 9, 24, 81],
-        ).bbox
-        == [5, 10, 25, 80]
-    )
+    assert select_target_detection(detections, strategy="near-right", frame_shape=(100, 100, 3)).bbox == [
+        70,
+        20,
+        95,
+        90,
+    ]
+    assert select_target_detection(
+        detections,
+        strategy="track-iou",
+        frame_shape=(100, 100, 3),
+        previous_bbox=[38, 8, 56, 46],
+    ).bbox == [40, 10, 55, 45]
+    assert select_target_detection(
+        detections,
+        strategy="manual-initial-bbox",
+        frame_shape=(100, 100, 3),
+        manual_initial_bbox=[4, 9, 24, 81],
+    ).bbox == [5, 10, 25, 80]
 
 
 def test_build_clip_windows_handles_complete_and_short_sequences():

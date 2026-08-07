@@ -12,7 +12,9 @@ import {
 import {
   buildBallTrajectoryVisualization,
   buildReconstructedBallTrajectoryVisualization,
+  filterTrajectories,
   type BallTrajectoryVisualizationData,
+  type EstimatedBallShot,
   type EstimatedBallTrajectory,
 } from "../services/ballTrajectoryVisualization";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
@@ -21,6 +23,7 @@ import type { AnalysisJobSummary } from "../types/report";
 type LoadState = "loading" | "available" | "empty" | "failed";
 type ConfidenceFilter = "all" | "high";
 type DisplayLimit = 12 | 24 | 48 | "all";
+type PlayerFilter = "all" | "unassigned" | string;
 
 interface BallTrajectoryPageProps {
   jobId: string;
@@ -41,6 +44,26 @@ function directionLabel(trajectory: EstimatedBallTrajectory): string {
   return trajectory.direction === "near-to-far" ? "近端 → 远端" : "远端 → 近端";
 }
 
+function shotLabel(shot: EstimatedBallShot): string {
+  const hitter = shot.hitterPlayerId === null ? "未归属" : shot.hitterPlayerId.replace("Player_", "P");
+  return `球路 ${shot.sequence} · ${hitter} · ${shot.segments.length} 个飞行段 · ${shot.durationSeconds.toFixed(1)}s`;
+}
+
+function ownershipBadge(status: string): { label: string; className: string } | null {
+  switch (status) {
+    case "confirmed":
+      return { label: "归属确认", className: "bg-[#EAF8F0] text-[#168A34]" };
+    case "ambiguous":
+      return { label: "归属不明", className: "bg-[#FEF6E7] text-[#B54708]" };
+    case "unassigned":
+      return { label: "击球者不明", className: "bg-[#F2F4F7] text-[#667085]" };
+    case "not_applicable":
+      return { label: "无 Shot 上下文", className: "bg-[#F2F4F7] text-[#667085]" };
+    default:
+      return null;
+  }
+}
+
 export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProps) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [job, setJob] = useState<AnalysisJobSummary | null>(null);
@@ -48,8 +71,11 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
   const [errorMessage, setErrorMessage] = useState("");
   const [webGlError, setWebGlError] = useState("");
   const [filter, setFilter] = useState<ConfidenceFilter>("all");
+  const [playerFilter, setPlayerFilter] = useState<PlayerFilter>("all");
   const [displayLimit, setDisplayLimit] = useState<DisplayLimit>(24);
-  const [selectedTrajectoryId, setSelectedTrajectoryId] = useState<string | null>(null);
+  const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
+
+  const roster = useMemo(() => data?.playerRoster ?? [], [data]);
 
   useEffect(() => {
     let alive = true;
@@ -71,7 +97,7 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
         if (!alive) return;
         setJob(nextJob);
         setData(nextData);
-        setSelectedTrajectoryId(nextData.trajectories[0]?.id ?? null);
+        setSelectedShotId(nextData.shots[0]?.shotId ?? nextData.trajectories[0]?.id ?? null);
         setLoadState(nextData.trajectories.length ? "available" : "empty");
       } catch (error) {
         if (!alive) return;
@@ -86,18 +112,58 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
     };
   }, [jobId]);
 
-  const filteredTrajectories = useMemo(() => {
-    const filtered = (data?.trajectories ?? []).filter((trajectory) => filter === "all" || trajectory.highConfidence);
-    return displayLimit === "all" ? filtered : filtered.slice(-displayLimit);
-  }, [data, displayLimit, filter]);
+  const { trajectories: filteredTrajectories, shots: filteredShots } = useMemo(
+    () => filterTrajectories(data?.trajectories ?? [], data?.shots ?? [], {
+      playerFilter,
+      confidence: filter,
+      displayLimit,
+    }),
+    [data, displayLimit, filter, playerFilter],
+  );
 
-  const effectiveSelectedTrajectoryId = filteredTrajectories.some((trajectory) => trajectory.id === selectedTrajectoryId)
-    ? selectedTrajectoryId
-    : filteredTrajectories[0]?.id ?? null;
-  const selectedTrajectory = filteredTrajectories.find((trajectory) => trajectory.id === effectiveSelectedTrajectoryId) ?? null;
-  const totalDuration = data?.trajectories.reduce((total, trajectory) => total + trajectory.durationSeconds, 0) ?? 0;
-  const highConfidenceCount = data?.trajectories.filter((trajectory) => trajectory.highConfidence).length ?? 0;
-  const handleSelectTrajectory = useCallback((trajectoryId: string) => setSelectedTrajectoryId(trajectoryId), []);
+  const effectiveSelectedShotId = useMemo(() => {
+    if (selectedShotId !== null) {
+      const matches = filteredTrajectories.some((t) => t.shotId === selectedShotId || t.id === selectedShotId);
+      if (matches) return selectedShotId;
+    }
+    return filteredShots[0]?.shotId ?? filteredTrajectories[0]?.id ?? null;
+  }, [filteredShots, filteredTrajectories, selectedShotId]);
+
+  const selectedShot = useMemo(() => {
+    if (effectiveSelectedShotId === null) return null;
+    const shot = filteredShots.find((s) => s.shotId === effectiveSelectedShotId);
+    if (shot) return shot;
+    const single = filteredTrajectories.find((t) => t.id === effectiveSelectedShotId);
+    return single ? {
+      shotId: single.shotId ?? single.id,
+      hitterPlayerId: single.hitterPlayerId,
+      hitterRenderSlot: single.hitterRenderSlot,
+      ownershipStatus: single.ownershipStatus,
+      ownershipConfidence: single.ownershipConfidence,
+      segmentIds: [single.id],
+      segments: [single],
+      startTimeSeconds: single.startTimeSeconds,
+      endTimeSeconds: single.endTimeSeconds,
+      durationSeconds: single.durationSeconds,
+      pointCount: single.pointCount,
+      sequence: single.sequence,
+    } : null;
+  }, [effectiveSelectedShotId, filteredShots, filteredTrajectories]);
+
+  const selectedTrajectory = selectedShot?.segments[0] ?? null;
+  const totalShots = data?.shots.length ?? 0;
+  const highConfidenceShots = data?.shots.filter((shot) => shot.segments.some((segment) => segment.highConfidence)).length ?? 0;
+  const totalDuration = data?.shots.reduce((total, shot) => total + shot.durationSeconds, 0) ?? 0;
+  const perPlayerCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const shot of data?.shots ?? []) {
+      if (shot.hitterPlayerId === null) continue;
+      counts.set(shot.hitterPlayerId, (counts.get(shot.hitterPlayerId) ?? 0) + 1);
+    }
+    return counts;
+  }, [data]);
+
+  const handleSelectShot = useCallback((shotId: string | null) => setSelectedShotId(shotId), []);
   const handleWebGlError = useCallback((message: string) => setWebGlError(message), []);
   const visionPath = `/analysis/${jobId}/vision` as AppPath;
 
@@ -160,9 +226,12 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
           </p>
         </div>
         <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[#E4E7EC] py-3 lg:border-y-0 lg:py-0">
-          <Metric label="球路" value={`${data?.trajectories.length ?? 0}`} />
-          <Metric label="较高可信" value={`${highConfidenceCount}`} />
+          <Metric label="球路（Shot）" value={`${totalShots}`} />
+          <Metric label="较高可信" value={`${highConfidenceShots}`} />
           <Metric label="累计时长" value={`${totalDuration.toFixed(1)}s`} />
+          {[...perPlayerCounts.entries()].map(([playerId, count]) => (
+            <Metric key={playerId} label={playerId.replace("Player_", "P")} value={`${count}`} />
+          ))}
         </div>
       </header>
 
@@ -179,8 +248,8 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
           ) : filteredTrajectories.length ? (
             <BallTrajectoryScene
               trajectories={filteredTrajectories}
-              selectedTrajectoryId={effectiveSelectedTrajectoryId}
-              onSelectTrajectory={handleSelectTrajectory}
+              selectedShotId={effectiveSelectedShotId}
+              onSelectShot={handleSelectShot}
               onWebGlError={handleWebGlError}
             />
           ) : (
@@ -200,6 +269,31 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
               <h2 className="text-sm font-bold text-[#182230]">显示设置</h2>
               <SlidersHorizontal size={16} className="text-[#98A2B3]" aria-hidden="true" />
             </div>
+            {roster.length > 0 && (
+              <div className="mt-3" aria-label="球员筛选">
+                <div className="grid grid-cols-3 rounded-lg bg-[#F2F4F7] p-1">
+                  {["all", ...roster.map((entry) => entry.player_id)].map((playerId) => (
+                    <button
+                      aria-pressed={playerFilter === playerId}
+                      className={`min-h-9 rounded-md px-1 text-xs font-bold transition ${playerFilter === playerId ? "bg-white text-[#182230] shadow-sm" : "text-[#667085]"}`}
+                      key={playerId}
+                      onClick={() => setPlayerFilter(playerId)}
+                      type="button"
+                    >
+                      {playerId === "all" ? "全部" : playerId.replace("Player_", "P")}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  aria-pressed={playerFilter === "unassigned"}
+                  className={`mt-2 min-h-9 w-full rounded-md px-2 text-xs font-bold transition ${playerFilter === "unassigned" ? "bg-[#EAF8F0] text-[#168A34]" : "bg-[#F2F4F7] text-[#667085]"}`}
+                  onClick={() => setPlayerFilter("unassigned")}
+                  type="button"
+                >
+                  未归属（击球者不明 / 无 Shot 上下文）
+                </button>
+              </div>
+            )}
             <div className="mt-3 grid grid-cols-2 rounded-lg bg-[#F2F4F7] p-1" aria-label="轨迹可信度筛选">
               {(["all", "high"] as ConfidenceFilter[]).map((mode) => (
                 <button
@@ -239,21 +333,23 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
             </div>
           </section>
 
-          {selectedTrajectory ? (
+          {selectedShot ? (
             <section className="border-b border-[#E4E7EC] py-4" aria-live="polite">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-bold text-[#182230]">球路 {selectedTrajectory.sequence}</h2>
-                <span className={`rounded-md px-2 py-1 text-[11px] font-bold ${selectedTrajectory.highConfidence ? "bg-[#EAF8F0] text-[#168A34]" : "bg-[#F2F4F7] text-[#667085]"}`}>
-                  {selectedTrajectory.highConfidence ? "较高可信" : "谨慎参考"}
+                <h2 className="text-sm font-bold text-[#182230]">球路 {selectedShot.sequence}</h2>
+                <span className={`rounded-md px-2 py-1 text-[11px] font-bold ${selectedTrajectory?.highConfidence ? "bg-[#EAF8F0] text-[#168A34]" : "bg-[#F2F4F7] text-[#667085]"}`}>
+                  {selectedTrajectory?.highConfidence ? "较高可信" : "谨慎参考"}
                 </span>
               </div>
               <dl className="mt-3 grid gap-2 text-xs">
-                <Detail label="方向" value={directionLabel(selectedTrajectory)} />
-                <Detail label="时间" value={`${formatTime(selectedTrajectory.startTimeSeconds)} – ${formatTime(selectedTrajectory.endTimeSeconds)}`} />
-                <Detail label="持续" value={`${selectedTrajectory.durationSeconds.toFixed(2)} 秒`} />
-                <Detail label="轨迹点" value={`${selectedTrajectory.pointCount}`} />
-                <Detail label="平均置信" value={confidenceLabel(selectedTrajectory.averageConfidence)} />
-                <Detail label="插值比例" value={`${Math.round(selectedTrajectory.interpolatedRatio * 100)}%`} />
+                <Detail label="击球者" value={selectedShot.hitterPlayerId === null ? "未归属" : selectedShot.hitterPlayerId.replace("Player_", "P")} />
+                <Detail label="归属" value={ownershipBadge(selectedShot.ownershipStatus)?.label ?? selectedShot.ownershipStatus} />
+                <Detail label="归属置信" value={confidenceLabel(selectedShot.ownershipConfidence)} />
+                <Detail label="飞行段" value={`${selectedShot.segments.length} 段`} />
+                <Detail label="时间" value={`${formatTime(selectedShot.startTimeSeconds)} – ${formatTime(selectedShot.endTimeSeconds)}`} />
+                <Detail label="持续" value={`${selectedShot.durationSeconds.toFixed(2)} 秒`} />
+                <Detail label="轨迹点" value={`${selectedShot.pointCount}`} />
+                {selectedTrajectory ? <Detail label="方向" value={directionLabel(selectedTrajectory)} /> : null}
               </dl>
             </section>
           ) : null}
@@ -261,14 +357,37 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
           <section className="pt-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <h2 className="text-sm font-bold text-[#182230]">可见球路</h2>
-              <span className="text-xs text-[#98A2B3]">{filteredTrajectories.length}</span>
+              <span className="text-xs text-[#98A2B3]">{filteredShots.length || filteredTrajectories.length}</span>
             </div>
             <div className="max-h-64 space-y-1 overflow-y-auto pr-1 xl:max-h-[calc(100vh-620px)] xl:min-h-36">
-              {filteredTrajectories.map((trajectory) => (
+              {filteredShots.length ? filteredShots.map((shot) => {
+                const badge = ownershipBadge(shot.ownershipStatus);
+                return (
+                  <button
+                    className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${shot.shotId === effectiveSelectedShotId ? "bg-[#EAF8F0]" : "hover:bg-[#F7F9F8]"}`}
+                    key={shot.shotId}
+                    onClick={() => setSelectedShotId(shot.shotId)}
+                    type="button"
+                  >
+                    <CircleDot
+                      size={15}
+                      color={shot.segments[0]?.direction === "near-to-far" ? "#25B86A" : "#F04438"}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <strong className="block text-xs text-[#344054]">{shotLabel(shot)}</strong>
+                      <span className="mt-0.5 flex items-center gap-2 text-[11px] text-[#98A2B3]">
+                        {badge ? <em className={`rounded px-1.5 py-0.5 text-[10px] font-bold not-italic ${badge.className}`}>{badge.label}</em> : null}
+                        {formatTime(shot.startTimeSeconds)} · {shot.pointCount} 点
+                      </span>
+                    </span>
+                  </button>
+                );
+              }) : filteredTrajectories.map((trajectory) => (
                 <button
-                  className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${trajectory.id === effectiveSelectedTrajectoryId ? "bg-[#EAF8F0]" : "hover:bg-[#F7F9F8]"}`}
+                  className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${trajectory.id === effectiveSelectedShotId ? "bg-[#EAF8F0]" : "hover:bg-[#F7F9F8]"}`}
                   key={trajectory.id}
-                  onClick={() => setSelectedTrajectoryId(trajectory.id)}
+                  onClick={() => setSelectedShotId(trajectory.id)}
                   type="button"
                 >
                   <CircleDot

@@ -11,21 +11,19 @@ demo 模式下（没有真实视频）会直接返回一份写死的样例报告
 
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import datetime, timezone
-from pathlib import Path
 import logging
+from copy import deepcopy
+from datetime import UTC, datetime
+from pathlib import Path
 from threading import Lock
 from uuid import uuid4
-
-from typing import Optional
 
 from fastapi import BackgroundTasks
 
 from app.schemas.analysis import (
     ANALYSIS_ERROR_CODES,
-    AnalysisJobCreate,
     AnalysisDeleteResult,
+    AnalysisJobCreate,
     AnalysisJobSummary,
     AnalysisReport,
     AnalysisStage,
@@ -46,12 +44,10 @@ from app.services.job_orchestration import (
     first_failed_stage,
     merge_stage_progress,
     normalize_job,
-    stage_from_pipeline,
     utc_now,
 )
 from app.services.storage_service import StorageService
 from app.services.video_service import video_service
-
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +67,7 @@ def _pipeline_factory(analysis_options: dict | None = None) -> AnalysisPipeline:
     return AnalysisPipeline(**(analysis_options or {}))
 
 
-def _demo_settings() -> Settings:
+def _demo_settings():
     # demo 任务构建时解析推理开关的全局默认值（模块级函数避免与函数内局部 import 冲突）。
     from app.core.config import get_settings
 
@@ -87,7 +83,7 @@ def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult
             job=job,
             metadata=job.metadata,
             report_id=job.reportId or f"PV-{job.id.upper()}",
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=datetime.now(UTC).isoformat(),
             result=result,
         )
         _save_report(job.id, report)
@@ -120,6 +116,7 @@ def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
     _WORKER_STARTED = False
     if was_started:
         start_analysis_worker()
+
 
 # 阶段顺序表（本模块用到的顺序，与 job_orchestration 里的一致）
 ORDERED_STAGES: list[AnalysisStageId] = [
@@ -168,7 +165,6 @@ def create_analysis_job(
     #   - 无 videoId（demo）：直接返回一个已完成任务 + 样例报告。
     _sync_orchestration_storage()
     now = utc_now()
-
 
     if payload.videoId:
         if video_service.get_video(payload.videoId) is None:
@@ -274,7 +270,7 @@ def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummar
     # 内部：局部更新一个任务对象并保存（不落 JobStore，直接走 _save_job）。
     payload = job.model_dump()
     payload.update(updates)
-    payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    payload["updatedAt"] = datetime.now(UTC).isoformat()
     updated = AnalysisJobSummary.model_validate(payload)
     return _save_job(updated)
 
@@ -341,7 +337,7 @@ def _job_sort_key(job: AnalysisJobSummary) -> tuple[str, str]:
     return (job.updatedAt or job.createdAt, job.createdAt)
 
 
-def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:
+def get_mock_job(job_id: str) -> AnalysisJobSummary | None:
     # 按 job_id 取任务：先查 JobStore，再查内存，都没有返回 None。
     _sync_orchestration_storage()
     job = _JOB_STORE.get(job_id)
@@ -355,7 +351,7 @@ def get_mock_job(job_id: str) -> Optional[AnalysisJobSummary]:
     return job
 
 
-def get_mock_report(job_id: str) -> Optional[AnalysisReport]:
+def get_mock_report(job_id: str) -> AnalysisReport | None:
     # 按 job_id 取报告：先查内存，再查磁盘。
     cached = REPORTS.get(job_id)
     if cached is not None:
@@ -371,7 +367,7 @@ def get_mock_report(job_id: str) -> Optional[AnalysisReport]:
     return report
 
 
-def get_pipeline_result(job_id: str) -> Optional[AnalysisPipelineResult]:
+def get_pipeline_result(job_id: str) -> AnalysisPipelineResult | None:
     # 按 job_id 取流水线结果：先查内存，再查磁盘。
     cached = RESULTS.get(job_id)
     if cached is not None:
@@ -484,13 +480,14 @@ def recover_zombie_jobs() -> int:
     这里的判断依据是 updatedAt 距离当前时间超过阈值（默认 120 秒）。
     """
     import logging
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime
+
     from app.core.config import get_settings
 
     logger = logging.getLogger(__name__)
     settings = get_settings()
     threshold_seconds = max(60, settings.job_zombie_timeout_seconds)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     recovered = 0
 
     _sync_orchestration_storage()
@@ -506,7 +503,9 @@ def recover_zombie_jobs() -> int:
 
         logger.warning(
             "标记僵尸任务 %s 为 failed（%s 未更新，阈值=%ss）",
-            job.id, updated.isoformat(), threshold_seconds,
+            job.id,
+            updated.isoformat(),
+            threshold_seconds,
         )
         try:
             _JOB_STORE.mark_failed(
@@ -654,7 +653,9 @@ def build_mock_report(
     payload["generatedAt"] = generated_at
     payload["metadata"] = metadata.model_dump()
     payload["match"]["title"] = metadata.matchTitle
-    payload["match"]["subtitle"] = f"{'双打' if metadata.matchFormat == 'doubles' else '单打'}训练样本 · {metadata.level}"
+    payload["match"]["subtitle"] = (
+        f"{'双打' if metadata.matchFormat == 'doubles' else '单打'}训练样本 · {metadata.level}"
+    )
     payload["match"]["date"] = metadata.matchDate
     payload["match"]["venue"] = metadata.venue
     payload["session"]["athlete"] = metadata.athleteLabel
@@ -701,7 +702,7 @@ def _apply_pipeline_feedback(
         f"累计移动距离约 {total_distance:.1f} 英尺。"
         if not no_tracks
         else (
-            "本次任务已处理上传视频，但当前 MVP 没有生成可用的场地轨迹。请检查四角标定、拍摄角度、模型依赖和视频清晰度。"
+            "本次任务已处理上传视频，但当前 MVP 没有生成可用的场地轨迹。请检查四角标定、拍摄角度、模型依赖和视频清晰度。"  # noqa: E501
             if not limited
             else "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。"
         )
@@ -777,7 +778,7 @@ def _apply_pipeline_feedback(
             "tone": "advantage" if not no_tracks else "risk",
             "title": "移动指标" if not no_tracks else "轨迹暂不可用",
             "body": (
-                f"累计移动 {total_distance:.1f} 英尺，平均速度 {avg_speed:.1f} 英尺/秒，最高速度 {max_speed:.1f} 英尺/秒。"
+                f"累计移动 {total_distance:.1f} 英尺，平均速度 {avg_speed:.1f} 英尺/秒，最高速度 {max_speed:.1f} 英尺/秒。"  # noqa: E501
                 if not no_tracks
                 else "当前没有可用球员轨迹，建议重新标定四角或确认模型推理配置。"
             ),
@@ -836,10 +837,42 @@ def _pipeline_dashboard_metrics(
 ) -> list[dict]:
     # 内部：把汇总数字包装成"仪表盘指标"列表（每个含 id/标签/值/进度条等）。
     return [
-        _metric("distance", "activity", "累计移动距离", f"{total_distance:.1f} ft", "来自场地投影轨迹的累计距离", "真实视频", min(100, int(total_distance))),
-        _metric("avg-speed", "timer", "平均移动速度", f"{avg_speed:.1f} ft/s", f"最高速度 {max_speed:.1f} ft/s", "pipeline", min(100, int(avg_speed * 12))),
-        _metric("kitchen", "waves", "厨房区停留", f"{kitchen_seconds:.1f}s", "按投影点统计的非截击区停留时间", "真实视频", min(100, int(kitchen_seconds * 10))),
-        _metric("tracks", "radar", "可用轨迹点", str(point_count), "用于生成可视化和热力图的点数量", "算法输出", min(100, point_count * 8)),
+        _metric(
+            "distance",
+            "activity",
+            "累计移动距离",
+            f"{total_distance:.1f} ft",
+            "来自场地投影轨迹的累计距离",
+            "真实视频",
+            min(100, int(total_distance)),
+        ),
+        _metric(
+            "avg-speed",
+            "timer",
+            "平均移动速度",
+            f"{avg_speed:.1f} ft/s",
+            f"最高速度 {max_speed:.1f} ft/s",
+            "pipeline",
+            min(100, int(avg_speed * 12)),
+        ),
+        _metric(
+            "kitchen",
+            "waves",
+            "厨房区停留",
+            f"{kitchen_seconds:.1f}s",
+            "按投影点统计的非截击区停留时间",
+            "真实视频",
+            min(100, int(kitchen_seconds * 10)),
+        ),
+        _metric(
+            "tracks",
+            "radar",
+            "可用轨迹点",
+            str(point_count),
+            "用于生成可视化和热力图的点数量",
+            "算法输出",
+            min(100, point_count * 8),
+        ),
     ]
 
 
@@ -878,7 +911,12 @@ def _pipeline_report_definitions(
             "metrics": movement_metrics,
             "insights": [
                 _note("movement-source", "training", "真实 pipeline 输出", source_note),
-                _note("movement-speed", "advantage" if point_count else "risk", "速度与覆盖", f"平均速度 {avg_speed:.1f} ft/s，最高速度 {max_speed:.1f} ft/s。"),
+                _note(
+                    "movement-speed",
+                    "advantage" if point_count else "risk",
+                    "速度与覆盖",
+                    f"平均速度 {avg_speed:.1f} ft/s，最高速度 {max_speed:.1f} ft/s。",
+                ),
             ],
             "trainingLink": "基于移动路径安排回位训练",
         },
@@ -891,7 +929,9 @@ def _pipeline_report_definitions(
             "heroMetricLabel": "姿态诊断",
             "visualization": "diagnosis",
             "metrics": [_metric("diagnosis-na", "alert", "动作诊断", "未接入", unavailable, "MVP 限制", 0)],
-            "insights": [_note("diagnosis-note", "training", "需要姿态模型", "RTMPose 或同等姿态模型接入后才能输出动作证据。")],
+            "insights": [
+                _note("diagnosis-note", "training", "需要姿态模型", "RTMPose 或同等姿态模型接入后才能输出动作证据。")
+            ],
             "trainingLink": "先依据移动指标训练",
         },
     ]
@@ -1058,12 +1098,32 @@ DEMO_REPORT = {
         },
     ],
     "reportActions": [
-        {"type": "movement", "title": "步法移动报告", "description": "拆解回位路径、覆盖平衡和启动延迟。", "path": "/reports/movement"},
-        {"type": "diagnosis", "title": "动作诊断报告", "description": "把动作问题转成证据和纠正方向。", "path": "/reports/diagnosis"},
+        {
+            "type": "movement",
+            "title": "步法移动报告",
+            "description": "拆解回位路径、覆盖平衡和启动延迟。",
+            "path": "/reports/movement",
+        },
+        {
+            "type": "diagnosis",
+            "title": "动作诊断报告",
+            "description": "把动作问题转成证据和纠正方向。",
+            "path": "/reports/diagnosis",
+        },
     ],
     "coachNotes": [
-        {"id": "note-advantage", "tone": "advantage", "title": "覆盖平衡接近理想", "body": "样例移动路径显示左右覆盖较均衡，可作为后续人员位移投影的展示基线。"},
-        {"id": "note-risk", "tone": "risk", "title": "右侧回位仍有延迟", "body": "右侧覆盖后的恢复路径偏长，适合用移动轨迹和速度指标继续验证。"},
+        {
+            "id": "note-advantage",
+            "tone": "advantage",
+            "title": "覆盖平衡接近理想",
+            "body": "样例移动路径显示左右覆盖较均衡，可作为后续人员位移投影的展示基线。",
+        },
+        {
+            "id": "note-risk",
+            "tone": "risk",
+            "title": "右侧回位仍有延迟",
+            "body": "右侧覆盖后的恢复路径偏长，适合用移动轨迹和速度指标继续验证。",
+        },
     ],
     "reportDefinitions": [],
     "playerMarkers": [
@@ -1082,7 +1142,14 @@ DEMO_REPORT = {
         {"id": "movement", "time": "08:42", "position": 76, "label": "移动覆盖摘要", "tone": "advantage"},
     ],
     "highlights": [
-        {"id": "h1", "title": "移动覆盖摘要", "time": "08:42", "result": "轨迹样例", "tone": "advantage", "description": "人员轨迹集中在中后场，适合作为后续标准球场投影的演示入口。"}
+        {
+            "id": "h1",
+            "title": "移动覆盖摘要",
+            "time": "08:42",
+            "result": "轨迹样例",
+            "tone": "advantage",
+            "description": "人员轨迹集中在中后场，适合作为后续标准球场投影的演示入口。",
+        }
     ],
     "diagnoses": [
         {
@@ -1108,7 +1175,9 @@ DEMO_REPORT = {
         }
     ],
     "shotRows": [],
-    "skillRatings": [{"id": "movement-coverage", "label": "移动覆盖", "score": 61, "note": "右侧覆盖后的回位仍可优化。"}],
+    "skillRatings": [
+        {"id": "movement-coverage", "label": "移动覆盖", "score": 61, "note": "右侧覆盖后的回位仍可优化。"}
+    ],
     "progressPoints": [{"match": "第1场", "performance": 67, "errors": 23, "thirdShot": 48, "kitchen": 52}],
 }
 

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 # 球场线分割模型「准备 + 训练」脚本。
 # 作用：把 COCO 格式的球场线标注数据集，转换成 YOLO 分割格式，并（可选地）用 Ultralytics 训练分割模型。
-
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 # 把项目根目录（backend/）加入模块搜索路径，使 `from app...` 可用。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

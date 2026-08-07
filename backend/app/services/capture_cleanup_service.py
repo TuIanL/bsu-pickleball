@@ -1,9 +1,10 @@
 """CaptureCleanupService —— 统一的录制资源清理服务，单摄/双摄共用。"""
+
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,8 @@ class CaptureCleanupService:
 
             self._delete_db_records(db, capture_take_id)
 
-            take.deleted_at = datetime.now(timezone.utc)
-            take.updated_at = datetime.now(timezone.utc)
+            take.deleted_at = datetime.now(UTC)
+            take.updated_at = datetime.now(UTC)
             db.commit()
 
         except AnalysisReferenceError as exc:
@@ -70,69 +71,59 @@ class CaptureCleanupService:
 
     def _check_analysis_references(self, db, capture_take_id: str) -> None:
         from app.models.capture_track import CaptureTrack
-        tracks = db.query(CaptureTrack).filter(
-            CaptureTrack.capture_take_id == capture_take_id
-        ).all()
+
+        tracks = db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == capture_take_id).all()
         video_ids = [t.video_id for t in tracks if t.video_id]
         if not video_ids:
             return
         try:
             from app.models.analysis_job import AnalysisJob
-            refs = db.query(AnalysisJob).filter(
-                AnalysisJob.video_id.in_(video_ids),
-                AnalysisJob.status.in_(["pending", "processing"]),
-            ).count()
+
+            refs = (
+                db.query(AnalysisJob)
+                .filter(
+                    AnalysisJob.video_id.in_(video_ids),
+                    AnalysisJob.status.in_(["pending", "processing"]),
+                )
+                .count()
+            )
             if refs > 0:
                 raise AnalysisReferenceError("视频被分析任务引用，无法删除")
         except ImportError:
             pass
 
     def _delete_db_records(self, db, capture_take_id: str) -> None:
-        from app.models.timeline_event import SessionTimelineEvent
-        from app.models.capture_track import CaptureTrack
         from app.models.capture_coding_action import CaptureCodingAction
         from app.models.capture_segment import CaptureSegment
-        from app.models.track_timeline_span import TrackTimelineSpan
-        from app.models.track_finalization import TrackFinalization
+        from app.models.capture_track import CaptureTrack
         from app.models.media_fragment import MediaFragment
+        from app.models.timeline_event import SessionTimelineEvent
+        from app.models.track_finalization import TrackFinalization
+        from app.models.track_timeline_span import TrackTimelineSpan
 
         # 按外键依赖顺序删除
-        db.query(SessionTimelineEvent).filter(
-            SessionTimelineEvent.capture_take_id == capture_take_id
-        ).delete()
-        db.query(CaptureSegment).filter(
-            CaptureSegment.capture_take_id == capture_take_id
-        ).delete()
-        db.query(CaptureCodingAction).filter(
-            CaptureCodingAction.capture_take_id == capture_take_id
-        ).delete()
+        db.query(SessionTimelineEvent).filter(SessionTimelineEvent.capture_take_id == capture_take_id).delete()
+        db.query(CaptureSegment).filter(CaptureSegment.capture_take_id == capture_take_id).delete()
+        db.query(CaptureCodingAction).filter(CaptureCodingAction.capture_take_id == capture_take_id).delete()
 
         # TimelineSpan → Finalization → Fragment → Track
-        track_ids = [t[0] for t in db.query(CaptureTrack.id).filter(
-            CaptureTrack.capture_take_id == capture_take_id
-        ).all()]
+        track_ids = [
+            t[0] for t in db.query(CaptureTrack.id).filter(CaptureTrack.capture_take_id == capture_take_id).all()
+        ]
         for tid in track_ids:
-            final_ids = [f[0] for f in db.query(TrackFinalization.id).filter(
-                TrackFinalization.capture_track_id == tid
-            ).all()]
+            final_ids = [
+                f[0] for f in db.query(TrackFinalization.id).filter(TrackFinalization.capture_track_id == tid).all()
+            ]
             for fid in final_ids:
-                db.query(TrackTimelineSpan).filter(
-                    TrackTimelineSpan.track_finalization_id == fid
-                ).delete()
-            db.query(TrackFinalization).filter(
-                TrackFinalization.capture_track_id == tid
-            ).delete()
-            db.query(MediaFragment).filter(
-                MediaFragment.capture_track_id == tid
-            ).delete()
+                db.query(TrackTimelineSpan).filter(TrackTimelineSpan.track_finalization_id == fid).delete()
+            db.query(TrackFinalization).filter(TrackFinalization.capture_track_id == tid).delete()
+            db.query(MediaFragment).filter(MediaFragment.capture_track_id == tid).delete()
 
-        db.query(CaptureTrack).filter(
-            CaptureTrack.capture_take_id == capture_take_id
-        ).delete()
+        db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == capture_take_id).delete()
 
     def _delete_media_files(self, video_path: str | None, output_dir: str | None) -> None:
         import shutil
-        import glob
+
         if output_dir:
             out = Path(output_dir)
             if out.exists():

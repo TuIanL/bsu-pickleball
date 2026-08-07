@@ -12,14 +12,15 @@
 # `from __future__ import annotations`：兼容较新类型写法。
 from __future__ import annotations
 
-from dataclasses import asdict   # 把 dataclass 转 dict
-from datetime import datetime, timezone   # 生成清单的创建时间（带时区）
-import json   # 把清单写成 JSON 文件
-from pathlib import Path   # 路径对象
-from typing import Any, Protocol   # Any：任意类型；Protocol：定义"结构化的接口约定"
+import json  # 把清单写成 JSON 文件
+from dataclasses import asdict  # 把 dataclass 转 dict
+from datetime import UTC, datetime  # 生成清单的创建时间（带时区）
+from pathlib import Path  # 路径对象
+from typing import Any, Protocol  # Any：任意类型；Protocol：定义"结构化的接口约定"
 
 # 检测框数据结构（来自 tracking schemas）
 from app.schemas.tracking import Detection
+
 # 预处理工具函数（来自同包 preprocessing）
 from app.vision.action_classification_preprocessing.preprocessing import (
     apply_clahe_bgr,
@@ -30,6 +31,7 @@ from app.vision.action_classification_preprocessing.preprocessing import (
     offset_box,
     sample_frame_indices,
 )
+
 # 配置与产物数据结构（来自同包 schemas）
 from app.vision.action_classification_preprocessing.schemas import (
     ActionPreprocessingConfig,
@@ -39,13 +41,16 @@ from app.vision.action_classification_preprocessing.schemas import (
     VideoManifest,
     dataclass_to_dict,
 )
+
 # 目标球员选择策略（来自同包 selection）
 from app.vision.action_classification_preprocessing.selection import select_target_detection
+
 # 视频扩展名白名单 + 文件名清洗工具（来自其它 vision 子模块）
 from app.vision.courtvision_calibration_engine.real_video_frame_extraction import (
     SUPPORTED_VIDEO_EXTENSIONS,
     sanitize_video_stem,
 )
+
 # 真正的人体检测器（YOLO）
 from app.vision.player_tracking_engine.person_detector import PersonDetector
 
@@ -58,8 +63,7 @@ class DetectorProtocol(Protocol):
     而不需要它们之间存在继承关系。
     """
 
-    def detect(self, frame: object) -> list[Detection]:
-        ...
+    def detect(self, frame: object) -> list[Detection]: ...
 
 
 def export_action_classification_dataset(
@@ -130,14 +134,18 @@ def export_action_classification_dataset(
     # 拼出最终 manifest 字典
     manifest = {
         "manifest_version": 1,
-        "created_at": datetime.now(timezone.utc).isoformat(),   # 带时区的创建时间
+        "created_at": datetime.now(UTC).isoformat(),  # 带时区的创建时间
         "input_path": str(source),
         "output_root": str(output_root),
         "manifest_path": str(manifest_path),
-        "settings": config.to_manifest_dict(),   # 把配置原样记下来，便于复现
+        "settings": config.to_manifest_dict(),  # 把配置原样记下来，便于复现
         "summary": {
             # 状态判断：有 clip 且无错误 → "ok"；有 clip 但有错误 → "partial"；一个 clip 都没 → "no_samples"
-            "status": "ok" if clips_written > 0 and error_count == 0 else "partial" if clips_written > 0 else "no_samples",
+            "status": "ok"
+            if clips_written > 0 and error_count == 0
+            else "partial"
+            if clips_written > 0
+            else "no_samples",
             "video_count": len(videos),
             "clips_written": clips_written,
             "frames_written": frames_written,
@@ -164,7 +172,9 @@ def discover_video_paths(input_path: str | Path) -> list[Path]:
         return [path]
     if not path.is_dir():
         return []
-    return sorted(child for child in path.iterdir() if child.is_file() and child.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS)
+    return sorted(
+        child for child in path.iterdir() if child.is_file() and child.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+    )
 
 
 def _export_one_video(
@@ -220,7 +230,7 @@ def _export_one_video(
 
         # frame_samples 暂存 (帧记录, 裁好的图)；后面拼 clip 时再统一写出
         frame_samples: list[tuple[FrameSample, Any]] = []
-        previous_bbox: list[float] | None = None   # 上一帧选中的框，供 track 类策略做 IoU 跟踪
+        previous_bbox: list[float] | None = None  # 上一帧选中的框，供 track 类策略做 IoU 跟踪
         # 先算好要抽哪些帧
         for frame_index, timestamp in sample_frame_indices(
             fps=fps,
@@ -296,7 +306,9 @@ def _export_one_video(
             entry.selected_frame_count += 1
             # 7) 把"相对 ROI 的框"换算回"相对整张原图的框"（加上 ROI 左上角偏移）
             source_bbox = offset_box(target.bbox, roi_record.bbox[0], roi_record.bbox[1])
-            crop_bbox_source = [int(value) for value in offset_box(crop_bbox_roi, roi_record.bbox[0], roi_record.bbox[1])]
+            crop_bbox_source = [
+                int(value) for value in offset_box(crop_bbox_roi, roi_record.bbox[0], roi_record.bbox[1])
+            ]
             # 先给个占位文件名（真正写出时再改成最终路径）
             placeholder_name = _frame_file_name(len(frame_samples))
             frame_record = FrameSample(

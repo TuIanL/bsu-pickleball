@@ -12,7 +12,6 @@ from __future__ import annotations
 # dataclass：数据类（详见 schemas.py 注释）。
 from dataclasses import dataclass
 
-
 # 英尺↔米 的换算系数（1 英尺 = 0.3048 米）。
 FEET_TO_METERS = 0.3048
 METERS_TO_FEET = 1.0 / FEET_TO_METERS
@@ -35,12 +34,13 @@ class CourtUnitMetadata:
 
     `as_dict()` 方便把它写进 JSON / 报告里。
     """
-    court_unit: str = "m"                      # 当前使用的单位："m" 或 "ft"
+
+    court_unit: str = "m"  # 当前使用的单位："m" 或 "ft"
     width_m: float = PICKLEBALL_COURT_WIDTH_M  # 宽（米）
     length_m: float = PICKLEBALL_COURT_LENGTH_M  # 长（米）
     width_ft: float = PICKLEBALL_COURT_WIDTH_FT  # 宽（英尺）
     length_ft: float = PICKLEBALL_COURT_LENGTH_FT  # 长（英尺）
-    feet_to_meters: float = FEET_TO_METERS     # 换算系数
+    feet_to_meters: float = FEET_TO_METERS  # 换算系数
 
     def as_dict(self) -> dict[str, float | str]:
         """转成普通 dict（米保留 4 位小数，方便序列化）。"""

@@ -3,12 +3,10 @@ from __future__ import annotations
 # 真实比赛视频抽帧脚本。
 # 作用：把真实采集到的球场视频，按固定时间间隔抽成单帧图片，存到本地「帧池」，
 # 供后续场地线标注 / 标定模型训练使用。输出带 manifest.json 清单。
-
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 # 把项目根目录（backend/）加入模块搜索路径，使 `from app...` 可用。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -10,13 +10,19 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.camera.models import ProbeResult
 
 
 # 异步包装函数：对外提供 async 接口，内部把耗时的同步操作丢到线程池执行，避免阻塞事件循环
-async def probe_camera(camera_id: str, stream_url: str, username: str | None = None, password: str | None = None, timeout_seconds: float = 10.0) -> ProbeResult:
+async def probe_camera(
+    camera_id: str,
+    stream_url: str,
+    username: str | None = None,
+    password: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> ProbeResult:
     """尝试连接摄像头流，返回在线状态 + 分辨率 + 延迟。"""
     import asyncio
 
@@ -26,14 +32,16 @@ async def probe_camera(camera_id: str, stream_url: str, username: str | None = N
 
 
 # 真正干活的同步函数（在线程里执行）
-def _probe_sync(camera_id: str, stream_url: str, username: str | None, password: str | None, timeout_seconds: float) -> ProbeResult:
+def _probe_sync(
+    camera_id: str, stream_url: str, username: str | None, password: str | None, timeout_seconds: float
+) -> ProbeResult:
     if stream_url.startswith("virtual://"):
         return ProbeResult(
             camera_id=camera_id,
             online=True,
             latency_ms=0,
             resolution="1920x1080",
-            detected_at=datetime.now(timezone.utc),
+            detected_at=datetime.now(UTC),
         )
 
     import cv2
@@ -55,7 +63,7 @@ def _probe_sync(camera_id: str, stream_url: str, username: str | None, password:
             return ProbeResult(
                 camera_id=camera_id,
                 online=False,
-                detected_at=datetime.now(timezone.utc),
+                detected_at=datetime.now(UTC),
                 error_message="cv2.VideoCapture could not open stream URL",
             )
 
@@ -72,7 +80,7 @@ def _probe_sync(camera_id: str, stream_url: str, username: str | None, password:
                 camera_id=camera_id,
                 online=False,
                 latency_ms=latency_ms,
-                detected_at=datetime.now(timezone.utc),
+                detected_at=datetime.now(UTC),
                 error_message="Stream opened but no frame could be read within timeout",
             )
 
@@ -83,14 +91,14 @@ def _probe_sync(camera_id: str, stream_url: str, username: str | None, password:
             online=True,
             latency_ms=latency_ms,
             resolution=f"{w}x{h}",
-            detected_at=datetime.now(timezone.utc),
+            detected_at=datetime.now(UTC),
         )
     except Exception as exc:
         # 任何异常都当作"不在线"，并记录错误
         return ProbeResult(
             camera_id=camera_id,
             online=False,
-            detected_at=datetime.now(timezone.utc),
+            detected_at=datetime.now(UTC),
             error_message=str(exc),
         )
     finally:

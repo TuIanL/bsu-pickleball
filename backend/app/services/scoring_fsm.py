@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
-
 HYBRID_21_RULESET = "hybrid_21_best_of_5_v1"
 LEGACY_SIDE_OUT_RULESET = "side_out_singles_v1"
 
