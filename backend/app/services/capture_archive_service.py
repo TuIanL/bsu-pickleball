@@ -162,6 +162,22 @@ def snapshot_capture_timeline(
             }
             for track in tracks
         ]
+        # 权威双摄同步校准（dual_camera_sync_calibration.v1）可用时引用约定路径，
+        # 否则维持 unknown（多视角分析据此判断 sync authority）。
+        sync_ref_path = plan.timeline_dir / "sync_calibration.json"
+        sync_calibration_entry = (
+            {
+                "schema_version": "dual_camera_sync_calibration.v1",
+                "status": "available",
+                "ref": "timeline/sync_calibration.json",
+            }
+            if sync_ref_path.exists()
+            else {
+                "schema_version": "dual_camera_sync_calibration.v1",
+                "status": "unknown",
+                "reason": "cross-camera calibration anchors unavailable",
+            }
+        )
         write_json_atomic(
             plan.timeline_dir / "annotation_manifest.json",
             {
@@ -173,11 +189,7 @@ def snapshot_capture_timeline(
                     "fps": fps,
                     "frame_index_rounding": "nearest",
                 },
-                "sync_calibration": {
-                    "schema_version": "dual_camera_sync_calibration.v1",
-                    "status": "unknown",
-                    "reason": "cross-camera calibration anchors unavailable",
-                },
+                "sync_calibration": sync_calibration_entry,
                 "sources": track_sources,
                 "events_file": "events.json",
                 "segments_file": "segments.json",

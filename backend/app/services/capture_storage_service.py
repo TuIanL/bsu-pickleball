@@ -57,6 +57,13 @@ def capture_storage_plan_from_dir(session_dir: str | os.PathLike[str]) -> Captur
     )
 
 
+# 权威双摄同步校准（dual_camera_sync_calibration.v1）的 take 存储约定路径。
+# 多视角分析以此作为 sync authority 的读取位置；annotation_manifest.sync_calibration
+# 在权威 artifact 可用时引用该文件。
+def sync_calibration_path(take_dir: str | os.PathLike[str]) -> Path:
+    return Path(take_dir) / "timeline" / "sync_calibration.json"
+
+
 # 将路径转换为绝对路径并展开用户目录（~）
 def _absolute(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
