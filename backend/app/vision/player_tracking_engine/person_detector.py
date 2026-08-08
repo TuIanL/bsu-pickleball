@@ -8,11 +8,22 @@ from typing import Any  # 宽松类型（模型对象等）
 from app.schemas.tracking import Detection
 
 
+class RegionDetectionUnsupported(RuntimeError):
+    """该 detector 未实现 ROI 推理（detect_regions 不可用）。
+
+    不用空列表表示"不支持"：`[]` 的语义是"ROI 推理成功但这里没人"，两者混淆会导致
+    P1 guided detection 接线失误时静默漏检、难以诊断。
+    """
+
+
 class PersonDetector:
     """YOLO-backed person detector with lazy optional dependency loading."""
 
     # COCO 数据集中“人(person)”的类 ID 为 0，只保留该类的检测框。
     PERSON_CLASS_ID = 0
+
+    # 是否支持 ROI 推理；Change 1 为 False，P1 guided-player-redetection 实现后置 True。
+    supports_region_detection = False
 
     def __init__(
         self,
@@ -62,6 +73,10 @@ class PersonDetector:
     def detect_frame(self, frame: object, frame_index: int | None = None) -> list[Detection]:
         return self.detect(frame)
 
+    def detect_regions(self, frame, regions, confidence_override=None) -> list[Detection]:
+        # 可选 ROI 检测契约（P1 guided-player-redetection 使用）。本实现未支持 → 显式报错。
+        raise RegionDetectionUnsupported("this detector does not implement ROI inference (detect_regions)")
+
     def _load_model(self) -> Any:
         # 懒加载 YOLO 模型：首次调用时导入 ultralytics 并加载权重，之后复用。
         if self._model is None:
@@ -108,10 +123,16 @@ class EmptyPersonDetector:
     """Model-free detector used by tests and fallback smoke runs."""
 
     # 不加载任何模型，始终返回空检测结果（测试/兜底用）。
+    # 语义 = "永无检测"，因此 detect_regions 返回 [] 是正确表达（与"不支持 ROI 推理"不同）。
+    supports_region_detection = True
+
     def detect(self, frame: object) -> list[Detection]:
         return []
 
     def detect_frame(self, frame: object, frame_index: int | None = None) -> list[Detection]:
+        return []
+
+    def detect_regions(self, frame, regions, confidence_override=None) -> list[Detection]:
         return []
 
 

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.core.config import get_settings
-from app.schemas.analysis import MatchAnalysisContext, build_match_context, build_player_group_profile
+from app.schemas.analysis import MatchAnalysisContext, build_match_context
 from app.schemas.calibration import CalibrationKeypoint, ImagePoint
 from app.schemas.court_view import CourtViewRoiArtifact, CourtViewThresholds
 from app.schemas.events import ServeDebugArtifactRefs, ServeEventsArtifact
@@ -34,11 +34,7 @@ from app.schemas.multitarget import MultiTargetDetection
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
 from app.schemas.pose import PoseOverlayArtifact, default_skeleton_edges
 from app.schemas.tracking import (
-    Detection,
-    DetectionOverlayFrame,
-    FrameDetection,
     PlayerFramePosition,
-    PlayerIdentityDiagnostic,
     PlayerSelectionArtifact,
     PlayerTrajectoryArtifact,
     ProjectedCourtPoint2D,
@@ -77,10 +73,7 @@ from app.vision.pickleball_game_analysis.calibration_diagnostics import Calibrat
 from app.vision.pickleball_game_analysis.court_adapter import BallCourtAdapter
 from app.vision.pickleball_game_analysis.court_track_postprocessor import CourtTrackPostProcessor
 from app.vision.pickleball_game_analysis.court_track_types import (
-    CourtTrackEvent,
-    CourtTrackObservation,
     RenderSlotOverflowError,
-    canonical_player_id,
 )
 from app.vision.pickleball_game_analysis.detection_writer import (
     build_ball_overlay_payload,
@@ -117,13 +110,14 @@ from app.vision.pickleball_performance_engine.speed_metrics import speed_summari
 from app.vision.pickleball_performance_engine.trajectory_metrics import total_distances
 from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
-from app.vision.player_tracking_engine.multi_object_tracker import DuplicateTrackSuppressor, MultiObjectTracker
+from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
-from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
-from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
-from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
+from app.vision.player_tracking_engine.view_tracking_session import (
+    build_view_tracking_config,
+    build_view_tracking_session,
+)
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 logger = logging.getLogger(__name__)
@@ -161,16 +155,6 @@ def _render_track_list_to_players(render_tracks: list[dict[str, Any]]) -> dict[s
     for pid in players:
         players[pid].sort(key=lambda p: p["frame_index"])
     return players
-
-
-# 渲染轨迹事件映射表：IdentityManager/LockManager diagnostics event → CourtTrackEvent type
-_RENDER_EVENT_MAPPING: dict[str, str] = {
-    "created": "identity_created",
-    "reconnected": "identity_reconnected",
-    "player_locked": "lock_acquired",
-    "player_reconnected_from_lost": "lock_reconnected",
-    "player_reconnected_after_track_change": "lock_reconnected",
-}
 
 
 @dataclass
@@ -333,16 +317,6 @@ class AnalysisPipeline:
             include_invalid=True,
             drop_outside_tracking=False,
         )
-        # 球员球场坐标时间平滑器（frame_stride 与抽帧步长一致，避免 stride>1 时被误判为断帧）
-        from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
-
-        self.position_smoother = CourtPositionSmoother(
-            alpha=0.45,
-            max_speed_ft_s=30.0,
-            max_gap_frames=10,
-            frame_stride=max(1, int(frame_stride or self.settings.overlay_frame_stride)),
-        )
-        # 主球员选择器：不再在 __init__ 中创建，改为在 _run_tracking 中按赛制创建
         # 姿态估计器：按配置创建 RTMPose26 适配器，关闭时设为 None
         self.pose_estimator = pose_estimator or (
             RTMPose26Adapter(
@@ -1737,10 +1711,6 @@ class AnalysisPipeline:
         last_processed_frame_index: int | None = None
         last_processed_timestamp: float | None = None
         processed_frame_count = 0
-        all_detections: list[Detection] = []
-        overlay_frames: list[DetectionOverlayFrame] = []
-        all_tracks = []
-        positions: list[PlayerFramePosition] = []
         pose_frames = []
         # 姿态阶段：未启用姿态估计时先预置一个 skipped 阶段
         pose_stage = (
@@ -1749,96 +1719,29 @@ class AnalysisPipeline:
             else None
         )
         pose_error: str | None = None
-        # 多目标跟踪器（没注入就新建，lost 缓冲帧数来自配置）
-        primary_player_window_frames = frames_for_seconds(self.settings.primary_player_window_seconds, fps)
-        identity_lost_buffer_frames = frames_for_seconds(self.settings.player_identity_lost_buffer_seconds, fps)
-        identity_inactive_buffer_frames = frames_for_seconds(self.settings.player_identity_inactive_buffer_seconds, fps)
-        identity_interpolation_buffer_frames = frames_for_seconds(
-            self.settings.player_identity_interpolation_buffer_seconds, fps
-        )
-        player_lock_bootstrap_min_frames = frames_for_seconds(self.settings.player_lock_bootstrap_min_seconds, fps)
-        player_lock_bootstrap_max_frames = max(
-            player_lock_bootstrap_min_frames,
-            frames_for_seconds(self.settings.player_lock_bootstrap_max_seconds, fps),
-        )
-        player_lock_lost_grace_frames = frames_for_seconds(self.settings.player_lock_lost_grace_seconds, fps, minimum=0)
-        player_lock_lost_max_frames_locked = frames_for_seconds(self.settings.player_lock_lost_max_seconds_locked, fps)
+        # 解析单视角 tracking 运行配置并装配可复用 ViewTrackingSession
+        # （保留 tracker / footpoint_estimator / projector 依赖注入语义）。
         ball_stationary_blacklist_frames = frames_for_seconds(self.settings.ball_stationary_blacklist_seconds, fps)
-        self.position_smoother.max_gap_frames = frames_for_seconds(10.0 / 30.0, fps)
         match_ctx = match_context or build_match_context(None)
-        group_profile = build_player_group_profile(match_ctx)
-        effective_player_count = min(
-            match_ctx.expected_player_count,
-            self.settings.player_analysis_hard_limit,
+        tracking_config = build_view_tracking_config(
+            self.settings,
+            match_ctx,
+            fps=fps,
+            frame_stride=stride,
+            frame_width=frame_width,
+            frame_height=frame_height,
         )
-        primary_player_selector = PrimaryPlayerSelector(
-            min_confidence=self.settings.primary_player_min_confidence,
-            max_subjects=effective_player_count,
-            min_box_area_ratio=self.settings.primary_player_min_box_area_ratio,
-            max_box_area_ratio=self.settings.primary_player_max_box_area_ratio,
-            court_margin_ft=self.settings.primary_player_court_margin_ft,
-            window_frames=primary_player_window_frames,
-            target_court_threshold=self.settings.primary_player_target_court_threshold,
-            quality_threshold=self.settings.primary_player_quality_threshold,
-            attention_enabled=self.settings.enable_attention_player_selector,
-            attention_model_path=self.settings.attention_player_selector_model_path,
-            attention_confidence_threshold=self.settings.attention_player_selector_confidence,
-            group_profile=group_profile,
-            near_side_quota=match_ctx.near_side_quota,
-            far_side_quota=match_ctx.far_side_quota,
-        )
-
-        tracker = self.tracker or MultiObjectTracker(max_lost=identity_lost_buffer_frames)
-        # 重复重叠 track 抑制：同一目标被跟踪器分身出的重复 track（如 P2 的 track 41/50）只保留其一
-        duplicate_suppressor = DuplicateTrackSuppressor(
-            iou_threshold=self.settings.player_duplicate_track_iou_threshold,
-            sustain_frames=self.settings.player_duplicate_track_sustain_frames,
-        )
-        # 球员身份管理器（把轨迹对应到稳定 player_id，处理重连/插值/跟丢）
-        identity_manager = PlayerIdentityManager(
-            PlayerIdentityConfig(
-                max_players=effective_player_count,
-                fps=fps,
-                match_threshold=self.settings.player_identity_match_threshold,
-                max_reconnect_distance_m=self.settings.player_identity_max_reconnect_distance_m,
-                max_speed_mps=self.settings.player_identity_max_speed_mps,
-                lost_buffer_frames=identity_lost_buffer_frames,
-                inactive_buffer_frames=identity_inactive_buffer_frames,
-                interpolation_buffer_frames=identity_interpolation_buffer_frames,
-                court_buffer_m=self.settings.player_identity_court_buffer_m,
-                input_court_unit="ft",
-                smoothing_window=self.settings.player_identity_smoothing_window,
-            )
-        )
-        # 球员锁定管理器（维护四名主球员的身份锁定状态）
-        player_lock_manager = PlayerLockManager(
-            PlayerLockConfig(
-                fps=fps,
-                target_player_count=effective_player_count,
-                near_side_quota=match_ctx.near_side_quota,
-                far_side_quota=match_ctx.far_side_quota,
-                bootstrap_min_frames=player_lock_bootstrap_min_frames,
-                bootstrap_max_frames=player_lock_bootstrap_max_frames,
-                min_observed_frames=self.settings.player_lock_min_observed_frames,
-                lock_min_hits=self.settings.player_lock_lock_min_hits,
-                plausible_min_hits=self.settings.player_lock_plausible_min_hits,
-                lost_grace_frames=player_lock_lost_grace_frames,
-                lost_max_frames_locked=player_lock_lost_max_frames_locked,
-                locked_conf=self.settings.player_lock_locked_conf,
-                tentative_conf=self.settings.player_lock_tentative_conf,
-                searching_conf=self.settings.player_lock_searching_conf,
-                reconnect_threshold=self.settings.player_lock_reconnect_threshold,
-                court_margin_ft=self.settings.player_lock_court_margin_ft,
-                max_reconnect_distance_ft=self.settings.player_lock_max_reconnect_distance_ft,
-                bootstrap_court_margin_ft=self.settings.player_lock_bootstrap_court_margin_ft,
-                lost_reconnect_court_margin_ft=self.settings.player_lock_lost_reconnect_court_margin_ft,
-                enable_appearance_score=self.settings.player_lock_enable_appearance_score,
-            )
+        session = build_view_tracking_session(
+            detector=self.detector,
+            homography=homography,
+            roi_artifact=roi_artifact,
+            config=tracking_config,
+            tracker=self.tracker,
+            footpoint_estimator=self.footpoint_estimator,
+            projector=self.projector,
         )
         from app.vision.pickleball_game_analysis.ball_tracker import BallTrackerConfig
 
-        selection_diagnostics = []
-        selection_training_samples = []
         # 球检测（可选）：启用且适配器可用时逐帧运行，使用局部 context 封装状态
         ball_ctx = _BallRunContext(
             tracker=(
@@ -1858,16 +1761,6 @@ class AnalysisPipeline:
                 else None
             ),
         )
-        player_multitarget_detections: list[MultiTargetDetection] = []
-
-        _prev_player_centroids: dict[str, tuple[float, float]] = {}
-
-        # 渲染轨迹相关状态
-        render_observations: list[CourtTrackObservation] = []
-        render_identity_epoch_by_player: dict[str, int] = {}
-        render_events: list[CourtTrackEvent] = []
-        lock_diagnostics: list[PlayerIdentityDiagnostic] = []
-        render_identity_diagnostic_cursor = 0
 
         if not clip_applied:
             frame_index = 0
@@ -1912,59 +1805,20 @@ class AnalysisPipeline:
                     frame_index += 1
                     continue
 
-                # 1) 检测本帧人体
-                raw_detections = self._detect_frame(frame, frame_index)
-                # 2) 把检测过滤到 ROI 内（并记录被过滤掉的数量）
-                detections, roi_filtered = filter_detections_to_roi(raw_detections, roi_artifact)
-                roi_filtered_detection_count += roi_filtered
-                if roi_artifact.status != "available":
-                    full_frame_fallback_count += 1
-                # 3) 跟踪：把本帧检测关联到已有轨迹
-                tracks = tracker.update(detections)
-                # 3b) 重复 track 抑制：剔除同一目标的重复重叠 track（仅球员路径）
-                tracks = duplicate_suppressor.filter(tracks)
-                # 4) 估算每个轨迹的脚点（画面坐标）
-                footpoints = {
-                    track.track_id: self.footpoint_estimator.estimate(track, frame_shape=(frame_width, frame_height))
-                    for track in tracks
-                }
-                # 5) 投影：脚点 + 单应矩阵 → 球场坐标
-                frame_positions = self.projector.project(
-                    tracks=tracks,
-                    homography=homography,
-                    frame_index=frame_index,
-                    timestamp=timestamp,
-                    footpoints=footpoints,
-                    frame_shape=(frame_width, frame_height),
-                )
-                # 5b) 在平滑前保存原始球场坐标（供渲染轨迹使用）
-                render_raw_by_track: dict[int, dict[str, Any]] = {}
-                for pos in frame_positions:
-                    if pos.court_position is not None:
-                        render_raw_by_track[pos.track_id] = {
-                            "x_ft": pos.court_position[0],
-                            "y_ft": pos.court_position[1],
-                            "projection_status": pos.projection_status,
-                            "projection_confidence": pos.projection_confidence,
-                            "footpoint_method": pos.footpoint_method,
-                            "confidence": pos.confidence,
-                        }
-                # 5c) 对投影后的球场坐标做时间平滑（降低抖动和异常跳变）
-                for pos in frame_positions:
-                    if pos.court_position is not None:
-                        result = self.position_smoother.update(
-                            track_id=pos.track_id,
-                            frame_index=pos.frame_index,
-                            x_ft=pos.court_position[0],
-                            y_ft=pos.court_position[1],
-                            timestamp=pos.timestamp,
-                            confidence=pos.confidence,
-                        )
-                        pos.court_position = [result.x, result.y]
-                # 5d) 投影调试日志写入（每帧每个球员一行 JSONL）
+                # 1-8b) 复用 ViewTrackingSession 完成逐帧 tracking 计算链
+                # （detect → ROI filter → tracker → footpoint → project → smooth →
+                #  select → lock → identity → render observations）。processed_frame_count
+                # 已在 gate 前递增（D1b），此处只消费 session 输出驱动 debug / ball / pose。
+                result = session.step(frame, frame_index=frame_index, timestamp=timestamp)
+                frame_positions = result.frame_positions
+                frame_detections = result.frame_detections
+                render_raw_by_track = result.render_raw_by_track
+                player_motion_pixels = result.player_motion_pixels
+
+                # 5d) 投影调试日志写入（每帧每个球员一行 JSONL）—— 消费 session 结果
                 if debug_writer is not None and debug_minimap is not None:
                     for pos in frame_positions:
-                        # 原始投影值（5b 在平滑前保存），平滑后 court_position 已被覆盖
+                        # 原始投影值（session 在平滑前保存），平滑后 court_position 已被覆盖
                         raw = render_raw_by_track.get(pos.track_id)
                         raw = [raw["x_ft"], raw["y_ft"]] if raw else None
                         smoothed = pos.court_position
@@ -2000,134 +1854,6 @@ class AnalysisPipeline:
                             pose_unavailable=pose_unavailable,
                             filter_reason=filter_reason,
                         )
-                # 6) 选主球员（建议集合，不再作为硬门控）
-                primary_selections = primary_player_selector.select(
-                    tracks=tracks,
-                    positions=frame_positions,
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                )
-                suggested_track_ids = {selection.track_id for selection in primary_selections}
-                selection_diagnostics.extend(primary_player_selector.last_diagnostics)
-                selection_training_samples = primary_player_selector.last_training_samples
-                # 6b) 球员锁定管理：产生并联合格的 track_id 集合
-                lock_update = player_lock_manager.update(
-                    frame_index=frame_index,
-                    positions=frame_positions,
-                    suggestions=primary_selections,
-                    frame=frame,
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                )
-                lock_diagnostics.extend(lock_update.diagnostics)
-                eligible_track_ids = lock_update.eligible_track_ids | suggested_track_ids
-                # 7) 把轨迹整理成"帧检测"格式（只保留主球员对应的轨迹）
-                frame_detections = self._tracks_to_frame_detections(
-                    tracks=tracks,
-                    frame_index=frame_index,
-                    timestamp=timestamp,
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                    eligible_track_ids=eligible_track_ids,
-                )
-                # 8) 身份管理：把本帧位置对应到稳定 player_id
-                player_samples = identity_manager.update(
-                    frame_index=frame_index,
-                    positions=frame_positions,
-                    eligible_track_ids=eligible_track_ids,
-                    track_identity_hints=lock_update.track_identity_hints,
-                )
-                player_by_track = {
-                    sample.track_id: sample.player_id
-                    for sample in player_samples
-                    if sample.track_id is not None and sample.tracking_status in ("detected", "tentative")
-                }
-                tentative_by_track = {
-                    sample.track_id
-                    for sample in player_samples
-                    if sample.track_id is not None and sample.tracking_status == "tentative"
-                }
-                # 8b) 收集渲染观测（原始坐标 + 稳定身份）
-                for pos in frame_positions:
-                    raw = render_raw_by_track.get(pos.track_id)
-                    if raw is None:
-                        continue
-                    player_id = player_by_track.get(pos.track_id)
-                    if player_id is None:
-                        continue
-                    canonical_id = canonical_player_id(player_id)
-                    render_observations.append(
-                        CourtTrackObservation(
-                            frame_index=frame_index,
-                            timestamp_seconds=timestamp,
-                            player_id=canonical_id,
-                            identity_epoch=render_identity_epoch_by_player.get(canonical_id, 0),
-                            track_id=pos.track_id,
-                            raw_x_ft=raw["x_ft"],
-                            raw_y_ft=raw["y_ft"],
-                            confidence=raw["confidence"],
-                            projection_status=raw["projection_status"],
-                            projection_confidence=raw["projection_confidence"],
-                            footpoint_method=raw["footpoint_method"],
-                            lock_state=None,
-                            tracking_status="tentative" if pos.track_id in tentative_by_track else "detected",
-                        )
-                    )
-                for detection in frame_detections:
-                    if detection.track_id is None:
-                        continue
-                    player_id = player_by_track.get(int(detection.track_id))
-                    if player_id is not None:
-                        detection.player_id = player_id
-                        # 标签只显示 canonical 身份（P1..P4），不泄漏原始 track_id
-                        detection.label = player_id.replace("Player_", "P")
-
-                all_detections.extend(raw_detections)
-                overlay_frames.append(
-                    DetectionOverlayFrame(
-                        frame_index=frame_index,
-                        timestamp_seconds=timestamp,
-                        detections=frame_detections,
-                    )
-                )
-                # 把本帧"主球员"检测结果归一化为共享多目标检测记录（player 类别）
-                for detection in frame_detections:
-                    try:
-                        player_multitarget_detections.append(
-                            MultiTargetDetection(
-                                frame_index=frame_index,
-                                timestamp_seconds=timestamp,
-                                class_name="player",
-                                bbox=[float(value) for value in detection.bbox],
-                                confidence=float(detection.confidence),
-                                source_width=max(1, frame_width),
-                                source_height=max(1, frame_height),
-                                track_id=str(detection.track_id) if detection.track_id is not None else None,
-                            )
-                        )
-                    except ValueError as exc:
-                        logger.debug("Skipping player detection for shared detections artifact: %s", exc)
-                all_tracks.extend(tracks)
-                positions.extend(frame_positions)
-                # 计算球员帧间位移（用于球追踪的静止误检抑制）
-                player_motion_pixels: float | None = None
-                if frame_detections:
-                    current_centroids: dict[str, tuple[float, float]] = {}
-                    for det in frame_detections:
-                        if det.track_id is not None:
-                            x1, y1, x2, y2 = det.bbox
-                            current_centroids[det.track_id] = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-                    if _prev_player_centroids and current_centroids:
-                        max_displacement = 0.0
-                        for track_id, (cx, cy) in current_centroids.items():
-                            if track_id in _prev_player_centroids:
-                                px, py = _prev_player_centroids[track_id]
-                                disp = hypot(cx - px, cy - py)
-                                if disp > max_displacement:
-                                    max_displacement = disp
-                        if max_displacement > 0:
-                            player_motion_pixels = max_displacement
-                    _prev_player_centroids = current_centroids
                 # 球检测（可选）：提取至 _process_ball_frame()，保持单视频循环
                 if ball_ctx.tracker is not None:
                     self._process_ball_frame(
@@ -2157,48 +1883,6 @@ class AnalysisPipeline:
                         pose_error = str(exc)
                         pose_frames = []
                 self._check_cancelled(cancellation_token)
-
-                # 9b) 收集生命周期事件（诊断游标方式）
-                new_diags = identity_manager.diagnostics[render_identity_diagnostic_cursor:]
-                render_identity_diagnostic_cursor = len(identity_manager.diagnostics)
-                for diag in new_diags:
-                    event_type = _RENDER_EVENT_MAPPING.get(diag.event)
-                    if event_type is None:
-                        continue
-                    diag_player_id = canonical_player_id(diag.player_id) if diag.player_id else ""
-                    render_events.append(
-                        CourtTrackEvent(
-                            frame_index=frame_index,
-                            timestamp_seconds=timestamp,
-                            player_id=diag_player_id,
-                            event_type=event_type,
-                            reason=diag.reason,
-                        )
-                    )
-                    if diag.event == "player_reset_after_prolonged_loss" and diag.player_id:
-                        epoch_player = canonical_player_id(diag.player_id)
-                        render_identity_epoch_by_player[epoch_player] = (
-                            render_identity_epoch_by_player.get(epoch_player, 0) + 1
-                        )
-                for lock_diag in lock_update.diagnostics:
-                    lock_event_type = _RENDER_EVENT_MAPPING.get(lock_diag.event)
-                    if lock_event_type is None:
-                        continue
-                    lock_player_id = canonical_player_id(lock_diag.player_id) if lock_diag.player_id else ""
-                    render_events.append(
-                        CourtTrackEvent(
-                            frame_index=frame_index,
-                            timestamp_seconds=timestamp,
-                            player_id=lock_player_id,
-                            event_type=lock_event_type,
-                            reason=lock_diag.reason,
-                        )
-                    )
-                    if lock_diag.event == "player_reset_after_prolonged_loss" and lock_diag.player_id:
-                        epoch_player = canonical_player_id(lock_diag.player_id)
-                        render_identity_epoch_by_player[epoch_player] = (
-                            render_identity_epoch_by_player.get(epoch_player, 0) + 1
-                        )
 
                 # 每隔 30 帧打一条进度日志
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
@@ -2238,10 +1922,12 @@ class AnalysisPipeline:
                 debug_overlay.close()
         court_view_state.finish(last_processed_frame_index, last_processed_timestamp)
 
+        # 结束阶段快照：session 累积的 tracking 产物 + 诊断 + selector 状态
+        outputs = session.snapshot()
         logger.info(
             "Player tracking completed: processed %s frames, %s projected position samples",
             processed_frame_count,
-            len(positions),
+            len(outputs.positions),
         )
 
         # 组装跟踪结果
@@ -2254,13 +1940,13 @@ class AnalysisPipeline:
             frame_height=frame_height,
             processed_frame_count=processed_frame_count,
             frame_stride=stride,
-            detections=all_detections,
-            overlay_frames=overlay_frames,
-            tracks=all_tracks,
-            positions=positions,
+            detections=outputs.raw_detections,
+            overlay_frames=outputs.overlay_frames,
+            tracks=outputs.tracks,
+            positions=outputs.positions,
         )
-        # 球员轨迹 + 投影轨迹点 + 主球员选择
-        player_trajectories = identity_manager.to_artifact(
+        # 球员轨迹 + 投影轨迹点 + 主球员选择（lock diagnostics 合并由 session 内部完成）
+        player_trajectories = session.build_player_trajectory_artifact(
             job_id=job_id,
             video_id=video_id,
             fps=fps,
@@ -2268,23 +1954,7 @@ class AnalysisPipeline:
             processed_frame_count=processed_frame_count,
             frame_stride=stride,
         )
-        if lock_diagnostics:
-            all_diagnostics = [*player_trajectories.diagnostics, *lock_diagnostics]
-            player_trajectories.diagnostics = sorted(
-                all_diagnostics,
-                key=lambda diagnostic: (
-                    diagnostic.frame_index,
-                    diagnostic.track_id is None,
-                    diagnostic.track_id if diagnostic.track_id is not None else -1,
-                    diagnostic.event,
-                ),
-            )
-            if player_trajectories.coverage is not None:
-                diagnostic_event_counts: dict[str, int] = {}
-                for diagnostic in player_trajectories.diagnostics:
-                    diagnostic_event_counts[diagnostic.event] = diagnostic_event_counts.get(diagnostic.event, 0) + 1
-                player_trajectories.coverage.diagnostic_event_counts = diagnostic_event_counts
-        player_metric_tracks = identity_manager.to_projected_track_points(output_court_unit="ft")
+        player_metric_tracks = session.projected_metric_tracks(output_court_unit="ft")
 
         # ── 过滤预热帧：仅保留 clip 范围内的 track points 用于指标计算 ──
         if clip_applied and player_metric_tracks:
@@ -2297,14 +1967,14 @@ class AnalysisPipeline:
             video_id=video_id,
             status="available",
             detail=(
-                f"已生成 {len(selection_diagnostics)} 条目标球场主球员选择诊断；"
-                f"模式 {primary_player_selector.last_selection_mode}"
+                f"已生成 {len(outputs.selection_diagnostics)} 条目标球场主球员选择诊断；"
+                f"模式 {outputs.selector_mode}"
             ),
-            selection_mode=primary_player_selector.last_selection_mode,  # type: ignore[arg-type]
-            fallback_reason=primary_player_selector.last_fallback_reason,
-            participant_limit=effective_player_count,
-            diagnostics=selection_diagnostics,
-            training_samples=selection_training_samples,
+            selection_mode=outputs.selector_mode,  # type: ignore[arg-type]
+            fallback_reason=outputs.selector_fallback_reason,
+            participant_limit=session.config.effective_player_count,
+            diagnostics=outputs.selection_diagnostics,
+            training_samples=outputs.latest_selection_training_samples,
         )
         if self.pose_estimator is not None:
             # 根据姿态估计结果决定姿态阶段状态
@@ -2342,8 +2012,8 @@ class AnalysisPipeline:
             if self.settings.enable_court_view_gate
             else "court-view gate 已被配置禁用",
             scorer_available=court_view_scorer.available and self.settings.enable_court_view_gate,
-            roi_filtered_detection_count=roi_filtered_detection_count,
-            full_frame_fallback_count=full_frame_fallback_count,
+            roi_filtered_detection_count=outputs.roi_filtered_detection_count,
+            full_frame_fallback_count=outputs.full_frame_fallback_count,
         )
         # 在 diagnostics 中记录阈值来源
         threshold_source = "task_override" if court_view_match_threshold is not None else "default_config"
@@ -2351,14 +2021,14 @@ class AnalysisPipeline:
         court_view_roi_artifact.diagnostics["match_threshold_effective"] = effective_match_threshold
         court_view_roi_artifact.diagnostics.update(fps_info.diagnostics())
         court_view_roi_artifact.diagnostics["fps_time_windows"] = {
-            "primary_player_window_frames": primary_player_window_frames,
-            "player_identity_lost_buffer_frames": identity_lost_buffer_frames,
-            "player_identity_inactive_buffer_frames": identity_inactive_buffer_frames,
-            "player_identity_interpolation_buffer_frames": identity_interpolation_buffer_frames,
-            "player_lock_bootstrap_min_frames": player_lock_bootstrap_min_frames,
-            "player_lock_bootstrap_max_frames": player_lock_bootstrap_max_frames,
-            "player_lock_lost_grace_frames": player_lock_lost_grace_frames,
-            "player_lock_lost_max_frames_locked": player_lock_lost_max_frames_locked,
+            "primary_player_window_frames": session.config.primary_player_window_frames,
+            "player_identity_lost_buffer_frames": session.config.identity_lost_buffer_frames,
+            "player_identity_inactive_buffer_frames": session.config.identity_inactive_buffer_frames,
+            "player_identity_interpolation_buffer_frames": session.config.identity_interpolation_buffer_frames,
+            "player_lock_bootstrap_min_frames": session.config.player_lock_bootstrap_min_frames,
+            "player_lock_bootstrap_max_frames": session.config.player_lock_bootstrap_max_frames,
+            "player_lock_lost_grace_frames": session.config.player_lock_lost_grace_frames,
+            "player_lock_lost_max_frames_locked": session.config.player_lock_lost_max_frames_locked,
             "ball_stationary_blacklist_frames": ball_stationary_blacklist_frames,
         }
         # 高剔除率预警
@@ -2387,7 +2057,7 @@ class AnalysisPipeline:
         )
         # 渲染轨迹后处理：生成逐帧位置（仅在存在观测时）
         render_output = None
-        if render_observations:
+        if outputs.render_observations:
             try:
                 postprocessor = CourtTrackPostProcessor(
                     max_interpolation_gap_seconds=self.settings.overlay_frame_stride / fps + 0.15,
@@ -2395,8 +2065,8 @@ class AnalysisPipeline:
                     max_spike_displacement_ft=6.0,
                 )
                 postprocess_result = postprocessor.process(
-                    observations=render_observations,
-                    events=render_events,
+                    observations=outputs.render_observations,
+                    events=outputs.render_events,
                     fps=fps,
                     total_frames=frame_count,
                 )
@@ -2463,7 +2133,7 @@ class AnalysisPipeline:
             pose_frames=pose_frames,
             court_view_roi=court_view_roi_artifact,
             ball_run_output=ball_run_output,
-            player_multitarget_detections=player_multitarget_detections,
+            player_multitarget_detections=outputs.player_multitarget_detections,
             calibration_diagnostics_path=calibration_diagnostics_path,
             render_trajectory=render_output,
             requested_clip=requested_clip,
@@ -2603,38 +2273,6 @@ class AnalysisPipeline:
         if len(keypoints) < 4:
             return None
         return [(float(keypoint.image.x), float(keypoint.image.y)) for keypoint in keypoints[:4]]
-
-    def _detect_frame(self, frame: object, frame_index: int) -> list[Detection]:
-        # 内部：调用检测器的统一入口（兼容 detect_frame / detect 两种接口）。
-        if hasattr(self.detector, "detect_frame"):
-            return self.detector.detect_frame(frame, frame_index)
-        return self.detector.detect(frame)
-
-    @staticmethod
-    def _tracks_to_frame_detections(
-        tracks,
-        frame_index: int,
-        timestamp: float,
-        frame_width: int,
-        frame_height: int,
-        eligible_track_ids: set[int] | None = None,
-    ) -> list[FrameDetection]:
-        # 内部：把"跟踪轨迹"转成"帧检测"列表，过滤掉丢失的、以及不在主球员集合里的。
-        source_width = max(1, int(frame_width))
-        source_height = max(1, int(frame_height))
-        return [
-            FrameDetection(
-                frame_index=frame_index,
-                timestamp_seconds=timestamp,
-                bbox=track.bbox,
-                confidence=track.confidence,
-                track_id=str(track.track_id),
-                source_width=source_width,
-                source_height=source_height,
-            )
-            for track in tracks
-            if not track.lost and (eligible_track_ids is None or track.track_id in eligible_track_ids)
-        ]
 
     @staticmethod
     def _detection_stage_detail(tracking_result: TrackingResult, enabled: bool = True) -> str:
