@@ -4,42 +4,36 @@
 TBD - created by archiving change rework-video-analysis-task-flow. Update Purpose after archive.
 ## Requirements
 ### Requirement: Analysis task list retrieval
-The system SHALL provide a way to retrieve all known durable analysis job summaries from current and previous analysis sessions.
 
-#### Scenario: Backend lists persisted jobs
-- **WHEN** the frontend requests the analysis task list
-- **THEN** the backend returns all readable persisted job summaries plus active job summaries, sorted by most recent update or creation time first
+`GET /api/analysis/jobs` MUST 默认只返回 `visibility=public` 的任务。`include_internal=true` 查询参数才返回 `visibility=internal` 的 child，且该参数仅用于开发/诊断界面。
 
-#### Scenario: No analysis jobs exist
-- **WHEN** the frontend requests the analysis task list and no jobs have been created
-- **THEN** the backend returns an empty list rather than an error
+#### Scenario: 默认隐藏 internal child
 
-#### Scenario: Persisted job record is unreadable
-- **WHEN** one persisted job summary cannot be parsed
-- **THEN** the backend skips or isolates that record without preventing the remaining valid jobs from being listed
+- **WHEN** 前端请求任务列表（不带 `include_internal=true`）
+- **THEN** 返回结果 SHALL 只含 `visibility=public` 的任务
+- **AND** multiview child（`visibility=internal`）SHALL 被过滤
 
-#### Scenario: Interrupted running job is listed after restart
-- **WHEN** the backend restarts after a job was running and no worker can confirm continued execution
-- **THEN** the task list exposes a stable queued, failed/interrupted, or recoverable state rather than leaving the job indefinitely active
+#### Scenario: 诊断模式查看 internal
+
+- **WHEN** 前端以 `?include_internal=true` 请求
+- **THEN** 返回结果 SHALL 额外包含 internal child
+- **AND** 该模式 SHALL 仅用于开发/诊断界面
 
 ### Requirement: Analysis task management page
-The system SHALL provide an analysis task management page that shows all historical and current video analysis tasks with clear orchestration-aware status labels.
 
-#### Scenario: User opens task management page
-- **WHEN** the user navigates to the analysis task management route
-- **THEN** the page lists analysis tasks with match title, uploaded file label, creation or update time, progress, current stage, and a status label such as queued, running, succeeded, failed, canceled, or compatible display labels
+任务管理页 MUST 对每个双摄分析只展示一张 Parent 卡片，卡片标注「双摄协同分析」与 A/B/融合子状态，不再出现两张无关联的机位任务卡片。双摄任务卡片的 CTA 按 Parent 状态区分：完成 → 查看报告；失败/取消 → 提供「重新双摄分析」入口；运行中 → 展示进度。
 
-#### Scenario: User has no tasks
-- **WHEN** the user opens the task management page before any analysis task exists
-- **THEN** the page shows an empty state with a clear action to upload a match video
+#### Scenario: 双摄任务单卡片
 
-#### Scenario: Task list cannot load
-- **WHEN** the backend task list request fails
-- **THEN** the page shows a stable recoverable error state and keeps upload access available
+- **WHEN** 任务列表包含 multiview Parent
+- **THEN** 该 Parent SHALL 以单张卡片展示，含「双摄协同分析」标题、A 机位/B 机位/多视角融合子状态与数据来源
+- **AND** 其 internal child SHALL 不单独出现在列表中
 
-#### Scenario: Task has stage telemetry
-- **WHEN** a task includes stage timing, error code, retry count, or cancellation context
-- **THEN** the page exposes the most useful user-facing fields without showing internal stack traces or sensitive local paths
+#### Scenario: 失败/取消的 Parent 可重新分析
+
+- **WHEN** multiview Parent 状态为 `failed` 或 `canceled`
+- **THEN** 录制卡片 SHALL 提供「重新双摄分析」入口（导航到 `MultiViewAnalysisSetupPage`）
+- **AND** SHALL NOT 误显示为「分析中」
 
 ### Requirement: Task status actions
 The system SHALL expose task actions according to each analysis task's current status, including cancellation for active tasks and delete actions for eligible historical tasks.
@@ -168,30 +162,24 @@ The system SHALL provide clear feedback for cancellation actions from task manag
 - **THEN** the frontend shows a recoverable error and does not pretend the job has been canceled
 
 ### Requirement: Analysis task list filters by recording session
-The system SHALL support filtering analysis tasks by `recording_session_id` query parameter, enabling per-recording task views.
 
-#### Scenario: Filter by recording session ID
-- **WHEN** the frontend requests `GET /api/analysis/jobs?recording_session_id=<sid>`
-- **THEN** the backend SHALL return only jobs whose `metadata.recording_session_id` matches `<sid>`
-- **AND** if no matching jobs exist, SHALL return an empty list
+按录制 session 过滤的任务查询 MUST 同样默认只返回 `visibility=public` 的 Parent，保证录制卡片查询该 session 的分析任务时不会出现三条（Parent + 两个 child）。
+
+#### Scenario: 录制卡片查询 Parent
+
+- **WHEN** 录制卡片请求 `GET /api/analysis/jobs?recording_session_id=<sid>`
+- **THEN** 返回结果 SHALL 只含该 session 的 public Parent 任务
+- **AND** internal child SHALL NOT 混入
 
 ### Requirement: Analysis task recording origin display
-The system SHALL expose the recording session origin of analysis jobs via the `AnalysisJobSummary` and SHALL display it in the task management UI.
 
-#### Scenario: Task has recording session origin
-- **WHEN** an `AnalysisJobSummary` has `recordingSessionId` or `metadata.recording_session_id` set
-- **THEN** the task card SHALL display a "来源录制" badge with the camera slot label (A/B machine position)
-- **AND** the badge SHALL include a link to navigate back to the corresponding recording card
+双摄录制卡片的 CTA MUST 将主操作改为「双摄协同分析」，次级的「分析 A/B 机位」MUST 降级为工程调试入口，分析状态展示 MUST 基于 Parent。
 
-#### Scenario: Dual-camera recording cards show analysis status
-- **WHEN** the dual-camera recording tab lists sync recording sessions
-- **THEN** each card SHALL query analysis jobs belonging to that session
-- **AND** cam analysis buttons SHALL reflect the analysis job status: "分析 X 机位" (no job), "分析中 N%" (running), "查看 X 分析报告" (completed), "重新分析" (failed/canceled)
+#### Scenario: 录制卡片主 CTA
 
-#### Scenario: Upload tab excludes dual-camera derived tasks
-- **WHEN** the upload tasks tab displays analysis jobs
-- **THEN** tasks whose `recording_session_id` matches an existing sync recording session SHALL be excluded from this tab
-- **AND** they SHALL appear exclusively within the corresponding dual-camera recording cards
+- **WHEN** 双摄录制卡片渲染且存在对应 CaptureTake
+- **THEN** 主操作 SHALL 为「双摄协同分析」
+- **AND** A/B 单摄入口 SHALL 置于次级操作
 
 ### Requirement: Terminal task bulk cleanup
 The system SHALL provide a one-click action on the analysis task management page that deletes all failed and canceled analysis tasks in the upload-task list, reusing the existing batch deletion path.
@@ -331,3 +319,70 @@ The system SHALL expose the inference toggle states used by each analysis job in
 #### Scenario: Job detail page shows toggle states
 - **WHEN** the user opens the job detail page
 - **THEN** the task information section SHALL show the human detection and pose estimation toggle states alongside the other task metadata
+
+### Requirement: 级联删除语义
+
+`AnalysisDeleteResult` / 批量删除路径 MUST 支持 multiview Parent 的级联删除（Parent + owned child 分析产物 + fusion run 产物 + parent artifacts/report），且 MUST NOT 删除 CaptureTake、源视频或 CaptureTrack。child 的删除仅能由 Parent cascade 触发。
+
+#### Scenario: 删除 Parent 级联
+
+- **WHEN** 用户删除 terminal 的 multiview Parent
+- **THEN** 删除结果 SHALL 覆盖 Parent 及其 owned child 的分析产物与 fusion run 产物
+- **AND** 录制资产（CaptureTake / 源视频 / CaptureTrack）SHALL 保留
+
+#### Scenario: 删除 child 被阻断
+
+- **WHEN** 外部 API 尝试直接删除 internal child
+- **THEN** 系统 SHALL 返回 `blocked`
+- **AND** 删除 SHALL 仅经 Parent cascade 发生
+
+### Requirement: 双摄录制卡片删除分析任务
+
+「双摄录制」Tab 的录制卡片 SHALL 在存在分析任务时提供「删除分析任务」入口，用于清除该录制派生的所有分析任务及其本地产物，同时保留录制本身。
+
+#### Scenario: 卡片显示删除分析任务按钮
+
+- **WHEN** 录制卡片存在任一分析任务（multiview Parent、A 机位或 B 机位单摄任务）
+- **THEN** 卡片 SHALL 提供「删除分析任务」操作
+- **AND** 该操作 SHALL 区别于「删除」（整条录制）按钮
+
+#### Scenario: 卡片无分析任务时不显示
+
+- **WHEN** 录制卡片不存在任何分析任务
+- **THEN** 卡片 SHALL 不显示「删除分析任务」操作
+
+#### Scenario: 用户确认后删除分析任务
+
+- **WHEN** 用户确认删除该录制的分析任务
+- **THEN** 前端 SHALL 调用后端录制级删除接口
+- **AND** 删除完成后 SHALL 刷新任务列表
+- **AND** 录制卡片 SHALL 保留在「双摄录制」Tab
+
+#### Scenario: 有活跃分析任务被阻断
+
+- **WHEN** 删除结果中包含 `blocked`（处理中任务）或 `failed` 项
+- **THEN** 前端 SHALL 报告哪些任务已删除、哪些需要用户处理
+- **AND** SHALL NOT 将阻塞项当作删除成功移除
+
+### Requirement: 分析任务删除清理完整产物目录
+
+删除分析任务 SHALL 清除该任务在本地磁盘的**完整产物目录**，而不只是部分已知文件；录制资产 MUST NOT 被误删。
+
+#### Scenario: capture job 产物目录整体删除
+
+- **WHEN** 用户删除一个产物位于 `take_dir/analysis/<job_id>/` 的 capture 分析任务
+- **THEN** 后端 SHALL 删除该 `<job_id>` 目录及其全部内容，包括 `analysis_overlay.mp4`、`position_visualizations/`、`fused_*.json`、`ball_trajectory.json`、`cleaned_ball_trajectory.json`、`bounce_events.json`、`player_render_trajectory.json`、`players_trajectory.*`、`detections.jsonl` 等
+- **AND** `take_dir` 下的录制视频、分段与 `sync_calibration.json` SHALL 保留
+
+#### Scenario: 删除路径安全校验
+
+- **WHEN** 后端准备整体删除分析任务产物目录
+- **THEN** 目标路径 SHALL 严格匹配 `<take_dir>/analysis/<job_id>` 或 `<outputs_dir>/<job_id>` 格式
+- **AND** `job_id` SHALL 以 `job-` 前缀开头并仅含 URL 安全字符（`^job-[A-Za-z0-9_-]+$`），避免误删录制目录
+
+#### Scenario: 非 capture job 行为不变
+
+- **WHEN** 用户删除产物位于 `<outputs_dir>/<job_id>` 的非 capture 分析任务
+- **THEN** 后端 SHALL 删除该 job 的输出目录
+- **AND** 既有删除行为 SHALL 保持一致
+

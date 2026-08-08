@@ -12,6 +12,7 @@ demo 模式下（没有真实视频）会直接返回一份写死的样例报告
 from __future__ import annotations
 
 import logging
+import re
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -89,33 +90,65 @@ def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult
         _save_report(job.id, report)
 
 
+def _on_worker_terminal(job: AnalysisJobSummary) -> None:
+    # 任一 job 进入终态时通知编排层：
+    # - 双摄 child 终态 → 推进其 Parent（waiting_sources → fusion_ready / fallback_ready / failed）；
+    # - 双摄 Parent 成功 → 编排状态置 completed。
+    coordinator = _get_coordinator()
+    if coordinator is not None:
+        coordinator.on_job_terminal(job)
+    if job.analysisKind == "multiview" and job.canonicalStatus == "succeeded":
+        _JOB_STORE.update(job.id, orchestrationStatus="completed")
+
+
 # 全局 Worker 运行时单例
-_WORKER = AnalysisWorkerRuntime(
-    _JOB_STORE,
-    pipeline_factory=_pipeline_factory,
-    on_completed=_on_worker_completed,
-)
+_WORKER: AnalysisWorkerRuntime | None = None
 _WORKER_STARTED = False
+_COORDINATOR = None
+
+
+def _get_coordinator():
+    """获取/初始化多视角协调器（与 Worker 共用同一 JobStore）。"""
+    global _COORDINATOR
+    if _COORDINATOR is None:
+        from app.services.multiview_coordinator import MultiViewAnalysisCoordinator
+
+        _COORDINATOR = MultiViewAnalysisCoordinator(_JOB_STORE)
+    return _COORDINATOR
+
+
+def _build_worker(store: JobStore) -> AnalysisWorkerRuntime:
+    """按给定 JobStore 构建 Worker（含编排层 terminal 回调）。"""
+    global _COORDINATOR
+    from app.services.multiview_coordinator import MultiViewAnalysisCoordinator
+
+    _COORDINATOR = MultiViewAnalysisCoordinator(store)
+    return AnalysisWorkerRuntime(
+        store,
+        pipeline_factory=_pipeline_factory,
+        on_completed=_on_worker_completed,
+        on_terminal=_on_worker_terminal,
+    )
 
 
 def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
     # 内部：如果传入了不同的 storage，就重建 JobStore 和 Worker，并沿用之前的启动状态。
-    global _JOB_STORE, _WORKER, _WORKER_STARTED
+    global _JOB_STORE, _WORKER, _WORKER_STARTED, _COORDINATOR
     target = storage or _STORAGE
     if _JOB_STORE.storage is target:
+        # storage 未变：仍需保证 Worker/Coordinator 已构建（模块级初始化可能是 None，worker 线程尚未启动）
+        if _WORKER is None:
+            _WORKER = _build_worker(_JOB_STORE)
         return
     was_started = _WORKER_STARTED
-    if was_started:
+    if was_started and _WORKER is not None:
         _WORKER.stop()
     _JOB_STORE = JobStore(target)
-    _WORKER = AnalysisWorkerRuntime(
-        _JOB_STORE,
-        pipeline_factory=_pipeline_factory,
-        on_completed=_on_worker_completed,
-    )
+    _WORKER = _build_worker(_JOB_STORE)
     _WORKER_STARTED = False
     if was_started:
         start_analysis_worker()
+
 
 
 # 阶段顺序表（本模块用到的顺序，与 job_orchestration 里的一致）
@@ -166,6 +199,19 @@ def create_analysis_job(
     _sync_orchestration_storage()
     now = utc_now()
 
+    if payload.analysisKind == "multiview":
+        # 双摄协同分析：Coordinator 创建 1 个 public Parent + 2 个 dedicated internal child
+        parent = _get_coordinator().create_multiview_job(payload)
+        with _LOCK:
+            JOBS[parent.id] = parent
+            for ref in parent.sourceJobs:
+                child = _JOB_STORE.get(ref.jobId)
+                if child is not None:
+                    JOBS[child.id] = child
+        if _WORKER is not None:
+            _WORKER.notify()
+        return parent
+
     if payload.videoId:
         if video_service.get_video(payload.videoId) is None:
             # 视频找不到 → 直接创建一个失败任务（带清晰错误信息）
@@ -215,10 +261,11 @@ def create_analysis_job(
             job = _JOB_STORE.create_job(payload)
             with _LOCK:
                 JOBS[job.id] = job
-            _WORKER.notify()
+            if _WORKER is not None:
+                _WORKER.notify()
             from app.core.config import get_settings
 
-            if not get_settings().enable_job_worker:
+            if not get_settings().enable_job_worker and _WORKER is not None:
                 _WORKER.run_one()
         return job
 
@@ -314,13 +361,21 @@ def _save_report(job_id: str, report: AnalysisReport) -> AnalysisReport:
     return report
 
 
-def list_analysis_jobs(storage: StorageService | None = None) -> list[AnalysisJobSummary]:
+def list_analysis_jobs(
+    storage: StorageService | None = None,
+    *,
+    include_internal: bool = False,
+) -> list[AnalysisJobSummary]:
     # 列出所有分析任务（磁盘 + 内存），按更新时间倒序。
+    # 默认只返回 visibility=public 的 Parent/单摄任务；internal child 仅 include_internal=True（诊断）时返回。
     _sync_orchestration_storage(storage)
     jobs: dict[str, AnalysisJobSummary] = {job.id: job for job in _JOB_STORE.list()}
     with _LOCK:
         jobs.update({job_id: normalize_job(job) for job_id, job in JOBS.items()})
-    return sorted(jobs.values(), key=lambda job: _job_sort_key(job), reverse=True)
+    all_jobs = sorted(jobs.values(), key=lambda job: _job_sort_key(job), reverse=True)
+    if include_internal:
+        return all_jobs
+    return [job for job in all_jobs if job.visibility != "internal"]
 
 
 def _load_job_from_path(path: Path, storage: StorageService) -> AnalysisJobSummary | None:
@@ -346,9 +401,37 @@ def get_mock_job(job_id: str) -> AnalysisJobSummary | None:
         if cached is None:
             return None
         job = normalize_job(cached)
+    # 双摄 Parent 运行中：viewRuns 惰性刷新为 child 实时进度（不落盘，避免写放大）
+    if job.analysisKind == "multiview" and job.canonicalStatus not in {"succeeded", "failed", "canceled"}:
+        live = _get_coordinator().live_view_runs(job)
+        if live != job.viewRuns:
+            job = job.model_copy(update={"viewRuns": live})
+    # multiview Parent 缺 videoId（历史任务或 result 未落盘时）→ 从 reference child 虚拟解析，
+    # 保证前端始终能确定视频源（防止"后端重启后视频无法播放"复发）。
+    if job.analysisKind == "multiview" and not job.videoId:
+        resolved = _resolve_parent_video_source(job)
+        if resolved is not None:
+            job = resolved
     with _LOCK:
         JOBS[job_id] = job
     return job
+
+
+def _resolve_parent_video_source(job: AnalysisJobSummary) -> AnalysisJobSummary | None:
+    """multiview Parent 缺失 videoId 时，从 reference child 解析（只读、不落盘）。"""
+    ref_view = job.referenceViewId
+    ref = next((r for r in (job.sourceJobs or []) if r.cameraSlot == ref_view), None)
+    if ref is None:
+        return None
+    child = _JOB_STORE.get(ref.jobId)
+    if child is None or not child.videoId:
+        return None
+    return job.model_copy(
+        update={
+            "videoId": child.videoId,
+            "calibrationId": child.calibrationId or job.calibrationId,
+        }
+    )
 
 
 def get_mock_report(job_id: str) -> AnalysisReport | None:
@@ -387,16 +470,47 @@ def get_pipeline_result(job_id: str) -> AnalysisPipelineResult | None:
     return result
 
 
-def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
+def _is_safe_artifact_root(root: Path | None, job_id: str, outputs_dir: Path) -> bool:
+    """判断目录是否为该 job 的分析产物根（安全可整树删除）。
+
+    仅接受两种形态，防止误删录制目录：
+    - 非 capture：`<outputs_dir>/<job_id>`
+    - capture：`<take_dir>/analysis/<job_id>`
+    且 `job_id` 必须以 `job-` 前缀开头并仅含 URL 安全字符（不匹配任意目录名）。
+    """
+    if not root or not job_id or not re.fullmatch(r"job-[A-Za-z0-9_-]+", job_id):
+        return False
+    try:
+        resolved = root.resolve()
+    except OSError:
+        return False
+    if resolved == (outputs_dir / job_id).resolve():
+        return True
+    if resolved.name == job_id and resolved.parent.name == "analysis":
+        return True
+    return False
+
+
+def delete_analysis_job(job_id: str, *, allow_internal: bool = False) -> AnalysisDeleteResult:
     # 删除分析任务：从内存和磁盘清掉所有相关产物，并清理共享的视频/标定文件。
     _sync_orchestration_storage()
     job = get_mock_job(job_id)
     if job is None:
         return AnalysisDeleteResult(job_id=job_id, status="not_found", detail="Analysis job not found")
 
+    # 内部 Source Job 只能由 Parent cascade 删除（外部 API blocked）
+    if job.visibility == "internal" and not allow_internal:
+        return AnalysisDeleteResult(
+            job_id=job_id, status="blocked", detail="internal source job cannot be deleted directly"
+        )
+
     # 活跃中的任务不允许删除
     if job.status in ACTIVE_COMPAT_STATUSES:
         return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="Active analysis jobs cannot be deleted")
+
+    # 双摄 Parent：先级联删除 owned child 分析产物 + fusion run 产物（绝不碰录制资产）
+    if job.analysisKind == "multiview":
+        _get_coordinator().delete_cascade(job)
 
     _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
 
@@ -428,9 +542,14 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
             _STORAGE.delete_path(path)
             deleted_paths.append(str(path))
 
-    job_output_dir = _STORAGE.outputs_dir / job_id
-    if job_output_dir.exists():
-        _STORAGE.delete_path_tree(job_output_dir)
+    # 删除该 job 的完整产物目录：capture job 为 <take_dir>/analysis/<job_id>（含 analysis_overlay.mp4、
+    # position_visualizations/、fused_* 等清单外产物），非 capture 为 <outputs_dir>/<job_id>。
+    # 删除前做路径安全校验，避免误删录制目录。
+    artifact_root = _STORAGE.capture_job_root(job_id) or (_STORAGE.outputs_dir / job_id)
+    if _is_safe_artifact_root(artifact_root, job_id, _STORAGE.outputs_dir):
+        if artifact_root.exists():
+            _STORAGE.delete_path_tree(artifact_root)
+            deleted_paths.append(str(artifact_root))
 
     # 若该视频/标定已无其它任务使用，则一并清理（shared artifact）
     _cleanup_shared_video_artifacts(job.videoId, excluded_job_id=job_id)
@@ -444,13 +563,20 @@ def delete_analysis_job(job_id: str) -> AnalysisDeleteResult:
 
 
 def cancel_analysis_job(job_id: str) -> AnalysisJobSummary | None:
-    # 取消任务：交给 JobStore.cancel，并唤醒 Worker。
+    # 取消任务：交给 JobStore.cancel，并唤醒 Worker；双摄 Parent 级联取消 owned children。
     _sync_orchestration_storage()
+    job = get_mock_job(job_id)
+    if job is not None and job.visibility == "internal":
+        # 内部 Source Job 不能被用户直接取消（Coordinator 内部才允许）
+        raise ValueError("internal source job cannot be canceled directly")
     job, _state = _JOB_STORE.cancel(job_id)
     if job is not None:
+        if job.analysisKind == "multiview" and job.canonicalStatus == "canceled":
+            _get_coordinator().cancel_cascade(job)
         with _LOCK:
             JOBS[job.id] = job
-        _WORKER.notify()
+        if _WORKER is not None:
+            _WORKER.notify()
     return job
 
 
@@ -460,7 +586,10 @@ def start_analysis_worker() -> None:
     _sync_orchestration_storage()
     from app.core.config import get_settings
 
-    if get_settings().enable_job_worker:
+    # 启动对账：推进遗留双摄 Parent（child 已完成但 Parent 仍 waiting_sources）
+    _get_coordinator().reconcile_all()
+
+    if get_settings().enable_job_worker and _WORKER is not None:
         _WORKER.start()
         _WORKER_STARTED = True
 
@@ -468,7 +597,8 @@ def start_analysis_worker() -> None:
 def stop_analysis_worker() -> None:
     # 停止后台分析 Worker。
     global _WORKER_STARTED
-    _WORKER.stop()
+    if _WORKER is not None:
+        _WORKER.stop()
     _WORKER_STARTED = False
 
 
@@ -520,12 +650,33 @@ def recover_zombie_jobs() -> int:
 
     if recovered:
         logger.info("启动时回收了 %s 个僵尸任务", recovered)
+
+    # 对账双摄 Parent/Child 依赖（child 已完成但 Parent 仍 waiting_sources 的情况）
+    _get_coordinator().reconcile_all()
     return recovered
 
 
 def batch_delete_analysis_jobs(job_ids: list[str]) -> list[AnalysisDeleteResult]:
     # 批量删除多个任务。
     return [delete_analysis_job(job_id) for job_id in job_ids]
+
+
+def delete_analysis_by_recording_session(
+    session_id: str,
+    session_capture_take_id: str | None = None,
+) -> list[AnalysisDeleteResult]:
+    # 删除某个双摄录制会话派生的所有分析任务（multiview Parent 级联 internal child + fusion run 产物，
+    # 以及单摄任务），不触碰录制本身（session / 双路视频 / CaptureTake / sync_calibration）。
+    # 匹配规则：recordingSessionId 或 metadata.recording_session_id 命中 session_id，
+    # 或 metadata.capture_take_id 命中该会话的 CaptureTake（补强归属）。
+    matched: dict[str, AnalysisJobSummary] = {}
+    for job in list_analysis_jobs():
+        metadata = getattr(job, "metadata", None)
+        job_session = job.recordingSessionId or getattr(metadata, "recording_session_id", None)
+        job_take = getattr(metadata, "capture_take_id", None)
+        if job_session == session_id or (session_capture_take_id and job_take == session_capture_take_id):
+            matched[job.id] = job
+    return [delete_analysis_job(job_id) for job_id in sorted(matched)]
 
 
 def _remaining_jobs(excluded_job_id: str | None = None) -> list[AnalysisJobSummary]:

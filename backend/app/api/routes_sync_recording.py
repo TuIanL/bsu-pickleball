@@ -21,6 +21,7 @@ from app.camera.models import (
     SyncTestResult,
 )
 from app.camera.sync_recorder_service import sync_recording_service
+from app.schemas.analysis import AnalysisDeleteResult
 from app.schemas.capture_stop_result import CaptureStopResult, CaptureStopResultBuilder
 
 router = APIRouter(prefix="/api/sync-recordings", tags=["sync-recordings"])
@@ -170,3 +171,18 @@ def delete_sync_recording(session_id: str) -> dict:
     if result["status"] == "blocked":
         raise HTTPException(status_code=409, detail=result["detail"])
     return result
+
+
+@router.delete("/{session_id}/analysis", response_model=list[AnalysisDeleteResult])
+def delete_sync_recording_analysis(session_id: str) -> list[AnalysisDeleteResult]:
+    """删除该双摄录制派生的所有分析任务及其本地产物（multiview Parent 级联 child + 单摄任务）。
+
+    录制本身（session、双路视频、CaptureTake、同步校准）MUST 保留；活跃任务返回 `blocked`。
+    """
+    from app.services.mock_analysis import delete_analysis_by_recording_session
+
+    session = sync_recording_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="同步录制会话不存在")
+    capture_take_id = getattr(session, "capture_take_id", None)
+    return delete_analysis_by_recording_session(session_id, session_capture_take_id=capture_take_id)
