@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import permutations
+from itertools import combinations, permutations
 
 from app.vision.multiview.court_frame import CourtOrientation, local_to_canonical
 from app.vision.multiview.types import ViewObservation
@@ -36,41 +36,50 @@ class PlayerAssociation:
 def min_cost_matching(
     reference_keys: Sequence[str],
     secondary_keys: Sequence[str],
-    cost: Mapping[str, Mapping[str, float]],
-    max_cost: float = float("inf"),
+    ranking_cost: Mapping[str, Mapping[str, float]],
+    *,
+    feasibility_cost: Mapping[str, Mapping[str, float]] | None = None,
+    max_feasibility_cost: float = float("inf"),
 ) -> list[tuple[str, str]]:
-    """小规模二分图最小代价完美匹配（≤6 元素暴力枚举）。
+    """小规模最大基数可行匹配 + 最小排序代价（≤6 元素暴力枚举）。
 
-    返回 `[(ref_key, sec_key), ...]`，只包含代价 <= max_cost 的配对；
-    超配的元素不配对（保持单视角）。
+    规则：
+    - 几何可行性门：`feasibility_cost[ref][sec] > max_feasibility_cost` 的 pair 不可行；
+      `feasibility_cost` 缺省退化为 `ranking_cost`（保持纯几何调用方语义）。
+    - 优先最大化可行匹配数量（maximum-cardinality），相同数量下取 ranking_cost 总和最小；
+      部分可行时返回能配的最大基数方案，而非空列表。
+    - 返回 `[(ref_key, sec_key), ...]`；未匹配元素保持单视角；无任何可行 pair 返回 `[]`。
     """
     if not reference_keys or not secondary_keys:
         return []
+    gate = feasibility_cost if feasibility_cost is not None else ranking_cost
     shorter, longer = reference_keys, secondary_keys
     flip = len(longer) < len(shorter)
     if flip:
         shorter, longer = longer, shorter
 
-    best: list[tuple[str, str]] = []
-    best_cost = float("inf")
-    for perm in permutations(longer, len(shorter)):
-        total = 0.0
-        feasible = True
-        pairs: list[tuple[str, str]] = []
-        for a, b in zip(shorter, perm, strict=False):
-            value = cost[a][b] if flip else cost[a][b]
-            if value > max_cost:
-                feasible = False
-                break
-            total += value
-            pairs.append((a, b))
-        if feasible and total < best_cost:
-            best_cost = total
-            best = pairs
-
-    if flip:
-        return [(b, a) for (a, b) in best]
-    return best
+    # k 从最大基数递减：优先能配更多对；同一 k 下取 ranking cost 最小方案。
+    for k in range(len(shorter), 0, -1):
+        best: list[tuple[str, str]] = []
+        best_cost = float("inf")
+        for chosen in combinations(shorter, k):
+            for perm in permutations(longer, k):
+                total = 0.0
+                feasible = True
+                pairs: list[tuple[str, str]] = []
+                for a, b in zip(chosen, perm, strict=False):
+                    ref_key, sec_key = (b, a) if flip else (a, b)
+                    if gate[ref_key][sec_key] > max_feasibility_cost:
+                        feasible = False
+                        break
+                    total += ranking_cost[ref_key][sec_key]
+                    pairs.append((ref_key, sec_key))
+                if feasible and total < best_cost:
+                    best_cost = total
+                    best = pairs
+        if best:
+            return best
+    return []
 
 
 class CrossViewPlayerAssociator:
@@ -136,7 +145,9 @@ class CrossViewPlayerAssociator:
         used_sec = {sp for _, sp in retained}
         avail_ref = [rp for rp in ref_pos if rp not in used_ref]
         avail_sec = [sp for sp in sec_pos if sp not in used_sec]
-        cost: dict[str, dict[str, float]] = {
+        # 排序代价（几何 + per-candidate prediction）与几何可行性门分离：
+        # 可行性只由几何距离判定，prediction 不改变"pair 是否合法"的硬门。
+        ranking_cost: dict[str, dict[str, float]] = {
             rp: {
                 sp: self._pair_cost(
                     ref_pos[rp],
@@ -149,11 +160,16 @@ class CrossViewPlayerAssociator:
             }
             for rp in avail_ref
         }
+        feasibility_cost: dict[str, dict[str, float]] = {
+            rp: {sp: _distance(ref_pos[rp], sec_pos[sp]) for sp in avail_sec}
+            for rp in avail_ref
+        }
         new_pairs = min_cost_matching(
             avail_ref,
             avail_sec,
-            cost,
-            max_cost=self.max_association_distance_ft,
+            ranking_cost,
+            feasibility_cost=feasibility_cost,
+            max_feasibility_cost=self.max_association_distance_ft,
         )
 
         # 3) 采纳/保持配对：
@@ -263,12 +279,12 @@ class CrossViewPlayerAssociator:
     ) -> float:
         base = _distance(ref_pos, sec_pos)
         # 该 ref player 已属于某 global player 时，用其预测位置残差作偏置：
-        # 把它匹配到远离预测位置的 secondary 会被惩罚（利于既有 global 的连续性）。
+        # 惩罚远离该 global 预测位置的 secondary candidate（per-candidate，真正参与排序）。
         existing_global = self.mapping.get((reference_view_id, ref_pid))
         if existing_global is not None:
             pred = predicted_positions.get(existing_global)
             if pred is not None:
-                base += self.prediction_bias_ft * _distance(ref_pos, pred)
+                base += self.prediction_bias_ft * _distance(sec_pos, pred)
         return base
 
     def _next_global_id(self) -> str:
