@@ -24,6 +24,7 @@ import {
   listSyncRecordings,
   mergeSyncRecording,
   deleteSyncRecording,
+  deleteRecordingAnalysis,
 } from "../services/analysisClient";
 import {
   errorToNotice,
@@ -110,6 +111,7 @@ export function AnalysisTasksPage({
   const [syncRecordings, setSyncRecordings] = useState<SyncRecordingSession[]>([]);
   const [syncRecordingsLoading, setSyncRecordingsLoading] = useState(false);
   const [mergingSyncRecordingIds, setMergingSyncRecordingIds] = useState<Set<string>>(() => new Set());
+  const [deletingRecordingAnalysisIds, setDeletingRecordingAnalysisIds] = useState<Set<string>>(() => new Set());
   const [fieldSessionsLoading, setFieldSessionsLoading] = useState(false);
   const [playingSession, setPlayingSession] = useState<RecordingSession | null>(null);
   const [playingSyncSession, setPlayingSyncSession] = useState<SyncRecordingSession | null>(null);
@@ -287,6 +289,32 @@ export function AnalysisTasksPage({
       await loadSyncRecordingsList();
     } catch (error) {
       alert(error instanceof Error ? error.message : "删除失败，请稍后重试");
+    }
+  };
+
+  const handleDeleteRecordingAnalysis = async (sessionId: string) => {
+    if (!window.confirm("确定删除该录制的所有分析任务及本地产物吗？录制本身会保留。")) return;
+    setDeletingRecordingAnalysisIds((current) => new Set(current).add(sessionId));
+    setDeleteToast(null);
+    try {
+      const results = await deleteRecordingAnalysis(sessionId);
+      setDeleteToast(buildDeleteToast(
+        results.filter((result) => result.status === "deleted").length,
+        results.filter((result) => result.status === "blocked").length,
+        results.filter((result) => result.status === "failed").length,
+        results.filter((result) => result.status === "not_found").length,
+        "分析任务",
+      ));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "删除分析任务失败，请稍后重试");
+    } finally {
+      setDeletingRecordingAnalysisIds((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
+      void loadJobs();
+      void loadSyncRecordingsList();
     }
   };
 
@@ -986,6 +1014,8 @@ export function AnalysisTasksPage({
                   key={sr.session_id}
                   session={sr}
                   onDelete={handleDeleteSyncRecordingSession}
+                  onDeleteAnalysis={handleDeleteRecordingAnalysis}
+                  deletingAnalysis={deletingRecordingAnalysisIds.has(sr.session_id)}
                   onNavigate={onNavigate}
                   onPlay={handlePlaySyncSession}
                   onMerge={handleMergeSyncRecording}
@@ -1226,9 +1256,11 @@ function TaskMeta({ label, value }: { label: string; value: string }) {
 }
 
 
-function SyncRecordingTaskCard({
+export function SyncRecordingTaskCard({
   session,
   onDelete,
+  onDeleteAnalysis,
+  deletingAnalysis = false,
   onNavigate,
   onPlay,
   onMerge,
@@ -1237,6 +1269,8 @@ function SyncRecordingTaskCard({
 }: {
   session: SyncRecordingSession;
   onDelete: (sessionId: string) => void;
+  onDeleteAnalysis: (sessionId: string) => void;
+  deletingAnalysis?: boolean;
   onNavigate: NavigateFn;
   onPlay: (session: SyncRecordingSession) => void;
   onMerge: (sessionId: string) => void;
@@ -1261,6 +1295,8 @@ function SyncRecordingTaskCard({
   });
   const cam1Job = findCamJob("cam_1");
   const cam2Job = findCamJob("cam_2");
+  // 双摄协同分析 Parent（只出现一张 Parent 卡片；internal child 后端已过滤）
+  const multiviewJob = analysisJobs.find(j => j.analysisKind === "multiview");
 
   const statusLabel: Record<string, string> = {
     recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消",
@@ -1379,8 +1415,22 @@ function SyncRecordingTaskCard({
         </div>
       )}
       {/* 分析状态行 */}
-      {(cam1Job || cam2Job) && (
+      {(multiviewJob || cam1Job || cam2Job) && (
         <div className="mt-2 flex flex-wrap gap-2 border-t border-[#DDE9D6] pt-3">
+          {multiviewJob && (
+            <div className="flex items-center gap-2 rounded-full bg-[#EAF7EE] px-3 py-1 text-xs">
+              <span className="font-bold text-[#168A34]">双摄协同</span>
+              {multiviewJob.status === "completed" ? (
+                <span className="text-[#168A34]">分析完成</span>
+              ) : multiviewJob.status === "failed" ? (
+                <span className="text-[#C92A2A]">分析失败</span>
+              ) : multiviewJob.status === "canceled" ? (
+                <span className="text-slate-500">已取消</span>
+              ) : (
+                <span className="text-[#9A6500]">分析中 {multiviewJob.progress}%</span>
+              )}
+            </div>
+          )}
           {cam1Job && (
             <div className="flex items-center gap-2 rounded-full bg-[#EAF7EE] px-3 py-1 text-xs">
               <span className="font-bold text-[#168A34]">A 机位</span>
@@ -1427,11 +1477,60 @@ function SyncRecordingTaskCard({
             <LayoutDashboard size={12} className="inline mr-1" />工作台
           </button>
         )}
+        {/* 主 CTA：双摄协同分析（只创建一个 Parent 任务） */}
+        {multiviewJob ? (
+          multiviewJob.status === "completed" ? (
+            <button className="green-button px-3 py-2 text-xs font-bold" onClick={() => onNavigate(`/analysis/${multiviewJob.id}/vision`)} type="button">
+              查看双摄分析报告
+            </button>
+          ) : multiviewJob.status === "failed" || multiviewJob.status === "canceled" ? (
+            <div className="flex items-center gap-1.5">
+              <button
+                className="green-button px-3 py-2 text-xs font-bold"
+                onClick={() => onNavigate(`/capture/takes/${session.capture_take_id}/analyze?session=${session.session_id}` as AppPath)}
+                type="button"
+              >
+                重新双摄分析
+              </button>
+              <button
+                className="quiet-button px-2 py-1.5 text-xs"
+                onClick={() => onNavigate(`/analysis/${multiviewJob.id}`)}
+                type="button"
+              >
+                查看任务详情
+              </button>
+            </div>
+          ) : (
+            <button className="green-button px-3 py-2 text-xs font-bold" onClick={() => onNavigate(`/analysis/${multiviewJob.id}`)} type="button">
+              双摄分析中 {multiviewJob.progress}%
+            </button>
+          )
+        ) : canPlay && session.capture_take_id ? (
+          <button
+            className="green-button px-4 py-2 text-xs font-black"
+            onClick={() => onNavigate(`/capture/takes/${session.capture_take_id}/analyze?session=${session.session_id}` as AppPath)}
+            type="button"
+          >
+            双摄协同分析
+          </button>
+        ) : null}
+        {/* A/B 机位单摄分析降级为次级入口（工程调试） */}
         {renderCamAnalysisButton("A", cam1Name, cam1VideoId, cam1Job, "cam_1")}
         {renderCamAnalysisButton("B", cam2Name, cam2VideoId, cam2Job, "cam_2")}
         {session.field_session_id && (
           <button className="quiet-button px-3 py-2 text-xs" onClick={() => onNavigate(`/capture/${session.field_session_id}` as AppPath)} type="button">
             返回采集
+          </button>
+        )}
+        {analysisJobs.length > 0 && (
+          <button
+            className="quiet-button px-3 py-2 text-xs text-[#C92A2A]"
+            disabled={deletingAnalysis}
+            onClick={() => onDeleteAnalysis(session.session_id)}
+            type="button"
+          >
+            <Trash2 size={12} className={`inline mr-1 ${deletingAnalysis ? "animate-pulse" : ""}`} />
+            {deletingAnalysis ? "删除分析中..." : "删除分析任务"}
           </button>
         )}
         {session.status !== "recording" && (

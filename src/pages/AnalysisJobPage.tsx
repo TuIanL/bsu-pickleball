@@ -1,21 +1,42 @@
 import { useState, useEffect } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Camera, Layers, ShieldAlert } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
-import type { AnalysisJobSummary } from "../types/report";
+import type { AnalysisJobSummary, FusedManifest } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
 import { StatusState } from "../components/StatusState";
 import { supportedReportTypes } from "../app/router";
 import { reportActions } from "../data/demoData";
-import { getAnalysisJob, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
+import { getAnalysisJob, getFusedManifest, getFusionDiagnostics, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
+import type { FusionDiagnostics } from "../services/analysisClient";
 import { errorToNotice, isCancelableAnalysisJob, cameraAngleLabel, formatDateTime, formatDurationMs } from "../utils/analysisHelpers";
+
+const VIEW_LABELS: Record<string, string> = { cam_1: "A 机位", cam_2: "B 机位" };
 
 export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
   const [cancelNotice, setCancelNotice] = useState<DiagnosticNotice | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
+  const [manifest, setManifest] = useState<FusedManifest | null>(null);
+  const [diagnostics, setDiagnostics] = useState<FusionDiagnostics | null>(null);
+
+  const isMultiview = job?.analysisKind === "multiview";
+
+  useEffect(() => {
+    if (!isMultiview || job?.status !== "completed") {
+      return;
+    }
+    let alive = true;
+    getFusedManifest(job.id)
+      .then((m) => { if (alive) setManifest(m); })
+      .catch(() => { if (alive) setManifest(null); });
+    getFusionDiagnostics(job.id)
+      .then((d) => { if (alive) setDiagnostics(d); })
+      .catch(() => { if (alive) setDiagnostics(null); });
+    return () => { alive = false; };
+  }, [isMultiview, job?.id, job?.status]);
 
   useEffect(() => {
     let alive = true;
@@ -137,6 +158,118 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
           </div>
         </div>
       </section>
+
+      {isMultiview ? (
+        <section className="mt-6 sport-card p-5 sm:p-6">
+          <div className="flex items-center gap-2">
+            <Layers size={16} className="text-[#168A34]" aria-hidden="true" />
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">双摄协同分析</p>
+          </div>
+
+          {/* viewRuns 子进度 */}
+          {job.viewRuns ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {Object.entries(job.viewRuns).map(([view, run]) => (
+                <div className="rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4" key={view}>
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-bold text-[#14241B]">
+                      <Camera size={14} aria-hidden="true" />
+                      {VIEW_LABELS[view] ?? view}
+                    </span>
+                    <span className="text-xs font-bold text-slate-500">{run.progress}%</span>
+                  </div>
+                  <div className="mt-2 h-1.5 rounded-full bg-[#DFEADA]">
+                    <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${run.progress}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">{run.stage}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* 降级提示 + 数据来源（不静默） */}
+          {manifest?.analysis_source ? (
+            <>
+              {manifest.analysis_source.mode === "single_view_fallback" ? (
+                <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4">
+                  <strong className="flex items-center gap-1.5 text-sm text-[#991B1B]">
+                    <ShieldAlert size={15} aria-hidden="true" />
+                    本次未完成双视角融合
+                  </strong>
+                  <p className="mt-1 text-sm leading-6 text-[#B91C1C]">
+                    {manifest.analysis_source.reason
+                      ? `${manifest.analysis_source.reason}，结果已使用 ${VIEW_LABELS[manifest.analysis_source.source_view ?? ""] ?? manifest.analysis_source.source_view ?? "参考机位"} 单视角数据。`
+                      : "结果使用单视角数据（未执行多视角融合）。"}
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+                  <strong className="text-sm text-[#168A34]">已完成多视角融合</strong>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    球员位置类指标（移动 / 热力图 / 移动距离速度）来自 A+B 多视角融合。
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-4 grid gap-2 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4 text-sm">
+                {[
+                  ["分析模式", "双摄协同"],
+                  ["球员移动", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : "A 机位单视角"],
+                  ["热力图", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : "A 机位单视角"],
+                  ["移动距离 / 速度", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : "A 机位单视角"],
+                  ["姿态 / 球路 / 动作识别", manifest.analysis_source.source_view
+                    ? `${VIEW_LABELS[manifest.analysis_source.source_view] ?? manifest.analysis_source.source_view} 机位`
+                    : "A 机位"],
+                ].map(([label, value]) => (
+                  <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] p-2.5" key={label}>
+                    <span className="text-slate-500">{label}</span>
+                    <strong className="text-right text-[#14241B]">{value}</strong>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {/* 融合质量（fused_diagnostics） */}
+          {diagnostics?.fusion_status_counts ? (() => {
+            const counts = diagnostics.fusion_status_counts;
+            const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+            const pct = (key: string) => `${Math.round(((counts[key] ?? 0) / total) * 1000) / 10}%`;
+            const rows: Array<[string, string]> = [
+              ["双视角共同观测", pct("dual_observed")],
+              ["单视角补偿", pct("single_view_fallback")],
+              ["冲突", pct("conflict")],
+              ["预测补点", pct("predicted")],
+              ["不可用", pct("unavailable")],
+            ];
+            return (
+              <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#168A34]">融合质量</p>
+                <div className="mt-3 grid gap-1.5 text-sm sm:grid-cols-2">
+                  {rows.map(([label, value]) => (
+                    <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] px-3 py-2" key={label}>
+                      <span className="text-slate-500">{label}</span>
+                      <strong className="text-[#14241B]">{value}</strong>
+                    </div>
+                  ))}
+                  <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] px-3 py-2">
+                    <span className="text-slate-500">视角位置差异中位数</span>
+                    <strong className="text-[#14241B]">
+                      {diagnostics.view_disagreement?.median_distance_ft != null
+                        ? `${diagnostics.view_disagreement.median_distance_ft.toFixed(2)} ft`
+                        : "—"}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] px-3 py-2">
+                    <span className="text-slate-500">参与指标样本</span>
+                    <strong className="text-[#14241B]">{diagnostics.metric_eligible_count ?? "—"}</strong>
+                  </div>
+                </div>
+              </div>
+            );
+          })() : null}
+        </section>
+      ) : null}
 
       <section className="mt-6 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
         <article className="sport-card p-5 sm:p-6">

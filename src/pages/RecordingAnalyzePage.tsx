@@ -92,8 +92,8 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
       };
 
       const cameraAngle: "baseline" | "sideline" | "elevated" | "unknown" =
-        typeof session.match_format === "string"
-          ? angleMap[session.match_format] ?? "unknown"
+        session.camera_slots?.[camSlot]?.camera_angle
+          ? angleMap[session.camera_slots[camSlot].camera_angle] ?? "unknown"
           : "unknown";
 
       const job = await createAnalysisJob({

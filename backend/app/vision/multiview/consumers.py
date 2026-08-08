@@ -110,17 +110,20 @@ def visualization_points(
     return points
 
 
-TrajectorySource = Literal["fused", "single_view"]
+TrajectorySource = Literal["fused", "single_view", "unavailable"]
 
 
 def select_trajectory_source(
     fused_available: bool,
     single_view_available: bool,
 ) -> TrajectorySource:
-    """选择位置型输出的轨迹来源：优先 fused，否则单视角；都不可用视为单视角缺失。
+    """选择位置型输出的轨迹来源：优先 fused，否则单视角，双路失败为 unavailable。
 
     现有单视角 artifact 不删除、不覆盖；本函数只决定"消费哪个"。
+    双路失败时返回 `unavailable`，不得假装存在单视角轨迹。
     """
     if fused_available:
         return "fused"
-    return "single_view" if single_view_available else "single_view"
+    if single_view_available:
+        return "single_view"
+    return "unavailable"

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAnalysisJob, getAnalysisReport, listAnalysisJobs } from "./analysisClient";
+import { createAnalysisJob, getAnalysisReport, listAnalysisJobs, deleteRecordingAnalysis } from "./analysisClient";
 
 describe("analysis job compatibility", () => {
   afterEach(() => {
@@ -103,3 +103,47 @@ describe("analysis job compatibility", () => {
     });
   });
 });
+
+describe("deleteRecordingAnalysis", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  it("calls the recording-scoped analysis delete endpoint", async () => {
+    const results = [
+      { job_id: "job-parent", status: "deleted", detail: "ok" },
+      { job_id: "job-single", status: "blocked", detail: "active" },
+    ];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(results), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const out = await deleteRecordingAnalysis("sync_1");
+
+    expect(out).toEqual(results);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/sync-recordings/sync_1/analysis");
+    expect(init?.method).toBe("DELETE");
+  });
+
+  it("surfaces blocked results without treating them as deleted", async () => {
+    const results = [
+      { job_id: "job-active", status: "blocked", detail: "analysis in progress" },
+    ];
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(results), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const out = await deleteRecordingAnalysis("sync_1");
+    expect(out).toHaveLength(1);
+    expect(out[0].status).toBe("blocked");
+  });
+});
+

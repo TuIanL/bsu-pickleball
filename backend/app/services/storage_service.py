@@ -312,6 +312,18 @@ class StorageService:
         # 渲染轨迹 JSON（逐帧坐标，仅用于小地图视频）
         return self._job_artifact_root(job_id) / "player_render_trajectory.json"
 
+    def fused_trajectory_json_path(self, job_id: str) -> Path:
+        # 多视角融合球员轨迹 JSON（Composer 发布到 Parent artifact 命名空间）
+        return self._job_artifact_root(job_id) / "fused_player_trajectory.json"
+
+    def fusion_diagnostics_json_path(self, job_id: str) -> Path:
+        # 多视角融合诊断 JSON（融合质量指标）
+        return self._job_artifact_root(job_id) / "fused_diagnostics.json"
+
+    def fusion_manifest_json_path(self, job_id: str) -> Path:
+        # 多视角产物清单 JSON（Parent 唯一产品出口，前端据此消费）
+        return self._job_artifact_root(job_id) / "fused_manifest.json"
+
     def court_view_roi_json_path(self, job_id: str) -> Path:
         # 球场视角与检测 ROI（感兴趣区域）JSON
         return self._job_artifact_root(job_id) / "court_view_roi.json"

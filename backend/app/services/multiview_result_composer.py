@@ -1,0 +1,459 @@
+"""多视角结果组装（multiview_result_composer）—— 把 P0 融合产物组装成 Parent 报告。
+
+三步（对应 spec `multiview-analysis-result-composer`）：
+
+1. **Select / Recompute**：用 fused trajectory + `metric_eligible` 重新计算位置类指标
+   （distance / speed / heatmap / zone stats），**绝不复制 child 在 local frame 算好的指标**。
+2. **Inherit**：从 reference view 继承 pose / ball / action / overlay 等非位置类产物
+   （复制到 Parent 命名空间）。
+3. **Normalize**：把 fused artifacts + diagnostics 发布到 Parent artifact 命名空间，
+   写 `fused_manifest.json` 作为 Parent 唯一产品出口（前端只消费 manifest，永远不碰 fusion run）。
+
+fallback 时同样经 Composer 重新生成 Parent 结果（内容可继承，所有权必须归 Parent）。
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+from datetime import UTC, datetime
+from pathlib import Path
+
+from app.schemas.analysis import AnalysisJobSummary, build_match_context
+from app.schemas.metrics import MetricStatus, PerformanceMetrics
+from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
+from app.schemas.tracking import ImagePoint, ProjectedCourtPoint2D, ProjectedTrackPoint
+from app.services.storage_service import StorageService
+from app.vision.multiview.artifact import FUSED_DIAGNOSTICS_FILENAME, FUSED_TRAJECTORY_FILENAME
+from app.vision.multiview.consumers import movement_points, visualization_points
+from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
+from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
+from app.vision.pickleball_performance_engine.metric_inputs import standard_court_metric_points
+from app.vision.pickleball_performance_engine.speed_metrics import speed_summaries
+from app.vision.pickleball_performance_engine.trajectory_metrics import total_distances
+from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
+
+logger = logging.getLogger(__name__)
+
+# 聚合阶段（双摄 Parent 对外展示的六阶段，不铺 24 行单摄阶段）
+MULTIVIEW_AGGREGATE_STAGES: tuple[tuple[str, str], ...] = (
+    ("multiview-input-check", "素材与同步检查"),
+    ("multiview-view-a", "A 机位视觉分析"),
+    ("multiview-view-b", "B 机位视觉分析"),
+    ("multiview-fusion", "多视角球员轨迹融合"),
+    ("multiview-metrics", "运动指标重算"),
+    ("multiview-report", "报告生成"),
+)
+
+# 从 reference view 继承到 Parent 命名空间的产物契约：
+#   artifacts 路径字段名 → (storage 访问器名, artifact 路由名, url 字段名, status 字段名 | None, 是否复制文件)
+# 前端依赖 `*_url` 决定某个视觉层是否可加载，依赖 `*_status`/`*_detail` 展示层状态，
+# 因此继承时必须同时补齐 url/status/detail，而不只是复制文件 + 填 `*_json_path`。
+_INHERITED_ARTIFACT_SPECS: dict[str, tuple[str, str, str, str | None, bool]] = {
+    "tracking_overlay_json_path": ("tracking_overlay_json_path", "tracking-overlay", "tracking_overlay_url", "tracking_overlay_status", True),
+    "player_selection_json_path": ("player_selection_json_path", "player-selection", "player_selection_url", "player_selection_status", True),
+    "player_selection_training_samples_json_path": (
+        "player_selection_training_samples_json_path",
+        "player-selection-training-samples",
+        "player_selection_training_samples_url",
+        None,
+        True,
+    ),
+    "detections_jsonl_path": ("detections_jsonl_path", "detections", "detections_url", "detections_status", True),
+    "ball_overlay_json_path": ("ball_overlay_json_path", "ball-overlay", "ball_overlay_url", "ball_overlay_status", True),
+    "ball_trajectory_json_path": ("ball_trajectory_json_path", "ball-trajectory", "ball_trajectory_url", "ball_trajectory_status", True),
+    "cleaned_ball_trajectory_json_path": (
+        "cleaned_ball_trajectory_json_path",
+        "cleaned-ball-trajectory",
+        "cleaned_ball_trajectory_url",
+        "cleaned_ball_trajectory_status",
+        True,
+    ),
+    "bounce_events_json_path": ("bounce_events_json_path", "bounce-events", "bounce_events_url", "bounce_events_status", True),
+    "reconstructed_ball_trajectory_json_path": (
+        "reconstructed_ball_trajectory_json_path",
+        "reconstructed-ball-trajectory",
+        "reconstructed_ball_trajectory_url",
+        "reconstructed_ball_trajectory_status",
+        True,
+    ),
+    # 叠加视频体积大（可达 GB 级），不复制到 Parent 命名空间，直接引用 child 的 URL。
+    "analysis_overlay_video_path": ("analysis_overlay_video_path", "analysis-overlay-video", "analysis_overlay_video_url", "analysis_overlay_video_status", False),
+    "heatmaps_manifest_json_path": ("heatmaps_manifest_json_path", "position-heatmaps", "heatmaps_url", "position_visualizations_status", True),
+    "scatter_plots_manifest_json_path": ("scatter_plots_manifest_json_path", "position-scatter-plots", "scatter_plots_url", "position_visualizations_status", True),
+    "pose_overlay_json_path": ("pose_overlay_json_path", "pose-overlay", "pose_overlay_url", "pose_overlay_status", True),
+    "serve_events_json_path": ("serve_events_json_path", "serve-events", "serve_events_url", "serve_events_status", True),
+    "serve_debug_candidates_json_path": (
+        "serve_debug_candidates_json_path",
+        "serve-debug-candidates",
+        "serve_debug_candidates_url",
+        None,
+        True,
+    ),
+    "serve_score_series_json_path": ("serve_score_series_json_path", "serve-score-series", "serve_score_series_url", None, True),
+    "serve_clips_manifest_json_path": ("serve_clips_manifest_json_path", "serve-clips-manifest", "serve_clips_manifest_url", None, True),
+    "serve_debug_overlay_path": ("serve_debug_overlay_video_path", "serve-debug-overlay", "serve_debug_overlay_url", None, True),
+    "player_trajectory_json_path": ("player_trajectory_json_path", "player-trajectories", "player_trajectory_url", "player_trajectory_status", True),
+    "player_render_trajectory_json_path": ("player_render_trajectory_path", "player-render-trajectories", "player_render_trajectory_url", "player_render_trajectory_status", True),
+    "court_view_roi_json_path": ("court_view_roi_json_path", "court-view-roi", "court_view_roi_url", "court_view_roi_status", True),
+    "calibration_diagnostics_json_path": (
+        "calibration_diagnostics_json_path",
+        "calibration-diagnostics",
+        "calibration_diagnostics_url",
+        None,
+        True,
+    ),
+}
+
+
+def _copy_if_exists(src: Path, dst: Path) -> bool:
+    """复制单个产物文件到目标；源缺失/目标已存在都幂等返回 False/True。"""
+    if not src.exists() or not src.is_file():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return True
+
+
+def _copy_tree_if_exists(src: Path, dst: Path) -> bool:
+    """复制产物目录（如 serve_clips / position heatmaps 目录）到目标。"""
+    if not src.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+    return True
+
+
+def _build_aggregate_stages(
+    *,
+    view_a_status: str,
+    view_b_status: str,
+    fusion_performed: bool,
+    composed: bool,
+) -> list[PipelineStageResult]:
+    """构建六聚合阶段（素材检查 → A/B → 融合 → 指标 → 报告）。"""
+    now = datetime.now(UTC).isoformat()
+    stages: list[PipelineStageResult] = []
+    for index, (stage_id, label) in enumerate(MULTIVIEW_AGGREGATE_STAGES):
+        status = "done" if index <= len(MULTIVIEW_AGGREGATE_STAGES) - 1 else "pending"
+        detail = label
+        progress = 100
+        if stage_id == "multiview-input-check":
+            status, progress = "done", 100
+            detail = "双视频 / 双标定 / 同步信息检查通过"
+        elif stage_id == "multiview-view-a":
+            status = "done" if view_a_status in {"completed", "succeeded"} else "failed"
+            detail = "A 机位视觉分析完成" if status == "done" else "A 机位分析失败"
+        elif stage_id == "multiview-view-b":
+            status = "done" if view_b_status in {"completed", "succeeded"} else "failed"
+            detail = "B 机位视觉分析完成" if status == "done" else "B 机位分析失败"
+        elif stage_id == "multiview-fusion":
+            status = "done" if fusion_performed else "skipped"
+            detail = "多视角球员轨迹融合" if fusion_performed else "未执行融合（单视角降级）"
+        elif stage_id == "multiview-metrics":
+            status = "done" if composed else "pending"
+            detail = "基于 fused 轨迹重算运动指标"
+        elif stage_id == "multiview-report":
+            status = "done" if composed else "pending"
+            detail = "生成 Parent 报告"
+        stages.append(
+            PipelineStageResult(
+                id=stage_id,
+                label=label,
+                status=status,
+                detail=detail,
+                started_at=now,
+                finished_at=now,
+                progress=progress,
+                public_message=detail,
+            )
+        )
+    return stages
+
+
+class MultiViewResultComposer:
+    """把 P0 融合产物组装为 Parent-owned 结果。"""
+
+    def __init__(self, storage: StorageService | None = None) -> None:
+        self.storage = storage or StorageService()
+
+    # ---- 第 1 步：Select / Recompute -------------------------------------
+
+    def fused_to_projected_tracks(
+        self,
+        fused_artifact: dict[str, object],
+        *,
+        eligible_only: bool = False,
+    ) -> list[ProjectedTrackPoint]:
+        """把 fused trajectory samples 转成标准球场轨迹点。
+
+        `eligible_only=True` 仅取 metric-eligible 样本（进指标）；否则全部有坐标样本（可视化）。
+        以 `global_player_id` 作为 `track_id`，供现有指标数学按球员分组。
+        """
+        points: list[ProjectedTrackPoint] = []
+        for sample in fused_artifact.get("samples", []):
+            if not isinstance(sample, dict):
+                continue
+            if eligible_only and not sample.get("metric_eligible"):
+                continue
+            x = sample.get("x_ft")
+            y = sample.get("y_ft")
+            if x is None or y is None:
+                continue
+            points.append(
+                ProjectedTrackPoint(
+                    frame_index=int(sample.get("reference_frame_index", 0)),
+                    timestamp_seconds=float(sample.get("timestamp_seconds", 0.0)),
+                    track_id=str(sample.get("global_player_id", "")),
+                    image_point=ImagePoint(x=0.0, y=0.0),  # 指标只消费 court_point，图像点占位
+                    confidence=1.0,
+                    side="unknown",
+                    court_point=ProjectedCourtPoint2D(x=float(x), y=float(y)),
+                )
+            )
+        return points
+
+    def recompute_metrics(
+        self,
+        fused_artifact: dict[str, object],
+        match_context,
+    ) -> PerformanceMetrics:
+        """用 fused + metric_eligible 重算位置类指标（不复用 child local-frame 指标）。"""
+        metric_tracks = standard_court_metric_points(
+            self.fused_to_projected_tracks(fused_artifact, eligible_only=True)
+        )
+        ctx = match_context or build_match_context(None)
+        statuses: dict[str, MetricStatus] = {}
+        if ctx.enable_doubles_spacing:
+            spacing_result = doubles_spacing(metric_tracks)
+            statuses["doubles_spacing"] = MetricStatus(status="available")
+        else:
+            spacing_result = []
+            statuses["doubles_spacing"] = MetricStatus(
+                status="not_applicable",
+                reason="singles_match",
+                expected_player_count=ctx.expected_player_count,
+            )
+        return PerformanceMetrics(
+            distances=total_distances(metric_tracks),
+            speeds=speed_summaries(metric_tracks),
+            kitchen_dwell=kitchen_dwell(metric_tracks),
+            doubles_spacing=spacing_result,
+            heatmap=generate_heatmap(metric_tracks),
+            metric_statuses=statuses,
+        )
+
+    # ---- 第 2 步：Inherit reference-view 产物 ---------------------------------
+
+    def _load_child_artifacts(self, child_id: str, capture_take_id: str | None) -> AnalysisArtifacts | None:
+        """读取 reference child 已落盘的 AnalysisPipelineResult.artifacts（用于继承 status/detail）。"""
+        if capture_take_id:
+            self.storage.resolve_capture_job_root(child_id, capture_take_id)
+        try:
+            path = self.storage.output_json_path(child_id)
+            if not path.exists():
+                return None
+            result = AnalysisPipelineResult.model_validate(self.storage.read_json(path))
+            return result.artifacts
+        except Exception:  # noqa: BLE001 - child 结果缺失/损坏时按无 status 处理
+            return None
+
+    def _inherit_reference_artifacts(
+        self,
+        parent_job_id: str,
+        reference_child: AnalysisJobSummary,
+        artifacts: AnalysisArtifacts,
+    ) -> None:
+        """把 reference child 已生成的单摄产物复制到 Parent 命名空间，并补齐 url/status/detail 契约。
+
+        前端依赖 `*_url` 决定视觉层是否可加载、依赖 `*_status`/`*_detail` 展示层状态；
+        仅填 `*_json_path` 会导致所有视觉层显示"不可用"。
+        """
+        capture_take_id = getattr(reference_child.metadata, "capture_take_id", None)
+        if capture_take_id:
+            # 重启后 _capture_job_roots 为空，必须重新注册 parent/child 的产物根，路径才能解析正确
+            self.storage.resolve_capture_job_root(parent_job_id, capture_take_id)
+            self.storage.resolve_capture_job_root(reference_child.id, capture_take_id)
+        child_artifacts = self._load_child_artifacts(reference_child.id, capture_take_id)
+
+        for path_field, (getter_name, route, url_field, status_field, copy_file) in _INHERITED_ARTIFACT_SPECS.items():
+            path_getter = getattr(self.storage, getter_name, None)
+            if path_getter is None:
+                continue
+            src = path_getter(reference_child.id)
+            dst = path_getter(parent_job_id)
+            copied = _copy_if_exists(src, dst) if copy_file else False
+            if copied:
+                setattr(artifacts, path_field, str(dst))
+                setattr(artifacts, url_field, f"/api/analysis/jobs/{parent_job_id}/artifacts/{route}")
+            elif not copy_file and child_artifacts is not None:
+                # 大视频不复制：直接引用 child 的 URL（内容即参考视角叠加视频）
+                child_url = getattr(child_artifacts, url_field, None)
+                if child_url:
+                    setattr(artifacts, url_field, child_url)
+            if status_field and child_artifacts is not None:
+                child_status = getattr(child_artifacts, status_field, None)
+                if child_status:
+                    setattr(artifacts, status_field, child_status)
+                detail_field = f"{status_field[: -len('status')]}detail"
+                child_detail = getattr(child_artifacts, detail_field, None)
+                if child_detail:
+                    setattr(artifacts, detail_field, child_detail)
+
+        # 目录型产物（position-heatmaps / position-scatter-plots / serve-clips）
+        for field, dir_getter_name in (
+            ("heatmaps_manifest", "heatmaps_dir"),
+            ("scatter_plots_manifest", "scatter_plots_dir"),
+            ("serve_clips_manifest", "serve_clips_dir"),
+            ("position_visualizations", "position_visualizations_dir"),
+        ):
+            dir_getter = getattr(self.storage, dir_getter_name, None)
+            if dir_getter is None:
+                continue
+            src = dir_getter(reference_child.id)
+            dst = dir_getter(parent_job_id)
+            _copy_tree_if_exists(src, dst)
+
+    # ---- 第 3 步：Normalize 到 Parent namespace + manifest --------------------
+
+    def publish_fused_artifacts(
+        self,
+        parent_job_id: str,
+        fused_artifact: dict[str, object],
+        diagnostics: dict[str, object],
+        analysis_source: dict[str, str],
+    ) -> dict[str, object]:
+        """把 fused + diagnostics 写入 Parent 命名空间，并写 fused_manifest.json 作为唯一出口。"""
+        fused_path = self.storage.fused_trajectory_json_path(parent_job_id)
+        diag_path = self.storage.fusion_diagnostics_json_path(parent_job_id)
+        self.storage.write_json_atomic(fused_path, fused_artifact)
+        self.storage.write_json_atomic(diag_path, diagnostics)
+
+        manifest: dict[str, object] = {
+            "schema_version": "fused_manifest.v1",
+            "analysis_source": analysis_source,
+            "artifacts": {
+                "playerTrajectory": {
+                    "source": "fused",
+                    "url": f"/api/analysis/jobs/{parent_job_id}/artifacts/fused-trajectory",
+                },
+                "fusionDiagnostics": {
+                    "url": f"/api/analysis/jobs/{parent_job_id}/artifacts/fusion-diagnostics",
+                },
+                "referenceOverlay": {"source": analysis_source.get("source_view")},
+            },
+        }
+        self.storage.write_json_atomic(self.storage.fusion_manifest_json_path(parent_job_id), manifest)
+        logger.info("发布 fused 产物到 Parent %s（manifest: %s）", parent_job_id, manifest)
+        return manifest
+
+    # ---- 组装 AnalysisPipelineResult -----------------------------------------
+
+    def build_pipeline_result(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        fused_artifact: dict[str, object],
+        diagnostics: dict[str, object],
+        analysis_source: dict[str, str],
+        reference_child: AnalysisJobSummary | None,
+        fusion_performed: bool,
+        message: str,
+    ) -> AnalysisPipelineResult:
+        """组装 Parent 的 AnalysisPipelineResult（供现有报告构建路径消费）。"""
+        match_context = build_match_context(
+            job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
+        )
+        metrics = self.recompute_metrics(fused_artifact, match_context)
+        tracks = self.fused_to_projected_tracks(fused_artifact)
+        artifacts = AnalysisArtifacts()
+        if reference_child is not None:
+            self._inherit_reference_artifacts(job.id, reference_child, artifacts)
+        # 前端用 source_video_url / video_id 作为视频源兜底；Parent 的 videoId 已在创建时
+        # 从 reference child 继承（见 multiview_coordinator），此处显式补上 source_video_url。
+        video_id = reference_child.videoId if reference_child else None
+        if video_id and not artifacts.source_video_url:
+            artifacts.source_video_url = f"/api/videos/{video_id}/stream"
+        self.publish_fused_artifacts(
+            job.id,
+            fused_artifact,
+            diagnostics,
+            analysis_source,
+        )
+        view_a = job.viewRuns.get("cam_1") if job.viewRuns else None
+        view_b = job.viewRuns.get("cam_2") if job.viewRuns else None
+        stages = _build_aggregate_stages(
+            view_a_status=view_a.status if view_a else "pending",
+            view_b_status=view_b.status if view_b else "pending",
+            fusion_performed=fusion_performed,
+            composed=True,
+        )
+        return AnalysisPipelineResult(
+            job_id=job.id,
+            video_id=video_id,
+            calibration_id=reference_child.calibrationId if reference_child else None,
+            status="completed",
+            generated_at=datetime.now(UTC),
+            stages=stages,
+            tracks=tracks,
+            metrics=metrics,
+            artifacts=artifacts,
+            message=message,
+            match_context=match_context,
+            observed_player_count=len({t.track_id for t in tracks if t.track_id}),
+        )
+
+
+def build_fallback_fused_artifact(
+    *,
+    run_id: str,
+    capture_take_id: str,
+    reference_view_id: str,
+    observations,
+    sync_quality: str,
+    reference_orientation=None,
+) -> dict[str, object]:
+    """单视角降级时的"伪 fused"轨迹：直接取 reference view 的 canonical 观测。
+
+    用于 `A✓+B✕` / `A✓+B✓+sync✕` 分支——不执行真正融合，但 Composer 仍按
+    fused 契约重算指标（metric-eligible = 观测点），保证报告与 fallback 前一致。
+    """
+    from app.vision.multiview.court_frame import local_to_canonical
+
+    samples: list[dict[str, object]] = []
+    for obs in observations:
+        canonical = local_to_canonical(obs.local_x_ft, obs.local_y_ft, reference_orientation)
+        samples.append(
+            {
+                "global_player_id": obs.view_player_id,
+                "timestamp_seconds": obs.timestamp_seconds,
+                "take_timestamp_ms": obs.timestamp_seconds * 1000.0,
+                "reference_frame_index": obs.source_frame_index,
+                "x_ft": canonical[0],
+                "y_ft": canonical[1],
+                "fusion_status": "single_view_fallback",
+                "fusion_confidence": 0.0,
+                "contributing_views": [reference_view_id],
+                "selected_view": reference_view_id,
+                "view_observations": {},
+                "association_confidence": 0.0,
+                "sync_quality": sync_quality,
+                "court_frame_version": "canonical_court_frame.v1",
+                "measurement_source": "single_view_fallback",
+                "metric_eligible": True,
+            }
+        )
+    return {
+        "schema_version": "fused_player_trajectory.v1",
+        "run_id": run_id,
+        "capture_take_id": capture_take_id,
+        "reference_view_id": reference_view_id,
+        "secondary_view_id": None,
+        "sync_quality": sync_quality,
+        "court_frame_version": "canonical_court_frame.v1",
+        "players": sorted({s["global_player_id"] for s in samples}),
+        "samples": samples,
+    }

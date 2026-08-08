@@ -8,6 +8,7 @@ import CaptureConsolePage from "../pages/CaptureConsolePage";
 import { SegmentManagerPage } from "../pages/SegmentManagerPage";
 import { RecordingWorkspacePage } from "../pages/RecordingWorkspacePage";
 import { RecordingAnalyzePage } from "../pages/RecordingAnalyzePage";
+import { MultiViewAnalysisSetupPage } from "../pages/MultiViewAnalysisSetupPage";
 import { HardwarePage } from "../pages/HardwarePage";
 import { TrainingPage } from "../pages/TrainingPage";
 import { CameraHubPage } from "../pages/CameraHubPage";
@@ -73,6 +74,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         const cam = new URLSearchParams(window.location.search).get("cam") as "cam_1" | "cam_2" | null;
         return <RecordingAnalyzePage sessionId={route.sessionId} cam={cam} onNavigate={onNavigate} />;
       }
+      case "multiview-setup":
+        return <MultiViewAnalysisSetupPage captureTakeId={route.captureTakeId} onNavigate={onNavigate} />;
       case "workspace":
         return <div style={{ padding: 24, color: "#98A2B3", fontSize: 14 }}>工作台（建设中）</div>;
       case "landing":

@@ -27,6 +27,7 @@ import type {
   CaptureSegmentSummary,
   AnalysisBatchCreateResponse,
   AnalysisBatchDetail,
+  FusedManifest,
 } from "../types/report";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 
@@ -607,6 +608,86 @@ export async function listAnalysisJobs(options: DemoFallbackOptions = {}): Promi
   }
 }
 
+// ── 双摄（multiview）协同分析 ──
+
+export interface MultiViewCreateViewPayload {
+  viewId: string;
+  videoId: string;
+  calibrationId: string;
+  courtOrientation: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
+}
+
+export interface MultiviewAnalysisJobRequest {
+  metadata: AnalysisUploadMetadata;
+  frameStride?: number;
+  referenceViewId: string;
+  views: MultiViewCreateViewPayload[];
+  /** 分析窗口（take 公共时间轴 ms；缺省整场）。secondary 由后端经 sync 换算到自身时间轴。 */
+  clipStartMs?: number;
+  clipEndMs?: number;
+}
+
+/**
+ * 创建双摄协同分析任务：后端创建 1 个 public Parent + 2 个 internal child。
+ * 前端绝不 create 两个 job 再调 fusion（业务编排不泄漏到浏览器）。
+ */
+export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRequest): Promise<AnalysisJobSummary> {
+  try {
+    const job = normalizeAnalysisJobSummary(await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
+      body: JSON.stringify({
+        metadata: request.metadata,
+        frameStride: request.frameStride ?? 2,
+        clipStartMs: request.clipStartMs,
+        clipEndMs: request.clipEndMs,
+        analysisKind: "multiview",
+        multiview: {
+          referenceViewId: request.referenceViewId,
+          views: request.views,
+        },
+      }),
+      method: "POST",
+    }));
+    rememberAnalysisJob(job);
+    return job;
+  } catch (error) {
+    throw error;
+  }
+}
+
+export async function getFusedManifest(jobId: string): Promise<FusedManifest | null> {
+  try {
+    return await requestJson<FusedManifest>(`/api/analysis/jobs/${jobId}/artifacts/fused-manifest`);
+  } catch (error) {
+    if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** 融合质量诊断（fused_diagnostics）：双视角共同观测 / 单视角补偿 / 预测补点 / 视角位置差异等 */
+export interface FusionDiagnostics {
+  schema_version?: string;
+  run_id?: string;
+  fusion_status_counts?: Record<string, number>;
+  sample_count?: number;
+  metric_eligible_count?: number;
+  view_disagreement?: { median_distance_ft?: number | null; mean_distance_ft?: number | null; dual_samples?: number };
+  fallback?: boolean;
+  reason?: string;
+}
+
+export async function getFusionDiagnostics(jobId: string): Promise<FusionDiagnostics | null> {
+  try {
+    return await requestJson<FusionDiagnostics>(`/api/analysis/jobs/${jobId}/artifacts/fusion-diagnostics`);
+  } catch (error) {
+    if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function deleteAnalysisJob(jobId: string, options: DemoFallbackOptions = {}): Promise<AnalysisDeleteResult> {
   try {
     const result = await requestJson<AnalysisDeleteResult>(`/api/analysis/jobs/${jobId}`, {
@@ -942,6 +1023,33 @@ export async function deleteSyncRecording(sessionId: string): Promise<{ session_
   return requestJson<{ session_id: string; status: string; detail: string }>(`/api/sync-recordings/${sessionId}`, {
     method: "DELETE",
   });
+}
+
+export async function deleteRecordingAnalysis(sessionId: string, options: DemoFallbackOptions = {}): Promise<AnalysisDeleteResult[]> {
+  // 删除该双摄录制派生的所有分析任务及其本地产物；录制本身保留。
+  try {
+    const results = await requestJson<AnalysisDeleteResult[]>(`/api/sync-recordings/${sessionId}/analysis`, {
+      method: "DELETE",
+    });
+    const deletedJobIds = results.filter((result) => result.status === "deleted").map((result) => result.job_id);
+    if (deletedJobIds.length) {
+      deleteStoredJobs(deletedJobIds);
+    }
+    return results;
+  } catch (error) {
+    if (options.useDemoFallback) {
+      const storedJobs = getStoredDemoJobs();
+      const recordingDerived = Object.values(storedJobs)
+        .map((stored) => stored.summary)
+        .filter(
+          (job) => job.recordingSessionId === sessionId || job.metadata?.recording_session_id === sessionId,
+        );
+      if (recordingDerived.length) {
+        return deleteStoredJobs(recordingDerived.map((job) => job.id));
+      }
+    }
+    throw error;
+  }
 }
 
 export async function mergeSyncRecording(sessionId: string): Promise<SyncRecordingSession> {

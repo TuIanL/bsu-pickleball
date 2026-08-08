@@ -26,6 +26,22 @@ AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "compl
 AnalysisCanonicalStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 # 分析模式：演示 / 真实 / 受限
 AnalysisMode = Literal["demo", "real", "limited"]
+# 任务类型：普通单视角 / 双摄多视角（Parent）
+AnalysisKind = Literal["single_view", "multiview"]
+# 任务可见性：public 对用户可见；internal 为双摄 Source Job，默认不进入任务列表
+Visibility = Literal["public", "internal"]
+# 任务分析范围：full = 完整单摄流水线；perception = 仅感知（预留，P0.5 不实现）
+AnalysisScope = Literal["full", "perception"]
+# 多视角编排状态（独立于 canonicalStatus 的编排维度）
+AnalysisOrchestrationStatus = Literal[
+    "none",  # 普通 single_view
+    "waiting_sources",  # Parent 等 child
+    "fallback_ready",  # child 不完整，可单摄降级
+    "fusion_ready",  # 两 child 完成，可 fusion
+    "fusing",
+    "composing",
+    "completed",
+]
 # 流水线阶段 id（稳定集合，外加 str 兼容未来扩展）
 AnalysisStageId = (
     Literal[
@@ -121,6 +137,23 @@ class AnalysisStage(BaseModel):
     counters: dict[str, Any] = Field(default_factory=dict)
 
 
+class MultiViewViewPayload(BaseModel):
+    """双摄创建请求中的一路 view 输入（video + calibration + orientation）。"""
+
+    viewId: str  # 如 "cam_1" / "cam_2"
+    videoId: str
+    calibrationId: str
+    # None = 尚未声明（preflight 不通过，绝不猜测）。
+    courtOrientation: Literal["identity", "rotate_180", "mirror_x", "mirror_y"] | None = None
+
+
+class MultiViewCreateRequest(BaseModel):
+    """双摄（multiview）创建协议：一个 CaptureTake + 两路 view 输入。"""
+
+    referenceViewId: str
+    views: list[MultiViewViewPayload] = Field(min_length=2, max_length=8)  # P0.5 恒 2 路，数组为多机位扩展留位
+
+
 class AnalysisJobCreate(BaseModel):
     """创建分析任务的请求。"""
 
@@ -141,6 +174,26 @@ class AnalysisJobCreate(BaseModel):
     # 任务级推理开关：None 表示沿用后端全局配置（enable_model_inference / enable_pose_inference）
     enableModelInference: bool | None = None
     enablePoseInference: bool | None = None
+    # 任务类型与双摄编排负载（analysisKind=multiview 时必带 multiview，且 metadata.capture_take_id 必须存在）
+    analysisKind: AnalysisKind = "single_view"
+    multiview: MultiViewCreateRequest | None = None
+
+
+class SourceJobRef(BaseModel):
+    """Parent 对 owned child 的引用（数组，非 childJob1/childJob2 双字段）。"""
+
+    cameraSlot: str
+    jobId: str
+    # 该 view（CaptureTrack + Calibration）的 local→canonical 变换；None = 未声明。
+    courtOrientation: Literal["identity", "rotate_180", "mirror_x", "mirror_y"] | None = None
+
+
+class ViewRunSummary(BaseModel):
+    """双摄任务中某一机位 child 的运行聚合状态（前端展示子进度用）。"""
+
+    status: str
+    stage: str
+    progress: int = Field(ge=0, le=100)
 
 
 class AnalysisJobSummary(BaseModel):
@@ -187,6 +240,19 @@ class AnalysisJobSummary(BaseModel):
     # 任务实际使用的推理开关（创建时由 payload 或全局配置解析后固化；旧任务缺失时为 None）
     enableModelInference: bool | None = None
     enablePoseInference: bool | None = None
+    # 编排字段（历史 job 缺省兼容）
+    analysisKind: AnalysisKind = "single_view"
+    visibility: Visibility = "public"
+    parentJobId: str | None = None
+    analysisScope: AnalysisScope | None = None
+    orchestrationStatus: AnalysisOrchestrationStatus = "none"
+    fusionRunId: str | None = None
+    # Parent 对 owned child 的所有权映射（数组）
+    sourceJobs: list[SourceJobRef] = Field(default_factory=list)
+    # 双摄任务参考机位（Composer/Executor 据此决定 reference view）
+    referenceViewId: str | None = None
+    # 双摄任务各机位子进度（cam_1 / cam_2）
+    viewRuns: dict[str, ViewRunSummary] | None = None
 
 
 # 删除任务的状态

@@ -116,23 +116,31 @@ TBD - created by archiving change add-multiview-player-trajectory-fusion. Update
 
 ### Requirement: 下游消费受 metric eligibility 约束
 
-P0 完成后，`minimap / movement distance & speed / heatmap / court-position visualization` MUST 能够消费 `FusedPlayerTrajectoryArtifact`，但 metric 类消费 MUST 受 `metric_eligible` 门控：`dual_observed` 与 `single_view_fallback` → metrics yes；`conflict` → 取决于是否接受某一路真实 observation，必须携带 `metric_eligible` 标志；`predicted` → visualization yes、movement/heatmap 默认 no；`unavailable` → no。融合不可用时，系统 MUST 显式回退到单视角产物，且现有单视角 artifact 不删除、不覆盖。
+下游消费 Fused Trajectory MUST 保持受 metric eligibility 约束：`dual_observed / single_view_fallback → metrics yes`；`conflict` 按 `metric_eligible` 标志；`predicted → visualization yes、metrics no`；`unavailable → no`。本 Change 的 Composer 接入 MUST NOT 放宽该消费契约。
 
-#### Scenario: 真实观测进指标
+#### Scenario: eligibility 契约不变
 
-- **WHEN** 某 sample 为 `dual_observed` 或 `single_view_fallback`
-- **THEN** `metric_eligible` SHALL 为 yes
-- **AND** 该 sample 可进入 movement / speed / heatmap
+- **WHEN** Composer 消费 fused trajectory
+- **THEN** `metric_eligibility_policy` 语义 SHALL 与 P0 冻结版本一致
+- **AND** `predicted` / `unavailable` 样本 SHALL NOT 计入 movement / heatmap
 
-#### Scenario: 预测点不进移动量
+### Requirement: 轨迹来源选择含 unavailable
 
-- **WHEN** 某 sample 由 `GlobalTrackFilter` 预测产生
-- **THEN** `metric_eligible` SHALL 默认为 no
-- **AND** 该 sample 仅用于 visualization，SHALL NOT 计入真实移动距离
+`TrajectorySource` MUST 扩展为 `Literal["fused", "single_view", "unavailable"]`。`select_trajectory_source(fused_available, single_view_available)` MUST 按以下规则返回：fused 可用 → `"fused"`；仅单视角可用 → `"single_view"`；两者均不可用 → `"unavailable"`。MUST NOT 在双路失败时声称存在单视角轨迹。
 
-#### Scenario: 回退单视角
+#### Scenario: fused 可用
 
-- **WHEN** fused trajectory 不可用
-- **THEN** 视图 SHALL 显式回退到单视角产物
-- **AND** 现有单视角 artifact SHALL 保持不变
+- **WHEN** `fused_available=True`
+- **THEN** 返回 SHALL 为 `"fused"`
+
+#### Scenario: 仅单视角可用
+
+- **WHEN** `fused_available=False` 且 `single_view_available=True`
+- **THEN** 返回 SHALL 为 `"single_view"`
+
+#### Scenario: 双路失败
+
+- **WHEN** `fused_available=False` 且 `single_view_available=False`
+- **THEN** 返回 SHALL 为 `"unavailable"`
+- **AND** 消费方 SHALL 按无可用轨迹处理（Parent 失败），不得虚构单视角轨迹
 

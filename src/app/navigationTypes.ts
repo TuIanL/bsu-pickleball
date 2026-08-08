@@ -31,7 +31,8 @@ export type AppPath =
   | "/hardware"
   | `/reports/${ReportType}`
   | `/recording/${string}`
-  | `/capture/${string}/analyze`;
+  | `/capture/${string}/analyze`
+  | `/capture/takes/${string}/analyze`;
 
 export type RouteState =
   | { name: "landing"; path: "/"; shellMode: "landing"; navigationSection: null }
@@ -55,6 +56,7 @@ export type RouteState =
   | { name: "training"; path: "/training"; shellMode: "standard"; navigationSection: "settings" }
   | { name: "hardware"; path: "/hardware"; shellMode: "standard"; navigationSection: "settings" }
   | { name: "recordingWorkspace"; path: `/recording/${string}`; sessionId: string; shellMode: "standard"; navigationSection: "videos" }
-  | { name: "recording-analyze"; path: `/capture/${string}/analyze`; sessionId: string; shellMode: "standard"; navigationSection: "analysis" };
+  | { name: "recording-analyze"; path: `/capture/${string}/analyze`; sessionId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "multiview-setup"; path: `/capture/takes/${string}/analyze`; captureTakeId: string; shellMode: "standard"; navigationSection: "analysis" };
 
 export type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;

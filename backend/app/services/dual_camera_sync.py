@@ -13,7 +13,7 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -221,6 +221,72 @@ def calibrations_from_anchor_rows(
             max_residual_seconds=max_residual_seconds,
         )
     return result
+
+
+def derive_sync_calibration_from_segment_timing(
+    segments: Sequence[object],
+) -> dict[str, object]:
+    """从双摄录制各 segment 的 `input_start_time` 推导 degraded 同步校准。
+
+    与手动锚点（`calibrations_from_anchor_rows`，权威路径）不同：本函数由录制时序元数据
+    推导两机位媒体时间轴的 offset（同一真实事件 wall T → cam_2 = cam_1 + (start_1 - start_2)），
+    **quality 恒为 degraded**（未经人工锚点校验，不冒充 authoritative good；
+    按 P0 门控 `degraded → 允许融合但降权并输出诊断`）。
+
+    `segments` 为 duck-typed：每个 segment 需有 `.files`，文件需有 `.role / .input_start_time / .media_duration_sec`。
+    """
+    offset_seconds: float | None = None
+    duration_sec = 0.0
+    for segment in segments:
+        files_by_role: dict[str, object] = {}
+        for file_ in getattr(segment, "files", []):
+            role = getattr(file_, "role", None)
+            if role is not None:
+                files_by_role[str(role)] = file_
+        f1 = files_by_role.get("cam_1")
+        f2 = files_by_role.get("cam_2")
+        if not f1 or not f2:
+            continue
+        s1 = getattr(f1, "input_start_time", None)
+        s2 = getattr(f2, "input_start_time", None)
+        if s1 is None or s2 is None:
+            continue
+        duration_sec = min(
+            float(getattr(f1, "media_duration_sec", 0.0) or 0.0),
+            float(getattr(f2, "media_duration_sec", 0.0) or 0.0),
+        )
+        if duration_sec <= 0:
+            continue
+        offset_seconds = float(s1) - float(s2)
+        break
+
+    if offset_seconds is None:
+        raise ValueError("no usable segment timing metadata (input_start_time) found")
+
+    anchors = [
+        {"cam_1": 0.0, "cam_2": offset_seconds},
+        {"cam_1": duration_sec, "cam_2": duration_sec + offset_seconds},
+    ]
+    calibrations = calibrations_from_anchor_rows(
+        anchors,
+        reference_camera="cam_1",
+        camera_ids=["cam_1", "cam_2"],
+    )
+    calibrations = {
+        camera_id: replace(
+            cal,
+            quality="degraded",
+            reason="auto-derived from recording timing (input_start_time); not anchor-verified",
+        )
+        for camera_id, cal in calibrations.items()
+    }
+    return {
+        "schema_version": "dual_camera_sync_calibration.v1",
+        "reference_camera": "cam_1",
+        "anchor_count": len(anchors),
+        "mappings": {camera_id: calibration_to_dict(cal) for camera_id, cal in calibrations.items()},
+        "source": "auto_degraded_from_recording_timing",
+    }
 
 
 def calibration_to_dict(calibration: SyncCalibration) -> dict[str, object]:

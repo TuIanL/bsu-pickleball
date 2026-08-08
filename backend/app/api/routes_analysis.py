@@ -71,22 +71,29 @@ def create_analysis_job_route(payload: AnalysisJobCreate) -> AnalysisJobSummary:
     创建分析任务
 
     前端提交视频 id、标定 id、分析参数后调用本接口。
+    双摄任务（analysisKind=multiview）在此创建 1 个 Parent + 2 个内部 child。
     后端会记录任务，并返回它的 id 与初始状态（如 queued 排队中）。
     """
-    return create_analysis_job(payload)
+    try:
+        return create_analysis_job(payload)
+    except ValueError as exc:
+        # 双摄 preflight 不通过：返回结构化失败原因（不静默退化）
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/jobs", response_model=list[AnalysisJobSummary])
 def list_analysis_jobs_route(
     recording_session_id: str | None = Query(default=None, alias="recording_session_id"),
+    include_internal: bool = Query(default=False, alias="include_internal"),
 ) -> list[AnalysisJobSummary]:
     """
     读取所有已知分析任务
 
     支持按录制 session 过滤：?recording_session_id=<sid>。
+    默认只返回 visibility=public 的任务（internal child 隐藏）；include_internal=true 仅用于诊断。
     用于前端的"任务管理"页面，展示历史与当前任务列表。
     """
-    jobs = list_analysis_jobs()
+    jobs = list_analysis_jobs(include_internal=include_internal)
     if recording_session_id:
         jobs = [
             j
@@ -138,7 +145,11 @@ def cancel_analysis_job_route(job_id: str) -> AnalysisJobSummary:
     """
     请求取消排队中或运行中的分析任务
     """
-    job = cancel_analysis_job(job_id)
+    try:
+        job = cancel_analysis_job(job_id)
+    except ValueError as exc:
+        # 内部 Source Job 不能被用户直接取消
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
@@ -205,6 +216,9 @@ def read_analysis_artifact(
         "pose-overlay",  # 姿态骨架叠加
         "player-trajectories",  # 球员轨迹
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
+        "fused-trajectory",  # 多视角融合球员轨迹（Parent 命名空间产物）
+        "fusion-diagnostics",  # 多视角融合诊断（融合质量）
+        "fused-manifest",  # 多视角产物清单（Parent 唯一产品出口）
         "serve-events",  # 发球事件
         "serve-debug-candidates",  # 发球候选（调试用）
         "serve-score-series",  # 发球评分序列
@@ -260,6 +274,12 @@ def read_analysis_artifact(
         path = _STORAGE.player_trajectory_json_path(job_id)
     elif artifact_name == "player-render-trajectories":
         path = _STORAGE.player_render_trajectory_path(job_id)
+    elif artifact_name == "fused-trajectory":
+        path = _STORAGE.fused_trajectory_json_path(job_id)
+    elif artifact_name == "fusion-diagnostics":
+        path = _STORAGE.fusion_diagnostics_json_path(job_id)
+    elif artifact_name == "fused-manifest":
+        path = _STORAGE.fusion_manifest_json_path(job_id)
     elif artifact_name == "serve-events":
         path = _STORAGE.serve_events_json_path(job_id)
     elif artifact_name == "serve-debug-candidates":

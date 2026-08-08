@@ -6,38 +6,19 @@
 ## Requirements
 ### Requirement: 录制→分析迷你配置面板
 
-系统 MUST 提供一个从录制 session 到创建分析任务的迷你配置页面，展示继承自录制的只读元数据，并允许为选定机位的视频完成四角标定后直接创建分析任务。页面使用共享的 `AnalysisUploadMetadata` 类型构建请求，不得在页面内重复定义不完整 metadata。
+`RecordingAnalyzePage` 仍作为单摄分析（工程调试）入口保留：从录制继承只读元数据 + 四角标定 + 创建单摄任务。它 MUST 不再是双摄录制完成后的主流程。
 
-#### Scenario: 从双摄录制卡片打开分析
+#### Scenario: 单摄入口保留
 
-- **WHEN** 用户在一个已完成合并的双摄录制任务卡片上点击「分析 A 机位」或「分析 B 机位」
-- **THEN** 系统 SHALL 导航到 `/capture/<sessionId>/analyze?cam=<cam_1|cam_2>`
-- **AND** 系统 SHALL 渲染 `RecordingAnalyzePage` 而非 `NewAnalysisPage`
+- **WHEN** 用户通过次级操作选择「仅分析 A 机位」或「仅分析 B 机位」
+- **THEN** 系统 SHALL 仍导航到 `/capture/<sessionId>/analyze?cam=<cam_1|cam_2>` 渲染 `RecordingAnalyzePage`
+- **AND** 仍按既有契约创建单摄 AnalysisJob
 
-#### Scenario: 只读元数据展示
+#### Scenario: 双摄主流程改道
 
-- **WHEN** `RecordingAnalyzePage` 加载完成
-- **THEN** 页面顶部 SHALL 以只读 banner 展示场地名称、比赛时间、帧率、比赛形式、相机角度和选定机位
-- **AND** banner SHALL NOT 包含任何可编辑表单控件
-
-#### Scenario: 四角标定
-
-- **WHEN** 页面加载完毕且视频流就绪
-- **THEN** 系统 SHALL 渲染共享组件 `<CourtCornerCalibrator />` 用于标定球场四个角点
-- **AND** 标定组件 SHALL 提供「自动识别」与「手动点选」两种方式
-- **AND** 标定完成后 MUST 产出 `calibrationId`
-
-#### Scenario: 确认启动分析
-
-- **WHEN** 用户已完成标定并点击「确认并启动分析」
-- **THEN** 系统 SHALL 使用录制 session 的元数据快照构建 `AnalysisUploadMetadata`
-- **AND** 系统 SHALL POST `/api/analysis/jobs` 携带 `{ videoId, calibrationId, metadata, recording_session_id, camera_slot }`
-- **AND** 成功后 SHALL 跳转到 `/analysis/<jobId>`
-
-#### Scenario: 标定未完成时按钮禁用
-
-- **WHEN** 标定状态不为完成
-- **THEN** 「确认并启动分析」按钮 SHALL 处于禁用状态
+- **WHEN** 用户对已完成合并的双摄录制选择主操作
+- **THEN** 主操作 SHALL 为「双摄协同分析」并导航到 `/capture/takes/:captureTakeId/analyze`
+- **AND** 用户 SHALL 进入 `MultiViewAnalysisSetupPage` 而非单机位页
 
 ### Requirement: 分析任务归属录制
 
@@ -66,3 +47,29 @@
 - **WHEN** 前端读取不包含录制归属字段的历史分析任务
 - **THEN** 任务列表 SHALL 正常渲染文件、状态和时间信息
 - **AND** SHALL 隐藏录制来源专属控件而不是抛出运行时异常
+
+### Requirement: 确认启动分析
+
+单摄路径的创建契约 MUST 保持不变（POST `/api/analysis/jobs` 携带 `{ videoId, calibrationId, metadata, recording_session_id, camera_slot }`，成功后跳转 `/analysis/<jobId>`）。双摄路径 MUST 由 `MultiViewAnalysisSetupPage` 一次创建一个 multiview Parent（见 `multiview-analysis-setup-page` 与 `multiview-analysis-orchestration`），并支持在 take 公共时间轴指定分析窗口（`clipStartMs/clipEndMs`，secondary 由后端经 sync 换算）。
+
+#### Scenario: 单摄创建不变
+
+- **WHEN** 用户从 `RecordingAnalyzePage` 确认启动单摄分析
+- **THEN** 行为与既有契约一致，导航到 `/analysis/<jobId>`
+
+#### Scenario: 双摄创建唯一 Parent
+
+- **WHEN** 用户从 `MultiViewAnalysisSetupPage` 点击「开始双摄协同分析」
+- **THEN** 系统 SHALL 只创建一个 multiview Parent
+- **AND** 导航到 `/analysis/<parentId>`
+
+### Requirement: cameraAngle 语义修正
+
+`RecordingAnalyzePage` MUST 修复 `cameraAngle` 错误映射：不得用 `session.match_format`（`singles/doubles`）查询角度表（键为 `baseline_high/sideline/elevated...`），该错误几乎恒落 `unknown`。机位角度 MUST 来自真实机位来源（`camera_slots[camSlot].camera_angle`）。
+
+#### Scenario: 角度来源真实
+
+- **WHEN** 单摄任务创建时设置 `cameraAngle`
+- **THEN** 该值 SHALL 来自真实机位来源
+- **AND** SHALL NOT 由 `match_format` 查询角度表推导
+

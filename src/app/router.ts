@@ -20,6 +20,7 @@ const routeMeta = {
   "new-analysis": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-tasks": { shellMode: "standard", navigationSection: "analysis" },
   "recording-analyze": { shellMode: "standard", navigationSection: "analysis" },
+  "multiview-setup": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-job": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-details": { shellMode: "standard", navigationSection: "analysis" },
   vision: { shellMode: "standard", navigationSection: "analysis" },
@@ -68,6 +69,19 @@ export function parsePath(pathname: string): RouteState {
   if (segmentManagerMatch) {
     const [, fieldSessionId, takeId] = segmentManagerMatch;
     return { name: "segmentManager", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, fieldSessionId, takeId, ...routeMeta.segmentManager };
+  }
+
+  const multiviewSetupMatch = captureConsoleMatch
+    ? captureConsoleMatch[1].match(/^takes\/(.+)\/analyze$/)
+    : null;
+  if (multiviewSetupMatch) {
+    const [, captureTakeId] = multiviewSetupMatch;
+    return {
+      name: "multiview-setup",
+      path: `/capture/takes/${captureTakeId}/analyze`,
+      captureTakeId,
+      ...routeMeta["multiview-setup"],
+    };
   }
 
   const recordingAnalyzeMatch = captureConsoleMatch

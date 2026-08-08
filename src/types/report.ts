@@ -745,9 +745,57 @@ export interface AnalysisJobSummary {
   /** 任务实际使用的推理开关（YOLO 人体检测 / RTMPose 姿态识别），后端解析后固化 */
   enableModelInference?: boolean;
   enablePoseInference?: boolean;
+  /** 任务类型：普通单视角 / 双摄多视角 Parent */
+  analysisKind?: "single_view" | "multiview";
+  /** 可见性：internal = 双摄 Source Job，默认不进任务列表 */
+  visibility?: "public" | "internal";
+  /** internal Source Job 的 Parent 引用 */
+  parentJobId?: string | null;
+  /** 分析范围：child 恒 full；Parent 不适用 */
+  analysisScope?: "full" | "perception" | null;
+  /** 多视角编排状态（独立于 canonicalStatus） */
+  orchestrationStatus?:
+    | "none"
+    | "waiting_sources"
+    | "fallback_ready"
+    | "fusion_ready"
+    | "fusing"
+    | "composing"
+    | "completed";
+  /** 融合 Run 标识（执行融合前持久化） */
+  fusionRunId?: string | null;
+  /** Parent 对 owned child 的所有权映射（数组） */
+  sourceJobs?: Array<{
+    cameraSlot: string;
+    jobId: string;
+    courtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
+  }>;
+  /** 双摄任务参考机位 */
+  referenceViewId?: string | null;
+  /** 双摄任务各机位子进度 */
+  viewRuns?: Record<string, { status: string; stage: string; progress: number }>;
 }
 
 export type AnalysisDeleteStatus = "deleted" | "blocked" | "not_found" | "failed";
+
+/** 多视角产物清单（Parent 唯一产品出口，前端只消费它，不接触 fusion run） */
+export interface FusedManifest {
+  schema_version?: string;
+  analysis_source?: {
+    mode: string;
+    source_job_id?: string;
+    source_view?: string;
+    reason?: string;
+  };
+  artifacts?: {
+    playerTrajectory?: { source?: string; url?: string };
+    fusionDiagnostics?: { url?: string };
+    referenceOverlay?: { source?: string };
+  };
+}
+
+/** 球场端位置（MVP 人工确认的产品语义，而非算法枚举） */
+export type CourtEndChoice = "end_a" | "end_b";
 
 export interface AnalysisDeleteResult {
   job_id: string;

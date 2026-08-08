@@ -358,6 +358,10 @@ class JobStore:
                 if payload.enablePoseInference is not None
                 else settings.enable_pose_inference
             ),
+            clipStartMs=payload.clipStartMs,
+            clipEndMs=payload.clipEndMs,
+            analysisKind=payload.analysisKind,
+            orchestrationStatus="waiting_sources" if payload.analysisKind == "multiview" else "none",
         )
         return self.save(job)
 
@@ -425,10 +429,29 @@ class JobStore:
                 return job
         return None
 
+    def is_runnable(self, job: AnalysisJobSummary) -> bool:
+        """统一可执行判定：业务状态（queued）与编排状态（fusion_ready/fallback_ready）正交。
+
+        - 普通 single_view：queued 即可执行；
+        - multiview Parent：须 child 就绪（fusion_ready / fallback_ready），
+          waiting_sources 阶段不可被 Worker claim，杜绝 Parent 占锁等待 child 的死锁。
+        """
+        if job.canonicalStatus != "queued":
+            return False
+        if job.analysisKind == "single_view":
+            return True
+        if job.analysisKind == "multiview":
+            return job.orchestrationStatus in {"fusion_ready", "fallback_ready"}
+        return False
+
     def claim_next(self, worker_id: str) -> AnalysisJobSummary | None:
         # Worker 来"领取"下一个可执行的排队任务：按优先级、排队时间排序，取最高。
         with self._lock:
-            queued = [job for job in self.list() if job.canonicalStatus == "queued" and not job.cancelRequestedAt]
+            queued = [
+                job
+                for job in self.list()
+                if self.is_runnable(job) and not job.cancelRequestedAt
+            ]
             if not queued:
                 return None
             queued.sort(key=lambda job: (-job.priority, job.queuedAt or job.createdAt, job.id))
@@ -438,7 +461,7 @@ class JobStore:
         # 指定 job_id 领取（用于手动触发某个任务）。
         with self._lock:
             job = self.get(job_id)
-            if job is None or job.canonicalStatus != "queued" or job.cancelRequestedAt:
+            if job is None or not self.is_runnable(job) or job.cancelRequestedAt:
                 return None
             return self._claim(job, worker_id)
 
@@ -700,6 +723,7 @@ class AnalysisWorkerRuntime:
         on_completed: Callable[[AnalysisJobSummary, AnalysisPipelineResult], None],
         worker_id: str = "local-worker",
         resource_limiter: ResourceLimiter | None = None,
+        on_terminal: Callable[[AnalysisJobSummary], None] | None = None,
     ) -> None:
         settings = get_settings()
         self.store = store
@@ -712,6 +736,7 @@ class AnalysisWorkerRuntime:
         self._stop_event = threading.Event()  # 通知线程停止
         self._wake_event = threading.Event()  # 通知线程"有新活了，别睡了"
         self._running_lock = threading.Lock()  # 保证同一时刻只跑一个任务
+        self.on_terminal = on_terminal  # 任一 job 进入终态时回调（编排层用）
 
     def start(self) -> None:
         # 启动后台线程（如果还没在跑）。
@@ -768,16 +793,6 @@ class AnalysisWorkerRuntime:
         # 真正执行一个任务：构造取消令牌 → 跑流水线 → 根据结果更新任务状态。
         # 含重试、取消、超时、异常兜底。
         token = CancellationToken(self.store, job.id)
-        payload = AnalysisJobCreate(
-            metadata=job.metadata,
-            videoId=job.videoId,
-            calibrationId=job.calibrationId,
-            frameStride=job.frameStride,
-            sourceFps=job.sourceFps or job.metadata.sourceFps,
-            priority=job.priority,
-            clipStartMs=getattr(job, "clipStartMs", None),
-            clipEndMs=getattr(job, "clipEndMs", None),
-        )
         latest = job
         retry_attempts = 0
 
@@ -788,53 +803,18 @@ class AnalysisWorkerRuntime:
             latest = self.store.mark_stage(latest, stage_from_pipeline(stage_result))
             self._raise_if_stage_timed_out(latest)
 
+        def run_executor() -> AnalysisPipelineResult:
+            # 按 analysisKind 分发执行体（SingleView / MultiView），不在此硬编码分支。
+            from app.services.analysis_executor_dispatch import resolve_executor
+
+            executor = resolve_executor(job.analysisKind, self.store, self.pipeline_factory)
+            return executor.execute(job, token, progress_callback)
+
         try:
             token.raise_if_cancelled()
-
-            def run_pipeline() -> AnalysisPipelineResult:
-                # 调用流水线（兼容旧版本：没有 cancellation_token 参数时退化为不带它调用）。
-                if job.metadata.capture_take_id:
-                    from app.services.storage_service import StorageService
-
-                    StorageService.register_capture_job_from_take(job.id, job.metadata.capture_take_id)
-                elif job.metadata.session_dir:
-                    from app.services.storage_service import StorageService
-
-                    StorageService.register_capture_job(job.id, job.metadata.session_dir)
-                pipeline = self.pipeline_factory(
-                    analysis_options={
-                        "enable_model_inference": payload.enableModelInference,
-                        "enable_pose_inference": payload.enablePoseInference,
-                    }
-                )
-                match_context = build_match_context(
-                    job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
-                )
-                run_kwargs = {
-                    "job_id": job.id,
-                    "video_id": payload.videoId,
-                    "calibration_id": payload.calibrationId,
-                    "frame_stride": payload.frameStride,
-                    "source_fps": payload.sourceFps or payload.metadata.sourceFps,
-                    "court_view_match_threshold": payload.courtViewMatchThreshold,
-                    "match_context": match_context,
-                    "progress_callback": progress_callback,
-                    "cancellation_token": token,
-                    "clip_start_ms": payload.clipStartMs,
-                    "clip_end_ms": payload.clipEndMs,
-                    "capture_take_id": job.metadata.capture_take_id,
-                }
-                signature = inspect.signature(pipeline.run)
-                accepts_kwargs = any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
-                )
-                if not accepts_kwargs:
-                    run_kwargs = {key: value for key, value in run_kwargs.items() if key in signature.parameters}
-                return pipeline.run(**run_kwargs)
-
             while True:
                 try:
-                    result = self.resource_limiter.run_cpu(run_pipeline)
+                    result = self.resource_limiter.run_cpu(run_executor)
                     break
                 except StageTimeoutError:
                     raise
@@ -857,17 +837,18 @@ class AnalysisWorkerRuntime:
                     latest = self.store.mark_stage(latest, retry_stage)
             if token.is_cancel_requested():
                 self._cleanup_tmp(job.id)
-                return self.store.mark_canceled(latest)
+                return self._notify_terminal(self.store.mark_canceled(latest))
             stages = analysis_stages_from_pipeline(result)
             if result.status == "completed":
                 latest = self.store.mark_succeeded(latest, stages)
+                self._notify_terminal(latest)
                 self.on_completed(latest, result)
                 return latest
             self._cleanup_tmp(job.id)
-            return self.store.mark_failed(latest, stages=stages, message=result.message)
+            return self._notify_terminal(self.store.mark_failed(latest, stages=stages, message=result.message))
         except JobCanceledError:
             self._cleanup_tmp(job.id)
-            return self.store.mark_canceled(latest)
+            return self._notify_terminal(self.store.mark_canceled(latest))
         except StageTimeoutError as exc:
             logger.warning("Analysis job %s timed out at stage %s", job.id, latest.stage)
             timed_out_stage = AnalysisStage(
@@ -883,12 +864,14 @@ class AnalysisWorkerRuntime:
             )
             stages = merge_stage_progress(latest.stages, timed_out_stage)
             self._cleanup_tmp(job.id)
-            return self.store.mark_failed(
-                latest,
-                stages=stages,
-                message="分析阶段超时，请缩短视频、提高抽帧间隔或检查模型运行环境。",
-                error_code=ANALYSIS_ERROR_CODES["stage_timeout"],
-                internal_message=str(exc),
+            return self._notify_terminal(
+                self.store.mark_failed(
+                    latest,
+                    stages=stages,
+                    message="分析阶段超时，请缩短视频、提高抽帧间隔或检查模型运行环境。",
+                    error_code=ANALYSIS_ERROR_CODES["stage_timeout"],
+                    internal_message=str(exc),
+                )
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Analysis job %s failed in worker", job.id)
@@ -905,13 +888,24 @@ class AnalysisWorkerRuntime:
             )
             stages = merge_stage_progress(latest.stages, failed_stage)
             self._cleanup_tmp(job.id)
-            return self.store.mark_failed(
-                latest,
-                stages=stages,
-                message="分析任务执行失败，请检查输入视频和模型配置。",
-                error_code=ANALYSIS_ERROR_CODES["internal_error"],
-                internal_message=str(exc),
+            return self._notify_terminal(
+                self.store.mark_failed(
+                    latest,
+                    stages=stages,
+                    message="分析任务执行失败，请检查输入视频和模型配置。",
+                    error_code=ANALYSIS_ERROR_CODES["internal_error"],
+                    internal_message=str(exc),
+                )
             )
+
+    def _notify_terminal(self, job: AnalysisJobSummary) -> AnalysisJobSummary:
+        """任一 job 进入终态时通知编排层（如推进双摄 Parent），失败不影响主流程。"""
+        if self.on_terminal is not None:
+            try:
+                self.on_terminal(job)
+            except Exception:  # noqa: BLE001
+                logger.exception("on_terminal callback failed for job %s", job.id)
+        return job
 
     def _raise_if_stage_timed_out(self, job: AnalysisJobSummary) -> None:
         # 内部：检查当前 active 阶段是否超过配置的最大时长，超时则抛 StageTimeoutError。
