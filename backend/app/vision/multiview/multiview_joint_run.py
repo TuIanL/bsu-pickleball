@@ -19,6 +19,7 @@ from app.vision.multiview.guidance import CrossViewGuidance, GuidanceGenerator
 from app.vision.multiview.global_state import GlobalPlayerRegistry
 from app.vision.multiview.joint_artifact import FusedSample, NormalizedFusedTrajectory, write_fused_v2
 from app.vision.multiview.joint_view_runtime import JointViewRuntime
+from app.vision.multiview.offline_refinement import F0TickViewState
 
 
 class CancellationToken(Protocol):
@@ -34,6 +35,10 @@ class MultiViewJointRunOutput:
     normalized: NormalizedFusedTrajectory
     diagnostics: dict[str, Any]
     counters: dict[str, int] = field(default_factory=dict)
+    # F0 trace(供 offline refinement 挖掘 RecoveryWindow)
+    f0_trace: dict[str, dict[str, dict[int, F0TickViewState]]] = field(default_factory=dict)
+    f0_source_frames: dict[str, dict[int, int | None]] = field(default_factory=dict)
+    f0_global_positions: dict[str, dict[int, tuple[float, float]]] = field(default_factory=dict)
 
 
 class MultiViewJointRun:
@@ -88,6 +93,9 @@ class MultiViewJointRun:
             reference_fps = 30.0
         stride = max(1, int(frame_stride))
         samples: list[FusedSample] = []
+        f0_trace: dict[str, dict[str, dict[int, F0TickViewState]]] = {}
+        f0_source_frames: dict[str, dict[int, int | None]] = {}
+        f0_global_positions: dict[str, dict[int, tuple[float, float]]] = {}
 
         for n in range(reference_frame_count):
             if cancellation_token is not None:
@@ -154,6 +162,30 @@ class MultiViewJointRun:
                 if len(views) >= 2:
                     self.registry.record_dual_consistent(gid)
 
+            # ---- F0 trace(供 offline refinement 挖掘)----
+            for gid in list(self.registry.players):
+                view_trace = f0_trace.setdefault(gid, {})
+                for view_id in self.runtimes:
+                    matched = [u for u in updates if u.global_id == gid and u.view_id == view_id]
+                    if matched:
+                        obs = matched[0].observation
+                        view_trace.setdefault(view_id, {})[n] = F0TickViewState(
+                            observed=True, quality=obs.confidence,
+                            canonical_position=(obs.canonical_x_ft, obs.canonical_y_ft),
+                            origin=obs.detection_origin,
+                        )
+                    else:
+                        view_trace.setdefault(view_id, {})[n] = F0TickViewState(
+                            observed=False, quality=0.0, canonical_position=None, origin="missing",
+                        )
+            for view_id, _rt in self.runtimes.items():
+                bundle_sample = bundle.views.get(view_id)
+                f0_source_frames.setdefault(view_id, {})[n] = (
+                    bundle_sample.source_frame_index if bundle_sample is not None else None
+                )
+            for gid, (x, y, views) in fused.items():
+                f0_global_positions.setdefault(gid, {})[n] = (x, y)
+
             if progress_callback is not None:
                 progress_callback(ref_idx + 1, reference_frame_count)
 
@@ -204,6 +236,9 @@ class MultiViewJointRun:
             ),
             diagnostics=diagnostics,
             counters=dict(self.counter),
+            f0_trace=f0_trace,
+            f0_source_frames=f0_source_frames,
+            f0_global_positions=f0_global_positions,
         )
 
     # ---- 内部 ---------------------------------------------------------------

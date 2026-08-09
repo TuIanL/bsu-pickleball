@@ -10,6 +10,7 @@ Additive P1(design D9):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 V1_SCHEMA = "fused_player_trajectory.v1"
 V2_SCHEMA = "fused_player_trajectory.v2"
@@ -125,3 +126,42 @@ def _normalize_v2_sample(raw: dict) -> FusedSample:
         view_observations=dict(raw.get("view_observations", {})),
         contributing_views=list(raw.get("contributing_views", [])),
     )
+
+
+# ---- offline refinement(F1)产物 --------------------------------------------
+
+
+RefinementStatus = Literal[
+    "skipped_no_windows",
+    "completed",
+    "rejected_by_safety_gate",
+    "failed_fallback",
+]
+
+
+def write_recovered_observations(recovered: list[dict[str, object]]) -> dict[str, object]:
+    """写入 `recovered_view_observations.v1.json`(F1 recovery provenance,不覆盖 F0)。"""
+    return {
+        "schema_version": "recovered_view_observations.v1",
+        "observations": list(recovered),
+    }
+
+
+def build_refinement_manifest(
+    *,
+    status: RefinementStatus,
+    final_source: Literal["refined_f1", "first_pass_f0"],
+    first_pass_artifact: str | None = None,
+    recovered_artifact: str | None = None,
+    refined_artifact: str | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    """manifest 的 `refinement` 字段(4 状态,对应 final_source)。"""
+    return {
+        "status": status,
+        "final_source": final_source,
+        "first_pass_artifact": first_pass_artifact,
+        "recovered_observations": recovered_artifact,
+        "refined_artifact": refined_artifact,
+        "reason": reason,
+    }

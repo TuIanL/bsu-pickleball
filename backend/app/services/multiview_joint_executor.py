@@ -110,6 +110,8 @@ class MultiViewJointExecutor:
             cam2_frames: list[FrameTiming] = []
             secondary_camera_id = reference_view_id
             orientations: dict[str, CourtOrientation] = {}
+            detectors_by_view: dict[str, object] = {}
+            homographies_by_view: dict[str, list[list[float]]] = {}
             reference_homography = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
             for vi in view_inputs:
                 cap = cv2.VideoCapture(videos[vi.camera_slot].path)
@@ -141,6 +143,8 @@ class MultiViewJointExecutor:
                 orientations[vi.camera_slot] = (
                     CourtOrientation(vi.court_orientation) if vi.court_orientation else CourtOrientation.identity
                 )
+                detectors_by_view[vi.camera_slot] = detector
+                homographies_by_view[vi.camera_slot] = homography
                 if vi.camera_slot == reference_view_id:
                     reference_homography = homography
                 else:
@@ -189,12 +193,48 @@ class MultiViewJointExecutor:
                 cancellation_token=token, progress_callback=on_progress,
             )
 
+            # ---- F1 离线精修(只读 F0;写 immutable F0 + recovered/F1 artifact + manifest)----
+            from app.vision.multiview.offline_refinement import run_offline_refinement
+            from app.vision.multiview.joint_artifact import build_refinement_manifest
+
+            f0_artifact = "fused_player_trajectory.f0.v2.json"
+            refinement = build_refinement_manifest(
+                status="skipped_no_windows", final_source="first_pass_f0", first_pass_artifact=f0_artifact,
+            )
+            if out.f0_trace:
+                try:
+                    refinement_outcome = run_offline_refinement(
+                        f0_trace=out.f0_trace,
+                        f0_source_frames=out.f0_source_frames,
+                        f0_global_positions=out.f0_global_positions,
+                        frame_provider=lambda vid, idx: runtimes[vid].get_frame(idx) if vid in runtimes else None,
+                        detector=detectors_by_view.get(secondary_camera_id),
+                        homography=homographies_by_view.get(secondary_camera_id, reference_homography),
+                        inverse_homography=invert_homography(reference_homography),
+                        orientation_by_view=orientations,
+                        frame_width=width, frame_height=height,
+                    )
+                    refinement = build_refinement_manifest(
+                        status=refinement_outcome.status,
+                        final_source=refinement_outcome.final_source,
+                        first_pass_artifact=f0_artifact,
+                        recovered_artifact="recovered_view_observations.v1.json" if refinement_outcome.recovered else None,
+                        refined_artifact="fused_player_trajectory.f1.v2.json"
+                        if refinement_outcome.final_source == "refined_f1" else None,
+                        reason=refinement_outcome.reason,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("offline refinement failed: %s", exc)
+                    refinement = build_refinement_manifest(
+                        status="failed_fallback", final_source="first_pass_f0", first_pass_artifact=f0_artifact,
+                    )
+
             # 6) compose + 落盘
             self.store.update(parent.id, orchestrationStatus="composing")
             composer = MultiViewResultComposer(storage)
             result = composer.compose_joint_result(
                 job=parent, joint_output=out, reference_view_id=reference_view_id,
-                message="双摄协同分析完成(joint_tracking_v2)。",
+                message="双摄协同分析完成(joint_tracking_v2)。", refinement=refinement,
             )
             result = storage.publicize_pipeline_result(result)
             storage.write_json(storage.output_json_path(parent.id), result.model_dump(mode="json"))

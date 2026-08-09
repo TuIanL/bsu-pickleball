@@ -413,6 +413,7 @@ class MultiViewResultComposer:
         joint_output,
         reference_view_id: str,
         message: str,
+        refinement: dict[str, object] | None = None,
     ) -> AnalysisPipelineResult:
         """joint_tracking_v2 的 Parent 结果组装：从 Parent-owned JointRun 获取，GlobalPlayer 标签。
 
@@ -456,6 +457,15 @@ class MultiViewResultComposer:
                 "reason": "joint run",
             },
         )
+        if refinement is not None:
+            # 把 offline refinement 生命周期写进 manifest(refinement.status / final_source / artifacts)
+            manifest_path = self.storage.fusion_manifest_json_path(job.id)
+            try:
+                manifest = self.storage.read_json(manifest_path) or {}
+                manifest["refinement"] = refinement
+                self.storage.write_json_atomic(manifest_path, manifest)
+            except Exception:  # noqa: BLE001
+                pass
         view_a = job.viewRuns.get("cam_1") if job.viewRuns else None
         view_b = job.viewRuns.get("cam_2") if job.viewRuns else None
         stages = _build_aggregate_stages(
