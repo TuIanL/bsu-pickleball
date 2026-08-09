@@ -41,6 +41,8 @@ AnalysisOrchestrationStatus = Literal[
     "fusing",
     "composing",
     "completed",
+    "joint_ready",  # joint_tracking_v2:preflight 通过,可直接 claim 执行
+    "joint_tracking",  # joint_tracking_v2:正在双摄同步 tracking
 ]
 # 流水线阶段 id（稳定集合，外加 str 兼容未来扩展）
 AnalysisStageId = (
@@ -152,6 +154,8 @@ class MultiViewCreateRequest(BaseModel):
 
     referenceViewId: str
     views: list[MultiViewViewPayload] = Field(min_length=2, max_length=8)  # P0.5 恒 2 路，数组为多机位扩展留位
+    # 执行模式:late_fusion_v1(2 child → FusionRun)| joint_tracking_v2(直接 runnable → ViewRun A/B)
+    executionMode: Literal["late_fusion_v1", "joint_tracking_v2"] = "late_fusion_v1"
 
 
 class AnalysisJobCreate(BaseModel):
@@ -247,6 +251,12 @@ class AnalysisJobSummary(BaseModel):
     analysisScope: AnalysisScope | None = None
     orchestrationStatus: AnalysisOrchestrationStatus = "none"
     fusionRunId: str | None = None
+    # 执行模式:late_fusion_v1(P0 现状,2 child → FusionRun)| joint_tracking_v2(直接 runnable → ViewRun A/B)
+    executionMode: Literal["late_fusion_v1", "joint_tracking_v2"] = "late_fusion_v1"
+    # joint_tracking_v2 的持久化输入(无 child,重启后据此重建 JointRun);元素为 JointViewInput 序列化 dict
+    jointViewInputs: list[dict[str, object]] = Field(default_factory=list)
+    # joint_tracking_v2 的运行标识(不复用 fusionRunId;late 仅用 fusionRunId)
+    jointRunId: str | None = None
     # Parent 对 owned child 的所有权映射（数组）
     sourceJobs: list[SourceJobRef] = Field(default_factory=list)
     # 双摄任务参考机位（Composer/Executor 据此决定 reference view）

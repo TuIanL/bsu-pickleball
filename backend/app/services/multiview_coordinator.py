@@ -231,6 +231,39 @@ class MultiViewAnalysisCoordinator:
         )
         parent = self.store.create_job(parent_payload)
 
+        # joint_tracking_v2:不创建 AnalysisJob children,直接持久化 jointViewInputs → joint_ready
+        if mv.executionMode == "joint_tracking_v2":
+            joint_inputs = [
+                {
+                    "cameraSlot": view.viewId,
+                    "captureTrackId": "",
+                    "cameraId": view.viewId,
+                    "videoId": view.videoId,
+                    "calibrationId": view.calibrationId,
+                    "courtOrientation": view.courtOrientation,
+                }
+                for view in mv.views
+            ]
+            joint_view_runs = {
+                view.viewId: ViewRunSummary(status="queued", stage="queue", progress=10) for view in mv.views
+            }
+            joint_updates: dict[str, object] = {
+                "executionMode": "joint_tracking_v2",
+                "jointViewInputs": joint_inputs,
+                "sourceJobs": [],
+                "referenceViewId": mv.referenceViewId,
+                "analysisScope": None,
+                "orchestrationStatus": "joint_ready",
+                "viewRuns": joint_view_runs,
+            }
+            ref_view = next((v for v in mv.views if v.viewId == mv.referenceViewId), None)
+            if ref_view is not None:
+                joint_updates["videoId"] = ref_view.videoId
+                joint_updates["calibrationId"] = ref_view.calibrationId
+            parent = self.store.update(parent.id, **joint_updates)
+            logger.info("创建 joint Parent %s（executionMode=joint_tracking_v2, 无 child）", parent.id)
+            return parent
+
         refs: list[SourceJobRef] = []
         created_children: dict[str, AnalysisJobSummary] = {}
         for view in mv.views:

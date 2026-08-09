@@ -304,6 +304,8 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         "clipEndMs": payload.clipEndMs,
         "captureSegmentId": payload.captureSegmentId,
         "segmentVersion": payload.segmentVersion,
+        # 执行模式进入输入签名:同一 take 的 late_fusion_v1 / joint_tracking_v2 视为不同任务(A/B 不被去重)
+        "executionMode": payload.multiview.executionMode if payload.multiview else None,
     }
     return _stable_hash(input_payload), _stable_hash(config_payload)
 
@@ -430,17 +432,19 @@ class JobStore:
         return None
 
     def is_runnable(self, job: AnalysisJobSummary) -> bool:
-        """统一可执行判定：业务状态（queued）与编排状态（fusion_ready/fallback_ready）正交。
+        """统一可执行判定：业务状态（queued）与编排状态正交。
 
         - 普通 single_view：queued 即可执行；
-        - multiview Parent：须 child 就绪（fusion_ready / fallback_ready），
-          waiting_sources 阶段不可被 Worker claim，杜绝 Parent 占锁等待 child 的死锁。
+        - multiview / late_fusion_v1：须 child 就绪（fusion_ready / fallback_ready）；
+        - multiview / joint_tracking_v2：preflight 后即 joint_ready 可执行（无 child）。
         """
         if job.canonicalStatus != "queued":
             return False
         if job.analysisKind == "single_view":
             return True
         if job.analysisKind == "multiview":
+            if job.executionMode == "joint_tracking_v2":
+                return job.orchestrationStatus == "joint_ready"
             return job.orchestrationStatus in {"fusion_ready", "fallback_ready"}
         return False
 
@@ -804,10 +808,13 @@ class AnalysisWorkerRuntime:
             self._raise_if_stage_timed_out(latest)
 
         def run_executor() -> AnalysisPipelineResult:
-            # 按 analysisKind 分发执行体（SingleView / MultiView），不在此硬编码分支。
+            # 按 analysisKind + executionMode 分发执行体（SingleView / MultiView late|joint）。
             from app.services.analysis_executor_dispatch import resolve_executor
 
-            executor = resolve_executor(job.analysisKind, self.store, self.pipeline_factory)
+            executor = resolve_executor(
+                job.analysisKind, self.store, self.pipeline_factory,
+                execution_mode=getattr(job, "executionMode", None),
+            )
             return executor.execute(job, token, progress_callback)
 
         try:

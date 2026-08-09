@@ -22,8 +22,8 @@ class PersonDetector:
     # COCO 数据集中“人(person)”的类 ID 为 0，只保留该类的检测框。
     PERSON_CLASS_ID = 0
 
-    # 是否支持 ROI 推理；Change 1 为 False，P1 guided-player-redetection 实现后置 True。
-    supports_region_detection = False
+    # 是否支持 ROI 推理;Change 2 已实现(裁剪 ROI 推理 + 坐标回源帧)。
+    supports_region_detection = True
 
     def __init__(
         self,
@@ -74,8 +74,40 @@ class PersonDetector:
         return self.detect(frame)
 
     def detect_regions(self, frame, regions, confidence_override=None) -> list[Detection]:
-        # 可选 ROI 检测契约（P1 guided-player-redetection 使用）。本实现未支持 → 显式报错。
-        raise RegionDetectionUnsupported("this detector does not implement ROI inference (detect_regions)")
+        """对指定图像 ROI 区域做检测,返回源帧坐标系检测框(guided re-detection)。
+
+        每个 ROI 独立裁剪推理(lower-threshold),检测框坐标转回源帧坐标系。
+        """
+        model = self._load_model()
+        conf = float(confidence_override if confidence_override is not None else max(self.conf_threshold * 0.7, 0.05))
+        detections: list[Detection] = []
+        for region in regions:
+            x1, y1, x2, y2 = [int(v) for v in region]
+            crop = frame[y1:y2, x1:x2] if hasattr(frame, "__getitem__") else frame
+            try:
+                results = model(crop, verbose=False, conf=conf, device=self.device)
+            except TypeError:
+                results = model(crop, verbose=False, conf=conf)
+            for result in results:
+                boxes = getattr(result, "boxes", None)
+                if boxes is None:
+                    continue
+                for box in boxes:
+                    class_id = int(self._first_value(getattr(box, "cls", 0)))
+                    if class_id != self.PERSON_CLASS_ID:
+                        continue
+                    confidence = float(self._first_value(getattr(box, "conf", 0.0)))
+                    if confidence < conf:
+                        continue
+                    bx1, by1, bx2, by2 = [float(value) for value in self._xyxy(box)]
+                    detections.append(
+                        Detection(
+                            bbox=[bx1 + x1, by1 + y1, bx2 + x1, by2 + y1],  # 转回源帧坐标
+                            confidence=confidence,
+                            class_name="person",
+                        )
+                    )
+        return detections
 
     def _load_model(self) -> Any:
         # 懒加载 YOLO 模型：首次调用时导入 ultralytics 并加载权重，之后复用。

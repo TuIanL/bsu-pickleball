@@ -429,10 +429,15 @@ def resolve_executor(
     analysis_kind: str,
     store,
     pipeline_factory: Callable[..., object],
+    execution_mode: str | None = None,
 ) -> AnalysisJobExecutor:
-    """按 analysisKind 选择执行体（第一版只含 SingleView / MultiView）。"""
+    """按 analysisKind 选择执行体(single_view / multiview);multiview 再按 executionMode 分发。"""
     if analysis_kind == "single_view":
         return SingleViewAnalysisExecutor(store, pipeline_factory)
     if analysis_kind == "multiview":
+        if execution_mode == "joint_tracking_v2":
+            from app.services.multiview_joint_executor import MultiViewJointExecutor
+
+            return MultiViewJointExecutor(store, pipeline_factory)
         return MultiViewAnalysisExecutor(store, pipeline_factory)
     raise ValueError(f"unknown analysisKind: {analysis_kind!r}")

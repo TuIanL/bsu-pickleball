@@ -406,6 +406,79 @@ class MultiViewResultComposer:
             observed_player_count=len({t.track_id for t in tracks if t.track_id}),
         )
 
+    def compose_joint_result(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        joint_output,
+        reference_view_id: str,
+        message: str,
+    ) -> AnalysisPipelineResult:
+        """joint_tracking_v2 的 Parent 结果组装：从 Parent-owned JointRun 获取，GlobalPlayer 标签。
+
+        - 复用既有位置类指标数学（fused_to_projected_tracks + recompute_metrics）；
+        - track_id = `GlobalPlayer_<id>`，overlay 标签来自全局身份而非 child 局部 Player_<id>；
+        - 不依赖 reference child 继承路径。
+        """
+        match_context = build_match_context(
+            job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
+        )
+        synthetic: dict[str, object] = {
+            "schema_version": joint_output.trajectory.get("schema_version", "fused_player_trajectory.v2"),
+            "samples": [
+                {
+                    "global_player_id": s.global_player_id,
+                    "take_timestamp_ms": s.take_timestamp_ms,
+                    "reference_frame_index": s.reference_frame_index,
+                    "x_ft": s.x_ft,
+                    "y_ft": s.y_ft,
+                    "fusion_status": s.fusion_status,
+                    "metric_eligible": s.metric_eligible,
+                    "observation_origin": s.observation_origin,
+                }
+                for s in joint_output.normalized.samples
+            ],
+        }
+        metrics = self.recompute_metrics(synthetic, match_context)
+        tracks = self.fused_to_projected_tracks(synthetic)  # track_id = GlobalPlayer_<id>
+        artifacts = AnalysisArtifacts()
+        video_id = job.videoId
+        if video_id and not artifacts.source_video_url:
+            artifacts.source_video_url = f"/api/videos/{video_id}/stream"
+        self.publish_fused_artifacts(
+            job.id,
+            joint_output.trajectory,
+            joint_output.diagnostics,
+            {
+                "mode": "joint_tracking_v2",
+                "source_job_id": job.id,
+                "source_view": reference_view_id,
+                "reason": "joint run",
+            },
+        )
+        view_a = job.viewRuns.get("cam_1") if job.viewRuns else None
+        view_b = job.viewRuns.get("cam_2") if job.viewRuns else None
+        stages = _build_aggregate_stages(
+            view_a_status=view_a.status if view_a else "done",
+            view_b_status=view_b.status if view_b else "done",
+            fusion_performed=True,
+            composed=True,
+        )
+        return AnalysisPipelineResult(
+            job_id=job.id,
+            video_id=video_id,
+            calibration_id=job.calibrationId,
+            status="completed",
+            generated_at=datetime.now(UTC),
+            stages=stages,
+            tracks=tracks,
+            metrics=metrics,
+            artifacts=artifacts,
+            message=message,
+            match_context=match_context,
+            observed_player_count=len({t.track_id for t in tracks if t.track_id}),
+        )
+
 
 def build_fallback_fused_artifact(
     *,

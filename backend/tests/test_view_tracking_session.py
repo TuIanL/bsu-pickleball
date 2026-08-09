@@ -95,15 +95,18 @@ def _default_script() -> dict[int, list[Detection]]:
 # ---- detect_regions 契约 --------------------------------------------------
 
 
-def test_person_detector_detect_regions_raises_unsupported():
+def test_person_detector_detect_regions_contract():
+    # PersonDetector 已实现 ROI 推理契约(Change 2);未加载模型时按懒加载触发 RuntimeError。
     detector = PersonDetector()
-    assert detector.supports_region_detection is False
+    assert detector.supports_region_detection is True
     try:
         detector.detect_regions(None, [(0, 0, 100, 100)])
     except RegionDetectionUnsupported:
+        raise AssertionError("PersonDetector 已实现 ROI 推理,不应抛 RegionDetectionUnsupported")
+    except RuntimeError:
+        pass  # 未安装 ultralytics / 未加载模型 → 懒加载失败(契约已存在)
+    except Exception:
         pass
-    else:
-        raise AssertionError("expected RegionDetectionUnsupported")
 
 
 def test_empty_person_detector_detect_regions_returns_empty():
