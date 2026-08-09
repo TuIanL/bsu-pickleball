@@ -161,6 +161,20 @@ class MultiViewJointRun:
                 self.registry.absorb_measurement(gid, x, y, timestamp_s)
                 if len(views) >= 2:
                     self.registry.record_dual_consistent(gid)
+                # 逐 tick 轨迹样本(每个 canonical tick 一个真实观测样本)
+                samples.append(
+                    FusedSample(
+                        global_player_id=gid,
+                        take_timestamp_ms=take_ms,
+                        reference_frame_index=ref_idx,
+                        x_ft=x,
+                        y_ft=y,
+                        fusion_status="dual_observed" if len(views) >= 2 else "single_view_fallback",
+                        metric_eligible=True,  # 真实观测(非 predicted),可进指标
+                        observation_origin="base",
+                        contributing_views=list(views),
+                    )
+                )
 
             # ---- F0 trace(供 offline refinement 挖掘)----
             for gid in list(self.registry.players):
@@ -189,26 +203,8 @@ class MultiViewJointRun:
             if progress_callback is not None:
                 progress_callback(ref_idx + 1, reference_frame_count)
 
-        # ---- 结束:生成 v2 样本 ----
-        now_ms = reference_frame_count / reference_fps * 1000.0
-        for gid, state in self.registry.players.items():
-            samples.append(
-                FusedSample(
-                    global_player_id=gid,
-                    take_timestamp_ms=now_ms,
-                    reference_frame_index=reference_frame_count - 1,
-                    x_ft=state.x_ft,
-                    y_ft=state.y_ft,
-                    fusion_status="dual_observed" if state.cross_view_anchored else "single_view_fallback",
-                    metric_eligible=state.lifecycle == "confirmed",
-                    observation_origin="base",
-                    view_observations={
-                        view_id: {"visibility": b.visibility, "origin": "base"}
-                        for view_id, b in state.view_bindings.items()
-                    },
-                    contributing_views=[v for v in state.view_bindings if state.view_bindings[v].visibility == "observed"],
-                )
-            )
+        # ---- 结束:逐 tick 样本已累积,排序后写 v2 ----
+        samples.sort(key=lambda s: (s.take_timestamp_ms, s.global_player_id))
         trajectory = write_fused_v2(
             run_id=self.run_id,
             capture_take_id=self.capture_take_id,

@@ -312,6 +312,13 @@ class ViewTrackingSession:
         self.roi_filtered_detection_count += roi_filtered
         if self.roi_artifact.status != "available":
             self.full_frame_fallback_count += 1
+        # 2b) guidance → guided re-detection（跨视角 feedback,pre-gate 在 tracker 之前,invariant 2/9）
+        if guidance:
+            guided = self._run_guided_detection(frame, guidance)
+            if guided:
+                from app.vision.multiview.guided_detection import merge_base_and_guided
+
+                detections = merge_base_and_guided(detections, guided)
         # 3) 跟踪 + 重复抑制
         tracks = self.tracker.update(detections)
         tracks = self.duplicate_suppressor.filter(tracks)
@@ -587,6 +594,36 @@ class ViewTrackingSession:
         if hasattr(self.detector, "detect_frame"):
             return self.detector.detect_frame(frame, frame_index)
         return self.detector.detect(frame)
+
+    def _run_guided_detection(self, frame: object, guidance) -> list[Detection]:
+        """按跨视角 guidance 对目标 ROI 做 guided re-detection,pre-gate 后返回 accepted。
+
+        只在本 session 的检测链内使用(在 tracker.update 之前);pre-gate 拒绝的 candidate 不触碰 tracker。
+        """
+        from app.vision.multiview.guided_detection import guided_candidate_pre_gate
+
+        accepted: list[Detection] = []
+        for g in guidance:
+            roi = getattr(g, "roi", None)
+            predicted = getattr(g, "predicted_canonical_position", None)
+            if roi is None or predicted is None:
+                continue
+            try:
+                candidates = self.detector.detect_regions(frame, [roi])
+            except Exception:
+                continue
+            for d in candidates:
+                gated = guided_candidate_pre_gate(
+                    d,
+                    homography=self.homography,
+                    predicted_canonical=predicted,
+                    max_residual_ft=3.0,
+                    frame_width=self.config.frame_width,
+                    frame_height=self.config.frame_height,
+                )
+                if gated.accepted:
+                    accepted.append(d)
+        return accepted
 
     @staticmethod
     def _tracks_to_frame_detections(
