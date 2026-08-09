@@ -179,3 +179,31 @@ def test_acceptance_gate_rejects_on_coverage_decrease():
     f0 = RefinementMetrics(eligible_coverage=0.9, jump_count=1)
     f1 = RefinementMetrics(eligible_coverage=0.7, jump_count=1, recovered_count=1)
     assert not gate.decide(f0, f1).accepted
+
+
+# ---- re-fusion -------------------------------------------------------------
+
+
+def test_refuse_f1_merges_recovered_and_original_strong_priority():
+    from app.vision.multiview.offline_refinement import RecoveredViewObservation, refuse_f1
+    from app.vision.multiview.joint_artifact import FusedSample
+
+    f0 = [FusedSample(
+        global_player_id="g1", take_timestamp_ms=100.0, reference_frame_index=3,
+        x_ft=5.0, y_ft=8.0, fusion_status="dual_observed", metric_eligible=True,
+    )]
+    recovered = [RecoveredViewObservation(
+        view_id="cam_1", take_timestamp_ms=200.0, source_frame_index=6,
+        canonical_x_ft=6.0, canonical_y_ft=9.0, bbox=[1, 2, 3, 4], confidence=0.8,
+        global_player_id="g1",
+    )]
+    f1 = refuse_f1(f0, recovered)
+    assert len(f1) == 2
+    assert f1[1].observation_origin == "offline_refinement"
+    # original 强观测优先:同一 global 同 tick 的 recovered 不追加
+    dup = [RecoveredViewObservation(
+        view_id="cam_1", take_timestamp_ms=100.0, source_frame_index=3,
+        canonical_x_ft=9.0, canonical_y_ft=9.0, bbox=[1, 2, 3, 4], confidence=0.8,
+        global_player_id="g1",
+    )]
+    assert len(refuse_f1(f0, dup)) == 1

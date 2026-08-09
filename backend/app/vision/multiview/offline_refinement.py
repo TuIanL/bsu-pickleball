@@ -71,6 +71,7 @@ class RecoveredViewObservation:
     bbox: list[float]
     confidence: float
     detection_origin: OfflineOrigin = "offline_refinement"
+    global_player_id: str = ""
 
 
 # ---- F0 trace 数据结构 ------------------------------------------------------
@@ -280,6 +281,7 @@ class OfflineRecovery:
             bbox=list(best.detection.bbox),
             confidence=best.detection.confidence,
             detection_origin="offline_refinement",
+            global_player_id=plan.global_player_id,
         )
 
 
@@ -431,3 +433,44 @@ def _coverage_with(
 ) -> float:
     base = _coverage(f0_trace)
     return min(1.0, base + 0.1 * len(recovered) / max(1, sum(len(v) for v in f0_trace.values() if isinstance(v, dict))))
+
+
+def refuse_f1(
+    f0_samples: list[Any],
+    recovered: list[RecoveredViewObservation],
+    *,
+    original_strong_priority: bool = True,
+) -> list[Any]:
+    """Re-fusion:F1 samples = F0 samples + recovered observations(recovered 是额外真实证据)。
+
+    `original_strong_priority`:若某 global 在某 tick 已有 F0 原始强观测,recovered 不覆盖
+    (original 强观测优先,invariant);recovered 仅补充 F0 缺失/弱观测的 tick。
+    最终 `metric_eligible` 由调用方按统一 fusion policy 判定。
+    """
+    from app.vision.multiview.joint_artifact import FusedSample
+
+    samples = list(f0_samples)
+    for r in recovered:
+        # original 强观测优先:同一 global 同一 reference_frame 已有 sample 则不重复
+        if original_strong_priority:
+            dup = any(
+                s.global_player_id == r.global_player_id
+                and abs(s.take_timestamp_ms - r.take_timestamp_ms) < 1.0
+                for s in samples
+            )
+            if dup:
+                continue
+        samples.append(
+            FusedSample(
+                global_player_id=r.global_player_id,
+                take_timestamp_ms=r.take_timestamp_ms,
+                reference_frame_index=r.source_frame_index,
+                x_ft=r.canonical_x_ft,
+                y_ft=r.canonical_y_ft,
+                fusion_status="offline_refinement",
+                metric_eligible=True,
+                observation_origin="offline_refinement",
+                contributing_views=[r.view_id],
+            )
+        )
+    return samples

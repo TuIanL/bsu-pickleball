@@ -17,23 +17,23 @@
 ## 3. Safety / No Feedback
 
 - [x] 3.1 **F1 MUST NOT 修改 F0 状态**:永不调用 F0 `ViewTrackingSession` / `MultiObjectTracker` / `PlayerLockManager` / `PlayerIdentityManager` / `GlobalPlayerState` F0 history 的 update
-- [ ] 3.2 一轮上限:每个 RecoveryWindow 只跑一遍 F1;所有 recovered evidence 完成后统一冻结,再进入 Refusion(不做"recover tick100 → 更新轨迹 → 帮 recover tick101")
+- [x] 3.2 一轮上限:每个 RecoveryWindow 只跑一遍 F1;所有 recovered evidence 完成后统一冻结,再进入 Refusion(不做"recover tick100 → 更新轨迹 → 帮 recover tick101")
 - [x] 3.3 拒绝的 recovered 直接丢弃,零副作用(invariant 9 + 3)
 - [x] 3.4 单测:F1 不修改 F0 状态(git 式断言 tracker/lock/identity 状态不变)、一轮上限、拒绝零副作用
 
 ## 4. Refusion
 
-- [ ] 4.1 实现 Refusion:original view observations + recovered observations → effective per-view observations(**original 强观测优先**)
-- [ ] 4.2 复用既有 fusion math:`ViewIntrinsicQuality / PairConsistency / Conflict Gate / PlayerPositionFusion`,不重写
-- [ ] 4.3 重新执行 final temporal filtering(从 F0 起点统一重跑),产出 immutable `fused_player_trajectory.f1.v2.json`
-- [ ] 4.4 单测:re-fusion 后 fused sample、original 强观测优先、F1 是统一生成轨迹(非局部打补丁)
+- [x] 4.1 实现 Refusion:original view observations + recovered observations → effective per-view observations(**original 强观测优先**)
+- [x] 4.2 复用既有 fusion math:`ViewIntrinsicQuality / PairConsistency / Conflict Gate / PlayerPositionFusion`,不重写
+- [x] 4.3 重新执行 final temporal filtering(从 F0 起点统一重跑),产出 immutable `fused_player_trajectory.f1.v2.json`
+- [x] 4.4 单测:re-fusion 后 fused sample、original 强观测优先、F1 是统一生成轨迹(非局部打补丁)
 
 ## 5. Acceptance + Manifest
 
 - [x] 5.1 实现 `RefinementAcceptanceGate`:F0 vs F1 内部指标比较(eligible coverage / jump count / speed violations / conflict count / recovered residual P50/P90 / donor inconsistency / original-strong preservation)
 - [x] 5.2 F1 采用规则:`accepted_recovered_count > 0` + `eligible_coverage(F1) >= eligible_coverage(F0)` + 新增 jump/conflict ≤ allowed_delta + 无 original 强观测被降级/替换 + residual 统计在门内;否则 `rejected_by_safety_gate` → F0
 - [x] 5.3 manifest 4 状态:`skipped_no_windows / completed / rejected_by_safety_gate / failed_fallback`,对应 `final_source = first_pass_f0 | refined_f1`
-- [ ] 5.4 immutable artifacts:`fused_player_trajectory.f0.v2.json`(永不覆盖)+ `recovered_view_observations.v1.json` + `fused_player_trajectory.f1.v2.json` + `refinement_diagnostics.json`;Parent canonicalStatus 在 refinement 完成前保持 running
+- [x] 5.4 immutable artifacts:`fused_player_trajectory.f0.v2.json`(永不覆盖)+ `recovered_view_observations.v1.json` + `fused_player_trajectory.f1.v2.json` + `refinement_diagnostics.json`;Parent canonicalStatus 在 refinement 完成前保持 running
 - [x] 5.5 单测:gate 通过→refined_f1、gate 拒绝→rejected_by_safety_gate、无窗口→skipped_no_windows、异常→failed_fallback、F0 不可变
 
 ## 6. Metrics / Regression

@@ -33,9 +33,11 @@ from app.vision.multiview.guidance import (
     GuidanceGenerator,
     invert_homography,
 )
+from app.vision.multiview.fusion_run import default_run_output_dir
 from app.vision.multiview.joint_types import JointViewInput
 from app.vision.multiview.joint_view_runtime import JointViewRuntime
 from app.vision.multiview.multiview_joint_run import MultiViewJointRun
+from app.vision.multiview.offline_refinement import RecoveredViewObservation
 from app.vision.multiview.sync import load_sync_calibration
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.view_tracking_session import (
@@ -44,6 +46,35 @@ from app.vision.player_tracking_engine.view_tracking_session import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _recovered_to_dict(r: RecoveredViewObservation) -> dict[str, object]:
+    """RecoveredViewObservation → recovered_view_observations.v1 元素。"""
+    return {
+        "view_id": r.view_id,
+        "take_timestamp_ms": r.take_timestamp_ms,
+        "source_frame_index": r.source_frame_index,
+        "canonical_x_ft": r.canonical_x_ft,
+        "canonical_y_ft": r.canonical_y_ft,
+        "bbox": r.bbox,
+        "confidence": r.confidence,
+        "detection_origin": r.detection_origin,
+        "global_player_id": r.global_player_id,
+    }
+
+
+def _with_samples(out, f1_trajectory: dict[str, object]):
+    """构造一个 compose 消费的 F1 output(用 F1 trajectory + normalized samples)。"""
+    from types import SimpleNamespace
+
+    from app.vision.multiview.joint_artifact import load_fused_trajectory
+
+    normalized = load_fused_trajectory(f1_trajectory)
+    return SimpleNamespace(
+        trajectory=f1_trajectory,
+        normalized=normalized,
+        diagnostics=out.diagnostics,
+    )
 
 
 class MultiViewJointExecutor:
@@ -194,13 +225,19 @@ class MultiViewJointExecutor:
             )
 
             # ---- F1 离线精修(只读 F0;写 immutable F0 + recovered/F1 artifact + manifest)----
-            from app.vision.multiview.offline_refinement import run_offline_refinement
-            from app.vision.multiview.joint_artifact import build_refinement_manifest
+            from app.vision.multiview.offline_refinement import run_offline_refinement, refuse_f1
+            from app.vision.multiview.joint_artifact import (
+                build_refinement_manifest,
+                write_fused_v2,
+                write_recovered_observations,
+            )
 
+            run_dir = default_run_output_dir(analysis_dir, run_id) if analysis_dir is not None else None
             f0_artifact = "fused_player_trajectory.f0.v2.json"
             refinement = build_refinement_manifest(
                 status="skipped_no_windows", final_source="first_pass_f0", first_pass_artifact=f0_artifact,
             )
+            compose_output = out  # 默认用 F0
             if out.f0_trace:
                 try:
                     refinement_outcome = run_offline_refinement(
@@ -223,6 +260,24 @@ class MultiViewJointExecutor:
                         if refinement_outcome.final_source == "refined_f1" else None,
                         reason=refinement_outcome.reason,
                     )
+                    # 物理落盘 immutable artifacts(design D6):f0 / recovered / f1
+                    if run_dir is not None:
+                        run_dir.mkdir(parents=True, exist_ok=True)
+                        storage.write_json_atomic(run_dir / f0_artifact, out.trajectory)
+                        if refinement_outcome.recovered:
+                            storage.write_json_atomic(
+                                run_dir / "recovered_view_observations.v1.json",
+                                write_recovered_observations([_recovered_to_dict(r) for r in refinement_outcome.recovered]),
+                            )
+                        if refinement_outcome.final_source == "refined_f1":
+                            f1_samples = refuse_f1(out.normalized.samples, refinement_outcome.recovered)
+                            f1_trajectory = write_fused_v2(
+                                run_id=run_id, capture_take_id=capture_take_id,
+                                reference_view_id=reference_view_id, samples=f1_samples,
+                            )
+                            storage.write_json_atomic(run_dir / "fused_player_trajectory.f1.v2.json", f1_trajectory)
+                            compose_output = _with_samples(out, f1_trajectory)
+                        storage.write_json_atomic(run_dir / "refinement_diagnostics.json", refinement)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("offline refinement failed: %s", exc)
                     refinement = build_refinement_manifest(
@@ -233,7 +288,7 @@ class MultiViewJointExecutor:
             self.store.update(parent.id, orchestrationStatus="composing")
             composer = MultiViewResultComposer(storage)
             result = composer.compose_joint_result(
-                job=parent, joint_output=out, reference_view_id=reference_view_id,
+                job=parent, joint_output=compose_output, reference_view_id=reference_view_id,
                 message="双摄协同分析完成(joint_tracking_v2)。", refinement=refinement,
             )
             result = storage.publicize_pipeline_result(result)
