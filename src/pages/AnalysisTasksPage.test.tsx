@@ -51,48 +51,86 @@ function renderCard(props: {
   analysisJobs?: AnalysisJobSummary[];
   deletingAnalysis?: boolean;
   onDeleteAnalysis?: (sessionId: string) => void;
+  onDeleteJob?: (job: AnalysisJobSummary) => void;
+  onNavigate?: (path: string) => void;
 }) {
   const onDeleteAnalysis = props.onDeleteAnalysis ?? vi.fn();
+  const onDeleteJob = props.onDeleteJob ?? vi.fn();
+  const onNavigate = props.onNavigate ?? vi.fn();
   const utils = render(
     <SyncRecordingTaskCard
       session={makeSession()}
       analysisJobs={props.analysisJobs}
       deletingAnalysis={props.deletingAnalysis ?? false}
       onDeleteAnalysis={onDeleteAnalysis}
+      onDeleteJob={onDeleteJob}
       onDelete={vi.fn()}
-      onNavigate={vi.fn()}
+      onNavigate={onNavigate}
       onPlay={vi.fn()}
       onMerge={vi.fn()}
     />,
   );
-  return { onDeleteAnalysis, ...utils };
+  return { onDeleteAnalysis, onDeleteJob, onNavigate, ...utils };
 }
 
-describe("SyncRecordingTaskCard 删除分析任务", () => {
+describe("SyncRecordingTaskCard 双摄分析任务", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
   });
 
-  it("有分析任务时显示「删除分析任务」按钮", () => {
+  it("有分析任务时显示录制级清除入口", () => {
     renderCard({ analysisJobs: [makeJob("job-parent")] });
-    expect(screen.getByRole("button", { name: /删除分析任务/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /清除本录制全部分析/ })).toBeTruthy();
   });
 
-  it("无分析任务时不显示「删除分析任务」按钮", () => {
+  it("无分析任务时不显示录制级清除入口", () => {
     renderCard({ analysisJobs: [] });
-    expect(screen.queryByRole("button", { name: /删除分析任务/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /清除本录制全部分析/ })).toBeNull();
   });
 
-  it("点击按钮回调 onDeleteAnalysis 并保留 session id", () => {
+  it("点击清除入口回调 onDeleteAnalysis 并保留 session id", () => {
     const { onDeleteAnalysis } = renderCard({ analysisJobs: [makeJob("job-parent")] });
-    fireEvent.click(screen.getByRole("button", { name: /删除分析任务/ }));
+    fireEvent.click(screen.getByRole("button", { name: /清除本录制全部分析/ }));
     expect(onDeleteAnalysis).toHaveBeenCalledWith("sync_1");
   });
 
   it("删除中禁用按钮", () => {
     renderCard({ analysisJobs: [makeJob("job-parent")], deletingAnalysis: true });
-    const button = screen.getByRole("button", { name: /删除分析中/ });
+    const button = screen.getByRole("button", { name: /清除分析中/ });
     expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("同一 Parent 存在历史任务时默认显示最新任务并可展开历史", () => {
+    const current = makeJob("job-new", "multiview");
+    const history = makeJob("job-old", "multiview");
+    current.updatedAt = "2026-08-10T12:00:00.000Z";
+    history.updatedAt = "2026-08-10T11:00:00.000Z";
+
+    renderCard({ analysisJobs: [history, current] });
+
+    expect(screen.getByText("job-new")).toBeTruthy();
+    expect(screen.queryByText("job-old")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /历史 1 个/ }));
+    expect(screen.getByText("job-old")).toBeTruthy();
+  });
+
+  it("任务级删除绑定当前任务的 job id", () => {
+    const job = makeJob("job-specific");
+    const { onDeleteJob } = renderCard({ analysisJobs: [job] });
+
+    fireEvent.click(screen.getByRole("button", { name: "删除此任务" }));
+
+    expect(onDeleteJob).toHaveBeenCalledWith(job);
+  });
+
+  it("双摄任务入口携带来源和 session 上下文", () => {
+    const job = makeJob("job-context");
+    const { onNavigate } = renderCard({ analysisJobs: [job] });
+
+    fireEvent.click(screen.getByRole("button", { name: "查看双摄分析报告" }));
+    expect(onNavigate).toHaveBeenCalledWith(
+      "/analysis/job-context/vision?taskSource=sync_recording&taskSession=sync_1",
+    );
   });
 });

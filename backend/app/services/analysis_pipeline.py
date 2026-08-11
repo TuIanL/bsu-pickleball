@@ -44,6 +44,8 @@ from app.schemas.tracking import (
     TrackingResult,
 )
 from app.services.calibration_service import CalibrationService
+from app.services.analysis_window import AnalysisWindowError, resolve_analysis_window
+from app.services.frame_timing_provider import FrameTimingProvider
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
 from app.utils.fps import frames_for_seconds, resolve_effective_fps
@@ -127,6 +129,21 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").lower() in {"1", "true", "yes"}
 
 
+def _timing_provider_for_video(path: Path) -> FrameTimingProvider:
+    """Probe media once for clip/debug exports and retain explicit fallback metadata."""
+    import cv2  # type: ignore
+
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        return FrameTimingProvider.nominal(frame_count=0, fps=1.0, media_path=path)
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    finally:
+        capture.release()
+    return FrameTimingProvider.from_media(path, frame_count=frame_count, fps=fps or 25.0)
+
+
 # 进度回调类型：每完成一个阶段就调用一次
 ProgressCallback = Callable[[PipelineStageResult], None]
 
@@ -205,6 +222,7 @@ class _VisualizationArtifactFields:
     analysis_overlay_video_url: str | None = None
     analysis_overlay_video_status: str | None = None
     analysis_overlay_video_detail: str | None = None
+    analysis_overlay_video_metadata: dict[str, Any] | None = None
     heatmaps_manifest_json_path: str | None = None
     heatmaps_url: str | None = None
     scatter_plots_manifest_json_path: str | None = None
@@ -257,6 +275,7 @@ class _TrackingRunOutput:
     render_trajectory: list[dict[str, Any]] | None = None
     requested_clip: dict[str, int] | None = None
     decoded_range: dict[str, int] | None = None
+    analysis_window: dict[str, Any] = field(default_factory=dict)
 
 
 class PipelineConfigurationError(ValueError): ...
@@ -400,6 +419,7 @@ class AnalysisPipeline:
         ball_run_output: _BallRunOutput | None = None
         ball_fields = _BallArtifactFields()
         player_multitarget_detections: list[MultiTargetDetection] = []
+        analysis_window_metadata: dict[str, Any] | None = None
         self._check_cancelled(cancellation_token)
         video = self.video_service.get_video(video_id) if video_id else None
 
@@ -536,6 +556,7 @@ class AnalysisPipeline:
                 self._write_result(result)
                 return result
             tracking_result = run_output.tracking
+            analysis_window_metadata = run_output.analysis_window or None
             ball_run_output = run_output.ball_run_output
             player_multitarget_detections = run_output.player_multitarget_detections
             calibration_diagnostics_json_path = run_output.calibration_diagnostics_path
@@ -664,6 +685,7 @@ class AnalysisPipeline:
                 render_traj_payload["status"] = "available"
                 render_traj_payload["fps"] = tracking_result.fps
                 render_traj_payload["total_frames"] = tracking_result.frame_count
+                render_traj_payload["analysis_window"] = run_output.analysis_window
                 sample_count = len(run_output.render_trajectory.get("samples", []))
                 render_traj_payload["detail"] = f"已生成逐帧渲染轨迹，共 {sample_count} 帧"
                 self.storage.write_json(render_traj_path, render_traj_payload)
@@ -842,6 +864,9 @@ class AnalysisPipeline:
         _ball_fps = tracking_result.fps if video and calibration else 0.0
         _ball_processed = tracking_result.processed_frame_count if video and calibration else 0
         _ball_stride = frame_stride or self.frame_stride
+        _timing_provenance = (
+            tracking_result.timing_provenance if video and calibration else None
+        )
         # 重建球轨迹需要 homography 与（可选的）serve 事件；mock 路径下均不可用
         _reconstruction_homography = (
             calibration.homography.values if (calibration is not None and calibration.homography is not None) else None
@@ -863,6 +888,7 @@ class AnalysisPipeline:
             homography=_reconstruction_homography,
             serve_events=_reconstruction_serve_events,
             tracking_run_output=locals().get("run_output"),
+            timing_provenance=_timing_provenance,
         )
 
         # 球分析 strict mode 检查：strict=true 且球分析失败时，整体 pipeline failed
@@ -947,6 +973,10 @@ class AnalysisPipeline:
         scatter_plots_url = visualization_fields.scatter_plots_url
         position_visualizations_status = visualization_fields.position_visualizations_status
         position_visualizations_detail = visualization_fields.position_visualizations_detail
+        if analysis_window_metadata is not None and visualization_fields.analysis_overlay_video_metadata:
+            output_origin = visualization_fields.analysis_overlay_video_metadata.get("output_time_origin_ms")
+            if output_origin is not None:
+                analysis_window_metadata["output_time_origin_ms"] = output_origin
 
         # 汇总成最终结果
         result = AnalysisPipelineResult(
@@ -1037,10 +1067,17 @@ class AnalysisPipeline:
                 player_trajectory_detail=player_trajectory_detail,
                 court_view_roi_status=court_view_roi_status,
                 court_view_roi_detail=court_view_roi_detail,
+                analysis_window=analysis_window_metadata,
+                analysis_overlay_video_metadata=(
+                    visualization_fields.analysis_overlay_video_metadata
+                    if hasattr(visualization_fields, "analysis_overlay_video_metadata")
+                    else None
+                ),
             ),
             message=message,
             match_context=match_ctx,
             observed_player_count=len({t.track_id for t in tracks if t.track_id}),
+            analysis_window=analysis_window_metadata,
         )
         result = self.storage.publicize_pipeline_result(result)
         self._write_result(result)
@@ -1092,6 +1129,7 @@ class AnalysisPipeline:
         homography: list[list[float]] | None = None,
         serve_events: list[Any] | None = None,
         tracking_run_output: Any | None = None,
+        timing_provenance: dict[str, object] | None = None,
     ) -> None:
         """统一处理球分析阶段的状态记录与 artifact 写入。
 
@@ -1219,6 +1257,7 @@ class AnalysisPipeline:
                 fps=fps,
                 frame_stride=frame_stride,
                 processed_frame_count=processed_frame_count,
+                timing_provenance=timing_provenance,
                 status=overlay_status,
                 detail=overlay_detail,
             )
@@ -1479,7 +1518,7 @@ class AnalysisPipeline:
                             stage.progress = min(95, max(20, 20 + written // 120))
                         stage.counters = {
                             "written_frame_count": written,
-                            "source_frame_count": frame_count,
+                            "planned_frame_count": frame_count,
                             "artifact": "analysis-overlay-video",
                         }
                         self._notify_progress(progress_callback, stage)
@@ -1494,6 +1533,8 @@ class AnalysisPipeline:
                         ball_points=ball_points,
                         bounce_points=bounce_points,
                         fps_override=overlay_fps,
+                        clip_start_ms=clip_start_ms,
+                        clip_end_ms=clip_end_ms,
                         progress_callback=overlay_progress,
                     )
                     fields.analysis_overlay_video_status = overlay_result.status
@@ -1501,6 +1542,7 @@ class AnalysisPipeline:
                     if overlay_result.status == "available":
                         fields.analysis_overlay_video_path = overlay_result.path
                         fields.analysis_overlay_video_url = overlay_url
+                        fields.analysis_overlay_video_metadata = overlay_result.metadata
                     results.append(overlay_result)
                 except Exception as exc:
                     detail = f"分析叠加视频生成失败：{exc}"
@@ -1597,33 +1639,38 @@ class AnalysisPipeline:
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        timing_provider = FrameTimingProvider.from_media(
+            video.path,
+            frame_count=frame_count,
+            fps=fps,
+        )
 
         # ── 时间裁剪 + 预热区间 ──
         pre_roll_ms = self.settings.pre_roll_ms if hasattr(self.settings, "pre_roll_ms") else 1500
         post_roll_ms = self.settings.post_roll_ms if hasattr(self.settings, "post_roll_ms") else 500
-        video_duration_ms = int((frame_count / fps) * 1000) if fps > 0 else 0
-        decode_start_ms = 0
-        decode_end_ms = video_duration_ms
-        clip_applied = False
-
-        if clip_start_ms is not None and clip_end_ms is not None:
-            clip_applied = True
-            decode_start_ms = max(0, clip_start_ms - pre_roll_ms)
-            decode_end_ms = min(video_duration_ms, clip_end_ms + post_roll_ms)
-            # 半开区间校验
-            if clip_start_ms < 0 or clip_end_ms <= clip_start_ms:
-                raise ValueError(f"无效 clip 范围: [{clip_start_ms}, {clip_end_ms})")
-            decode_start_frame = int((decode_start_ms / 1000.0) * fps)
-            decode_end_frame = int((decode_end_ms / 1000.0) * fps)
-            clip_start_frame = int((clip_start_ms / 1000.0) * fps)
-            clip_end_frame = int((clip_end_ms / 1000.0) * fps)
-            # Seek 到解码起始帧
+        video_duration_ms = int(timing_provider.duration_seconds * 1000)
+        try:
+            window = resolve_analysis_window(
+                source_duration_ms=video_duration_ms,
+                source_frame_count=frame_count,
+                fps=fps,
+                clip_start_ms=clip_start_ms,
+                clip_end_ms=clip_end_ms,
+                pre_roll_ms=pre_roll_ms,
+                post_roll_ms=post_roll_ms,
+                timing_provider=timing_provider,
+            )
+        except AnalysisWindowError:
+            capture.release()
+            raise
+        clip_applied = window.enabled
+        decode_start_frame = window.decoded_start_frame
+        decode_end_frame = window.decoded_end_frame
+        clip_start_frame = window.requested_start_frame
+        clip_end_frame = window.requested_end_frame
+        frame_index = decode_start_frame
+        if clip_applied:
             capture.set(cv2.CAP_PROP_POS_FRAMES, decode_start_frame)
-            frame_index = decode_start_frame
-            # 调整 frame_count 用于进度百分比
-            decode_end_frame - decode_start_frame
-        else:
-            frame_index = 0
         # 球场视角（court-view）相关评分器/状态机/阈值
         # 支持任务级覆盖 court_view_match_threshold
         effective_match_threshold = (
@@ -1762,14 +1809,11 @@ class AnalysisPipeline:
             ),
         )
 
-        if not clip_applied:
-            frame_index = 0
-
-        requested_clip = {}
-        decoded_range = {}
-        if clip_applied:
-            requested_clip = {"start_ms": clip_start_ms, "end_ms": clip_end_ms}
-            decoded_range = {"start_ms": decode_start_ms, "end_ms": decode_end_ms}
+        window_metadata = window.metadata()
+        window_metadata["timing_provenance"] = timing_provider.metadata()
+        window_metadata["processed_frame_count"] = 0
+        requested_clip = window_metadata.get("requested_clip") if clip_applied else None
+        decoded_range = window_metadata.get("decoded_range") if clip_applied else None
 
         try:
             while True:
@@ -1778,14 +1822,16 @@ class AnalysisPipeline:
                 if not ok:
                     break
                 # clip 范围终止
-                if clip_applied and frame_index > decode_end_frame:
+                if clip_applied and frame_index >= decode_end_frame:
                     break
                 # 按 stride 抽帧：不是目标帧就跳过
                 if frame_index % stride != 0:
                     frame_index += 1
                     continue
 
-                timestamp = frame_index / fps
+                timestamp = timing_provider.take_timestamp_for_frame(frame_index)
+                if timestamp is None:
+                    timestamp = frame_index / fps
                 # 标记帧是否为预热帧（pre-roll / post-roll context）
                 last_processed_frame_index = frame_index
                 last_processed_timestamp = timestamp
@@ -1799,6 +1845,7 @@ class AnalysisPipeline:
                 court_view_sample = court_view_state.update(frame_index, timestamp, court_view_score)
                 court_view_frame_samples.append(court_view_sample)
                 processed_frame_count += 1
+                window_metadata["processed_frame_count"] = processed_frame_count
                 # 被"非球场视角"门控挡住的帧，跳过后续检测
                 if court_view_sample.reason == "gated_non_court_view":
                     self._check_cancelled(cancellation_token)
@@ -1888,19 +1935,20 @@ class AnalysisPipeline:
                 if processed_frame_count == 1 or processed_frame_count % 30 == 0:
                     frame_progress = self._tracking_frame_progress(
                         processed_frame_count=processed_frame_count,
-                        frame_count=frame_count,
+                        frame_count=window.planned_frame_count,
                         stride=stride,
                     )
                     progress_stage = self._stage(
                         "frame-sampling",
                         "抽帧采样",
                         "active",
-                        f"正在逐帧分析：已处理 {processed_frame_count}/{max(1, (frame_count + stride - 1) // stride) if frame_count else 'unknown'} 个抽样帧",  # noqa: E501
+                        f"正在逐帧分析：已处理 {processed_frame_count}/{max(1, (window.planned_frame_count + stride - 1) // stride) if window.planned_frame_count else 'unknown'} 个抽样帧",  # noqa: E501
                     )
                     progress_stage.progress = frame_progress
                     progress_stage.counters = {
                         "processed_frame_count": processed_frame_count,
                         "source_frame_count": frame_count,
+                        "planned_frame_count": window.planned_frame_count,
                         "frame_stride": stride,
                     }
                     self._notify_progress(progress_callback, progress_stage)
@@ -1924,6 +1972,29 @@ class AnalysisPipeline:
 
         # 结束阶段快照：session 累积的 tracking 产物 + 诊断 + selector 状态
         outputs = session.snapshot()
+        # 预热帧可以留在 tracker 内部状态中，但所有正式 artifact 都只暴露
+        # requested clip。这样 child 融合和前端可视化不会把 pre-roll 当成分析结果。
+        if clip_applied:
+            outputs.raw_detections = [
+                item for item in outputs.raw_detections if window.is_requested_frame(item.frame_index)
+            ]
+            outputs.overlay_frames = [
+                item for item in outputs.overlay_frames if window.is_requested_frame(item.frame_index)
+            ]
+            outputs.positions = [
+                item for item in outputs.positions if window.is_requested_frame(item.frame_index)
+            ]
+            outputs.player_multitarget_detections = [
+                item
+                for item in outputs.player_multitarget_detections
+                if window.is_requested_frame(item.frame_index)
+            ]
+            outputs.render_observations = [
+                item for item in outputs.render_observations if window.is_requested_frame(item.frame_index)
+            ]
+            outputs.render_events = [
+                item for item in outputs.render_events if window.is_requested_frame(item.frame_index)
+            ]
         logger.info(
             "Player tracking completed: processed %s frames, %s projected position samples",
             processed_frame_count,
@@ -1944,6 +2015,7 @@ class AnalysisPipeline:
             overlay_frames=outputs.overlay_frames,
             tracks=outputs.tracks,
             positions=outputs.positions,
+            timing_provenance=timing_provider.metadata(),
         )
         # 球员轨迹 + 投影轨迹点 + 主球员选择（lock diagnostics 合并由 session 内部完成）
         player_trajectories = session.build_player_trajectory_artifact(
@@ -1954,12 +2026,25 @@ class AnalysisPipeline:
             processed_frame_count=processed_frame_count,
             frame_stride=stride,
         )
+        if clip_applied:
+            player_trajectories = player_trajectories.model_copy(
+                update={
+                    "players": {
+                        player_id: [sample for sample in samples if window.is_requested_frame(sample.frame_index)]
+                        for player_id, samples in player_trajectories.players.items()
+                    },
+                    "processed_frame_count": window.requested_frame_count,
+                }
+            )
+        player_trajectories = player_trajectories.model_copy(
+            update={"timing_provenance": timing_provider.metadata()}
+        )
         player_metric_tracks = session.projected_metric_tracks(output_court_unit="ft")
 
         # ── 过滤预热帧：仅保留 clip 范围内的 track points 用于指标计算 ──
         if clip_applied and player_metric_tracks:
             player_metric_tracks = [
-                pt for pt in player_metric_tracks if clip_start_frame <= pt.frame_index <= clip_end_frame
+                pt for pt in player_metric_tracks if window.is_requested_frame(pt.frame_index)
             ]
 
         player_selection = PlayerSelectionArtifact(
@@ -1995,6 +2080,7 @@ class AnalysisPipeline:
                 detail=f"已生成 {sum(len(frame.subjects) for frame in pose_frames)} 组骨架关节",
                 keypoint_schema=self.settings.pose_keypoint_schema,
                 source=SourceFrameSize(width=max(1, frame_width), height=max(1, frame_height)),
+                timing_provenance=timing_provider.metadata(),
                 skeleton_edges=default_skeleton_edges(),
                 frames=pose_frames,
             )
@@ -2049,6 +2135,14 @@ class AnalysisPipeline:
                 f"（剔除率 {gate_rate:.0%}），骨架输出可能极度稀疏"
             )
         # 球分析后处理：提取至 _run_bounce_detection()，不再内联处理
+        if clip_applied:
+            ball_ctx.samples = [
+                item for item in ball_ctx.samples if window.is_requested_frame(item.frame_index)
+            ]
+            ball_ctx.detections = [
+                item for item in ball_ctx.detections if window.is_requested_frame(item.frame_index)
+            ]
+            pose_frames = [item for item in pose_frames if window.is_requested_frame(item.frame_index)]
         ball_run_output = self._run_bounce_detection(
             job_id=job_id,
             video_id=video_id,
@@ -2068,7 +2162,7 @@ class AnalysisPipeline:
                     observations=outputs.render_observations,
                     events=outputs.render_events,
                     fps=fps,
-                    total_frames=frame_count,
+                    total_frames=window.requested_frame_count if clip_applied else frame_count,
                 )
                 render_output = {
                     "players": [
@@ -2138,6 +2232,7 @@ class AnalysisPipeline:
             render_trajectory=render_output,
             requested_clip=requested_clip,
             decoded_range=decoded_range,
+            analysis_window=window_metadata,
         )
 
     @staticmethod
@@ -2336,6 +2431,7 @@ class AnalysisPipeline:
             frame_count=tracking_result.frame_count,
             processed_frame_count=tracking_result.processed_frame_count,
             frame_stride=tracking_result.frame_stride,
+            timing_provenance=tracking_result.timing_provenance,
             frames=tracking_result.overlay_frames,
         )
 
@@ -2595,6 +2691,7 @@ class AnalysisPipeline:
             "clip_limit": limit,
             "candidate_count": len(serve_events.events),
             "omitted_count": max(0, len(serve_events.events) - len(clips)),
+            "timing_provenance": _timing_provider_for_video(source_video_path).metadata(),
             "clips": clips,
         }
 
@@ -2616,12 +2713,20 @@ class AnalysisPipeline:
             return "failed_open_source"
         try:
             fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             if fps <= 0 or width <= 0 or height <= 0:
                 return "failed_video_metadata"
-            start_frame = max(0, int(start_seconds * fps))
-            end_frame = max(start_frame + 1, int(end_seconds * fps))
+            timing_provider = FrameTimingProvider.from_media(
+                source_video_path,
+                frame_count=frame_count,
+                fps=fps,
+            )
+            start_frame = timing_provider.frame_index_at_or_after_take_time(max(0.0, start_seconds)) or 0
+            end_frame = timing_provider.frame_index_at_or_after_take_time(max(start_seconds, end_seconds))
+            end_frame = frame_count if end_frame is None else end_frame
+            end_frame = max(start_frame + 1, min(frame_count, end_frame))
             output_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = output_path.with_suffix(".tmp.mp4")
             writer = cv2.VideoWriter(str(temp_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
@@ -2630,7 +2735,7 @@ class AnalysisPipeline:
             try:
                 capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
                 frame_index = start_frame
-                while frame_index <= end_frame:
+                while frame_index < end_frame:
                     ok, frame = capture.read()
                     if not ok or frame is None:
                         break
@@ -2658,10 +2763,16 @@ class AnalysisPipeline:
             return "failed_open_source"
         try:
             fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             if fps <= 0 or width <= 0 or height <= 0:
                 return "failed_video_metadata"
+            timing_provider = FrameTimingProvider.from_media(
+                source_video_path,
+                frame_count=frame_count,
+                fps=fps,
+            )
             output_path = self.storage.serve_debug_overlay_video_path(job_id)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
@@ -2683,7 +2794,9 @@ class AnalysisPipeline:
                     ok, frame = capture.read()
                     if not ok or frame is None:
                         break
-                    timestamp = frame_index / fps
+                    timestamp = timing_provider.take_timestamp_for_frame(frame_index)
+                    if timestamp is None:
+                        timestamp = frame_index / fps
                     active = next((item for item in windows if item[0] <= timestamp <= item[1]), None)
                     if active is not None:
                         _start, _end, candidate = active

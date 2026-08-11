@@ -89,6 +89,10 @@ def _ensure_capture_storage_columns(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE capture_takes ADD COLUMN storage_status VARCHAR(32) NOT NULL DEFAULT 'available'")
             )
+        if "display_mode" not in columns:
+            connection.execute(
+                text("ALTER TABLE capture_takes ADD COLUMN display_mode VARCHAR(16) NOT NULL DEFAULT 'standard'")
+            )
         if "slot" not in track_columns:
             connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN slot VARCHAR(16) NOT NULL DEFAULT 'cam_1'"))
         if "analysis_role" not in track_columns:
@@ -147,6 +151,12 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     _ensure_capture_storage_columns(engine)
+    field_session_columns = {column["name"] for column in inspect(engine).get_columns("field_sessions")}
+    with engine.begin() as connection:
+        if "display_mode" not in field_session_columns:
+            connection.execute(
+                text("ALTER TABLE field_sessions ADD COLUMN display_mode VARCHAR(16) NOT NULL DEFAULT 'standard'")
+            )
     _ensure_vidat_provenance_columns(engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
     lcs_columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}

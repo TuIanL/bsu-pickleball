@@ -79,9 +79,18 @@ def test_delete_capture_job_removes_full_artifact_dir_preserves_recording(monkey
 
     take_dir = tmp_path / "take"
     job = _create_completed_job(mock_analysis, make_metadata(capture_take_id="CT_001"))
+    job.videoId = "capture-video"
+    job.calibrationId = "capture-calibration"
     storage.register_capture_job(job.id, take_dir)
     artifact_root = take_dir / "analysis" / job.id
     _write_recording_assets(take_dir)
+    capture_video = take_dir / "cam_1.mp4"
+    capture_video.write_bytes(b"capture-video")
+    storage.write_json(
+        storage.video_metadata_path(job.videoId),
+        {"id": job.videoId, "path": str(capture_video)},
+    )
+    storage.write_json(storage.calibration_json_path(job.calibrationId), {"id": job.calibrationId})
     _write_job_artifacts(artifact_root, job.id)
     assert artifact_root.exists()
 
@@ -94,7 +103,32 @@ def test_delete_capture_job_removes_full_artifact_dir_preserves_recording(monkey
     # 录制资产保留
     assert (take_dir / "174_merged.mp4").exists()
     assert (take_dir / "timeline" / "sync_calibration.json").exists()
+    assert capture_video.exists()
+    assert storage.video_metadata_path(job.videoId).exists()
+    assert storage.calibration_json_path(job.calibrationId).exists()
     assert take_dir.exists()
+
+
+def test_delete_path_is_idempotent_when_directory_entry_disappears(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    artifact_root = tmp_path / "analysis" / "job-delete-race"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "._player_selection.json").write_text("metadata", encoding="utf-8")
+
+    calls = 0
+
+    def race_rmtree(path, *, ignore_errors=False, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise FileNotFoundError("._player_selection.json disappeared")
+        # The retry models a directory whose transient entry has already gone.
+        return None
+
+    monkeypatch.setattr("app.services.storage_service.shutil.rmtree", race_rmtree)
+
+    assert storage.delete_path_tree(artifact_root) is True
+    assert calls == 2
 
 
 def test_delete_non_capture_job_removes_outputs_dir(monkeypatch, tmp_path):

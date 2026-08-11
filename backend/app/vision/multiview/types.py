@@ -20,6 +20,8 @@ class ViewObservation:
     timestamp_seconds: float
     local_x_ft: float
     local_y_ft: float
+    source_pts_seconds: float | None = None
+    timing_provenance: str = "legacy_nominal_fps"
     view_player_id: str = ""
     projection_status: str | None = None
     projection_confidence: float | None = None

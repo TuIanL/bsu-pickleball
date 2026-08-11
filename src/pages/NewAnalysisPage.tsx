@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { ArrowRight, Camera, Upload } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
+import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
 import type { AnalysisUploadMetadata, AutomaticCalibrationResponse } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -82,6 +83,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   // 支持直接传入 videoId（如从其他页面跳转）
   const [searchParams] = useState(() => new URLSearchParams(window.location.search));
+  const returnTaskContext = taskContextFromLocation();
   const videoIdParam = searchParams.get("videoId");
   const sourceFpsParam = Number(searchParams.get("fps") ?? NaN);
 
@@ -403,7 +405,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         enablePoseInference,
       });
       rememberAnalysisJob(job);
-      onNavigate("/analysis/tasks");
+      onNavigate(taskListPath(returnTaskContext));
     } catch (error) {
       setError(
         errorToNotice(
@@ -841,7 +843,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
             <button className="quiet-button" onClick={() => onNavigate("/vision")} type="button">
               查看演示工作台
             </button>
-            <button className="quiet-button" onClick={() => onNavigate("/analysis/tasks")} type="button">
+            <button className="quiet-button" onClick={() => onNavigate(taskListPath(returnTaskContext))} type="button">
               查看任务管理
             </button>
           </div>

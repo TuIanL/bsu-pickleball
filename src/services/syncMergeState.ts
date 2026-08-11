@@ -8,8 +8,12 @@ export function getSyncMergeStatus(session: SyncRecordingSession): SyncMergeStat
 }
 
 export function canUseSyncVideos(session: SyncRecordingSession): boolean {
+  const availability = session.video_availability;
+  const hasExplicitAvailability = !!availability && ("cam_1" in availability || "cam_2" in availability);
   return session.status === "completed"
     && getSyncMergeStatus(session) === "completed"
     && !!session.registered_video_ids?.cam_1
-    && !!session.registered_video_ids?.cam_2;
+    && !!session.registered_video_ids?.cam_2
+    && (!hasExplicitAvailability
+      || (availability?.cam_1 === "available" && availability?.cam_2 === "available"));
 }

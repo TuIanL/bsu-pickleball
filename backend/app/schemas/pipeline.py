@@ -125,6 +125,8 @@ class AnalysisArtifacts(BaseModel):
     court_view_roi_status: str | None = None
     court_view_roi_detail: str | None = None
     overlay_video_path: str | None = None
+    analysis_window: dict[str, Any] | None = None
+    analysis_overlay_video_metadata: dict[str, Any] | None = None
 
 
 class AnalysisPipelineResult(BaseModel):
@@ -142,3 +144,6 @@ class AnalysisPipelineResult(BaseModel):
     message: str  # 结果说明
     match_context: MatchAnalysisContext | None = None  # 比赛分析上下文
     observed_player_count: int | None = None  # 实际观察到的球员数
+    analysis_window: dict[str, Any] | None = None
+    requested_execution_mode: str | None = None
+    effective_multiview_mode: str | None = None

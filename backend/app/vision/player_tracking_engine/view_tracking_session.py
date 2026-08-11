@@ -306,7 +306,9 @@ class ViewTrackingSession:
         _ = guidance  # Change 1：guidance 仅占位，不触发 guided detection
 
         # 1) 检测
-        raw_detections = self._detect_frame(frame, frame_index)
+        raw_detections = self._bind_detections_to_frame(
+            self._detect_frame(frame, frame_index), frame_index
+        )
         # 2) ROI 过滤（ROI artifact 由调用方计算、构造时注入）
         detections, roi_filtered = filter_detections_to_roi(raw_detections, self.roi_artifact)
         self.roi_filtered_detection_count += roi_filtered
@@ -594,6 +596,22 @@ class ViewTrackingSession:
         if hasattr(self.detector, "detect_frame"):
             return self.detector.detect_frame(frame, frame_index)
         return self.detector.detect(frame)
+
+    @staticmethod
+    def _bind_detections_to_frame(
+        detections: Sequence[Detection], frame_index: int
+    ) -> list[Detection]:
+        """Attach the decode frame to detector results at the tracking boundary.
+
+        Detector adapters intentionally return frame-agnostic boxes.  The session
+        is the first layer that knows which decoded frame produced them, so this
+        is the authoritative place to add that identity before raw detections are
+        retained for window filtering and artifacts.
+        """
+        return [
+            detection.model_copy(update={"frame_index": frame_index})
+            for detection in detections
+        ]
 
     def _run_guided_detection(self, frame: object, guidance) -> list[Detection]:
         """按跨视角 guidance 对目标 ROI 做 guided re-detection,pre-gate 后返回 accepted。

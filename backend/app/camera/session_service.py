@@ -127,6 +127,7 @@ class SessionService:
         field_session_id = request.field_session_id
         court_name = request.court_name
         match_format = request.match_format or "doubles"
+        display_mode = "standard"
 
         if field_session_id:
             from app.database import get_session_factory
@@ -142,6 +143,12 @@ class SessionService:
                     court_name = fs.court_name
                 if request.match_format is None:
                     match_format = fs.match_format.value
+                raw_display_mode = getattr(fs, "display_mode", "standard")
+                display_mode = getattr(raw_display_mode, "value", raw_display_mode)
+                if display_mode not in {"standard", "showcase"}:
+                    display_mode = "standard"
+                if display_mode == "showcase":
+                    raise ValueError("展示模式只能使用双摄录制")
             finally:
                 db.close()
 
@@ -168,6 +175,7 @@ class SessionService:
             started_at=datetime.now(UTC),
             storage_root=str(plan.storage_root),
             session_dir=str(plan.take_dir),
+            display_mode=display_mode,
         )
 
         # 启动 FFmpeg 录制；on_exit 回调在进程退出时触发（用于标记失败）

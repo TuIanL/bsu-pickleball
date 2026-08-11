@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { ArrowRight, LineChart } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
+import { taskListPathForJob, withTaskListContext, taskContextForJob } from "../app/navigationContext";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -18,15 +19,15 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
   const { error, job, report, result } = useAnalysisResultReport(jobId);
 
   if (job === undefined || report === undefined) {
-    return <StatusState title="正在加载分析详情" body="正在读取任务元数据、报告和算法结果。" onNavigate={onNavigate} />;
+    return <StatusState title="正在加载分析详情" body="正在读取任务元数据、报告和算法结果。" onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
   }
 
   if (error) {
-    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} />;
+    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
   }
 
   if (!job) {
-    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能已经被删除。`} onNavigate={onNavigate} />;
+    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能已经被删除。`} onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
   }
 
   if (isActiveAnalysisJob(job)) {
@@ -48,6 +49,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
           ],
         }}
         onNavigate={onNavigate}
+        backPath={taskListPathForJob(job)}
       />
     );
   }
@@ -66,6 +68,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
           ],
         }}
         onNavigate={onNavigate}
+        backPath={taskListPathForJob(job)}
       />
     );
   }
@@ -75,6 +78,12 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
   const trackCount = result?.tracks.length ?? 0;
   const trackIds = new Set(result?.tracks.map((track) => track.track_id) ?? []);
   const hasProjection = trackCount > 0;
+  const analysisWindow = result?.analysis_window;
+  const returnPath = taskListPathForJob(job);
+  const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
+  const formatWindow = (start?: number, end?: number) => (
+    start != null && end != null ? `${formatSeconds(start / 1000)} - ${formatSeconds(end / 1000)}` : "未启用"
+  );
 
   return (
     <PageFrame>
@@ -83,7 +92,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
           <div>
             <button
               className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
-              onClick={() => onNavigate("/analysis/tasks")}
+              onClick={() => onNavigate(returnPath)}
               type="button"
             >
               <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
@@ -104,7 +113,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
             <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
               {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
             </p>
-            <button className="mt-5 green-button w-full" onClick={() => onNavigate(`/analysis/${job.id}/vision`)} type="button">
+            <button className="mt-5 green-button w-full" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/vision`))} type="button">
               打开视频分析
               <ArrowRight size={16} aria-hidden="true" />
             </button>
@@ -136,6 +145,32 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
               <ProjectionReadiness label="球员轨迹" ready={hasProjection} body={hasProjection ? `${trackCount} 个标准球场坐标点` : "尚未生成可用人员位移轨迹"} />
               <ProjectionReadiness label="可视化状态" ready={false} body="热力图、位移轨迹和人员分布后续接入" />
             </div>
+          </article>
+
+          <article className="sport-card p-5">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">分析范围</p>
+            <dl className="mt-4 grid gap-2 text-sm">
+              <RailMeta
+                label="请求窗口"
+                value={formatWindow(analysisWindow?.requested_clip?.start_ms, analysisWindow?.requested_clip?.end_ms)}
+              />
+              <RailMeta
+                label="实际解码范围"
+                value={formatWindow(analysisWindow?.decoded_range?.start_ms, analysisWindow?.decoded_range?.end_ms)}
+              />
+              <RailMeta
+                label="源视频"
+                value={
+                  analysisWindow?.source_duration_ms != null
+                    ? `${formatSeconds(analysisWindow.source_duration_ms / 1000)} · ${analysisWindow.source_frame_count ?? 0} 帧`
+                    : "未提供"
+                }
+              />
+              <RailMeta
+                label="处理帧数"
+                value={analysisWindow?.processed_frame_count != null ? String(analysisWindow.processed_frame_count) : "结果未记录"}
+              />
+            </dl>
           </article>
         </aside>
       </section>

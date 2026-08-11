@@ -2,26 +2,32 @@
 
 ## Purpose
 多视角分析执行模式:`late_fusion_v1 | joint_tracking_v2`,两模式的编排/执行差异、缺省规则与 A/B baseline 去重。
-
 ## Requirements
 ### Requirement: 执行模式字段与缺省规则
 
-多视角 Parent 任务 SHALL 携带 `multiviewExecutionMode`,取值为 `late_fusion_v1` 或 `joint_tracking_v2`。字段缺失或未知时 SHALL 缺省为 `late_fusion_v1`(历史任务零迁移)。
+多视角创建请求 SHALL 在 `multiview.executionMode` 携带执行模式，取值为 `late_fusion_v1` 或 `joint_tracking_v2`；Parent 持久化字段 SHALL 为 `executionMode`。缺失或未知时 SHALL 缺省为 `late_fusion_v1`，以保持历史任务兼容。旧文档中的 `multiviewExecutionMode` SHALL 视为历史命名，不新增同名顶层字段。
 
 #### Scenario: 历史任务缺省 late_fusion_v1
 
 - **WHEN** 一个多视角 Parent 缺 `executionMode` 字段
 - **THEN** 系统 SHALL 按 `late_fusion_v1` 处理
-- **AND** 不触发任何数据/产物迁移
+- **AND** 不触发任何数据或产物迁移
 
-#### Scenario: 新建双摄协同默认 joint_tracking_v2
+#### Scenario: 新建任务显式选择 joint
 
-- **WHEN** 创建新的双摄协同分析任务
-- **THEN** 系统 SHALL 将其标记为 `joint_tracking_v2`(除非显式指定 late_fusion_v1)
+- **WHEN** 前端在 `multiview.executionMode` 发送 `joint_tracking_v2`
+- **THEN** 系统 SHALL 将 Parent 标记为 `joint_tracking_v2`
+- **AND** SHALL NOT 因字段命名差异回退为 late-fusion
+
+#### Scenario: 未知模式安全缺省
+
+- **WHEN** 请求携带未知 execution mode
+- **THEN** 系统 SHALL 缺省为 `late_fusion_v1`
+- **AND** SHALL 记录输入校验或兼容诊断
 
 ### Requirement: executionMode 进入输入签名
 
-`multiviewExecutionMode` SHALL 进入 Parent 的 `inputSignature` / `configSignature`。同一 CaptureTake 的 `late_fusion_v1` 与 `joint_tracking_v2` 任务 SHALL 视为不同分析任务,SHALL NOT 被幂等/去重逻辑合并。
+`executionMode` SHALL 进入 Parent 的 `inputSignature` / `configSignature`。同一 CaptureTake 的 `late_fusion_v1` 与 `joint_tracking_v2` 任务 SHALL 视为不同分析任务，SHALL NOT 被幂等或去重逻辑合并。
 
 #### Scenario: A/B 不被去重
 
@@ -54,3 +60,4 @@
 - **WHEN** 对同一 CaptureTake 分别创建 late_fusion_v1 与 joint_tracking_v2 两个 Parent
 - **THEN** 两者 SHALL 独立运行、独立产出、互不覆盖
 - **AND** 对比指标(球场位置 RMSE / 缺失率 / 覆盖率等)SHALL 可基于两者产物计算
+

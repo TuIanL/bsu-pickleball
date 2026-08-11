@@ -172,7 +172,6 @@ slower machines.
 PICKLEBALL_RTMPOSE_CONFIG_PATH=../models/rtmpose/configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py \
 PICKLEBALL_RTMPOSE_CHECKPOINT_PATH=../models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth \
 PICKLEBALL_RTMPOSE_DEVICE=cpu \
-TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
 uvicorn app.main:app --reload
 ```
 
@@ -192,9 +191,13 @@ python scripts/validate_rtmpose.py \
   --bbox 40,24,152,232
 ```
 
-With PyTorch 2.6+ and trusted OpenMMLab checkpoints, set
-`TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` when validating or running pose inference
-so the older checkpoint format can load.
+The RTMPose adapter automatically applies `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`
+for the duration of trusted local checkpoint initialization and restores the
+previous process value afterward. This covers direct Uvicorn launches and the
+validation script; the startup script may still export the variable as an
+outer safeguard. Only use this compatibility mode with checkpoint files from a
+trusted source because older PyTorch checkpoint formats can execute code while
+being deserialized.
 
 Renderable video overlays use primary-player filtering rather than strict
 court-line filtering, so athletes remain visible when they step outside the

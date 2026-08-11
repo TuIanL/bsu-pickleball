@@ -60,6 +60,10 @@ export interface CourtCornerCalibratorProps {
   videoId: string;
   /** 标定完成后回调，返回 calibrationId + 四个点的坐标 */
   onComplete: (calibrationId: string, points: CalibrationPointDraft[]) => void;
+  /** 返回向导上一步或退出当前流程的文案 */
+  cancelLabel?: string;
+  /** 重新进入该机位时恢复的点位草稿 */
+  initialPoints?: CalibrationPointDraft[];
   /** 取消回调 */
   onCancel?: () => void;
   /** 是否正在提交（禁用按钮） */
@@ -96,6 +100,8 @@ export function CourtCornerCalibrator({
   videoId,
   onComplete,
   onCancel,
+  cancelLabel = "取消",
+  initialPoints,
   isSubmitting = false,
 }: CourtCornerCalibratorProps) {
   const calibrationVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -103,7 +109,7 @@ export function CourtCornerCalibrator({
   const calibrationAutoSeekAttemptsRef = useRef(0);
   const calibrationAutoSeekEnabledRef = useRef(false);
 
-  const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPointDraft[]>([]);
+  const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPointDraft[]>(() => initialPoints ? [...initialPoints] : []);
   const [calibrationFrameStatus, setCalibrationFrameStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [calibrationFrameError, setCalibrationFrameError] = useState<string | null>(null);
   const [calibrationFramePreviewUrl, setCalibrationFramePreviewUrl] = useState<string | null>(null);
@@ -355,7 +361,11 @@ export function CourtCornerCalibrator({
   useEffect(() => {
     calibrationAutoSeekAttemptsRef.current = 0;
     calibrationAutoSeekEnabledRef.current = Boolean(videoSrc);
-  }, [videoSrc]);
+    // Incoming drafts change when the wizard switches camera/video; reset the local editor state intentionally.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the local draft with new props
+    setCalibrationPoints(initialPoints ? [...initialPoints] : []);
+    setError(null);
+  }, [initialPoints, videoId, videoSrc]);
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -471,7 +481,9 @@ export function CourtCornerCalibrator({
           onError={() => {
             setCalibrationFrameStatus("error");
             setCalibrationFramePreviewUrl(null);
-            setCalibrationFrameError("浏览器无法预览这个视频编码。请换用 H.264 MP4，或先转码后再标定。");
+            setCalibrationFrameError(
+              "视频资源加载失败，可能是文件暂不可访问、服务端返回错误，或视频编码不兼容。请刷新后重试；若仍失败，请检查视频是否已完成合并。",
+            );
           }}
           onLoadedData={() => {
             if (!Number.isFinite(calibrationVideoRef.current?.duration ?? Number.NaN)) {
@@ -566,7 +578,7 @@ export function CourtCornerCalibrator({
       <div className="mt-4 flex flex-wrap gap-3">
         {calibrationComplete && (
           <button
-            className="sport-button px-5 py-2.5 text-sm font-bold"
+            className="green-button px-5 py-2.5 text-sm font-bold"
             disabled={isSubmitting}
             onClick={handleSubmit}
             type="button"
@@ -581,7 +593,7 @@ export function CourtCornerCalibrator({
             onClick={onCancel}
             type="button"
           >
-            取消
+            {cancelLabel}
           </button>
         )}
       </div>

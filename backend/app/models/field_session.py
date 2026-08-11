@@ -28,6 +28,11 @@ class CameraSetup(enum.StrEnum):
     debug_single = "debug_single"
 
 
+class DisplayMode(enum.StrEnum):
+    standard = "standard"
+    showcase = "showcase"
+
+
 class FieldSessionStatus(enum.StrEnum):
     planned = "planned"
     live = "live"
@@ -45,6 +50,9 @@ class FieldSession(Base):
     capture_mode: Mapped[CaptureMode] = mapped_column(Enum(CaptureMode), nullable=False, default=CaptureMode.practice)
     match_format: Mapped[MatchFormat] = mapped_column(Enum(MatchFormat), nullable=False, default=MatchFormat.doubles)
     camera_setup: Mapped[CameraSetup] = mapped_column(Enum(CameraSetup), nullable=False, default=CameraSetup.single)
+    display_mode: Mapped[DisplayMode] = mapped_column(
+        Enum(DisplayMode), nullable=False, default=DisplayMode.standard, server_default="standard"
+    )
     status: Mapped[FieldSessionStatus] = mapped_column(
         Enum(FieldSessionStatus), nullable=False, default=FieldSessionStatus.planned
     )

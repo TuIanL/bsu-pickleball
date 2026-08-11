@@ -92,6 +92,20 @@ def test_create_field_session_defaults_and_rejects_invalid_enums(client):
     assert invalid.status_code == 422
 
 
+def test_display_mode_defaults_to_standard_and_showcase_requires_dual(client):
+    standard = _create_field_session(client)
+    assert standard["display_mode"] == "standard"
+
+    showcase = _create_field_session(client, camera_setup="dual", display_mode="showcase")
+    assert showcase["display_mode"] == "showcase"
+
+    invalid = client.post(
+        "/api/field-sessions",
+        json={"title": "展示单摄", "camera_setup": "single", "display_mode": "showcase"},
+    )
+    assert invalid.status_code == 422
+
+
 def test_field_session_ids_are_unique_for_rapid_creates(client):
     first = _create_field_session(client, title="first")
     second = _create_field_session(client, title="second")
@@ -137,6 +151,19 @@ def test_update_metadata_does_not_change_status(client):
 
     invalid = client.patch(f"/api/field-sessions/{created['id']}", json={"camera_setup": "bad"})
     assert invalid.status_code == 422
+
+
+def test_live_field_session_locks_display_mode_and_camera_setup(client):
+    created = _create_field_session(client, camera_setup="dual", display_mode="showcase")
+    assert client.post(f"/api/field-sessions/{created['id']}/start").status_code == 200
+
+    mode_update = client.patch(f"/api/field-sessions/{created['id']}", json={"display_mode": "standard"})
+    setup_update = client.patch(f"/api/field-sessions/{created['id']}", json={"camera_setup": "single"})
+    assert mode_update.status_code == 409
+    assert setup_update.status_code == 409
+    detail = client.get(f"/api/field-sessions/{created['id']}").json()
+    assert detail["display_mode"] == "showcase"
+    assert detail["camera_setup"] == "dual"
 
 
 def test_field_session_status_transitions(client):

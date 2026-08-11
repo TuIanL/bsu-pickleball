@@ -165,9 +165,18 @@ class StorageService:
         if not path.exists():
             return False
         if path.is_dir():
-            shutil.rmtree(path)
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                # macOS 可能在递归删除期间生成/移除 ._ 元数据文件；重试并忽略
+                # 同一目录内已消失的条目，保证删除接口具备幂等性。
+                if path.exists():
+                    shutil.rmtree(path, ignore_errors=True)
             return True
-        path.unlink()
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return True
         return True
 
     @staticmethod

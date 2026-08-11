@@ -85,6 +85,8 @@ def create_capture_take(
     from app.models.field_session import FieldSession
 
     fs = db.query(FieldSession).filter(FieldSession.id == field_session_id).first()
+    if fs:
+        take.display_mode = getattr(fs, "display_mode", "standard")
     if fs and fs.match_format in ("singles", "doubles"):
         scoring_mode = "hybrid_21_best_of_5_v1"
         scoring_ruleset_version = "hybrid_21_best_of_5_v1"

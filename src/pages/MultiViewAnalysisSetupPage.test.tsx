@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -15,12 +15,30 @@ vi.mock("../services/analysisClient", () => ({
   getSyncRecording: mocks.getSyncRecording,
   getVideoStreamUrl: mocks.getVideoStreamUrl,
   createMultiviewAnalysisJob: mocks.createMultiviewAnalysisJob,
+  isAnalysisApiError: () => false,
   getFusedManifest: mocks.getFusedManifest,
   getFusionDiagnostics: mocks.getFusionDiagnostics,
 }));
 
 vi.mock("../components/platform/CourtCornerCalibrator", () => ({
-  CourtCornerCalibrator: () => <div data-testid="calibrator" />,
+  CourtCornerCalibrator: (props: {
+    videoId: string;
+    initialPoints?: unknown[];
+    cancelLabel?: string;
+    onCancel?: () => void;
+    onComplete: (calibrationId: string, points: unknown[]) => void;
+  }) => (
+    <div data-testid={`calibrator-${props.videoId}`}>
+      <span data-testid={`draft-count-${props.videoId}`}>{props.initialPoints?.length ?? 0}</span>
+      <button onClick={props.onCancel} type="button">{props.cancelLabel ?? "取消"}</button>
+      <button onClick={() => props.onComplete(`cal-${props.videoId}`, [
+        { id: "top_left", label: "远端左角", viewX: 10, viewY: 10, x: 10, y: 10 },
+        { id: "top_right", label: "远端右角", viewX: 90, viewY: 10, x: 90, y: 10 },
+        { id: "bottom_right", label: "近端右角", viewX: 90, viewY: 90, x: 90, y: 90 },
+        { id: "bottom_left", label: "近端左角", viewX: 10, viewY: 90, x: 10, y: 90 },
+      ])} type="button">完成标定 {props.videoId}</button>
+    </div>
+  ),
 }));
 
 import { MultiViewAnalysisSetupPage } from "./MultiViewAnalysisSetupPage";
@@ -41,7 +59,7 @@ function makeTake(sourceSessionId: string) {
   };
 }
 
-function makeSession(sessionId: string) {
+function makeSession(sessionId: string, overrides: Record<string, unknown> = {}) {
   return {
     session_id: sessionId,
     status: "completed",
@@ -62,6 +80,7 @@ function makeSession(sessionId: string) {
     duration_sec: 300,
     capture_take_id: TAKE_ID,
     session_dir: "",
+    ...overrides,
   };
 }
 
@@ -72,7 +91,8 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getCaptureTake.mockReset();
     mocks.getSyncRecording.mockReset();
     mocks.getVideoStreamUrl.mockReset();
-    mocks.getVideoStreamUrl.mockReturnValue(undefined);
+    mocks.createMultiviewAnalysisJob.mockReset();
+    mocks.getVideoStreamUrl.mockImplementation((videoId: string) => `/video/${videoId}`);
     mocks.getFusedManifest.mockResolvedValue(null);
     mocks.getFusionDiagnostics.mockResolvedValue(null);
   });
@@ -111,5 +131,57 @@ describe("MultiViewAnalysisSetupPage", () => {
     const nextButton = await screen.findByRole("button", { name: /下一步/ });
     // 素材闸只看视频就绪：take.status=failed 不阻塞（jest-dom 未注册，用 DOM 属性断言）
     expect((nextButton as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the wizard open when going back and restores calibration drafts", async () => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+    const onNavigate = vi.fn();
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={onNavigate} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
+    expect(screen.getByTestId("calibrator-video-a")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    expect(screen.getByRole("button", { name: "下一步：A 机位标定" })).toBeTruthy();
+    expect(onNavigate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步：A 机位标定" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    expect(screen.getByTestId("draft-count-video-b").textContent).toBe("4");
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+
+    expect(screen.getByTestId("draft-count-video-a").textContent).toBe("4");
+  });
+
+  it("disables the first next step until both camera videos are ready", async () => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID, { registered_video_ids: { cam_1: "video-a" } }));
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+
+    const nextButton = await screen.findByRole("button", { name: /下一步：A 机位标定/ });
+    expect((nextButton as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("returns to material checks after a sync preflight submit failure and allows retry", async () => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+    mocks.createMultiviewAnalysisJob.mockRejectedValue(new Error("sync preflight failed"));
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
+
+    expect(await screen.findByText("双摄分析启动失败")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "下一步：A 机位标定" })).toBeTruthy();
   });
 });

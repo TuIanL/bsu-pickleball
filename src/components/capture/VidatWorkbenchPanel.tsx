@@ -97,7 +97,7 @@ export function VidatWorkbenchPanel({ captureTakeId, onImported }: { captureTake
           <span>最终胜者 {String(preview.score_summary.final.match_winner ?? "未决出")}</span><span>阻塞 {preview.blocking_errors.length}</span>
         </div>
         {preview.blocking_errors.length > 0 && <ul className="mt-2 text-sm text-red-700">{preview.blocking_errors.map(message => <li key={message}>{message}</li>)}</ul>}
-        <button className="primary-button mt-3 px-4 py-2 text-sm" disabled={busy || preview.blocking_errors.length > 0} onClick={confirm} type="button">确认导入并重建比分</button>
+        <button className="green-button mt-3 px-4 py-2 text-sm" disabled={busy || preview.blocking_errors.length > 0} onClick={confirm} type="button">确认导入并重建比分</button>
       </div>}
     </section>
   );

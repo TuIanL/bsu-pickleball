@@ -60,6 +60,7 @@ class CaptureStopResultBuilder:
                 capture_mode=capture_take.capture_mode.value
                 if hasattr(capture_take.capture_mode, "value")
                 else str(capture_take.capture_mode),
+                display_mode=getattr(getattr(capture_take, "display_mode", "standard"), "value", getattr(capture_take, "display_mode", "standard")),
                 source_session_type=capture_take.source_session_type.value
                 if hasattr(capture_take.source_session_type, "value")
                 else str(capture_take.source_session_type),
@@ -125,6 +126,7 @@ class CaptureStopResultBuilder:
                 capture_mode=capture_take.capture_mode.value
                 if hasattr(capture_take.capture_mode, "value")
                 else str(capture_take.capture_mode),
+                display_mode=getattr(getattr(capture_take, "display_mode", "standard"), "value", getattr(capture_take, "display_mode", "standard")),
                 source_session_type=capture_take.source_session_type.value
                 if hasattr(capture_take.source_session_type, "value")
                 else str(capture_take.source_session_type),

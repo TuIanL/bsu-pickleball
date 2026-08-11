@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw } from "lucide-react";
-import type { AppPath, CaptureSegmentSummary, CaptureTakeSummary, SessionTimelineEvent } from "../types/report";
+import type { CaptureSegmentSummary, CaptureTakeSummary, SessionTimelineEvent } from "../types/report";
+import type { NavigateFn } from "../app/navigationTypes";
 import { getCaptureTake, listSegments, patchSegment, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents } from "../services/analysisClient";
 import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
 import { EditableSegmentTimeline } from "../components/EditableSegmentTimeline";
 
-type NavigateFn = (path: AppPath | `/capture/${string}`) => void;
 type FilterType = "all" | "set" | "game" | "rally";
 
 export function SegmentManagerPage({

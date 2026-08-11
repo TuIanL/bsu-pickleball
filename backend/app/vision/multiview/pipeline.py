@@ -11,16 +11,19 @@
 
 from __future__ import annotations
 
-import bisect
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.services.dual_camera_sync import map_reference_time
 from app.vision.multiview.association import CrossViewPlayerAssociator, PlayerAssociation
 from app.vision.multiview.canonical_timeline import CanonicalTimelineBuilder
 from app.vision.multiview.court_frame import CourtOrientation
 from app.vision.multiview.fusion import FusionConfig, FusionMeasurement, fuse_observation
 from app.vision.multiview.global_filter import GlobalTrackFilter
+from app.vision.multiview.pairing import (
+    FramePairingPlan,
+    build_frame_pairing_plan,
+    observations_by_source_frame,
+)
 from app.vision.multiview.quality import (
     intrinsic_from_canonical,
     pair_consistency,
@@ -36,6 +39,7 @@ class FusionPipelineResult:
 
     measurements: list[FusionMeasurement]
     global_players: list[PlayerAssociation]
+    pairing_plan: FramePairingPlan | None = None
 
 
 def run_fusion_pipeline(
@@ -60,6 +64,15 @@ def run_fusion_pipeline(
     """
     reference_orientation = reference_orientation or CourtOrientation.identity
     secondary_orientation = secondary_orientation or CourtOrientation.identity
+    pairing_plan = build_frame_pairing_plan(
+        reference_view_id=reference_view_id,
+        reference_observations=reference_observations,
+        secondary_view_id=secondary_view_id,
+        secondary_observations=secondary_observations,
+        sync=sync,
+        secondary_camera_id=secondary_camera_id,
+        max_pairing_error_ms=max_pairing_error_ms,
+    )
 
     if global_players is None:
         associator = associator or CrossViewPlayerAssociator()
@@ -74,6 +87,7 @@ def run_fusion_pipeline(
             sync=sync,
             secondary_camera_id=secondary_camera_id,
             max_pairing_error_ms=max_pairing_error_ms,
+            pairing_plan=pairing_plan,
         )
         global_players = associator.snapshot_global_players(reference_view_id, secondary_view_id)
 
@@ -99,6 +113,7 @@ def run_fusion_pipeline(
             sync=sync,
             secondary_camera_id=secondary_camera_id,
             orientations={reference_view_id: reference_orientation, secondary_view_id: secondary_orientation},
+            pairing_plan=pairing_plan,
         )
         for tick in ticks:
             ref_canonical = tick.observations[reference_view_id]
@@ -171,7 +186,11 @@ def run_fusion_pipeline(
                 measurements.append(measurement)
 
     measurements.sort(key=lambda m: (m.take_timestamp_ms, m.global_player_id))
-    return FusionPipelineResult(measurements=measurements, global_players=list(global_players))
+    return FusionPipelineResult(
+        measurements=measurements,
+        global_players=list(global_players),
+        pairing_plan=pairing_plan,
+    )
 
 
 def _run_association_pass(
@@ -186,35 +205,38 @@ def _run_association_pass(
     sync: MultiViewSyncCalibration | None,
     secondary_camera_id: str,
     max_pairing_error_ms: float,
+    pairing_plan: FramePairingPlan | None = None,
 ) -> None:
     """在 reference 时间轴逐 tick 运行关联器，建立跨视角映射。"""
     ref_by_frame: dict[int, list[ViewObservation]] = {}
     for obs in reference_observations:
         ref_by_frame.setdefault(obs.source_frame_index, []).append(obs)
 
-    # 每个 reference tick 取 nearest secondary obs（按 timestamp，容差内）。
-    # secondary 时间经 sync mapping 换算（ref_time → secondary_time）。
-    sec_sorted = sorted(secondary_observations, key=lambda o: o.timestamp_seconds)
-    sec_times = [o.timestamp_seconds for o in sec_sorted]
-    sec_calibration = sync.mapping_for(secondary_camera_id) if sync is not None else None
-
-    tolerance_s = max_pairing_error_ms / 1000.0
+    pairing_plan = pairing_plan or build_frame_pairing_plan(
+        reference_view_id=reference_view_id,
+        reference_observations=reference_observations,
+        secondary_view_id=secondary_view_id,
+        secondary_observations=secondary_observations,
+        sync=sync,
+        secondary_camera_id=secondary_camera_id,
+        max_pairing_error_ms=max_pairing_error_ms,
+    )
+    sec_by_frame = observations_by_source_frame(secondary_observations)
     for frame_index in sorted(ref_by_frame):
         ref_obs_at_tick = ref_by_frame[frame_index]
         if not ref_obs_at_tick:
             continue
-        ref_t0 = ref_obs_at_tick[0].timestamp_seconds
-        sec_target = ref_t0
-        if sec_calibration is not None:
-            sec_target = map_reference_time(sec_calibration, ref_t0)
-        # nearest secondary observations within tolerance per player.
-        sec_at_tick: list[ViewObservation] = []
-        if sec_sorted:
-            lo = max(0, bisect.bisect_left(sec_times, sec_target - tolerance_s))
-            hi = bisect.bisect_right(sec_times, sec_target + tolerance_s)
-            for obs in sec_sorted[lo:hi]:
-                if abs(obs.timestamp_seconds - sec_target) <= tolerance_s:
-                    sec_at_tick.append(obs)
+        decision = pairing_plan.decision_for(frame_index)
+        sec_at_tick = (
+            sec_by_frame.get(
+                decision.secondary_frame_index
+                if decision is not None and decision.secondary_frame_index is not None
+                else -1,
+                [],
+            )
+            if decision is not None and decision.available
+            else []
+        )
         associator.process_tick(
             reference_view_id=reference_view_id,
             reference_observations=ref_obs_at_tick,

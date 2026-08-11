@@ -1,4 +1,5 @@
 import type { AppShellMode, NavigationSection, ReportType, RouteState } from "./navigationTypes";
+import { parseTaskListContext } from "./navigationContext";
 
 export const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
 
@@ -21,6 +22,7 @@ const routeMeta = {
   "analysis-tasks": { shellMode: "standard", navigationSection: "analysis" },
   "recording-analyze": { shellMode: "standard", navigationSection: "analysis" },
   "multiview-setup": { shellMode: "standard", navigationSection: "analysis" },
+  showcase: { shellMode: "landing", navigationSection: null },
   "analysis-job": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-details": { shellMode: "standard", navigationSection: "analysis" },
   vision: { shellMode: "standard", navigationSection: "analysis" },
@@ -59,6 +61,12 @@ export function parsePath(pathname: string): RouteState {
 
   if (pathname === "/capture") {
     return { name: "captureHome", path: "/capture", ...routeMeta.captureHome };
+  }
+
+  const showcaseMatch = pathname.match(/^\/showcase\/([^/]+)$/);
+  if (showcaseMatch) {
+    const [, runtimeId] = showcaseMatch;
+    return { name: "showcase", path: `/showcase/${runtimeId}`, runtimeId, ...routeMeta.showcase };
   }
 
   const captureConsoleMatch = pathname.match(/^\/capture\/(.+)$/);
@@ -196,6 +204,19 @@ export function parsePath(pathname: string): RouteState {
 
 export function parseLocation(pathname: string, search: string): RouteState {
   const route = parsePath(pathname);
+
+  if (route.name === "tasks" || route.name === "analysis-tasks") {
+    const params = new URLSearchParams(search);
+    if (!params.has("source") && !params.has("taskSource") && !params.has("session") && !params.has("taskSession") && !params.has("cam") && !params.has("taskCam")) {
+      return route;
+    }
+    const context = parseTaskListContext(search);
+    return {
+      ...route,
+      taskSource: context.source,
+      taskSessionId: context.sessionId,
+    };
+  }
 
   if (route.name === "upload" && search) {
     const params = new URLSearchParams(search);

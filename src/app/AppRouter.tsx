@@ -18,6 +18,7 @@ import { VisionPage } from "../pages/VisionPage";
 import { ReportPage } from "../pages/ReportPage";
 import { NewAnalysisPage } from "../pages/NewAnalysisPage";
 import { AnalysisTasksPage } from "../pages/AnalysisTasksPage";
+import { ShowcaseDisplayPage } from "../pages/ShowcaseDisplayPage";
 
 const BallTrajectoryPage = lazy(() =>
   import("../pages/BallTrajectoryPage").then((module) => ({ default: module.BallTrajectoryPage })),
@@ -43,11 +44,11 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
       case "segmentManager":
         return <SegmentManagerPage fieldSessionId={route.fieldSessionId} takeId={route.takeId} onNavigate={onNavigate} />;
       case "tasks":
-        return <AnalysisTasksPage onNavigate={onNavigate} recentJob={recentJob} />;
+        return <AnalysisTasksPage onNavigate={onNavigate} recentJob={recentJob} taskSource={route.taskSource} taskSessionId={route.taskSessionId} />;
       case "new-analysis":
         return <NewAnalysisPage onNavigate={onNavigate} />;
       case "analysis-tasks":
-        return <AnalysisTasksPage onNavigate={onNavigate} recentJob={recentJob} />;
+        return <AnalysisTasksPage onNavigate={onNavigate} recentJob={recentJob} taskSource={route.taskSource} taskSessionId={route.taskSessionId} />;
       case "analysis-job":
         return <AnalysisJobPage jobId={route.jobId} onNavigate={onNavigate} />;
       case "analysis-details":
@@ -76,6 +77,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
       }
       case "multiview-setup":
         return <MultiViewAnalysisSetupPage captureTakeId={route.captureTakeId} onNavigate={onNavigate} />;
+      case "showcase":
+        return <ShowcaseDisplayPage runtimeId={route.runtimeId} onNavigate={onNavigate} />;
       case "workspace":
         return <div style={{ padding: 24, color: "#98A2B3", fontSize: 14 }}>工作台（建设中）</div>;
       case "landing":

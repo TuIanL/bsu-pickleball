@@ -25,6 +25,7 @@ from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, Pipe
 from app.schemas.tracking import ImagePoint, ProjectedCourtPoint2D, ProjectedTrackPoint
 from app.services.storage_service import StorageService
 from app.vision.multiview.artifact import FUSED_DIAGNOSTICS_FILENAME, FUSED_TRAJECTORY_FILENAME
+from app.vision.multiview.artifact import evidence_summary_from_artifact
 from app.vision.multiview.consumers import movement_points, visualization_points
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
@@ -278,6 +279,9 @@ class MultiViewResultComposer:
             self.storage.resolve_capture_job_root(parent_job_id, capture_take_id)
             self.storage.resolve_capture_job_root(reference_child.id, capture_take_id)
         child_artifacts = self._load_child_artifacts(reference_child.id, capture_take_id)
+        if child_artifacts is not None:
+            artifacts.analysis_window = child_artifacts.analysis_window
+            artifacts.analysis_overlay_video_metadata = child_artifacts.analysis_overlay_video_metadata
 
         for path_field, (getter_name, route, url_field, status_field, copy_file) in _INHERITED_ARTIFACT_SPECS.items():
             path_getter = getattr(self.storage, getter_name, None)
@@ -329,12 +333,28 @@ class MultiViewResultComposer:
         """把 fused + diagnostics 写入 Parent 命名空间，并写 fused_manifest.json 作为唯一出口。"""
         fused_path = self.storage.fused_trajectory_json_path(parent_job_id)
         diag_path = self.storage.fusion_diagnostics_json_path(parent_job_id)
+        evidence = evidence_summary_from_artifact(fused_artifact)
+        diagnostics.update({key: value for key, value in evidence.items() if key not in diagnostics})
+        effective_mode = str(diagnostics.get("effective_mode", evidence["effective_mode"]))
+        analysis_source = dict(analysis_source)
+        analysis_source["effective_mode"] = effective_mode
+        analysis_source.setdefault("requested_mode", analysis_source.get("mode"))
+        if effective_mode != "multiview_fused" and analysis_source.get("reason") is None:
+            analysis_source["reason"] = "; ".join(
+                str(diagnostics.get(key))
+                for key in ("authority_reason", "reason")
+                if diagnostics.get(key)
+            ) or "insufficient dual-view evidence"
         self.storage.write_json_atomic(fused_path, fused_artifact)
         self.storage.write_json_atomic(diag_path, diagnostics)
 
         manifest: dict[str, object] = {
             "schema_version": "fused_manifest.v1",
             "analysis_source": analysis_source,
+            "evidence": evidence,
+            "requested_mode": diagnostics.get("requested_mode"),
+            "effective_mode": effective_mode,
+            "canonical_frame_id": diagnostics.get("canonical_frame_id"),
             "artifacts": {
                 "playerTrajectory": {
                     "source": "fused",
@@ -404,6 +424,9 @@ class MultiViewResultComposer:
             message=message,
             match_context=match_context,
             observed_player_count=len({t.track_id for t in tracks if t.track_id}),
+            analysis_window=artifacts.analysis_window,
+            requested_execution_mode=job.executionMode,
+            effective_multiview_mode=str(diagnostics.get("effective_mode", "single_view_fallback")),
         )
 
     def compose_joint_result(
@@ -443,6 +466,7 @@ class MultiViewResultComposer:
         metrics = self.recompute_metrics(synthetic, match_context)
         tracks = self.fused_to_projected_tracks(synthetic)  # track_id = GlobalPlayer_<id>
         artifacts = AnalysisArtifacts()
+        artifacts.analysis_window = joint_output.diagnostics.get("analysis_window")
         video_id = job.videoId
         if video_id and not artifacts.source_video_url:
             artifacts.source_video_url = f"/api/videos/{video_id}/stream"
@@ -487,6 +511,9 @@ class MultiViewResultComposer:
             message=message,
             match_context=match_context,
             observed_player_count=len({t.track_id for t in tracks if t.track_id}),
+            analysis_window=artifacts.analysis_window,
+            requested_execution_mode=job.executionMode,
+            effective_multiview_mode=str(joint_output.diagnostics.get("effective_mode", "multiview_fused")),
         )
 
 
@@ -498,6 +525,7 @@ def build_fallback_fused_artifact(
     observations,
     sync_quality: str,
     reference_orientation=None,
+    canonical_frame_id: str | None = None,
 ) -> dict[str, object]:
     """单视角降级时的"伪 fused"轨迹：直接取 reference view 的 canonical 观测。
 
@@ -525,6 +553,7 @@ def build_fallback_fused_artifact(
                 "association_confidence": 0.0,
                 "sync_quality": sync_quality,
                 "court_frame_version": "canonical_court_frame.v1",
+                "canonical_frame_id": canonical_frame_id,
                 "measurement_source": "single_view_fallback",
                 "metric_eligible": True,
             }

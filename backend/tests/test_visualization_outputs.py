@@ -150,6 +150,56 @@ def test_overlay_writer_generates_video_with_tracking_only(tmp_path):
     assert output.stat().st_size > 0
 
 
+def test_overlay_writer_outputs_only_requested_clip(tmp_path):
+    import cv2  # type: ignore
+
+    video = _make_long_video(tmp_path / "source-window.avi")
+    output = tmp_path / "analysis_overlay_window.mp4"
+    result = OverlayVideoWriter(VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)).write(
+        source_video_path=video,
+        output_path=output,
+        clip_start_ms=2_000,
+        clip_end_ms=4_000,
+    )
+
+    assert result.status == "available"
+    assert result.item_count == 10  # 5fps, [2s, 4s)
+    assert result.metadata is not None
+    assert result.metadata["output_time_origin_ms"] == 2_000
+    capture = cv2.VideoCapture(str(output))
+    assert int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) == 10
+    capture.release()
+
+
+def test_overlay_writer_uses_pts_sidecar_for_requested_clip(tmp_path):
+    video = _make_long_video(tmp_path / "source-pts.avi")
+    sidecar = Path(f"{video}.pts.jsonl")
+    pts_values = [10.0, 10.1, 10.4, 10.5, 10.8]
+    pts_values.extend(10.8 + (index - 4) * 0.2 for index in range(5, 40))
+    sidecar.write_text(
+        "\n".join(
+            json.dumps({"frame_index": index, "pts_seconds": pts})
+            for index, pts in enumerate(pts_values)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "analysis_overlay_pts.mp4"
+
+    result = OverlayVideoWriter(
+        VisualizationConfig(minimap_width=80, minimap_height=160, minimap_padding=8)
+    ).write(
+        source_video_path=video,
+        output_path=output,
+        clip_start_ms=400,
+        clip_end_ms=800,
+    )
+
+    assert result.status == "available"
+    assert result.item_count == 2
+    assert result.metadata["timing_provenance"]["authority"] == "source_pts"
+
+
 def test_overlay_writer_generates_video_with_ball_and_bounce_points(tmp_path):
     video = _make_video(tmp_path / "source-ball.avi")
     output = tmp_path / "analysis_overlay_ball.mp4"

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Activity, Camera } from "lucide-react";
 import type { SyncRecordingSession } from "../types/report";
 import type { NavigateFn } from "../app/navigationTypes";
+import { taskListPath, withTaskListContext } from "../app/navigationContext";
 import type { CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { CourtCornerCalibrator } from "../components/platform/CourtCornerCalibrator";
 import { PageFrame } from "../components/PageFrame";
@@ -68,6 +69,8 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
   // ── Derived data ────────────────────────────────────────────────────────
 
   const camSlot = cam ?? "cam_1";
+  const taskContext = { source: "recorded" as const, sessionId, cameraSlot: cam ?? undefined };
+  const taskReturnPath = taskListPath(taskContext);
   const videoId = session?.registered_video_ids?.[camSlot];
   const videoSrc = videoId ? (getVideoStreamUrl(videoId) ?? undefined) : undefined;
 
@@ -119,7 +122,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
         cameraSlot: camSlot,
       });
 
-      onNavigate(`/analysis/${job.id}` as Parameters<NavigateFn>[0]);
+      onNavigate(withTaskListContext(`/analysis/${job.id}`, taskContext));
     } catch (err) {
       setSubmitError({
         title: "分析任务创建失败",
@@ -142,7 +145,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
-            onClick={() => onNavigate("/analysis/tasks")}
+            onClick={() => onNavigate(taskReturnPath)}
             type="button"
           >
             返回任务列表
@@ -176,7 +179,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
-            onClick={() => onNavigate("/analysis/tasks")}
+            onClick={() => onNavigate(taskReturnPath)}
             type="button"
           >
             返回任务列表
@@ -192,7 +195,11 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
     <PageFrame>
       <section className="mx-auto max-w-5xl">
         {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="mb-6">
+          <button className="quiet-button mb-4 px-3 py-2 text-sm" onClick={() => onNavigate(taskReturnPath)} type="button">
+            返回录制任务
+          </button>
+          <div className="flex items-center gap-3">
           <span className="grid size-10 place-items-center rounded-xl bg-[#22C55E]/15 text-[#168A34]">
             <Camera size={20} aria-hidden="true" />
           </span>
@@ -201,6 +208,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
             <p className="mt-0.5 text-sm text-slate-500">
               {camSlot === "cam_1" ? "底线 A 机位" : "底线 B 机位"} · 场地信息已锁定
             </p>
+          </div>
           </div>
         </div>
 
@@ -230,7 +238,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           videoSrc={videoSrc}
           videoId={videoId}
           onComplete={handleCalibrationComplete}
-          onCancel={() => onNavigate("/analysis/tasks")}
+          onCancel={() => onNavigate(taskReturnPath)}
           isSubmitting={isSubmitting}
         />
 

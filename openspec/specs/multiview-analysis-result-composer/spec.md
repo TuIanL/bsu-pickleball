@@ -110,7 +110,6 @@ Composer 生成的 Parent `AnalysisPipelineResult` SHALL 提供 `source_video_ur
 - **THEN** `artifacts.source_video_url` SHALL 基于 Parent 的 `videoId` 生成
 - **AND** `observed_player_count` SHALL 等于 fused 轨迹中不同 `global_player_id` 的数量
 
-
 ### Requirement: v1/v2 独立 writer + 公共 version-aware reader
 
 系统 SHALL 提供独立 artifact writer:`late_fusion_v1 → writer_v1 → fused_player_trajectory.v1`(P0 writer 永远保留);`joint_tracking_v2 → writer_v2 → fused_player_trajectory.v2`。系统 SHALL 提供公共 `load_fused_trajectory(path)` reader:按 schema_version 归一化(`normalize_v1` / `normalize_v2`)为 Composer 消费的 internal model。
@@ -184,3 +183,20 @@ Composer 生成的 Parent `AnalysisPipelineResult` SHALL 提供 `source_video_ur
 - **WHEN** F1 生成或消费历史 v2 产物
 - **THEN** `fused_player_trajectory.f0.v2.json` SHALL 保持原样
 - **AND** 无 `refinement` 字段的历史产物 SHALL 视为 F0-only(`final_source=first_pass_f0`)
+
+### Requirement: Manifest 反映真实多视角证据
+
+`MultiViewResultComposer` SHALL 根据 diagnostics 的有效证据计算并写入 effective mode。manifest 的 `analysis_source`、fused diagnostics 和 Parent result message SHALL 使用一致的模式语义。
+
+#### Scenario: 零双摄证据不标正常融合
+
+- **WHEN** fused artifact 只有 reference single-view fallback samples
+- **THEN** manifest 的 mode SHALL 为 `single_view_fallback`
+- **AND** manifest SHALL 保留 fallback reason 与 evidence counters
+
+#### Scenario: 部分覆盖标 degraded
+
+- **WHEN** 运行包含双摄证据但 secondary 覆盖低于正常融合阈值
+- **THEN** manifest SHALL 为 `multiview_degraded`
+- **AND** diagnostics SHALL 暴露 effective ratio
+

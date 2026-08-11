@@ -376,6 +376,50 @@ def test_joint_run_end_to_end():
     assert cam2_rt.counters.get("stepped_frames", 0) >= 1
 
 
+def test_joint_run_window_limits_ticks_and_excludes_warmup_samples():
+    from types import SimpleNamespace
+
+    class FakeRuntime:
+        def __init__(self, view_id):
+            self.view_id = view_id
+            self.calls = []
+
+        def step(self, source_frame_index, timestamp_s, guidance=()):
+            self.calls.append(source_frame_index)
+            return SimpleNamespace(frame_index=source_frame_index, frame_positions=[])
+
+    cam1 = FakeRuntime("cam_1")
+    cam2 = FakeRuntime("cam_2")
+    clock = CanonicalAnalysisClock(
+        reference_view_id="cam_1", secondary_view_id="cam_2",
+        secondary_frames=[FrameTiming(i, i / 30.0) for i in range(30)],
+        sync=_sync(), secondary_camera_id="cam_2",
+    )
+    registry = GlobalPlayerRegistry()
+    run = MultiViewJointRun(
+        run_id="mvr-window", capture_take_id="take", reference_view_id="cam_1",
+        clock=clock, runtimes={"cam_1": cam1, "cam_2": cam2},
+        registry=registry, associator=GlobalPlayerAssociator(registry, max_association_distance_ft=3.0),
+        guidance_generator=GuidanceGenerator(CrossViewGuidancePolicy()),
+        orientations={"cam_1": IDENTITY, "cam_2": IDENTITY},
+        inverse_homography=np.eye(3), frame_width=640, frame_height=480,
+    )
+    out = run.run(
+        reference_fps=30.0,
+        frame_stride=1,
+        reference_frame_start=3,
+        reference_frame_end=9,
+        metric_frame_start=5,
+        metric_frame_end=9,
+    )
+
+    assert cam1.calls == [3, 4, 5, 6, 7, 8]
+    assert cam2.calls == [3, 4, 5, 6, 7, 8]
+    assert out.diagnostics["processed_tick_count"] == 6
+    assert out.diagnostics["metric_frame_range"] == {"start": 5, "end": 9}
+    assert out.normalized.samples == []
+
+
 # ---- ReferenceRichAnalysisContext(full scope 富分析)-------------------------
 
 

@@ -7,9 +7,7 @@ import {
   timelineMarkers,
   videoOverlayLabels,
 } from "../data/demoData";
-import type { AppPath } from "../types/report";
-
-type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
+import type { NavigateFn } from "../app/navigationTypes";
 
 function PageFrame({ children, compact = false }: { children: ReactNode; compact?: boolean }) {
   return (

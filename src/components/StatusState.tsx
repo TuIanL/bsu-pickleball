@@ -1,5 +1,5 @@
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
-import type { NavigateFn } from "../app/navigationTypes";
+import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { PageFrame } from "./PageFrame";
 import { DiagnosticNoticeCard } from "./DiagnosticNoticeCard";
 
@@ -7,11 +7,13 @@ export function StatusState({
   body,
   notice,
   onNavigate,
+  backPath,
   title,
 }: {
   body: string;
   notice?: DiagnosticNotice | null;
   onNavigate: NavigateFn;
+  backPath?: NavigatePath;
   title: string;
 }) {
   return (
@@ -29,7 +31,7 @@ export function StatusState({
           <button className="green-button" onClick={() => onNavigate("/analysis/new")} type="button">
             上传新视频
           </button>
-          <button className="quiet-button" onClick={() => onNavigate("/analysis/tasks")} type="button">
+          <button className="quiet-button" onClick={() => onNavigate(backPath ?? "/analysis/tasks")} type="button">
             返回任务管理
           </button>
           <button className="quiet-button" onClick={() => onNavigate("/vision")} type="button">

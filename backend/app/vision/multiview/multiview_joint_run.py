@@ -20,6 +20,8 @@ from app.vision.multiview.global_state import GlobalPlayerRegistry
 from app.vision.multiview.joint_artifact import FusedSample, NormalizedFusedTrajectory, write_fused_v2
 from app.vision.multiview.joint_view_runtime import JointViewRuntime
 from app.vision.multiview.offline_refinement import F0TickViewState
+from app.vision.multiview.court_frame import CanonicalCourtFrameDefinition
+from app.services.frame_timing_provider import FrameTimingProvider
 
 
 class CancellationToken(Protocol):
@@ -59,6 +61,8 @@ class MultiViewJointRun:
         inverse_homography: Any,
         frame_width: int,
         frame_height: int,
+        canonical_frame_ref: CanonicalCourtFrameDefinition | None = None,
+        reference_timing_provider: FrameTimingProvider | None = None,
     ) -> None:
         self.run_id = run_id
         self.capture_take_id = capture_take_id
@@ -72,6 +76,8 @@ class MultiViewJointRun:
         self.inverse_homography = inverse_homography
         self.frame_width = frame_width
         self.frame_height = frame_height
+        self.canonical_frame_ref = canonical_frame_ref
+        self.reference_timing_provider = reference_timing_provider
         self.counter: dict[str, int] = {}
         # 失败语义:非 reference 视角连续缺帧(解码失败)→ 该时刻起 degraded,不再 step(继续 reference)
         self._consecutive_missing: dict[str, int] = {}
@@ -82,9 +88,14 @@ class MultiViewJointRun:
     def run(
         self,
         *,
-        reference_frame_count: int,
+        reference_frame_count: int | None = None,
         reference_fps: float,
         frame_stride: int = 1,
+        reference_frame_start: int = 0,
+        reference_frame_end: int | None = None,
+        metric_frame_start: int | None = None,
+        metric_frame_end: int | None = None,
+        analysis_window: dict[str, Any] | None = None,
         cancellation_token: CancellationToken | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> MultiViewJointRunOutput:
@@ -92,16 +103,36 @@ class MultiViewJointRun:
         if reference_fps <= 0:
             reference_fps = 30.0
         stride = max(1, int(frame_stride))
+        if reference_frame_start < 0:
+            raise ValueError("reference_frame_start must be non-negative")
+        if reference_frame_end is None:
+            if reference_frame_count is None:
+                raise ValueError("reference_frame_count or reference_frame_end is required")
+            reference_frame_end = reference_frame_start + max(0, reference_frame_count) * stride
+        if reference_frame_end <= reference_frame_start:
+            raise ValueError("reference frame range must be positive")
+        tick_indices = list(range(reference_frame_start, reference_frame_end, stride))
+        total_ticks = len(tick_indices)
+        metric_start = metric_frame_start if metric_frame_start is not None else reference_frame_start
+        metric_end = metric_frame_end if metric_frame_end is not None else reference_frame_end
+        if metric_start < reference_frame_start or metric_end > reference_frame_end or metric_end <= metric_start:
+            raise ValueError("metric frame range must be inside the reference frame range")
         samples: list[FusedSample] = []
         f0_trace: dict[str, dict[str, dict[int, F0TickViewState]]] = {}
         f0_source_frames: dict[str, dict[int, int | None]] = {}
         f0_global_positions: dict[str, dict[int, tuple[float, float]]] = {}
 
-        for n in range(reference_frame_count):
+        for tick_number, ref_idx in enumerate(tick_indices):
             if cancellation_token is not None:
                 cancellation_token.raise_if_cancelled()
-            ref_idx = n * stride
-            timestamp_s = ref_idx / reference_fps
+            timestamp_s = (
+                self.reference_timing_provider.take_timestamp_for_frame(ref_idx)
+                if self.reference_timing_provider is not None
+                else None
+            )
+            if timestamp_s is None:
+                timestamp_s = ref_idx / reference_fps
+            metric_eligible_tick = metric_start <= ref_idx < metric_end
             bundle = self.clock.tick(
                 reference_frame_index=ref_idx,
                 reference_timestamp_seconds=timestamp_s,
@@ -162,19 +193,20 @@ class MultiViewJointRun:
                 if len(views) >= 2:
                     self.registry.record_dual_consistent(gid)
                 # 逐 tick 轨迹样本(每个 canonical tick 一个真实观测样本)
-                samples.append(
-                    FusedSample(
-                        global_player_id=gid,
-                        take_timestamp_ms=take_ms,
-                        reference_frame_index=ref_idx,
-                        x_ft=x,
-                        y_ft=y,
-                        fusion_status="dual_observed" if len(views) >= 2 else "single_view_fallback",
-                        metric_eligible=True,  # 真实观测(非 predicted),可进指标
-                        observation_origin="base",
-                        contributing_views=list(views),
+                if metric_eligible_tick:
+                    samples.append(
+                        FusedSample(
+                            global_player_id=gid,
+                            take_timestamp_ms=take_ms,
+                            reference_frame_index=ref_idx,
+                            x_ft=x,
+                            y_ft=y,
+                            fusion_status="dual_observed" if len(views) >= 2 else "single_view_fallback",
+                            metric_eligible=True,  # 真实观测(非 predicted),可进指标
+                            observation_origin="base",
+                            contributing_views=list(views),
+                        )
                     )
-                )
 
             # ---- F0 trace(供 offline refinement 挖掘)----
             for gid in list(self.registry.players):
@@ -183,25 +215,27 @@ class MultiViewJointRun:
                     matched = [u for u in updates if u.global_id == gid and u.view_id == view_id]
                     if matched:
                         obs = matched[0].observation
-                        view_trace.setdefault(view_id, {})[n] = F0TickViewState(
+                        view_trace.setdefault(view_id, {})[tick_number] = F0TickViewState(
                             observed=True, quality=obs.confidence,
                             canonical_position=(obs.canonical_x_ft, obs.canonical_y_ft),
                             origin=obs.detection_origin,
                         )
                     else:
-                        view_trace.setdefault(view_id, {})[n] = F0TickViewState(
+                        view_trace.setdefault(view_id, {})[tick_number] = F0TickViewState(
                             observed=False, quality=0.0, canonical_position=None, origin="missing",
                         )
             for view_id, _rt in self.runtimes.items():
                 bundle_sample = bundle.views.get(view_id)
-                f0_source_frames.setdefault(view_id, {})[n] = (
-                    bundle_sample.source_frame_index if bundle_sample is not None else None
-                )
-            for gid, (x, y, views) in fused.items():
-                f0_global_positions.setdefault(gid, {})[n] = (x, y)
+                if metric_eligible_tick:
+                    f0_source_frames.setdefault(view_id, {})[tick_number] = (
+                        bundle_sample.source_frame_index if bundle_sample is not None else None
+                    )
+            if metric_eligible_tick:
+                for gid, (x, y, views) in fused.items():
+                    f0_global_positions.setdefault(gid, {})[tick_number] = (x, y)
 
             if progress_callback is not None:
-                progress_callback(ref_idx + 1, reference_frame_count)
+                progress_callback(tick_number + 1, total_ticks)
 
         # ---- 结束:逐 tick 样本已累积,排序后写 v2 ----
         samples.sort(key=lambda s: (s.take_timestamp_ms, s.global_player_id))
@@ -220,7 +254,15 @@ class MultiViewJointRun:
             "view_degraded": sorted(self.view_degraded),
             "degraded": "joint_degraded" if self.view_degraded else "healthy",
             "counters": dict(self.counter),
+            "reference_frame_range": {"start": reference_frame_start, "end": reference_frame_end},
+            "metric_frame_range": {"start": metric_start, "end": metric_end},
+            "processed_tick_count": total_ticks,
+            "canonical_frame_id": (
+                self.canonical_frame_ref.frame_id if self.canonical_frame_ref is not None else None
+            ),
         }
+        if analysis_window is not None:
+            diagnostics["analysis_window"] = analysis_window
         return MultiViewJointRunOutput(
             trajectory=trajectory,
             normalized=NormalizedFusedTrajectory(

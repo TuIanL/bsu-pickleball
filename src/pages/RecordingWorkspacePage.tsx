@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import type { AppPath, RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
+import type { RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
+import type { NavigateFn, NavigatePath, TaskListContext } from "../app/navigationTypes";
+import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
 import type { CaptureSegmentSummary } from "../types/report";
 import {
   getRecording, getSyncRecording, getFieldSession,
@@ -9,8 +11,6 @@ import {
 import { MiniTimeline } from "../components/MiniTimeline";
 import { VidatWorkbenchPanel } from "../components/capture/VidatWorkbenchPanel";
 
-type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
-
 type RecordingType = "single" | "dual";
 type PageState =
   | { status: "loading" }
@@ -18,6 +18,24 @@ type PageState =
   | { status: "loaded"; type: RecordingType; recording: RecordingSession | null; syncRecording: SyncRecordingSession | null };
 
 type TimelineLoadState = "idle" | "loaded" | "unavailable";
+
+export function recordingTaskListPath(
+  sessionId: string,
+  recordingType: RecordingType | undefined,
+  locationTaskContext: TaskListContext,
+  hasExplicitTaskContext: boolean,
+): NavigatePath {
+  if (hasExplicitTaskContext) {
+    return taskListPath(locationTaskContext);
+  }
+  return taskListPath(
+    recordingType === "dual"
+      ? { source: "sync_recording", sessionId }
+      : recordingType === "single"
+        ? { source: "recorded", sessionId }
+        : { source: "upload" },
+  );
+}
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
   session_note: "备注",
@@ -111,6 +129,14 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
   const video1Ref = useRef<HTMLVideoElement | null>(null);
   const video2Ref = useRef<HTMLVideoElement | null>(null);
   const pendingSeekRef = useRef<{ source: string; target: number } | null>(null);
+  const locationTaskContext = taskContextFromLocation();
+  const hasExplicitTaskContext = typeof window !== "undefined" && (() => {
+    const params = new URLSearchParams(window.location.search);
+    return ["source", "taskSource", "session", "taskSession", "sessionId", "cam", "taskCam"].some((key) => params.has(key));
+  })();
+  const taskReturnPath = (recordingType?: RecordingType): NavigatePath => {
+    return recordingTaskListPath(sessionId, recordingType, locationTaskContext, hasExplicitTaskContext);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -263,7 +289,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <p className="text-slate-500">录制未找到</p>
-        <button className="quiet-button px-4 py-2" onClick={() => onNavigate("/analysis/tasks")} type="button">返回任务列表</button>
+        <button className="quiet-button px-4 py-2" onClick={() => onNavigate(taskReturnPath())} type="button">返回任务列表</button>
       </div>
     );
   }
@@ -292,7 +318,13 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* 头部 */}
       <div className="flex items-center gap-4">
-        <button className="quiet-button p-2" onClick={() => onNavigate("/analysis/tasks")} type="button" title="返回">
+        <button
+          aria-label={isDual ? "返回双摄任务管理" : "返回录制任务管理"}
+          className="quiet-button p-2"
+          onClick={() => onNavigate(taskReturnPath(type))}
+          type="button"
+          title={isDual ? "返回双摄任务管理" : "返回录制任务管理"}
+        >
           <ArrowLeft size={18} />
         </button>
         <div className="min-w-0 flex-1">

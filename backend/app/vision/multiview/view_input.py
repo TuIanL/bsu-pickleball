@@ -22,3 +22,4 @@ class MultiViewViewInput:
     calibration_id: str
     # None = 尚未声明（job-level fallback，绝不猜测）。
     court_orientation: CourtOrientation | None = None
+    camera_id: str | None = None  # 稳定硬件 identity，用于精确匹配 sync mapping

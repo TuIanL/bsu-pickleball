@@ -129,6 +129,7 @@ class PoseOverlayArtifact(BaseModel):
     status: PoseArtifactStatus = "unavailable"
     detail: str
     keypoint_schema: str = "rtmpose26"  # 关键点方案名
+    timing_provenance: dict[str, object] | None = None
     source: SourceFrameSize  # 原图尺寸
     skeleton_edges: list[SkeletonEdge] = Field(default_factory=list)  # 骨架连线定义
     frames: list[PoseOverlayFrame] = Field(default_factory=list)

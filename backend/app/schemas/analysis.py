@@ -143,10 +143,19 @@ class MultiViewViewPayload(BaseModel):
     """双摄创建请求中的一路 view 输入（video + calibration + orientation）。"""
 
     viewId: str  # 如 "cam_1" / "cam_2"
+    # 稳定硬件 identity；历史请求缺省时兼容回退到 viewId。
+    cameraId: str | None = None
     videoId: str
     calibrationId: str
     # None = 尚未声明（preflight 不通过，绝不猜测）。
     courtOrientation: Literal["identity", "rotate_180", "mirror_x", "mirror_y"] | None = None
+
+
+class CanonicalFramePayload(BaseModel):
+    """首次创建 take canonical frame 时使用的物理端点定义。"""
+
+    endA: str = Field(default="end_a", min_length=1)
+    endB: str = Field(default="end_b", min_length=1)
 
 
 class MultiViewCreateRequest(BaseModel):
@@ -156,6 +165,7 @@ class MultiViewCreateRequest(BaseModel):
     views: list[MultiViewViewPayload] = Field(min_length=2, max_length=8)  # P0.5 恒 2 路，数组为多机位扩展留位
     # 执行模式:late_fusion_v1(2 child → FusionRun)| joint_tracking_v2(直接 runnable → ViewRun A/B)
     executionMode: Literal["late_fusion_v1", "joint_tracking_v2"] = "late_fusion_v1"
+    canonicalFrame: CanonicalFramePayload | None = None
 
 
 class AnalysisJobCreate(BaseModel):
@@ -188,6 +198,8 @@ class SourceJobRef(BaseModel):
 
     cameraSlot: str
     jobId: str
+    # 同步 artifact 使用的真实硬件 camera identity；历史任务缺省时回退到 cameraSlot。
+    cameraId: str | None = None
     # 该 view（CaptureTrack + Calibration）的 local→canonical 变换；None = 未声明。
     courtOrientation: Literal["identity", "rotate_180", "mirror_x", "mirror_y"] | None = None
 
@@ -261,6 +273,8 @@ class AnalysisJobSummary(BaseModel):
     sourceJobs: list[SourceJobRef] = Field(default_factory=list)
     # 双摄任务参考机位（Composer/Executor 据此决定 reference view）
     referenceViewId: str | None = None
+    # 同一 CaptureTake 的 canonical court frame；历史任务缺省时保持只读兼容。
+    canonicalFrameId: str | None = None
     # 双摄任务各机位子进度（cam_1 / cam_2）
     viewRuns: dict[str, ViewRunSummary] | None = None
 

@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
-import type { AppPath, FieldSession, RecordingSession } from "../../types/report";
+import type { FieldSession, RecordingSession } from "../../types/report";
+import type { NavigateFn } from "../../app/navigationTypes";
 import { RecordingTaskCard } from "./RecordingTaskCard";
-
-type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 interface FieldSessionGroupCardProps {
   fieldSession: FieldSession | null;
@@ -100,6 +99,9 @@ export function FieldSessionGroupCard({
               <span className="rounded-full bg-[#F1F7EC] px-2.5 py-0.5 text-xs font-bold text-slate-500">
                 {STATUS_LABEL[fieldSession.status] ?? fieldSession.status}
               </span>
+            )}
+            {!isUncategorized && fieldSession?.display_mode === "showcase" && (
+              <span className="rounded-full bg-[#FFF1D6] px-2.5 py-0.5 text-xs font-bold text-[#9A5A00]">展示模式</span>
             )}
           </div>
           <p className="mt-0.5 truncate text-xs text-slate-400">

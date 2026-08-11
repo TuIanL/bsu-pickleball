@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowLeft, CircleDot, Loader2, Route, SlidersHorizontal } from "lucide-react";
-import type { AppPath, NavigateFn } from "../app/navigationTypes";
+import type { NavigateFn } from "../app/navigationTypes";
+import { taskContextForJob, withTaskListContext } from "../app/navigationContext";
 import { PageFrame } from "../components/PageFrame";
 import { BallTrajectoryScene } from "../components/platform/BallTrajectoryScene";
 import {
@@ -165,7 +166,7 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
 
   const handleSelectShot = useCallback((shotId: string | null) => setSelectedShotId(shotId), []);
   const handleWebGlError = useCallback((message: string) => setWebGlError(message), []);
-  const visionPath = `/analysis/${jobId}/vision` as AppPath;
+  const visionPath = withTaskListContext(`/analysis/${jobId}/vision`, taskContextForJob(job));
 
   if (loadState === "loading") {
     return (

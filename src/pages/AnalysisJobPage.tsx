@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { ArrowRight, Camera, Layers, ShieldAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, Camera, Layers, ShieldAlert } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
+import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import type { AnalysisJobSummary, FusedManifest } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -23,6 +24,8 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   const [diagnostics, setDiagnostics] = useState<FusionDiagnostics | null>(null);
 
   const isMultiview = job?.analysisKind === "multiview";
+  const returnPath = taskListPathForJob(job);
+  const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
 
   useEffect(() => {
     if (!isMultiview || job?.status !== "completed") {
@@ -76,15 +79,15 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   }, [jobId]);
 
   if (job === undefined) {
-    return <StatusState title="正在读取分析任务" body="正在连接后端或本地 mock 任务记录。" onNavigate={onNavigate} />;
+    return <StatusState title="正在读取分析任务" body="正在连接后端或本地 mock 任务记录。" onNavigate={onNavigate} backPath={returnPath} />;
   }
 
   if (loadError) {
-    return <StatusState title={loadError.title} body={loadError.body} notice={loadError} onNavigate={onNavigate} />;
+    return <StatusState title={loadError.title} body={loadError.body} notice={loadError} onNavigate={onNavigate} backPath={returnPath} />;
   }
 
   if (!job) {
-    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能是本地记录已清空。`} onNavigate={onNavigate} />;
+    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能是本地记录已清空。`} onNavigate={onNavigate} backPath={returnPath} />;
   }
 
   const statusCopy = {
@@ -137,6 +140,14 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
       <section className="sport-card overflow-hidden">
         <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.42fr] lg:p-8">
           <div>
+            <button
+              className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+              onClick={() => onNavigate(returnPath)}
+              type="button"
+            >
+              <ArrowLeft size={16} aria-hidden="true" />
+              返回任务管理
+            </button>
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-[#168A34]">分析任务</p>
             <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{statusCopy[job.status]}</h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
@@ -190,15 +201,15 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
           {/* 降级提示 + 数据来源（不静默） */}
           {manifest?.analysis_source ? (
             <>
-              {manifest.analysis_source.mode === "single_view_fallback" ? (
+              {manifest.analysis_source.mode === "single_view_fallback" || manifest.analysis_source.mode === "multiview_degraded" ? (
                 <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4">
                   <strong className="flex items-center gap-1.5 text-sm text-[#991B1B]">
                     <ShieldAlert size={15} aria-hidden="true" />
-                    本次未完成双视角融合
+                    {manifest.analysis_source.mode === "multiview_degraded" ? "本次双视角证据覆盖不足" : "本次未完成双视角融合"}
                   </strong>
                   <p className="mt-1 text-sm leading-6 text-[#B91C1C]">
                     {manifest.analysis_source.reason
-                      ? `${manifest.analysis_source.reason}，结果已使用 ${VIEW_LABELS[manifest.analysis_source.source_view ?? ""] ?? manifest.analysis_source.source_view ?? "参考机位"} 单视角数据。`
+                      ? `${manifest.analysis_source.reason}，结果按 ${manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "参考机位单视角"} 语义展示。`
                       : "结果使用单视角数据（未执行多视角融合）。"}
                   </p>
                 </div>
@@ -214,9 +225,11 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               <div className="mt-4 grid gap-2 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4 text-sm">
                 {[
                   ["分析模式", "双摄协同"],
-                  ["球员移动", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : "A 机位单视角"],
-                  ["热力图", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : "A 机位单视角"],
-                  ["移动距离 / 速度", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : "A 机位单视角"],
+                  ["请求执行模式", manifest.requested_mode ?? manifest.analysis_source.requested_mode ?? job.executionMode ?? "late_fusion_v1"],
+                  ["有效结果模式", manifest.effective_mode ?? manifest.analysis_source.effective_mode ?? manifest.analysis_source.mode],
+                  ["球员移动", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "A 机位单视角"],
+                  ["热力图", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "A 机位单视角"],
+                  ["移动距离 / 速度", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "A 机位单视角"],
                   ["姿态 / 球路 / 动作识别", manifest.analysis_source.source_view
                     ? `${VIEW_LABELS[manifest.analysis_source.source_view] ?? manifest.analysis_source.source_view} 机位`
                     : "A 机位"],
@@ -382,7 +395,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             <button
               className="green-button px-4 py-2.5"
               disabled={!isCompleted}
-              onClick={() => onNavigate(`/analysis/${job.id}/vision`)}
+              onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/vision`))}
               type="button"
             >
               打开视频分析
@@ -391,7 +404,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             <button
               className="quiet-button px-4 py-2.5"
               disabled={!isCompleted}
-              onClick={() => onNavigate(`/analysis/${job.id}/details`)}
+              onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/details`))}
               type="button"
             >
               分析详情
@@ -401,7 +414,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
                 className="quiet-button px-4 py-2.5"
                 disabled={!isCompleted}
                 key={action.type}
-                onClick={() => onNavigate(`/analysis/${job.id}/reports/${action.type}`)}
+                onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/reports/${action.type}`))}
                 type="button"
               >
                 {action.title}
@@ -412,10 +425,10 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
                 {isCanceling ? "取消中" : "取消任务"}
               </button>
             ) : null}
-            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(contextualPath("/analysis/new"))} type="button">
               {isCanceled ? "新建分析" : "重新上传"}
             </button>
-            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(returnPath)} type="button">
               返回任务管理
             </button>
           </div>

@@ -13,6 +13,8 @@ import numpy as np
 
 # 小地图渲染器，用于在视频角落叠加球场俯视小地图。
 from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisualizer
+from app.services.analysis_window import AnalysisWindowError, resolve_analysis_window
+from app.services.frame_timing_provider import FrameTimingProvider
 
 # 可视化配置、坐标点、结果对象，以及按语言取标签的函数。
 from app.vision.pickleball_game_analysis.visualization_schemas import (
@@ -42,6 +44,8 @@ class OverlayVideoWriter:
         ball_points: list[VisualizationPoint] | None = None,
         bounce_points: list[VisualizationPoint] | None = None,
         fps_override: float | None = None,
+        clip_start_ms: int | None = None,
+        clip_end_ms: int | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> VisualizationResult:
         # 把人物检测/姿态/球检测等叠加层以及球场坐标点绘制到视频帧上，写出叠加视频。
@@ -59,6 +63,28 @@ class OverlayVideoWriter:
         if width <= 0 or height <= 0:
             cap.release()
             return VisualizationResult("failed", "源视频尺寸无效，无法写出叠加视频")
+        timing_provider = FrameTimingProvider.from_media(
+            source_video_path,
+            frame_count=frame_count,
+            fps=fps,
+        )
+        try:
+            window = resolve_analysis_window(
+                source_duration_ms=int(timing_provider.duration_seconds * 1000),
+                source_frame_count=frame_count,
+                fps=fps,
+                clip_start_ms=clip_start_ms,
+                clip_end_ms=clip_end_ms,
+                timing_provider=timing_provider,
+            )
+        except AnalysisWindowError as exc:
+            cap.release()
+            return VisualizationResult("failed", f"叠加视频窗口无效：{exc}")
+        start_frame = window.requested_start_frame if window.enabled else 0
+        end_frame = window.requested_end_frame if window.enabled else frame_count
+        assert start_frame is not None or not window.enabled
+        if window.enabled:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame or 0)
 
         # 确保输出目录存在，并用 mp4v 编码创建 VideoWriter。
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,13 +109,9 @@ class OverlayVideoWriter:
             if pp.frame_index is not None:
                 label = pp.label or ""
                 player_frame_table[pp.frame_index][label] = pp
-        trail_frames = (
-            round(self.config.minimap_player_trail_seconds * fps)
-            if hasattr(self.config, "minimap_player_trail_seconds")
-            else 0
-        )
+        trail_seconds = max(0.0, float(getattr(self.config, "minimap_player_trail_seconds", 0.0)))
         has_render_track = bool(player_frame_table)
-        frame_index = 0
+        frame_index = start_frame or 0
         written = 0
         from collections import deque
 
@@ -100,6 +122,8 @@ class OverlayVideoWriter:
                 ok, frame = cap.read()
                 if not ok:
                     break
+                if frame_index >= end_frame:
+                    break
                 # 依次叠加四种信息：追踪框、姿态关键点、球检测、球场坐标点（实际在 minimap 画）。
                 self._draw_tracking(frame, tracking_by_frame.get(frame_index))
                 self._draw_pose(frame, pose_by_frame.get(frame_index))
@@ -107,9 +131,12 @@ class OverlayVideoWriter:
                 self._draw_court_points(
                     frame, points_by_frame.get(frame_index, []), bounces_by_frame.get(frame_index, [])
                 )
+                current_time = timing_provider.take_timestamp_for_frame(frame_index)
+                if current_time is None:
+                    current_time = frame_index / fps
                 # 在角落叠加小地图面板。
-                if has_render_track and trail_frames > 0:
-                    # 使用帧索引表 + deque 方式（渲染轨迹路径）
+                if has_render_track and trail_seconds > 0:
+                    # 轨迹拖尾按 source PTS 时间裁剪，frame index 只负责查找当前帧。
                     current_players = player_frame_table.get(frame_index, {})
                     for pid, pt in current_players.items():
                         trail = player_trails[pid]
@@ -120,27 +147,24 @@ class OverlayVideoWriter:
                                 trail.clear()
                         trail.append(pt)
                     for pid in list(player_trails):
-                        while (
-                            player_trails[pid]
-                            and player_trails[pid][0].frame_index is not None
-                            and player_trails[pid][0].frame_index < frame_index - trail_frames
+                        while player_trails[pid] and (
+                            player_trails[pid][0].timestamp_seconds is not None
+                            and player_trails[pid][0].timestamp_seconds < current_time - trail_seconds
                         ):
                             player_trails[pid].popleft()
                     minimap_player_points = [p for trail in player_trails.values() for p in trail]
                 else:
-                    # 回退路径：逐帧扫描（与修改前一致）
-                    current_time = frame_index / fps
                     minimap_player_points = _points_until_time(player_points, current_time)
                 self._draw_minimap(
                     frame,
                     minimap_player_points,
-                    _points_until_time(ball_points, frame_index / fps),
-                    _points_near_time(bounce_points, frame_index / fps, window_seconds=0.5),
+                    _points_until_time(ball_points, current_time),
+                    _points_near_time(bounce_points, current_time, window_seconds=0.5),
                 )
                 # 在画面底部写入“时间: X.XXs”文本。
                 cv2.putText(
                     frame,
-                    f"{self.labels['frame_time']}: {frame_index / fps:.2f}s",
+                    f"{self.labels['frame_time']}: {current_time:.2f}s",
                     (12, max(22, height - 14)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.52,
@@ -151,7 +175,7 @@ class OverlayVideoWriter:
                 writer.write(frame)
                 written += 1
                 if progress_callback is not None and (written == 1 or written % 120 == 0):
-                    progress_callback(written, frame_count)
+                    progress_callback(written, window.requested_frame_count if window.enabled else frame_count)
                 frame_index += 1
         except Exception as exc:
             # 写出过程中任何异常都转为失败结果，保证资源被释放。
@@ -165,7 +189,20 @@ class OverlayVideoWriter:
         if written == 0:
             return VisualizationResult("failed", "未写出任何视频帧")
         return VisualizationResult(
-            "available", f"已生成 {written} 帧分析叠加视频", str(output_path), item_count=written
+            "available",
+            f"已生成 {written} 帧分析叠加视频",
+            str(output_path),
+            item_count=written,
+            metadata={
+                **window.metadata(),
+                "output_time_origin_ms": int(
+                    (timing_provider.take_timestamp_for_frame(start_frame or 0) or 0.0) * 1000
+                ),
+                "timing_provenance": timing_provider.metadata(),
+                "output_first_source_frame": start_frame if written else None,
+                "output_last_source_frame": (frame_index - 1) if written else None,
+                "written_frame_count": written,
+            },
         )
 
     def _draw_tracking(self, frame: np.ndarray, overlay_frame: dict[str, Any] | None) -> None:

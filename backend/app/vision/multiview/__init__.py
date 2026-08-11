@@ -45,6 +45,7 @@ from app.vision.multiview.court_frame import (
     load_canonical_court_frame,
     local_to_canonical,
     resolve_or_create_canonical_court_frame,
+    validate_canonical_court_frame_compatibility,
     write_canonical_court_frame,
 )
 from app.vision.multiview.fusion import (
@@ -62,6 +63,13 @@ from app.vision.multiview.fusion_run import (
 )
 from app.vision.multiview.global_filter import GlobalTrackFilter, predictions_for
 from app.vision.multiview.pipeline import FusionPipelineResult, run_fusion_pipeline
+from app.vision.multiview.pairing import (
+    FramePairingDecision,
+    FramePairingPlan,
+    PairingStatus,
+    build_frame_pairing_plan,
+    observations_by_source_frame,
+)
 from app.vision.multiview.quality import (
     FOOTPOINT_METHOD_QUALITY,
     NORMALIZED_BBOX_REFERENCE,
@@ -87,9 +95,12 @@ from app.vision.multiview.spike_adapter import (
 from app.vision.multiview.sync import (
     SYNC_CALIBRATION_SCHEMA_VERSION,
     MultiViewSyncCalibration,
+    SyncAuthorityIssue,
+    SyncAuthorityValidation,
     SyncGateDecision,
     evaluate_sync_gate,
     load_sync_calibration,
+    validate_sync_authority,
 )
 from app.vision.multiview.types import (
     CanonicalObservation,
@@ -120,6 +131,8 @@ __all__ = [
     "FusionConfig",
     "FusionMeasurement",
     "FusionPipelineResult",
+    "FramePairingDecision",
+    "FramePairingPlan",
     "FusionStatus",
     "FusionConfig",
     "FusionMeasurement",
@@ -129,9 +142,12 @@ __all__ = [
     "MeasurementSource",
     "MultiViewFusionRun",
     "MultiViewSyncCalibration",
+    "SyncAuthorityIssue",
+    "SyncAuthorityValidation",
     "MultiViewViewInput",
     "NORMALIZED_BBOX_REFERENCE",
     "PairConsistencyResult",
+    "PairingStatus",
     "PlayerAssociation",
     "RENDER_SCHEMA_VERSION",
     "RENDER_SOURCE_INTERPOLATED",
@@ -146,12 +162,14 @@ __all__ = [
     "ViewAvailability",
     "ViewObservation",
     "build_fused_artifact",
+    "build_frame_pairing_plan",
     "build_fusion_diagnostics",
     "canonical_to_local",
     "canonical_court_frame_path",
     "canonicalize_view_observations",
     "default_run_output_dir",
     "evaluate_sync_gate",
+    "validate_sync_authority",
     "extract_render_observations",
     "fusion_weights",
     "fuse_observation",
@@ -166,10 +184,12 @@ __all__ = [
     "metric_eligibility_policy",
     "min_cost_matching",
     "movement_points",
+    "observations_by_source_frame",
     "normalized_bbox_score",
     "pair_consistency",
     "predictions_for",
     "resolve_or_create_canonical_court_frame",
+    "validate_canonical_court_frame_compatibility",
     "run_fusion_pipeline",
     "select_trajectory_source",
     "serialize_fused_sample",

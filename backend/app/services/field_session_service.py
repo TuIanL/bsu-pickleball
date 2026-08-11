@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.field_session import CameraSetup, CaptureMode, FieldSession, FieldSessionStatus, MatchFormat
+from app.models.field_session import CameraSetup, CaptureMode, DisplayMode, FieldSession, FieldSessionStatus, MatchFormat
 from app.schemas.field_session import FieldSessionCreate, FieldSessionUpdate
 
 # 前缀 + 时间戳生成可读 ID
@@ -31,6 +31,8 @@ _ALLOWED_TRANSITIONS: dict[FieldSessionStatus, set[FieldSessionStatus]] = {
 
 def create_field_session(db: Session, payload: FieldSessionCreate) -> FieldSession:
     """创建 Field Session，状态默认为 planned。"""
+    if payload.display_mode == "showcase" and payload.camera_setup != "dual":
+        raise ValueError("展示模式只能与双摄方案组合")
     now = datetime.now(UTC)
     session = FieldSession(
         id=_generate_id(),
@@ -40,6 +42,7 @@ def create_field_session(db: Session, payload: FieldSessionCreate) -> FieldSessi
         capture_mode=CaptureMode(payload.capture_mode),
         match_format=MatchFormat(payload.match_format),
         camera_setup=CameraSetup(payload.camera_setup),
+        display_mode=DisplayMode(payload.display_mode),
         status=FieldSessionStatus.planned,
         notes=payload.notes,
         created_at=now,
@@ -90,6 +93,12 @@ def update_field_session(db: Session, field_session_id: str, payload: FieldSessi
     if fs is None:
         return None
     update_data = payload.model_dump(exclude_unset=True)
+    if fs.status == FieldSessionStatus.live and any(key in update_data for key in ("display_mode", "camera_setup")):
+        raise ValueError("采集任务进行中，展示模式和摄像头方案不可修改")
+    next_camera_setup = update_data.get("camera_setup", getattr(fs.camera_setup, "value", fs.camera_setup))
+    next_display_mode = update_data.get("display_mode", getattr(fs.display_mode, "value", fs.display_mode))
+    if next_display_mode == "showcase" and next_camera_setup != "dual":
+        raise ValueError("展示模式只能与双摄方案组合")
     for key, value in update_data.items():
         if value is not None:
             if key == "capture_mode":
@@ -98,6 +107,8 @@ def update_field_session(db: Session, field_session_id: str, payload: FieldSessi
                 value = MatchFormat(value)
             elif key == "camera_setup":
                 value = CameraSetup(value)
+            elif key == "display_mode":
+                value = DisplayMode(value)
             setattr(fs, key, value)
     fs.updated_at = datetime.now(UTC)
     db.commit()

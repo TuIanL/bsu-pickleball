@@ -6,7 +6,7 @@
 """
 
 import json
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
@@ -42,6 +42,42 @@ class TestSyncRecorderUnit:
         assert recorder.is_recording is False
         assert recorder.processes == []
         assert recorder.segment_index == 1
+
+    def test_showcase_stop_precedes_media_finalize(self, tmp_path, monkeypatch):
+        from app.camera.models import SyncRecordingSession
+        import app.camera.sync_recorder_service as sync_module
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        class FakeRecorder:
+            def stop_recording(self):
+                events.append("raw_recording_stop")
+
+        events = []
+        session = SyncRecordingSession(
+            session_id="sync_showcase_finalize",
+            status="recording",
+            capture_take_id="take-showcase-finalize",
+            output_dir=str(tmp_path),
+            display_mode="showcase",
+            started_at=datetime.now(UTC),
+        )
+        sync_module.SYNC_SESSIONS[session.session_id] = session
+        service = SyncRecordingService()
+        service._recorder = FakeRecorder()
+        service._segments = []
+        service._persist = lambda current: None
+        service._materialize_staged_media = lambda current: events.append("media_finalize") or current
+        service._stop_showcase_runtime = lambda current: events.append("showcase_stop")
+        service._finalize_capture_take = lambda current, status: events.append("capture_take_finalize")
+
+        try:
+            result = service.stop_session(session.session_id)
+        finally:
+            sync_module.SYNC_SESSIONS.pop(session.session_id, None)
+
+        assert result.session.status == "completed"
+        assert events.index("showcase_stop") < events.index("media_finalize")
+        assert events.index("media_finalize") < events.index("capture_take_finalize")
 
     def test_extracts_first_middle_and_last_frame(self, tmp_path):
         from app.camera.sync_recorder_service import _extract_first_and_last_frames
@@ -930,6 +966,81 @@ class TestSyncModels:
             }
         )
         assert session.merge_status == "completed"
+
+    def test_rehydrates_stale_registered_video_ids_from_existing_mp4(self, tmp_path):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession
+        from app.camera.sync_recorder_service import SyncRecordingService
+        from app.core.config import Settings
+        from app.services.storage_service import StorageService
+        from app.services.video_service import VideoService
+
+        settings = Settings(
+            data_dir=tmp_path / "data",
+            database_path=tmp_path / "data" / "app.sqlite3",
+            uploads_dir=tmp_path / "uploads",
+            outputs_dir=tmp_path / "outputs",
+            calibrations_dir=tmp_path / "calibrations",
+            recordings_dir=tmp_path / "recordings",
+            cameras_dir=tmp_path / "cameras",
+            tmp_dir=tmp_path / "tmp",
+        )
+        video_service = VideoService(StorageService(settings))
+        cam_1 = tmp_path / "174_merged.mp4"
+        cam_2 = tmp_path / "175_merged.mp4"
+        cam_1.write_bytes(b"cam-1")
+        cam_2.write_bytes(b"cam-2")
+        session = SyncRecordingSession(
+            session_id="sync_rehydrate",
+            status="completed",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            output_dir=str(tmp_path),
+            registered_video_ids={"cam_1": "rec-stale-a", "cam_2": "rec-stale-b"},
+            merge_status="completed",
+        )
+        service = SyncRecordingService(sync_recorder_factory=lambda: object())
+
+        with (
+            patch("app.services.video_service.video_service", video_service),
+            patch.dict("app.services.video_service.VIDEOS", {}, clear=True),
+            patch.object(service, "_persist"),
+        ):
+            repaired = service._repair_registered_video_metadata(session)
+
+        assert repaired.registered_video_ids == {"cam_1": "rec-stale-a", "cam_2": "rec-stale-b"}
+        assert video_service.get_available_video("rec-stale-a") is not None
+        assert video_service.get_available_video("rec-stale-b") is not None
+        assert video_service.get_video("rec-stale-a").path == str(cam_1)
+
+    def test_preserves_unavailable_registered_video_ids_in_session(self, tmp_path):
+        from app.camera.models import CameraSlotConfig, SyncRecordingSession
+        from app.camera.sync_recorder_service import SyncRecordingService
+
+        session = SyncRecordingSession(
+            session_id="sync_unavailable",
+            status="completed",
+            camera_slots={
+                "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+                "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+            },
+            output_dir=str(tmp_path),
+            registered_video_ids={"cam_1": "rec-missing-a", "cam_2": "rec-missing-b"},
+            default_analysis_video_id="rec-missing-a",
+        )
+        service = SyncRecordingService(sync_recorder_factory=lambda: object())
+
+        with (
+            patch.dict("app.services.video_service.VIDEOS", {}, clear=True),
+            patch.object(service, "_persist"),
+        ):
+            repaired = service._repair_registered_video_metadata(session)
+
+        assert repaired.registered_video_ids == {"cam_1": "rec-missing-a", "cam_2": "rec-missing-b"}
+        assert repaired.default_analysis_video_id == "rec-missing-a"
+        assert repaired.video_availability == {"cam_1": "unavailable", "cam_2": "unavailable"}
+        assert repaired.merge_error is None
 
     def test_sync_test_result_all_online(self):
         """验证测试结果模型"""

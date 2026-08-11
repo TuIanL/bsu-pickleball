@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Camera, FolderOpen, Loader2, Pencil, PlusCircle, RefreshCw, Trash2, X,
+  Camera, ExternalLink, FolderOpen, Loader2, Pencil, PlusCircle, RefreshCw, Trash2, X,
 } from "lucide-react";
-import type { AppPath, FieldSession, CameraInfo } from "../types/report";
+import type { FieldSession, CameraInfo } from "../types/report";
+import type { NavigateFn } from "../app/navigationTypes";
 import {
   getFieldSession, createCamera, deleteCamera, updateCamera,
   getCameraPreviewUrl, getDefaultStorageLocation, pickStorageLocation,
 } from "../services/analysisClient";
 import { useCaptureRuntime } from "../hooks/useCaptureRuntime";
 import { useCaptureRuntimeStatus } from "../hooks/useCaptureRuntimeStatus";
+import { useShowcaseRuntime } from "../hooks/useShowcaseRuntime";
 import { MiniTimeline } from "../components/MiniTimeline";
 import { ScoreBoard } from "../components/ScoreBoard";
 import { useCameraSetup } from "../hooks/useCameraSetup";
@@ -27,9 +29,6 @@ import type { TimelineWindowMode, TimelineDensity } from "../components/MiniTime
 import type { RecordingControlViewModel } from "../components/capture/captureTypes";
 import type { QuickEventDef } from "../services/timelineQuickEvents";
 import { buildMatchControlViewModel, withInitialServer } from "../services/matchControlViewModel";
-
-/** 导航跳转函数签名 */
-type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 const captureModeLabel: Record<string, string> = {
   practice: "自由练习", match: "记分比赛", engineering: "工程测试",
@@ -115,6 +114,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
     captureTakeId: runtime.captureTakeId,
     phase: runtime.phase,
   });
+  const showcase = useShowcaseRuntime(runtime.session?.showcaseRuntimeId, runtime.isRecording);
   const isMatch = fieldSession?.capture_mode === "match";
   const matchControls = buildMatchControlViewModel(liveCoding.liveCodingState);
   const hasPendingMatchAction = liveCoding.outboxItems.some(item => item.status === "pending" || item.status === "sending");
@@ -512,6 +512,17 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
           {runtime.isStopped && (
             <button className="rounded-lg px-2.5 py-1.5 text-xs transition" style={{ border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }} onClick={handleReset} type="button">新录制</button>
           )}
+          {fieldSession.display_mode === "showcase" && runtime.session?.showcaseRuntimeId && (
+            <button
+              className="rounded-lg px-2.5 py-1.5 text-xs font-bold transition"
+              style={{ border: "1px solid var(--capture-brand-primary)", color: "var(--capture-brand-primary)" }}
+              onClick={() => window.open(`/showcase/${encodeURIComponent(runtime.session!.showcaseRuntimeId!)}`, "_blank", "noopener,noreferrer")}
+              type="button"
+              title="打开独立展示屏"
+            >
+              <ExternalLink size={14} className="mr-1 inline" />展示屏
+            </button>
+          )}
         </div>
       </div>
 
@@ -597,6 +608,13 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
       {runtimeStatus.state.error && runtimeStatus.state.snapshot && (
         <div className="rounded-lg px-3 py-2 text-xs" style={{ background: "var(--capture-brand-soft)", border: "1px solid var(--capture-status-warning)", color: "var(--capture-status-warning)" }}>
           运行状态更新失败：{runtimeStatus.state.error}（最后更新于 {runtimeStatus.state.lastSuccessAt ? new Date(runtimeStatus.state.lastSuccessAt).toLocaleTimeString() : "—"}）
+        </div>
+      )}
+      {fieldSession.display_mode === "showcase" && runtime.isRecording && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--capture-surface-card)", border: "1px solid var(--capture-border-default)", color: "var(--capture-text-secondary)" }}>
+          <strong>现场展示模式</strong>
+          {showcase.status ? Object.values(showcase.status.cameras).map((camera) => <span key={camera.slot}>{camera.slot}: {camera.person_status} · {camera.actual_inference_fps.toFixed(1)} fps · {camera.track_count} 人</span>) : <span>正在读取展示状态…</span>}
+          {showcase.error && <span style={{ color: "var(--capture-status-warning)" }}>{showcase.error}</span>}
         </div>
       )}
 

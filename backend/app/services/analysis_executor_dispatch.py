@@ -37,11 +37,16 @@ from app.vision.multiview.artifact import (
     write_fusion_diagnostics,
 )
 from app.vision.multiview.court_frame import CourtOrientation
+from app.vision.multiview.court_frame import load_canonical_court_frame
 from app.vision.multiview.fusion import FusionConfig
 from app.vision.multiview.fusion_run import MultiViewFusionRun, default_run_output_dir
 from app.vision.multiview.pipeline import run_fusion_pipeline
 from app.vision.multiview.spike_adapter import SpikeAdapterError, load_view_observations
-from app.vision.multiview.sync import evaluate_sync_gate, load_sync_calibration
+from app.vision.multiview.sync import (
+    evaluate_sync_gate,
+    load_sync_calibration,
+    validate_sync_authority,
+)
 from app.vision.multiview.view_input import MultiViewViewInput
 
 logger = logging.getLogger(__name__)
@@ -185,6 +190,27 @@ class MultiViewAnalysisExecutor:
         if len(children) < 2:
             raise RuntimeError(f"parent {parent.id} requires at least two source children")
 
+        secondary_view_id = next(vid for vid in children if vid != reference_view_id)
+        reference_ref, reference_child = children[reference_view_id]
+        secondary_ref, secondary_child = children[secondary_view_id]
+        reference_camera_id = (
+            reference_ref.cameraId
+            or getattr(reference_child.metadata, "camera_id", None)
+            or reference_view_id
+        )
+        secondary_camera_id = (
+            secondary_ref.cameraId
+            or getattr(secondary_child.metadata, "camera_id", None)
+            or secondary_view_id
+        )
+        authority = validate_sync_authority(
+            sync,
+            reference_camera_id=reference_camera_id,
+            secondary_camera_id=secondary_camera_id,
+        )
+        authority_reason = "; ".join(issue.code for issue in authority.issues) or None
+        canonical_frame = load_canonical_court_frame(take_dir)
+
         # 构建 / 复用 MultiViewFusionRun（执行前持久化 fusionRunId，保证重启幂等）
         run_id = parent.fusionRunId or f"mvf_{uuid4().hex[:12]}"
         run_dir = default_run_output_dir(analysis_dir, run_id)
@@ -195,6 +221,7 @@ class MultiViewAnalysisExecutor:
                 video_id=child.videoId or "",
                 analysis_job_id=child.id,
                 calibration_id=child.calibrationId or "",
+                camera_id=ref.cameraId or getattr(child.metadata, "camera_id", None) or ref.cameraSlot,
                 court_orientation=CourtOrientation(ref.courtOrientation) if ref.courtOrientation else None,
             )
             for ref, child in children.values()
@@ -205,17 +232,19 @@ class MultiViewAnalysisExecutor:
             source_analysis_job_ids=[ref.jobId for ref in parent.sourceJobs],
             view_inputs=view_inputs,
             sync_calibration_ref=sync,
+            canonical_frame_ref=canonical_frame,
             output_dir=run_dir,
         )
         if not parent.fusionRunId:
             self.store.update(parent.id, fusionRunId=run_id)
 
         eligibility = run.check_eligibility()
+        authority_ready = authority.valid
         fused_artifact: dict[str, object] | None = None
         diagnostics: dict[str, object] | None = None
         fusion_performed = False
 
-        if eligibility.ready:
+        if eligibility.ready and authority_ready:
             # 幂等复用：fusionRunId 已存在且 fused artifact 完整 → reuse
             existing = load_fused_artifact(run_dir / FUSED_TRAJECTORY_FILENAME) if parent.fusionRunId else None
             if (
@@ -228,6 +257,7 @@ class MultiViewAnalysisExecutor:
                 diagnostics = (
                     load_fused_artifact(diag) or {"schema_version": FUSED_DIAGNOSTICS_SCHEMA_VERSION, "reused": True}
                 )
+                fusion_performed = True
                 logger.info("复用既有 fused artifact（run=%s）", run_id)
             else:
                 try:
@@ -238,6 +268,7 @@ class MultiViewAnalysisExecutor:
                         reference_view_id=reference_view_id,
                         sync=sync,
                         storage=storage,
+                        secondary_camera_id=secondary_camera_id,
                     )
                     fusion_performed = True
                 except (SpikeAdapterError, ValueError, OSError) as exc:  # noqa: BLE001
@@ -254,7 +285,8 @@ class MultiViewAnalysisExecutor:
                 reference_view_id=reference_view_id,
                 sync=sync,
                 storage=storage,
-                reason=eligibility.reason,
+                reason=authority_reason or eligibility.reason,
+                canonical_frame=canonical_frame,
             )
             analysis_source = {
                 "mode": "single_view_fallback",
@@ -264,13 +296,18 @@ class MultiViewAnalysisExecutor:
             }
             message = f"未执行多视角融合（{reason}），结果使用 {reference_view_id} 单视角数据。"
         else:
+            effective_mode = str((diagnostics or {}).get("effective_mode", "multiview_fused"))
             analysis_source = {
-                "mode": "multiview_fused",
+                "mode": effective_mode,
                 "source_job_id": parent.id,
                 "source_view": reference_view_id,
                 "reason": eligibility.reason,
             }
-            message = "双摄协同分析完成（多视角融合已执行）。"
+            message = (
+                "双摄协同分析完成（多视角融合已执行）。"
+                if effective_mode == "multiview_fused"
+                else "双摄分析完成，但副摄证据覆盖不足，结果按降级模式展示。"
+            )
 
         composer = MultiViewResultComposer(storage)
         reference_child = children[reference_view_id][1]
@@ -292,24 +329,6 @@ class MultiViewAnalysisExecutor:
 
     # ---- 融合执行 -----------------------------------------------------------
 
-    @staticmethod
-    def _resolve_secondary_sync_key(sync, preferred_view_id: str) -> str:
-        """解析 sync 中 secondary 相机的映射键。
-
-        优先视图槽位（cam_1/cam_2）；若 sync 文件以硬件 camera id 为键
-        （`calibrate_dual_camera_sync.py` 产物），回退取唯一非 reference 的 mapping 键，
-        避免 `mapping_for(view_id)` 返回 None 导致融合静默按 offset=0 对齐
-        （违反"缺 sync ≠ offset_ms=0"不变式）。
-        """
-        if sync is None:
-            return preferred_view_id
-        if sync.mapping_for(preferred_view_id) is not None:
-            return preferred_view_id
-        non_reference = [key for key in sync.mappings if key != sync.reference_camera]
-        if len(non_reference) == 1:
-            return non_reference[0]
-        return preferred_view_id
-
     def _run_fusion(
         self,
         *,
@@ -319,6 +338,7 @@ class MultiViewAnalysisExecutor:
         reference_view_id: str,
         sync,
         storage: StorageService,
+        secondary_camera_id: str,
     ) -> tuple[dict[str, object], dict[str, object]]:
         ref_ref, ref_child = children[reference_view_id]
         secondary_view_id = next(vid for vid in children if vid != reference_view_id)
@@ -343,10 +363,18 @@ class MultiViewAnalysisExecutor:
             reference_orientation=ref_orientation,
             secondary_orientation=sec_orientation,
             sync=sync,
-            secondary_camera_id=self._resolve_secondary_sync_key(sync, secondary_view_id),
+            secondary_camera_id=secondary_camera_id,
             max_pairing_error_ms=DEFAULT_MAX_PAIRING_ERROR_MS,
             config=config,
         )
+        run.pairing_plan_ref = {
+            "decision_count": len(pipeline_result.pairing_plan.decisions)
+            if pipeline_result.pairing_plan is not None
+            else 0,
+            "available_count": pipeline_result.pairing_plan.available_count
+            if pipeline_result.pairing_plan is not None
+            else 0,
+        }
         sync_quality = sync.worst_quality() if sync else "unknown"
         fused = build_fused_artifact(
             pipeline_result.measurements,
@@ -356,6 +384,7 @@ class MultiViewAnalysisExecutor:
             secondary_view_id=secondary_view_id,
             sync_quality=sync_quality,
             court_frame_version=config.court_frame_version,
+            canonical_frame_id=run.canonical_frame_ref.frame_id if run.canonical_frame_ref else None,
         )
         diagnostics = build_fusion_diagnostics(
             pipeline_result.measurements,
@@ -367,6 +396,10 @@ class MultiViewAnalysisExecutor:
             },
             reference_view_id=reference_view_id,
             secondary_view_id=secondary_view_id,
+            pairing_plan=pipeline_result.pairing_plan,
+            canonical_frame_id=run.canonical_frame_ref.frame_id if run.canonical_frame_ref else None,
+            authority_reason=None,
+            requested_mode=parent.executionMode,
         )
         write_fused_artifact(run.output_dir, fused)
         write_fusion_diagnostics(run.output_dir, diagnostics)
@@ -377,6 +410,18 @@ class MultiViewAnalysisExecutor:
             len(pipeline_result.global_players),
         )
         return fused, diagnostics
+
+    @staticmethod
+    def _resolve_secondary_sync_key(sync, preferred_view_id: str) -> str:
+        """Legacy test/helper compatibility; runtime paths use persisted cameraId directly."""
+        if sync is None:
+            return preferred_view_id
+        if sync.mapping_for(preferred_view_id) is not None:
+            return preferred_view_id
+        non_reference = [key for key in sync.mappings if key != sync.reference_camera]
+        if len(non_reference) == 1:
+            return non_reference[0]
+        return preferred_view_id
 
     # ---- 单视角降级 ----------------------------------------------------------
 
@@ -390,6 +435,7 @@ class MultiViewAnalysisExecutor:
         sync,
         storage: StorageService,
         reason: str,
+        canonical_frame=None,
     ) -> tuple[dict[str, object], dict[str, object], str]:
         ref_ref, ref_child = children[reference_view_id]
         try:
@@ -410,6 +456,7 @@ class MultiViewAnalysisExecutor:
             observations=ref_obs,
             sync_quality=sync_quality,
             reference_orientation=ref_orientation,
+            canonical_frame_id=canonical_frame.frame_id if canonical_frame else None,
         )
         diagnostics = {
             "schema_version": FUSED_DIAGNOSTICS_SCHEMA_VERSION,
@@ -418,6 +465,15 @@ class MultiViewAnalysisExecutor:
             "reason": reason or "job-level single-view fallback",
             "reference_view_id": reference_view_id,
             "sample_count": len(ref_obs),
+            "canonical_frame_id": canonical_frame.frame_id if canonical_frame else None,
+            "requested_mode": parent.executionMode,
+            "authority_reason": reason,
+            "secondary_available_samples": 0,
+            "dual_evidence_samples": 0,
+            "single_view_fallback_samples": len(ref_obs),
+            "predicted_samples": 0,
+            "effective_multiview_ratio": 0.0,
+            "effective_mode": "single_view_fallback",
         }
         write_fused_artifact(run.output_dir, fused)
         write_fusion_diagnostics(run.output_dir, diagnostics)

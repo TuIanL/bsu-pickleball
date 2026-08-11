@@ -14,8 +14,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from app.services.dual_camera_sync import FrameTiming, build_frame_map
 from app.vision.multiview.court_frame import CourtOrientation, local_to_canonical
+from app.vision.multiview.pairing import (
+    FramePairingPlan,
+    build_frame_pairing_plan,
+    observations_by_source_frame,
+)
 from app.vision.multiview.sync import MultiViewSyncCalibration
 from app.vision.multiview.types import CanonicalObservation, CanonicalTimelineTick, ViewObservation
 
@@ -36,6 +40,7 @@ class CanonicalTimelineBuilder:
         sync: MultiViewSyncCalibration | None,
         secondary_camera_id: str,
         orientations: dict[str, CourtOrientation],
+        pairing_plan: FramePairingPlan | None = None,
     ) -> list[CanonicalTimelineTick]:
         """构建 canonical timeline。
 
@@ -53,34 +58,27 @@ class CanonicalTimelineBuilder:
         if not reference_observations:
             return []
 
-        # 用既有 build_frame_map 一次完成 secondary 配对（reference 时间 → secondary 时间）。
-        ref_times = [obs.timestamp_seconds for obs in reference_observations]
-        sec_frames = [
-            FrameTiming(frame_index=obs.source_frame_index, pts_seconds=obs.timestamp_seconds)
-            for obs in secondary_observations
-        ]
-        sec_mapping = sync.mapping_for(secondary_camera_id) if sync is not None else None
-        # 无 sync authority 或缺失该 camera 映射时，禁止假装对齐：secondary 一律 unavailable。
-        sec_by_frame: dict[int, ViewObservation] = {}
-        selections = []
-        if sec_mapping is not None:
-            selections = build_frame_map(
-                ref_times,
-                sec_frames,
-                calibration=sec_mapping,
-                max_selection_error_seconds=self.max_pairing_error_ms / 1000.0,
-            )
-            sec_by_frame = {obs.source_frame_index: obs for obs in secondary_observations}
+        # 兼容直接调用 builder 的旧消费者；正式 pipeline 会把同一份 plan 传进来。
+        pairing_plan = pairing_plan or build_frame_pairing_plan(
+            reference_view_id=reference_view_id,
+            reference_observations=reference_observations,
+            secondary_view_id=secondary_view_id,
+            secondary_observations=secondary_observations,
+            sync=sync,
+            secondary_camera_id=secondary_camera_id,
+            max_pairing_error_ms=self.max_pairing_error_ms,
+        )
+        sec_by_frame = observations_by_source_frame(secondary_observations)
 
         ticks: list[CanonicalTimelineTick] = []
-        for index, ref_obs in enumerate(reference_observations):
+        for ref_obs in reference_observations:
             ref_cx, ref_cy = local_to_canonical(ref_obs.local_x_ft, ref_obs.local_y_ft, ref_orientation)
             reference_obs = CanonicalObservation(
                 view_id=reference_view_id,
                 view_status="available",
                 source_frame_index=ref_obs.source_frame_index,
-                source_timestamp_ms=ref_obs.timestamp_seconds * 1000.0,
-                mapped_take_timestamp_ms=ref_obs.timestamp_seconds * 1000.0,
+                source_timestamp_ms=_observation_time(ref_obs) * 1000.0,
+                mapped_take_timestamp_ms=_observation_time(ref_obs) * 1000.0,
                 selection_error_ms=0.0,
                 canonical_x_ft=ref_cx,
                 canonical_y_ft=ref_cy,
@@ -93,38 +91,39 @@ class CanonicalTimelineBuilder:
             )
 
             secondary_obs: CanonicalObservation = self._unavailable(secondary_view_id)
-            if selections:
-                selection = selections[index]
-                if selection.status == "ok" and selection.source_frame_index is not None:
-                    matched = sec_by_frame.get(selection.source_frame_index)
-                    if matched is not None:
-                        sec_cx, sec_cy = local_to_canonical(
-                            matched.local_x_ft, matched.local_y_ft, sec_orientation
-                        )
-                        secondary_obs = CanonicalObservation(
-                            view_id=secondary_view_id,
-                            view_status="available",
-                            source_frame_index=matched.source_frame_index,
-                            source_timestamp_ms=matched.timestamp_seconds * 1000.0,
-                            mapped_take_timestamp_ms=ref_obs.timestamp_seconds * 1000.0,
-                            selection_error_ms=(
-                                None
-                                if selection.selection_error_seconds is None
-                                else selection.selection_error_seconds * 1000.0
-                            ),
-                            canonical_x_ft=sec_cx,
-                            canonical_y_ft=sec_cy,
-                            view_player_id=matched.view_player_id,
-                            detector_confidence=matched.confidence,
-                            projection_confidence=matched.projection_confidence,
-                            footpoint_method=matched.footpoint_method,
-                            tracking_status="detected",
-                            is_interpolated=False,
-                        )
+            decision = pairing_plan.decision_for(ref_obs.source_frame_index)
+            if decision is not None and decision.available:
+                matched_observations = sec_by_frame.get(
+                    decision.secondary_frame_index
+                    if decision.secondary_frame_index is not None
+                    else -1,
+                    [],
+                )
+                matched = matched_observations[0] if matched_observations else None
+                if matched is not None:
+                    sec_cx, sec_cy = local_to_canonical(
+                        matched.local_x_ft, matched.local_y_ft, sec_orientation
+                    )
+                    secondary_obs = CanonicalObservation(
+                        view_id=secondary_view_id,
+                        view_status="available",
+                        source_frame_index=matched.source_frame_index,
+                        source_timestamp_ms=_observation_time(matched) * 1000.0,
+                        mapped_take_timestamp_ms=_observation_time(ref_obs) * 1000.0,
+                        selection_error_ms=decision.selection_error_ms,
+                        canonical_x_ft=sec_cx,
+                        canonical_y_ft=sec_cy,
+                        view_player_id=matched.view_player_id,
+                        detector_confidence=matched.confidence,
+                        projection_confidence=matched.projection_confidence,
+                        footpoint_method=matched.footpoint_method,
+                        tracking_status="detected",
+                        is_interpolated=False,
+                    )
 
             ticks.append(
                 CanonicalTimelineTick(
-                    take_timestamp_ms=ref_obs.timestamp_seconds * 1000.0,
+                    take_timestamp_ms=_observation_time(ref_obs) * 1000.0,
                     reference_frame_index=ref_obs.source_frame_index,
                     observations={
                         reference_view_id: reference_obs,
@@ -146,3 +145,11 @@ class CanonicalTimelineBuilder:
             canonical_x_ft=None,
             canonical_y_ft=None,
         )
+
+
+def _observation_time(observation: ViewObservation) -> float:
+    return (
+        observation.source_pts_seconds
+        if observation.source_pts_seconds is not None
+        else observation.timestamp_seconds
+    )

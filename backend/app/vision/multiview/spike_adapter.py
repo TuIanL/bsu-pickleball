@@ -68,6 +68,8 @@ def extract_render_observations(
                 view_id=view_id,
                 source_frame_index=int(sample.get("frame_index", 0)),
                 timestamp_seconds=float(sample.get("timestamp_seconds", 0.0)),
+                source_pts_seconds=safe_float(sample.get("source_pts_seconds")),
+                timing_provenance=str(sample.get("timing_provenance", "legacy_nominal_fps")),
                 local_x_ft=float(sample.get("x_ft", 0.0)),
                 local_y_ft=float(sample.get("y_ft", 0.0)),
                 view_player_id=str(sample.get("player_id", "")),

@@ -34,7 +34,10 @@ router = APIRouter(prefix="/api/field-sessions", tags=["field-sessions"])
 @router.post("", response_model=FieldSessionDetail, status_code=201)
 def create(payload: FieldSessionCreate, db: Session = Depends(get_db)) -> FieldSessionDetail:
     """创建 Field Session"""
-    return FieldSessionDetail.model_validate(create_field_session(db, payload))
+    try:
+        return FieldSessionDetail.model_validate(create_field_session(db, payload))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("", response_model=list[FieldSessionSummary])
@@ -65,7 +68,10 @@ def get_detail(field_session_id: str, db: Session = Depends(get_db)) -> FieldSes
 @router.patch("/{field_session_id}", response_model=FieldSessionDetail)
 def update(field_session_id: str, payload: FieldSessionUpdate, db: Session = Depends(get_db)) -> FieldSessionDetail:
     """更新 Field Session 元数据"""
-    fs = update_field_session(db, field_session_id, payload)
+    try:
+        fs = update_field_session(db, field_session_id, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=409 if "进行中" in str(e) else 422, detail=str(e)) from e
     if fs is None:
         raise HTTPException(status_code=404, detail=f"Field Session {field_session_id} 不存在")
     return FieldSessionDetail.model_validate(fs)

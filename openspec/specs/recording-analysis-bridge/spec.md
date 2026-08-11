@@ -50,7 +50,7 @@
 
 ### Requirement: 确认启动分析
 
-单摄路径的创建契约 MUST 保持不变（POST `/api/analysis/jobs` 携带 `{ videoId, calibrationId, metadata, recording_session_id, camera_slot }`，成功后跳转 `/analysis/<jobId>`）。双摄路径 MUST 由 `MultiViewAnalysisSetupPage` 一次创建一个 multiview Parent（见 `multiview-analysis-setup-page` 与 `multiview-analysis-orchestration`），并支持在 take 公共时间轴指定分析窗口（`clipStartMs/clipEndMs`，secondary 由后端经 sync 换算）。
+单摄路径的创建契约 MUST 保持不变（POST `/api/analysis/jobs` 携带 `{ videoId, calibrationId, metadata, recording_session_id, camera_slot }`，成功后跳转 `/analysis/<jobId>`）。双摄路径 MUST 由 `MultiViewAnalysisSetupPage` 一次创建一个 multiview Parent，并支持在 take 公共时间轴指定分析窗口（`clipStartMs/clipEndMs`，secondary 由后端经 sync 换算）。该窗口 MUST 端到端影响实际跟踪、融合、指标和分析叠加视频，而不仅是保存在请求或任务摘要中。
 
 #### Scenario: 单摄创建不变
 
@@ -63,6 +63,24 @@
 - **THEN** 系统 SHALL 只创建一个 multiview Parent
 - **AND** 导航到 `/analysis/<parentId>`
 
+#### Scenario: 用户窗口进入请求
+
+- **WHEN** 用户勾选「仅分析指定窗口」并提交合法起止秒数
+- **THEN** 前端请求体 SHALL 包含换算后的 `clipStartMs` 与 `clipEndMs`
+- **AND** 两个双摄执行视角 SHALL 继承同一个公共物理窗口
+
+#### Scenario: 关闭窗口时保持全场分析
+
+- **WHEN** 用户未勾选指定窗口
+- **THEN** 前端 SHALL 省略 clip 字段或发送未启用值
+- **AND** 后端 SHALL 按完整 CaptureTake 执行，不得使用旧的残留窗口
+
+#### Scenario: 窗口结果可解释
+
+- **WHEN** 带窗口的双摄任务进入分析详情页
+- **THEN** 页面或结果诊断 SHALL 能显示用户请求的时间范围
+- **AND** SHALL 能区分请求范围、预热解码范围和源视频总时长
+
 ### Requirement: cameraAngle 语义修正
 
 `RecordingAnalyzePage` MUST 修复 `cameraAngle` 错误映射：不得用 `session.match_format`（`singles/doubles`）查询角度表（键为 `baseline_high/sideline/elevated...`），该错误几乎恒落 `unknown`。机位角度 MUST 来自真实机位来源（`camera_slots[camSlot].camera_angle`）。
@@ -72,4 +90,26 @@
 - **WHEN** 单摄任务创建时设置 `cameraAngle`
 - **THEN** 该值 SHALL 来自真实机位来源
 - **AND** SHALL NOT 由 `match_format` 查询角度表推导
+
+### Requirement: 录制分析入口区分双摄主流程和单摄工程流程
+
+从双摄录制进入的主分析流程 SHALL 使用双摄任务上下文；A/B 单摄分析入口 SHALL 继续作为次级工程入口，并在返回任务管理时恢复其实际录制来源，不得默认伪装为上传视频任务。
+
+#### Scenario: 双摄创建页退出
+
+- **WHEN** 用户从双摄录制卡片进入 `MultiViewAnalysisSetupPage` 并点击退出
+- **THEN** 页面 SHALL 返回双摄任务管理上下文
+- **AND** SHALL NOT 返回单摄录制分析页或视频采集页
+
+#### Scenario: 单摄工程入口返回
+
+- **WHEN** 用户通过 A/B 单摄工程入口创建或查看分析任务
+- **THEN** 页面 SHALL 保留普通录制来源及 session/camera slot 上下文
+- **AND** 返回任务管理时 SHALL 进入录制视频任务视图
+
+#### Scenario: 创建失败重试
+
+- **WHEN** 录制分析创建失败
+- **THEN** 页面 SHALL 提供留在当前创建流程重试或返回原录制任务的操作
+- **AND** SHALL 不把用户送到无关的上传视频创建页
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAnalysisJob, getAnalysisReport, listAnalysisJobs, deleteRecordingAnalysis } from "./analysisClient";
+import { createAnalysisJob, createMultiviewAnalysisJob, getAnalysisReport, listAnalysisJobs, deleteRecordingAnalysis } from "./analysisClient";
 
 describe("analysis job compatibility", () => {
   afterEach(() => {
@@ -102,6 +102,77 @@ describe("analysis job compatibility", () => {
       backendDetail: "database unavailable",
     });
   });
+
+  it("sends a multiview clip only when the caller enables it", async () => {
+    const responseJob = {
+      id: "job-multiview",
+      status: "queued",
+      stage: "queue",
+      progress: 10,
+      createdAt: "2026-08-03T00:00:00.000Z",
+      updatedAt: "2026-08-03T00:00:00.000Z",
+      metadata: {
+        fileName: "dual.mp4",
+        matchTitle: "双摄",
+        venue: "测试球场",
+        matchDate: "2026-08-03",
+        matchFormat: "doubles",
+        cameraAngle: "baseline",
+        athleteLabel: "Player A",
+        level: "MVP",
+      },
+      stages: [],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(responseJob), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const metadata = { ...responseJob.metadata, matchFormat: "doubles", cameraAngle: "baseline", level: "MVP" } as const;
+    await createMultiviewAnalysisJob({
+      metadata,
+      referenceViewId: "cam_1",
+      clipStartMs: 2000,
+      clipEndMs: 4000,
+      views: [
+        { viewId: "cam_1", videoId: "v1", calibrationId: "c1", courtOrientation: "identity" },
+        { viewId: "cam_2", videoId: "v2", calibrationId: "c2", courtOrientation: "rotate_180" },
+      ],
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.clipStartMs).toBe(2000);
+    expect(body.clipEndMs).toBe(4000);
+    expect(body.multiview.executionMode).toBe("late_fusion_v1");
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(responseJob), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    await createMultiviewAnalysisJob({
+      metadata,
+      referenceViewId: "cam_1",
+      views: [
+        { viewId: "cam_1", videoId: "v1", calibrationId: "c1", courtOrientation: "identity" },
+        { viewId: "cam_2", videoId: "v2", calibrationId: "c2", courtOrientation: "rotate_180" },
+      ],
+    });
+    const bodyWithoutClip = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    expect(bodyWithoutClip).not.toHaveProperty("clipStartMs");
+    expect(bodyWithoutClip).not.toHaveProperty("clipEndMs");
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(responseJob), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    await createMultiviewAnalysisJob({
+      metadata,
+      referenceViewId: "cam_1",
+      executionMode: "joint_tracking_v2",
+      views: [
+        { viewId: "cam_1", cameraId: "hardware-a", videoId: "v1", calibrationId: "c1", courtOrientation: "identity" },
+        { viewId: "cam_2", cameraId: "hardware-b", videoId: "v2", calibrationId: "c2", courtOrientation: "rotate_180" },
+      ],
+    });
+    const jointBody = JSON.parse(String(fetchMock.mock.calls[2][1]?.body));
+    expect(jointBody.multiview.executionMode).toBe("joint_tracking_v2");
+    expect(jointBody.multiview.views[1].cameraId).toBe("hardware-b");
+  });
 });
 
 describe("deleteRecordingAnalysis", () => {
@@ -146,4 +217,3 @@ describe("deleteRecordingAnalysis", () => {
     expect(out[0].status).toBe("blocked");
   });
 });
-

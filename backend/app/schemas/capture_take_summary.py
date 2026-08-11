@@ -11,6 +11,7 @@ class CaptureTakeSummary(BaseModel):
     id: str
     field_session_id: str
     capture_mode: str
+    display_mode: str = "standard"
     source_session_type: str
     source_session_id: str
     status: str

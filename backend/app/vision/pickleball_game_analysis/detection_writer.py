@@ -154,6 +154,7 @@ def build_ball_overlay_payload(
     processed_frame_count: int = 0,
     status: str = "available",
     detail: str = "ball overlay generated",
+    timing_provenance: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """从 BallFrameSample 列表构造 ball_overlay.json 的 payload。
 
@@ -224,6 +225,7 @@ def build_ball_overlay_payload(
             "fps": round(float(fps), 2),
             "frame_stride": int(frame_stride),
             "processed_frame_count": int(processed_frame_count),
+            "timing_provenance": timing_provenance,
         },
         "coverage": {
             "overlay_frame_count": detected_count,

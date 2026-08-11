@@ -9,10 +9,9 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import type { AppPath, FieldSessionCreate } from "../types/report";
+import type { FieldSessionCreate } from "../types/report";
+import type { NavigateFn } from "../app/navigationTypes";
 import { createFieldSession } from "../services/analysisClient";
-
-type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 type AnalysisIntent = "auto_analyze" | "ask_after_recording" | "save_only";
 
@@ -23,6 +22,7 @@ interface WizardForm {
   capture_mode: string;
   match_format: string;
   camera_setup: string;
+  display_mode: "standard" | "showcase";
   notes: string;
   analysisIntent: AnalysisIntent;
   selectedCameraId: string;
@@ -42,6 +42,7 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
     capture_mode: "practice",
     match_format: "doubles",
     camera_setup: "single",
+    display_mode: "standard",
     notes: "",
     analysisIntent: "ask_after_recording",
     selectedCameraId: "",
@@ -60,6 +61,7 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
         capture_mode: form.capture_mode,
         match_format: form.match_format,
         camera_setup: form.camera_setup,
+        display_mode: form.display_mode,
         notes: form.notes,
       };
 
@@ -255,7 +257,7 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                     ? "border-[#2F80ED]/40 bg-[#2F80ED]/6"
                     : "hover:border-[#22C55E]/25"
                 }`}
-                onClick={() => update({ camera_setup: opt.value })}
+                onClick={() => update({ camera_setup: opt.value, ...(opt.value !== "dual" && form.display_mode === "showcase" ? { display_mode: "standard" } : {}) })}
                 type="button"
               >
                 <div
@@ -296,6 +298,26 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </div>
 
           <div className="grid gap-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                { value: "standard" as const, title: "标准模式", desc: "保留现有录制和录制后分析流程，不启动实时推理。", icon: FileVideo },
+                { value: "showcase" as const, title: "现场展示模式", desc: "双摄录制时实时显示人体框，可选球点短轨迹；录制结束后仍生成完整报告。", icon: Sparkles },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`sport-card flex items-start gap-3 p-4 text-left transition ${form.display_mode === opt.value ? "border-[#FF9500]/40 bg-[#FF9500]/6" : "hover:border-[#22C55E]/25"}`}
+                  onClick={() => update({ display_mode: opt.value, ...(opt.value === "showcase" ? { camera_setup: "dual" } : {}) })}
+                >
+                  <opt.icon size={20} className={form.display_mode === opt.value ? "text-[#FF9500]" : "text-slate-400"} />
+                  <span className="min-w-0"><strong className="block text-sm font-black text-[#14241B]">{opt.title}</strong><span className="mt-1 block text-xs text-slate-500">{opt.desc}</span></span>
+                  {form.display_mode === opt.value && <CheckCircle2 size={16} className="ml-auto shrink-0 text-[#FF9500]" />}
+                </button>
+              ))}
+            </div>
+            {form.display_mode === "showcase" && (
+              <p className="rounded-lg border border-[#FF9500]/25 bg-[#FF9500]/6 px-3 py-2 text-xs text-[#9A5A00]">展示模式已锁定双摄方案。展示屏为独立页面，关闭或刷新不会停止录制。</p>
+            )}
             {[
               {
                 value: "auto_analyze" as AnalysisIntent,

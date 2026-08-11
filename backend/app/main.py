@@ -17,6 +17,7 @@ from app.api.routes_segment_editing import router as segment_editing_router
 from app.api.routes_segment_editing import router2 as analysis_batch_router
 from app.api.routes_storage import router as storage_router
 from app.api.routes_sync_recording import router as sync_recording_router
+from app.api.routes_showcase import router as showcase_router
 from app.api.routes_timeline_events import router as timeline_events_router
 from app.api.routes_vidat import router as vidat_router
 from app.api.routes_video import router as video_router
@@ -72,6 +73,7 @@ app.include_router(manual_calibration_router)
 app.include_router(camera_router)
 app.include_router(recording_router)
 app.include_router(sync_recording_router)
+app.include_router(showcase_router)
 app.include_router(analysis_router)
 app.include_router(field_sessions_router)
 app.include_router(timeline_events_router)

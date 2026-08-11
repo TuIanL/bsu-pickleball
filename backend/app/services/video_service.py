@@ -76,10 +76,18 @@ class VideoService:
         )
         return metadata
 
-    def register_recording(self, file_path: Path, original_filename: str, file_size: int) -> str:
+    def register_recording(
+        self,
+        file_path: Path,
+        original_filename: str,
+        file_size: int,
+        *,
+        video_id: str | None = None,
+    ) -> str:
         # 登记一个"由摄像头录制产生"的视频（不是前端上传的）。
         # 与 save_upload 的区别：文件已经在磁盘上，这里只是登记元数据。
-        video_id = f"rec-{uuid4().hex[:10]}"
+        # 恢复已持久化的录制会话时复用原 ID，避免重启后会话快照指向孤儿 ID。
+        video_id = video_id or f"rec-{uuid4().hex[:10]}"
         metadata = VideoMetadata(
             id=video_id,
             original_filename=original_filename,
@@ -109,6 +117,21 @@ class VideoService:
         # model_validate：把普通 dict 还原成 Pydantic 模型对象
         metadata = VideoMetadata.model_validate(self.storage.read_json(path))
         VIDEOS[video_id] = metadata
+        return metadata
+
+    def get_available_video(self, video_id: str | None) -> VideoMetadata | None:
+        """Return metadata only when the referenced media file is currently readable."""
+        if not video_id:
+            return None
+        metadata = self.get_video(video_id)
+        if metadata is None:
+            return None
+        path = Path(metadata.path)
+        try:
+            if not path.is_file() or path.stat().st_size <= 0:
+                return None
+        except OSError:
+            return None
         return metadata
 
 

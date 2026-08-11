@@ -11,6 +11,7 @@ describe("parsePath", () => {
     { pathname: "/tasks", expected: { name: "tasks", path: "/tasks", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/capture", expected: { name: "captureHome", path: "/capture", shellMode: "standard", navigationSection: "videos" } },
     { pathname: "/capture/new", expected: { name: "captureNew", path: "/capture/new", shellMode: "standard", navigationSection: "capture" } },
+    { pathname: "/showcase/showcase-1", expected: { name: "showcase", path: "/showcase/showcase-1", runtimeId: "showcase-1", shellMode: "landing", navigationSection: null } },
     // captureConsole (dynamic sessionId)
     { pathname: "/capture/fs-1", expected: { name: "captureConsole", path: "/capture/fs-1", sessionId: "fs-1", shellMode: "capture", navigationSection: "capture" } },
     { pathname: "/capture/fs-1/analyze", expected: { name: "recording-analyze", path: "/capture/fs-1/analyze", sessionId: "fs-1", shellMode: "standard", navigationSection: "analysis" } },
@@ -92,5 +93,20 @@ describe("parseLocation", () => {
   it("hands normal routes through to parsePath ignoring search", () => {
     const result = parseLocation("/tasks", "?foo=bar");
     expect(result).toEqual({ name: "tasks", path: "/tasks", shellMode: "standard", navigationSection: "analysis" });
+  });
+
+  it("restores the dual-camera task tab and session from the URL", () => {
+    expect(parseLocation("/analysis/tasks", "?source=sync_recording&session=sync-1")).toMatchObject({
+      name: "analysis-tasks",
+      taskSource: "sync_recording",
+      taskSessionId: "sync-1",
+    });
+  });
+
+  it("falls back to the upload task tab for an invalid URL source", () => {
+    expect(parseLocation("/analysis/tasks", "?source=unknown")).toMatchObject({
+      name: "analysis-tasks",
+      taskSource: "upload",
+    });
   });
 });

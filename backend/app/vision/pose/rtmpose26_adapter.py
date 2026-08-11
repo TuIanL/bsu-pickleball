@@ -2,10 +2,12 @@
 
 """Optional RTMPose adapter with lazy heavyweight imports."""
 
+import os  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
 from collections.abc import Sequence  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, Iterator  # noqa: E402
 
 from app.schemas.pose import (  # noqa: E402
     RTMPOSE26_KEYPOINT_NAMES,
@@ -113,17 +115,6 @@ class RTMPose26Adapter:
         except ImportError as exc:
             raise RuntimeError("mmpose is not installed; install RTMPose runtime dependencies") from exc
 
-        # PyTorch >= 2.6 默认 weights_only=True，但 mmpose 检查点包含 numpy 对象，
-        # 需要将 numpy 的序列化全局加入安全列表。
-        try:
-            import numpy as _np  # type: ignore
-            import torch  # type: ignore
-
-            if hasattr(torch.serialization, "add_safe_globals"):
-                torch.serialization.add_safe_globals([_np.core.multiarray._reconstruct])
-        except ImportError:
-            pass
-
         try:
             from mmpose.utils import register_all_modules  # type: ignore
 
@@ -131,8 +122,40 @@ class RTMPose26Adapter:
         except ImportError:
             pass  # 若该版本 mmpose 不需要手动注册模块，则忽略
 
-        self._model = init_model(self.config_path, self.checkpoint_path, device=self.device)
+        # 该 checkpoint 来自仓库配置的本地 OpenMMLab 模型资产；其旧格式包含
+        # numpy 对象，PyTorch 2.6+ 的默认 weights_only 加载会拒绝这些对象。
+        # 兼容范围限定在模型初始化调用内，避免污染直接启动后端的进程环境。
+        with self._trusted_checkpoint_loading_context():
+            self._model = init_model(self.config_path, self.checkpoint_path, device=self.device)
         return self._model
+
+    @staticmethod
+    @contextmanager
+    def _trusted_checkpoint_loading_context() -> Iterator[None]:
+        """为受信任的本地 RTMPose 权重准备 PyTorch 2.6 兼容加载环境。"""
+        previous_force_value = os.environ.get("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD")
+        os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+        try:
+            try:
+                import numpy as _np  # type: ignore
+                import torch  # type: ignore
+
+                add_safe_globals = getattr(torch.serialization, "add_safe_globals", None)
+                if add_safe_globals is not None:
+                    safe_globals = [_np.ndarray, _np.core.multiarray._reconstruct]
+                    dtype = getattr(_np, "dtype", None)
+                    if dtype is not None:
+                        safe_globals.append(dtype)
+                    add_safe_globals(safe_globals)
+            except ImportError:
+                # 缺少 torch/numpy 时由 init_model 或上层现有降级逻辑报告真实依赖问题。
+                pass
+            yield
+        finally:
+            if previous_force_value is None:
+                os.environ.pop("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", None)
+            else:
+                os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = previous_force_value
 
     # 返回 mmpose 的 top-down 推理函数，仅在使用时导入（懒导入，减少无关依赖）。
     @staticmethod

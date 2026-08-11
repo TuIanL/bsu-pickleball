@@ -1,6 +1,6 @@
 // 导入 React 核心钩子
 import { useCallback, useEffect, useState } from "react";
-import type { AppPath, RouteState } from "./app/navigationTypes";
+import type { NavigateOptions, NavigatePath, RouteState } from "./app/navigationTypes";
 import { parseLocation } from "./app/router";
 import { AppRouter } from "./app/AppRouter";
 import { AppShell } from "./components/platform/AppShell";
@@ -13,10 +13,15 @@ function App() {
   const [recentJob, setRecentJob] = useState<AnalysisJobSummary | null>(() => getRecentAnalysisJob());
 
   // 自定义导航函数，支持平滑滚动到顶部
-  const navigate = useCallback((path: AppPath | `/upload` | `/upload?${string}`) => {
+  const navigate = useCallback((path: NavigatePath, options: NavigateOptions = {}) => {
     const url = new URL(path, window.location.origin);
     const nextRoute = parseLocation(url.pathname, url.search);
-    window.history.pushState({}, "", path);
+    const nextHref = `${url.pathname}${url.search}${url.hash}`;
+    if (options.replace) {
+      window.history.replaceState({}, "", nextHref);
+    } else {
+      window.history.pushState({}, "", nextHref);
+    }
     setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);

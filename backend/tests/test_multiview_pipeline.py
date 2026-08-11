@@ -163,3 +163,44 @@ def test_pipeline_mirror_orientations_align_cross_view():
     assert all(m.fusion_status == "dual_observed" for m in result.measurements)
     assert all(m.x_ft == pytest.approx(4.0, abs=0.01) for m in result.measurements)
     assert all(m.y_ft == pytest.approx(36.0, abs=0.01) for m in result.measurements)
+
+
+def test_adversarial_pairing_uses_one_secondary_frame_for_association_and_fusion():
+    # 每个 source frame 有两个球员；容差窗口覆盖相邻帧，不能把 X/Y 从不同帧拼到同一 tick。
+    ref = [
+        _obs("cam_1", "A", 0, 0.0, 2.0, 10.0),
+        _obs("cam_1", "B", 0, 0.0, 18.0, 10.0),
+        _obs("cam_1", "A", 1, 1 / 30.0, 2.0, 10.0),
+        _obs("cam_1", "B", 1, 1 / 30.0, 18.0, 10.0),
+    ]
+    sec = [
+        _obs("cam_2", "X", 0, 0.5, 2.0, 10.0),
+        _obs("cam_2", "Y", 0, 0.5, 18.0, 10.0),
+        # 相邻帧交换空间位置，旧的跨窗口 player 覆盖逻辑会得到错误关联。
+        _obs("cam_2", "X", 1, 0.5 + 1 / 30.0, 18.0, 10.0),
+        _obs("cam_2", "Y", 1, 0.5 + 1 / 30.0, 2.0, 10.0),
+    ]
+    result = run_fusion_pipeline(
+        reference_view_id="cam_1",
+        reference_observations=ref,
+        secondary_view_id="cam_2",
+        secondary_observations=sec,
+        reference_orientation=CourtOrientation.identity,
+        secondary_orientation=CourtOrientation.identity,
+        sync=_good_sync(),
+        secondary_camera_id="cam_2",
+        max_pairing_error_ms=40.0,
+        config=FusionConfig(),
+    )
+
+    assert {(p.reference_view_player_id, p.secondary_view_player_id) for p in result.global_players} == {
+        ("A", "X"),
+        ("B", "Y"),
+    }
+    assert result.pairing_plan is not None
+    assert [d.secondary_frame_index for d in result.pairing_plan.decisions] == [0, 1]
+    assert all(
+        detail["source_frame_index"] == m.reference_frame_index
+        for m in result.measurements
+        for detail in [m.view_observations["secondary"]]
+    )

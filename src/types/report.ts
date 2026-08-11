@@ -362,6 +362,7 @@ export interface SyncRecordingSession {
   output_dir: string;                               // 输出目录
   default_analysis_video_id?: string;
   registered_video_ids?: Partial<Record<CameraSlotRole, string>>;
+  video_availability?: Partial<Record<CameraSlotRole, "available" | "unavailable" | "pending">>;
   associated_video_paths: string[];
   court_name: string;
   match_format: string;
@@ -377,6 +378,8 @@ export interface SyncRecordingSession {
   storage_root?: string;
   session_dir?: string;
   storage_status?: string;
+  display_mode?: "standard" | "showcase";
+  showcase_runtime_id?: string;
   merge_status?: SyncMergeStatus;
   merge_error?: string;
   merge_started_at?: string;
@@ -443,6 +446,7 @@ export interface FieldSession {
   capture_mode: string;   // 采集模式
   match_format: string;
   camera_setup: string;   // 摄像头配置
+  display_mode?: "standard" | "showcase";
   status: string;
   notes: string;
   started_at?: string;
@@ -459,7 +463,39 @@ export interface FieldSessionCreate {
   capture_mode?: string;
   match_format?: string;
   camera_setup?: string;
+  display_mode?: "standard" | "showcase";
   notes?: string;
+}
+
+export interface ShowcaseCameraStatus {
+  slot: string;
+  camera_id: string;
+  connection_status: string;
+  last_frame_at?: string | null;
+  actual_inference_fps: number;
+  actual_output_fps: number;
+  latency_ms?: number | null;
+  track_count: number;
+  person_status: string;
+  ball_status: string;
+  degradation_reason?: string | null;
+  frame_sequence: number;
+}
+
+export interface ShowcaseRuntimeStatus {
+  runtime_id: string;
+  capture_take_id: string;
+  field_session_id?: string | null;
+  status: string;
+  recording_status: string;
+  target_inference_fps: number;
+  processing_width: number;
+  jpeg_quality: number;
+  ball_enabled: boolean;
+  cameras: Record<string, ShowcaseCameraStatus>;
+  degradation_reasons: string[];
+  started_at: string;
+  stopped_at?: string | null;
 }
 
 /** 场次删除结果 */
@@ -610,6 +646,7 @@ export interface CaptureTakeSummary {
   id: string;
   field_session_id: string;
   capture_mode: string;
+  display_mode?: "standard" | "showcase";
   source_session_type: string;
   source_session_id: string;
   status: string;
@@ -740,6 +777,8 @@ export interface AnalysisJobSummary {
   videoId?: string;
   calibrationId?: string;
   analysisMode?: "demo" | "real" | "limited";
+  clipStartMs?: number | null;
+  clipEndMs?: number | null;
   recordingSessionId?: string;
   cameraSlot?: "cam_1" | "cam_2";
   /** 任务实际使用的推理开关（YOLO 人体检测 / RTMPose 姿态识别），后端解析后固化 */
@@ -747,6 +786,9 @@ export interface AnalysisJobSummary {
   enablePoseInference?: boolean;
   /** 任务类型：普通单视角 / 双摄多视角 Parent */
   analysisKind?: "single_view" | "multiview";
+  executionMode?: "late_fusion_v1" | "joint_tracking_v2";
+  jointRunId?: string | null;
+  canonicalFrameId?: string | null;
   /** 可见性：internal = 双摄 Source Job，默认不进任务列表 */
   visibility?: "public" | "internal";
   /** internal Source Job 的 Parent 引用 */
@@ -768,6 +810,7 @@ export interface AnalysisJobSummary {
   sourceJobs?: Array<{
     cameraSlot: string;
     jobId: string;
+    cameraId?: string | null;
     courtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
   }>;
   /** 双摄任务参考机位 */
@@ -781,11 +824,16 @@ export type AnalysisDeleteStatus = "deleted" | "blocked" | "not_found" | "failed
 /** 多视角产物清单（Parent 唯一产品出口，前端只消费它，不接触 fusion run） */
 export interface FusedManifest {
   schema_version?: string;
+  requested_mode?: string;
+  effective_mode?: string;
+  canonical_frame_id?: string | null;
   analysis_source?: {
     mode: string;
     source_job_id?: string;
     source_view?: string;
     reason?: string;
+    requested_mode?: string;
+    effective_mode?: string;
   };
   artifacts?: {
     playerTrajectory?: { source?: string; url?: string };
@@ -1293,6 +1341,16 @@ export interface AnalysisPipelineResult {
     enable_doubles_spacing: boolean;
   };
   observed_player_count?: number;
+  analysis_window?: {
+    enabled?: boolean;
+    requested_clip?: { start_ms?: number; end_ms?: number };
+    decoded_range?: { start_ms?: number; end_ms?: number };
+    source_duration_ms?: number;
+    source_frame_count?: number;
+    planned_frame_count?: number;
+    processed_frame_count?: number;
+    output_time_origin_ms?: number;
+  };
   artifacts: {
     result_json_path?: string;
     tracking_result_json_path?: string;
@@ -1358,6 +1416,8 @@ export interface AnalysisPipelineResult {
     court_view_roi_status?: string;
     court_view_roi_detail?: string;
     overlay_video_path?: string;
+    analysis_window?: AnalysisPipelineResult["analysis_window"];
+    analysis_overlay_video_metadata?: AnalysisPipelineResult["analysis_window"];
   };
   message: string;
 }

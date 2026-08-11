@@ -69,6 +69,8 @@ export function adaptSyncRecordingSession(s: SyncRecordingSession): UnifiedCaptu
     storageRoot: s.storage_root,
     sessionDir: s.session_dir,
     storageStatus: s.storage_status,
+    displayMode: s.display_mode,
+    showcaseRuntimeId: s.showcase_runtime_id,
     };
 }
 

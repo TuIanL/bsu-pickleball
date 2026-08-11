@@ -196,6 +196,7 @@ def get_capture_take_detail(
         id=take.id,
         field_session_id=take.field_session_id,
         capture_mode=take.capture_mode.value,
+        display_mode=getattr(getattr(take, "display_mode", "standard"), "value", getattr(take, "display_mode", "standard")),
         source_session_type=take.source_session_type.value,
         source_session_id=take.source_session_id,
         status=take.status.value,

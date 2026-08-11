@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, LineChart, Route, Timer } from "lucide-react";
-import type { NavigateFn, AppPath, ReportType } from "../app/navigationTypes";
+import type { NavigateFn, AppPath, NavigatePath, ReportType } from "../app/navigationTypes";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, StructuredVisualizationData } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -16,6 +16,7 @@ import StructuredHeatmap from "../components/platform/StructuredHeatmap";
 import StructuredScatterPlot from "../components/platform/StructuredScatterPlot";
 import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap";
 import { supportedReportTypes } from "../app/router";
+import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
 import { adaptPipelineResultToReport, isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles, buildPlayerRoster } from "../utils/analysisHelpers";
@@ -362,17 +363,18 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
     trackingOverlayLoadState,
     videoSrc,
   } = useVisualAnalysisReport(jobId);
+  const taskReturnPath = taskListPathForJob(job);
 
   if (jobId && (job === undefined || report === undefined)) {
-    return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} />;
+    return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (jobId && error) {
-    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} />;
+    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (jobId && !job) {
-    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，无法打开视觉分析。`} onNavigate={onNavigate} />;
+    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，无法打开视觉分析。`} onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (job && job.status !== "completed") {
@@ -407,6 +409,7 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
             : null
         }
         onNavigate={onNavigate}
+        backPath={taskReturnPath}
       />
     );
   }
@@ -417,6 +420,7 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
         title="报告尚未生成"
         body="该任务记录已读取，但还没有可用的轻量报告数据。请返回任务管理查看任务状态或稍后重试。"
         onNavigate={onNavigate}
+        backPath={taskReturnPath}
       />
     );
   }
@@ -428,8 +432,10 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
       : job?.analysisMode === "limited"
         ? `有限真实分析 · 任务 ${analysis.jobId}`
         : `真实上传视频 · 任务 ${analysis.jobId}`;
-  const reportPath = (type: ReportType) =>
-    (analysis.jobId ? `/analysis/${analysis.jobId}/reports/${type}` : `/reports/${type}`) as AppPath;
+  const reportPath = (type: ReportType) => analysis.jobId
+    ? withTaskListContext(`/analysis/${analysis.jobId}/reports/${type}`, taskContextForJob(job))
+    : `/reports/${type}` as AppPath;
+  const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
   const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
 
   if (jobId) {
@@ -439,7 +445,7 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
           <div>
             <button
               className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
-              onClick={() => onNavigate("/analysis/tasks")}
+              onClick={() => onNavigate(taskReturnPath)}
               type="button"
             >
               <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
@@ -456,7 +462,7 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
           </div>
           <button
             className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
-            onClick={() => onNavigate(`/analysis/${jobId}/trajectory`)}
+            onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/trajectory`))}
             type="button"
           >
             <Route size={17} aria-hidden="true" />
@@ -559,7 +565,7 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
               </span>
               <button
                 className="green-button px-4 py-2 text-xs"
-                onClick={() => onNavigate(`/analysis/${recentJob.id}/vision`)}
+                onClick={() => onNavigate(withTaskListContext(`/analysis/${recentJob.id}/vision`, taskContextForJob(recentJob)))}
                 type="button"
               >
                 回到刚刚的结果
@@ -844,7 +850,7 @@ function AnalysisStatusRail({
   onNavigate: NavigateFn;
   poseOverlay: PoseOverlayArtifact | null;
   poseOverlayLoadState: OverlayLoadState;
-  reportPath: (type: ReportType) => AppPath;
+  reportPath: (type: ReportType) => NavigatePath;
   result?: AnalysisPipelineResult | null;
   scatterManifest: VisualizationManifest | null;
   scatterLoadState: OverlayLoadState;
@@ -900,6 +906,8 @@ function AnalysisStatusRail({
   ];
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
   const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
+  const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
+  const taskReturnPath = taskListPathForJob(job);
 
   return (
     <aside className="grid gap-4">
@@ -923,6 +931,17 @@ function AnalysisStatusRail({
               <RailMeta label="视频" value={job.metadata.fileName} />
               <RailMeta label="分析模式" value={analysisModeLabel(job.analysisMode)} />
               <RailMeta label="当前阶段" value={activeStage?.label ?? job.stage} />
+              <RailMeta
+                label="分析窗口"
+                value={
+                  result?.analysis_window?.requested_clip?.start_ms != null && result.analysis_window.requested_clip.end_ms != null
+                    ? `${(result.analysis_window.requested_clip.start_ms / 1000).toFixed(2)} - ${(result.analysis_window.requested_clip.end_ms / 1000).toFixed(2)} 秒`
+                    : "全视频"
+                }
+              />
+              {result?.analysis_window?.output_time_origin_ms != null ? (
+                <RailMeta label="叠加视频时间起点" value={`${(result.analysis_window.output_time_origin_ms / 1000).toFixed(2)} 秒`} />
+              ) : null}
               <RailMeta label="更新时间" value={formatDateTime(job.updatedAt || job.createdAt)} />
             </dl>
           </>
@@ -953,7 +972,7 @@ function AnalysisStatusRail({
           {job?.id ? (
             <button
               className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
-              onClick={() => onNavigate(`/analysis/${job.id}/details`)}
+                onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/details`))}
               type="button"
             >
               分析详情
@@ -972,7 +991,7 @@ function AnalysisStatusRail({
             </button>
           ))}
         </div>
-        <button className="quiet-button mt-4 w-full px-4 py-2.5" onClick={() => onNavigate("/analysis/tasks")} type="button">
+        <button className="quiet-button mt-4 w-full px-4 py-2.5" onClick={() => onNavigate(taskReturnPath)} type="button">
           返回任务管理
         </button>
       </section>
@@ -1056,7 +1075,7 @@ function HighlightsCard({
 }: {
   highlights: AnalysisReport["highlights"];
   onNavigate: NavigateFn;
-  reportPath: (type: ReportType) => AppPath;
+  reportPath: (type: ReportType) => NavigatePath;
 }) {
   return (
     <section className="sport-card p-5">

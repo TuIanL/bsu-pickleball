@@ -28,6 +28,7 @@ import type {
   AnalysisBatchCreateResponse,
   AnalysisBatchDetail,
   FusedManifest,
+  ShowcaseRuntimeStatus,
 } from "../types/report";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 
@@ -612,6 +613,7 @@ export async function listAnalysisJobs(options: DemoFallbackOptions = {}): Promi
 
 export interface MultiViewCreateViewPayload {
   viewId: string;
+  cameraId?: string;
   videoId: string;
   calibrationId: string;
   courtOrientation: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
@@ -622,6 +624,8 @@ export interface MultiviewAnalysisJobRequest {
   frameStride?: number;
   referenceViewId: string;
   views: MultiViewCreateViewPayload[];
+  executionMode?: "late_fusion_v1" | "joint_tracking_v2";
+  canonicalFrame?: { endA: string; endB: string };
   /** 分析窗口（take 公共时间轴 ms；缺省整场）。secondary 由后端经 sync 换算到自身时间轴。 */
   clipStartMs?: number;
   clipEndMs?: number;
@@ -632,26 +636,24 @@ export interface MultiviewAnalysisJobRequest {
  * 前端绝不 create 两个 job 再调 fusion（业务编排不泄漏到浏览器）。
  */
 export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRequest): Promise<AnalysisJobSummary> {
-  try {
-    const job = normalizeAnalysisJobSummary(await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
-      body: JSON.stringify({
-        metadata: request.metadata,
-        frameStride: request.frameStride ?? 2,
-        clipStartMs: request.clipStartMs,
-        clipEndMs: request.clipEndMs,
-        analysisKind: "multiview",
-        multiview: {
-          referenceViewId: request.referenceViewId,
-          views: request.views,
-        },
-      }),
-      method: "POST",
-    }));
-    rememberAnalysisJob(job);
-    return job;
-  } catch (error) {
-    throw error;
-  }
+  const job = normalizeAnalysisJobSummary(await requestJson<AnalysisJobSummary>("/api/analysis/jobs", {
+    body: JSON.stringify({
+      metadata: request.metadata,
+      frameStride: request.frameStride ?? 2,
+      clipStartMs: request.clipStartMs,
+      clipEndMs: request.clipEndMs,
+      analysisKind: "multiview",
+      multiview: {
+        referenceViewId: request.referenceViewId,
+        views: request.views,
+        executionMode: request.executionMode ?? "late_fusion_v1",
+        canonicalFrame: request.canonicalFrame,
+      },
+    }),
+    method: "POST",
+  }));
+  rememberAnalysisJob(job);
+  return job;
 }
 
 export async function getFusedManifest(jobId: string): Promise<FusedManifest | null> {
@@ -1062,12 +1064,24 @@ export function getCameraPreviewUrl(cameraId?: string): string | undefined {
   return cameraId ? toApiUrl(`/api/cameras/${cameraId}/preview`) : undefined;
 }
 
+export function getShowcaseStreamUrl(runtimeId: string, slot: "cam_1" | "cam_2"): string {
+  return toApiUrl(`/api/showcase-runtimes/${encodeURIComponent(runtimeId)}/streams/${slot}`);
+}
+
+export async function getShowcaseRuntimeStatus(runtimeId: string): Promise<ShowcaseRuntimeStatus> {
+  return requestJson<ShowcaseRuntimeStatus>(`/api/showcase-runtimes/${encodeURIComponent(runtimeId)}`);
+}
+
 // Field Session API functions
 export async function createFieldSession(request: FieldSessionCreate): Promise<FieldSession> {
-  return requestJson<FieldSession>("/api/field-sessions", {
+  return normalizeFieldSession(await requestJson<FieldSession>("/api/field-sessions", {
     body: JSON.stringify(request),
     method: "POST",
-  });
+  }));
+}
+
+function normalizeFieldSession(session: FieldSession): FieldSession {
+  return { ...session, display_mode: session.display_mode === "showcase" ? "showcase" : "standard" };
 }
 
 export async function listFieldSessions(params?: {
@@ -1084,11 +1098,11 @@ export async function listFieldSessions(params?: {
   if (params?.limit) sp.set("limit", String(params.limit));
   if (params?.offset) sp.set("offset", String(params.offset));
   const q = sp.toString();
-  return requestJson<FieldSession[]>(`/api/field-sessions${q ? `?${q}` : ""}`);
+  return (await requestJson<FieldSession[]>(`/api/field-sessions${q ? `?${q}` : ""}`)).map(normalizeFieldSession);
 }
 
 export async function getFieldSession(id: string): Promise<FieldSession> {
-  return requestJson<FieldSession>(`/api/field-sessions/${id}`);
+  return normalizeFieldSession(await requestJson<FieldSession>(`/api/field-sessions/${id}`));
 }
 
 export async function updateFieldSession(id: string, request: Partial<FieldSessionCreate>): Promise<FieldSession> {

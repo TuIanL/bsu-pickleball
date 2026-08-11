@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -143,6 +143,7 @@ class CanonicalCourtFrameDefinition:
     end_b_definition: str  # 物理端点 B 的描述
     created_at: str
     schema_version: str = "canonical_court_frame.v1"
+    orientation_by_view: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -152,6 +153,7 @@ class CanonicalCourtFrameDefinition:
         end_b_definition: str,
         *,
         created_at: str | None = None,
+        orientation_by_view: dict[str, str] | None = None,
     ) -> CanonicalCourtFrameDefinition:
         return cls(
             frame_id=f"ccf_{uuid4().hex[:12]}",
@@ -159,6 +161,7 @@ class CanonicalCourtFrameDefinition:
             end_a_definition=end_a_definition,
             end_b_definition=end_b_definition,
             created_at=created_at or datetime.now(UTC).isoformat(),
+            orientation_by_view=dict(orientation_by_view or {}),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -173,6 +176,12 @@ class CanonicalCourtFrameDefinition:
             end_b_definition=str(payload["end_b_definition"]),
             created_at=str(payload.get("created_at", "")),
             schema_version=str(payload.get("schema_version", "canonical_court_frame.v1")),
+            orientation_by_view={
+                str(key): str(value)
+                for key, value in (payload.get("orientation_by_view") or {}).items()
+            }
+            if isinstance(payload.get("orientation_by_view"), dict)
+            else {},
         )
 
 
@@ -208,7 +217,7 @@ def load_canonical_court_frame(
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
     return CanonicalCourtFrameDefinition.from_dict(payload)
 
@@ -218,6 +227,7 @@ def resolve_or_create_canonical_court_frame(
     capture_take_id: str,
     end_a_definition: str,
     end_b_definition: str,
+    orientation_by_view: dict[str, str] | None = None,
 ) -> CanonicalCourtFrameDefinition:
     """读取既有定义；不存在则创建并持久化。保证同一 take 复用同一 frame_id。"""
     existing = load_canonical_court_frame(take_dir)
@@ -227,6 +237,37 @@ def resolve_or_create_canonical_court_frame(
         capture_take_id=capture_take_id,
         end_a_definition=end_a_definition,
         end_b_definition=end_b_definition,
+        orientation_by_view=orientation_by_view,
     )
     write_canonical_court_frame(take_dir, definition)
     return definition
+
+
+def validate_canonical_court_frame_compatibility(
+    existing: CanonicalCourtFrameDefinition | None,
+    *,
+    capture_take_id: str,
+    end_a_definition: str,
+    end_b_definition: str,
+    orientation_by_view: dict[str, str] | None = None,
+) -> str | None:
+    """Validate a new request without changing the historical read-only resolver."""
+    if existing is None:
+        return None
+    if existing.capture_take_id != capture_take_id:
+        return "capture_take_id differs from the existing canonical frame"
+    if existing.end_a_definition != end_a_definition or existing.end_b_definition != end_b_definition:
+        return (
+            "endpoint definition differs from the existing canonical frame "
+            f"{existing.frame_id}"
+        )
+    if (
+        existing.orientation_by_view
+        and orientation_by_view
+        and existing.orientation_by_view != orientation_by_view
+    ):
+        return (
+            "view orientation differs from the existing canonical frame "
+            f"{existing.frame_id}"
+        )
+    return None

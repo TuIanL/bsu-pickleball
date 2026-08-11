@@ -19,6 +19,8 @@ from app.core.config import get_settings
 from app.schemas.analysis import AnalysisJobSummary, build_match_context
 from app.schemas.pipeline import PipelineStageResult
 from app.services.analysis_executor_dispatch import _resolve_analysis_dir
+from app.services.analysis_window import resolve_analysis_window
+from app.services.frame_timing_provider import FrameTimingProvider
 from app.services.calibration_service import CalibrationService
 from app.services.multiview_result_composer import MultiViewResultComposer
 from app.services.storage_service import StorageService
@@ -27,6 +29,7 @@ from app.vision.court_view import compute_expanded_detection_roi
 from app.vision.multiview.analysis_clock import CanonicalAnalysisClock
 from app.vision.multiview.association_global import GlobalPlayerAssociator
 from app.vision.multiview.court_frame import CourtOrientation
+from app.vision.multiview.court_frame import load_canonical_court_frame
 from app.vision.multiview.global_state import GlobalPlayerRegistry
 from app.vision.multiview.guidance import (
     CrossViewGuidancePolicy,
@@ -39,6 +42,8 @@ from app.vision.multiview.joint_view_runtime import JointViewRuntime
 from app.vision.multiview.multiview_joint_run import MultiViewJointRun
 from app.vision.multiview.offline_refinement import RecoveredViewObservation
 from app.vision.multiview.sync import load_sync_calibration
+from app.vision.multiview.sync import validate_sync_authority
+from app.vision.multiview.artifact import evidence_summary_from_artifact
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.view_tracking_session import (
     build_view_tracking_config,
@@ -101,6 +106,10 @@ class MultiViewJointExecutor:
             if len(view_inputs) < 2:
                 raise RuntimeError(f"joint parent {parent.id} requires >=2 jointViewInputs")
             reference_view_id = parent.referenceViewId or view_inputs[0].camera_slot
+            reference_input = next(item for item in view_inputs if item.camera_slot == reference_view_id)
+            secondary_input = next(item for item in view_inputs if item.camera_slot != reference_view_id)
+            reference_camera_id = reference_input.camera_id or reference_input.camera_slot
+            secondary_camera_id = secondary_input.camera_id or secondary_input.camera_slot
 
             # 2) 解析视频 + 标定
             video_svc = VideoService()
@@ -125,6 +134,22 @@ class MultiViewJointExecutor:
             height = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             frame_count = int(probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             probe.release()
+            reference_timing_provider = FrameTimingProvider.from_media(
+                ref_video.path,
+                frame_count=frame_count,
+                fps=fps,
+            )
+            window = resolve_analysis_window(
+                source_duration_ms=int(reference_timing_provider.duration_seconds * 1000),
+                source_frame_count=frame_count,
+                fps=fps,
+                clip_start_ms=parent.clipStartMs,
+                clip_end_ms=parent.clipEndMs,
+                pre_roll_ms=getattr(settings, "pre_roll_ms", 1500),
+                post_roll_ms=getattr(settings, "post_roll_ms", 500),
+                timing_provider=reference_timing_provider,
+            )
+            window_metadata = window.metadata()
 
             match_ctx = build_match_context(
                 parent.metadata.matchFormat if hasattr(parent.metadata, "matchFormat") else None
@@ -139,7 +164,8 @@ class MultiViewJointExecutor:
 
             runtimes: dict[str, JointViewRuntime] = {}
             cam2_frames: list[FrameTiming] = []
-            secondary_camera_id = reference_view_id
+            timing_providers: dict[str, FrameTimingProvider] = {reference_view_id: reference_timing_provider}
+            secondary_view_id = secondary_input.camera_slot
             orientations: dict[str, CourtOrientation] = {}
             detectors_by_view: dict[str, object] = {}
             homographies_by_view: dict[str, list[list[float]]] = {}
@@ -181,16 +207,32 @@ class MultiViewJointExecutor:
                 else:
                     sec_fps = float(cap.get(cv2.CAP_PROP_FPS) or fps)
                     sec_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                    cam2_frames = [FrameTiming(i, i / sec_fps) for i in range(sec_count)]
-                    secondary_camera_id = vi.camera_slot
+                    timing_provider = FrameTimingProvider.from_media(
+                        videos[vi.camera_slot].path,
+                        frame_count=sec_count,
+                        fps=sec_fps,
+                    )
+                    timing_providers[vi.camera_slot] = timing_provider
+                    # SyncCalibration maps the reference take clock to the secondary
+                    # camera's own normalized clock; do not subtract the reference
+                    # camera's PTS from the secondary stream here.
+                    cam2_frames = list(timing_provider.frames_with_origin())
+                    secondary_view_id = vi.camera_slot
 
             # 4) clock + registry + associator + guidance
             analysis_dir = _resolve_analysis_dir(storage, parent, capture_take_id)
             take_dir = analysis_dir.parent if analysis_dir is not None else None
             sync = load_sync_calibration(take_dir) if take_dir is not None else None
+            authority = validate_sync_authority(
+                sync,
+                reference_camera_id=reference_camera_id,
+                secondary_camera_id=secondary_camera_id,
+            )
+            authority_reason = "; ".join(issue.code for issue in authority.issues) or None
+            clock_sync = sync if authority.valid else None
             clock = CanonicalAnalysisClock(
-                reference_view_id=reference_view_id, secondary_view_id=secondary_camera_id,
-                secondary_frames=cam2_frames, sync=sync, secondary_camera_id=secondary_camera_id,
+                reference_view_id=reference_view_id, secondary_view_id=secondary_view_id,
+                secondary_frames=cam2_frames, sync=clock_sync, secondary_camera_id=secondary_camera_id,
             )
             registry = GlobalPlayerRegistry()
             associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
@@ -201,6 +243,8 @@ class MultiViewJointExecutor:
                 guidance_generator=gen, orientations=orientations,
                 inverse_homography=invert_homography(reference_homography),
                 frame_width=width, frame_height=height,
+                canonical_frame_ref=load_canonical_court_frame(take_dir) if take_dir is not None else None,
+                reference_timing_provider=reference_timing_provider,
             )
 
             # 5) 长任务执行(每 tick cancellation + 进度)
@@ -219,10 +263,22 @@ class MultiViewJointExecutor:
                 )
 
             out = run.run(
-                reference_frame_count=(frame_count // parent.frameStride) + 1,
                 reference_fps=fps, frame_stride=parent.frameStride,
+                reference_frame_start=window.decoded_start_frame,
+                reference_frame_end=window.decoded_end_frame,
+                metric_frame_start=window.requested_start_frame if window.enabled else 0,
+                metric_frame_end=window.requested_end_frame if window.enabled else frame_count,
+                analysis_window=window_metadata,
                 cancellation_token=token, progress_callback=on_progress,
             )
+            out.diagnostics.update(evidence_summary_from_artifact(out.trajectory))
+            out.diagnostics["timing_provenance"] = {
+                slot: provider.metadata() for slot, provider in timing_providers.items()
+            }
+            out.diagnostics["authority_reason"] = authority_reason
+            out.diagnostics["requested_mode"] = parent.executionMode
+            if authority_reason:
+                out.diagnostics["effective_mode"] = "single_view_fallback"
 
             # ---- F1 离线精修(只读 F0;写 immutable F0 + recovered/F1 artifact + manifest)----
             from app.vision.multiview.offline_refinement import run_offline_refinement, refuse_f1
@@ -289,7 +345,11 @@ class MultiViewJointExecutor:
             composer = MultiViewResultComposer(storage)
             result = composer.compose_joint_result(
                 job=parent, joint_output=compose_output, reference_view_id=reference_view_id,
-                message="双摄协同分析完成(joint_tracking_v2)。", refinement=refinement,
+                message=(
+                    "双摄协同分析完成(joint_tracking_v2)。"
+                    if out.diagnostics.get("effective_mode") == "multiview_fused"
+                    else "双摄分析完成，但副摄证据不可用或覆盖不足，结果按降级模式展示。"
+                ), refinement=refinement,
             )
             result = storage.publicize_pipeline_result(result)
             storage.write_json(storage.output_json_path(parent.id), result.model_dump(mode="json"))

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Activity, Camera, CheckCircle2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Camera, CheckCircle2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
-import type { CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
-import { CourtCornerCalibrator } from "../components/platform/CourtCornerCalibrator";
+import { taskListPath, withTaskListContext } from "../app/navigationContext";
+import { CourtCornerCalibrator, type CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { PageFrame } from "../components/PageFrame";
 import {
   createMultiviewAnalysisJob,
@@ -89,6 +89,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   const [step, setStep] = useState<SetupStep>(0);
   const [calibrationA, setCalibrationA] = useState<string | null>(null);
   const [calibrationB, setCalibrationB] = useState<string | null>(null);
+  const [calibrationPointsA, setCalibrationPointsA] = useState<CalibrationPointDraft[]>([]);
+  const [calibrationPointsB, setCalibrationPointsB] = useState<CalibrationPointDraft[]>([]);
   const [cam1AtEndA, setCam1AtEndA] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<{ title: string; body: string } | null>(null);
@@ -99,6 +101,11 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
 
   // 路由带 `?session=`（录制卡片传入），缺失时回退到 take.source_session_id 反查
   const routeSessionId = new URLSearchParams(window.location.search).get("session");
+  const taskContext = {
+    source: "sync_recording" as const,
+    sessionId: session?.session_id ?? routeSessionId ?? undefined,
+  };
+  const taskReturnPath = () => taskListPath(taskContext);
 
   // ── Load take + source session ────────────────────────────────────────────
 
@@ -138,6 +145,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
 
   const videoIdA = session?.registered_video_ids?.cam_1;
   const videoIdB = session?.registered_video_ids?.cam_2;
+  const cameraIdA = session?.camera_slots?.cam_1?.camera_id ?? "cam_1";
+  const cameraIdB = session?.camera_slots?.cam_2?.camera_id ?? "cam_2";
   const videoSrcA = videoIdA ? (getVideoStreamUrl(videoIdA) ?? undefined) : undefined;
   const videoSrcB = videoIdB ? (getVideoStreamUrl(videoIdB) ?? undefined) : undefined;
 
@@ -160,12 +169,14 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   // ── Actions ────────────────────────────────────────────────────────────────
 
   const handleCalibrationComplete = (slot: "cam_1" | "cam_2") => {
-    return (calibrationId: string, _points: CalibrationPointDraft[]) => {
+    return (calibrationId: string, points: CalibrationPointDraft[]) => {
       if (slot === "cam_1") {
         setCalibrationA(calibrationId);
+        setCalibrationPointsA(points);
         setStep(2);
       } else {
         setCalibrationB(calibrationId);
+        setCalibrationPointsB(points);
         setStep(3);
       }
     };
@@ -195,12 +206,16 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         clipEndMs: clipEnabled ? Math.max(1, Math.round(clipEndSec * 1000)) : undefined,
         referenceViewId: "cam_1",
         views: [
-          { viewId: "cam_1", videoId: videoIdA, calibrationId: calibrationA, courtOrientation: cam1Orientation },
-          { viewId: "cam_2", videoId: videoIdB, calibrationId: calibrationB, courtOrientation: cam2Orientation },
+          { viewId: "cam_1", cameraId: cameraIdA, videoId: videoIdA, calibrationId: calibrationA, courtOrientation: cam1Orientation },
+          { viewId: "cam_2", cameraId: cameraIdB, videoId: videoIdB, calibrationId: calibrationB, courtOrientation: cam2Orientation },
         ],
+        canonicalFrame: {
+          endA: cam1AtEndA ? "cam_1_physical_end" : "cam_2_physical_end",
+          endB: cam1AtEndA ? "cam_2_physical_end" : "cam_1_physical_end",
+        },
       });
       // 只导航到 Parent（用户永不直接进入 child）
-      onNavigate(`/analysis/${parent.id}` as Parameters<NavigateFn>[0]);
+      onNavigate(withTaskListContext(`/analysis/${parent.id}`, taskContext));
     } catch (err) {
       const message = isAnalysisApiError(err)
         ? err.backendDetail ?? err.message
@@ -211,6 +226,9 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         title: "双摄分析启动失败",
         body: message,
       });
+      if (/sync|同步|preflight|朝向|双摄素材/i.test(message)) {
+        setStep(0);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -228,10 +246,10 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
-            onClick={() => onNavigate("/capture")}
+            onClick={() => onNavigate(taskReturnPath())}
             type="button"
           >
-            返回视频管理
+            返回双摄任务
           </button>
         </div>
       </PageFrame>
@@ -256,6 +274,14 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
     <PageFrame>
       <section className="mx-auto max-w-5xl">
         {/* Header */}
+        <button
+          className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+          onClick={() => onNavigate(taskReturnPath())}
+          type="button"
+        >
+          <ArrowLeft size={16} aria-hidden="true" />
+          返回双摄任务
+        </button>
         <div className="mb-6 flex items-center gap-3">
           <span className="grid size-10 place-items-center rounded-xl bg-[#22C55E]/15 text-[#168A34]">
             <Camera size={20} aria-hidden="true" />
@@ -354,16 +380,27 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                 双摄素材尚未全部就绪，无法开始协同分析。请确认双机位视频已合并完成。
               </div>
             )}
+            {submitError && (
+              <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4">
+                <strong className="block text-sm text-[#991B1B]">{submitError.title}</strong>
+                <p className="mt-1 text-sm leading-6 text-[#B91C1C]">{submitError.body}</p>
+                <button className="quiet-button mt-3 px-3 py-1.5 text-xs" onClick={() => setSubmitError(null)} type="button">
+                  重新检查同步
+                </button>
+              </div>
+            )}
             <div className="mt-6 flex justify-end gap-3">
-              <button className="quiet-button px-4 py-2 text-sm" onClick={() => onNavigate("/capture")} type="button">
-                返回
+              <button className="quiet-button px-4 py-2 text-sm" onClick={() => onNavigate(taskReturnPath())} type="button">
+                <ArrowLeft size={15} aria-hidden="true" />
+                退出向导
               </button>
               <button
-                className="primary-button px-4 py-2 text-sm disabled:opacity-40"
+                className="green-button px-4 py-2 text-sm disabled:opacity-40"
                 disabled={!allReady}
                 onClick={() => setStep(1)}
                 type="button"
               >
+                <ArrowRight size={15} aria-hidden="true" />
                 下一步：A 机位标定
               </button>
             </div>
@@ -380,8 +417,11 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
             <CourtCornerCalibrator
               videoSrc={videoSrcA}
               videoId={videoIdA}
+              initialPoints={calibrationPointsA}
+              isSubmitting={isSubmitting}
+              cancelLabel="上一步"
               onComplete={handleCalibrationComplete("cam_1")}
-              onCancel={() => onNavigate("/capture")}
+              onCancel={() => setStep(0)}
             />
           </div>
         )}
@@ -396,8 +436,11 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
             <CourtCornerCalibrator
               videoSrc={videoSrcB}
               videoId={videoIdB}
+              initialPoints={calibrationPointsB}
+              isSubmitting={isSubmitting}
+              cancelLabel="上一步"
               onComplete={handleCalibrationComplete("cam_2")}
-              onCancel={() => onNavigate("/capture")}
+              onCancel={() => setStep(1)}
             />
           </div>
         )}
@@ -452,7 +495,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                   <button className="quiet-button px-3 py-1.5 text-xs" onClick={() => setStep(0)} type="button">
                     重新检查同步
                   </button>
-                  <button className="quiet-button px-3 py-1.5 text-xs" onClick={() => onNavigate(`/capture/${session.session_id}/analyze?cam=cam_1` as Parameters<NavigateFn>[0])} type="button">
+                  <button className="quiet-button px-3 py-1.5 text-xs" onClick={() => onNavigate(withTaskListContext(`/capture/${session.session_id}/analyze?cam=cam_1`, { source: "recorded", sessionId: session.session_id, cameraSlot: "cam_1" }))} type="button">
                     改用 A 机位单摄分析
                   </button>
                 </div>
@@ -461,10 +504,11 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
 
             <div className="flex justify-end gap-3">
               <button className="quiet-button px-4 py-2 text-sm" onClick={() => setStep(2)} type="button">
+                <ArrowLeft size={15} aria-hidden="true" />
                 上一步
               </button>
               <button
-                className="primary-button px-5 py-2 text-sm disabled:opacity-40"
+                className="green-button px-5 py-2 text-sm disabled:opacity-40"
                 disabled={!calibrationA || !calibrationB || isSubmitting}
                 onClick={handleStart}
                 type="button"

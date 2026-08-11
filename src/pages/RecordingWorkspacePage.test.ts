@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RecordingSession, SessionTimelineEvent } from "../types/report";
-import { eventsForRecording } from "./RecordingWorkspacePage";
+import { eventsForRecording, recordingTaskListPath } from "./RecordingWorkspacePage";
 
 const recording: RecordingSession = {
   session_id: "rec-current",
@@ -61,5 +61,22 @@ describe("eventsForRecording", () => {
     ], recording);
 
     expect(events).toEqual([]);
+  });
+});
+
+describe("recordingTaskListPath", () => {
+  it("infers dual and single recording task tabs when no context is in the URL", () => {
+    expect(recordingTaskListPath("sync-1", "dual", { source: "upload" }, false)).toBe(
+      "/analysis/tasks?source=sync_recording&session=sync-1",
+    );
+    expect(recordingTaskListPath("rec-1", "single", { source: "upload" }, false)).toBe(
+      "/analysis/tasks?source=recorded&session=rec-1",
+    );
+  });
+
+  it("prefers explicit task context from the entering URL", () => {
+    expect(recordingTaskListPath("sync-1", "dual", { source: "sync_recording", sessionId: "sync-1" }, true)).toBe(
+      "/analysis/tasks?source=sync_recording&session=sync-1",
+    );
   });
 });

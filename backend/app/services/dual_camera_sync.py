@@ -258,19 +258,21 @@ def derive_sync_calibration_from_segment_timing(
         if duration_sec <= 0:
             continue
         offset_seconds = float(s1) - float(s2)
+        reference_camera_id = str(getattr(f1, "camera_id", None) or "cam_1")
+        secondary_camera_id = str(getattr(f2, "camera_id", None) or "cam_2")
         break
 
     if offset_seconds is None:
         raise ValueError("no usable segment timing metadata (input_start_time) found")
 
     anchors = [
-        {"cam_1": 0.0, "cam_2": offset_seconds},
-        {"cam_1": duration_sec, "cam_2": duration_sec + offset_seconds},
+        {reference_camera_id: 0.0, secondary_camera_id: offset_seconds},
+        {reference_camera_id: duration_sec, secondary_camera_id: duration_sec + offset_seconds},
     ]
     calibrations = calibrations_from_anchor_rows(
         anchors,
-        reference_camera="cam_1",
-        camera_ids=["cam_1", "cam_2"],
+        reference_camera=reference_camera_id,
+        camera_ids=[reference_camera_id, secondary_camera_id],
     )
     calibrations = {
         camera_id: replace(
@@ -282,7 +284,7 @@ def derive_sync_calibration_from_segment_timing(
     }
     return {
         "schema_version": "dual_camera_sync_calibration.v1",
-        "reference_camera": "cam_1",
+        "reference_camera": reference_camera_id,
         "anchor_count": len(anchors),
         "mappings": {camera_id: calibration_to_dict(cal) for camera_id, cal in calibrations.items()},
         "source": "auto_degraded_from_recording_timing",

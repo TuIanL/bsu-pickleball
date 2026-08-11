@@ -3,6 +3,7 @@ import { ArrowRight, Dumbbell } from "lucide-react";
 import type { NavigateFn, AppPath } from "../app/navigationTypes";
 import type { AnalysisReport, ReportType, AnalysisJobSummary } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
+import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import { PageFrame } from "../components/PageFrame";
 import { StatusState } from "../components/StatusState";
 import { MetricCard } from "../components/platform/MetricCard";
@@ -86,17 +87,18 @@ export function ReportPage({
   reportType: ReportType;
 }) {
   const { error, job, report } = useJobReport(jobId);
+  const taskReturnPath = taskListPathForJob(job);
 
   if (jobId && (job === undefined || report === undefined)) {
-    return <StatusState title="正在加载分析报告" body="正在读取该任务生成的轻量报告数据。" onNavigate={onNavigate} />;
+    return <StatusState title="正在加载分析报告" body="正在读取该任务生成的轻量报告数据。" onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (jobId && error) {
-    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} />;
+    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (jobId && !job) {
-    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，无法打开报告。`} onNavigate={onNavigate} />;
+    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，无法打开报告。`} onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (job && job.status !== "completed") {
@@ -131,6 +133,7 @@ export function ReportPage({
             : null
         }
         onNavigate={onNavigate}
+        backPath={taskReturnPath}
       />
     );
   }
@@ -141,6 +144,7 @@ export function ReportPage({
         title="报告尚未生成"
         body="该任务记录已读取，但还没有可用的轻量报告数据。请返回任务管理查看任务状态或稍后重试。"
         onNavigate={onNavigate}
+        backPath={taskReturnPath}
       />
     );
   }
@@ -151,7 +155,9 @@ export function ReportPage({
     supportedDefinitions.find((item) => item.type === reportType) ??
     supportedDefinitions[0] ??
     analysis.reportDefinitions[0];
-  const backPath = (analysis.jobId ? `/analysis/${analysis.jobId}/vision` : "/vision") as AppPath;
+  const backPath = analysis.jobId
+    ? withTaskListContext(`/analysis/${analysis.jobId}/vision`, taskContextForJob(job))
+    : "/vision" as AppPath;
 
   return (
     <PageFrame>

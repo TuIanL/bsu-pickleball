@@ -98,6 +98,7 @@ class RecordingSession(BaseModel):
     storage_root: str | None = None
     session_dir: str | None = None
     storage_status: str = "available"
+    display_mode: Literal["standard", "showcase"] = "standard"
 
 
 # 删除录制会话的结果
@@ -226,6 +227,11 @@ class SyncRecordingSession(BaseModel):
     output_dir: str = ""
     default_analysis_video_id: str | None = None
     registered_video_ids: dict[CameraSlotRole, str] = {}
+    # 运行时可用性不是视频引用本身；外置存储暂时不可访问时保留 ID，
+    # 仅更新这里的状态，待存储恢复后再自动重新检查。
+    video_availability: dict[CameraSlotRole, Literal["available", "unavailable", "pending"]] = Field(
+        default_factory=dict
+    )
     associated_video_paths: list[str] = []
     court_name: str = ""
     match_format: str = "doubles"
@@ -241,6 +247,8 @@ class SyncRecordingSession(BaseModel):
     storage_root: str | None = None
     session_dir: str | None = None
     storage_status: str = "available"
+    display_mode: Literal["standard", "showcase"] = "standard"
+    showcase_runtime_id: str | None = None
     merge_status: SyncMergeStatus = "pending"
     merge_error: str | None = None
     merge_started_at: datetime | None = None

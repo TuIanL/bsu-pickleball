@@ -156,6 +156,7 @@ def test_coordinator_creates_parent_and_dedicated_children(monkeypatch, tmp_path
     assert parent.orchestrationStatus == "waiting_sources"
     assert parent.referenceViewId == "cam_1"
     assert len(parent.sourceJobs) == 2
+    assert parent.analysisMode == "real"
 
     for ref in parent.sourceJobs:
         child = mock_analysis._JOB_STORE.get(ref.jobId)
@@ -164,6 +165,7 @@ def test_coordinator_creates_parent_and_dedicated_children(monkeypatch, tmp_path
         assert child.parentJobId == parent.id
         assert child.analysisScope == "full"
         assert child.analysisKind == "single_view"
+        assert child.analysisMode == "real"
         assert ref.courtOrientation in {"identity", "rotate_180"}
 
     # waiting_sources Parent + 两个 queued child → claim_next 应领取 child，而不是 Parent
@@ -786,21 +788,21 @@ def test_derive_sync_calibration_from_segment_timing():
     segment = SimpleNamespace(
         segment_index=0,
         files=[
-            SimpleNamespace(role="cam_1", input_start_time=100.0, media_duration_sec=60.0),
-            SimpleNamespace(role="cam_2", input_start_time=100.25, media_duration_sec=60.0),
+            SimpleNamespace(role="cam_1", camera_id="174", input_start_time=100.0, media_duration_sec=60.0),
+            SimpleNamespace(role="cam_2", camera_id="175", input_start_time=100.25, media_duration_sec=60.0),
         ],
     )
     payload = derive_sync_calibration_from_segment_timing([segment])
 
     assert payload["schema_version"] == "dual_camera_sync_calibration.v1"
-    assert payload["reference_camera"] == "cam_1"
+    assert payload["reference_camera"] == "174"
     assert payload["source"] == "auto_degraded_from_recording_timing"
     # 自动推导恒 degraded，不冒充 authoritative good
-    assert payload["mappings"]["cam_1"]["quality"] == "degraded"
-    assert payload["mappings"]["cam_2"]["quality"] == "degraded"
+    assert payload["mappings"]["174"]["quality"] == "degraded"
+    assert payload["mappings"]["175"]["quality"] == "degraded"
     # offset = input_start_1 - input_start_2 = 100 - 100.25 = -0.25s → -250ms
-    assert payload["mappings"]["cam_2"]["offset_ms"] == -250.0
-    assert payload["mappings"]["cam_2"]["rate"] == 1.0
+    assert payload["mappings"]["175"]["offset_ms"] == -250.0
+    assert payload["mappings"]["175"]["rate"] == 1.0
 
     # 无可用时序元数据 → 明确报错（不静默写空校准）
     with pytest.raises(ValueError, match="input_start_time"):
@@ -843,6 +845,55 @@ def test_ensure_sync_calibration_auto_generates_degraded(monkeypatch, tmp_path):
     written_once = sync_path.read_text(encoding="utf-8")
     assert coord._ensure_sync_calibration("CT_1") is True
     assert sync_path.read_text(encoding="utf-8") == written_once
+
+
+def test_ensure_sync_calibration_repairs_legacy_auto_identity(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from app.camera.sync_recorder_service import sync_recording_service
+    import app.services.multiview_coordinator as mc
+    from app.services.dual_camera_sync import derive_sync_calibration_from_segment_timing
+
+    mock_analysis, _ = _coordinator_with_patches(monkeypatch, tmp_path)
+    coord = mock_analysis._get_coordinator()
+
+    take_dir = tmp_path / "take-legacy"
+    (take_dir / "timeline").mkdir(parents=True)
+    monkeypatch.setattr(mc, "_check_capture_take_dir", lambda ctid: str(take_dir))
+    monkeypatch.setattr(coord, "_resolve_sync_session_id", lambda ctid: "sync-legacy")
+
+    stale_segment = SimpleNamespace(
+        segment_index=0,
+        files=[
+            SimpleNamespace(role="cam_1", input_start_time=100.0, media_duration_sec=60.0),
+            SimpleNamespace(role="cam_2", input_start_time=100.25, media_duration_sec=60.0),
+        ],
+    )
+    stale_payload = derive_sync_calibration_from_segment_timing([stale_segment])
+    sync_path = mc.sync_calibration_path(take_dir)
+    sync_path.write_text(json.dumps(stale_payload), encoding="utf-8")
+
+    actual_segment = SimpleNamespace(
+        segment_index=0,
+        files=[
+            SimpleNamespace(role="cam_1", camera_id="174", input_start_time=100.0, media_duration_sec=60.0),
+            SimpleNamespace(role="cam_2", camera_id="175", input_start_time=100.25, media_duration_sec=60.0),
+        ],
+    )
+    session = SimpleNamespace(
+        camera_slots={
+            "cam_1": SimpleNamespace(camera_id="174"),
+            "cam_2": SimpleNamespace(camera_id="175"),
+        },
+        segments=[actual_segment],
+    )
+    monkeypatch.setattr(sync_recording_service, "get_session", lambda sid: session)
+
+    assert coord._ensure_sync_calibration("CT_legacy") is True
+    repaired = json.loads(sync_path.read_text(encoding="utf-8"))
+    assert repaired["reference_camera"] == "174"
+    assert set(repaired["mappings"]) == {"174", "175"}
+    assert repaired["mappings"]["175"]["camera_id"] == "175"
 
 
 def test_ensure_sync_calibration_returns_false_when_not_derivable(monkeypatch, tmp_path):
@@ -918,6 +969,15 @@ def test_map_clip_to_view_uses_sync_offset(monkeypatch, tmp_path):
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
     assert coord._map_clip_to_view(str(empty_dir), "cam_2", 1000, 61000) == (1000, 61000)
+
+
+def test_map_clip_to_view_strict_rejects_missing_sync_authority(monkeypatch, tmp_path):
+    mock_analysis, _ = _coordinator_with_patches(monkeypatch, tmp_path)
+    coord = mock_analysis._get_coordinator()
+    empty_dir = tmp_path / "strict-empty"
+    empty_dir.mkdir()
+    with pytest.raises(ValueError, match="sync mapping unavailable"):
+        coord._map_clip_to_view(str(empty_dir), "cam_2", 1000, 2000, strict=True)
 
 
 # ---- 回归：clip 窗口必须落盘（否则 child 拿不到窗口，等于跑全片） -----------------

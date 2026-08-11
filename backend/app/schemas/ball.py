@@ -65,6 +65,7 @@ class BallOverlaySource(BaseModel):
     fps: float = Field(..., description="视频帧率")
     frame_stride: int = Field(..., description="抽帧步长")
     processed_frame_count: int = Field(..., description="实际处理的帧数")
+    timing_provenance: dict[str, object] | None = Field(default=None, description="时间轴来源与兼容模式")
 
 
 class BallOverlayCoverage(BaseModel):

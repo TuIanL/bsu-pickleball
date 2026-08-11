@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary } from "../types/report";
 
 const analysisClientMocks = vi.hoisted(() => ({
@@ -48,6 +48,8 @@ function failedJob(): AnalysisJobSummary {
 }
 
 describe("analysis task error states", () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     vi.clearAllMocks();
     onNavigate.mockReset();
@@ -72,5 +74,18 @@ describe("analysis task error states", () => {
 
     expect(await screen.findByRole("heading", { name: "分析任务失败" })).toBeTruthy();
     expect(screen.getAllByText("视频读取失败").length).toBeGreaterThan(0);
+  });
+
+  it("returns a multiview failure to the dual-camera task list", async () => {
+    getAnalysisJob.mockResolvedValue({ ...failedJob(), analysisKind: "multiview", recordingSessionId: "sync-1" });
+    getAnalysisReport.mockResolvedValue(null);
+    getAnalysisResult.mockResolvedValue(null);
+    window.history.replaceState({}, "", "/analysis/job-failed");
+
+    render(<AnalysisDetailsPage jobId="job-failed" onNavigate={onNavigate} />);
+
+    const returnButton = await screen.findByRole("button", { name: "返回任务管理" });
+    returnButton.click();
+    expect(onNavigate).toHaveBeenCalledWith("/analysis/tasks?source=sync_recording&session=sync-1");
   });
 });

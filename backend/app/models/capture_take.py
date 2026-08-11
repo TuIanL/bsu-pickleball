@@ -9,6 +9,7 @@ from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integ
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.models.field_session import DisplayMode
 
 
 # 录制单元状态枚举
@@ -54,6 +55,9 @@ class CaptureTake(Base):
     capture_mode: Mapped[CaptureMode] = mapped_column(
         Enum(CaptureMode),
         nullable=False,  # 录制模式
+    )
+    display_mode: Mapped[DisplayMode] = mapped_column(
+        Enum(DisplayMode), nullable=False, default=DisplayMode.standard, server_default="standard"
     )
     source_session_type: Mapped[SourceSessionType] = mapped_column(
         Enum(SourceSessionType),

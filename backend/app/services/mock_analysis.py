@@ -492,7 +492,7 @@ def _is_safe_artifact_root(root: Path | None, job_id: str, outputs_dir: Path) ->
 
 
 def delete_analysis_job(job_id: str, *, allow_internal: bool = False) -> AnalysisDeleteResult:
-    # 删除分析任务：从内存和磁盘清掉所有相关产物，并清理共享的视频/标定文件。
+    # 删除分析任务：从内存和磁盘清掉所有相关产物。
     _sync_orchestration_storage()
     job = get_mock_job(job_id)
     if job is None:
@@ -551,9 +551,16 @@ def delete_analysis_job(job_id: str, *, allow_internal: bool = False) -> Analysi
             _STORAGE.delete_path_tree(artifact_root)
             deleted_paths.append(str(artifact_root))
 
-    # 若该视频/标定已无其它任务使用，则一并清理（shared artifact）
-    _cleanup_shared_video_artifacts(job.videoId, excluded_job_id=job_id)
-    _cleanup_shared_calibration_artifacts(job.calibrationId, excluded_job_id=job_id)
+    # 上传分析的私有视频允许随任务回收；CaptureTake/录制 session 产生的媒体和
+    # 标定属于录制资产，删除分析时必须保留，尤其是双摄 child 的级联删除路径。
+    capture_derived = bool(
+        getattr(job.metadata, "capture_take_id", None)
+        or getattr(job.metadata, "recording_session_id", None)
+        or getattr(job, "recordingSessionId", None)
+    )
+    if not capture_derived:
+        _cleanup_shared_video_artifacts(job.videoId, excluded_job_id=job_id)
+        _cleanup_shared_calibration_artifacts(job.calibrationId, excluded_job_id=job_id)
 
     return AnalysisDeleteResult(
         job_id=job_id,

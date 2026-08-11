@@ -47,6 +47,7 @@ class MultiViewFusionRun:
     view_inputs: list[MultiViewViewInput] = field(default_factory=list)
     sync_calibration_ref: MultiViewSyncCalibration | None = None
     canonical_frame_ref: CanonicalCourtFrameDefinition | None = None
+    pairing_plan_ref: dict[str, object] | None = None
     output_dir: Path | None = None
     status: RunStatus = "pending"
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())

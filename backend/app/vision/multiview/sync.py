@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Literal
@@ -44,6 +45,125 @@ class MultiViewSyncCalibration:
 
 
 SyncGateDecision = Literal["fuse", "fuse_degraded", "single_view"]
+
+
+@dataclass(frozen=True)
+class SyncAuthorityIssue:
+    """同步 authority 的结构化校验问题。"""
+
+    code: str
+    message: str
+    camera_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SyncAuthorityValidation:
+    """当前多视角 Parent 是否拥有可消费的同步 authority。"""
+
+    valid: bool
+    issues: tuple[SyncAuthorityIssue, ...] = ()
+    reference_camera_id: str | None = None
+    secondary_camera_id: str | None = None
+    secondary_mapping: SyncCalibration | None = None
+
+
+def validate_sync_authority(
+    sync: MultiViewSyncCalibration | None,
+    *,
+    reference_camera_id: str,
+    secondary_camera_id: str,
+) -> SyncAuthorityValidation:
+    """严格验证当前 Parent 所需的 reference/secondary mapping。
+
+    reference camera 的 mapping 可以省略，因为 reference timeline 本身是 canonical
+    时钟；secondary mapping 则必须精确存在且身份一致。
+    """
+
+    issues: list[SyncAuthorityIssue] = []
+    if sync is None:
+        issues.append(SyncAuthorityIssue("sync_unavailable", "sync authority unavailable"))
+        return SyncAuthorityValidation(False, tuple(issues), reference_camera_id, secondary_camera_id)
+    if sync.schema_version != SYNC_CALIBRATION_SCHEMA_VERSION:
+        issues.append(
+            SyncAuthorityIssue(
+                "schema_version_mismatch",
+                f"expected {SYNC_CALIBRATION_SCHEMA_VERSION}, got {sync.schema_version}",
+            )
+        )
+    if sync.reference_camera != reference_camera_id:
+        issues.append(
+            SyncAuthorityIssue(
+                "reference_camera_mismatch",
+                f"expected reference camera {reference_camera_id}, got {sync.reference_camera}",
+                sync.reference_camera,
+            )
+        )
+
+    mapping = sync.mapping_for(secondary_camera_id)
+    if mapping is None:
+        issues.append(
+            SyncAuthorityIssue(
+                "secondary_mapping_missing",
+                f"mapping for secondary camera {secondary_camera_id} is missing",
+                secondary_camera_id,
+            )
+        )
+        return SyncAuthorityValidation(
+            not issues,
+            tuple(issues),
+            reference_camera_id,
+            secondary_camera_id,
+            None,
+        )
+
+    if mapping.reference_camera != sync.reference_camera:
+        issues.append(
+            SyncAuthorityIssue(
+                "mapping_reference_mismatch",
+                "secondary mapping reference_camera differs from top-level reference_camera",
+                secondary_camera_id,
+            )
+        )
+    if mapping.camera_id != secondary_camera_id:
+        issues.append(
+            SyncAuthorityIssue(
+                "mapping_camera_mismatch",
+                f"mapping camera_id {mapping.camera_id} does not match {secondary_camera_id}",
+                secondary_camera_id,
+            )
+        )
+    if not math.isfinite(mapping.offset_seconds):
+        issues.append(SyncAuthorityIssue("offset_not_finite", "mapping offset is not finite", secondary_camera_id))
+    if not math.isfinite(mapping.rate) or mapping.rate <= 0:
+        issues.append(SyncAuthorityIssue("rate_invalid", "mapping rate must be finite and positive", secondary_camera_id))
+    if not math.isfinite(mapping.residual_rms_seconds) or mapping.residual_rms_seconds < 0:
+        issues.append(
+            SyncAuthorityIssue(
+                "residual_invalid", "mapping residual_rms_seconds must be finite and non-negative", secondary_camera_id
+            )
+        )
+    if mapping.anchor_count < 0:
+        issues.append(SyncAuthorityIssue("anchor_count_invalid", "mapping anchor_count must be non-negative", secondary_camera_id))
+    if mapping.quality not in {"good", "degraded", "unknown"}:
+        issues.append(SyncAuthorityIssue("quality_invalid", f"unknown sync quality {mapping.quality!r}", secondary_camera_id))
+    if mapping.valid_start_seconds is not None and not math.isfinite(mapping.valid_start_seconds):
+        issues.append(SyncAuthorityIssue("valid_start_invalid", "valid_start_seconds is not finite", secondary_camera_id))
+    if mapping.valid_end_seconds is not None and not math.isfinite(mapping.valid_end_seconds):
+        issues.append(SyncAuthorityIssue("valid_end_invalid", "valid_end_seconds is not finite", secondary_camera_id))
+    if (
+        mapping.valid_start_seconds is not None
+        and mapping.valid_end_seconds is not None
+        and mapping.valid_end_seconds < mapping.valid_start_seconds
+    ):
+        issues.append(SyncAuthorityIssue("valid_range_invalid", "sync valid range is reversed", secondary_camera_id))
+
+    return SyncAuthorityValidation(
+        not issues,
+        tuple(issues),
+        reference_camera_id,
+        secondary_camera_id,
+        mapping,
+    )
 
 
 def evaluate_sync_gate(sync: MultiViewSyncCalibration | None) -> tuple[SyncGateDecision, str]:

@@ -714,6 +714,34 @@ class SyncRecorder:
 class SyncRecordingService:
     """双摄同步录制服务，管理会话生命周期、持久化、摄像头占用。"""
 
+    @staticmethod
+    def _start_showcase_runtime(session: SyncRecordingSession) -> SyncRecordingSession:
+        """Start the optional overlay after recording is already healthy."""
+        if session.display_mode != "showcase":
+            return session
+        try:
+            from app.services.showcase_runtime import showcase_runtime_manager
+
+            runtime = showcase_runtime_manager.start_for_session(session)
+            updated = session.model_copy(update={"showcase_runtime_id": runtime.runtime_id})
+            SYNC_SESSIONS[session.session_id] = updated
+            return updated
+        except Exception as exc:
+            logger.warning("展示旁路启动失败，双摄录制继续: %s", exc)
+            return session.model_copy(update={"error_message": f"展示旁路不可用: {exc}"})
+
+    @staticmethod
+    def _stop_showcase_runtime(session: SyncRecordingSession) -> None:
+        if session.display_mode != "showcase":
+            return
+        try:
+            from app.services.showcase_runtime import showcase_runtime_manager
+
+            if not showcase_runtime_manager.stop_for_session(session, timeout=3.0):
+                logger.warning("展示旁路停止超时: %s", session.session_id)
+        except Exception as exc:
+            logger.warning("展示旁路停止失败，继续收尾原始录制: %s", exc)
+
     def __init__(
         self,
         sync_recorder_factory=None,
@@ -906,6 +934,7 @@ class SyncRecordingService:
         field_session_id = request.field_session_id
         court_name = request.court_name
         match_format = request.match_format or "doubles"
+        display_mode = "standard"
 
         if field_session_id:
             from app.database import get_session_factory
@@ -920,6 +949,12 @@ class SyncRecordingService:
                     court_name = fs.court_name
                 if request.match_format is None:
                     match_format = fs.match_format.value
+                raw_display_mode = getattr(fs, "display_mode", "standard")
+                display_mode = getattr(raw_display_mode, "value", raw_display_mode)
+                if display_mode not in {"standard", "showcase"}:
+                    display_mode = "standard"
+                if display_mode == "showcase" and getattr(fs.camera_setup, "value", fs.camera_setup) != "dual":
+                    raise ValueError("展示模式只能与双摄方案组合")
             finally:
                 db.close()
 
@@ -959,6 +994,7 @@ class SyncRecordingService:
             started_at=datetime.now(UTC),
             storage_root=str(plan.storage_root),
             session_dir=str(plan.take_dir),
+            display_mode=display_mode,
         )
 
         # 活跃录制唯一性约束：全局最多一个 active CaptureTake
@@ -1100,6 +1136,9 @@ class SyncRecordingService:
         )
         self._start_storage_monitor(session_id)
 
+        session = self._start_showcase_runtime(session)
+        self._persist(session)
+
         logger.info("双摄同步录制会话已开始: %s", session_id)
         return session
 
@@ -1129,6 +1168,7 @@ class SyncRecordingService:
                 self._recorder.stop_recording()
         except Exception as exc:
             logger.warning("存储故障停止双摄录制失败: %s", exc)
+        self._stop_showcase_runtime(session)
         failed = session.model_copy(
             update={
                 "status": "failed",
@@ -1164,6 +1204,7 @@ class SyncRecordingService:
 
         # 停止录制器
         self._recorder.stop_recording()
+        self._stop_showcase_runtime(session)
         stopped_at = datetime.now(UTC)
         wall_duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
         duration = _duration_from_segments(self._segments, wall_duration)
@@ -1366,6 +1407,7 @@ class SyncRecordingService:
 
         SYNC_SESSIONS[session_id] = session
         self._persist(session)
+        self._stop_showcase_runtime(session)
         _ACTIVE_SYNC_SESSION_ID = None
         _ACTIVE_SYNC_CAMERAS.clear()
         logger.warning("双摄同步录制会话自动结束(异常): %s", session_id)
@@ -1391,7 +1433,11 @@ class SyncRecordingService:
                 raise RuntimeError("已取消的录制不能合并")
             if session.merge_status == "running":
                 raise RuntimeError("该任务正在合并中")
-            if session.merge_status == "completed" and len(session.registered_video_ids) >= len(session.camera_slots):
+            if (
+                session.merge_status == "completed"
+                and len(session.registered_video_ids) >= len(session.camera_slots)
+                and self._registered_video_ids_are_available(session)
+            ):
                 return session
             if not self._session_has_ts(session):
                 raise RuntimeError("没有找到可合并的 TS 分段")
@@ -1449,7 +1495,11 @@ class SyncRecordingService:
             if session is None:
                 return
             track_results = self._finalize_capture_tracks(session)
-            if track_results is None:
+            track_results_usable = bool(track_results) and all(
+                self._video_id_is_available(track_results.get(role, {}).get("video_id"))
+                for role in session.camera_slots
+            )
+            if track_results is None or not track_results_usable:
                 session, _, _, _ = self._register_session_videos(session)
             else:
                 registered = dict(session.registered_video_ids or {})
@@ -1586,6 +1636,7 @@ class SyncRecordingService:
         analysis_blocked_reason: str | None = None
         default_analysis_video_id = session.default_analysis_video_id
         registered_video_ids: dict[CameraSlotRole, str] = dict(session.registered_video_ids or {})
+        video_availability = dict(session.video_availability or {})
         associated_video_paths: list[str] = []
         alignment = self._compute_sync_alignment(session)
 
@@ -1602,11 +1653,32 @@ class SyncRecordingService:
                         if f.file_size > 0 and os.path.exists(f.file_path):
                             files.append(f.file_path)
 
-            if role in registered_video_ids:
+            existing_video_id = registered_video_ids.get(role)
+            if self._video_id_is_available(existing_video_id):
+                video_availability[role] = "available"
                 if role == "cam_1":
-                    default_analysis_video_id = registered_video_ids[role]
+                    default_analysis_video_id = existing_video_id
                     analysis_available = True
                 continue
+
+            # 会话 JSON 可能比 VideoService 元数据更持久。优先从已经合并的
+            # MP4 重建元数据，避免重启后重复执行长时间的 TS 合并。
+            merged_path = self._existing_merged_media_path(session, role, slot)
+            if merged_path is not None:
+                try:
+                    restored_id = self._register_media_path(merged_path, existing_video_id)
+                except (OSError, ValueError) as exc:
+                    logger.warning("恢复双摄视频失败 %s/%s: %s", session.session_id, role, exc)
+                else:
+                    registered_video_ids[role] = restored_id
+                    video_availability[role] = "available"
+                    if role == "cam_1":
+                        default_analysis_video_id = restored_id
+                        analysis_available = True
+                    continue
+
+            if role == "cam_1":
+                analysis_available = False
 
             if files:
                 trim_start, target_frames = alignment.get(role, (0.0, None))
@@ -1616,21 +1688,29 @@ class SyncRecordingService:
                     slot,
                     trim_start=trim_start,
                     target_frames=target_frames,
+                    preferred_video_id=existing_video_id,
                 )
                 if video_id:
                     registered_video_ids[role] = video_id
+                    video_availability[role] = "available"
                     if role == "cam_1":
                         default_analysis_video_id = video_id
                         analysis_available = True
                 elif role == "cam_1":
+                    video_availability[role] = "unavailable"
                     analysis_blocked_reason = "默认分析视频注册失败，请检查文件完整性"
-            elif role == "cam_1":
-                analysis_blocked_reason = "底线机位 A 无有效分段文件"
+                else:
+                    video_availability[role] = "unavailable"
+            else:
+                video_availability[role] = "pending" if existing_video_id is None else "unavailable"
+                if role == "cam_1":
+                    analysis_blocked_reason = "底线机位 A 无有效分段文件"
 
         session = session.model_copy(
             update={
                 "default_analysis_video_id": default_analysis_video_id,
                 "registered_video_ids": registered_video_ids,
+                "video_availability": video_availability,
                 "associated_video_paths": associated_video_paths,
             }
         )
@@ -1772,6 +1852,7 @@ class SyncRecordingService:
         *,
         trim_start: float = 0.0,
         target_frames: int | None = None,
+        preferred_video_id: str | None = None,
     ) -> str | None:
         """登记一个机位的视频到 VideoService"""
         from app.camera.capture_finalizer import set_merge_status
@@ -1810,6 +1891,7 @@ class SyncRecordingService:
                 file_path=file_path,
                 original_filename=file_path.name,
                 file_size=file_size,
+                video_id=preferred_video_id,
             )
 
             if take_id:
@@ -1824,6 +1906,116 @@ class SyncRecordingService:
             if take_id:
                 set_merge_status(take_id, "failed", f"{slot.camera_id} 异常: {exc}")
             return None
+
+    @staticmethod
+    def _video_id_is_available(video_id: str | None) -> bool:
+        if not video_id:
+            return False
+        from app.services.video_service import video_service
+
+        return video_service.get_available_video(video_id) is not None
+
+    @staticmethod
+    def _existing_merged_media_path(
+        session: SyncRecordingSession,
+        role: CameraSlotRole,
+        slot: CameraSlotConfig,
+    ) -> Path | None:
+        """Find an already-created MP4 without rerunning the expensive merge."""
+        candidates: list[Path] = []
+        result = (session.merge_results or {}).get(role)
+        if result and result.get("output_path"):
+            candidates.append(Path(str(result["output_path"])))
+        for directory in (session.output_dir, session.session_dir):
+            if directory:
+                candidates.append(Path(directory) / f"{slot.camera_id}_merged.mp4")
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    @staticmethod
+    def _register_media_path(path: Path, preferred_video_id: str | None = None) -> str:
+        from app.services.video_service import video_service
+
+        return video_service.register_recording(
+            file_path=path,
+            original_filename=path.name,
+            file_size=path.stat().st_size,
+            video_id=preferred_video_id,
+        )
+
+    def _repair_registered_video_metadata(self, session: SyncRecordingSession) -> SyncRecordingSession:
+        """Rehydrate stale metadata without destroying historical video references.
+
+        A recording ID is durable session history, not a cache entry.  In particular,
+        an unavailable external volume must not cause a read-only list/get call to
+        remove that ID from the session.  We only refresh the derived availability
+        state and restore metadata when the media becomes visible again.
+        """
+        if session.status == "recording" or not session.camera_slots:
+            return session
+
+        with self._video_registration_lock:
+            registered = dict(session.registered_video_ids or {})
+            availability = dict(session.video_availability or {})
+            changed = False
+            for role in ("cam_1", "cam_2"):
+                slot = session.camera_slots.get(role)
+                if not slot:
+                    continue
+                video_id = registered.get(role)
+                if self._video_id_is_available(video_id):
+                    if availability.get(role) != "available":
+                        availability[role] = "available"
+                        changed = True
+                    continue
+
+                merged_path = self._existing_merged_media_path(session, role, slot)
+                if merged_path is not None:
+                    try:
+                        restored_id = self._register_media_path(merged_path, video_id)
+                    except (OSError, ValueError) as exc:
+                        logger.warning("恢复双摄视频元数据失败 %s/%s: %s", session.session_id, role, exc)
+                    else:
+                        registered[role] = restored_id
+                        availability[role] = "available"
+                        changed = True
+                        continue
+
+                next_status = "unavailable" if video_id else "pending"
+                if availability.get(role) != next_status:
+                    availability[role] = next_status
+                    changed = True
+
+            if not changed:
+                return session
+
+            updated = session.model_copy(
+                update={
+                    "registered_video_ids": registered,
+                    "default_analysis_video_id": registered.get("cam_1"),
+                    "video_availability": availability,
+                }
+            )
+            SYNC_SESSIONS[session.session_id] = updated
+            self._persist(updated)
+            return updated
+
+    def _registered_video_ids_are_available(self, session: SyncRecordingSession) -> bool:
+        return all(
+            self._video_id_is_available(session.registered_video_ids.get(role))
+            for role in session.camera_slots
+        )
 
     def _find_keyframe_after(self, file_path: str, time_sec: float) -> float:
         """查找指定时间之后最近的关键帧时间位置"""
@@ -2203,6 +2395,7 @@ class SyncRecordingService:
             coordinator.stop_tracks()
         else:
             self._recorder.stop_recording()
+        self._stop_showcase_runtime(session)
         stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
 
@@ -2249,7 +2442,8 @@ class SyncRecordingService:
             raise ValueError("field_session_id 不可为空")
         court_name = request.court_name or ""
         match_format = request.match_format or "doubles"
-        if field_session_id and not court_name:
+        display_mode = "standard"
+        if field_session_id:
             from app.database import get_session_factory
             from app.services.field_session_service import get_field_session
 
@@ -2257,9 +2451,16 @@ class SyncRecordingService:
             try:
                 fs = get_field_session(db, field_session_id)
                 if fs:
-                    court_name = fs.court_name
+                    if not court_name:
+                        court_name = fs.court_name
                     if request.match_format is None:
                         match_format = fs.match_format.value
+                    raw_display_mode = getattr(fs, "display_mode", "standard")
+                    display_mode = getattr(raw_display_mode, "value", raw_display_mode)
+                    if display_mode not in {"standard", "showcase"}:
+                        display_mode = "standard"
+                    if display_mode == "showcase" and getattr(fs.camera_setup, "value", fs.camera_setup) != "dual":
+                        raise ValueError("展示模式只能与双摄方案组合")
             finally:
                 db.close()
 
@@ -2337,6 +2538,7 @@ class SyncRecordingService:
             started_at=datetime.now(UTC),
             storage_root=str(plan.storage_root),
             session_dir=str(plan.take_dir),
+            display_mode=display_mode,
         )
 
         global _ACTIVE_SYNC_SESSION_ID, _ACTIVE_SYNC_CAMERAS
@@ -2348,6 +2550,8 @@ class SyncRecordingService:
         self._active_coordinator = coord
         self._coordinator.activate(prep.capture_take_id)
 
+        session = self._start_showcase_runtime(session)
+        self._persist(session)
         return session, prep
 
     def _stop_with_track_recorder(self, session_id: str, coordinator):
@@ -2356,6 +2560,7 @@ class SyncRecordingService:
             raise ValueError(f"会话 {session_id} 不存在")
 
         _, outcome = coordinator.stop_tracks()
+        self._stop_showcase_runtime(session)
 
         stopped_at = datetime.now(UTC)
         duration = (stopped_at - session.started_at).total_seconds() if session.started_at else 0
@@ -2476,9 +2681,9 @@ class SyncRecordingService:
     def get_session(self, session_id: str) -> SyncRecordingSession | None:
         cached = SYNC_SESSIONS.get(session_id)
         if cached:
-            return cached
+            return self._repair_registered_video_metadata(cached)
         loaded = self._load(session_id)
-        return loaded
+        return self._repair_registered_video_metadata(loaded) if loaded else None
 
     def list_sessions(
         self,
@@ -2517,6 +2722,7 @@ class SyncRecordingService:
                                     db.close()
                             except Exception:
                                 pass
+                    session = self._repair_registered_video_metadata(session)
                     SYNC_SESSIONS[session.session_id] = session
                     if status and session.status != status:
                         continue

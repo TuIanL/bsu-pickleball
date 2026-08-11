@@ -150,6 +150,7 @@ class VisualizationResult:
     path: str | None = None
     url: str | None = None
     item_count: int = 0
+    metadata: dict[str, object] | None = None
 
 
 # ── 结构化可视化数据（前端 SVG 渲染用） ──────────────────────────────

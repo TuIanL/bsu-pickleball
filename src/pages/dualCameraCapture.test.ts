@@ -117,6 +117,16 @@ describe("Deferred dual-camera merge state", () => {
     expect(canUseSyncVideos(session("completed"))).toBe(true);
   });
 
+  it("keeps historical IDs but blocks playback while storage is unavailable", () => {
+    const unavailable = session("completed");
+    unavailable.video_availability = { cam_1: "unavailable", cam_2: "unavailable" };
+    expect(unavailable.registered_video_ids).toEqual({ cam_1: "video-a", cam_2: "video-b" });
+    expect(canUseSyncVideos(unavailable)).toBe(false);
+
+    unavailable.video_availability = { cam_1: "available", cam_2: "available" };
+    expect(canUseSyncVideos(unavailable)).toBe(true);
+  });
+
   it("derives completed state for legacy sessions with both video IDs", () => {
     const legacy = session();
     legacy.registered_video_ids = { cam_1: "video-a", cam_2: "video-b" };

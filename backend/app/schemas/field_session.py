@@ -7,7 +7,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+DisplayModeLiteral = Literal["standard", "showcase"]
 
 
 class FieldSessionCreate(BaseModel):
@@ -23,7 +25,14 @@ class FieldSessionCreate(BaseModel):
     camera_setup: Literal["single", "dual", "debug_single"] = Field(
         default="single", description="摄像头方案: single / dual / debug_single"
     )
+    display_mode: DisplayModeLiteral = Field(default="standard", description="显示模式: standard / showcase")
     notes: str = Field(default="", description="备注")
+
+    @model_validator(mode="after")
+    def validate_showcase_camera(self) -> "FieldSessionCreate":
+        if self.display_mode == "showcase" and self.camera_setup != "dual":
+            raise ValueError("展示模式只能与双摄方案组合")
+        return self
 
 
 class FieldSessionUpdate(BaseModel):
@@ -35,6 +44,7 @@ class FieldSessionUpdate(BaseModel):
     capture_mode: Literal["practice", "match", "engineering"] | None = None
     match_format: Literal["singles", "doubles"] | None = None
     camera_setup: Literal["single", "dual", "debug_single"] | None = None
+    display_mode: DisplayModeLiteral | None = None
     notes: str | None = None
 
 
@@ -48,6 +58,7 @@ class FieldSessionSummary(BaseModel):
     capture_mode: str
     match_format: str
     camera_setup: str
+    display_mode: str = "standard"
     status: str
     notes: str
     started_at: datetime | None = None
@@ -68,6 +79,7 @@ class FieldSessionDetail(BaseModel):
     capture_mode: str
     match_format: str
     camera_setup: str
+    display_mode: str = "standard"
     status: str
     notes: str
     started_at: datetime | None = None

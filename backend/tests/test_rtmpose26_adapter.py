@@ -1,4 +1,7 @@
+import os
+import sys
 from types import SimpleNamespace
+from types import ModuleType
 
 import pytest
 
@@ -98,3 +101,76 @@ def test_extract_keypoints_handles_dict_shape_without_scores():
 
     assert len(extracted_keypoints) == 26
     assert extracted_scores == [1.0 for _ in range(26)]
+
+
+def test_model_loading_prepares_torch_compatibility_and_restores_environment(monkeypatch, tmp_path):
+    torch = pytest.importorskip("torch")
+    numpy = pytest.importorskip("numpy")
+    config_path = tmp_path / "rtmpose.py"
+    checkpoint_path = tmp_path / "rtmpose.pth"
+    config_path.write_text("# test config\n", encoding="utf-8")
+    checkpoint_path.write_bytes(b"test checkpoint")
+
+    observed: dict[str, object] = {}
+    mmpose_module = ModuleType("mmpose")
+    mmpose_apis_module = ModuleType("mmpose.apis")
+    mmpose_utils_module = ModuleType("mmpose.utils")
+
+    def fake_init_model(config, checkpoint, *, device):
+        observed["env"] = os.environ.get("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD")
+        observed["args"] = (config, checkpoint, device)
+        return object()
+
+    def fake_register_all_modules():
+        observed["registered"] = True
+
+    mmpose_apis_module.init_model = fake_init_model
+    mmpose_utils_module.register_all_modules = fake_register_all_modules
+    mmpose_module.apis = mmpose_apis_module
+    mmpose_module.utils = mmpose_utils_module
+    monkeypatch.setitem(sys.modules, "mmpose", mmpose_module)
+    monkeypatch.setitem(sys.modules, "mmpose.apis", mmpose_apis_module)
+    monkeypatch.setitem(sys.modules, "mmpose.utils", mmpose_utils_module)
+
+    safe_globals_calls: list[list[object]] = []
+    monkeypatch.setattr(
+        torch.serialization,
+        "add_safe_globals",
+        lambda values: safe_globals_calls.append(list(values)),
+    )
+    monkeypatch.delenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", raising=False)
+
+    adapter = RTMPose26Adapter(str(config_path), str(checkpoint_path), device="cpu")
+    assert adapter._load_model() is not None
+
+    assert observed["env"] == "1"
+    assert observed["args"] == (str(config_path), str(checkpoint_path), "cpu")
+    assert observed["registered"] is True
+    assert safe_globals_calls
+    assert numpy.ndarray in safe_globals_calls[0]
+    assert numpy.core.multiarray._reconstruct in safe_globals_calls[0]
+    assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" not in os.environ
+
+
+def test_model_loading_preserves_existing_compatibility_environment(monkeypatch, tmp_path):
+    config_path = tmp_path / "rtmpose.py"
+    checkpoint_path = tmp_path / "rtmpose.pth"
+    config_path.write_text("# test config\n", encoding="utf-8")
+    checkpoint_path.write_bytes(b"test checkpoint")
+
+    mmpose_module = ModuleType("mmpose")
+    mmpose_apis_module = ModuleType("mmpose.apis")
+    mmpose_utils_module = ModuleType("mmpose.utils")
+    mmpose_apis_module.init_model = lambda config, checkpoint, *, device: object()
+    mmpose_utils_module.register_all_modules = lambda: None
+    mmpose_module.apis = mmpose_apis_module
+    mmpose_module.utils = mmpose_utils_module
+    monkeypatch.setitem(sys.modules, "mmpose", mmpose_module)
+    monkeypatch.setitem(sys.modules, "mmpose.apis", mmpose_apis_module)
+    monkeypatch.setitem(sys.modules, "mmpose.utils", mmpose_utils_module)
+    monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "0")
+
+    adapter = RTMPose26Adapter(str(config_path), str(checkpoint_path))
+    adapter._load_model()
+
+    assert os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "0"

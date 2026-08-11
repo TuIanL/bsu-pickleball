@@ -26,6 +26,8 @@ export type UnifiedCaptureSession = {
   storageRoot?: string;                         // 存储根目录
   sessionDir?: string;                          // 会话目录
   storageStatus?: string;                       // 存储状态
+  displayMode?: "standard" | "showcase";
+  showcaseRuntimeId?: string;
 };
 
 /** 录制启动意图：单摄一键启动，双摄指定双摄像头 */

@@ -1,8 +1,8 @@
 import { Camera, LayoutDashboard, Play, Trash2 } from "lucide-react";
-import type { AppPath, RecordingSession } from "../../types/report";
+import type { RecordingSession } from "../../types/report";
+import type { NavigateFn } from "../../app/navigationTypes";
+import { withTaskListContext } from "../../app/navigationContext";
 import { deleteRecording } from "../../services/analysisClient";
-
-type NavigateFn = (path: AppPath | `/upload` | `/upload?${string}`) => void;
 
 export function RecordingTaskCard({
   session,
@@ -23,6 +23,8 @@ export function RecordingTaskCard({
 }) {
   const isPlayable = session.status === "completed" && !!session.video_id;
   const hasAnalysis = !!session.auto_analysis_job_id;
+  const taskContext = { source: "recorded" as const, sessionId: session.session_id };
+  const navigateWithTaskContext = (path: string) => onNavigate(withTaskListContext(path, taskContext));
 
   const statusLabel = (status: string) => {
     const map: Record<string, string> = { recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消" };
@@ -77,17 +79,17 @@ export function RecordingTaskCard({
             </button>
           )}
           {session.status === "completed" && (
-            <button className="quiet-button px-3 py-2 text-xs" onClick={() => onNavigate(`/recording/${session.session_id}`)} type="button">
+            <button className="quiet-button px-3 py-2 text-xs" onClick={() => navigateWithTaskContext(`/recording/${session.session_id}`)} type="button">
               <LayoutDashboard size={12} className="inline mr-1" />工作台
             </button>
           )}
           {isPlayable && !hasAnalysis && (
-            <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/new?videoId=${session.video_id}&source=recording&sessionId=${session.session_id}`)} type="button">
+            <button className="green-button px-3 py-2 text-xs" onClick={() => navigateWithTaskContext(`/analysis/new?videoId=${session.video_id}&source=recording&sessionId=${session.session_id}`)} type="button">
               开始分析
             </button>
           )}
           {hasAnalysis && (
-            <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)} type="button">
+            <button className="green-button px-3 py-2 text-xs" onClick={() => navigateWithTaskContext(`/analysis/${session.auto_analysis_job_id}`)} type="button">
               查看分析结果
             </button>
           )}

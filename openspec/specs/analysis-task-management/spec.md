@@ -21,17 +21,24 @@ TBD - created by archiving change rework-video-analysis-task-flow. Update Purpos
 
 ### Requirement: Analysis task management page
 
-任务管理页 MUST 对每个双摄分析只展示一张 Parent 卡片，卡片标注「双摄协同分析」与 A/B/融合子状态，不再出现两张无关联的机位任务卡片。双摄任务卡片的 CTA 按 Parent 状态区分：完成 → 查看报告；失败/取消 → 提供「重新双摄分析」入口；运行中 → 展示进度。
+任务管理页 MUST 对每个双摄分析只展示一张 Parent 卡片，卡片标注「双摄协同分析」与 A/B/融合子状态，不再出现两张无关联的机位任务卡片。双摄任务卡片 SHALL 在 Parent、A 机位和 B 机位之间建立明确的任务分组；每组默认展示最新公开任务，并提供历史任务入口。双摄任务卡片的 CTA 按当前 Parent 状态区分：完成 → 查看报告；失败/取消 → 提供「重新双摄分析」入口；运行中 → 展示进度。
 
 #### Scenario: 双摄任务单卡片
 
-- **WHEN** 任务列表包含 multiview Parent
-- **THEN** 该 Parent SHALL 以单张卡片展示，含「双摄协同分析」标题、A 机位/B 机位/多视角融合子状态与数据来源
+- **WHEN** 任务列表包含一个或多个属于同一双摄录制的 multiview Parent
+- **THEN** 该录制 SHALL 以一张卡片展示最新 Parent
+- **AND** 卡片 SHALL 含「双摄协同分析」标题、A 机位/B 机位/多视角融合子状态与数据来源
 - **AND** 其 internal child SHALL 不单独出现在列表中
+
+#### Scenario: 多个 Parent 保留历史
+
+- **WHEN** 同一双摄录制存在多个公开 multiview Parent
+- **THEN** 卡片 SHALL 默认展示最近更新的 Parent
+- **AND** SHALL 提供展开入口查看其他 Parent 任务
 
 #### Scenario: 失败/取消的 Parent 可重新分析
 
-- **WHEN** multiview Parent 状态为 `failed` 或 `canceled`
+- **WHEN** 当前 multiview Parent 状态为 `failed` 或 `canceled`
 - **THEN** 录制卡片 SHALL 提供「重新双摄分析」入口（导航到 `MultiViewAnalysisSetupPage`）
 - **AND** SHALL NOT 误显示为「分析中」
 
@@ -173,13 +180,20 @@ The system SHALL provide clear feedback for cancellation actions from task manag
 
 ### Requirement: Analysis task recording origin display
 
-双摄录制卡片的 CTA MUST 将主操作改为「双摄协同分析」，次级的「分析 A/B 机位」MUST 降级为工程调试入口，分析状态展示 MUST 基于 Parent。
+双摄录制卡片的 CTA MUST 将主操作改为「双摄协同分析」，次级的「分析 A/B 机位」MUST 降级为工程调试入口，分析状态展示 MUST 基于当前 Parent 和各机位任务分组。存在多次任务时，状态和操作 SHALL 指向最新任务，历史任务 SHALL 可展开查看。
 
 #### Scenario: 录制卡片主 CTA
 
 - **WHEN** 双摄录制卡片渲染且存在对应 CaptureTake
 - **THEN** 主操作 SHALL 为「双摄协同分析」
 - **AND** A/B 单摄入口 SHALL 置于次级操作
+
+#### Scenario: 录制卡片展示多次任务
+
+- **WHEN** 双摄录制卡片下存在同一类型的多个公开分析任务
+- **THEN** 主视图 SHALL 展示该类型最近更新任务的状态
+- **AND** SHALL 显示历史任务数量与展开入口
+- **AND** SHALL 不将旧任务静默覆盖或丢弃
 
 ### Requirement: Terminal task bulk cleanup
 The system SHALL provide a one-click action on the analysis task management page that deletes all failed and canceled analysis tasks in the upload-task list, reusing the existing batch deletion path.
@@ -385,4 +399,96 @@ The system SHALL expose the inference toggle states used by each analysis job in
 - **WHEN** 用户删除产物位于 `<outputs_dir>/<job_id>` 的非 capture 分析任务
 - **THEN** 后端 SHALL 删除该 job 的输出目录
 - **AND** 既有删除行为 SHALL 保持一致
+
+### Requirement: 双摄录制派生任务归属一致性
+
+前端 SHALL 使用与后端录制级删除一致的归属规则识别双摄录制派生的公开分析任务：任务的 `recordingSessionId` 或 `metadata.recording_session_id` 命中 session id，或任务的 `metadata.capture_take_id` 命中该双摄会话的 `capture_take_id`。
+
+#### Scenario: 任务通过 recording session 归属
+
+- **WHEN** 公开分析任务的 `recordingSessionId` 或 `metadata.recording_session_id` 等于双摄会话的 `session_id`
+- **THEN** 前端 SHALL 将任务展示在该双摄录制卡片的分析任务区域
+- **AND** 前端 SHALL 将任务从上传任务 Tab 中排除
+
+#### Scenario: 任务通过 capture take 归属
+
+- **WHEN** 公开分析任务缺少 session id，但 `metadata.capture_take_id` 等于双摄会话的 `capture_take_id`
+- **THEN** 前端 SHALL 将任务展示在该双摄录制卡片的分析任务区域
+- **AND** 前端 SHALL 将任务从上传任务 Tab 中排除
+
+#### Scenario: 任务不属于任何双摄会话
+
+- **WHEN** 公开分析任务的 session id 和 capture take id 均未命中任何双摄会话
+- **THEN** 前端 SHALL 将任务保留在上传任务 Tab 或未归属诊断范围
+- **AND** SHALL NOT 将任务错误挂载到任一双摄录制卡片
+
+### Requirement: 双摄任务按类型分组并保留历史
+
+双摄录制卡片 SHALL 将归属该会话的公开分析任务分为双摄协同 Parent、A 机位单摄任务和 B 机位单摄任务。每组 SHALL 默认展示按最近更新时间排序的最新任务；同组其他任务 SHALL 作为历史任务保留并可展开查看。
+
+#### Scenario: 双摄 Parent 作为主任务
+
+- **WHEN** 双摄录制会话存在一个或多个公开 `analysisKind=multiview` 任务
+- **THEN** 卡片 SHALL 将最新 Parent 作为双摄协同主任务展示
+- **AND** internal child SHALL NOT 作为独立任务展示
+
+#### Scenario: 同一机位存在多个任务
+
+- **WHEN** A 或 B 机位存在多个公开单摄分析任务
+- **THEN** 卡片 SHALL 展示该机位最新任务的状态和操作
+- **AND** SHALL 提供历史任务数量与展开入口
+- **AND** 历史任务 SHALL 保留各自的 job id 和状态
+
+#### Scenario: 任务更新时间缺失
+
+- **WHEN** 某任务没有 `updatedAt`
+- **THEN** 前端 SHALL 使用 `createdAt` 参与当前任务和历史任务排序
+- **AND** SHALL 使用 job id 作为相同时间下的稳定排序依据
+
+### Requirement: 双摄任务操作绑定具体任务
+
+双摄卡片上的查看报告、查看进度、重试、取消和任务级删除操作 SHALL 绑定用户当前看到的具体任务 ID，不得通过任务类型再次隐式选择第一条任务。
+
+#### Scenario: 最新任务操作
+
+- **WHEN** 用户在双摄卡片点击最新 Parent 或 A/B 任务的操作
+- **THEN** 前端 SHALL 使用该任务行对应的 `job.id` 导航或调用操作接口
+
+#### Scenario: 历史任务操作
+
+- **WHEN** 用户展开历史任务并点击某一历史任务的详情或删除操作
+- **THEN** 前端 SHALL 只作用于该历史任务的 `job.id`
+- **AND** SHALL NOT 修改同组当前任务
+
+### Requirement: 任务列表来源上下文可恢复
+
+分析任务管理页 SHALL 使用有限来源枚举表示当前任务视图，并在 URL 中保留来源 tab；双摄视图可以额外保留其录制 session id。页面重新挂载、刷新或从任务详情返回时 SHALL 恢复 URL 指定的来源视图。
+
+#### Scenario: 返回双摄任务列表
+
+- **WHEN** 用户从双摄任务卡片进入分析详情后点击返回任务管理
+- **THEN** 页面 SHALL 回到双摄录制 tab
+- **AND** SHALL NOT 默认显示上传视频任务 tab
+
+#### Scenario: 直接打开带来源的任务列表
+
+- **WHEN** 用户打开 `/analysis/tasks?source=sync_recording&session=<sessionId>`
+- **THEN** 页面 SHALL 激活双摄录制 tab
+- **AND** SHALL 使用 session id 作为当前录制上下文
+
+#### Scenario: 非法来源参数
+
+- **WHEN** URL 中的 `source` 不是受支持的来源枚举
+- **THEN** 页面 SHALL 安全回退到上传视频任务 tab
+- **AND** SHALL 不抛出路由解析异常
+
+### Requirement: 任务页 tab 切换不污染浏览器历史
+
+任务管理页来源 tab 切换 SHALL 更新可恢复的 URL 状态，但 SHALL 使用 replace 历史语义；从任务页进入详情或创建页 SHALL 使用新的业务历史项。
+
+#### Scenario: 用户切换任务来源
+
+- **WHEN** 用户在任务管理页从上传任务切换到双摄录制
+- **THEN** 地址 SHALL 反映双摄来源
+- **AND** 用户随后按浏览器后退 SHALL 不需要逐个经过任务页 tab 切换状态
 

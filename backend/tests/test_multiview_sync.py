@@ -10,6 +10,7 @@ from app.vision.multiview.sync import (
     evaluate_sync_gate,
     load_sync_calibration,
     sync_calibration_path,
+    validate_sync_authority,
 )
 
 
@@ -107,3 +108,45 @@ def test_load_sync_calibration_corrupt_returns_none(tmp_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{ not json", encoding="utf-8")
     assert load_sync_calibration(tmp_path) is None
+
+
+def test_validate_sync_authority_requires_exact_secondary_identity():
+    sync = MultiViewSyncCalibration(
+        reference_camera="hardware-ref",
+        mappings={"hardware-other": _sync("hardware-ref", "hardware-other", "good")},
+    )
+    result = validate_sync_authority(
+        sync,
+        reference_camera_id="hardware-ref",
+        secondary_camera_id="hardware-secondary",
+    )
+    assert not result.valid
+    assert {issue.code for issue in result.issues} == {"secondary_mapping_missing"}
+
+
+def test_validate_sync_authority_rejects_invalid_numeric_quality_and_range():
+    bad = SyncCalibration(
+        reference_camera="ref",
+        camera_id="sec",
+        offset_seconds=0.0,
+        rate=0.0,
+        drift_ppm=0.0,
+        residual_rms_seconds=float("nan"),
+        anchor_count=-1,
+        quality="broken",
+        valid_start_seconds=3.0,
+        valid_end_seconds=1.0,
+    )
+    result = validate_sync_authority(
+        MultiViewSyncCalibration(reference_camera="ref", mappings={"sec": bad}),
+        reference_camera_id="ref",
+        secondary_camera_id="sec",
+    )
+    assert not result.valid
+    assert {issue.code for issue in result.issues} >= {
+        "rate_invalid",
+        "residual_invalid",
+        "anchor_count_invalid",
+        "quality_invalid",
+        "valid_range_invalid",
+    }

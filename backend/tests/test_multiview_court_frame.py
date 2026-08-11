@@ -14,6 +14,7 @@ from app.vision.multiview.court_frame import (
     load_canonical_court_frame,
     local_to_canonical,
     resolve_or_create_canonical_court_frame,
+    validate_canonical_court_frame_compatibility,
     write_canonical_court_frame,
 )
 
@@ -111,3 +112,20 @@ def test_resolve_reuses_same_frame_id(tmp_path):
 
 def test_load_missing_returns_none(tmp_path):
     assert load_canonical_court_frame(tmp_path) is None
+
+
+def test_new_request_can_reject_canonical_frame_conflict(tmp_path):
+    frame = resolve_or_create_canonical_court_frame(
+        tmp_path,
+        "take_1",
+        "北端",
+        "南端",
+        orientation_by_view={"cam_1": "identity", "cam_2": "rotate_180"},
+    )
+    assert validate_canonical_court_frame_compatibility(
+        frame,
+        capture_take_id="take_1",
+        end_a_definition="北端",
+        end_b_definition="南端",
+        orientation_by_view={"cam_1": "rotate_180", "cam_2": "identity"},
+    )

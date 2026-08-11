@@ -159,6 +159,9 @@ class Detection(BaseModel):
     confidence: float = Field(ge=0, le=1)
     # 类别名：这里系统只关心"人"，所以固定为 "person"
     class_name: Literal["person"] = "person"
+    # 原始 detector 只负责返回框，tracking session 在接收结果时绑定当前解码帧。
+    # 保持可选以兼容直接调用 detector 的历史代码和已有测试/产物。
+    frame_index: int | None = Field(default=None, ge=0)
 
     @field_validator("bbox")
     @classmethod
@@ -261,6 +264,7 @@ class TrackingOverlayArtifact(BaseModel):
     processed_frame_count: int = Field(default=0, ge=0)
     # 帧步长：每隔几帧处理一次（1 表示逐帧处理）
     frame_stride: int = Field(default=1, ge=1)
+    timing_provenance: dict[str, object] | None = None
     # 每一帧的检测叠加数据
     frames: list[DetectionOverlayFrame] = Field(default_factory=list)
 
@@ -358,6 +362,7 @@ class TrackingResult(BaseModel):
     frame_height: int = Field(default=0, ge=0)
     processed_frame_count: int = Field(default=0, ge=0)
     frame_stride: int = Field(default=1, ge=1)
+    timing_provenance: dict[str, object] | None = None
     # 所有原始检测
     detections: list[Detection] = Field(default_factory=list)
     # 所有帧的检测叠加数据
@@ -711,6 +716,7 @@ class PlayerTrajectoryArtifact(BaseModel):
     frame_count: int = Field(default=0, ge=0)
     processed_frame_count: int = Field(default=0, ge=0)
     frame_stride: int = Field(default=1, ge=1)
+    timing_provenance: dict[str, object] | None = None
     # 球场坐标元数据（标准尺寸、单位换算），默认按规范初始化
     court: CourtCoordinateMetadata = Field(default_factory=CourtCoordinateMetadata)
     # 每个球员的轨迹采样点列表，键是 player_id

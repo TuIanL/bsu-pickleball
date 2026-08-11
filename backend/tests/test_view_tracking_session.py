@@ -151,6 +151,21 @@ def test_session_step_returns_view_frame_result():
     assert result.player_motion_pixels is None or result.player_motion_pixels >= 0
 
 
+def test_session_binds_frame_index_to_raw_detector_results():
+    """Raw detector boxes must remain traceable to the frame that produced them."""
+    config = _make_config()
+    session = build_view_tracking_session(
+        detector=ScriptedDetector({3: [_det([280, 150, 310, 300])]}),
+        homography=SCALE_HOMOGRAPHY,
+        roi_artifact=_make_roi_artifact(),
+        config=config,
+    )
+
+    session.step(object(), frame_index=3, timestamp=0.1)
+
+    assert session.snapshot().raw_detections[0].frame_index == 3
+
+
 def test_dual_session_state_isolation():
     config = _make_config()
     script = _default_script()
