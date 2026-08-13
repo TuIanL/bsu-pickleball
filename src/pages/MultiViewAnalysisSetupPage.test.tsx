@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getCaptureTake: vi.fn(),
+  getSyncAnchorStatus: vi.fn(),
   getSyncRecording: vi.fn(),
   getVideoStreamUrl: vi.fn(),
   createMultiviewAnalysisJob: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../services/analysisClient", () => ({
   getCaptureTake: mocks.getCaptureTake,
+  getSyncAnchorStatus: mocks.getSyncAnchorStatus,
   getSyncRecording: mocks.getSyncRecording,
   getVideoStreamUrl: mocks.getVideoStreamUrl,
   createMultiviewAnalysisJob: mocks.createMultiviewAnalysisJob,
@@ -59,6 +61,26 @@ function makeTake(sourceSessionId: string) {
   };
 }
 
+function makeSyncStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    capture_take_id: TAKE_ID,
+    state: "confirmed",
+    analysis_allowed: true,
+    reason_codes: ["manual_confirmation_valid"],
+    source: "manual_anchors",
+    revision: 4,
+    provenance: [],
+    invalidation_reasons: [],
+    quality: {
+      anchor_count: 4,
+      coverage_ratio: 0.8,
+      residual_rms_ms: 4,
+      quality: "good",
+    },
+    ...overrides,
+  };
+}
+
 function makeSession(sessionId: string, overrides: Record<string, unknown> = {}) {
   return {
     session_id: sessionId,
@@ -89,6 +111,7 @@ describe("MultiViewAnalysisSetupPage", () => {
 
   beforeEach(() => {
     mocks.getCaptureTake.mockReset();
+    mocks.getSyncAnchorStatus.mockReset();
     mocks.getSyncRecording.mockReset();
     mocks.getVideoStreamUrl.mockReset();
     mocks.createMultiviewAnalysisJob.mockReset();
@@ -100,6 +123,7 @@ describe("MultiViewAnalysisSetupPage", () => {
   it("uses the ?session= route param (not the take id) to load the sync session", async () => {
     window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
     mocks.getCaptureTake.mockResolvedValue(makeTake("source-fallback-session"));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
     render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
@@ -112,6 +136,7 @@ describe("MultiViewAnalysisSetupPage", () => {
   it("falls back to take.source_session_id when no ?session= param", async () => {
     window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze`);
     mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
     render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
@@ -124,6 +149,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
     // take 状态为 failed，但双视频已注册 → 素材闸只看视频就绪，不看 take.status
     mocks.getCaptureTake.mockResolvedValue({ ...makeTake(SYNC_SESSION_ID), status: "failed" });
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
     render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
@@ -136,6 +162,7 @@ describe("MultiViewAnalysisSetupPage", () => {
   it("keeps the wizard open when going back and restores calibration drafts", async () => {
     window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
     mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
     const onNavigate = vi.fn();
 
@@ -160,6 +187,7 @@ describe("MultiViewAnalysisSetupPage", () => {
   it("disables the first next step until both camera videos are ready", async () => {
     window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
     mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID, { registered_video_ids: { cam_1: "video-a" } }));
 
     render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
@@ -168,9 +196,31 @@ describe("MultiViewAnalysisSetupPage", () => {
     expect((nextButton as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it.each([
+    ["required", false, "需要标注", "开始标注"],
+    ["draft", false, "草稿未完成", "继续标注"],
+    ["invalidated", false, "确认已失效", "重新标注"],
+    ["confirmed", true, "人工锚点已确认", null],
+    ["auto_degraded", true, "仅自动估算", null],
+    ["not_required", true, "无需人工标注", null],
+  ] as const)("renders sync state %s and applies the server gate", async (state, allowed, label, action) => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus({ state, analysis_allowed: allowed, reason_codes: [state] }));
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+
+    const nextButton = await screen.findByRole("button", { name: /下一步：A 机位标定/ });
+    expect(screen.getByText(label)).toBeTruthy();
+    expect((nextButton as HTMLButtonElement).disabled).toBe(!allowed);
+    if (action) expect(screen.getByRole("button", { name: action })).toBeTruthy();
+  });
+
   it("returns to material checks after a sync preflight submit failure and allows retry", async () => {
     window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
     mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
     mocks.createMultiviewAnalysisJob.mockRejectedValue(new Error("sync preflight failed"));
 
@@ -183,5 +233,26 @@ describe("MultiViewAnalysisSetupPage", () => {
 
     expect(await screen.findByText("双摄分析启动失败")).toBeTruthy();
     expect(screen.getByRole("button", { name: "下一步：A 机位标定" })).toBeTruthy();
+  });
+
+  it("publishes the opt-in Debug Replay flag as an authoritative joint request", async () => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+    mocks.createMultiviewAnalysisJob.mockResolvedValue({ id: "job-debug" });
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "生成 Debug Replay" }));
+    fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
+
+    await waitFor(() => expect(mocks.createMultiviewAnalysisJob).toHaveBeenCalled());
+    const request = mocks.createMultiviewAnalysisJob.mock.calls[0][0];
+    expect(request.executionMode).toBe("joint_tracking_v2");
+    expect(request.debugTraceEnabled).toBe(true);
   });
 });

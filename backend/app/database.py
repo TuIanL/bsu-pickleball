@@ -99,6 +99,14 @@ def _ensure_capture_storage_columns(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE capture_tracks ADD COLUMN analysis_role VARCHAR(32) NOT NULL DEFAULT 'default'")
             )
+        if "timing_authority" not in track_columns:
+            connection.execute(
+                text("ALTER TABLE capture_tracks ADD COLUMN timing_authority VARCHAR(32) NOT NULL DEFAULT 'missing'")
+            )
+        if "timing_sidecar_path" not in track_columns:
+            connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN timing_sidecar_path VARCHAR(1024)"))
+        if "timing_failure_reason" not in track_columns:
+            connection.execute(text("ALTER TABLE capture_tracks ADD COLUMN timing_failure_reason VARCHAR(2048)"))
         if "fragment_id" not in ffmpeg_columns:
             connection.execute(text("ALTER TABLE ffmpeg_registry ADD COLUMN fragment_id VARCHAR(64)"))
         if "return_code" not in ffmpeg_columns:

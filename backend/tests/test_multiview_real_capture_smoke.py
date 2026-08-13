@@ -119,6 +119,12 @@ def test_real_capture_take_late_and_joint_smoke(tmp_path):
             )
         },
     )
+    providers = {}
+    for slot, media_path in videos.items():
+        sidecar = tmp_path / f"{slot}.registered.mp4.pts.jsonl"
+        write_frame_timing_sidecar(media_path, sidecar)
+        providers[slot] = FrameTimingProvider.from_sidecar(sidecar, media_path=media_path)
+        assert providers[slot].provenance.authority == "source_pts"
     canonical = CanonicalCourtFrameDefinition.create(
         session.capture_take_id,
         "recorded-cam-1-end-a",
@@ -250,9 +256,13 @@ def test_real_capture_take_late_and_joint_smoke(tmp_path):
             clock=CanonicalAnalysisClock(
                 reference_view_id="cam_1",
                 secondary_view_id="cam_2",
-                secondary_frames=[FrameTiming(i, i / fps) for i in range(frame_count)],
+                secondary_frames=list(providers["cam_2"].frames_with_origin()),
                 sync=sync,
                 secondary_camera_id=secondary_id,
+                reference_timing_provider=providers["cam_1"],
+                secondary_timing_provider=providers["cam_2"],
+                reference_timing_authority="source_pts",
+                secondary_timing_authority="source_pts",
             ),
             runtimes=runtimes,
             registry=registry,
@@ -263,6 +273,10 @@ def test_real_capture_take_late_and_joint_smoke(tmp_path):
             frame_width=width,
             frame_height=height,
             canonical_frame_ref=canonical,
+            timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+            sync_quality="good",
+            execution_mode="joint_authoritative",
+            authoritative_joint_eligible=True,
         )
         joint_output = joint.run(reference_frame_count=frame_count, reference_fps=fps)
     finally:
@@ -272,6 +286,21 @@ def test_real_capture_take_late_and_joint_smoke(tmp_path):
     assert joint_output.trajectory["capture_take_id"] == session.capture_take_id
     assert joint_output.diagnostics["canonical_frame_id"] == canonical.frame_id
     assert all(runtime.counters.get("stepped_frames", 0) > 0 for runtime in runtimes.values())
+    assert joint_output.diagnostics["execution_mode"] == "joint_authoritative"
+    assert joint_output.diagnostics["authoritative_eligible_tick_count"] > 0
+    assert joint_output.diagnostics["frame_status_counts"]["available"] >= frame_count
+    assert all(
+        field in next(iter(sample["view_observations"].values()))
+        for sample in joint_output.trajectory["samples"]
+        for field in (
+            "source_frame_index",
+            "source_timestamp_ms",
+            "mapped_take_timestamp_ms",
+            "selection_error_ms",
+            "timing_authority",
+            "sync_quality",
+        )
+    ) if joint_output.trajectory["samples"] else True
 
     def payload(mode: str) -> AnalysisJobCreate:
         metadata = AnalysisUploadMetadata(

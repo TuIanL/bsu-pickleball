@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.sync_anchor import SyncAnchorStatus
+
 
 class CaptureTakeSummary(BaseModel):
     id: str
@@ -19,6 +21,7 @@ class CaptureTakeSummary(BaseModel):
     ended_at: datetime | None = None
     duration_ms: int | None = None
     revision: int = 0
+    sync_anchor_status: SyncAnchorStatus | None = None
 
     class Config:
         from_attributes = True

@@ -103,6 +103,19 @@ describe("parseLocation", () => {
     });
   });
 
+  it("preserves a safe workbench return path across direct loads", () => {
+    expect(parseLocation("/sync-calibration", "?take=take-1&return=%2Fcapture%2Ftakes%2Ftake-1%2Fanalyze")).toMatchObject({
+      name: "sync-calibration",
+      captureTakeId: "take-1",
+      returnPath: "/capture/takes/take-1/analyze",
+    });
+    expect(parseLocation("/sync-calibration", "?take=take-1&return=https%3A%2F%2Fevil.invalid")).toMatchObject({
+      name: "sync-calibration",
+      captureTakeId: "take-1",
+      returnPath: undefined,
+    });
+  });
+
   it("falls back to the upload task tab for an invalid URL source", () => {
     expect(parseLocation("/analysis/tasks", "?source=unknown")).toMatchObject({
       name: "analysis-tasks",

@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.camera.capture_finalizer import get_merge_status
@@ -18,7 +19,18 @@ from app.schemas.coding_actions import (
     CodingActionResponse,
     LiveCodingStateResponse,
 )
+from app.schemas.sync_anchor import (
+    SyncAnchorConfirmRequest,
+    SyncAnchorDraftRequest,
+    SyncAnchorError,
+)
 from app.services import capture_runtime_status_service, capture_take_service, coding_actions_service
+from app.services.sync_anchor_service import (
+    SyncAnchorAssetService,
+    SyncAnchorConflictError,
+    SyncAnchorNotFoundError,
+    SyncAnchorValidationError,
+)
 
 
 def _ensure_utc(value: datetime | None) -> datetime | None:
@@ -34,6 +46,97 @@ from app.services import capture_segment_service as seg_svc  # noqa: E402
 from app.services import live_coding_state_service as state_svc  # noqa: E402
 
 router = APIRouter(prefix="/api/capture-takes", tags=["capture-takes"])
+
+
+def _sync_anchor_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    current_revision: int | None = None,
+    issues: list[object] | None = None,
+) -> JSONResponse:
+    payload = SyncAnchorError(
+        code=code,
+        message=message,
+        current_revision=current_revision,
+        issues=issues or [],
+    )
+    return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
+
+
+@router.get("/{capture_take_id}/sync-anchors/status")
+def get_sync_anchor_status(
+    capture_take_id: str,
+    require_manual: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    try:
+        return SyncAnchorAssetService(db).status(capture_take_id, require_manual=require_manual)
+    except SyncAnchorNotFoundError as exc:
+        return _sync_anchor_error(404, "capture_take_not_found", str(exc))
+
+
+@router.get("/{capture_take_id}/sync-anchors/draft")
+def get_sync_anchor_draft(capture_take_id: str, db: Session = Depends(get_db)):
+    try:
+        service = SyncAnchorAssetService(db)
+        status = service.status(capture_take_id)
+        if status.draft is None:
+            return _sync_anchor_error(404, "draft_not_found", "当前 CaptureTake 没有同步锚点草稿")
+        return {
+            "capture_take_id": capture_take_id,
+            "revision": status.revision,
+            "draft": status.draft,
+            "status": status,
+        }
+    except SyncAnchorNotFoundError as exc:
+        return _sync_anchor_error(404, "capture_take_not_found", str(exc))
+
+
+@router.put("/{capture_take_id}/sync-anchors/draft")
+def put_sync_anchor_draft(
+    capture_take_id: str,
+    payload: SyncAnchorDraftRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        service = SyncAnchorAssetService(db)
+        revision, status = service.save_draft(capture_take_id, payload)
+        return {"capture_take_id": capture_take_id, "revision": revision, "draft": status.draft, "status": status}
+    except SyncAnchorConflictError as exc:
+        return _sync_anchor_error(409, "revision_conflict", str(exc), current_revision=exc.current_revision)
+    except SyncAnchorNotFoundError as exc:
+        return _sync_anchor_error(404, "capture_take_not_found", str(exc))
+
+
+@router.post("/{capture_take_id}/sync-anchors/confirm")
+def confirm_sync_anchors(
+    capture_take_id: str,
+    payload: SyncAnchorConfirmRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        return SyncAnchorAssetService(db).confirm(capture_take_id, payload)
+    except SyncAnchorConflictError as exc:
+        return _sync_anchor_error(409, "revision_conflict", str(exc), current_revision=exc.current_revision)
+    except SyncAnchorValidationError as exc:
+        return _sync_anchor_error(
+            422,
+            "validation_failed",
+            str(exc),
+            issues=[issue.model_dump(mode="json") for issue in exc.issues],
+        )
+    except SyncAnchorNotFoundError as exc:
+        return _sync_anchor_error(404, "capture_take_not_found", str(exc))
+
+
+@router.get("/{capture_take_id}/sync-anchors/export")
+def export_sync_anchors(capture_take_id: str, db: Session = Depends(get_db)):
+    try:
+        return SyncAnchorAssetService(db).export(capture_take_id)
+    except SyncAnchorNotFoundError as exc:
+        return _sync_anchor_error(404, "anchors_not_found", str(exc))
 
 
 @router.get("/active")
@@ -192,11 +295,19 @@ def get_capture_take_detail(
         raise HTTPException(status_code=404, detail="CaptureTake 不存在")
     started = _ensure_utc(take.started_at)
     ended = _ensure_utc(take.ended_at)
+    try:
+        sync_anchor_status = SyncAnchorAssetService(db).status(take.id)
+    except SyncAnchorNotFoundError:
+        sync_anchor_status = None
     return CaptureTakeSummary(
         id=take.id,
         field_session_id=take.field_session_id,
         capture_mode=take.capture_mode.value,
-        display_mode=getattr(getattr(take, "display_mode", "standard"), "value", getattr(take, "display_mode", "standard")),
+        display_mode=getattr(
+            getattr(take, "display_mode", "standard"),
+            "value",
+            getattr(take, "display_mode", "standard"),
+        ),
         source_session_type=take.source_session_type.value,
         source_session_id=take.source_session_id,
         status=take.status.value,
@@ -204,6 +315,7 @@ def get_capture_take_detail(
         ended_at=ended.isoformat() if ended else None,
         duration_ms=take.duration_ms,
         revision=take.revision,
+        sync_anchor_status=sync_anchor_status,
     )
 
 

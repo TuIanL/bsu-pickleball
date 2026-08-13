@@ -78,36 +78,57 @@ class PersonDetector:
 
         每个 ROI 独立裁剪推理(lower-threshold),检测框坐标转回源帧坐标系。
         """
+        batches = self.detect_regions_batch(frame, regions, confidence_override=confidence_override)
+        return [detection for batch in batches for detection in batch]
+
+    def detect_regions_batch(self, frame, regions, confidence_override=None) -> list[list[Detection]]:
+        """Run one model call for multiple ROIs and preserve ROI-local results.
+
+        Offline refinement often asks about several players in the same source
+        frame. Ultralytics accepts a list of crops, so batching avoids seeking
+        and launching the model once per recovery plan while keeping the
+        existing per-ROI result contract.
+        """
         model = self._load_model()
         conf = float(confidence_override if confidence_override is not None else max(self.conf_threshold * 0.7, 0.05))
-        detections: list[Detection] = []
-        for region in regions:
-            x1, y1, x2, y2 = [int(v) for v in region]
-            crop = frame[y1:y2, x1:x2] if hasattr(frame, "__getitem__") else frame
-            try:
-                results = model(crop, verbose=False, conf=conf, device=self.device)
-            except TypeError:
-                results = model(crop, verbose=False, conf=conf)
-            for result in results:
-                boxes = getattr(result, "boxes", None)
-                if boxes is None:
+        normalized_regions = [tuple(int(v) for v in region) for region in regions]
+        crops = []
+        for x1, y1, x2, y2 in normalized_regions:
+            crops.append(frame[y1:y2, x1:x2] if hasattr(frame, "__getitem__") else frame)
+        try:
+            results = model(crops, verbose=False, conf=conf, device=self.device)
+        except TypeError:
+            results = model(crops, verbose=False, conf=conf)
+        if not isinstance(results, (list, tuple)):
+            results = list(results)
+
+        grouped: list[list[Detection]] = []
+        for region, result in zip(normalized_regions, results, strict=False):
+            x1, y1, _x2, _y2 = region
+            detections: list[Detection] = []
+            boxes = getattr(result, "boxes", None)
+            if boxes is None:
+                grouped.append(detections)
+                continue
+            for box in boxes:
+                class_id = int(self._first_value(getattr(box, "cls", 0)))
+                if class_id != self.PERSON_CLASS_ID:
                     continue
-                for box in boxes:
-                    class_id = int(self._first_value(getattr(box, "cls", 0)))
-                    if class_id != self.PERSON_CLASS_ID:
-                        continue
-                    confidence = float(self._first_value(getattr(box, "conf", 0.0)))
-                    if confidence < conf:
-                        continue
-                    bx1, by1, bx2, by2 = [float(value) for value in self._xyxy(box)]
-                    detections.append(
-                        Detection(
-                            bbox=[bx1 + x1, by1 + y1, bx2 + x1, by2 + y1],  # 转回源帧坐标
-                            confidence=confidence,
-                            class_name="person",
-                        )
+                confidence = float(self._first_value(getattr(box, "conf", 0.0)))
+                if confidence < conf:
+                    continue
+                bx1, by1, bx2, by2 = [float(value) for value in self._xyxy(box)]
+                detections.append(
+                    Detection(
+                        bbox=[bx1 + x1, by1 + region[1], bx2 + x1, by2 + region[1]],
+                        confidence=confidence,
+                        class_name="person",
                     )
-        return detections
+                )
+            grouped.append(detections)
+        while len(grouped) < len(normalized_regions):
+            grouped.append([])
+        return grouped
 
     def _load_model(self) -> Any:
         # 懒加载 YOLO 模型：首次调用时导入 ultralytics 并加载权重，之后复用。

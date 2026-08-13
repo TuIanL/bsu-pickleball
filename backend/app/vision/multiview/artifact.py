@@ -115,6 +115,87 @@ def evidence_summary_from_artifact(
     }
 
 
+def _view_disagreement_from_artifact(artifact: dict[str, object]) -> dict[str, object]:
+    """Calculate inter-view disagreement for serialized v1/v2 samples."""
+    distances: list[float] = []
+    samples = artifact.get("samples", [])
+    if not isinstance(samples, list):
+        samples = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        details = sample.get("view_observations")
+        if not isinstance(details, dict):
+            continue
+        observations = [
+            detail
+            for _view_id, detail in sorted(details.items())
+            if isinstance(detail, dict)
+            and isinstance(detail.get("x_ft"), (int, float))
+            and isinstance(detail.get("y_ft"), (int, float))
+        ]
+        if len(observations) < 2:
+            continue
+        first, second = observations[0], observations[1]
+        distances.append(
+            (
+                (float(first["x_ft"]) - float(second["x_ft"])) ** 2
+                + (float(first["y_ft"]) - float(second["y_ft"])) ** 2
+            )
+            ** 0.5
+        )
+    ordered = sorted(distances)
+    p90_index = max(0, min(len(ordered) - 1, int(len(ordered) * 0.9) - 1)) if ordered else None
+    return {
+        "dual_samples": len(distances),
+        "median_distance_ft": median(distances) if distances else None,
+        "mean_distance_ft": mean(distances) if distances else None,
+        "p90_distance_ft": ordered[p90_index] if p90_index is not None else None,
+    }
+
+
+def fusion_quality_fields_from_artifact(artifact: dict[str, object]) -> dict[str, object]:
+    """Return Fusion Quality fields shared by v1 and joint v2 artifacts."""
+    samples = artifact.get("samples", [])
+    if not isinstance(samples, list):
+        samples = []
+    status_counts = Counter(
+        str(sample.get("fusion_status", "unknown"))
+        for sample in samples
+        if isinstance(sample, dict)
+    )
+    return {
+        "fusion_status_counts": dict(status_counts),
+        "sample_count": len(samples),
+        "metric_eligible_count": sum(
+            1 for sample in samples if isinstance(sample, dict) and sample.get("metric_eligible") is True
+        ),
+        "view_disagreement": _view_disagreement_from_artifact(artifact),
+    }
+
+
+def normalize_fusion_diagnostics(
+    artifact: dict[str, object],
+    diagnostics: dict[str, object] | None,
+) -> dict[str, object]:
+    """Publish a complete ``fused_diagnostics.v1`` envelope for v1/v2 runs.
+
+    Joint execution already records authority and recovery facts in its
+    diagnostics payload, but its v2 payload does not carry the P0 Fusion
+    Quality counters. Derive only those artifact-local counters here while
+    preserving every existing backend decision and reason field.
+    """
+    normalized = dict(diagnostics or {})
+    normalized["schema_version"] = FUSED_DIAGNOSTICS_SCHEMA_VERSION
+    for key, value in fusion_quality_fields_from_artifact(artifact).items():
+        if normalized.get(key) is None:
+            normalized[key] = value
+    for key, value in evidence_summary_from_artifact(artifact).items():
+        if normalized.get(key) is None:
+            normalized[key] = value
+    return normalized
+
+
 def serialize_fused_sample(measurement: FusionMeasurement) -> dict[str, object]:
     """把 FusionMeasurement 序列化为 fused_player_trajectory.v1 的一个 sample。"""
     return {

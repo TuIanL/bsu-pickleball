@@ -6,6 +6,7 @@ PTS when a sidecar is available; nominal FPS is an explicit compatibility mode.
 
 from __future__ import annotations
 
+import math
 from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,6 +90,26 @@ class FrameTimingProvider:
         )
 
     @classmethod
+    def missing(
+        cls,
+        *,
+        media_path: str | Path | None = None,
+        sidecar_path: str | Path | None = None,
+        reason: str = "source PTS sidecar unavailable",
+    ) -> "FrameTimingProvider":
+        """Represent unavailable timing without inventing frame timestamps."""
+        return cls(
+            frames=(),
+            provenance=TimingProvenance(
+                authority="missing",
+                media_path=str(media_path) if media_path is not None else None,
+                sidecar_path=str(sidecar_path) if sidecar_path is not None else None,
+                reason=reason,
+            ),
+            fps=None,
+        )
+
+    @classmethod
     def from_media(
         cls,
         media_path: str | Path,
@@ -96,6 +117,7 @@ class FrameTimingProvider:
         frame_count: int,
         fps: float,
         sidecar_path: str | Path | None = None,
+        allow_nominal_fallback: bool = True,
     ) -> "FrameTimingProvider":
         media = Path(media_path)
         sidecar = Path(sidecar_path) if sidecar_path is not None else Path(f"{media}.pts.jsonl")
@@ -105,6 +127,13 @@ class FrameTimingProvider:
                 return cls.from_sidecar(sidecar, media_path=media)
             except (OSError, ValueError, TypeError) as exc:
                 sidecar_error = f"PTS sidecar unreadable or invalid: {exc}"
+        if not allow_nominal_fallback:
+            return cls.missing(
+                media_path=media,
+                sidecar_path=sidecar,
+                reason=sidecar_error
+                or "PTS sidecar unavailable; nominal FPS fallback disabled for authoritative joint analysis",
+            )
         return cls.nominal(
             frame_count=frame_count,
             fps=fps,
@@ -210,8 +239,12 @@ def _validated_frames(frames: list[FrameTiming]) -> list[FrameTiming]:
     previous_index = -1
     previous_pts: float | None = None
     for frame in frames:
-        if frame.frame_index <= previous_index:
+        if frame.frame_index < 0 or frame.frame_index <= previous_index:
             raise ValueError("frame indices must be strictly increasing")
+        if not math.isfinite(frame.pts_seconds):
+            raise ValueError("PTS values must be finite")
+        if frame.dts_seconds is not None and not math.isfinite(frame.dts_seconds):
+            raise ValueError("DTS values must be finite")
         if previous_pts is not None and frame.pts_seconds < previous_pts:
             raise ValueError("PTS values must be monotonically non-decreasing")
         previous_index = frame.frame_index

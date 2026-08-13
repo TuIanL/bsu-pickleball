@@ -81,6 +81,12 @@ class CaptureTrack(Base):
         nullable=False,
         default=SyncQuality.unknown,  # 同步质量
     )
+    # Local source timing is independent from cross-camera sync quality.
+    timing_authority: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="missing", server_default="missing"
+    )
+    timing_sidecar_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    timing_failure_reason: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

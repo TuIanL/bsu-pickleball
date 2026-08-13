@@ -25,7 +25,7 @@ from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, Pipe
 from app.schemas.tracking import ImagePoint, ProjectedCourtPoint2D, ProjectedTrackPoint
 from app.services.storage_service import StorageService
 from app.vision.multiview.artifact import FUSED_DIAGNOSTICS_FILENAME, FUSED_TRAJECTORY_FILENAME
-from app.vision.multiview.artifact import evidence_summary_from_artifact
+from app.vision.multiview.artifact import normalize_fusion_diagnostics
 from app.vision.multiview.consumers import movement_points, visualization_points
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
@@ -333,9 +333,20 @@ class MultiViewResultComposer:
         """把 fused + diagnostics 写入 Parent 命名空间，并写 fused_manifest.json 作为唯一出口。"""
         fused_path = self.storage.fused_trajectory_json_path(parent_job_id)
         diag_path = self.storage.fusion_diagnostics_json_path(parent_job_id)
-        evidence = evidence_summary_from_artifact(fused_artifact)
-        diagnostics.update({key: value for key, value in evidence.items() if key not in diagnostics})
-        effective_mode = str(diagnostics.get("effective_mode", evidence["effective_mode"]))
+        diagnostics = normalize_fusion_diagnostics(fused_artifact, diagnostics)
+        evidence = {
+            key: diagnostics[key]
+            for key in (
+                "secondary_available_samples",
+                "dual_evidence_samples",
+                "single_view_fallback_samples",
+                "predicted_samples",
+                "effective_multiview_ratio",
+                "effective_mode",
+            )
+            if key in diagnostics
+        }
+        effective_mode = str(diagnostics.get("effective_mode", "single_view_fallback"))
         analysis_source = dict(analysis_source)
         analysis_source["effective_mode"] = effective_mode
         analysis_source.setdefault("requested_mode", analysis_source.get("mode"))
@@ -427,6 +438,12 @@ class MultiViewResultComposer:
             analysis_window=artifacts.analysis_window,
             requested_execution_mode=job.executionMode,
             effective_multiview_mode=str(diagnostics.get("effective_mode", "single_view_fallback")),
+            execution_mode=str(diagnostics.get("execution_mode")) if diagnostics.get("execution_mode") else None,
+            authoritative_joint_eligible=(
+                bool(diagnostics["authoritative_joint_eligible"])
+                if "authoritative_joint_eligible" in diagnostics
+                else None
+            ),
         )
 
     def compose_joint_result(
@@ -479,6 +496,10 @@ class MultiViewResultComposer:
                 "source_job_id": job.id,
                 "source_view": reference_view_id,
                 "reason": "joint run",
+                "execution_mode": str(joint_output.diagnostics.get("execution_mode", "unknown")),
+                "authoritative_joint_eligible": str(
+                    bool(joint_output.diagnostics.get("authoritative_joint_eligible", False))
+                ),
             },
         )
         if refinement is not None:
@@ -514,6 +535,16 @@ class MultiViewResultComposer:
             analysis_window=artifacts.analysis_window,
             requested_execution_mode=job.executionMode,
             effective_multiview_mode=str(joint_output.diagnostics.get("effective_mode", "multiview_fused")),
+            execution_mode=(
+                str(joint_output.diagnostics["execution_mode"])
+                if joint_output.diagnostics.get("execution_mode")
+                else None
+            ),
+            authoritative_joint_eligible=(
+                bool(joint_output.diagnostics["authoritative_joint_eligible"])
+                if "authoritative_joint_eligible" in joint_output.diagnostics
+                else None
+            ),
         )
 
 

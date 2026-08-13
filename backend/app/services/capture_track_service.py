@@ -37,6 +37,9 @@ def create_track(
     offset_ms: int = 0,
     offset_source: str = "assumed",
     sync_quality: str = "unknown",
+    timing_authority: str = "missing",
+    timing_sidecar_path: str | None = None,
+    timing_failure_reason: str | None = None,
 ) -> CaptureTrack:
     track = CaptureTrack(
         id=_generate_id(),
@@ -49,6 +52,9 @@ def create_track(
         offset_ms=offset_ms,
         offset_source=OffsetSource(offset_source),
         sync_quality=SyncQuality(sync_quality),
+        timing_authority=timing_authority,
+        timing_sidecar_path=timing_sidecar_path,
+        timing_failure_reason=timing_failure_reason,
     )
     db.add(track)
     db.flush()

@@ -12,7 +12,9 @@ Parent 被 claim 后:
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
+from collections.abc import Mapping
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -24,6 +26,8 @@ from app.services.frame_timing_provider import FrameTimingProvider
 from app.services.calibration_service import CalibrationService
 from app.services.multiview_result_composer import MultiViewResultComposer
 from app.services.storage_service import StorageService
+from app.services.multiview_observability import build_recovery_episode_projection
+from app.services.joint_debug_renderer import JointDebugRenderInputs, render_joint_debug_artifacts
 from app.services.video_service import VideoService
 from app.vision.court_view import compute_expanded_detection_roi
 from app.vision.multiview.analysis_clock import CanonicalAnalysisClock
@@ -40,10 +44,21 @@ from app.vision.multiview.fusion_run import default_run_output_dir
 from app.vision.multiview.joint_types import JointViewInput
 from app.vision.multiview.joint_view_runtime import JointViewRuntime
 from app.vision.multiview.multiview_joint_run import MultiViewJointRun
-from app.vision.multiview.offline_refinement import RecoveredViewObservation
+from app.vision.multiview.offline_refinement import (
+    RecoveredViewObservation,
+    RefinementConfigSnapshot,
+    RefinementViewContext,
+)
+from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
 from app.vision.multiview.sync import load_sync_calibration
-from app.vision.multiview.sync import validate_sync_authority
+from app.vision.multiview.sync import resolve_sync_authority
 from app.vision.multiview.artifact import evidence_summary_from_artifact
+from app.vision.multiview.debug_trace import (
+    JOINT_DEBUG_MANIFEST_FILENAME,
+    JOINT_DEBUG_TRACE_FILENAME,
+    build_joint_debug_manifest,
+    write_joint_debug_trace,
+)
 from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
 from app.vision.player_tracking_engine.view_tracking_session import (
     build_view_tracking_config,
@@ -65,6 +80,24 @@ def _recovered_to_dict(r: RecoveredViewObservation) -> dict[str, object]:
         "confidence": r.confidence,
         "detection_origin": r.detection_origin,
         "global_player_id": r.global_player_id,
+        "canonical_tick": r.canonical_tick,
+        "source_timestamp_ms": r.source_timestamp_ms,
+        "mapped_take_timestamp_ms": r.mapped_take_timestamp_ms,
+        "selection_error_ms": r.selection_error_ms,
+        "timing_authority": r.timing_authority,
+        "sync_quality": r.sync_quality,
+        "target_view_timing": {
+            "source_timestamp_ms": r.source_timestamp_ms,
+            "mapped_take_timestamp_ms": r.mapped_take_timestamp_ms,
+            "selection_error_ms": r.selection_error_ms,
+            "timing_authority": r.timing_authority,
+            "sync_quality": r.sync_quality,
+        },
+        "donor_view": r.donor_view,
+        "donor_source_frame_index": r.donor_source_frame_index,
+        "donor_quality": r.donor_quality,
+        "expected_global_position": list(r.expected_global_position) if r.expected_global_position else None,
+        "residual_ft": r.residual_ft,
     }
 
 
@@ -79,6 +112,115 @@ def _with_samples(out, f1_trajectory: dict[str, object]):
         trajectory=f1_trajectory,
         normalized=normalized,
         diagnostics=out.diagnostics,
+    )
+
+
+def _publish_refinement_artifacts(
+    *,
+    storage: StorageService,
+    run_dir,
+    out,
+    outcome,
+    run_id: str,
+    capture_take_id: str,
+    reference_view_id: str,
+    authoritative_run: bool,
+    snapshot_artifact: str | None,
+):
+    """Publish post-snapshot F1 artifacts in the fixed order and return compose input.
+
+    F0 and its refinement snapshot are written by the caller before recovery
+    starts. The parent manifest is intentionally not written here. The caller
+    owns that last publication step so a mid-flight write failure can fall back
+    to F0 without exposing a partial refinement manifest.
+    """
+    from app.vision.multiview.joint_artifact import (
+        build_refinement_manifest,
+        write_fused_v2,
+        write_recovered_observations,
+        write_refinement_diagnostics,
+    )
+
+    f0_artifact = "fused_player_trajectory.f0.v2.json"
+
+    refinement = build_refinement_manifest(
+        status=outcome.status,
+        final_source=outcome.final_source,
+        first_pass_artifact=f0_artifact,
+        recovered_artifact="recovered_view_observations.v1.json" if outcome.recovered else None,
+        refined_artifact="fused_player_trajectory.f1.v2.json"
+        if outcome.final_source == "refined_f1" else None,
+        f0_snapshot_artifact=snapshot_artifact,
+        diagnostics_artifact="refinement_diagnostics.json",
+        reason=outcome.reason,
+    )
+    compose_output = out
+    if outcome.recovered:
+        storage.write_json_atomic(
+            run_dir / "recovered_view_observations.v1.json",
+            write_recovered_observations([_recovered_to_dict(item) for item in outcome.recovered]),
+        )
+    if outcome.candidate_samples:
+        f1_trajectory = write_fused_v2(
+            run_id=run_id,
+            capture_take_id=capture_take_id,
+            reference_view_id=reference_view_id,
+            samples=outcome.candidate_samples,
+            authoritative_run=authoritative_run,
+        )
+        storage.write_json_atomic(run_dir / "fused_player_trajectory.f1.v2.json", f1_trajectory)
+        if outcome.final_source == "refined_f1":
+            compose_output = _with_samples(out, f1_trajectory)
+    storage.write_json_atomic(
+        run_dir / "refinement_diagnostics.json",
+        write_refinement_diagnostics(
+            status=outcome.status,
+            final_source=outcome.final_source,
+            diagnostics=outcome.diagnostics,
+            reason=outcome.reason,
+        ),
+    )
+    return refinement, compose_output
+
+
+def _write_failed_refinement_fallback(
+    *,
+    storage: StorageService,
+    run_dir,
+    f0_snapshot_present: bool,
+    reason: str,
+):
+    """Write diagnostics for an execution failure while keeping F0 final."""
+    from app.vision.multiview.joint_artifact import build_refinement_manifest, write_refinement_diagnostics
+
+    refinement = build_refinement_manifest(
+        status="failed_fallback",
+        final_source="first_pass_f0",
+        first_pass_artifact="fused_player_trajectory.f0.v2.json",
+        f0_snapshot_artifact=("f0_refinement_snapshot.v1.json" if f0_snapshot_present else None),
+        diagnostics_artifact="refinement_diagnostics.json",
+        reason=reason,
+    )
+    storage.write_json_atomic(
+        run_dir / "refinement_diagnostics.json",
+        write_refinement_diagnostics(
+            status="failed_fallback",
+            final_source="first_pass_f0",
+            reason=reason,
+        ),
+    )
+    return refinement
+
+
+def _deserialize_joint_view_input(payload: Mapping[str, object]) -> JointViewInput:
+    """Normalize persisted API camelCase input to the executor's snake_case type."""
+    return JointViewInput(
+        camera_slot=str(payload.get("camera_slot") or payload.get("cameraSlot") or ""),
+        capture_track_id=str(payload.get("capture_track_id") or payload.get("captureTrackId") or ""),
+        camera_id=str(payload.get("camera_id") or payload.get("cameraId") or ""),
+        video_id=str(payload.get("video_id") or payload.get("videoId") or ""),
+        calibration_id=str(payload.get("calibration_id") or payload.get("calibrationId") or ""),
+        court_orientation=payload.get("court_orientation") or payload.get("courtOrientation"),
     )
 
 
@@ -102,7 +244,10 @@ class MultiViewJointExecutor:
                 self.store.update(parent.id, jointRunId=run_id)
             self.store.update(parent.id, orchestrationStatus="joint_tracking")
 
-            view_inputs = [JointViewInput(**dict(item)) for item in (parent.jointViewInputs or [])]
+            view_inputs = [
+                _deserialize_joint_view_input(dict(item))
+                for item in (parent.jointViewInputs or [])
+            ]
             if len(view_inputs) < 2:
                 raise RuntimeError(f"joint parent {parent.id} requires >=2 jointViewInputs")
             reference_view_id = parent.referenceViewId or view_inputs[0].camera_slot
@@ -138,6 +283,7 @@ class MultiViewJointExecutor:
                 ref_video.path,
                 frame_count=frame_count,
                 fps=fps,
+                allow_nominal_fallback=False,
             )
             window = resolve_analysis_window(
                 source_duration_ms=int(reference_timing_provider.duration_seconds * 1000),
@@ -165,21 +311,27 @@ class MultiViewJointExecutor:
             runtimes: dict[str, JointViewRuntime] = {}
             cam2_frames: list[FrameTiming] = []
             timing_providers: dict[str, FrameTimingProvider] = {reference_view_id: reference_timing_provider}
+            view_fps: dict[str, float] = {reference_view_id: fps}
             secondary_view_id = secondary_input.camera_slot
             orientations: dict[str, CourtOrientation] = {}
             detectors_by_view: dict[str, object] = {}
             homographies_by_view: dict[str, list[list[float]]] = {}
+            view_geometry: dict[str, dict[str, object]] = {}
+            recovery_config = P1OnlineRecoveryConfig()
             reference_homography = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
             for vi in view_inputs:
                 cap = cv2.VideoCapture(videos[vi.camera_slot].path)
                 captures[vi.camera_slot] = cap
+                view_fps_value = float(cap.get(cv2.CAP_PROP_FPS) or fps)
+                view_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
+                view_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
                 calibration = calibrations[vi.camera_slot]
                 homography = (
                     calibration.homography.values
                     if calibration is not None and getattr(calibration, "homography", None) is not None
-                    else reference_homography
+                    else None
                 )
-                roi = compute_expanded_detection_roi(None, width, height)
+                roi = compute_expanded_detection_roi(None, view_width, view_height)
                 detector = (
                     PersonDetector(
                         model_path=settings.default_detector_model,
@@ -189,29 +341,49 @@ class MultiViewJointExecutor:
                     if settings.enable_model_inference
                     else EmptyPersonDetector()
                 )
+                session_config = replace(
+                    config,
+                    fps=view_fps_value,
+                    frame_width=view_width,
+                    frame_height=view_height,
+                    eligibility_policy="lock_only",
+                )
                 session = build_view_tracking_session(
-                    detector=detector, homography=homography, roi_artifact=roi, config=config,
+                    detector=detector,
+                    homography=homography or reference_homography,
+                    roi_artifact=roi,
+                    config=session_config,
                 )
                 scope = "full" if vi.camera_slot == reference_view_id else "perception"
                 runtimes[vi.camera_slot] = JointViewRuntime(
-                    view_input=vi, capture=cap, fps=fps, frame_size=(width, height),
-                    homography=homography, roi_artifact=roi, tracking_session=session, scope=scope,
+                    view_input=vi, capture=cap, fps=view_fps_value, frame_size=(view_width, view_height),
+                    homography=homography or reference_homography, roi_artifact=roi, tracking_session=session, scope=scope,
                 )
                 orientations[vi.camera_slot] = (
                     CourtOrientation(vi.court_orientation) if vi.court_orientation else CourtOrientation.identity
                 )
+                view_geometry[vi.camera_slot] = {
+                    "orientation": orientations[vi.camera_slot],
+                    "inverse_homography": invert_homography(homography) if homography is not None else None,
+                    "frame_width": view_width,
+                    "frame_height": view_height,
+                    "available": homography is not None and bool(vi.court_orientation),
+                }
                 detectors_by_view[vi.camera_slot] = detector
-                homographies_by_view[vi.camera_slot] = homography
+                homographies_by_view[vi.camera_slot] = homography or reference_homography
                 if vi.camera_slot == reference_view_id:
-                    reference_homography = homography
+                    reference_homography = homography or reference_homography
                 else:
-                    sec_fps = float(cap.get(cv2.CAP_PROP_FPS) or fps)
+                    sec_fps = view_fps_value
                     sec_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                     timing_provider = FrameTimingProvider.from_media(
                         videos[vi.camera_slot].path,
                         frame_count=sec_count,
                         fps=sec_fps,
+                        allow_nominal_fallback=False,
                     )
+                    view_fps[vi.camera_slot] = sec_fps
+                    runtimes[vi.camera_slot].fps = sec_fps
                     timing_providers[vi.camera_slot] = timing_provider
                     # SyncCalibration maps the reference take clock to the secondary
                     # camera's own normalized clock; do not subtract the reference
@@ -223,16 +395,32 @@ class MultiViewJointExecutor:
             analysis_dir = _resolve_analysis_dir(storage, parent, capture_take_id)
             take_dir = analysis_dir.parent if analysis_dir is not None else None
             sync = load_sync_calibration(take_dir) if take_dir is not None else None
-            authority = validate_sync_authority(
+            resolution = resolve_sync_authority(
                 sync,
                 reference_camera_id=reference_camera_id,
                 secondary_camera_id=secondary_camera_id,
+                timing_authority_by_view={
+                    reference_camera_id: reference_timing_provider.provenance.authority,
+                    secondary_camera_id: timing_providers[secondary_view_id].provenance.authority,
+                },
+                require_authoritative_calibration=bool(getattr(parent, "debugTraceEnabled", False)),
             )
-            authority_reason = "; ".join(issue.code for issue in authority.issues) or None
-            clock_sync = sync if authority.valid else None
+            if getattr(parent, "debugTraceEnabled", False) and not resolution.authoritative_joint_eligible:
+                raise RuntimeError(
+                    "authoritative visual acceptance blocked: "
+                    + (resolution.reason or "sync authority unavailable")
+                )
+            authority_reason = (
+                resolution.reason if resolution.execution_mode != "joint_authoritative" else None
+            )
+            clock_sync = sync if resolution.structural_valid else None
             clock = CanonicalAnalysisClock(
                 reference_view_id=reference_view_id, secondary_view_id=secondary_view_id,
                 secondary_frames=cam2_frames, sync=clock_sync, secondary_camera_id=secondary_camera_id,
+                reference_timing_provider=reference_timing_provider,
+                secondary_timing_provider=timing_providers[secondary_view_id],
+                reference_timing_authority=reference_timing_provider.provenance.authority,
+                secondary_timing_authority=timing_providers[secondary_view_id].provenance.authority,
             )
             registry = GlobalPlayerRegistry()
             associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
@@ -243,8 +431,18 @@ class MultiViewJointExecutor:
                 guidance_generator=gen, orientations=orientations,
                 inverse_homography=invert_homography(reference_homography),
                 frame_width=width, frame_height=height,
+                view_geometry=view_geometry,
+                recovery_config=recovery_config,
                 canonical_frame_ref=load_canonical_court_frame(take_dir) if take_dir is not None else None,
                 reference_timing_provider=reference_timing_provider,
+                timing_authority_by_view={
+                    reference_view_id: reference_timing_provider.provenance.authority,
+                    secondary_view_id: timing_providers[secondary_view_id].provenance.authority,
+                },
+                sync_quality=resolution.sync_quality,
+                execution_mode=resolution.execution_mode,
+                authoritative_joint_eligible=resolution.authoritative_joint_eligible,
+                debug_trace_enabled=bool(getattr(parent, "debugTraceEnabled", False)),
             )
 
             # 5) 长任务执行(每 tick cancellation + 进度)
@@ -276,68 +474,131 @@ class MultiViewJointExecutor:
                 slot: provider.metadata() for slot, provider in timing_providers.items()
             }
             out.diagnostics["authority_reason"] = authority_reason
+            out.diagnostics["authority_reason_codes"] = list(resolution.reason_codes)
+            out.diagnostics["structural_valid"] = resolution.structural_valid
+            out.diagnostics["timing_authority_by_view"] = {
+                slot: provider.provenance.authority for slot, provider in timing_providers.items()
+            }
+            out.diagnostics["sync_quality"] = resolution.sync_quality
+            out.diagnostics["execution_mode"] = resolution.execution_mode
+            out.diagnostics["authoritative_joint_eligible"] = resolution.authoritative_joint_eligible
             out.diagnostics["requested_mode"] = parent.executionMode
-            if authority_reason:
-                out.diagnostics["effective_mode"] = "single_view_fallback"
-
-            # ---- F1 离线精修(只读 F0;写 immutable F0 + recovered/F1 artifact + manifest)----
-            from app.vision.multiview.offline_refinement import run_offline_refinement, refuse_f1
-            from app.vision.multiview.joint_artifact import (
-                build_refinement_manifest,
-                write_fused_v2,
-                write_recovered_observations,
-            )
 
             run_dir = default_run_output_dir(analysis_dir, run_id) if analysis_dir is not None else None
-            f0_artifact = "fused_player_trajectory.f0.v2.json"
-            refinement = build_refinement_manifest(
-                status="skipped_no_windows", final_source="first_pass_f0", first_pass_artifact=f0_artifact,
+            if getattr(parent, "debugTraceEnabled", False):
+                if out.debug_trace is None:
+                    raise RuntimeError("debug trace was enabled but joint run produced no trace")
+                if run_dir is None:
+                    raise RuntimeError("debug trace requires a persistent JointRun diagnostic directory")
+                run_dir.mkdir(parents=True, exist_ok=True)
+                trace_path = write_joint_debug_trace(run_dir / JOINT_DEBUG_TRACE_FILENAME, out.debug_trace)
+                manifest = build_joint_debug_manifest(
+                    run_id=run_id,
+                    capture_take_id=capture_take_id,
+                    config={
+                        "debug_trace_enabled": True,
+                        "requested_mode": parent.executionMode,
+                        "execution_mode": resolution.execution_mode,
+                        "frame_stride": parent.frameStride,
+                        "p1_online_recovery_config": recovery_config.snapshot(),
+                    },
+                )
+                manifest_path = storage.write_json_atomic(run_dir / JOINT_DEBUG_MANIFEST_FILENAME, manifest)
+                out.diagnostics["joint_debug_trace"] = {
+                    "schema_version": out.debug_trace["schema_version"],
+                    "path": str(trace_path),
+                    "manifest_path": str(manifest_path),
+                }
+            recovery_evidence = getattr(out, "recovery_evidence", None) or []
+            if recovery_evidence:
+                storage.write_json_atomic(
+                    storage.recovery_episodes_json_path(parent.id, run_id),
+                    build_recovery_episode_projection(
+                        {
+                            "run_id": run_id,
+                            "capture_take_id": capture_take_id,
+                            "ticks": recovery_evidence,
+                        }
+                    ),
+                )
+
+            # ---- F1 离线精修(只读 immutable F0;最后才更新 manifest)----
+            from app.vision.multiview.offline_refinement import run_offline_refinement
+            from app.vision.multiview.joint_artifact import (
+                build_refinement_manifest,
+                write_f0_refinement_snapshot,
             )
+
+            f0_artifact = "fused_player_trajectory.f0.v2.json"
             compose_output = out  # 默认用 F0
-            if out.f0_trace:
+            refinement = build_refinement_manifest(
+                status="skipped_no_windows",
+                final_source="first_pass_f0",
+                first_pass_artifact=f0_artifact,
+                reason=None,
+            )
+            if run_dir is not None:
                 try:
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    # F0 is published before F1 starts. It is never overwritten.
+                    storage.write_json_atomic(run_dir / f0_artifact, out.trajectory)
+                    snapshot_artifact = "f0_refinement_snapshot.v1.json"
+                    if out.f0_snapshot is not None:
+                        storage.write_json_atomic(
+                            run_dir / snapshot_artifact,
+                            write_f0_refinement_snapshot(out.f0_snapshot),
+                        )
+                    else:
+                        snapshot_artifact = None
+
+                    contexts = {}
+                    for view_id in runtimes:
+                        geometry = view_geometry.get(view_id, {})
+                        # F1 never borrows reference geometry for a target view.
+                        # An incomplete calibration is a deterministic skip.
+                        if not geometry.get("available") or geometry.get("inverse_homography") is None:
+                            continue
+                        contexts[view_id] = RefinementViewContext(
+                            view_id=view_id,
+                            frame_provider=runtimes[view_id].get_frame,
+                            detector=detectors_by_view[view_id],
+                            homography=homographies_by_view[view_id],
+                            inverse_homography=geometry["inverse_homography"],
+                            orientation=orientations[view_id],
+                            frame_width=int(geometry.get("frame_width") or runtimes[view_id].frame_size[0]),
+                            frame_height=int(geometry.get("frame_height") or runtimes[view_id].frame_size[1]),
+                            timing_metadata=timing_providers.get(view_id, reference_timing_provider).metadata(),
+                        )
                     refinement_outcome = run_offline_refinement(
+                        snapshot=out.f0_snapshot,
                         f0_trace=out.f0_trace,
                         f0_source_frames=out.f0_source_frames,
                         f0_global_positions=out.f0_global_positions,
-                        frame_provider=lambda vid, idx: runtimes[vid].get_frame(idx) if vid in runtimes else None,
-                        detector=detectors_by_view.get(secondary_camera_id),
-                        homography=homographies_by_view.get(secondary_camera_id, reference_homography),
-                        inverse_homography=invert_homography(reference_homography),
-                        orientation_by_view=orientations,
-                        frame_width=width, frame_height=height,
+                        view_contexts=contexts,
+                        f0_samples=out.normalized.samples,
+                        config=RefinementConfigSnapshot.from_online(recovery_config),
+                        reference_view_id=reference_view_id,
+                        secondary_view_id=secondary_view_id,
+                        sync_quality=resolution.sync_quality,
                     )
-                    refinement = build_refinement_manifest(
-                        status=refinement_outcome.status,
-                        final_source=refinement_outcome.final_source,
-                        first_pass_artifact=f0_artifact,
-                        recovered_artifact="recovered_view_observations.v1.json" if refinement_outcome.recovered else None,
-                        refined_artifact="fused_player_trajectory.f1.v2.json"
-                        if refinement_outcome.final_source == "refined_f1" else None,
-                        reason=refinement_outcome.reason,
+                    refinement, compose_output = _publish_refinement_artifacts(
+                        storage=storage,
+                        run_dir=run_dir,
+                        out=out,
+                        outcome=refinement_outcome,
+                        run_id=run_id,
+                        capture_take_id=capture_take_id,
+                        reference_view_id=reference_view_id,
+                        authoritative_run=resolution.authoritative_joint_eligible,
+                        snapshot_artifact=snapshot_artifact,
                     )
-                    # 物理落盘 immutable artifacts(design D6):f0 / recovered / f1
-                    if run_dir is not None:
-                        run_dir.mkdir(parents=True, exist_ok=True)
-                        storage.write_json_atomic(run_dir / f0_artifact, out.trajectory)
-                        if refinement_outcome.recovered:
-                            storage.write_json_atomic(
-                                run_dir / "recovered_view_observations.v1.json",
-                                write_recovered_observations([_recovered_to_dict(r) for r in refinement_outcome.recovered]),
-                            )
-                        if refinement_outcome.final_source == "refined_f1":
-                            f1_samples = refuse_f1(out.normalized.samples, refinement_outcome.recovered)
-                            f1_trajectory = write_fused_v2(
-                                run_id=run_id, capture_take_id=capture_take_id,
-                                reference_view_id=reference_view_id, samples=f1_samples,
-                            )
-                            storage.write_json_atomic(run_dir / "fused_player_trajectory.f1.v2.json", f1_trajectory)
-                            compose_output = _with_samples(out, f1_trajectory)
-                        storage.write_json_atomic(run_dir / "refinement_diagnostics.json", refinement)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("offline refinement failed: %s", exc)
-                    refinement = build_refinement_manifest(
-                        status="failed_fallback", final_source="first_pass_f0", first_pass_artifact=f0_artifact,
+                    refinement = _write_failed_refinement_fallback(
+                        storage=storage,
+                        run_dir=run_dir,
+                        f0_snapshot_present=out.f0_snapshot is not None,
+                        reason=str(exc),
                     )
 
             # 6) compose + 落盘
@@ -353,6 +614,31 @@ class MultiViewJointExecutor:
             )
             result = storage.publicize_pipeline_result(result)
             storage.write_json(storage.output_json_path(parent.id), result.model_dump(mode="json"))
+
+            # Debug Replay is rendered only after the authoritative result and
+            # refinement artifacts are published. Rendering consumes persisted
+            # trace evidence and must never change the analysis conclusion.
+            if getattr(parent, "debugTraceEnabled", False) and run_dir is not None:
+                try:
+                    trace_path = run_dir / JOINT_DEBUG_TRACE_FILENAME
+                    trajectory_path = run_dir / "fused_player_trajectory.f1.v2.json"
+                    if not trajectory_path.is_file():
+                        trajectory_path = run_dir / "fused_player_trajectory.f0.v2.json"
+                    render_joint_debug_artifacts(
+                        JointDebugRenderInputs(
+                            video_paths={view_id: video.path for view_id, video in videos.items()},
+                            trace_path=trace_path,
+                            trajectory_path=trajectory_path,
+                            diagnostics_path=storage.fusion_diagnostics_json_path(parent.id),
+                            canonical_frame_path=take_dir / "metadata" / "canonical_court_frame.json",
+                            timing_mapping_path=take_dir / "timeline" / "sync_calibration.json",
+                            output_video_path=storage.canonical_debug_video_path(parent.id, run_id),
+                            summary_path=storage.joint_debug_summary_json_path(parent.id, run_id),
+                            fps=max(1.0, fps / max(1, parent.frameStride)),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - debug is opt-in and non-blocking
+                    logger.warning("joint debug replay render failed: %s", exc)
             self.store.update(parent.id, orchestrationStatus="completed")
             logger.info(
                 "joint run 完成 run=%s globals=%s degraded=%s",

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from app.services.dual_camera_sync import FrameTiming, build_frame_map
+from app.services.frame_timing_provider import FrameTimingProvider
 from app.vision.multiview.sync import MultiViewSyncCalibration
 
 
@@ -24,6 +25,8 @@ class FrameSample:
     source_timestamp_ms: float
     mapped_take_timestamp_ms: float
     selection_error_ms: float | None = None
+    timing_authority: str = "source_pts"
+    sync_quality: str = "unknown"
     frame: Any | None = None
 
 
@@ -33,7 +36,7 @@ class SynchronizedFrameBundle:
 
     take_timestamp_ms: float
     views: dict[str, FrameSample | None]  # view_id -> FrameSample | None(无源帧)
-    frame_status: dict[str, str]  # available | unavailable | no_new_frame
+    frame_status: dict[str, str]
     mapping_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
@@ -50,15 +53,29 @@ class CanonicalAnalysisClock:
         secondary_camera_id: str,
         max_pairing_error_ms: float = 1000.0 / 30.0,
         frame_provider: Callable[[int], Any] | None = None,
+        reference_timing_provider: FrameTimingProvider | None = None,
+        secondary_timing_provider: FrameTimingProvider | None = None,
+        reference_timing_authority: str = "source_pts",
+        secondary_timing_authority: str = "source_pts",
     ) -> None:
         self.reference_view_id = reference_view_id
         self.secondary_view_id = secondary_view_id
         self._sec_calibration = sync.mapping_for(secondary_camera_id) if sync is not None else None
         self._sec_frames = list(secondary_frames)
         self._max_pairing_error_s = max_pairing_error_ms / 1000.0
+        self.max_pairing_error_ms = max_pairing_error_ms
         self._frame_provider = frame_provider
+        self._reference_timing_provider = reference_timing_provider
+        self._secondary_timing_provider = secondary_timing_provider
+        self._reference_timing_authority = reference_timing_authority
+        self._secondary_timing_authority = secondary_timing_authority
+        self._sync_quality = self._sec_calibration.quality if self._sec_calibration is not None else "unknown"
         # view_id -> 最近已消费的 source_frame_index（单调不重复的依据）
         self.last_consumed_source_frame_index: dict[str, int] = {}
+        self.status_counts: dict[str, int] = {}
+
+    def _record_status(self, status: str) -> None:
+        self.status_counts[status] = self.status_counts.get(status, 0) + 1
 
     def tick(
         self,
@@ -72,20 +89,31 @@ class CanonicalAnalysisClock:
         # ---- reference 视角：永远是当前分析帧 ----
         ref_sample = FrameSample(
             source_frame_index=reference_frame_index,
-            source_timestamp_ms=take_ms,
+            source_timestamp_ms=(
+                self._reference_timing_provider.timestamp_for_frame(reference_frame_index) * 1000.0
+                if self._reference_timing_provider is not None
+                and self._reference_timing_provider.timestamp_for_frame(reference_frame_index) is not None
+                else take_ms
+            ),
             mapped_take_timestamp_ms=take_ms,
             selection_error_ms=0.0,
+            timing_authority=self._reference_timing_authority,
+            sync_quality=self._sync_quality,
             frame=self._frame_provider(reference_frame_index) if self._frame_provider else None,
         )
         views: dict[str, FrameSample | None] = {self.reference_view_id: ref_sample}
         frame_status: dict[str, str] = {self.reference_view_id: "available"}
+        self._record_status("available")
 
         # ---- secondary 视角：nearest mapping + 单调不重复 ----
         diag: dict[str, Any] = {}
         if self._sec_calibration is None or not self._sec_frames:
             views[self.secondary_view_id] = None
-            frame_status[self.secondary_view_id] = "unavailable"
-            diag["secondary_selection_status"] = "unavailable_no_sync_or_frames"
+            status = "unavailable_no_sync" if self._sec_calibration is None else "unavailable_out_of_media_range"
+            frame_status[self.secondary_view_id] = status
+            diag["secondary_selection_status"] = status
+            diag["reason"] = status
+            self._record_status(status)
         else:
             selection = build_frame_map(
                 [take_ms / 1000.0],
@@ -94,6 +122,13 @@ class CanonicalAnalysisClock:
                 max_selection_error_seconds=self._max_pairing_error_s,
             )[0]
             diag["secondary_selection_status"] = selection.status
+            diag["selection_error_ms"] = (
+                selection.selection_error_seconds * 1000.0
+                if selection.selection_error_seconds is not None
+                else None
+            )
+            diag["timing_authority"] = self._secondary_timing_authority
+            diag["sync_quality"] = self._sync_quality
             if selection.status == "ok" and selection.source_frame_index is not None:
                 last = self.last_consumed_source_frame_index.get(self.secondary_view_id)
                 if last is not None and selection.source_frame_index <= last:
@@ -101,6 +136,8 @@ class CanonicalAnalysisClock:
                     views[self.secondary_view_id] = None
                     frame_status[self.secondary_view_id] = "no_new_frame"
                     diag["secondary_selection_error_ms"] = None
+                    diag["reason"] = "source_frame_already_consumed"
+                    self._record_status("no_new_frame")
                 else:
                     self.last_consumed_source_frame_index[self.secondary_view_id] = selection.source_frame_index
                     views[self.secondary_view_id] = FrameSample(
@@ -116,6 +153,8 @@ class CanonicalAnalysisClock:
                             if selection.selection_error_seconds is not None
                             else None
                         ),
+                        timing_authority=self._secondary_timing_authority,
+                        sync_quality=self._sync_quality,
                         frame=(
                             self._frame_provider(selection.source_frame_index)
                             if self._frame_provider
@@ -123,9 +162,19 @@ class CanonicalAnalysisClock:
                         ),
                     )
                     frame_status[self.secondary_view_id] = "available"
+                    self._record_status("available")
             else:
                 views[self.secondary_view_id] = None
-                frame_status[self.secondary_view_id] = "unavailable"
+                status = selection.status if selection.status in {
+                    "unavailable_outside_valid_interval",
+                    "unavailable_out_of_media_range",
+                    "unavailable_selection_error",
+                } else "unavailable_no_sync"
+                frame_status[self.secondary_view_id] = status
+                diag["reason"] = status
+                self._record_status(status)
+
+        diag["frame_status_counts"] = dict(self.status_counts)
 
         return SynchronizedFrameBundle(
             take_timestamp_ms=take_ms,

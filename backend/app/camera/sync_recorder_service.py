@@ -1596,14 +1596,89 @@ class SyncRecordingService:
                 and fragment["status"] in (FragmentStatus.completed.value, FragmentStatus.interrupted.value)
             ]
             result = finalizer.finalize_track(track_id, infos)
-            results[slot] = {
+            result_payload = {
                 "status": result.status,
                 "video_id": result.video_id,
                 "output_path": result.output_path,
                 "fragment_count": result.fragment_count,
                 "error": "; ".join(result.warnings) if result.warnings else None,
             }
+            if result.output_path:
+                result_payload.update(self._materialize_registered_video_timing(result.output_path))
+            results[slot] = result_payload
+        self._persist_capture_track_timing(session.capture_take_id, results)
         return results
+
+    @staticmethod
+    def _materialize_registered_video_timing(media_path: str | os.PathLike[str]) -> dict[str, object]:
+        """Materialize/validate PTS for the final registered media.
+
+        Timing is an analysis capability attached to the video, not a
+        prerequisite for preserving a completed capture.  Callers therefore
+        receive a structured unavailable result instead of an exception.
+        """
+        from app.services.dual_camera_sync import (
+            summarize_frame_timing_sidecar,
+            write_frame_timing_sidecar,
+        )
+
+        media = Path(media_path)
+        sidecar = Path(f"{media}.pts.jsonl")
+        try:
+            if sidecar.exists():
+                return summarize_frame_timing_sidecar(sidecar, media_path=media)
+            return write_frame_timing_sidecar(media, sidecar)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("生成 registered video PTS sidecar 失败 %s: %s", media, exc)
+            return {
+                "status": "unavailable",
+                "timing_authority": "missing",
+                "provenance": "registered_video_pts_materialization",
+                "media_path": str(media),
+                "sidecar_path": str(sidecar),
+                "frame_count": 0,
+                "fps": None,
+                "first_pts_seconds": None,
+                "last_pts_seconds": None,
+                "timing_failure_reason": str(exc),
+            }
+
+    @staticmethod
+    def _persist_capture_track_timing(
+        capture_take_id: str | None,
+        timing_results: dict[str, dict[str, object]],
+    ) -> None:
+        """Mirror sidecar readiness onto CaptureTrack without affecting media state."""
+        if not capture_take_id or not timing_results:
+            return
+        try:
+            from app.database import get_session_factory
+            from app.models.capture_track import CaptureTrack
+
+            db = get_session_factory()()
+            try:
+                tracks = db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == capture_take_id).all()
+                for track in tracks:
+                    timing = timing_results.get(track.slot.value)
+                    if not timing:
+                        continue
+                    track.timing_authority = str(timing.get("timing_authority", "missing"))
+                    track.timing_sidecar_path = (
+                        str(timing["sidecar_path"]) if timing.get("sidecar_path") else None
+                    )
+                    track.timing_failure_reason = (
+                        str(timing["timing_failure_reason"])
+                        if timing.get("timing_failure_reason")
+                        else None
+                    )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("回写 CaptureTrack timing authority 失败: %s", exc)
 
     def _persist_capture_manifest(self, session: SyncRecordingSession) -> None:
         if not session.session_dir:
@@ -1638,6 +1713,7 @@ class SyncRecordingService:
         registered_video_ids: dict[CameraSlotRole, str] = dict(session.registered_video_ids or {})
         video_availability = dict(session.video_availability or {})
         associated_video_paths: list[str] = []
+        merge_results = dict(session.merge_results or {})
         alignment = self._compute_sync_alignment(session)
 
         for role in ("cam_1", "cam_2"):
@@ -1655,6 +1731,20 @@ class SyncRecordingService:
 
             existing_video_id = registered_video_ids.get(role)
             if self._video_id_is_available(existing_video_id):
+                try:
+                    from app.services.video_service import video_service
+
+                    registered_media = video_service.get_available_video(existing_video_id)
+                    registered_path = getattr(registered_media, "path", None)
+                    if registered_path:
+                        merge_results[role] = {
+                            **dict(merge_results.get(role) or {}),
+                            "video_id": existing_video_id,
+                            "output_path": str(registered_path),
+                            **self._materialize_registered_video_timing(registered_path),
+                        }
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("补写已登记视频 timing sidecar 失败 %s/%s: %s", session.session_id, role, exc)
                 video_availability[role] = "available"
                 if role == "cam_1":
                     default_analysis_video_id = existing_video_id
@@ -1671,6 +1761,12 @@ class SyncRecordingService:
                     logger.warning("恢复双摄视频失败 %s/%s: %s", session.session_id, role, exc)
                 else:
                     registered_video_ids[role] = restored_id
+                    merge_results[role] = {
+                        **dict(merge_results.get(role) or {}),
+                        "video_id": restored_id,
+                        "output_path": str(merged_path),
+                        **self._materialize_registered_video_timing(merged_path),
+                    }
                     video_availability[role] = "available"
                     if role == "cam_1":
                         default_analysis_video_id = restored_id
@@ -1692,6 +1788,7 @@ class SyncRecordingService:
                 )
                 if video_id:
                     registered_video_ids[role] = video_id
+                    merge_results.setdefault(role, {})["video_id"] = video_id
                     video_availability[role] = "available"
                     if role == "cam_1":
                         default_analysis_video_id = video_id
@@ -1712,6 +1809,7 @@ class SyncRecordingService:
                 "registered_video_ids": registered_video_ids,
                 "video_availability": video_availability,
                 "associated_video_paths": associated_video_paths,
+                "merge_results": merge_results,
             }
         )
         # 将派生视频 ID 回写到 CaptureTrack，保证数据库、会话快照和训练清单一致。
@@ -1729,6 +1827,17 @@ class SyncRecordingService:
                         video_id = registered_video_ids.get(track.slot.value)
                         if video_id:
                             track.video_id = video_id
+                        timing = merge_results.get(track.slot.value) or {}
+                        if timing:
+                            track.timing_authority = str(timing.get("timing_authority", "missing"))
+                            track.timing_sidecar_path = (
+                                str(timing["sidecar_path"]) if timing.get("sidecar_path") else None
+                            )
+                            track.timing_failure_reason = (
+                                str(timing["timing_failure_reason"])
+                                if timing.get("timing_failure_reason")
+                                else None
+                            )
                     db.commit()
                 except Exception:
                     db.rollback()
@@ -1893,6 +2002,12 @@ class SyncRecordingService:
                 file_size=file_size,
                 video_id=preferred_video_id,
             )
+            session.merge_results[slot.role] = {
+                **dict(session.merge_results.get(slot.role) or {}),
+                "video_id": video_id,
+                "output_path": str(file_path),
+                **self._materialize_registered_video_timing(file_path),
+            }
 
             if take_id:
                 is_merged = merged_path is not None and merged_path.endswith(".mp4")

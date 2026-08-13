@@ -10,10 +10,18 @@ Additive P1(design D9):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 V1_SCHEMA = "fused_player_trajectory.v1"
 V2_SCHEMA = "fused_player_trajectory.v2"
+TIMING_PROVENANCE_FIELDS = (
+    "source_frame_index",
+    "source_timestamp_ms",
+    "mapped_take_timestamp_ms",
+    "selection_error_ms",
+    "timing_authority",
+    "sync_quality",
+)
 
 
 @dataclass
@@ -30,6 +38,7 @@ class FusedSample:
     observation_origin: str = "base"
     view_observations: dict[str, dict] = field(default_factory=dict)
     contributing_views: list[str] = field(default_factory=list)
+    authoritative_joint_eligible: bool = False
 
 
 @dataclass
@@ -47,13 +56,24 @@ def write_fused_v2(
     capture_take_id: str,
     reference_view_id: str,
     samples: list[FusedSample],
+    authoritative_run: bool = False,
 ) -> dict[str, object]:
     """写入 `fused_player_trajectory.v2`(observation_origin 与 fusion_status 正交)。"""
+    if authoritative_run:
+        for sample in samples:
+            for view_id, detail in sample.view_observations.items():
+                missing = [field for field in TIMING_PROVENANCE_FIELDS if field not in detail]
+                if missing:
+                    raise ValueError(
+                        f"authoritative sample {sample.reference_frame_index}/{view_id} "
+                        f"missing timing fields: {', '.join(missing)}"
+                    )
     return {
         "schema_version": V2_SCHEMA,
         "run_id": run_id,
         "capture_take_id": capture_take_id,
         "reference_view_id": reference_view_id,
+        "authoritative_run": authoritative_run,
         "players": sorted({s.global_player_id for s in samples}),
         "samples": [
             {
@@ -67,6 +87,7 @@ def write_fused_v2(
                 "observation_origin": s.observation_origin,
                 "view_observations": s.view_observations,
                 "contributing_views": s.contributing_views,
+                "authoritative_joint_eligible": s.authoritative_joint_eligible,
             }
             for s in samples
         ],
@@ -125,6 +146,7 @@ def _normalize_v2_sample(raw: dict) -> FusedSample:
         observation_origin=str(raw.get("observation_origin", "base")),
         view_observations=dict(raw.get("view_observations", {})),
         contributing_views=list(raw.get("contributing_views", [])),
+        authoritative_joint_eligible=bool(raw.get("authoritative_joint_eligible", False)),
     )
 
 
@@ -138,12 +160,39 @@ RefinementStatus = Literal[
     "failed_fallback",
 ]
 
+F0_SNAPSHOT_SCHEMA = "f0_refinement_snapshot.v1"
+REFINEMENT_DIAGNOSTICS_SCHEMA = "refinement_diagnostics.v1"
+
 
 def write_recovered_observations(recovered: list[dict[str, object]]) -> dict[str, object]:
     """写入 `recovered_view_observations.v1.json`(F1 recovery provenance,不覆盖 F0)。"""
     return {
         "schema_version": "recovered_view_observations.v1",
         "observations": list(recovered),
+    }
+
+
+def write_f0_refinement_snapshot(snapshot: Any) -> dict[str, object]:
+    """Serialize the immutable F0 evidence consumed by F1."""
+    payload = snapshot.to_dict() if hasattr(snapshot, "to_dict") else dict(snapshot)
+    payload["schema_version"] = F0_SNAPSHOT_SCHEMA
+    return payload
+
+
+def write_refinement_diagnostics(
+    *,
+    status: RefinementStatus,
+    final_source: Literal["refined_f1", "first_pass_f0"],
+    diagnostics: dict[str, object] | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    """Stable diagnostics artifact; never doubles as the parent manifest."""
+    return {
+        "schema_version": REFINEMENT_DIAGNOSTICS_SCHEMA,
+        "status": status,
+        "final_source": final_source,
+        "reason": reason,
+        **(diagnostics or {}),
     }
 
 
@@ -154,6 +203,8 @@ def build_refinement_manifest(
     first_pass_artifact: str | None = None,
     recovered_artifact: str | None = None,
     refined_artifact: str | None = None,
+    f0_snapshot_artifact: str | None = None,
+    diagnostics_artifact: str | None = None,
     reason: str | None = None,
 ) -> dict[str, object]:
     """manifest 的 `refinement` 字段(4 状态,对应 final_source)。"""
@@ -163,5 +214,7 @@ def build_refinement_manifest(
         "first_pass_artifact": first_pass_artifact,
         "recovered_observations": recovered_artifact,
         "refined_artifact": refined_artifact,
+        "f0_snapshot_artifact": f0_snapshot_artifact,
+        "diagnostics_artifact": diagnostics_artifact,
         "reason": reason,
     }

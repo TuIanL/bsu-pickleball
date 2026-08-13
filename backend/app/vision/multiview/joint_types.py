@@ -44,7 +44,17 @@ class JointViewObservation:
     footpoint_confidence: float | None = None
     source_track_id: int | None = None
     view_player_id: str = ""
+    local_identity_epoch: int = 0
     detection_origin: DetectionOrigin = "base"
     guidance_id: str | None = None
+    donor_view: str | None = None
+    expected_global_player_id: str | None = None
+    pre_gate_residual_ft: float | None = None
+    intrinsic_quality: float | None = None
+    source_timestamp_ms: float | None = None
+    mapped_take_timestamp_ms: float | None = None
+    selection_error_ms: float | None = None
+    timing_authority: str = "missing"
+    sync_quality: str = "unknown"
     tracking_status: str = "detected"  # detected | tentative
     lock_state: str | None = None

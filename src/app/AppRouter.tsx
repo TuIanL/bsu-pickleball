@@ -9,6 +9,7 @@ import { SegmentManagerPage } from "../pages/SegmentManagerPage";
 import { RecordingWorkspacePage } from "../pages/RecordingWorkspacePage";
 import { RecordingAnalyzePage } from "../pages/RecordingAnalyzePage";
 import { MultiViewAnalysisSetupPage } from "../pages/MultiViewAnalysisSetupPage";
+import { SyncCalibrationWorkbenchPage } from "../pages/SyncCalibrationWorkbenchPage";
 import { HardwarePage } from "../pages/HardwarePage";
 import { TrainingPage } from "../pages/TrainingPage";
 import { CameraHubPage } from "../pages/CameraHubPage";
@@ -18,6 +19,7 @@ import { VisionPage } from "../pages/VisionPage";
 import { ReportPage } from "../pages/ReportPage";
 import { NewAnalysisPage } from "../pages/NewAnalysisPage";
 import { AnalysisTasksPage } from "../pages/AnalysisTasksPage";
+import { MultiviewObservabilityPage } from "../pages/MultiviewObservabilityPage";
 import { ShowcaseDisplayPage } from "../pages/ShowcaseDisplayPage";
 
 const BallTrajectoryPage = lazy(() =>
@@ -61,6 +63,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
             <BallTrajectoryPage key={route.jobId} jobId={route.jobId} onNavigate={onNavigate} />
           </Suspense>
         );
+      case "multiview-observability":
+        return <MultiviewObservabilityPage jobId={route.jobId} onNavigate={onNavigate} />;
       case "report":
         return <ReportPage jobId={"jobId" in route ? route.jobId : undefined} reportType={route.reportType} onNavigate={onNavigate} />;
       case "camera-hub":
@@ -77,6 +81,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
       }
       case "multiview-setup":
         return <MultiViewAnalysisSetupPage captureTakeId={route.captureTakeId} onNavigate={onNavigate} />;
+      case "sync-calibration":
+        return <SyncCalibrationWorkbenchPage captureTakeId={route.captureTakeId} onNavigate={onNavigate} returnPath={route.returnPath} />;
       case "showcase":
         return <ShowcaseDisplayPage runtimeId={route.runtimeId} onNavigate={onNavigate} />;
       case "workspace":

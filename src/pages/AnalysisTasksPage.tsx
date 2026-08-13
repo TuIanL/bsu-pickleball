@@ -6,6 +6,7 @@ import type { AnalysisJobSummary, RecordingSession, FieldSession, SyncRecordingS
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { Modal } from "../components/platform/Modal";
+import { JobStageStepper } from "../components/platform/JobStageStepper";
 import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
 import DeleteToast, { type DeleteToastData } from "../components/platform/DeleteToast";
 import { FieldSessionGroupCard } from "../components/platform/FieldSessionGroupCard";
@@ -1108,7 +1109,7 @@ export function AnalysisTasksPage({
   );
 }
 
-function AnalysisTaskCard({
+export function AnalysisTaskCard({
   job,
   canceling = false,
   deleting = false,
@@ -1213,15 +1214,20 @@ function AnalysisTaskCard({
           ) : null}
         </div>
         <div>
-          <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
-            <div className="flex items-end justify-between">
-              <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">进度</span>
-              <strong className="text-3xl font-black text-[#168A34]">{job.progress}%</strong>
+          {job.status !== "failed" && job.status !== "canceled" ? (
+            <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+              <div className="flex items-end justify-between">
+                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">进度</span>
+                <strong className="text-3xl font-black text-[#168A34]">{job.progress}%</strong>
+              </div>
+              <div className="mt-3">
+                <JobStageStepper compact stages={job.stages} ariaLabel={`任务 ${job.id} 分析阶段进度`} />
+              </div>
+              <div className="mt-3 h-1.5 rounded-full bg-[#DFEADA]">
+                <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+              </div>
             </div>
-            <div className="mt-3 h-2 rounded-full bg-[#DFEADA]">
-              <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
-            </div>
-          </div>
+          ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
             {job.status === "completed" ? (
               <>

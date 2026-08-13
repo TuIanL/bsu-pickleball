@@ -40,6 +40,7 @@ export type AppPath =
   | `/analysis/${string}/details`
   | `/analysis/${string}/vision`
   | `/analysis/${string}/trajectory`
+  | `/analysis/${string}/multiview`
   | `/analysis/${string}/reports/${ReportType}`
   | "/training"
   | "/hardware"
@@ -47,6 +48,7 @@ export type AppPath =
   | `/recording/${string}`
   | `/capture/${string}/analyze`
   | `/capture/takes/${string}/analyze`
+  | "/sync-calibration"
   | `/showcase/${string}`;
 
 export type NavigatePath = AppPath | `${string}?${string}`;
@@ -67,6 +69,7 @@ export type RouteState =
   | { name: "vision"; path: "/vision"; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "ball-trajectory"; path: `/analysis/${string}/trajectory`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "multiview-observability"; path: `/analysis/${string}/multiview`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "report"; path: `/reports/${ReportType}`; reportType: ReportType; shellMode: "standard"; navigationSection: "reports" }
   | { name: "report"; path: `/analysis/${string}/reports/${ReportType}`; reportType: ReportType; jobId: string; shellMode: "standard"; navigationSection: "reports" }
   | { name: "camera-hub"; path: "/camera"; shellMode: "standard"; navigationSection: "devices" }
@@ -75,6 +78,7 @@ export type RouteState =
   | { name: "recordingWorkspace"; path: `/recording/${string}`; sessionId: string; shellMode: "standard"; navigationSection: "videos" }
   | { name: "recording-analyze"; path: `/capture/${string}/analyze`; sessionId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "multiview-setup"; path: `/capture/takes/${string}/analyze`; captureTakeId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "sync-calibration"; path: "/sync-calibration"; captureTakeId: string; returnPath?: NavigatePath; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "showcase"; path: `/showcase/${string}`; runtimeId: string; shellMode: "landing"; navigationSection: null };
 
 export type NavigateFn = (path: NavigatePath, options?: NavigateOptions) => void;

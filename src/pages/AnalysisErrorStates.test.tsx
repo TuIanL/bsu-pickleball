@@ -84,6 +84,7 @@ describe("analysis task error states", () => {
 
     render(<AnalysisDetailsPage jobId="job-failed" onNavigate={onNavigate} />);
 
+    expect(await screen.findByRole("heading", { name: "分析任务失败" })).toBeTruthy();
     const returnButton = await screen.findByRole("button", { name: "返回任务管理" });
     returnButton.click();
     expect(onNavigate).toHaveBeenCalledWith("/analysis/tasks?source=sync_recording&session=sync-1");

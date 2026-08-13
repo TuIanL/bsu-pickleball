@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAnalysisJob, createMultiviewAnalysisJob, getAnalysisReport, listAnalysisJobs, deleteRecordingAnalysis } from "./analysisClient";
+import {
+  confirmSyncAnchors,
+  createAnalysisJob,
+  createMultiviewAnalysisJob,
+  deleteRecordingAnalysis,
+  getAnalysisReport,
+  getSyncAnchorExportUrl,
+  getSyncAnchorStatus,
+  listAnalysisJobs,
+  saveSyncAnchorDraft,
+} from "./analysisClient";
 
 describe("analysis job compatibility", () => {
   afterEach(() => {
@@ -101,6 +111,52 @@ describe("analysis job compatibility", () => {
       isNetworkError: false,
       backendDetail: "database unavailable",
     });
+  });
+
+  it("keeps structured sync-anchor errors intact for conflict and validation UI", async () => {
+    const errorBody = {
+      code: "revision_conflict",
+      message: "sync anchor revision conflict",
+      current_revision: 4,
+      issues: [],
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(errorBody), { status: 409, statusText: "Conflict", headers: { "content-type": "application/json" } }),
+    );
+
+    await expect(saveSyncAnchorDraft("take-1", {
+      reference_camera: "camera-a",
+      cameras: ["camera-a", "camera-b"],
+      anchors: [],
+      expected_revision: 3,
+    })).rejects.toMatchObject({ status: 409, backendDetail: JSON.stringify(errorBody) });
+  });
+
+  it("uses the dedicated sync-anchor endpoints and leaves export read-only", async () => {
+    const status = {
+      capture_take_id: "take-1",
+      state: "confirmed",
+      analysis_allowed: true,
+      reason_codes: [],
+      source: "manual_anchors",
+      revision: 4,
+      provenance: [],
+      invalidation_reasons: [],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(status), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status, calibration: {}, anchors: { reference_camera: "camera-a", cameras: [], anchors: [] } }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(getSyncAnchorStatus("take-1")).resolves.toMatchObject({ state: "confirmed", revision: 4 });
+    await expect(confirmSyncAnchors("take-1", {
+      reference_camera: "camera-a",
+      cameras: ["camera-a", "camera-b"],
+      anchors: [],
+      expected_revision: 4,
+    })).resolves.toMatchObject({ status: { state: "confirmed" } });
+    expect(getSyncAnchorExportUrl("take-1")).toContain("/api/capture-takes/take-1/sync-anchors/export");
+    expect(fetchMock.mock.calls[0][0]).toContain("/sync-anchors/status");
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
   });
 
   it("sends a multiview clip only when the caller enables it", async () => {

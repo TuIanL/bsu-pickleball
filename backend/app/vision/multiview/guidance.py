@@ -28,6 +28,9 @@ class CrossViewGuidancePolicy:
     base_roi_margin_px: float = 40.0
     uncertainty_to_px_scale: float = 12.0
     max_roi_margin_px: float = 160.0
+    min_donor_quality: float = 0.55
+    donor_max_age_ms: float = 300.0
+    donor_origins: tuple[str, ...] = ("base",)
 
 
 @dataclass
@@ -43,6 +46,15 @@ class CrossViewGuidance:
     roi: tuple[float, float, float, float]  # (x1, y1, x2, y2) 目标视角图像空间
     confidence: float
     expires_at: float
+    guidance_id: str = ""
+    donor_view: str | None = None
+    donor_view_player_id: str | None = None
+    donor_source_frame_index: int | None = None
+    donor_take_timestamp_ms: float | None = None
+    donor_quality: float = 0.0
+    donor_origin: str = "base"
+    expected_global_player_id: str | None = None
+    recovery_episode_id: str | None = None
 
 
 class GuidanceGenerator:
@@ -64,9 +76,15 @@ class GuidanceGenerator:
         frame_width: int,
         frame_height: int,
         prediction: tuple[float, float, float] | None,
+        donor_view: str | None = None,
+        donor_binding: Any | None = None,
+        target_frame_available: bool = True,
+        strict_donor: bool = False,
     ) -> CrossViewGuidance | None:
         """对单个 confirmed+anchored global 生成 guidance;不满足条件返回 None。"""
         p = self.policy
+        if not target_frame_available:
+            return None
         if global_state.lifecycle != "confirmed" or not global_state.cross_view_anchored:
             return None
         if prediction is None:
@@ -79,6 +97,19 @@ class GuidanceGenerator:
         # 触发条件:目标视角 binding weak/missing/lost
         if binding is None or binding.visibility not in {"weak", "missing", "lost"}:
             return None
+        if strict_donor:
+            if donor_binding is None or donor_view is None or donor_view == target_view:
+                return None
+            last_donor_seen = donor_binding.last_seen_take_timestamp_ms
+            donor_age = now_take_ms - (last_donor_seen if last_donor_seen is not None else now_take_ms)
+            if (
+                donor_binding.observation_origin != "base"
+                or donor_binding.visibility not in {"observed", "weak"}
+                or donor_age > p.donor_max_age_ms
+            ):
+                return None
+            if donor_binding.quality < p.min_donor_quality:
+                return None
         # cooldown
         key = (global_state.global_player_id, target_view)
         last_tick = self._last_generated.get(key, -10**9)
@@ -95,7 +126,7 @@ class GuidanceGenerator:
         x2 = min(float(frame_width), ix + r_px)
         y2 = min(float(frame_height), iy + r_px)
 
-        self._last_generated[key] = tick
+        guidance_id = f"g_{global_state.global_player_id}_{target_view}_{tick}"
         return CrossViewGuidance(
             global_player_id=global_state.global_player_id,
             target_view=target_view,
@@ -106,6 +137,14 @@ class GuidanceGenerator:
             roi=(x1, y1, x2, y2),
             confidence=max(0.0, 1.0 - uncertainty / p.max_uncertainty_ft),
             expires_at=now_take_ms + 50.0,
+            guidance_id=guidance_id,
+            donor_view=donor_view,
+            donor_view_player_id=getattr(donor_binding, "view_player_id", None),
+            donor_source_frame_index=getattr(donor_binding, "last_source_frame_index", None),
+            donor_take_timestamp_ms=getattr(donor_binding, "last_seen_take_timestamp_ms", None),
+            donor_quality=float(getattr(donor_binding, "quality", 0.0) or 0.0),
+            donor_origin=str(getattr(donor_binding, "observation_origin", "base")),
+            expected_global_player_id=global_state.global_player_id,
         )
 
     def generate_for_view(
@@ -120,6 +159,9 @@ class GuidanceGenerator:
         frame_width: int,
         frame_height: int,
         predictions: dict[str, tuple[float, float, float]],
+        candidate_donor_views: tuple[str, ...] | None = None,
+        target_frame_available: bool = True,
+        strict_donor: bool = True,
     ) -> list[CrossViewGuidance]:
         """为目标视角生成全部符合条件的 guidance(受 max_regions_per_view_per_tick 限制)。"""
         out: list[CrossViewGuidance] = []
@@ -127,6 +169,28 @@ class GuidanceGenerator:
             pred = predictions.get(gid)
             if pred is None:
                 continue
+            donor_view = None
+            donor_binding = None
+            if strict_donor:
+                for candidate_view in candidate_donor_views or tuple(state.view_bindings):
+                    if candidate_view == target_view:
+                        continue
+                    candidate = state.view_bindings.get(candidate_view)
+                    if candidate is None:
+                        continue
+                    candidate_seen = candidate.last_seen_take_timestamp_ms
+                    candidate_age = now_take_ms - (
+                        candidate_seen if candidate_seen is not None else now_take_ms
+                    )
+                    if (
+                        candidate.observation_origin not in self.policy.donor_origins
+                        or candidate.visibility not in {"observed", "weak"}
+                        or candidate_age > self.policy.donor_max_age_ms
+                        or candidate.quality < self.policy.min_donor_quality
+                    ):
+                        continue
+                    if donor_binding is None or candidate.quality > donor_binding.quality:
+                        donor_view, donor_binding = candidate_view, candidate
             g = self.generate(
                 global_state=state,
                 target_view=target_view,
@@ -137,12 +201,20 @@ class GuidanceGenerator:
                 frame_width=frame_width,
                 frame_height=frame_height,
                 prediction=pred,
+                donor_view=donor_view,
+                donor_binding=donor_binding,
+                target_frame_available=target_frame_available,
+                strict_donor=strict_donor,
             )
             if g is not None:
                 out.append(g)
             if len(out) >= self.policy.max_regions_per_view_per_tick:
                 break
         return out
+
+    def commit(self, guidance: CrossViewGuidance, tick: int) -> None:
+        """Consume cooldown only after target ROI detection was invoked."""
+        self._last_generated[(guidance.global_player_id, guidance.target_view)] = tick
 
 
 def court_to_image_single(point: tuple[float, float], inverse_homography: Any) -> tuple[float, float]:

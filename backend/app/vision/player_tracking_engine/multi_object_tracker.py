@@ -17,6 +17,14 @@ class _TrackState:
     lost_count: int = 0
 
 
+@dataclass(frozen=True)
+class TrackingUpdate:
+    """Tracks plus exact input-detection to track assignments."""
+
+    tracks: list[Track]
+    detection_to_track: dict[int, int]
+
+
 class MultiObjectTracker:
     """Simple IOU tracker with a replaceable detection-in / tracks-out contract."""
 
@@ -28,9 +36,13 @@ class MultiObjectTracker:
         self._tracks: dict[int, _TrackState] = {}
 
     def update(self, detections: list[Detection]) -> list[Track]:
+        return self.update_with_assignments(detections).tracks
+
+    def update_with_assignments(self, detections: list[Detection]) -> TrackingUpdate:
         matched_tracks: set[int] = set()
         matched_detections: set[int] = set()
         active: list[Track] = []
+        detection_to_track: dict[int, int] = {}
 
         # 1) 枚举所有 (检测, 轨迹) 对的 IOU，作为候选匹配。
         candidates: list[tuple[float, int, int]] = []
@@ -52,6 +64,7 @@ class MultiObjectTracker:
             state.lost_count = 0
             matched_tracks.add(track_id)
             matched_detections.add(detection_index)
+            detection_to_track[detection_index] = track_id
             active.append(_state_to_track(state, lost=False))
 
         # 3) 未匹配到的检测视为“新目标”，分配新 track_id 并新建轨迹。
@@ -63,6 +76,7 @@ class MultiObjectTracker:
             state = _TrackState(track_id=track_id, bbox=detection.bbox, confidence=detection.confidence)
             self._tracks[track_id] = state
             matched_tracks.add(track_id)
+            detection_to_track[detection_index] = track_id
             active.append(_state_to_track(state, lost=False))
 
         # 4) 本轮未匹配到的轨迹 lost_count+1；超过 max_lost 则彻底删除。
@@ -76,13 +90,16 @@ class MultiObjectTracker:
 
         # 按 track_id 升序返回当前活跃轨迹。
         active.sort(key=lambda track: track.track_id)
-        return active
+        return TrackingUpdate(tracks=active, detection_to_track=detection_to_track)
 
 
 class EmptyTracker:
     # 空实现，用于测试或无需真实跟踪的占位场景（永远返回空列表）。
     def update(self, detections: list[Detection]) -> list[Track]:
         return []
+
+    def update_with_assignments(self, detections: list[Detection]) -> TrackingUpdate:
+        return TrackingUpdate(tracks=[], detection_to_track={})
 
 
 def _state_to_track(state: _TrackState, lost: bool) -> Track:

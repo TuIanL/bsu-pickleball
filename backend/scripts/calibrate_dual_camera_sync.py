@@ -17,31 +17,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from app.services.dual_camera_sync import calibration_to_dict, calibrations_from_anchor_rows
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.services.dual_camera_sync import (
+    build_dual_camera_sync_calibration,
+)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("anchors", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--max-residual-ms", type=float, default=33.333)
     args = parser.parse_args()
 
     payload = json.loads(args.anchors.read_text(encoding="utf-8"))
-    reference = str(payload["reference_camera"])
-    cameras = [str(camera) for camera in payload.get("cameras", [reference])]
-    calibrations = calibrations_from_anchor_rows(
-        payload.get("anchors", []),
-        reference_camera=reference,
-        camera_ids=cameras,
+    output = build_dual_camera_sync_calibration(
+        payload,
+        max_residual_seconds=max(0.0, args.max_residual_ms) / 1000.0,
+        minimum_anchor_count=3,
     )
-    output = {
-        "schema_version": "dual_camera_sync_calibration.v1",
-        "reference_camera": reference,
-        "anchor_count": len(payload.get("anchors", [])),
-        "mappings": {camera: calibration_to_dict(value) for camera, value in calibrations.items()},
-    }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     return 0

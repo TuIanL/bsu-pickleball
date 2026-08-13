@@ -1,45 +1,31 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Camera, Layers, ShieldAlert } from "lucide-react";
-import type { NavigateFn } from "../app/navigationTypes";
+import { ArrowLeft, ArrowRight, Camera, Layers } from "lucide-react";
+import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
-import type { AnalysisJobSummary, FusedManifest } from "../types/report";
+import type { AnalysisJobSummary } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
+import { JobStageStepper } from "../components/platform/JobStageStepper";
 import { StatusState } from "../components/StatusState";
 import { supportedReportTypes } from "../app/router";
 import { reportActions } from "../data/demoData";
-import { getAnalysisJob, getFusedManifest, getFusionDiagnostics, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
-import type { FusionDiagnostics } from "../services/analysisClient";
-import { errorToNotice, isCancelableAnalysisJob, cameraAngleLabel, formatDateTime, formatDurationMs } from "../utils/analysisHelpers";
+import { getAnalysisJob, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
+import { errorToNotice, isCancelableAnalysisJob, cameraAngleLabel, formatDateTime, formatDurationMs, analysisStatusMeta, analysisModeLabel } from "../utils/analysisHelpers";
 
 const VIEW_LABELS: Record<string, string> = { cam_1: "A 机位", cam_2: "B 机位" };
+
+const TERMINAL_STATUSES = ["completed", "failed", "canceled"] as const;
 
 export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
   const [cancelNotice, setCancelNotice] = useState<DiagnosticNotice | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
-  const [manifest, setManifest] = useState<FusedManifest | null>(null);
-  const [diagnostics, setDiagnostics] = useState<FusionDiagnostics | null>(null);
 
   const isMultiview = job?.analysisKind === "multiview";
   const returnPath = taskListPathForJob(job);
   const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
-
-  useEffect(() => {
-    if (!isMultiview || job?.status !== "completed") {
-      return;
-    }
-    let alive = true;
-    getFusedManifest(job.id)
-      .then((m) => { if (alive) setManifest(m); })
-      .catch(() => { if (alive) setManifest(null); });
-    getFusionDiagnostics(job.id)
-      .then((d) => { if (alive) setDiagnostics(d); })
-      .catch(() => { if (alive) setDiagnostics(null); });
-    return () => { alive = false; };
-  }, [isMultiview, job?.id, job?.status]);
 
   useEffect(() => {
     let alive = true;
@@ -102,10 +88,12 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const isCanceled = job.status === "canceled";
+  const isTerminal = TERMINAL_STATUSES.includes(job.status as (typeof TERMINAL_STATUSES)[number]);
   const canCancel = isCancelableAnalysisJob(job);
-  const activeStage = job.stages.find((stage) => stage.status === "active") ?? job.stages.find((stage) => stage.id === job.stage);
+  const activeStage = job.stages.find((stage) => stage.status === "active");
   const failedStage = job.stages.find((stage) => stage.status === "failed");
-  const currentStage = failedStage ?? activeStage ?? [...job.stages].reverse().find((stage) => stage.status === "done" || stage.status === "skipped");
+  const currentStage = failedStage ?? activeStage;
+  const statusMeta = analysisStatusMeta(job.status);
 
   const handleCancel = async () => {
     if (!canCancel || isCanceling) {
@@ -135,158 +123,136 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     }
   };
 
+  const completedStageCount = job.stages.filter((stage) => stage.status === "done" || stage.status === "skipped").length;
+  const totalDurationMs = job.stages.reduce((sum, stage) => sum + (stage.durationMs ?? 0), 0);
+
   return (
     <PageFrame>
       <section className="sport-card overflow-hidden">
-        <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.42fr] lg:p-8">
-          <div>
+        <div className="p-6 lg:p-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <button
-              className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+              className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
               onClick={() => onNavigate(returnPath)}
               type="button"
             >
               <ArrowLeft size={16} aria-hidden="true" />
               返回任务管理
             </button>
-            <p className="text-sm font-bold uppercase tracking-[0.2em] text-[#168A34]">分析任务</p>
-            <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{statusCopy[job.status]}</h1>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-              {job.metadata.matchTitle} · {job.metadata.fileName} · {job.metadata.venue}
-            </p>
-            <p className="mt-2 text-sm font-semibold text-slate-500">任务 ID：{job.id}</p>
-            {currentStage ? (
-              <p className="mt-3 inline-flex rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-sm font-bold text-[#14241B]">
-                当前阶段：{currentStage.label} · {currentStage.status === "failed" ? "失败" : currentStage.status === "active" ? "处理中" : currentStage.status === "skipped" ? "已跳过" : "已完成"}
-              </p>
-            ) : null}
-          </div>
-          <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
-            <span className="text-sm font-bold text-[#168A34]">当前进度</span>
-            <strong className="mt-4 block text-5xl font-black text-[#13A12C]">{job.progress}%</strong>
-            <div className="mt-5 h-2 rounded-full bg-[#DFEADA]">
-              <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full px-3 py-1 text-xs font-black ${statusMeta.className}`}>{statusMeta.label}</span>
+              <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+                {analysisModeLabel(job.analysisMode)}
+              </span>
+              {isMultiview ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-[#168A34]/25 bg-[#EAF7EE] px-3 py-1 text-xs font-black text-[#168A34]">
+                  <Layers size={12} aria-hidden="true" />
+                  双摄协同
+                </span>
+              ) : null}
             </div>
           </div>
+
+          <h1 className="mt-5 text-4xl font-black text-[#14241B] sm:text-5xl">{statusCopy[job.status]}</h1>
+          <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
+            {job.metadata.matchTitle} · {job.metadata.fileName} · {job.metadata.venue} · 任务 ID：{job.id}
+          </p>
+
+          {isTerminal ? (
+            <TerminalSummary
+              isCompleted={isCompleted}
+              isFailed={isFailed}
+              isCanceled={isCanceled}
+              job={job}
+              completedStageCount={completedStageCount}
+              totalDurationMs={totalDurationMs}
+              currentStage={currentStage}
+              onNavigate={onNavigate}
+              contextualPath={contextualPath}
+              returnPath={returnPath}
+            />
+          ) : (
+            <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4 sm:p-5">
+              <JobStageStepper stages={job.stages} ariaLabel="分析阶段进度" />
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <p className="min-w-0 flex-1 text-sm font-semibold leading-6 text-[#14241B]">
+                  {currentStage ? (
+                    <>
+                      <span className={`mr-1.5 inline-block size-2 rounded-full align-middle ${currentStage.status === "failed" ? "bg-[#FF4D4F]" : "bg-[#FF9500]"}`} />
+                      {currentStage.label}
+                      {currentStage.detail ? <span className="text-slate-600"> · {currentStage.detail}</span> : null}
+                    </>
+                  ) : (
+                    <span className="text-slate-500">{statusCopy[job.status]}，等待视觉分析任务执行…</span>
+                  )}
+                </p>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">整体进度</span>
+                  <strong className="text-xl font-black text-[#168A34]">{job.progress}%</strong>
+                </div>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full bg-[#DFEADA]">
+                <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+              </div>
+
+              {isMultiview && job.viewRuns ? (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {Object.entries(job.viewRuns).map(([view, run]) => (
+                    <div className="rounded-xl border border-[#DDE9D6] bg-white/80 p-2.5" key={view}>
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="inline-flex items-center gap-1.5 text-[#14241B]">
+                          <Camera size={12} aria-hidden="true" />
+                          {VIEW_LABELS[view] ?? view}
+                        </span>
+                        <span className="text-slate-500">{run.progress}%</span>
+                      </div>
+                      <div className="mt-1.5 h-1 rounded-full bg-[#DFEADA]">
+                        <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${run.progress}%` }} />
+                      </div>
+                      <p className="mt-1 truncate text-[0.68rem] font-semibold text-slate-500">{run.stage}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {canCancel ? (
+                <div className="mt-4 flex justify-end">
+                  <button className="quiet-button px-3 py-2 text-sm text-[#A45A00]" disabled={isCanceling} onClick={handleCancel} type="button">
+                    {isCanceling ? "取消中…" : "取消任务"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
       </section>
 
-      {isMultiview ? (
-        <section className="mt-6 sport-card p-5 sm:p-6">
-          <div className="flex items-center gap-2">
-            <Layers size={16} className="text-[#168A34]" aria-hidden="true" />
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">双摄协同分析</p>
-          </div>
-
-          {/* viewRuns 子进度 */}
-          {job.viewRuns ? (
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {Object.entries(job.viewRuns).map(([view, run]) => (
-                <div className="rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4" key={view}>
-                  <div className="flex items-center justify-between">
-                    <span className="inline-flex items-center gap-1.5 text-sm font-bold text-[#14241B]">
-                      <Camera size={14} aria-hidden="true" />
-                      {VIEW_LABELS[view] ?? view}
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">{run.progress}%</span>
-                  </div>
-                  <div className="mt-2 h-1.5 rounded-full bg-[#DFEADA]">
-                    <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${run.progress}%` }} />
-                  </div>
-                  <p className="mt-2 text-xs text-slate-500">{run.stage}</p>
-                </div>
-              ))}
+      {isMultiview && isCompleted ? (
+        <section className="mt-6 sport-card border-l-4 border-l-[#168A34] p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <Layers size={20} className="mt-0.5 shrink-0 text-[#168A34]" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">双摄协同分析</p>
+                <h2 className="mt-1 text-lg font-black text-[#14241B]">同步、融合、恢复与精修已集中到协同详情页</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600">任务页保留轻量摘要；完整状态由后端 observability summary 统一投影。</p>
+              </div>
             </div>
-          ) : null}
-
-          {/* 降级提示 + 数据来源（不静默） */}
-          {manifest?.analysis_source ? (
-            <>
-              {manifest.analysis_source.mode === "single_view_fallback" || manifest.analysis_source.mode === "multiview_degraded" ? (
-                <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4">
-                  <strong className="flex items-center gap-1.5 text-sm text-[#991B1B]">
-                    <ShieldAlert size={15} aria-hidden="true" />
-                    {manifest.analysis_source.mode === "multiview_degraded" ? "本次双视角证据覆盖不足" : "本次未完成双视角融合"}
-                  </strong>
-                  <p className="mt-1 text-sm leading-6 text-[#B91C1C]">
-                    {manifest.analysis_source.reason
-                      ? `${manifest.analysis_source.reason}，结果按 ${manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "参考机位单视角"} 语义展示。`
-                      : "结果使用单视角数据（未执行多视角融合）。"}
-                  </p>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
-                  <strong className="text-sm text-[#168A34]">已完成多视角融合</strong>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
-                    球员位置类指标（移动 / 热力图 / 移动距离速度）来自 A+B 多视角融合。
-                  </p>
-                </div>
-              )}
-
-              <div className="mt-4 grid gap-2 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4 text-sm">
-                {[
-                  ["分析模式", "双摄协同"],
-                  ["请求执行模式", manifest.requested_mode ?? manifest.analysis_source.requested_mode ?? job.executionMode ?? "late_fusion_v1"],
-                  ["有效结果模式", manifest.effective_mode ?? manifest.analysis_source.effective_mode ?? manifest.analysis_source.mode],
-                  ["球员移动", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "A 机位单视角"],
-                  ["热力图", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "A 机位单视角"],
-                  ["移动距离 / 速度", manifest.analysis_source.mode === "multiview_fused" ? "A+B 多视角融合" : manifest.analysis_source.mode === "multiview_degraded" ? "降级多视角" : "A 机位单视角"],
-                  ["姿态 / 球路 / 动作识别", manifest.analysis_source.source_view
-                    ? `${VIEW_LABELS[manifest.analysis_source.source_view] ?? manifest.analysis_source.source_view} 机位`
-                    : "A 机位"],
-                ].map(([label, value]) => (
-                  <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] p-2.5" key={label}>
-                    <span className="text-slate-500">{label}</span>
-                    <strong className="text-right text-[#14241B]">{value}</strong>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          {/* 融合质量（fused_diagnostics） */}
-          {diagnostics?.fusion_status_counts ? (() => {
-            const counts = diagnostics.fusion_status_counts;
-            const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
-            const pct = (key: string) => `${Math.round(((counts[key] ?? 0) / total) * 1000) / 10}%`;
-            const rows: Array<[string, string]> = [
-              ["双视角共同观测", pct("dual_observed")],
-              ["单视角补偿", pct("single_view_fallback")],
-              ["冲突", pct("conflict")],
-              ["预测补点", pct("predicted")],
-              ["不可用", pct("unavailable")],
-            ];
-            return (
-              <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#168A34]">融合质量</p>
-                <div className="mt-3 grid gap-1.5 text-sm sm:grid-cols-2">
-                  {rows.map(([label, value]) => (
-                    <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] px-3 py-2" key={label}>
-                      <span className="text-slate-500">{label}</span>
-                      <strong className="text-[#14241B]">{value}</strong>
-                    </div>
-                  ))}
-                  <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] px-3 py-2">
-                    <span className="text-slate-500">视角位置差异中位数</span>
-                    <strong className="text-[#14241B]">
-                      {diagnostics.view_disagreement?.median_distance_ft != null
-                        ? `${diagnostics.view_disagreement.median_distance_ft.toFixed(2)} ft`
-                        : "—"}
-                    </strong>
-                  </div>
-                  <div className="flex justify-between gap-4 rounded-xl bg-[#F5FAF1] px-3 py-2">
-                    <span className="text-slate-500">参与指标样本</span>
-                    <strong className="text-[#14241B]">{diagnostics.metric_eligible_count ?? "—"}</strong>
-                  </div>
-                </div>
-              </div>
-            );
-          })() : null}
+            <button className="green-button shrink-0 px-4 py-2.5" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/multiview`))} type="button">
+              查看双摄协同详情
+              <ArrowRight size={16} aria-hidden="true" />
+            </button>
+          </div>
         </section>
       ) : null}
 
-      <section className="mt-6 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
-        <article className="sport-card p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务信息</p>
+      <section className="mt-6 sport-card p-5 sm:p-6">
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务信息</p>
+            <span className="text-xs font-bold text-slate-400 transition group-open:rotate-180">▾</span>
+          </summary>
           <div className="mt-5 grid gap-3 text-sm">
             {[
               ["比赛形式", job.metadata.matchFormat === "doubles" ? "双打" : "单打"],
@@ -320,81 +286,85 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               </div>
             ))}
           </div>
-          {isFailed ? (
-            <div className="mt-4">
-              <DiagnosticNoticeCard
-                notice={{
-                  title: "分析任务失败",
-                  body: job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。",
-                  detailItems: [
-                    ["错误码", job.errorCode],
-                    ["失败阶段", failedStage?.label ?? job.stage],
-                    ["阶段详情", failedStage?.detail],
-                    ["任务 ID", job.id],
-                  ],
-                }}
-              />
-            </div>
-          ) : null}
-          {isCanceled ? (
-            <div className="mt-4">
-              <DiagnosticNoticeCard
-                notice={{
-                  title: "任务已取消",
-                  body: "该分析任务已停止，保留任务记录供追踪和复盘。",
-                  detailItems: [
-                    ["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined],
-                    ["任务 ID", job.id],
-                  ],
-                }}
-                tone="info"
-              />
-            </div>
-          ) : null}
-          {cancelNotice ? (
-            <div className="mt-4">
-              <DiagnosticNoticeCard notice={cancelNotice} tone={cancelNotice.title.includes("失败") ? "error" : "info"} />
-            </div>
-          ) : null}
-        </article>
-
-        <article className="sport-card p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">分析阶段</p>
-          <div className="mt-5 grid gap-3">
-            {job.stages.map((stage) => (
-              <div className="flex gap-3 rounded-2xl border border-[#DDE9D6] bg-white/70 p-4" key={stage.id}>
-                <span className={`mt-1 size-3 shrink-0 rounded-full ${stage.status === "done" ? "bg-[#22C55E]" : stage.status === "failed" ? "bg-[#FF4D4F]" : stage.status === "active" ? "bg-[#FF9500]" : stage.status === "canceled" ? "bg-slate-500" : stage.status === "skipped" ? "bg-slate-400" : "bg-slate-300"}`} />
-                <div>
-                  <strong className="text-[#14241B]">{stage.label}</strong>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
-                    {stage.status === "skipped" ? "已跳过 · " : null}
-                    {stage.status === "canceled" ? "已取消 · " : null}
-                    {stage.publicMessage ?? stage.detail}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold text-slate-500">
-                    {stage.durationMs != null ? <span>耗时 {formatDurationMs(stage.durationMs)}</span> : null}
-                    {stage.errorCode ? <span>错误码 {stage.errorCode}</span> : null}
-                    {stage.retryCount ? <span>重试 {stage.retryCount} 次</span> : null}
-                  </div>
-                </div>
-              </div>
-            ))}
+        </details>
+        {isFailed ? (
+          <div className="mt-4">
+            <DiagnosticNoticeCard
+              notice={{
+                title: "分析任务失败",
+                body: job.publicErrorMessage ?? job.errorMessage ?? "请重新上传或检查后端日志。",
+                detailItems: [
+                  ["错误码", job.errorCode],
+                  ["失败阶段", failedStage?.label ?? job.stage],
+                  ["阶段详情", failedStage?.detail],
+                  ["任务 ID", job.id],
+                ],
+              }}
+            />
           </div>
-        </article>
+        ) : null}
+        {isCanceled ? (
+          <div className="mt-4">
+            <DiagnosticNoticeCard
+              notice={{
+                title: "任务已取消",
+                body: "该分析任务已停止，保留任务记录供追踪和复盘。",
+                detailItems: [
+                  ["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined],
+                  ["任务 ID", job.id],
+                ],
+              }}
+              tone="info"
+            />
+          </div>
+        ) : null}
+        {cancelNotice ? (
+          <div className="mt-4">
+            <DiagnosticNoticeCard notice={cancelNotice} tone={cancelNotice.title.includes("失败") ? "error" : "info"} />
+          </div>
+        ) : null}
       </section>
+    </PageFrame>
+  );
+}
 
-      <section className="mt-6 sport-card p-5 sm:p-6">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+function TerminalSummary({
+  isCompleted,
+  isFailed,
+  isCanceled,
+  job,
+  completedStageCount,
+  totalDurationMs,
+  currentStage,
+  onNavigate,
+  contextualPath,
+  returnPath,
+}: {
+  isCompleted: boolean;
+  isFailed: boolean;
+  isCanceled: boolean;
+  job: AnalysisJobSummary;
+  completedStageCount: number;
+  totalDurationMs: number;
+  currentStage: { label: string; detail?: string } | undefined;
+  onNavigate: NavigateFn;
+  contextualPath: (path: string) => NavigatePath;
+  returnPath: NavigatePath;
+}) {
+  return (
+    <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4 sm:p-5">
+      {isCompleted ? (
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">结果入口</p>
-            <h2 className="mt-2 text-2xl font-black text-[#14241B]">
-              {isCompleted ? "报告已经生成" : "等待分析完成后生成报告"}
-            </h2>
+            <p className="text-sm font-bold text-[#168A34]">
+              {`${completedStageCount}/${job.stages.length || 1} 阶段完成`}
+              {totalDurationMs > 0 ? <span className="font-semibold text-slate-500"> · 总耗时 {formatDurationMs(totalDurationMs)}</span> : null}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">报告已生成，可以查看视频分析或指标详情。</p>
           </div>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-2">
             <button
               className="green-button px-4 py-2.5"
-              disabled={!isCompleted}
               onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/vision`))}
               type="button"
             >
@@ -403,7 +373,6 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             </button>
             <button
               className="quiet-button px-4 py-2.5"
-              disabled={!isCompleted}
               onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/details`))}
               type="button"
             >
@@ -420,12 +389,24 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
                 {action.title}
               </button>
             ))}
-            {canCancel ? (
-              <button className="quiet-button px-4 py-2.5 text-[#A45A00]" disabled={isCanceling} onClick={handleCancel} type="button">
-                {isCanceling ? "取消中" : "取消任务"}
-              </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className={`text-sm font-bold ${isFailed ? "text-[#C92A2A]" : "text-slate-600"}`}>
+              {isFailed
+                ? `失败阶段：${currentStage?.label ?? job.stage}`
+                : `任务已取消${job.canceledAt ? ` · ${formatDateTime(job.canceledAt)}` : ""}`}
+            </p>
+            {isFailed ? (
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                {job.publicErrorMessage ?? job.errorMessage ?? currentStage?.detail ?? "请重新上传或检查后端日志。"}
+              </p>
             ) : null}
-            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(contextualPath("/analysis/new"))} type="button">
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="green-button px-4 py-2.5" onClick={() => onNavigate(contextualPath("/analysis/new"))} type="button">
               {isCanceled ? "新建分析" : "重新上传"}
             </button>
             <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(returnPath)} type="button">
@@ -433,7 +414,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             </button>
           </div>
         </div>
-      </section>
-    </PageFrame>
+      )}
+    </div>
   );
 }

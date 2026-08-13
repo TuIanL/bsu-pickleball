@@ -9,6 +9,9 @@ diagnostics / ROI 计数）。
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
+
+import numpy as np
 
 from app.core.config import get_settings
 from app.schemas.analysis import build_match_context
@@ -77,6 +80,19 @@ class ScriptedDetector:
         return []
 
 
+class RegionScriptedDetector(ScriptedDetector):
+    supports_region_detection = True
+
+    def __init__(self, script: dict[int, list[Detection]], region_script: list[Detection]):
+        super().__init__(script)
+        self.region_script = region_script
+        self.region_calls: list[list[tuple[float, float, float, float]]] = []
+
+    def detect_regions(self, frame, rois):
+        self.region_calls.append(list(rois))
+        return list(self.region_script)
+
+
 def _det(bbox, conf: float = 0.8) -> Detection:
     return Detection(bbox=list(bbox), confidence=conf, class_name="person")
 
@@ -109,9 +125,90 @@ def test_person_detector_detect_regions_contract():
         pass
 
 
+def test_person_detector_batch_region_results_preserve_roi_coordinates(monkeypatch):
+    class Box:
+        cls = [0]
+        conf = [0.8]
+
+        def __init__(self, xyxy):
+            self.xyxy = [xyxy]
+
+    class Result:
+        def __init__(self, xyxy):
+            self.boxes = [Box(xyxy)]
+
+    class Model:
+        def __call__(self, crops, **_kwargs):
+            assert len(crops) == 2
+            return [Result([1, 2, 11, 22]), Result([3, 4, 13, 24])]
+
+    detector = PersonDetector()
+    detector._model = Model()
+    frame = np.zeros((40, 40, 3), dtype=np.uint8)
+    regions = [(10, 20, 30, 35), (100, 200, 130, 235)]
+
+    grouped = detector.detect_regions_batch(frame, regions)
+    flattened = detector.detect_regions(frame, regions)
+
+    assert [[d.bbox for d in group] for group in grouped] == [
+        [[11.0, 22.0, 21.0, 42.0]],
+        [[103.0, 204.0, 113.0, 224.0]],
+    ]
+    assert [d.bbox for d in flattened] == [
+        [11.0, 22.0, 21.0, 42.0],
+        [103.0, 204.0, 113.0, 224.0],
+    ]
+
+
 def test_empty_person_detector_detect_regions_returns_empty():
     detector = EmptyPersonDetector()
     assert detector.detect_regions(None, [(0, 0, 100, 100)]) == []
+
+
+def test_non_empty_guidance_runs_joint_path_but_default_path_stays_legacy():
+    """The joint adapter must invoke ROI detection only when guidance is present."""
+    config = _make_config()
+    config.eligibility_policy = "lock_only"
+    detector = RegionScriptedDetector(
+        {},
+        [_det([280, 150, 310, 300])],
+    )
+    session = build_view_tracking_session(
+        detector=detector,
+        homography=SCALE_HOMOGRAPHY,
+        roi_artifact=_make_roi_artifact(),
+        config=config,
+    )
+    result = session.step(
+        object(),
+        frame_index=0,
+        timestamp=0.0,
+        guidance=(
+            SimpleNamespace(
+                roi=(250.0, 100.0, 340.0, 320.0),
+                predicted_local_position=(15.0, 15.0),
+                guidance_id="g_joint",
+                expected_global_player_id="global_player_1",
+                donor_view="cam_2",
+                donor_quality=0.9,
+            ),
+        ),
+    )
+    assert result.guided_detection_invoked is True
+    assert result.guided_candidate_count == 1
+    assert detector.region_calls == [[(250.0, 100.0, 340.0, 320.0)]]
+
+    # A fresh legacy session with guidance omitted never calls detect_regions.
+    legacy_detector = RegionScriptedDetector({}, [_det([280, 150, 310, 300])])
+    legacy = build_view_tracking_session(
+        detector=legacy_detector,
+        homography=SCALE_HOMOGRAPHY,
+        roi_artifact=_make_roi_artifact(),
+        config=_make_config(),
+    )
+    legacy_result = legacy.step(object(), frame_index=0, timestamp=0.0)
+    assert legacy_result.guided_detection_invoked is False
+    assert legacy_detector.region_calls == []
 
 
 # ---- config 构造 ----------------------------------------------------------

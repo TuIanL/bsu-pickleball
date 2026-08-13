@@ -23,6 +23,12 @@ class GuidedCandidate:
     residual_ft: float
     accepted: bool
     reject_reason: str | None = None
+    local_position: tuple[float, float] | None = None
+    guidance_id: str | None = None
+    expected_global_player_id: str | None = None
+    donor_view: str | None = None
+    donor_quality: float = 0.0
+    recovery_episode_id: str | None = None
 
 
 def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -33,31 +39,39 @@ def guided_candidate_pre_gate(
     detection: Detection,
     *,
     homography,
-    predicted_canonical: tuple[float, float],
+    predicted_canonical: tuple[float, float] | None = None,
+    predicted_local: tuple[float, float] | None = None,
     max_residual_ft: float,
     frame_width: int,
     frame_height: int,
 ) -> GuidedCandidate:
     """对单个 guided detection 做 pre-gate(在 tracker 之前)。
 
-    通过条件:bbox/image sanity + 可投影 + canonical residual <= max_residual_ft。
+    通过条件:bbox/image sanity + 可投影 + target-local residual <= max_residual_ft。
+
+    ``predicted_canonical`` remains a compatibility alias for existing callers;
+    joint recovery passes ``predicted_local`` explicitly.
     """
     x1, y1, x2, y2 = (float(v) for v in detection.bbox)
     # bbox / image sanity
     if x2 <= x1 or y2 <= y1:
-        return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "invalid_bbox")
+        return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "invalid_bbox", (0.0, 0.0))
     if x1 < -50 or y1 < -50 or x2 > frame_width + 50 or y2 > frame_height + 50:
-        return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "bbox_out_of_frame")
+        return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "bbox_out_of_frame", (0.0, 0.0))
     foot = ((x1 + x2) / 2.0, y2)  # 底边中点临时脚点
     try:
         cx, cy = image_to_court(foot, homography)
     except Exception:
-        return GuidedCandidate(detection, foot, (0.0, 0.0), float("inf"), False, "projection_failed")
-    residual = _dist((cx, cy), predicted_canonical)
+        return GuidedCandidate(detection, foot, (0.0, 0.0), float("inf"), False, "projection_failed", (0.0, 0.0))
+    expected = predicted_local if predicted_local is not None else predicted_canonical
+    if expected is None:
+        return GuidedCandidate(detection, foot, (cx, cy), float("inf"), False, "missing_prediction", (cx, cy))
+    residual = _dist((cx, cy), expected)
     accepted = residual <= max_residual_ft
     return GuidedCandidate(
         detection, foot, (cx, cy), residual, accepted,
         None if accepted else "residual_too_large",
+        (cx, cy),
     )
 
 

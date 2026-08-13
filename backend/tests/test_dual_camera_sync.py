@@ -14,8 +14,11 @@ from app.services.dual_camera_sync import (
     fit_affine_calibration,
     read_frame_timing_sidecar,
     retime_filter_expression,
+    summarize_frame_timing_sidecar,
+    validate_anchor_payload,
     write_frame_timing_sidecar,
 )
+from app.services.multiview_acceptance import materialize_registered_video_timing, prepare_take_timing
 
 
 def test_fit_affine_calibration_reports_offset_and_drift():
@@ -53,10 +56,10 @@ def test_build_frame_map_marks_out_of_range_targets_unavailable():
 
     selected = build_frame_map([-1.0, 0.0, 1.0, 2.0], frames)
 
-    assert selected[0].status == "unavailable"
+    assert selected[0].status == "unavailable_out_of_media_range"
     assert selected[1].status == "ok"
     assert selected[2].status == "ok"
-    assert selected[3].status == "unavailable"
+    assert selected[3].status == "unavailable_out_of_media_range"
 
 
 def test_calibrations_from_anchor_rows_fits_each_camera():
@@ -104,6 +107,51 @@ def test_write_frame_timing_sidecar_is_atomic(tmp_path: Path):
     assert rows[1]["pts_seconds"] == pytest.approx(1.416667)
     assert rows[1]["keyframe"] is False
     assert read_frame_timing_sidecar(sidecar)[1].frame_index == 1
+    assert summary["timing_authority"] == "source_pts"
+    assert summary["fps"] == pytest.approx(59.9988, rel=1e-4)
+
+
+@pytest.mark.parametrize(
+    "frames, message",
+    [
+        ([], "no video frames"),
+        (
+            [
+                {"best_effort_timestamp_time": "1.0"},
+                {"best_effort_timestamp_time": "0.9"},
+            ],
+            "monotonically",
+        ),
+    ],
+)
+def test_write_frame_timing_sidecar_rejects_empty_or_non_monotonic_pts(
+    tmp_path: Path, frames: list[dict[str, str]], message: str
+):
+    sidecar = tmp_path / "frames.jsonl"
+    fake = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"frames": frames}),
+        stderr="",
+    )
+    with patch("app.services.dual_camera_sync.subprocess.run", return_value=fake):
+        with pytest.raises(ValueError, match=message):
+            write_frame_timing_sidecar("source.ts", sidecar)
+    assert not sidecar.exists()
+
+
+def test_summarize_frame_timing_sidecar_rejects_empty_and_non_monotonic(tmp_path: Path):
+    sidecar = tmp_path / "empty.jsonl"
+    sidecar.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        summarize_frame_timing_sidecar(sidecar)
+
+    sidecar.write_text(
+        '{"frame_index":0,"pts_seconds":1.0}\n'
+        '{"frame_index":2,"pts_seconds":0.9}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="monotonically"):
+        summarize_frame_timing_sidecar(sidecar)
 
 
 def test_fit_affine_calibration_degraded_when_residual_exceeds_threshold():
@@ -182,11 +230,10 @@ def test_build_frame_map_honours_valid_range():
     )
     frames = [FrameTiming(i, i / 60) for i in range(1801)]
     selected = build_frame_map([0.0, 5.0, 25.0, 30.0], frames, calibration=cal)
-    # Due to the map_reference_time logic (offset+rate), the local_target is the same
-    # as the reference target when rate=1 and offset=0. The valid range check is
-    # currently NOT enforced in build_frame_map (known gap, tracked in tasks).
+    assert selected[0].status == "unavailable_outside_valid_interval"
     assert selected[1].source_frame_index is not None
     assert selected[2].source_frame_index is not None
+    assert selected[3].status == "unavailable_outside_valid_interval"
 
 
 def test_calibrations_from_anchor_rows_missing_camera_returns_unknown():
@@ -214,3 +261,168 @@ def test_retime_filter_expression_unknown_calibration_returns_default():
     )
     expr = retime_filter_expression(cal)
     assert expr == "setpts=(PTS-STARTPTS-0.000000000/TB)/1.000000000000"
+
+
+def test_manual_anchor_validation_requires_three_events_and_span():
+    issues = validate_anchor_payload(
+        {
+            "reference_camera": "174",
+            "cameras": ["174", "175"],
+            "anchors": [{"174": 1.0, "175": 1.05}, {"174": 1.0, "175": 1.05}],
+        }
+    )
+    assert "at least 3 shared-event anchors are required" in issues
+    assert "anchors must span a positive reference-camera time range" in issues
+
+
+def test_authoritative_minimum_anchor_count_marks_two_point_fit_degraded():
+    calibration = fit_affine_calibration(
+        [0.0, 10.0],
+        [0.05, 10.05],
+        reference_camera="174",
+        camera_id="175",
+        minimum_anchor_count=3,
+    )
+    assert calibration.quality == "degraded"
+    assert "authoritative calibration" in (calibration.reason or "")
+
+
+def test_registered_video_timing_reuses_bound_valid_sidecar(tmp_path: Path):
+    media = tmp_path / "camera.mp4"
+    media.write_bytes(b"media")
+    sidecar = Path(f"{media}.pts.jsonl")
+    sidecar.write_text(
+        '{"frame_index":0,"pts_seconds":0.0}\n'
+        '{"frame_index":1,"pts_seconds":0.04}\n',
+        encoding="utf-8",
+    )
+
+    result = materialize_registered_video_timing(media, slot="cam_1")
+
+    assert result.status == "ready"
+    assert result.timing_authority == "source_pts"
+    assert result.reused
+    assert result.summary["frame_count"] == 2
+
+
+def test_registered_video_timing_reports_missing_media(tmp_path: Path):
+    result = materialize_registered_video_timing(tmp_path / "missing.mp4", slot="cam_1")
+
+    assert result.status == "failed"
+    assert result.timing_authority == "missing"
+    assert "missing" in (result.reason or "")
+
+
+def test_prepare_take_timing_is_structured_and_does_not_fallback(tmp_path: Path, monkeypatch):
+    media_a = tmp_path / "175_merged.mp4"
+    media_b = tmp_path / "174_merged.mp4"
+    media_a.write_bytes(b"a")
+    media_b.write_bytes(b"b")
+
+    def fake_materialize(path, *, slot, ffprobe_bin):
+        return materialize_registered_video_timing(
+            path,
+            slot=slot,
+            sidecar_path=Path(f"{path}.pts.jsonl"),
+        )
+
+    monkeypatch.setattr(
+        "app.services.multiview_acceptance.materialize_registered_video_timing",
+        fake_materialize,
+    )
+    for media in (media_a, media_b):
+        Path(f"{media}.pts.jsonl").write_text(
+            '{"frame_index":0,"pts_seconds":0.0}\n',
+            encoding="utf-8",
+        )
+
+    payload = prepare_take_timing(
+        tmp_path,
+        video_paths={"cam_1": media_a, "cam_2": media_b},
+        output_path=tmp_path / "timing-preparation.json",
+    )
+
+    assert payload["status"] == "ready"
+    assert payload["timing_authority"] == "source_pts"
+    assert (tmp_path / "timing-preparation.json").exists()
+
+
+def test_capture_track_repair_uses_explicit_session_registration(tmp_path: Path, monkeypatch):
+    import app.services.capture_track_service as track_service
+    from app.services.multiview_acceptance import repair_capture_track_video_indices
+
+    media = tmp_path / "175_merged.mp4"
+    media.write_bytes(b"media")
+    Path(f"{media}.pts.jsonl").write_text(
+        '{"frame_index":0,"pts_seconds":0.0}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "metadata").mkdir()
+    (tmp_path / "metadata" / "recording_session.json").write_text(
+        json.dumps(
+            {
+                "camera_slots": {"cam_1": {"camera_id": "175"}},
+                "registered_video_ids": {"cam_1": "rec-175"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    track = SimpleNamespace(
+        id="track-1",
+        slot=SimpleNamespace(value="cam_1"),
+        camera_id="175",
+        video_id=None,
+        timing_authority="missing",
+        timing_sidecar_path=None,
+        timing_failure_reason=None,
+    )
+    monkeypatch.setattr(track_service, "get_tracks_for_take", lambda db, take_id: [track])
+
+    class FakeDb:
+        def flush(self):
+            return None
+
+    class FakeVideoService:
+        def get_available_video(self, video_id):
+            assert video_id == "rec-175"
+            return SimpleNamespace(path=str(media))
+
+    result = repair_capture_track_video_indices(
+        FakeDb(),
+        "take-1",
+        tmp_path,
+        video_service=FakeVideoService(),
+    )
+
+    assert result["ok"]
+    assert track.video_id == "rec-175"
+    assert track.timing_authority == "source_pts"
+    assert track.timing_sidecar_path == str(Path(f"{media}.pts.jsonl"))
+
+
+def test_capture_track_repair_rejects_identity_conflict(tmp_path: Path, monkeypatch):
+    import app.services.capture_track_service as track_service
+    from app.services.multiview_acceptance import repair_capture_track_video_indices
+
+    (tmp_path / "metadata").mkdir()
+    (tmp_path / "metadata" / "recording_session.json").write_text(
+        json.dumps(
+            {
+                "camera_slots": {"cam_1": {"camera_id": "175"}},
+                "registered_video_ids": {"cam_1": "rec-175"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    track = SimpleNamespace(
+        id="track-1",
+        slot=SimpleNamespace(value="cam_1"),
+        camera_id="174",
+        video_id=None,
+    )
+    monkeypatch.setattr(track_service, "get_tracks_for_take", lambda db, take_id: [track])
+
+    result = repair_capture_track_video_indices(SimpleNamespace(), "take-1", tmp_path)
+
+    assert not result["ok"]
+    assert any("camera identity conflict" in issue for issue in result["issues"])

@@ -108,10 +108,17 @@ class ViewBinding:
     """某 global player 在某视角的绑定。"""
 
     view_player_id: str | None = None
+    local_identity_epoch: int = 0
     track_id: int | None = None
     last_seen_take_timestamp_ms: float | None = None
+    last_source_frame_index: int | None = None
     quality: float = 0.0
     visibility: str = "missing"  # observed | weak | missing | lost
+    lock_state: str | None = None
+    tracking_status: str | None = None
+    observation_origin: str = "base"
+    guidance_id: str | None = None
+    donor_view: str | None = None
 
     def update_visibility(self, now_take_ms: float, weak_after_ms: float, lost_after_ms: float) -> None:
         if self.last_seen_take_timestamp_ms is None:
@@ -283,6 +290,23 @@ class GlobalPlayerRegistry:
         state = self.ensure(global_id)
         binding.update_visibility(now_take_ms, weak_after_ms, lost_after_ms)
         state.view_bindings[view_id] = binding
+
+    def age_bindings(
+        self,
+        now_take_ms: float,
+        *,
+        weak_after_ms: float = 300.0,
+        lost_after_ms: float = 1000.0,
+    ) -> None:
+        """Age every view binding before the current tick's perception.
+
+        Aging is deliberately independent of observation arrival. Callers can
+        still distinguish a stale binding from an unavailable target frame via
+        the canonical clock status.
+        """
+        for state in self.players.values():
+            for binding in state.view_bindings.values():
+                binding.update_visibility(now_take_ms, weak_after_ms, lost_after_ms)
 
 
 def _velocity_from_estimator(estimator: GlobalMotionEstimator, global_id: str) -> tuple[float, float]:

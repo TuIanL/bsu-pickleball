@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, ArrowLeft, ArrowRight, Camera, CheckCircle2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Bug, Camera, CheckCircle2, Link2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
 import { taskListPath, withTaskListContext } from "../app/navigationContext";
 import { CourtCornerCalibrator, type CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
@@ -7,12 +7,14 @@ import { PageFrame } from "../components/PageFrame";
 import {
   createMultiviewAnalysisJob,
   getCaptureTake,
+  getSyncAnchorStatus,
   getSyncRecording,
   getVideoStreamUrl,
   isAnalysisApiError,
   type MultiViewCreateViewPayload,
 } from "../services/analysisClient";
 import type { CaptureTakeSummary, SyncRecordingSession } from "../types/report";
+import type { SyncAnchorStatus } from "../types/syncAnchors";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,9 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   const [clipEnabled, setClipEnabled] = useState(false);
   const [clipStartSec, setClipStartSec] = useState(0);
   const [clipEndSec, setClipEndSec] = useState(60);
+  const [debugReplayEnabled, setDebugReplayEnabled] = useState(false);
+  const [syncAnchorStatus, setSyncAnchorStatus] = useState<SyncAnchorStatus | null>(null);
+  const [syncStatusLoading, setSyncStatusLoading] = useState(true);
 
   // 路由带 `?session=`（录制卡片传入），缺失时回退到 take.source_session_id 反查
   const routeSessionId = new URLSearchParams(window.location.search).get("session");
@@ -116,6 +121,14 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         const takeData = await getCaptureTake(captureTakeId);
         if (cancelled) return;
         setTake(takeData);
+        try {
+          const status = await getSyncAnchorStatus(captureTakeId);
+          if (!cancelled) setSyncAnchorStatus(status);
+        } catch {
+          if (!cancelled) setSyncAnchorStatus(takeData.sync_anchor_status ?? null);
+        } finally {
+          if (!cancelled) setSyncStatusLoading(false);
+        }
 
         // 解析双摄源会话：优先路由参数；否则从 take 的 source_session_id 反查。
         // 注意 take id 与 sync 会话 id 不是同一命名空间，不能直接当 session id 用。
@@ -136,6 +149,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         }
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "加载录制信息失败");
+        if (!cancelled) setSyncStatusLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -154,12 +168,34 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   const videosReady = Boolean(videoIdA && videoIdB);
   // 素材就绪只取决于双视频已注册；take.status（如 failed/partial）不作为硬闸——
   // 深层校验（take 目录 / sync / 朝向）由后端 preflight 在启动时执行。
-  const allReady = videosReady;
+  const manualSyncState = syncAnchorStatus?.state;
+  const debugReplayNeedsManualSync = debugReplayEnabled
+    && Boolean(manualSyncState)
+    && manualSyncState !== "confirmed"
+    && manualSyncState !== "not_required";
+  const syncReady = !syncStatusLoading
+    && Boolean(syncAnchorStatus?.analysis_allowed)
+    && !debugReplayNeedsManualSync;
+  const allReady = videosReady && syncReady;
   const takeStatusNote = !videosReady
     ? "视频未就绪"
     : takeCompleted
       ? "已录制完成"
       : `视频可用（录制标记 ${take?.status ?? "未知"}）`;
+
+  const syncStatusLabel: Record<SyncAnchorStatus["state"], string> = {
+    not_required: "无需人工标注",
+    required: "需要标注",
+    draft: "草稿未完成",
+    confirmed: "人工锚点已确认",
+    auto_degraded: "仅自动估算",
+    invalidated: "确认已失效",
+  };
+  const syncLabel = syncStatusLoading
+    ? "正在读取录制级同步状态…"
+    : syncAnchorStatus
+      ? syncStatusLabel[syncAnchorStatus.state]
+      : "同步状态不可用";
 
   // MVP：cam_1（reference view）位于球场哪一端 → identity/rotate_180 相对约定。
   // 精确的 mirror_x/mirror_y 语义 + 安装角色自动推断列为后续 Change。
@@ -204,6 +240,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         },
         clipStartMs: clipEnabled ? Math.max(0, Math.round(clipStartSec * 1000)) : undefined,
         clipEndMs: clipEnabled ? Math.max(1, Math.round(clipEndSec * 1000)) : undefined,
+        executionMode: debugReplayEnabled ? "joint_tracking_v2" : "late_fusion_v1",
+        debugTraceEnabled: debugReplayEnabled,
         referenceViewId: "cam_1",
         views: [
           { viewId: "cam_1", cameraId: cameraIdA, videoId: videoIdA, calibrationId: calibrationA, courtOrientation: cam1Orientation },
@@ -332,11 +370,11 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                   <div className="text-xs text-slate-500">{takeStatusNote}</div>
                 </div>
               </div>
-              <div className="flex items-center gap-3 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+              <div className={`flex items-center gap-3 rounded-2xl border p-4 ${syncReady ? "border-[#DDE9D6] bg-[#F5FAF1]" : "border-[#F4D8A8] bg-[#FDF6E7]"}`}>
                 <ShieldAlert size={18} className="text-[#168A34]" aria-hidden="true" />
                 <div>
-                  <div className="text-sm font-bold text-[#14241B]">多视角融合支持</div>
-                  <div className="text-xs text-slate-500">启动时校验双摄同步与机位朝向</div>
+                  <div className="text-sm font-bold text-[#14241B]">同步锚点状态</div>
+                  <div className="text-xs text-slate-500">{syncLabel}</div>
                 </div>
               </div>
             </div>
@@ -375,9 +413,46 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                 </div>
               )}
             </div>
-            {!allReady && (
+            <label className={`mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${debugReplayEnabled ? "border-[#8FD39D] bg-[#EFFAF1]" : "border-[#DDE9D6] bg-white"}`}>
+              <input
+                aria-label="生成 Debug Replay"
+                checked={debugReplayEnabled}
+                className="mt-0.5 size-4 accent-[#168A34]"
+                onChange={(event) => setDebugReplayEnabled(event.target.checked)}
+                type="checkbox"
+              />
+              <span className="flex items-start gap-2">
+                <Bug className="mt-0.5 shrink-0 text-[#168A34]" size={17} aria-hidden="true" />
+                <span>
+                  <span className="block text-sm font-bold text-[#14241B]">生成 Debug Replay</span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-500">创建 joint_tracking_v2 任务并保留四联诊断回放；会增加分析耗时和存储占用。</span>
+                </span>
+              </span>
+            </label>
+            {!videosReady && (
               <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4 text-sm text-[#B91C1C]">
                 双摄素材尚未全部就绪，无法开始协同分析。请确认双机位视频已合并完成。
+              </div>
+            )}
+            {videosReady && !syncReady && (
+              <div className="mt-4 rounded-2xl border border-[#F4D8A8] bg-[#FDF6E7] p-4">
+                <div>
+                  <div className="text-sm font-bold text-[#14241B]">先完成同步锚点前置检查</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {debugReplayNeedsManualSync
+                      ? "Debug Replay 需要人工确认的同步锚点。"
+                      : syncAnchorStatus?.reason_codes.join("；") || "当前录制还没有可复用的人工确认。"}
+                  </div>
+                </div>
+                <button className="quiet-button mt-3 px-3 py-2 text-xs" onClick={() => onNavigate(`/sync-calibration?take=${encodeURIComponent(captureTakeId)}&return=${encodeURIComponent(`/capture/takes/${captureTakeId}/analyze`)}`)} type="button">
+                  <Link2 size={15} />
+                  {syncAnchorStatus?.state === "draft" ? "继续标注" : syncAnchorStatus?.state === "invalidated" ? "重新标注" : "开始标注"}
+                </button>
+              </div>
+            )}
+            {syncReady && syncAnchorStatus?.quality && (
+              <div className="mt-4 rounded-2xl border border-[#B7E2C1] bg-[#F5FAF1] p-4 text-xs text-[#168A34]">
+                来源：{syncAnchorStatus.source === "manual_anchors" ? "人工锚点确认" : "自动估算"} · 锚点 {syncAnchorStatus.quality.anchor_count} 组 · 覆盖率 {(syncAnchorStatus.quality.coverage_ratio * 100).toFixed(1)}% · residual {syncAnchorStatus.quality.residual_rms_ms?.toFixed(2) ?? "—"} ms · 确认时间 {syncAnchorStatus.confirmed_at ? new Date(syncAnchorStatus.confirmed_at).toLocaleString("zh-CN") : "—"}
               </div>
             )}
             {submitError && (

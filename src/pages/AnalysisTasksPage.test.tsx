@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary, SyncRecordingSession } from "../types/report";
-import { SyncRecordingTaskCard } from "./AnalysisTasksPage";
+import { AnalysisTaskCard, SyncRecordingTaskCard } from "./AnalysisTasksPage";
 
 function makeSession(overrides: Partial<SyncRecordingSession> = {}): SyncRecordingSession {
   return {
@@ -132,5 +132,78 @@ describe("SyncRecordingTaskCard 双摄分析任务", () => {
     expect(onNavigate).toHaveBeenCalledWith(
       "/analysis/job-context/vision?taskSource=sync_recording&taskSession=sync_1",
     );
+  });
+});
+
+describe("AnalysisTaskCard 列表卡进度区", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  function makeTaskJob(overrides: Partial<AnalysisJobSummary> = {}): AnalysisJobSummary {
+    return {
+      id: "job-card",
+      status: "processing",
+      stage: "frame-sampling",
+      progress: 34,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+      analysisKind: "single_view",
+      analysisMode: "real",
+      metadata: {
+        fileName: "match.mp4",
+        matchTitle: "测试比赛",
+        venue: "测试球场",
+        matchDate: "2026-08-12",
+        matchFormat: "doubles",
+        cameraAngle: "baseline",
+        athleteLabel: "测试球员",
+        level: "大众进阶",
+      },
+      stages: [
+        { id: "upload", label: "视频上传", status: "done", detail: "d" },
+        { id: "queue", label: "任务排队", status: "done", detail: "d" },
+        { id: "frame-sampling", label: "抽帧采样", status: "active", detail: "正在逐帧分析", progress: 40 },
+        { id: "detection", label: "目标检测", status: "pending", detail: "d" },
+      ],
+      ...overrides,
+    } as unknown as AnalysisJobSummary;
+  }
+
+  function renderTaskCard(job: AnalysisJobSummary) {
+    return render(
+      <AnalysisTaskCard
+        job={job}
+        onCancel={vi.fn()}
+        onDelete={vi.fn()}
+        onNavigate={vi.fn()}
+        onToggleSelected={vi.fn()}
+      />,
+    );
+  }
+
+  it("processing 任务显示百分比、当前阶段名与 compact stepper", () => {
+    renderTaskCard(makeTaskJob());
+    expect(screen.getByText("34%")).toBeTruthy();
+    expect(screen.getByText("抽帧采样")).toBeTruthy();
+    expect(screen.getAllByTestId("stage-dot").length).toBeGreaterThan(0);
+    expect(screen.queryAllByTestId("stage-capsule")).toHaveLength(0);
+  });
+
+  it("failed 任务不显示进度条，以错误摘要为主", () => {
+    const job = makeTaskJob({
+      status: "failed",
+      stage: "detection",
+      progress: 42,
+      publicErrorMessage: "模型加载失败",
+      stages: makeTaskJob().stages.map((stage) =>
+        stage.id === "detection" ? { ...stage, status: "failed" } : stage,
+      ),
+    });
+    renderTaskCard(job);
+    expect(screen.queryByTestId("job-stage-stepper")).toBeNull();
+    expect(screen.queryByText("42%")).toBeNull();
+    expect(screen.getByText(/模型加载失败/)).toBeTruthy();
   });
 });

@@ -333,6 +333,22 @@ class StorageService:
         # 多视角产物清单 JSON（Parent 唯一产品出口，前端据此消费）
         return self._job_artifact_root(job_id) / "fused_manifest.json"
 
+    def multiview_run_dir(self, job_id: str, run_id: str) -> Path:
+        """Return the immutable run directory owned by a multiview parent."""
+        # Joint/fusion runs are siblings of the parent job artifact root:
+        # `<capture>/analysis/multiview/<run_id>` or `<outputs>/multiview/<run_id>`.
+        analysis_root = self._job_artifact_root(job_id).parent
+        return analysis_root / "multiview" / Path(run_id).name
+
+    def recovery_episodes_json_path(self, job_id: str, run_id: str) -> Path:
+        return self.multiview_run_dir(job_id, run_id) / "recovery_episodes.v1.json"
+
+    def joint_debug_summary_json_path(self, job_id: str, run_id: str) -> Path:
+        return self.multiview_run_dir(job_id, run_id) / "joint_debug_summary.v1.json"
+
+    def canonical_debug_video_path(self, job_id: str, run_id: str) -> Path:
+        return self.multiview_run_dir(job_id, run_id) / "canonical_debug.mp4"
+
     def court_view_roi_json_path(self, job_id: str) -> Path:
         # 球场视角与检测 ROI（感兴趣区域）JSON
         return self._job_artifact_root(job_id) / "court_view_roi.json"

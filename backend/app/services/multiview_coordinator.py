@@ -17,24 +17,32 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy.exc import OperationalError
+
 from app.schemas.analysis import (
+    AnalysisDeleteResult,
     AnalysisJobCreate,
     AnalysisJobSummary,
-    AnalysisDeleteResult,
     SourceJobRef,
     ViewRunSummary,
 )
-from app.services.capture_storage_service import sync_calibration_path
 from app.services.calibration_service import CalibrationService
+from app.services.capture_storage_service import sync_calibration_path
+from app.services.dual_camera_sync import summarize_frame_timing_sidecar
 from app.services.job_orchestration import JobStore
+from app.services.multiview_acceptance import (
+    repair_capture_track_video_indices,
+    timing_sidecar_path,
+)
 from app.services.storage_service import StorageService
+from app.services.sync_anchor_service import SyncAnchorAssetService, SyncAnchorNotFoundError
 from app.services.video_service import video_service
 from app.vision.multiview.court_frame import (
     load_canonical_court_frame,
     resolve_or_create_canonical_court_frame,
     validate_canonical_court_frame_compatibility,
 )
-from app.vision.multiview.sync import load_sync_calibration, validate_sync_authority
+from app.vision.multiview.sync import load_sync_calibration, resolve_sync_authority, validate_sync_authority
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +56,16 @@ class PreflightResult:
 
     ok: bool
     issues: list[str] = field(default_factory=list)
+    diagnostics: dict[str, object] = field(default_factory=dict)
+
+
+class MultiviewPreflightError(ValueError):
+    """Structured creation failure raised before any Parent/child is persisted."""
+
+    def __init__(self, issues: list[str], diagnostics: dict[str, object] | None = None) -> None:
+        self.issues = list(dict.fromkeys(issues))
+        self.diagnostics = diagnostics or {}
+        super().__init__("MultiView preflight failed: " + "; ".join(self.issues))
 
 
 def _check_capture_take_dir(capture_take_id: str) -> str | None:
@@ -103,9 +121,52 @@ def preflight_multiview(
         )
 
     issues: list[str] = []
+    diagnostics: dict[str, object] = {}
+    require_manual_sync = mv.executionMode == "joint_tracking_v2"
+    acceptance_run = require_manual_sync and bool(mv.debugTraceEnabled)
+    sync_status = None
+    try:
+        from app.database import get_session_factory
+
+        db = get_session_factory()()
+        try:
+            sync_status = SyncAnchorAssetService(db).status(
+                payload.metadata.capture_take_id,
+                require_manual=require_manual_sync,
+            )
+        finally:
+            db.close()
+    except (SyncAnchorNotFoundError, OperationalError, OSError, ValueError):
+        # Historical unit fixtures may only provide a timeline directory. The
+        # legacy file-level authority checks below remain their compatibility path.
+        sync_status = None
+    if sync_status is not None:
+        diagnostics["sync_anchor_status"] = sync_status.model_dump(mode="json")
+        if not sync_status.analysis_allowed:
+            issues.extend(f"sync anchor preflight {code}: {code}" for code in sync_status.reason_codes)
+    timing_authority_by_camera: dict[str, str] = {}
     for view in mv.views:
-        if video_service.get_video(view.videoId) is None:
+        video = video_service.get_video(view.videoId)
+        if video is None:
             issues.append(f"video not available for view {view.viewId} (videoId={view.videoId})")
+            timing_authority_by_camera[view.cameraId or view.viewId] = "missing"
+        elif acceptance_run:
+            media = Path(video.path)
+            sidecar = timing_sidecar_path(media)
+            try:
+                summary = summarize_frame_timing_sidecar(
+                    sidecar,
+                    media_path=media,
+                    require_bound_path=True,
+                )
+                timing_authority_by_camera[view.cameraId or view.viewId] = "source_pts"
+                diagnostics.setdefault("timing", {})[view.viewId] = summary
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                timing_authority_by_camera[view.cameraId or view.viewId] = "missing"
+                issues.append(
+                    f"timing sidecar unavailable for view {view.viewId}: "
+                    f"expected={sidecar}; reason={exc}"
+                )
         if CalibrationService().get_calibration(view.calibrationId) is None:
             issues.append(f"calibration not available for view {view.viewId} (calibrationId={view.calibrationId})")
         if view.courtOrientation is None:
@@ -140,8 +201,27 @@ def preflight_multiview(
                     sync,
                     reference_camera_id=reference_view.cameraId or reference_view.viewId,
                     secondary_camera_id=secondary_view.cameraId or secondary_view.viewId,
+                    require_authoritative_calibration=(
+                        mv.executionMode == "joint_tracking_v2" and bool(mv.debugTraceEnabled)
+                    ),
                 )
                 issues.extend(f"sync authority {issue.code}: {issue.message}" for issue in authority.issues)
+                if acceptance_run:
+                    resolution = resolve_sync_authority(
+                        sync,
+                        reference_camera_id=reference_view.cameraId or reference_view.viewId,
+                        secondary_camera_id=secondary_view.cameraId or secondary_view.viewId,
+                        timing_authority_by_view=timing_authority_by_camera,
+                        require_authoritative_calibration=True,
+                    )
+                    diagnostics["sync_authority"] = {
+                        "execution_mode": resolution.execution_mode,
+                        "sync_quality": resolution.sync_quality,
+                        "authoritative_joint_eligible": resolution.authoritative_joint_eligible,
+                        "reason_codes": list(resolution.reason_codes),
+                    }
+                    if not resolution.authoritative_joint_eligible:
+                        issues.extend(f"sync authority gate: {code}" for code in resolution.reason_codes)
 
     if take_dir and not issues:
         frame = mv.canonicalFrame
@@ -174,8 +254,8 @@ def preflight_multiview(
             issues.append(f"canonical frame conflict: {exc}")
 
     if issues:
-        return PreflightResult(ok=False, issues=issues)
-    return PreflightResult(ok=True, issues=[])
+        return PreflightResult(ok=False, issues=list(dict.fromkeys(issues)), diagnostics=diagnostics)
+    return PreflightResult(ok=True, issues=[], diagnostics=diagnostics)
 
 
 class MultiViewAnalysisCoordinator:
@@ -207,6 +287,31 @@ class MultiViewAnalysisCoordinator:
                 db.close()
         except Exception:  # noqa: BLE001 - DB 不可用时按无法推导处理
             return None
+
+    def _repair_authoritative_capture_inputs(self, capture_take_id: str) -> dict[str, object]:
+        """Repair persisted CaptureTrack references before a visual acceptance run."""
+        take_dir = _check_capture_take_dir(capture_take_id)
+        if not take_dir:
+            return {
+                "ok": False,
+                "issues": [f"CaptureTake session_dir unavailable: {capture_take_id}"],
+            }
+        try:
+            from app.database import get_session_factory
+
+            db = get_session_factory()()
+            try:
+                result = repair_capture_track_video_indices(db, capture_take_id, take_dir)
+                if result.get("ok"):
+                    db.commit()
+                else:
+                    db.rollback()
+                return result
+            finally:
+                db.close()
+        except Exception as exc:  # noqa: BLE001 - preflight reports the exact repair blocker
+            logger.warning("authoritative CaptureTrack repair failed take=%s: %s", capture_take_id, exc)
+            return {"ok": False, "issues": [f"CaptureTrack repair failed: {exc}"]}
 
     def _ensure_sync_calibration(self, capture_take_id: str) -> bool:
         """若 take 缺 sync_calibration.json，尝试从录制时序自动推导并写入（degraded）。
@@ -320,11 +425,49 @@ class MultiViewAnalysisCoordinator:
 
     def create_multiview_job(self, payload: AnalysisJobCreate) -> AnalysisJobSummary:
         """创建 1 个 public Parent + 每个 view 一个 dedicated internal child。"""
+        sync_calibration_revision: int | None = None
+        require_manual_sync = bool(
+            payload.multiview and payload.multiview.executionMode == "joint_tracking_v2"
+        )
+        try:
+            from app.database import get_session_factory
+
+            db = get_session_factory()()
+            try:
+                status = SyncAnchorAssetService(db).status(
+                    payload.metadata.capture_take_id,
+                    require_manual=require_manual_sync,
+                )
+            finally:
+                db.close()
+            if not status.analysis_allowed:
+                raise MultiviewPreflightError(
+                    [
+                        f"sync anchor preflight {code}: sync anchor confirmation is required"
+                        for code in status.reason_codes
+                    ],
+                    {"sync_anchor_status": status.model_dump(mode="json")},
+                )
+            sync_calibration_revision = status.revision
+        except (SyncAnchorNotFoundError, OperationalError):
+            # The existing file-level preflight below remains the compatibility
+            # path for legacy fixtures and imported takes without a DB row.
+            pass
+        if (
+            payload.multiview
+            and payload.multiview.executionMode == "joint_tracking_v2"
+            and payload.multiview.debugTraceEnabled
+        ):
+            repair = self._repair_authoritative_capture_inputs(payload.metadata.capture_take_id)
+            if not repair.get("ok"):
+                raise ValueError("Authoritative CaptureTrack preflight failed: " + "; ".join(
+                    str(issue) for issue in repair.get("issues", [])
+                ))
         # 真实双摄 take 缺 sync 时自动推导 degraded 校准（幂等），消除逐 take 手工生成摩擦
         self._ensure_sync_calibration(payload.metadata.capture_take_id)
         result = preflight_multiview(payload, storage=self.storage)
         if not result.ok:
-            raise ValueError("MultiView preflight failed: " + "; ".join(result.issues))
+            raise MultiviewPreflightError(result.issues, result.diagnostics)
 
         mv = payload.multiview
         assert mv is not None
@@ -400,6 +543,7 @@ class MultiViewAnalysisCoordinator:
             }
             joint_updates: dict[str, object] = {
                 "executionMode": "joint_tracking_v2",
+                "debugTraceEnabled": bool(mv.debugTraceEnabled),
                 "jointViewInputs": joint_inputs,
                 "sourceJobs": [],
                 "referenceViewId": mv.referenceViewId,
@@ -407,6 +551,7 @@ class MultiViewAnalysisCoordinator:
                 "orchestrationStatus": "joint_ready",
                 "viewRuns": joint_view_runs,
                 "canonicalFrameId": canonical_frame.frame_id,
+                "syncCalibrationRevision": sync_calibration_revision,
             }
             ref_view = next((v for v in mv.views if v.viewId == mv.referenceViewId), None)
             if ref_view is not None:
@@ -471,6 +616,7 @@ class MultiViewAnalysisCoordinator:
             "orchestrationStatus": "waiting_sources",
             "viewRuns": view_runs,
             "canonicalFrameId": canonical_frame.frame_id,
+            "syncCalibrationRevision": sync_calibration_revision,
         }
         # 把 reference child 的 videoId/calibrationId 挂到 Parent：即便 Parent 的
         # AnalysisPipelineResult 尚未落盘（或后端重启后丢失），前端仍能确定视频源。

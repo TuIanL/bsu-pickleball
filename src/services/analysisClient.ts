@@ -31,6 +31,17 @@ import type {
   ShowcaseRuntimeStatus,
 } from "../types/report";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
+import type {
+  MultiviewObservabilitySummary,
+  RecoveryEpisodePage,
+  RecoveryOutcome,
+} from "../types/multiviewObservability";
+import type {
+  SyncAnchorConfirmResponse,
+  SyncAnchorDraft,
+  SyncAnchorDraftResponse,
+  SyncAnchorStatus,
+} from "../types/syncAnchors";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
@@ -381,6 +392,14 @@ async function parseErrorBody(response: Response): Promise<string | undefined> {
   try {
     if (contentType.includes("application/json")) {
       const payload = (await response.json()) as { detail?: unknown; message?: unknown; error?: unknown };
+      if (
+        payload
+        && typeof payload === "object"
+        && "code" in payload
+        && ("issues" in payload || "diagnostics" in payload || "current_revision" in payload)
+      ) {
+        return JSON.stringify(payload);
+      }
       return (
         stringifyBackendDetail(payload.detail) ??
         stringifyBackendDetail(payload.message) ??
@@ -625,6 +644,8 @@ export interface MultiviewAnalysisJobRequest {
   referenceViewId: string;
   views: MultiViewCreateViewPayload[];
   executionMode?: "late_fusion_v1" | "joint_tracking_v2";
+  /** Opt-in canonical diagnostic replay; requires joint_tracking_v2. */
+  debugTraceEnabled?: boolean;
   canonicalFrame?: { endA: string; endB: string };
   /** 分析窗口（take 公共时间轴 ms；缺省整场）。secondary 由后端经 sync 换算到自身时间轴。 */
   clipStartMs?: number;
@@ -647,6 +668,7 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
         referenceViewId: request.referenceViewId,
         views: request.views,
         executionMode: request.executionMode ?? "late_fusion_v1",
+        debugTraceEnabled: request.debugTraceEnabled ?? false,
         canonicalFrame: request.canonicalFrame,
       },
     }),
@@ -688,6 +710,46 @@ export async function getFusionDiagnostics(jobId: string): Promise<FusionDiagnos
     }
     throw error;
   }
+}
+
+export async function getMultiviewObservability(jobId: string): Promise<MultiviewObservabilitySummary | null> {
+  try {
+    return await requestJson<MultiviewObservabilitySummary>(`/api/analysis/jobs/${jobId}/multiview/observability`);
+  } catch (error) {
+    if (isAnalysisApiError(error) && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export interface RecoveryEpisodeFilters {
+  cursor?: string | null;
+  limit?: number;
+  outcome?: RecoveryOutcome | "";
+  global_player_id?: string;
+  donor_view?: string;
+  target_view?: string;
+  from_ms?: number;
+  to_ms?: number;
+}
+
+export async function getMultiviewRecoveryEpisodes(jobId: string, filters: RecoveryEpisodeFilters = {}): Promise<RecoveryEpisodePage> {
+  const params = new URLSearchParams();
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  if (filters.outcome) params.set("outcome", filters.outcome);
+  if (filters.global_player_id) params.set("global_player_id", filters.global_player_id);
+  if (filters.donor_view) params.set("donor_view", filters.donor_view);
+  if (filters.target_view) params.set("target_view", filters.target_view);
+  if (filters.from_ms != null) params.set("from_ms", String(filters.from_ms));
+  if (filters.to_ms != null) params.set("to_ms", String(filters.to_ms));
+  const query = params.toString();
+  return requestJson<RecoveryEpisodePage>(`/api/analysis/jobs/${jobId}/multiview/recovery-events${query ? `?${query}` : ""}`);
+}
+
+export function getMultiviewDebugVideoUrl(jobId: string): string {
+  return toApiUrl(`/api/analysis/jobs/${jobId}/multiview/debug-video`);
 }
 
 export async function deleteAnalysisJob(jobId: string, options: DemoFallbackOptions = {}): Promise<AnalysisDeleteResult> {
@@ -788,6 +850,27 @@ export async function getAnalysisResult(jobId: string): Promise<AnalysisPipeline
 
 export function getVideoStreamUrl(videoId?: string): string | undefined {
   return videoId ? toApiUrl(`/api/videos/${videoId}/stream`) : undefined;
+}
+
+export interface VideoTimingFrame {
+  frame_index: number;
+  pts_seconds: number;
+  dts_seconds?: number | null;
+  keyframe?: boolean;
+}
+
+export interface VideoTimingResponse {
+  schema_version: string;
+  authority: "source_pts" | "legacy_nominal_fps" | "missing";
+  frame_count: number;
+  fps?: number | null;
+  first_pts_seconds?: number | null;
+  last_pts_seconds?: number | null;
+  frames: VideoTimingFrame[];
+}
+
+export async function getVideoTiming(videoId: string): Promise<VideoTimingResponse> {
+  return requestJson<VideoTimingResponse>(`/api/videos/${videoId}/timing`);
 }
 
 export function resolveAnalysisAssetUrl(path?: string): string | undefined {
@@ -1175,6 +1258,36 @@ export async function deleteTimelineEvent(eventId: string): Promise<void> {
 
 export async function getCaptureTake(takeId: string): Promise<CaptureTakeSummary> {
   return requestJson<CaptureTakeSummary>(`/api/capture-takes/${takeId}`);
+}
+
+export async function getSyncAnchorStatus(takeId: string, requireManual = false): Promise<SyncAnchorStatus> {
+  const query = requireManual ? "?require_manual=true" : "";
+  return requestJson<SyncAnchorStatus>(`/api/capture-takes/${takeId}/sync-anchors/status${query}`);
+}
+
+export async function getSyncAnchorDraft(takeId: string): Promise<SyncAnchorDraftResponse> {
+  return requestJson<SyncAnchorDraftResponse>(`/api/capture-takes/${takeId}/sync-anchors/draft`);
+}
+
+export async function saveSyncAnchorDraft(takeId: string, draft: SyncAnchorDraft): Promise<SyncAnchorDraftResponse> {
+  return requestJson<SyncAnchorDraftResponse>(`/api/capture-takes/${takeId}/sync-anchors/draft`, {
+    method: "PUT",
+    body: JSON.stringify(draft),
+  });
+}
+
+export async function confirmSyncAnchors(
+  takeId: string,
+  request: Omit<SyncAnchorDraft, "expected_revision"> & { expected_revision: number },
+): Promise<SyncAnchorConfirmResponse> {
+  return requestJson<SyncAnchorConfirmResponse>(`/api/capture-takes/${takeId}/sync-anchors/confirm`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export function getSyncAnchorExportUrl(takeId: string): string {
+  return toApiUrl(`/api/capture-takes/${takeId}/sync-anchors/export`);
 }
 
 export async function getMergeStatus(takeId: string): Promise<{ status: string; detail?: string }> {

@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.sync_anchor import SyncAnchorStatus
+
 
 class CodingActionRequest(BaseModel):
     action: str = Field(..., description="语义命令类型")
@@ -77,5 +79,6 @@ class CaptureTakeSummary(BaseModel):
     ended_at: str | None = None
     duration_ms: int | None = None
     revision: int
+    sync_anchor_status: SyncAnchorStatus | None = None
 
     model_config = {"from_attributes": True}

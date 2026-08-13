@@ -11,10 +11,12 @@ import json
 import math
 import os
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Literal
 
 from app.services.capture_storage_service import sync_calibration_path
 from app.services.dual_camera_sync import SyncCalibration, calibration_from_dict
+from app.services.frame_timing_provider import TimingAuthority
 
 # 权威同步校准 artifact 的 schema 版本。
 SYNC_CALIBRATION_SCHEMA_VERSION = "dual_camera_sync_calibration.v1"
@@ -31,6 +33,9 @@ class MultiViewSyncCalibration:
     mappings: dict[str, SyncCalibration] = field(default_factory=dict)
     schema_version: str = SYNC_CALIBRATION_SCHEMA_VERSION
     source_path: str | None = None
+    anchor_count: int | None = None
+    source: str | None = None
+    anchor_validation: dict[str, object] | None = None
 
     def mapping_for(self, camera_id: str) -> SyncCalibration | None:
         return self.mappings.get(camera_id)
@@ -45,6 +50,13 @@ class MultiViewSyncCalibration:
 
 
 SyncGateDecision = Literal["fuse", "fuse_degraded", "single_view"]
+SyncQuality = Literal["good", "degraded", "unknown", "unavailable"]
+ExecutionMode = Literal[
+    "joint_authoritative",
+    "joint_degraded",
+    "compatibility_degraded",
+    "single_view_fallback",
+]
 
 
 @dataclass(frozen=True)
@@ -67,11 +79,135 @@ class SyncAuthorityValidation:
     secondary_mapping: SyncCalibration | None = None
 
 
+@dataclass(frozen=True)
+class SyncAuthorityResolution:
+    """Combined structural authority and runtime quality decision.
+
+    Structural validity answers whether the requested reference/secondary
+    mapping can be consumed.  ``sync_quality`` and ``execution_mode`` are
+    deliberately separate so a degraded run remains executable without being
+    reported as an authoritative joint run.
+    """
+
+    structural_valid: bool
+    timing_authority_by_view: dict[str, TimingAuthority]
+    sync_quality: SyncQuality
+    execution_mode: ExecutionMode
+    authoritative_joint_eligible: bool
+    reason_codes: tuple[str, ...] = ()
+    validation: SyncAuthorityValidation | None = None
+
+    @property
+    def authoritative_eligible(self) -> bool:
+        """Compatibility spelling for callers using the shorter contract."""
+        return self.authoritative_joint_eligible
+
+    @property
+    def mode(self) -> ExecutionMode:
+        return self.execution_mode
+
+    @property
+    def reason(self) -> str | None:
+        return "; ".join(self.reason_codes) or None
+
+
+def resolve_sync_authority(
+    sync: MultiViewSyncCalibration | None,
+    *,
+    reference_camera_id: str,
+    secondary_camera_id: str,
+    timing_authority_by_view: Mapping[str, str] | None = None,
+    require_authoritative_calibration: bool = False,
+) -> SyncAuthorityResolution:
+    """Resolve the authority matrix used by a multi-view executor.
+
+    The mapping is keyed by camera/view id.  When omitted, source PTS is
+    assumed for backwards-compatible callers that only exercise calibration
+    resolution; production executors pass the actual provider authorities.
+    """
+    validation = validate_sync_authority(
+        sync,
+        reference_camera_id=reference_camera_id,
+        secondary_camera_id=secondary_camera_id,
+        require_authoritative_calibration=require_authoritative_calibration,
+    )
+    authorities: dict[str, TimingAuthority] = {
+        reference_camera_id: "source_pts",
+        secondary_camera_id: "source_pts",
+    }
+    if timing_authority_by_view is not None:
+        for camera_id in (reference_camera_id, secondary_camera_id):
+            raw = str(timing_authority_by_view.get(camera_id, "missing"))
+            authorities[camera_id] = raw if raw in {"source_pts", "legacy_nominal_fps", "missing"} else "missing"
+
+    reasons = [issue.code for issue in validation.issues]
+    if not validation.valid:
+        missing_views = [camera_id for camera_id, authority in authorities.items() if authority == "missing"]
+        if missing_views:
+            reasons.append("timing_authority_unavailable")
+            reasons.extend(f"{camera_id}_timing_authority_missing" for camera_id in missing_views)
+        if not reasons:
+            reasons.append("sync_authority_unavailable")
+        return SyncAuthorityResolution(
+            structural_valid=False,
+            timing_authority_by_view=authorities,
+            sync_quality="unavailable",
+            execution_mode="single_view_fallback",
+            authoritative_joint_eligible=False,
+            reason_codes=tuple(dict.fromkeys(reasons)),
+            validation=validation,
+        )
+
+    mapping = validation.secondary_mapping
+    quality: SyncQuality = (
+        mapping.quality if mapping is not None and mapping.quality in {"good", "degraded", "unknown"} else "unknown"
+    )
+    if mapping is not None and mapping.reason:
+        reasons.append("mapping_reason_present")
+
+    missing_views = [camera_id for camera_id, authority in authorities.items() if authority == "missing"]
+    nominal_views = [
+        camera_id for camera_id, authority in authorities.items() if authority == "legacy_nominal_fps"
+    ]
+    if missing_views:
+        reasons.append("timing_authority_unavailable")
+        reasons.extend(f"{camera_id}_timing_authority_missing" for camera_id in missing_views)
+        mode: ExecutionMode = "single_view_fallback"
+        quality = "unavailable"
+    elif nominal_views:
+        reasons.append("nominal_timing_not_authoritative")
+        reasons.extend(f"{camera_id}_using_legacy_nominal_fps" for camera_id in nominal_views)
+        mode = "compatibility_degraded"
+    elif quality == "good":
+        mode = "joint_authoritative"
+        reasons.append("sync_quality_good")
+    elif quality == "degraded":
+        mode = "joint_degraded"
+        reasons.append("sync_quality_degraded")
+    else:
+        mode = "single_view_fallback"
+        reasons.append("sync_quality_unknown")
+
+    eligible = mode == "joint_authoritative" and all(
+        authority == "source_pts" for authority in authorities.values()
+    )
+    return SyncAuthorityResolution(
+        structural_valid=True,
+        timing_authority_by_view=authorities,
+        sync_quality=quality,
+        execution_mode=mode,
+        authoritative_joint_eligible=eligible,
+        reason_codes=tuple(dict.fromkeys(reasons)),
+        validation=validation,
+    )
+
+
 def validate_sync_authority(
     sync: MultiViewSyncCalibration | None,
     *,
     reference_camera_id: str,
     secondary_camera_id: str,
+    require_authoritative_calibration: bool = False,
 ) -> SyncAuthorityValidation:
     """严格验证当前 Parent 所需的 reference/secondary mapping。
 
@@ -98,6 +234,29 @@ def validate_sync_authority(
                 sync.reference_camera,
             )
         )
+
+    if require_authoritative_calibration:
+        if sync.source != "manual_anchors":
+            issues.append(
+                SyncAuthorityIssue(
+                    "manual_anchor_calibration_required",
+                    "authoritative acceptance requires a calibration generated from manual anchors",
+                )
+            )
+        if sync.anchor_count is not None and sync.anchor_count < 3:
+            issues.append(
+                SyncAuthorityIssue(
+                    "anchor_count_insufficient",
+                    f"authoritative acceptance requires at least 3 anchors, got {sync.anchor_count}",
+                )
+            )
+        if sync.anchor_validation is not None and sync.anchor_validation.get("valid") is not True:
+            issues.append(
+                SyncAuthorityIssue(
+                    "anchor_validation_failed",
+                    "manual anchor payload validation failed",
+                )
+            )
 
     mapping = sync.mapping_for(secondary_camera_id)
     if mapping is None:
@@ -209,4 +368,15 @@ def load_sync_calibration(take_dir: str | os.PathLike[str]) -> MultiViewSyncCali
         mappings=mappings,
         schema_version=str(payload.get("schema_version", SYNC_CALIBRATION_SCHEMA_VERSION)),
         source_path=str(path),
+        anchor_count=(
+            int(payload["anchor_count"])
+            if payload.get("anchor_count") is not None
+            else None
+        ),
+        source=str(payload.get("source")) if payload.get("source") is not None else None,
+        anchor_validation=(
+            dict(payload["anchor_validation"])
+            if isinstance(payload.get("anchor_validation"), dict)
+            else None
+        ),
     )

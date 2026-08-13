@@ -41,3 +41,24 @@ class VideoReadError(BaseModel):
 
     code: str  # 错误代码（机器可读）
     message: str  # 错误描述（给人看）
+
+
+class VideoTimingFrame(BaseModel):
+    """A source-frame timing row exposed to the calibration workbench."""
+
+    frame_index: int = Field(ge=0)
+    pts_seconds: float
+    dts_seconds: float | None = None
+    keyframe: bool = False
+
+
+class VideoTimingResponse(BaseModel):
+    """Validated source PTS mapping for one registered video."""
+
+    schema_version: str = "frame_timing_provider.v1"
+    authority: str
+    frame_count: int = Field(ge=0)
+    fps: float | None = None
+    first_pts_seconds: float | None = None
+    last_pts_seconds: float | None = None
+    frames: list[VideoTimingFrame]

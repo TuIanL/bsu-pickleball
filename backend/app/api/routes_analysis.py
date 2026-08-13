@@ -25,16 +25,17 @@ from __future__ import annotations
 # Literal：限定某个参数只能取固定的几个字符串值（这里用于限定 artifact 名称白名单）
 # Union：表示返回值"可能是多种类型之一"
 # Query：URL 查询参数
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 # 不同的响应类型：
 # - FileResponse：返回一个文件（如视频/图片）
 # - JSONResponse：返回 JSON 数据
 # - PlainTextResponse：返回纯文本（如按行存储的 JSONL 文件）
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
 # 分析相关的数据模型
 from app.schemas.analysis import (
@@ -57,12 +58,77 @@ from app.services.mock_analysis import (
     get_pipeline_result,
     list_analysis_jobs,
 )
+from app.services.multiview_coordinator import MultiviewPreflightError
+from app.services.multiview_observability import (
+    MultiviewObservabilityProjector,
+    structured_error,
+)
 from app.services.storage_service import StorageService
 
 # 定义路由表，前缀 /api/analysis
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 # 存储服务对象，用于定位各类分析产物（artifact）在磁盘上的路径
 _STORAGE = StorageService()
+_MULTIVIEW_OBSERVABILITY = MultiviewObservabilityProjector(_STORAGE)
+
+
+def _multiview_error(status_code: int, code: str, message: str, job_id: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content=structured_error(code, message, job_id=job_id))
+
+
+def _iter_file_range(path: Path, start: int, end: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    with path.open("rb") as handle:
+        handle.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = handle.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def _debug_video_response(path: Path, request: Request) -> StreamingResponse:
+    size = path.stat().st_size
+    range_header = request.headers.get("range")
+    start, end = 0, max(0, size - 1)
+    status_code = 200
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(size),
+        "Content-Type": "video/mp4",
+    }
+    if range_header:
+        try:
+            unit, raw_range = range_header.split("=", 1)
+            if unit != "bytes" or "," in raw_range:
+                raise ValueError
+            raw_start, raw_end = raw_range.split("-", 1)
+            if raw_start:
+                start = int(raw_start)
+                end = int(raw_end) if raw_end else end
+            else:
+                suffix = int(raw_end)
+                start = max(0, size - suffix)
+            if start < 0 or start >= size or end < start:
+                raise ValueError
+            end = min(end, size - 1)
+        except (ValueError, TypeError):
+            return StreamingResponse(
+                iter(()),
+                status_code=416,
+                headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"},
+                media_type="video/mp4",
+            )
+        status_code = 206
+        headers["Content-Length"] = str(end - start + 1)
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        _iter_file_range(path, start, end),
+        status_code=status_code,
+        headers=headers,
+        media_type="video/mp4",
+    )
 
 
 @router.post("/jobs", response_model=AnalysisJobSummary)
@@ -76,6 +142,16 @@ def create_analysis_job_route(payload: AnalysisJobCreate) -> AnalysisJobSummary:
     """
     try:
         return create_analysis_job(payload)
+    except MultiviewPreflightError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "code": "multiview_preflight_failed",
+                "message": str(exc),
+                "issues": exc.issues,
+                "diagnostics": exc.diagnostics,
+            },
+        )
     except ValueError as exc:
         # 双摄 preflight 不通过：返回结构化失败原因（不静默退化）
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -193,6 +269,74 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
         raise HTTPException(status_code=404, detail="Analysis report not found")
 
     return report
+
+
+@router.get("/jobs/{job_id}/multiview/observability", response_model=None)
+def read_multiview_observability(job_id: str) -> JSONResponse:
+    """Return the product-level multiview observability projection."""
+    job = get_mock_job(job_id)
+    if job is None:
+        return _multiview_error(404, "not_found", "Analysis job not found.", job_id)
+    if job.analysisKind != "multiview":
+        return _multiview_error(404, "not_applicable", "This analysis job is not multiview.", job_id)
+    result = get_pipeline_result(job_id)
+    try:
+        return JSONResponse(_MULTIVIEW_OBSERVABILITY.project(job, result))
+    except Exception as exc:  # noqa: BLE001 - keep a stable API error DTO
+        return _multiview_error(500, "projection_unavailable", str(exc), job_id)
+
+
+@router.get("/jobs/{job_id}/multiview/recovery-events", response_model=None)
+def read_multiview_recovery_events(
+    job_id: str,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+    outcome: str | None = Query(default=None),
+    global_player_id: str | None = Query(default=None),
+    donor_view: str | None = Query(default=None),
+    target_view: str | None = Query(default=None),
+    from_ms: float | None = Query(default=None, ge=0),
+    to_ms: float | None = Query(default=None, ge=0),
+) -> JSONResponse:
+    """Return published, aggregated recovery episodes, never raw runtime ticks."""
+    job = get_mock_job(job_id)
+    if job is None:
+        return _multiview_error(404, "not_found", "Analysis job not found.", job_id)
+    if job.analysisKind != "multiview":
+        return _multiview_error(404, "not_applicable", "Recovery episodes are not applicable to this job.", job_id)
+    if from_ms is not None and to_ms is not None and from_ms > to_ms:
+        return _multiview_error(422, "invalid_time_range", "from_ms must be less than or equal to to_ms.", job_id)
+    result = get_pipeline_result(job_id)
+    summary = _MULTIVIEW_OBSERVABILITY.project(job, result)
+    run_id = summary.get("run_id")
+    page = _MULTIVIEW_OBSERVABILITY.episodes.list_episodes(
+        job=job,
+        run_id=run_id,
+        cursor=cursor,
+        limit=limit,
+        outcome=outcome,
+        global_player_id=global_player_id,
+        donor_view=donor_view,
+        target_view=target_view,
+        from_ms=from_ms,
+        to_ms=to_ms,
+    )
+    return JSONResponse(page)
+
+
+@router.get("/jobs/{job_id}/multiview/debug-video", response_model=None)
+def read_multiview_debug_video(job_id: str, request: Request) -> StreamingResponse | JSONResponse:
+    """Stream the published canonical debug MP4 with HTTP Range support."""
+    job = get_mock_job(job_id)
+    if job is None:
+        return _multiview_error(404, "not_found", "Analysis job not found.", job_id)
+    if job.analysisKind != "multiview":
+        return _multiview_error(404, "not_applicable", "Debug replay is not applicable to this job.", job_id)
+    summary = _MULTIVIEW_OBSERVABILITY.project(job, get_pipeline_result(job_id))
+    path = _MULTIVIEW_OBSERVABILITY.resolve_debug_video(job, summary.get("run_id"))
+    if path is None:
+        return _multiview_error(404, "unavailable", "This task has no published canonical debug video.", job_id)
+    return _debug_video_response(path, request)
 
 
 # 允许的 artifact（分析产物）名称白名单。

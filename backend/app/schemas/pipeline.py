@@ -147,3 +147,5 @@ class AnalysisPipelineResult(BaseModel):
     analysis_window: dict[str, Any] | None = None
     requested_execution_mode: str | None = None
     effective_multiview_mode: str | None = None
+    execution_mode: str | None = None
+    authoritative_joint_eligible: bool | None = None

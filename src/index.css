@@ -136,3 +136,26 @@ button {
 .toast-in {
   animation: toast-in 0.18s ease-out;
 }
+
+/* 任务阶段 stepper：当前阶段橙色呼吸（尊重系统减少动效偏好） */
+@keyframes stage-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.35);
+  }
+  50% {
+    opacity: 0.75;
+    box-shadow: 0 0 0 5px rgba(255, 149, 0, 0);
+  }
+}
+
+.stage-pulse {
+  animation: stage-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-pulse {
+    animation: none;
+  }
+}

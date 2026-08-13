@@ -654,6 +654,7 @@ export interface CaptureTakeSummary {
   ended_at?: string;
   duration_ms?: number;
   revision: number;
+  sync_anchor_status?: import("./syncAnchors").SyncAnchorStatus | null;
 }
 
 export interface CaptureSegmentSummary {

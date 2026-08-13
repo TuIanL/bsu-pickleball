@@ -17,6 +17,7 @@
 """
 
 # pathlib.Path 是 Python 处理文件路径的标准工具，可用来判断文件是否存在
+import json
 from pathlib import Path
 from urllib.parse import quote
 
@@ -25,11 +26,12 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
-from app.schemas.video import VideoMetadata, VideoUploadResponse
+from app.schemas.video import VideoMetadata, VideoTimingResponse, VideoUploadResponse
 
 # 导入真正干活的"视频服务"对象 video_service（逻辑在 services 层，不在路由层）
 # UnsupportedVideoError 是我们自定义的异常：当上传的文件不是受支持的视频格式时抛出
 from app.services.video_service import UnsupportedVideoError, video_service
+from app.services.dual_camera_sync import read_frame_timing_sidecar, summarize_frame_timing_sidecar
 
 # 创建一个路由表：
 # - prefix="/api/videos" 表示本文件里所有接口的路径都以 /api/videos 开头
@@ -91,6 +93,65 @@ def read_video(video_id: str) -> VideoMetadata:
         # 没找到就返回 HTTP 404（资源不存在）
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.get("/{video_id}/timing", response_model=VideoTimingResponse)
+def read_video_timing(video_id: str) -> VideoTimingResponse:
+    """Return validated source PTS rows for a registered video.
+
+    The client addresses the media only by its registered ``video_id``. The
+    sidecar path is derived from the registered media metadata, so arbitrary
+    filesystem paths never enter this endpoint.
+    """
+    video = video_service.get_available_video(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Registered video not found or unavailable")
+
+    media_path = Path(video.path).resolve(strict=False)
+    sidecar_path = Path(f"{media_path}.pts.jsonl")
+    if not sidecar_path.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_pts_missing",
+                "message": "Registered video has no validated source PTS sidecar",
+                "video_id": video_id,
+            },
+        )
+
+    try:
+        summary = summarize_frame_timing_sidecar(
+            sidecar_path,
+            media_path=media_path,
+            require_bound_path=True,
+        )
+        frames = read_frame_timing_sidecar(sidecar_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_pts_invalid",
+                "message": str(exc),
+                "video_id": video_id,
+            },
+        ) from exc
+
+    return VideoTimingResponse(
+        authority="source_pts",
+        frame_count=int(summary["frame_count"]),
+        fps=float(summary["fps"]) if summary.get("fps") is not None else None,
+        first_pts_seconds=float(summary["first_pts_seconds"]),
+        last_pts_seconds=float(summary["last_pts_seconds"]),
+        frames=[
+            {
+                "frame_index": frame.frame_index,
+                "pts_seconds": frame.pts_seconds,
+                "dts_seconds": frame.dts_seconds,
+                "keyframe": frame.keyframe,
+            }
+            for frame in frames
+        ],
+    )
 
 
 # 定义一个"播放视频流"的接口

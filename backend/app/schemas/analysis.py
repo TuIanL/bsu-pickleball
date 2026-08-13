@@ -166,6 +166,8 @@ class MultiViewCreateRequest(BaseModel):
     # 执行模式:late_fusion_v1(2 child → FusionRun)| joint_tracking_v2(直接 runnable → ViewRun A/B)
     executionMode: Literal["late_fusion_v1", "joint_tracking_v2"] = "late_fusion_v1"
     canonicalFrame: CanonicalFramePayload | None = None
+    # Visual Acceptance Run 的诊断开关；开启即要求 authoritative joint gate。
+    debugTraceEnabled: bool = False
 
 
 class AnalysisJobCreate(BaseModel):
@@ -265,6 +267,7 @@ class AnalysisJobSummary(BaseModel):
     fusionRunId: str | None = None
     # 执行模式:late_fusion_v1(P0 现状,2 child → FusionRun)| joint_tracking_v2(直接 runnable → ViewRun A/B)
     executionMode: Literal["late_fusion_v1", "joint_tracking_v2"] = "late_fusion_v1"
+    debugTraceEnabled: bool = False
     # joint_tracking_v2 的持久化输入(无 child,重启后据此重建 JointRun);元素为 JointViewInput 序列化 dict
     jointViewInputs: list[dict[str, object]] = Field(default_factory=list)
     # joint_tracking_v2 的运行标识(不复用 fusionRunId;late 仅用 fusionRunId)
@@ -275,6 +278,8 @@ class AnalysisJobSummary(BaseModel):
     referenceViewId: str | None = None
     # 同一 CaptureTake 的 canonical court frame；历史任务缺省时保持只读兼容。
     canonicalFrameId: str | None = None
+    # 录制级同步锚点 revision 的只读引用；不复制 anchors/calibration 内容。
+    syncCalibrationRevision: int | None = Field(default=None, ge=0)
     # 双摄任务各机位子进度（cam_1 / cam_2）
     viewRuns: dict[str, ViewRunSummary] | None = None
 

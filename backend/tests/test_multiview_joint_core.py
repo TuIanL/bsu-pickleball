@@ -7,10 +7,12 @@ GlobalPlayerAssociator / CrossViewGuidancePolicy / guided pre-gate / artifact v1
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from app.core.config import get_settings
 from app.schemas.analysis import build_match_context
 from app.services.dual_camera_sync import FrameTiming, SyncCalibration
+from app.services.frame_timing_provider import FrameTimingProvider
 from app.schemas.tracking import Detection
 from app.vision.court_view import compute_expanded_detection_roi
 from app.vision.multiview.analysis_clock import CanonicalAnalysisClock, FrameSample
@@ -76,7 +78,7 @@ def test_clock_tick_independent_of_detection():
     assert bundle.frame_status["cam_1"] == "available"
     assert bundle.views["cam_1"].source_frame_index == 7
     # 无 sync → cam_2 unavailable
-    assert bundle.frame_status["cam_2"] == "unavailable"
+    assert bundle.frame_status["cam_2"] == "unavailable_no_sync"
     assert bundle.views["cam_2"] is None
 
 
@@ -88,7 +90,7 @@ def test_clock_single_view_no_sync_is_unavailable():
         max_pairing_error_ms=33.3,
     )
     b = clock.tick(reference_frame_index=0, reference_timestamp_seconds=0.0)
-    assert b.frame_status["cam_2"] == "unavailable"
+    assert b.frame_status["cam_2"] == "unavailable_no_sync"
 
 
 def test_clock_same_secondary_frame_not_processed_twice():
@@ -111,6 +113,50 @@ def test_clock_same_secondary_frame_not_processed_twice():
     assert t2.views["cam_2"] is None
     # 单调:last_consumed 停在 f1
     assert clock.last_consumed_source_frame_index["cam_2"] == 1
+
+
+def test_clock_reports_interval_range_selection_error_and_provenance():
+    calibration = SyncCalibration(
+        reference_camera="cam_1",
+        camera_id="cam_2",
+        offset_seconds=0.0,
+        rate=1.0,
+        drift_ppm=250.0,
+        residual_rms_seconds=0.02,
+        anchor_count=3,
+        quality="degraded",
+        valid_start_seconds=0.2,
+        valid_end_seconds=0.8,
+    )
+    sync = MultiViewSyncCalibration(reference_camera="cam_1", mappings={"cam_2": calibration})
+    reference_provider = FrameTimingProvider(
+        frames=(FrameTiming(0, 10.0), FrameTiming(1, 10.05)),
+        provenance=FrameTimingProvider.nominal(frame_count=1, fps=20.0).provenance.__class__(
+            authority="source_pts"
+        ),
+        fps=20.0,
+    )
+    clock = CanonicalAnalysisClock(
+        reference_view_id="cam_1",
+        secondary_view_id="cam_2",
+        secondary_frames=[FrameTiming(0, 0.2), FrameTiming(1, 0.8)],
+        sync=sync,
+        secondary_camera_id="cam_2",
+        max_pairing_error_ms=10.0,
+        reference_timing_provider=reference_provider,
+        reference_timing_authority="source_pts",
+        secondary_timing_authority="source_pts",
+    )
+    before = clock.tick(reference_frame_index=0, reference_timestamp_seconds=0.1)
+    assert before.frame_status["cam_2"] == "unavailable_outside_valid_interval"
+    assert before.mapping_diagnostics["reason"] == "unavailable_outside_valid_interval"
+
+    error = clock.tick(reference_frame_index=1, reference_timestamp_seconds=0.5)
+    assert error.frame_status["cam_2"] == "unavailable_selection_error"
+    assert error.mapping_diagnostics["selection_error_ms"] is not None
+    assert error.views["cam_1"].source_timestamp_ms == pytest.approx(10050.0)
+    assert error.views["cam_1"].timing_authority == "source_pts"
+    assert error.views["cam_1"].sync_quality == "degraded"
 
 
 # ---- GlobalMotionEstimator ---------------------------------------------------
@@ -490,6 +536,10 @@ def test_execution_mode_dedup_ab():
     sig_late = analysis_signature(_payload("late_fusion_v1"))
     sig_joint = analysis_signature(_payload("joint_tracking_v2"))
     assert sig_late != sig_joint  # A/B 不被幂等去重当成同一任务
+
+    acceptance_payload = _payload("joint_tracking_v2")
+    acceptance_payload.multiview.debugTraceEnabled = True
+    assert analysis_signature(acceptance_payload) != sig_joint
 
 
 # ---- joint parent restart 幂等 + compose(GlobalPlayer 标签)------------------

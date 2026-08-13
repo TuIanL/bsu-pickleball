@@ -81,9 +81,14 @@ def _obs_detail(
         "source_timestamp_ms": obs.source_timestamp_ms,
         "mapped_take_timestamp_ms": obs.mapped_take_timestamp_ms,
         "selection_error_ms": obs.selection_error_ms,
+        "timing_authority": obs.timing_authority,
+        "sync_quality": obs.sync_quality,
         "x_ft": obs.canonical_x_ft,
         "y_ft": obs.canonical_y_ft,
         "quality": intrinsic,
+        "observation_origin": obs.observation_origin,
+        "donor_view": obs.donor_view,
+        "residual_ft": obs.residual_ft,
     }
 
 
@@ -101,6 +106,8 @@ def fuse_observation(
     predicted: tuple[float, float] | None,
     sync_quality: str,
     config: FusionConfig,
+    reference_label: str = "reference",
+    secondary_label: str = "secondary",
 ) -> FusionMeasurement | None:
     """融合一个 canonical tick 的两路观测，返回 measurement；无观测返回 None。"""
 
@@ -121,9 +128,9 @@ def fuse_observation(
 
     details: dict[str, ViewObservationDetail] = {}
     if ref_available:
-        details["reference"] = _obs_detail(reference_obs, reference_intrinsic)
+        details[reference_label] = _obs_detail(reference_obs, reference_intrinsic)
     if sec_available:
-        details["secondary"] = _obs_detail(secondary_obs, secondary_intrinsic)
+        details[secondary_label] = _obs_detail(secondary_obs, secondary_intrinsic)
 
     # 双观测：冲突检测 or 加权融合。
     if ref_available and sec_available:
@@ -150,7 +157,7 @@ def fuse_observation(
                 y_ft=y,
                 fusion_status="dual_observed",
                 fusion_confidence=confidence,
-                contributing_views=("reference", "secondary"),
+                contributing_views=(reference_label, secondary_label),
                 selected_view=None,
                 view_observations=details,
                 sync_quality=sync_quality,
@@ -162,7 +169,7 @@ def fuse_observation(
         # 冲突：不平均中间点。
         choose_reference = reference_intrinsic >= secondary_intrinsic
         chosen_xy = ref_xy if choose_reference else sec_xy
-        chosen_view = "reference" if choose_reference else "secondary"
+        chosen_view = reference_label if choose_reference else secondary_label
         if (
             predicted is not None
             and reference_intrinsic < config.prediction_floor
@@ -178,7 +185,7 @@ def fuse_observation(
                 y_ft=predicted[1],
                 fusion_status="conflict",
                 fusion_confidence=max(reference_intrinsic, secondary_intrinsic) * 0.3,
-                contributing_views=("reference", "secondary"),
+                contributing_views=(reference_label, secondary_label),
                 selected_view="prediction",
                 view_observations=details,
                 sync_quality=sync_quality,
@@ -195,12 +202,16 @@ def fuse_observation(
             y_ft=chosen_xy[1],
             fusion_status="conflict",
             fusion_confidence=max(reference_intrinsic, secondary_intrinsic) * 0.3,
-            contributing_views=("reference", "secondary"),
+            contributing_views=(reference_label, secondary_label),
             selected_view=chosen_view,
             view_observations=details,
             sync_quality=sync_quality,
             court_frame_version=config.court_frame_version,
-            measurement_source="reference" if choose_reference else "secondary",
+            measurement_source=(
+                "reference" if choose_reference and reference_label == "reference" else
+                "secondary" if not choose_reference and secondary_label == "secondary" else
+                "dual"
+            ),
             metric_eligible=True,
         )
 
@@ -216,12 +227,12 @@ def fuse_observation(
             y_ft=ref_xy[1],
             fusion_status="single_view_fallback",
             fusion_confidence=reference_intrinsic,
-            contributing_views=("reference",),
-            selected_view="reference",
+            contributing_views=(reference_label,),
+            selected_view=reference_label,
             view_observations=details,
             sync_quality=sync_quality,
             court_frame_version=config.court_frame_version,
-            measurement_source="reference",
+            measurement_source="reference" if reference_label == "reference" else "dual",
             metric_eligible=True,
         )
     if sec_available:
@@ -235,12 +246,12 @@ def fuse_observation(
             y_ft=sec_xy[1],
             fusion_status="single_view_fallback",
             fusion_confidence=secondary_intrinsic,
-            contributing_views=("secondary",),
-            selected_view="secondary",
+            contributing_views=(secondary_label,),
+            selected_view=secondary_label,
             view_observations=details,
             sync_quality=sync_quality,
             court_frame_version=config.court_frame_version,
-            measurement_source="secondary",
+            measurement_source="secondary" if secondary_label == "secondary" else "dual",
             metric_eligible=True,
         )
 

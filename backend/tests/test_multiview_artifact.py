@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.vision.multiview.artifact import (
     build_fused_artifact,
     build_fusion_diagnostics,
+    normalize_fusion_diagnostics,
     load_fused_artifact,
     serialize_fused_sample,
     write_fused_artifact,
@@ -12,6 +15,7 @@ from app.vision.multiview.artifact import (
 )
 from app.vision.multiview.association import PlayerAssociation
 from app.vision.multiview.fusion import FusionMeasurement
+from app.vision.multiview.joint_artifact import FusedSample, write_fused_v2
 
 
 def _measurement(
@@ -111,6 +115,56 @@ def test_view_observations_traceable_composition():
     assert sec["source_timestamp_ms"] == 1500.0
     assert sec["mapped_take_timestamp_ms"] == 1000.0
     assert sec["selection_error_ms"] == 3.0
+
+
+def test_authoritative_v2_requires_timing_provenance_fields():
+    detail = {
+        "source_frame_index": 1,
+        "source_timestamp_ms": 100.0,
+        "mapped_take_timestamp_ms": 99.0,
+        "selection_error_ms": 1.0,
+        "timing_authority": "source_pts",
+        "sync_quality": "good",
+    }
+    artifact = write_fused_v2(
+        run_id="mvr-authoritative",
+        capture_take_id="take",
+        reference_view_id="cam_1",
+        authoritative_run=True,
+        samples=[
+            FusedSample(
+                global_player_id="g1",
+                take_timestamp_ms=99.0,
+                reference_frame_index=1,
+                x_ft=1.0,
+                y_ft=2.0,
+                fusion_status="dual_observed",
+                metric_eligible=True,
+                view_observations={"cam_1": detail, "cam_2": detail},
+            )
+        ],
+    )
+    assert artifact["authoritative_run"] is True
+
+    with pytest.raises(ValueError, match="missing timing fields"):
+        write_fused_v2(
+            run_id="mvr-invalid",
+            capture_take_id="take",
+            reference_view_id="cam_1",
+            authoritative_run=True,
+            samples=[
+                FusedSample(
+                    global_player_id="g1",
+                    take_timestamp_ms=0.0,
+                    reference_frame_index=0,
+                    x_ft=1.0,
+                    y_ft=2.0,
+                    fusion_status="dual_observed",
+                    metric_eligible=True,
+                    view_observations={"cam_1": {}},
+                )
+            ],
+        )
 
 
 def test_build_fused_artifact_sorted_and_players():
@@ -239,3 +293,32 @@ def test_write_fusion_diagnostics(tmp_path):
     path = write_fusion_diagnostics(tmp_path, diagnostics)
     assert path.name == "fused_diagnostics.json"
     assert path.exists()
+
+
+def test_normalize_joint_v2_diagnostics_publishes_fusion_quality_fields():
+    artifact = {
+        "schema_version": "fused_player_trajectory.v2",
+        "samples": [
+            {
+                "fusion_status": "dual_observed",
+                "metric_eligible": True,
+                "view_observations": {
+                    "cam_1": {"x_ft": 1.0, "y_ft": 2.0},
+                    "cam_2": {"x_ft": 2.0, "y_ft": 2.0},
+                },
+            },
+            {"fusion_status": "single_view_fallback", "metric_eligible": True, "view_observations": {}},
+        ],
+    }
+
+    diagnostics = normalize_fusion_diagnostics(
+        artifact,
+        {"schema_version": "fused_player_trajectory.v2", "effective_multiview_ratio": 0.5},
+    )
+
+    assert diagnostics["schema_version"] == "fused_diagnostics.v1"
+    assert diagnostics["fusion_status_counts"] == {"dual_observed": 1, "single_view_fallback": 1}
+    assert diagnostics["sample_count"] == 2
+    assert diagnostics["metric_eligible_count"] == 2
+    assert diagnostics["view_disagreement"]["dual_samples"] == 1
+    assert diagnostics["view_disagreement"]["median_distance_ft"] == 1.0

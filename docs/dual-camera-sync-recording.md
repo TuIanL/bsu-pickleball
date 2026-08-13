@@ -112,7 +112,38 @@
 两路 FFmpeg 同步启动可保证毫秒级同步精度，但不是帧级硬同步。多视角联合分析需要在后续版本中通过时间戳对齐来实现。
 
 ### 双视角联合分析不在范围内
-本次 change 仅实现双摄同步采集。副机位视频作为关联素材保存(`associated_video_paths`)，不参与当前的单视频分析流程。
+本次 change 将双摄同步采集、录制级同步锚点和双摄分析前置检查串成一条流程。副机位视频作为 CaptureTake 的关联素材保存，双摄分析只消费当前 CaptureTake 的权威时间线资产。
+
+## 同步锚点与分析前置
+
+双摄 CaptureTake 的同步资产位于其 `timeline/` 目录：
+
+```text
+sync_anchor_draft.json
+sync_anchors.v1.json
+sync_calibration.json
+sync_anchor_confirmation.json
+sync_anchor_history/revision-*/
+```
+
+工作台从双摄分析向导的“素材检查”进入，首先读取服务端状态和草稿；草稿保存到 CaptureTake 后可在离开页面或更换浏览器后继续。首次发现旧浏览器 `localStorage` 草稿时，只显示一次“导入旧浏览器草稿”操作，导入成功后服务端草稿成为权威来源。
+
+状态和含义如下：
+
+| 状态 | 含义 | 默认门禁 |
+| --- | --- | --- |
+| `not_required` | 当前策略无需人工锚点，通常适用于单摄或明确允许降级的场景 | 允许分析 |
+| `required` | 双摄素材可用，但没有可复用的人工确认 | 需要开始标注 |
+| `draft` | 已保存部分锚点，尚未完成服务端确认 | 需要继续标注 |
+| `confirmed` | `manual_anchors` 与当前素材 provenance 匹配，拟合质量和覆盖率通过 | 允许复用 |
+| `auto_degraded` | 只有 `auto_degraded_from_recording_timing` 估算，不代表人工确认 | 普通模式可按策略允许，`joint_tracking_v2` 需人工确认 |
+| `invalidated` | 已确认结果与当前 registered video、camera identity 或 PTS sidecar 不匹配 | 需要重新标注 |
+
+确认至少需要 3 组跨越素材时间范围的共同事件。服务端重新验证 camera identity、source PTS、覆盖率和 residual，并以同一 revision 原子发布 anchors、calibration、confirmation metadata。JSON 导出保留给诊断和 CLI 互操作使用，不是完成确认的必要步骤。
+
+每次创建双摄 AnalysisJob 都重新执行 preflight。后续分析只记录 `syncCalibrationRevision` 引用，不复制锚点内容；同一 CaptureTake 的新分析、重试、分析窗口或算法配置变化不会使确认失效。若 registered video 或 timing sidecar 被替换，状态会变为 `invalidated`，旧 revision 仍保留在 `sync_anchor_history` 中，但不会再被当前分析使用。
+
+分析向导进入 A 机位球场标定前执行一次前端门禁，点击“开始双摄协同分析”时后端再执行一次。若页面打开后素材发生变化，创建接口返回结构化 `multiview_preflight_failed` 错误且不落盘 Parent/child 部分任务；用户回到素材检查后可从同一工作台继续处理草稿。
 
 ### `.ts` 分段格式
 原始录制输出为 `.ts` 分段文件（使用 `-c copy -f mpegts`），优点是低开销、适合 RTSP 原始流保存。停止时自动合并主机位分段为 MP4。

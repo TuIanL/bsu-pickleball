@@ -14,8 +14,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 from app.vision.multiview.association import min_cost_matching
 from app.vision.multiview.court_frame import CourtOrientation, local_to_canonical
@@ -35,11 +35,27 @@ class JointObservation:
     canonical_x_ft: float | None = None
     canonical_y_ft: float | None = None
     view_player_id: str = ""
+    local_identity_epoch: int = 0
     track_id: int | None = None
     confidence: float = 0.0
     projection_confidence: float | None = None
     detection_origin: str = "base"  # base | guided_roi
     guidance_id: str | None = None
+    donor_view: str | None = None
+    expected_global_player_id: str | None = None
+    pre_gate_residual_ft: float | None = None
+    intrinsic_quality: float | None = None
+    recovery_episode_id: str | None = None
+    source_timestamp_ms: float | None = None
+    mapped_take_timestamp_ms: float | None = None
+    selection_error_ms: float | None = None
+    timing_authority: str = "missing"
+    sync_quality: str = "unknown"
+    view_status: str = "available"
+    tracking_status: str = "detected"
+    lock_state: str | None = None
+    bbox: list[float] | None = None
+    image_footpoint: tuple[float, float] | None = None
 
 
 @dataclass
@@ -65,12 +81,26 @@ class GlobalPlayerAssociator:
         registry: GlobalPlayerRegistry,
         max_association_distance_ft: float = 3.0,
         prediction_bias_ft: float = 0.5,
+        local_identity_switch_penalty: float = 0.25,
+        guidance_global_mismatch_penalty: float = 0.5,
     ) -> None:
         self.registry = registry
         self.max_association_distance_ft = max_association_distance_ft
         self.prediction_bias_ft = prediction_bias_ft
-        # (view_id, obs_key) -> global_id(obs_key = view_player_id 或 str(track_id))
-        self.mapping: dict[tuple[str, str], str] = {}
+        self.local_identity_switch_penalty = local_identity_switch_penalty
+        self.guidance_global_mismatch_penalty = guidance_global_mismatch_penalty
+        self.diagnostics: dict[str, int] = {}
+        # (view_id, view_player_id, identity_epoch) -> global_id.
+        # Track-only observations remain compatible through a synthetic key.
+        self.mapping: dict[tuple[str, str, int], str] = {}
+
+    @staticmethod
+    def observation_key(obs: JointObservation) -> str:
+        return obs.view_player_id or str(obs.track_id)
+
+    @classmethod
+    def mapping_key(cls, obs: JointObservation) -> tuple[str, str, int]:
+        return (obs.view_id, cls.observation_key(obs), int(obs.local_identity_epoch))
 
     def process_tick(
         self,
@@ -81,6 +111,10 @@ class GlobalPlayerAssociator:
         """把两路观测分配到 global states;返回关联更新。"""
         # 1) canonical 化
         for obs in observations:
+            identity_key = self.observation_key(obs)
+            for old_key in list(self.mapping):
+                if old_key[0] == obs.view_id and old_key[1] == identity_key and old_key[2] != obs.local_identity_epoch:
+                    self.mapping.pop(old_key, None)
             if obs.canonical_x_ft is None:
                 cx, cy = local_to_canonical(
                     obs.local_x_ft, obs.local_y_ft, orientation_by_view.get(obs.view_id)
@@ -99,8 +133,10 @@ class GlobalPlayerAssociator:
                 continue
             ranking: dict[str, dict[str, float]] = {}
             feasibility: dict[str, dict[str, float]] = {}
+            observations_by_key: dict[str, JointObservation] = {}
             for obs in view_obs:
-                key = obs.view_player_id or str(obs.track_id)
+                key = f"{self.observation_key(obs)}@{obs.local_identity_epoch}"
+                observations_by_key[key] = obs
                 ranking[key] = {}
                 feasibility[key] = {}
                 for gid in pred_globals:
@@ -108,8 +144,13 @@ class GlobalPlayerAssociator:
                     geometry = _dist((obs.canonical_x_ft, obs.canonical_y_ft), (px, py))
                     feasibility[key][gid] = geometry
                     # per-candidate prediction residual(ranking 项)
-                    ranking[key][gid] = geometry + self.prediction_bias_ft * geometry
-            obs_keys = [o.view_player_id or str(o.track_id) for o in view_obs]
+                    cost = geometry + self.prediction_bias_ft * geometry
+                    if self.mapping.get(self.mapping_key(obs)) not in (None, gid):
+                        cost += self.local_identity_switch_penalty
+                    if obs.expected_global_player_id and obs.expected_global_player_id != gid:
+                        cost += self.guidance_global_mismatch_penalty
+                    ranking[key][gid] = cost
+            obs_keys = [f"{self.observation_key(o)}@{o.local_identity_epoch}" for o in view_obs]
             pairs = min_cost_matching(
                 obs_keys,
                 pred_globals,
@@ -118,19 +159,24 @@ class GlobalPlayerAssociator:
                 max_feasibility_cost=self.max_association_distance_ft,
             )
             for key, gid in pairs:
-                obs = next(o for o in view_obs if (o.view_player_id or str(o.track_id)) == key)
+                obs = observations_by_key[key]
                 assigned_obs.add(id(obs))
-                self.mapping[(view_id, key)] = gid
+                self.mapping[self.mapping_key(obs)] = gid
                 dist = feasibility[key][gid]
                 self.registry.set_binding(
                     gid,
                     view_id,
                     ViewBinding(
                         view_player_id=obs.view_player_id or None,
+                        local_identity_epoch=obs.local_identity_epoch,
                         track_id=obs.track_id,
                         last_seen_take_timestamp_ms=obs.take_timestamp_ms,
-                        quality=obs.confidence,
+                        last_source_frame_index=obs.source_frame_index,
+                        quality=obs.intrinsic_quality if obs.intrinsic_quality is not None else obs.confidence,
                         visibility="observed",
+                        observation_origin=obs.detection_origin,
+                        guidance_id=obs.guidance_id,
+                        donor_view=obs.donor_view,
                     ),
                     obs.take_timestamp_ms,
                 )
@@ -140,27 +186,58 @@ class GlobalPlayerAssociator:
         unmatched = [o for o in observations if id(o) not in assigned_obs]
         groups: list[tuple[str, tuple[float, float], list[JointObservation]]] = []
         for obs in unmatched:
-            key = obs.view_player_id or str(obs.track_id)
-            existing = self.mapping.get((obs.view_id, key))
+            key = self.observation_key(obs)
+            existing = self.mapping.get(self.mapping_key(obs))
             if existing is not None and existing in self.registry.players:
-                # 既有映射连续性:直接复用该 global(更新 binding)
-                self.registry.set_binding(
-                    existing, obs.view_id,
-                    ViewBinding(
-                        view_player_id=obs.view_player_id or None, track_id=obs.track_id,
-                        last_seen_take_timestamp_ms=obs.take_timestamp_ms, quality=obs.confidence,
-                    ),
-                    obs.take_timestamp_ms,
-                )
-                updates.append(AssociationUpdate(existing, obs.view_id, obs, 0.0, tentative=True))
-                continue
+                # 既有映射连续性仍需通过预测/状态 geometry hard gate。
+                predicted = predictions.get(existing)
+                if predicted is None:
+                    state = self.registry.get(existing)
+                    predicted = (state.x_ft, state.y_ft, state.position_uncertainty_ft) if state else None
+                if predicted is None or _dist(
+                    (obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0),
+                    (predicted[0], predicted[1]),
+                ) > self.max_association_distance_ft:
+                    self.mapping.pop(self.mapping_key(obs), None)
+                    self.diagnostics["continuity_rejected_geometry"] = (
+                        self.diagnostics.get("continuity_rejected_geometry", 0) + 1
+                    )
+                else:
+                    # 既有映射连续性: geometry gate 通过后复用 global。
+                    self.registry.set_binding(
+                        existing, obs.view_id,
+                        ViewBinding(
+                            view_player_id=obs.view_player_id or None,
+                            local_identity_epoch=obs.local_identity_epoch,
+                            track_id=obs.track_id,
+                            last_seen_take_timestamp_ms=obs.take_timestamp_ms,
+                            last_source_frame_index=obs.source_frame_index,
+                            quality=obs.intrinsic_quality if obs.intrinsic_quality is not None else obs.confidence,
+                            observation_origin=obs.detection_origin,
+                            guidance_id=obs.guidance_id,
+                            donor_view=obs.donor_view,
+                        ),
+                        obs.take_timestamp_ms,
+                    )
+                    updates.append(AssociationUpdate(existing, obs.view_id, obs, 0.0, tentative=True))
+                    continue
             pos = (obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0)
             placed = False
             for gi, (gid, centroid, members) in enumerate(groups):
-                if _dist(pos, centroid) <= self.max_association_distance_ft:
+                if (
+                    all(member.view_id != obs.view_id for member in members)
+                    and _dist(pos, centroid) <= self.max_association_distance_ft
+                ):
                     members.append(obs)
                     n = len(members)
-                    groups[gi] = (gid, ((centroid[0] * (n - 1) + pos[0]) / n, (centroid[1] * (n - 1) + pos[1]) / n), members)
+                    groups[gi] = (
+                        gid,
+                        (
+                            (centroid[0] * (n - 1) + pos[0]) / n,
+                            (centroid[1] * (n - 1) + pos[1]) / n,
+                        ),
+                        members,
+                    )
                     placed = True
                     break
             if not placed:
@@ -169,16 +246,20 @@ class GlobalPlayerAssociator:
             state = self.registry.ensure(gid)
             state.lifecycle = "tentative"
             for obs in members:
-                key = obs.view_player_id or str(obs.track_id)
-                self.mapping[(obs.view_id, key)] = gid
+                self.mapping[self.mapping_key(obs)] = gid
                 self.registry.set_binding(
                     gid,
                     obs.view_id,
                     ViewBinding(
                         view_player_id=obs.view_player_id or None,
+                        local_identity_epoch=obs.local_identity_epoch,
                         track_id=obs.track_id,
                         last_seen_take_timestamp_ms=obs.take_timestamp_ms,
-                        quality=obs.confidence,
+                        last_source_frame_index=obs.source_frame_index,
+                        quality=obs.intrinsic_quality if obs.intrinsic_quality is not None else obs.confidence,
+                        observation_origin=obs.detection_origin,
+                        guidance_id=obs.guidance_id,
+                        donor_view=obs.donor_view,
                     ),
                     obs.take_timestamp_ms,
                 )

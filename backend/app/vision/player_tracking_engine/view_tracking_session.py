@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import hypot
 from typing import Any
 
@@ -35,19 +35,23 @@ from app.schemas.tracking import (
 )
 from app.utils.fps import frames_for_seconds
 from app.vision.court_view import filter_detections_to_roi
-from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
-from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
-from app.vision.player_tracking_engine.multi_object_tracker import DuplicateTrackSuppressor, MultiObjectTracker
-from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
-from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
-from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
-from app.vision.player_tracking_engine.player_projector import PlayerProjector
-from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.pickleball_game_analysis.court_track_types import (
     CourtTrackEvent,
     CourtTrackObservation,
     canonical_player_id,
 )
+from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
+from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
+from app.vision.player_tracking_engine.multi_object_tracker import (
+    DuplicateTrackSuppressor,
+    MultiObjectTracker,
+    TrackingUpdate,
+)
+from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
+from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
+from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
+from app.vision.player_tracking_engine.player_projector import PlayerProjector
+from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 
 # 渲染事件映射表：IdentityManager/LockManager diagnostics event → CourtTrackEvent type
 _RENDER_EVENT_MAPPING: dict[str, str] = {
@@ -118,6 +122,7 @@ class ViewTrackingSessionConfig:
     # tracker / suppressor / smoother
     player_duplicate_track_iou_threshold: float
     player_duplicate_track_sustain_frames: int
+    eligibility_policy: str = "legacy_union"  # legacy_union | lock_only
     position_smoother_alpha: float = 0.45
     position_smoother_max_speed_ft_s: float = 30.0
     position_smoother_max_gap_frames: int = 10
@@ -133,6 +138,23 @@ class ViewFrameResult:
     frame_positions: list[PlayerFramePosition]
     render_raw_by_track: dict[int, dict[str, Any]]
     player_motion_pixels: float | None
+    source_timestamp_ms: float | None = None
+    mapped_take_timestamp_ms: float | None = None
+    selection_error_ms: float | None = None
+    timing_authority: str = "missing"
+    sync_quality: str = "unknown"
+    local_identity_by_track: dict[int, str] = field(default_factory=dict)
+    local_identity_epoch_by_track: dict[int, int] = field(default_factory=dict)
+    observation_origin_by_track: dict[int, str] = field(default_factory=dict)
+    guidance_id_by_track: dict[int, str] = field(default_factory=dict)
+    donor_view_by_track: dict[int, str] = field(default_factory=dict)
+    expected_global_by_track: dict[int, str] = field(default_factory=dict)
+    pre_gate_residual_by_track: dict[int, float] = field(default_factory=dict)
+    recovery_episode_by_track: dict[int, str] = field(default_factory=dict)
+    guided_candidate_count: int = 0
+    guided_pre_gate_accepted_count: int = 0
+    guided_detection_invoked: bool = False
+    guided_reject_reason_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -291,6 +313,7 @@ class ViewTrackingSession:
         self.render_identity_epoch_by_player: dict[str, int] = {}
         self._render_identity_diagnostic_cursor = 0
         self._prev_player_centroids: dict[str, tuple[float, float]] = {}
+        self._last_guided_reject_reason_counts: dict[str, int] = {}
 
     # ---- 主接口 -------------------------------------------------------------
 
@@ -303,8 +326,6 @@ class ViewTrackingSession:
         guidance: Sequence[Any] = (),
     ) -> ViewFrameResult:
         """推进一帧：完整 tracking 链（检测→…→身份→渲染观测）。默认 guidance=() 时与重构前一致。"""
-        _ = guidance  # Change 1：guidance 仅占位，不触发 guided detection
-
         # 1) 检测
         raw_detections = self._bind_detections_to_frame(
             self._detect_frame(frame, frame_index), frame_index
@@ -315,18 +336,30 @@ class ViewTrackingSession:
         if self.roi_artifact.status != "available":
             self.full_frame_fallback_count += 1
         # 2b) guidance → guided re-detection（跨视角 feedback,pre-gate 在 tracker 之前,invariant 2/9）
+        guided_by_detection: dict[int, Any] = {}
+        guided_detection_invoked = False
+        guided_candidate_count = 0
+        guided_reject_reason_counts: dict[str, int] = {}
         if guidance:
-            guided = self._run_guided_detection(frame, guidance)
+            guided, guided_detection_invoked, guided_candidate_count = self._run_guided_detection(frame, guidance)
+            guided_reject_reason_counts.update(self._last_guided_reject_reason_counts)
             if guided:
-                from app.vision.multiview.guided_detection import merge_base_and_guided
-
-                detections = merge_base_and_guided(detections, guided)
+                detections, guided_by_detection = self._merge_detection_evidence(detections, guided)
+                for candidate in guided:
+                    reason = getattr(candidate, "reject_reason", None)
+                    if reason:
+                        guided_reject_reason_counts[reason] = guided_reject_reason_counts.get(reason, 0) + 1
         # 3) 跟踪 + 重复抑制
-        tracks = self.tracker.update(detections)
+        tracker_update = self._tracker_update_with_assignments(detections)
+        tracks = tracker_update.tracks
         tracks = self.duplicate_suppressor.filter(tracks)
+        surviving_track_ids = {track.track_id for track in tracks}
         # 4) 脚点 + 投影
         footpoints = {
-            track.track_id: self.footpoint_estimator.estimate(track, frame_shape=(self.config.frame_width, self.config.frame_height))
+            track.track_id: self.footpoint_estimator.estimate(
+                track,
+                frame_shape=(self.config.frame_width, self.config.frame_height),
+            )
             for track in tracks
         }
         frame_positions = self.projector.project(
@@ -381,7 +414,10 @@ class ViewTrackingSession:
             frame_height=self.config.frame_height,
         )
         self.lock_diagnostics.extend(lock_update.diagnostics)
-        eligible_track_ids = lock_update.eligible_track_ids | suggested_track_ids
+        if self.config.eligibility_policy == "lock_only":
+            eligible_track_ids = set(lock_update.eligible_track_ids)
+        else:
+            eligible_track_ids = lock_update.eligible_track_ids | suggested_track_ids
         # 9) 帧检测（仅主球员集合）
         frame_detections = self._tracks_to_frame_detections(
             tracks,
@@ -408,6 +444,31 @@ class ViewTrackingSession:
             for sample in player_samples
             if sample.track_id is not None and sample.tracking_status == "tentative"
         }
+        epoch_by_player = dict(self.render_identity_epoch_by_player)
+        identity_epoch_by_track = {
+            int(track_id): epoch_by_player.get(canonical_player_id(player_id), 0)
+            for track_id, player_id in player_by_track.items()
+            if int(track_id) in surviving_track_ids
+        }
+        origin_by_track: dict[int, str] = {}
+        guidance_by_track: dict[int, str] = {}
+        donor_by_track: dict[int, str] = {}
+        expected_global_by_track: dict[int, str] = {}
+        residual_by_track: dict[int, float] = {}
+        for detection_index, evidence in guided_by_detection.items():
+            track_id = tracker_update.detection_to_track.get(detection_index)
+            if track_id is None or track_id not in surviving_track_ids:
+                continue
+            origin_by_track[track_id] = "guided_roi"
+            guidance_id = getattr(evidence, "guidance_id", None)
+            if guidance_id:
+                guidance_by_track[track_id] = guidance_id
+            if getattr(evidence, "donor_view", None):
+                donor_by_track[track_id] = evidence.donor_view
+            if getattr(evidence, "expected_global_player_id", None):
+                expected_global_by_track[track_id] = evidence.expected_global_player_id
+            if getattr(evidence, "residual_ft", None) is not None:
+                residual_by_track[track_id] = float(evidence.residual_ft)
         # 11) 渲染观测（使用当前 epoch；须在 diagnostics 驱动的 epoch 递增之前 —— D2b）
         for pos in frame_positions:
             raw = render_raw_by_track.get(pos.track_id)
@@ -523,6 +584,24 @@ class ViewTrackingSession:
             frame_positions=frame_positions,
             render_raw_by_track=render_raw_by_track,
             player_motion_pixels=player_motion_pixels,
+            local_identity_by_track={int(k): v for k, v in player_by_track.items() if int(k) in surviving_track_ids},
+            local_identity_epoch_by_track=identity_epoch_by_track,
+            observation_origin_by_track=origin_by_track,
+            guidance_id_by_track=guidance_by_track,
+            donor_view_by_track=donor_by_track,
+            expected_global_by_track=expected_global_by_track,
+            pre_gate_residual_by_track=residual_by_track,
+            recovery_episode_by_track={
+                track_id: str(evidence.recovery_episode_id)
+                for detection_index, evidence in guided_by_detection.items()
+                if (track_id := tracker_update.detection_to_track.get(detection_index)) is not None
+                and track_id in surviving_track_ids
+                and getattr(evidence, "recovery_episode_id", None)
+            },
+            guided_candidate_count=guided_candidate_count,
+            guided_pre_gate_accepted_count=len(guided_by_detection),
+            guided_detection_invoked=guided_detection_invoked,
+            guided_reject_reason_counts=guided_reject_reason_counts,
         )
 
     # ---- 结束阶段窄接口 -----------------------------------------------------
@@ -613,35 +692,100 @@ class ViewTrackingSession:
             for detection in detections
         ]
 
-    def _run_guided_detection(self, frame: object, guidance) -> list[Detection]:
+    def _run_guided_detection(self, frame: object, guidance) -> tuple[list[Any], bool, int]:
         """按跨视角 guidance 对目标 ROI 做 guided re-detection,pre-gate 后返回 accepted。
 
         只在本 session 的检测链内使用(在 tracker.update 之前);pre-gate 拒绝的 candidate 不触碰 tracker。
         """
         from app.vision.multiview.guided_detection import guided_candidate_pre_gate
 
-        accepted: list[Detection] = []
+        accepted: list[Any] = []
+        invoked = False
+        candidate_count = 0
+        self._last_guided_reject_reason_counts: dict[str, int] = {}
         for g in guidance:
             roi = getattr(g, "roi", None)
-            predicted = getattr(g, "predicted_canonical_position", None)
+            predicted = getattr(g, "predicted_local_position", None) or getattr(g, "predicted_canonical_position", None)
             if roi is None or predicted is None:
+                reason = "missing_guidance_geometry"
+                self._last_guided_reject_reason_counts[reason] = (
+                    self._last_guided_reject_reason_counts.get(reason, 0) + 1
+                )
                 continue
             try:
                 candidates = self.detector.detect_regions(frame, [roi])
             except Exception:
+                reason = "detector_error"
+                self._last_guided_reject_reason_counts[reason] = (
+                    self._last_guided_reject_reason_counts.get(reason, 0) + 1
+                )
                 continue
+            invoked = True
+            candidate_count += len(candidates)
             for d in candidates:
                 gated = guided_candidate_pre_gate(
                     d,
                     homography=self.homography,
-                    predicted_canonical=predicted,
+                    predicted_local=predicted,
                     max_residual_ft=3.0,
                     frame_width=self.config.frame_width,
                     frame_height=self.config.frame_height,
                 )
                 if gated.accepted:
-                    accepted.append(d)
-        return accepted
+                    gated.guidance_id = getattr(g, "guidance_id", None)
+                    gated.expected_global_player_id = (
+                        getattr(g, "expected_global_player_id", None)
+                        or getattr(g, "global_player_id", None)
+                    )
+                    gated.donor_view = getattr(g, "donor_view", None)
+                    gated.donor_quality = float(getattr(g, "donor_quality", 0.0) or 0.0)
+                    gated.recovery_episode_id = getattr(g, "recovery_episode_id", None)
+                    accepted.append(gated)
+                else:
+                    reason = gated.reject_reason or "pre_gate_rejected"
+                    self._last_guided_reject_reason_counts[reason] = (
+                        self._last_guided_reject_reason_counts.get(reason, 0) + 1
+                    )
+        return accepted, invoked, candidate_count
+
+    def _tracker_update_with_assignments(self, detections: list[Detection]) -> TrackingUpdate:
+        update_with_assignments = getattr(self.tracker, "update_with_assignments", None)
+        if callable(update_with_assignments):
+            return update_with_assignments(detections)
+        return TrackingUpdate(
+            tracks=self.tracker.update(detections),
+            detection_to_track={},
+        )
+
+    @staticmethod
+    def _merge_detection_evidence(base: list[Detection], guided: list[Any]) -> tuple[list[Detection], dict[int, Any]]:
+        """Deterministic base-over-guided evidence merge.
+
+        Guided candidates are sorted by residual, donor quality and guidance id;
+        accepted candidates overlapping base evidence are discarded from the
+        tracker input, preserving base as the authoritative same-tick evidence.
+        """
+        from app.vision.multiview.guided_detection import _iou
+
+        merged = list(base)
+        evidence_by_index: dict[int, Any] = {}
+        for candidate in sorted(
+            guided,
+            key=lambda item: (
+                float(getattr(item, "residual_ft", float("inf"))),
+                -float(getattr(item, "donor_quality", 0.0) or 0.0),
+                str(getattr(item, "guidance_id", "")),
+            ),
+        ):
+            if any(_iou(candidate.detection.bbox, existing.bbox) >= 0.5 for existing in merged):
+                candidate.reject_reason = "duplicate_of_base" if any(
+                    _iou(candidate.detection.bbox, existing.bbox) >= 0.5 for existing in base
+                ) else "duplicate_of_guided"
+                continue
+            index = len(merged)
+            merged.append(candidate.detection)
+            evidence_by_index[index] = candidate
+        return merged, evidence_by_index
 
     @staticmethod
     def _tracks_to_frame_detections(

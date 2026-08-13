@@ -6,7 +6,7 @@ CanonicalAnalysisClock 只告诉 runtime 下一 `source_frame_index`;runtime 负
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Mapping
 
 from app.vision.multiview.joint_types import JointViewInput
@@ -56,6 +56,7 @@ class JointViewRuntime:
         source_frame_index: int,
         timestamp_s: float,
         guidance: tuple[Any, ...] = (),
+        timing_context: Any | None = None,
     ) -> ViewFrameResult | None:
         """解帧 + 推进 tracking session;无帧返回 None。"""
         frame = self.get_frame(source_frame_index)
@@ -69,4 +70,13 @@ class JointViewRuntime:
             guidance=guidance,
         )
         self.counters["stepped_frames"] = self.counters.get("stepped_frames", 0) + 1
-        return result
+        if timing_context is None:
+            return result
+        return replace(
+            result,
+            source_timestamp_ms=getattr(timing_context, "source_timestamp_ms", None),
+            mapped_take_timestamp_ms=getattr(timing_context, "mapped_take_timestamp_ms", None),
+            selection_error_ms=getattr(timing_context, "selection_error_ms", None),
+            timing_authority=getattr(timing_context, "timing_authority", "missing"),
+            sync_quality=getattr(timing_context, "sync_quality", "unknown"),
+        )

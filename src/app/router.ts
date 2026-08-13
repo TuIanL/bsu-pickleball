@@ -1,4 +1,4 @@
-import type { AppShellMode, NavigationSection, ReportType, RouteState } from "./navigationTypes";
+import type { AppShellMode, NavigatePath, NavigationSection, ReportType, RouteState } from "./navigationTypes";
 import { parseTaskListContext } from "./navigationContext";
 
 export const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
@@ -22,11 +22,13 @@ const routeMeta = {
   "analysis-tasks": { shellMode: "standard", navigationSection: "analysis" },
   "recording-analyze": { shellMode: "standard", navigationSection: "analysis" },
   "multiview-setup": { shellMode: "standard", navigationSection: "analysis" },
+  "sync-calibration": { shellMode: "standard", navigationSection: "analysis" },
   showcase: { shellMode: "landing", navigationSection: null },
   "analysis-job": { shellMode: "standard", navigationSection: "analysis" },
   "analysis-details": { shellMode: "standard", navigationSection: "analysis" },
   vision: { shellMode: "standard", navigationSection: "analysis" },
   "ball-trajectory": { shellMode: "standard", navigationSection: "analysis" },
+  "multiview-observability": { shellMode: "standard", navigationSection: "analysis" },
   report: { shellMode: "standard", navigationSection: "reports" },
   "camera-hub": { shellMode: "standard", navigationSection: "devices" },
   training: { shellMode: "standard", navigationSection: "settings" },
@@ -40,6 +42,10 @@ export function parsePath(pathname: string): RouteState {
 
   if (pathname === "/workspace") {
     return { name: "workspace", path: "/workspace", ...routeMeta.workspace };
+  }
+
+  if (pathname === "/sync-calibration") {
+    return { name: "sync-calibration", path: "/sync-calibration", captureTakeId: "", ...routeMeta["sync-calibration"] };
   }
 
   if (pathname === "/upload") {
@@ -138,6 +144,17 @@ export function parsePath(pathname: string): RouteState {
     };
   }
 
+  const multiviewObservabilityMatch = pathname.match(/^\/analysis\/([^/]+)\/multiview$/);
+  if (multiviewObservabilityMatch) {
+    const [, jobId] = multiviewObservabilityMatch;
+    return {
+      name: "multiview-observability",
+      path: `/analysis/${jobId}/multiview`,
+      jobId,
+      ...routeMeta["multiview-observability"],
+    };
+  }
+
   const analysisReportMatch = pathname.match(/^\/analysis\/([^/]+)\/reports\/([^/]+)$/);
 
   if (analysisReportMatch) {
@@ -204,6 +221,19 @@ export function parsePath(pathname: string): RouteState {
 
 export function parseLocation(pathname: string, search: string): RouteState {
   const route = parsePath(pathname);
+
+  if (route.name === "sync-calibration") {
+    const params = new URLSearchParams(search);
+    const rawReturnPath = params.get("return");
+    const returnPath = rawReturnPath && rawReturnPath.startsWith("/") && !rawReturnPath.startsWith("//")
+      ? rawReturnPath as NavigatePath
+      : undefined;
+    return {
+      ...route,
+      captureTakeId: params.get("take") ?? params.get("captureTakeId") ?? "",
+      returnPath,
+    };
+  }
 
   if (route.name === "tasks" || route.name === "analysis-tasks") {
     const params = new URLSearchParams(search);

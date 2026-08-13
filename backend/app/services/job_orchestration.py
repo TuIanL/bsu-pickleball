@@ -37,6 +37,7 @@ from app.schemas.analysis import (
 )
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
 from app.services.storage_service import StorageService
+from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,12 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         # 分析模式由是否提供标定/视频决定
         "analysisMode": "real" if payload.calibrationId else "limited" if payload.videoId else "demo",
     }
+    # Joint recovery parameters are part of reproducibility/idempotency. Keep the
+    # field absent for legacy single-view and late-fusion jobs so their signatures
+    # remain unchanged.
+    if payload.multiview and payload.multiview.executionMode == "joint_tracking_v2":
+        config_payload["p1OnlineRecovery"] = P1OnlineRecoveryConfig().snapshot()
+        config_payload["debugTraceEnabled"] = bool(payload.multiview.debugTraceEnabled)
     input_payload = {
         "videoId": payload.videoId,
         "calibrationId": payload.calibrationId,
@@ -364,6 +371,7 @@ class JobStore:
             clipEndMs=payload.clipEndMs,
             analysisKind=payload.analysisKind,
             orchestrationStatus="waiting_sources" if payload.analysisKind == "multiview" else "none",
+            debugTraceEnabled=bool(payload.multiview.debugTraceEnabled) if payload.multiview else False,
         )
         return self.save(job)
 

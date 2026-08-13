@@ -44,6 +44,8 @@ class CanonicalObservation:
     source_timestamp_ms: float | None
     mapped_take_timestamp_ms: float | None
     selection_error_ms: float | None
+    timing_authority: str = "missing"
+    sync_quality: str = "unknown"
     # canonical 坐标（已归一化）；不可用时为 None。
     canonical_x_ft: float | None = None
     canonical_y_ft: float | None = None
@@ -54,6 +56,9 @@ class CanonicalObservation:
     footpoint_method: str | None = None
     tracking_status: str | None = None
     is_interpolated: bool = False
+    observation_origin: str = "base"
+    donor_view: str | None = None
+    residual_ft: float | None = None
 
 
 @dataclass(frozen=True)

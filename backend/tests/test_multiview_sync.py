@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.services.dual_camera_sync import SyncCalibration, calibration_to_dict
 from app.vision.multiview.sync import (
     MultiViewSyncCalibration,
     evaluate_sync_gate,
     load_sync_calibration,
+    resolve_sync_authority,
     sync_calibration_path,
     validate_sync_authority,
 )
+from app.services.frame_timing_provider import FrameTimingProvider
 
 
 def _sync(reference_camera: str, camera_id: str, quality: str, offset_ms: float = 500.0) -> SyncCalibration:
@@ -150,3 +154,142 @@ def test_validate_sync_authority_rejects_invalid_numeric_quality_and_range():
         "quality_invalid",
         "valid_range_invalid",
     }
+
+
+def test_resolve_sync_authority_good_is_authoritative_joint():
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", "good")},
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+    )
+    assert result.structural_valid
+    assert result.sync_quality == "good"
+    assert result.execution_mode == "joint_authoritative"
+    assert result.authoritative_joint_eligible
+
+
+def test_visual_acceptance_requires_manual_three_anchor_calibration():
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", "good")},
+        anchor_count=2,
+        source="auto_degraded_from_recording_timing",
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+        require_authoritative_calibration=True,
+    )
+    assert not result.structural_valid
+    assert not result.authoritative_joint_eligible
+    assert "manual_anchor_calibration_required" in result.reason_codes
+    assert "anchor_count_insufficient" in result.reason_codes
+
+
+def test_visual_acceptance_accepts_valid_manual_anchor_metadata():
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", "good")},
+        anchor_count=4,
+        source="manual_anchors",
+        anchor_validation={"valid": True, "issues": []},
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+        require_authoritative_calibration=True,
+    )
+    assert result.execution_mode == "joint_authoritative"
+    assert result.authoritative_joint_eligible
+
+
+def test_resolve_sync_authority_degraded_is_non_authoritative_joint():
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", "degraded")},
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+    )
+    assert result.execution_mode == "joint_degraded"
+    assert not result.authoritative_joint_eligible
+
+
+@pytest.mark.parametrize("quality", ["unknown"])
+def test_resolve_sync_authority_unknown_or_invalid_falls_back(quality):
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", quality)},
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+    )
+    assert result.execution_mode == "single_view_fallback"
+    assert not result.authoritative_joint_eligible
+
+    missing_mapping = resolve_sync_authority(
+        None,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+    )
+    assert missing_mapping.execution_mode == "single_view_fallback"
+    assert not missing_mapping.structural_valid
+
+
+def test_resolve_sync_authority_nominal_is_compatibility_only():
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", "good")},
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "legacy_nominal_fps"},
+    )
+    assert result.execution_mode == "compatibility_degraded"
+    assert not result.authoritative_joint_eligible
+    assert "nominal_timing_not_authoritative" in result.reason_codes
+
+
+def test_missing_provider_does_not_create_nominal_timestamps(tmp_path):
+    provider = FrameTimingProvider.from_media(
+        tmp_path / "camera.mp4",
+        frame_count=3,
+        fps=30.0,
+        allow_nominal_fallback=False,
+    )
+    assert provider.provenance.authority == "missing"
+    assert provider.frames == ()
+
+
+def test_missing_timing_authority_blocks_authoritative_joint_even_with_good_mapping():
+    sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={"cam_2": _sync("cam_1", "cam_2", "good")},
+    )
+    result = resolve_sync_authority(
+        sync,
+        reference_camera_id="cam_1",
+        secondary_camera_id="cam_2",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "missing"},
+    )
+    assert result.execution_mode == "single_view_fallback"
+    assert result.sync_quality == "unavailable"
+    assert "timing_authority_unavailable" in result.reason_codes
