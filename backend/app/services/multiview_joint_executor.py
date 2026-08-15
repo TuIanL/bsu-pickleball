@@ -112,6 +112,7 @@ def _with_samples(out, f1_trajectory: dict[str, object]):
         trajectory=f1_trajectory,
         normalized=normalized,
         diagnostics=out.diagnostics,
+        debug_trace=getattr(out, "debug_trace", None),
     )
 
 
@@ -422,7 +423,7 @@ class MultiViewJointExecutor:
                 reference_timing_authority=reference_timing_provider.provenance.authority,
                 secondary_timing_authority=timing_providers[secondary_view_id].provenance.authority,
             )
-            registry = GlobalPlayerRegistry()
+            registry = GlobalPlayerRegistry(expected_player_count=match_ctx.expected_player_count)
             associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
             gen = GuidanceGenerator(CrossViewGuidancePolicy())
             run = MultiViewJointRun(
@@ -483,6 +484,8 @@ class MultiViewJointExecutor:
             out.diagnostics["execution_mode"] = resolution.execution_mode
             out.diagnostics["authoritative_joint_eligible"] = resolution.authoritative_joint_eligible
             out.diagnostics["requested_mode"] = parent.executionMode
+            # 参考视角源帧尺寸（composer 生成 tracking_overlay / heatmaps 需要）
+            out.diagnostics["frame_size"] = {"width": width, "height": height}
 
             run_dir = default_run_output_dir(analysis_dir, run_id) if analysis_dir is not None else None
             if getattr(parent, "debugTraceEnabled", False):

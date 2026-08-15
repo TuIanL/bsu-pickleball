@@ -148,8 +148,11 @@ def test_clock_reports_interval_range_selection_error_and_provenance():
         secondary_timing_authority="source_pts",
     )
     before = clock.tick(reference_frame_index=0, reference_timestamp_seconds=0.1)
-    assert before.frame_status["cam_2"] == "unavailable_outside_valid_interval"
-    assert before.mapping_diagnostics["reason"] == "unavailable_outside_valid_interval"
+    # 2026-08-13 起：窗口开头（< valid_start）回退到有效起点帧，status=fallback_valid_start
+    assert before.frame_status["cam_2"] == "fallback_valid_start"
+    assert before.mapping_diagnostics["reason"] == "fallback_valid_start"
+    assert before.views["cam_2"] is not None
+    assert before.views["cam_2"].source_frame_index == 0  # 回退到 valid_start 最近的帧
 
     error = clock.tick(reference_frame_index=1, reference_timestamp_seconds=0.5)
     assert error.frame_status["cam_2"] == "unavailable_selection_error"
@@ -157,6 +160,68 @@ def test_clock_reports_interval_range_selection_error_and_provenance():
     assert error.views["cam_1"].source_timestamp_ms == pytest.approx(10050.0)
     assert error.views["cam_1"].timing_authority == "source_pts"
     assert error.views["cam_1"].sync_quality == "degraded"
+
+
+def test_clock_window_start_falls_back_to_valid_start_frame():
+    """窗口开头（canonical 早于 valid_start）回退到有效起点帧，status=fallback_valid_start。
+
+    debug replay 前段因此有副摄画面（2026-08-13 修复），且不消费 tracker（单调不变量保持）。
+    """
+    calibration = SyncCalibration(
+        reference_camera="cam_1",
+        camera_id="cam_2",
+        offset_seconds=0.0,
+        rate=1.0,
+        drift_ppm=0.0,
+        residual_rms_seconds=0.001,
+        anchor_count=3,
+        quality="good",
+        valid_start_seconds=3.4,
+        valid_end_seconds=50.0,
+    )
+    sync = MultiViewSyncCalibration(reference_camera="cam_1", mappings={"cam_2": calibration})
+    # cam_2 60fps，帧 0..5999（0-100s）
+    cam2_frames = [FrameTiming(i, i / 60.0) for i in range(6000)]
+    clock = CanonicalAnalysisClock(
+        reference_view_id="cam_1",
+        secondary_view_id="cam_2",
+        secondary_frames=cam2_frames,
+        sync=sync,
+        secondary_camera_id="cam_2",
+        max_pairing_error_ms=16.7,
+    )
+    # 窗口开头：t=0 早于 valid_start 3.4s → 回退到 valid_start 附近的帧
+    early = clock.tick(reference_frame_index=0, reference_timestamp_seconds=0.0)
+    assert early.frame_status["cam_2"] == "fallback_valid_start"
+    assert early.views["cam_2"] is not None
+    assert early.views["cam_2"].source_frame_index == round(3.4 * 60)  # ≈204
+    assert early.mapping_diagnostics["reason"] == "fallback_valid_start"
+    assert early.mapping_diagnostics["fallback_selection_error_ms"] is not None
+
+    # 有效区间内：正常 available
+    inside = clock.tick(reference_frame_index=300, reference_timestamp_seconds=5.0)
+    assert inside.frame_status["cam_2"] == "available"
+    assert inside.views["cam_2"].source_frame_index == 300
+
+    # 无有效区间（valid_start=None）：保持细分不可用
+    no_range_sync = MultiViewSyncCalibration(
+        reference_camera="cam_1",
+        mappings={
+            "cam_2": SyncCalibration(
+                reference_camera="cam_1", camera_id="cam_2",
+                offset_seconds=0.0, rate=1.0, drift_ppm=0.0,
+                residual_rms_seconds=0.001, anchor_count=3, quality="good",
+            )
+        },
+    )
+    clock2 = CanonicalAnalysisClock(
+        reference_view_id="cam_1", secondary_view_id="cam_2",
+        secondary_frames=cam2_frames, sync=no_range_sync, secondary_camera_id="cam_2",
+    )
+    # 无 valid_start 时 selection 走 out_of_media_range（target=0 在帧范围内则 selection ok）：
+    # 此处 target=0、local=0、最近帧=0 → ok，故直接 available
+    ok_bundle = clock2.tick(reference_frame_index=0, reference_timestamp_seconds=0.0)
+    assert ok_bundle.frame_status["cam_2"] == "available"
 
 
 # ---- GlobalMotionEstimator ---------------------------------------------------
@@ -202,18 +267,22 @@ def _obs(view_id, x, y, pid="", tid=None, ts=0.0):
 def test_global_centric_assignment_and_single_view_missing():
     reg = GlobalPlayerRegistry()
     assoc = GlobalPlayerAssociator(reg, max_association_distance_ft=3.0)
-    # tick1:双视角 P1 一致,确立 global(bootstrap 成组)
-    obs1 = [_obs("cam_1", 5.0, 8.0, pid="P1", tid=1), _obs("cam_2", 5.2, 8.1, pid="P1", tid=11)]
-    updates = assoc.process_tick(obs1, 0.0, {"cam_1": IDENTITY, "cam_2": IDENTITY})
-    gids = {u.global_id for u in updates}
-    assert len(gids) == 1  # 双视角成组到同一 global
+    # roster 化：前 2 tick 双视角 P1 一致 → 先成 candidate，第 2 tick 晋升为 global（provisional occupant）
+    for t in range(2):
+        obs = [
+            _obs("cam_1", 5.0 + t * 0.1, 8.0, pid="P1", tid=1, ts=t / 30.0),
+            _obs("cam_2", 5.2 + t * 0.1, 8.1, pid="P1", tid=11, ts=t / 30.0),
+        ]
+        assoc.process_tick(obs, t / 30.0, {"cam_1": IDENTITY, "cam_2": IDENTITY}, tick=t)
+    gids = {gid for gid in reg.players if reg.players[gid].roster_status in ("provisional", "confirmed")}
+    assert len(gids) == 1  # 双视角一致 2 tick → 晋升占用一个 roster slot
     gid0 = next(iter(gids))
     # 吸收一次测量(模拟 joint run 的 fusion 更新),使 global 有 motion state
     reg.absorb_measurement(gid0, 5.1, 8.05, 0.0)
     reg.record_dual_consistent(gid0)
-    # tick2:cam_1 P1 缺失,仅 cam_2 可见 → 仍分配到该 global
-    obs2 = [_obs("cam_2", 5.3, 8.2, pid="P1", tid=11, ts=1 / 30.0)]
-    updates2 = assoc.process_tick(obs2, 1 / 30.0, {"cam_1": IDENTITY, "cam_2": IDENTITY})
+    # tick3:cam_1 P1 缺失,仅 cam_2 可见 → 仍分配到该 global（弱历史绑定 + 连续性）
+    obs2 = [_obs("cam_2", 5.3, 8.2, pid="P1", tid=11, ts=3 / 30.0)]
+    updates2 = assoc.process_tick(obs2, 3 / 30.0, {"cam_1": IDENTITY, "cam_2": IDENTITY}, tick=3)
     assert {u.global_id for u in updates2} == {gid0}
 
 
@@ -221,18 +290,17 @@ def test_association_geometry_gate_independent():
     reg = GlobalPlayerRegistry()
     assoc = GlobalPlayerAssociator(reg, max_association_distance_ft=3.0)
     # P1 在 cam_1(5,8);cam_2 有两个候选:近(5.2,8.1)与远(20,30)
-    obs = [
-        _obs("cam_1", 5.0, 8.0, pid="P1", tid=1),
-        _obs("cam_2", 5.2, 8.1, pid="X", tid=11),
-        _obs("cam_2", 20.0, 30.0, pid="Y", tid=12),
-    ]
-    updates = assoc.process_tick(obs, 0.0, {"cam_1": IDENTITY, "cam_2": IDENTITY})
-    # 近候选 X 与 P1 成组(同一 global);远候选 Y 独立 tentative
-    gid_p1 = [u.global_id for u in updates if u.view_id == "cam_1" and u.observation.view_player_id == "P1"][0]
-    gid_x = [u.global_id for u in updates if u.view_id == "cam_2" and u.observation.view_player_id == "X"][0]
-    gid_y = [u.global_id for u in updates if u.view_id == "cam_2" and u.observation.view_player_id == "Y"][0]
-    assert gid_p1 == gid_x
-    assert gid_y != gid_p1
+    for t in range(2):
+        obs = [
+            _obs("cam_1", 5.0, 8.0, pid="P1", tid=1, ts=t / 30.0),
+            _obs("cam_2", 5.2, 8.1, pid="X", tid=11, ts=t / 30.0),
+            _obs("cam_2", 20.0, 30.0, pid="Y", tid=12, ts=t / 30.0),
+        ]
+        assoc.process_tick(obs, t / 30.0, {"cam_1": IDENTITY, "cam_2": IDENTITY}, tick=t)
+    # 近候选 X 与 P1 双视角一致 2 tick → 晋升同一 global；远候选 Y 单视角候选未达晋升阈值
+    gids = sorted(g for g in reg.players if reg.players[g].roster_status in ("provisional", "confirmed"))
+    assert len(gids) == 1
+    assert len(reg.candidates) == 1  # Y 仍在候选池（hit=2 < 5，且无双视角一致）
 
 
 # ---- CrossViewGuidancePolicy -------------------------------------------------

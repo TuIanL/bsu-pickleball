@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Mapping
 
+import cv2
+
 from app.vision.multiview.joint_types import JointViewInput
 from app.vision.player_tracking_engine.view_tracking_session import ViewTrackingSession, ViewFrameResult
 
@@ -44,8 +46,11 @@ class JointViewRuntime:
         if callable(read):
             return read(source_frame_index)
         # cv2.VideoCapture:seek + read
+        # 必须用帧号语义（CAP_PROP_POS_FRAMES）定位，不能把帧号当毫秒（0 = CAP_PROP_POS_MSEC）：
+        # 毫秒语义下 set(400) 实际定位到 400ms 处（60fps 时 ≈帧 25），导致检测跑在错误帧上、
+        # 检测框每 ~5-8 tick 才变化一次（2026-08-13 定位的 joint 解帧 bug）。
         try:
-            cap.set(0, source_frame_index)  # CAP_PROP_POS_FRAMES
+            cap.set(cv2.CAP_PROP_POS_FRAMES, source_frame_index)
             ok, frame = cap.read()
             return frame if ok else None
         except Exception:

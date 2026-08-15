@@ -273,6 +273,10 @@ class StorageService:
         # 结构化可视化数据 JSON 文件路径
         return self.structured_visualization_data_dir(job_id) / "data.json"
 
+    def roster_manifest_json_path(self, job_id: str) -> Path:
+        # global-player-roster.v1（诊断 / 映射 contract）
+        return self._job_artifact_root(job_id) / "roster.json"
+
     def heatmaps_manifest_json_path(self, job_id: str) -> Path:
         # 热力图清单（索引）JSON
         return self.heatmaps_dir(job_id) / "manifest.json"

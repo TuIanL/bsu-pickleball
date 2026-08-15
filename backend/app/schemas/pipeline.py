@@ -71,6 +71,7 @@ class AnalysisArtifacts(BaseModel):
     heatmaps_url: str | None = None
     scatter_plots_manifest_json_path: str | None = None
     scatter_plots_url: str | None = None
+    structured_visualization_data_path: str | None = None
     pose_overlay_json_path: str | None = None
     pose_overlay_url: str | None = None
     serve_events_json_path: str | None = None
@@ -88,6 +89,13 @@ class AnalysisArtifacts(BaseModel):
     player_trajectory_url: str | None = None
     player_render_trajectory_json_path: str | None = None
     player_render_trajectory_url: str | None = None
+    player_render_trajectory_status: str | None = None
+    player_render_trajectory_detail: str | None = None
+    # global-player-roster.v1（joint 模式，诊断 / 映射 contract，stabilize-joint-global-player-roster）
+    roster_manifest_json_path: str | None = None
+    roster_url: str | None = None
+    roster_status: str | None = None
+    roster_detail: str | None = None
     court_view_roi_json_path: str | None = None
     court_view_roi_url: str | None = None
     source_video_url: str | None = None

@@ -1,9 +1,15 @@
-# multiview-online-player-recovery Specification
+# multiview-online-player-recovery Specification (Delta)
 
 ## Purpose
-TBD - created by archiving change make-p1-cross-view-player-recovery-operational. Update Purpose after archive.
+
+本 delta 强化 guided recovery 的身份约束：对 confirmed + cross_view_anchored 的 global player，guidance 明确的 `expected_global_player_id` 在 guided candidate（`detection_origin=guided_roi`）通过 target-view pre-gate 时成为强约束——优先恢复 expected global，不可行则 reject / unresolved，不得转投其他 global；同 tick base formal observation 优先于 guidance，stale guidance 不得覆盖 base evidence。
+
 ## Requirements
+
+## MODIFIED Requirements
+
 ### Requirement: 在线恢复证据链
+
 `joint_tracking_v2` SHALL 仅在 target view 从自身当前 source frame 的真实像素中重新获得 formal local player observation 后，声明一次 online recovery。该 observation SHALL 可追溯 donor view、guidance、target source frame、local player identity 与 identity epoch、source track、pre-gate residual 与 assigned global player。当 recovery 针对 `confirmed AND cross_view_anchored` 的 global player 时，assigned global SHALL 为 guidance 指定的 `expected_global_player_id`，除非几何不可行或 pre-gate 拒绝（此时记录 reject / unresolved，SHALL NOT 转投其他 global）。同 tick 的 base formal observation 正常走普通关联，stale guidance SHALL NOT 覆盖 base evidence（base 优先语义与 `base_recovered` 保持一致）。
 
 #### Scenario: 双向 controlled dropout 恢复
@@ -30,21 +36,3 @@ TBD - created by archiving change make-p1-cross-view-player-recovery-operational
 - **WHEN** 同 tick 的 base formal observation 已可靠看到目标球员，而 guidance 期望另一 global（陈旧）
 - **THEN** base observation SHALL 走普通关联，guidance 强约束不覆盖
 - **AND** 恢复 episode 按 base_recovered 记录，不计为 guided success
-### Requirement: Recovery diagnostics 完整性
-
-运行 diagnostics SHALL 记录 target weak、eligible opportunity、guidance generated、ROI invoked、candidate、pre-gate accepted、tracker admitted、local identity admitted 与 expected-global preserved 的漏斗，并按原因区分 donor、availability、pre-gate、lock 与 global assignment 失败。
-
-#### Scenario: 可定位恢复失败
-- **WHEN** 某 target view 没有产生恢复 observation
-- **THEN** diagnostics SHALL 记录最早阻断阶段及结构化 reason
-- **AND** target frame unavailable SHALL 与 source frame available 但无视觉 observation 区分
-
-### Requirement: Recovery episode 与成功语义
-
-系统 SHALL 在 target binding 首次进入 weak/lost 时建立 `recovery_episode_id`，直至 target 重新形成 formal observation。`recovery_opportunity` SHALL 要求 target frame available、weak/lost、global confirmed+anchored 与可接受 uncertainty；`guided_recovery_success` SHALL 要求真实 guided pixel evidence 经 pre-gate、surviving tracker、formal lock/local identity 后被分配到 expected global。same-tick base recovery SHALL 记录为 `base_recovered`，不得计入 guided success。
-
-#### Scenario: same-tick base 优先
-- **WHEN** pre-tick target binding weak，且该 tick 的 base 与 guided detection 都命中同一 target player
-- **THEN** 系统 SHALL 保留 base evidence 并记录 `base_recovered`
-- **AND** SHALL NOT 将该 episode 标记为 guided recovery success
-

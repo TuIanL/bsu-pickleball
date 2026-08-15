@@ -117,23 +117,32 @@ def test_guidance_cooldown_is_consumed_only_after_roi_invocation():
 def test_same_view_bootstrap_never_groups_two_local_players():
     registry = GlobalPlayerRegistry()
     associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
-    observations = [
-        JointObservation("cam_1", 0, 0.0, 5.0, 8.0, view_player_id="Player_1", local_identity_epoch=0),
-        JointObservation("cam_1", 0, 0.0, 5.2, 8.1, view_player_id="Player_2", local_identity_epoch=0),
-    ]
-    updates = associator.process_tick(observations, 0.0, {"cam_1": CourtOrientation.identity})
-    assert len({update.global_id for update in updates}) == 2
+    # roster 化：同 view 双人（canonical 近距）各成独立候选，单视角稳定 5 tick 后各自晋升
+    for t in range(5):
+        observations = [
+            JointObservation("cam_1", t, 0.0, 5.0, 8.0, view_player_id="Player_1", local_identity_epoch=0),
+            JointObservation("cam_1", t, 0.0, 5.2, 8.1, view_player_id="Player_2", local_identity_epoch=0),
+        ]
+        associator.process_tick(observations, 0.0, {"cam_1": CourtOrientation.identity}, tick=t)
+    gids = {g for g in registry.players if registry.players[g].roster_status in ("provisional", "confirmed")}
+    assert len(gids) == 2  # 同 view 两个 local players 不得合并为同一 global
 
 
 def test_identity_epoch_prevents_old_mapping_continuity():
     registry = GlobalPlayerRegistry()
     associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
-    first = JointObservation("cam_1", 0, 0.0, 5.0, 8.0, view_player_id="Player_3", local_identity_epoch=0)
-    first_update = associator.process_tick([first], 0.0, {"cam_1": CourtOrientation.identity})[0]
-    registry.absorb_measurement(first_update.global_id, 5.0, 8.0, 0.0)
-    second = JointObservation("cam_1", 1, 33.0, 5.1, 8.1, view_player_id="Player_3", local_identity_epoch=1)
-    second_update = associator.process_tick([second], 1 / 30.0, {"cam_1": CourtOrientation.identity})[0]
-    assert second_update.global_id == first_update.global_id  # geometry may independently preserve the global
+    # 单视角稳定 5 tick → Player_3 晋升为 roster global
+    for t in range(5):
+        obs = JointObservation("cam_1", t, 0.0, 5.0, 8.0, view_player_id="Player_3", local_identity_epoch=0)
+        associator.process_tick([obs], t / 30.0, {"cam_1": CourtOrientation.identity}, tick=t)
+    gids = {g for g in registry.players if registry.players[g].roster_status in ("provisional", "confirmed")}
+    assert len(gids) == 1
+    gid0 = next(iter(gids))
+    registry.absorb_measurement(gid0, 5.0, 8.0, 0.0)
+    # epoch reset：强绑定失效，但弱历史绑定 (cam_1, Player_3) 经 geometry 重新证明回原 global
+    second = JointObservation("cam_1", 10, 33.0, 5.1, 8.1, view_player_id="Player_3", local_identity_epoch=1)
+    second_update = associator.process_tick([second], 10 / 30.0, {"cam_1": CourtOrientation.identity}, tick=10)[0]
+    assert second_update.global_id == gid0  # 弱历史绑定重新证明回原 global
     assert ("cam_1", "Player_3", 0) not in associator.mapping
     assert ("cam_1", "Player_3", 1) in associator.mapping
 
@@ -141,11 +150,21 @@ def test_identity_epoch_prevents_old_mapping_continuity():
 def test_history_mapping_rejects_geometry_infeasible_fallback():
     registry = GlobalPlayerRegistry()
     associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
-    first = JointObservation("cam_1", 0, 0.0, 5.0, 8.0, view_player_id="Player_4")
-    first_update = associator.process_tick([first], 0.0, {"cam_1": CourtOrientation.identity})[0]
-    registry.absorb_measurement(first_update.global_id, 5.0, 8.0, 0.0)
-    far = JointObservation("cam_1", 1, 33.0, 100.0, 100.0, view_player_id="Player_4")
-    associator.process_tick([far], 1 / 30.0, {"cam_1": CourtOrientation.identity})
+    # 单视角稳定 5 tick → Player_4 晋升为 roster global
+    for t in range(5):
+        obs = JointObservation("cam_1", t, 0.0, 5.0, 8.0, view_player_id="Player_4", local_identity_epoch=0)
+        associator.process_tick([obs], t / 30.0, {"cam_1": CourtOrientation.identity}, tick=t)
+    gids = {g for g in registry.players if registry.players[g].roster_status in ("provisional", "confirmed")}
+    assert len(gids) == 1
+    gid0 = next(iter(gids))
+    registry.absorb_measurement(gid0, 5.0, 8.0, 0.0)
+    # 一帧正常观测建立 mapping（弱历史绑定 → 关联成功）
+    ok = JointObservation("cam_1", 9, 32.0, 5.1, 8.1, view_player_id="Player_4", local_identity_epoch=0)
+    ok_update = associator.process_tick([ok], 9 / 30.0, {"cam_1": CourtOrientation.identity}, tick=9)[0]
+    assert ok_update.global_id == gid0
+    # 远观测：强绑定 continuity 几何不可行 → 拒绝（不 fallback）
+    far = JointObservation("cam_1", 10, 33.0, 100.0, 100.0, view_player_id="Player_4", local_identity_epoch=0)
+    associator.process_tick([far], 10 / 30.0, {"cam_1": CourtOrientation.identity}, tick=10)
     assert associator.diagnostics["continuity_rejected_geometry"] == 1
 
 
@@ -178,20 +197,21 @@ def test_guided_pre_gate_uses_target_local_space_for_transforms():
 
 
 class _ControlledRuntime:
-    def __init__(self, view_id: str, dropout_view: str, *, decode_failure: bool = False):
+    def __init__(self, view_id: str, dropout_view: str, *, decode_failure: bool = False, dropout_frame: int = 4):
         self.view_id = view_id
         self.dropout_view = dropout_view
         self.decode_failure = decode_failure
+        self.dropout_frame = dropout_frame
         self.calls: list[tuple[int, bool]] = []
         self.guidance_seen = []
 
     def step(self, source_frame_index, timestamp_s, guidance=(), timing_context=None):
-        if self.decode_failure and self.view_id == self.dropout_view and source_frame_index == 1 and guidance:
+        if self.decode_failure and self.view_id == self.dropout_view and source_frame_index == self.dropout_frame and guidance:
             self.calls.append((source_frame_index, False))
             self.guidance_seen.extend(guidance)
             return None
-        is_guided_recovery = self.view_id == self.dropout_view and source_frame_index == 1 and bool(guidance)
-        is_dropout = self.view_id == self.dropout_view and source_frame_index == 1 and not guidance
+        is_guided_recovery = self.view_id == self.dropout_view and source_frame_index == self.dropout_frame and bool(guidance)
+        is_dropout = self.view_id == self.dropout_view and source_frame_index == self.dropout_frame and not guidance
         self.calls.append((source_frame_index, is_guided_recovery))
         self.guidance_seen.extend(guidance)
         if is_dropout:
@@ -265,7 +285,7 @@ def _run_controlled_dropout(
     clock = CanonicalAnalysisClock(
         reference_view_id="cam_1",
         secondary_view_id="cam_2",
-        secondary_frames=[FrameTiming(i, i / 30.0) for i in range(3)],
+        secondary_frames=[FrameTiming(i, i / 30.0) for i in range(12)],
         sync=sync,
         secondary_camera_id="cam_2",
     )
@@ -305,12 +325,12 @@ def _run_controlled_dropout(
             },
         },
     )
-    return run.run(reference_frame_count=2, reference_fps=30.0), runtimes
+    return run.run(reference_frame_count=8, reference_fps=30.0), runtimes
 
 
 def test_controlled_dropout_cam1_recovers_from_cam2_and_preserves_global_id():
     output, runtimes = _run_controlled_dropout("cam_1")
-    assert runtimes["cam_1"].calls[-1][1] is True
+    assert runtimes["cam_1"].calls[4][1] is True  # dropout 帧（4）经 guidance 恢复
     assert output.normalized.samples
     recovered = [
         sample for sample in output.normalized.samples
@@ -325,7 +345,7 @@ def test_controlled_dropout_cam1_recovers_from_cam2_and_preserves_global_id():
 
 def test_controlled_dropout_cam2_recovers_from_cam1_and_preserves_global_id():
     output, runtimes = _run_controlled_dropout("cam_2")
-    assert runtimes["cam_2"].calls[-1][1] is True
+    assert runtimes["cam_2"].calls[4][1] is True  # dropout 帧（4）经 guidance 恢复
     recovered = [
         sample for sample in output.normalized.samples
         if sample.view_observations.get("cam_2", {}).get("detection_origin") == "guided_roi"

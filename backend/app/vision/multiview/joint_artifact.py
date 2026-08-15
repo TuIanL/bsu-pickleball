@@ -39,6 +39,8 @@ class FusedSample:
     view_observations: dict[str, dict] = field(default_factory=dict)
     contributing_views: list[str] = field(default_factory=list)
     authoritative_joint_eligible: bool = False
+    # 可选秒级时间戳（2026-08-13 起 writer 必写；历史产物缺失时由 reader 回退 take_timestamp_ms/1000）
+    timestamp_seconds: float | None = None
 
 
 @dataclass
@@ -79,6 +81,11 @@ def write_fused_v2(
             {
                 "global_player_id": s.global_player_id,
                 "take_timestamp_ms": s.take_timestamp_ms,
+                "timestamp_seconds": (
+                    s.timestamp_seconds
+                    if s.timestamp_seconds is not None
+                    else s.take_timestamp_ms / 1000.0
+                ),
                 "reference_frame_index": s.reference_frame_index,
                 "x_ft": s.x_ft,
                 "y_ft": s.y_ft,
@@ -129,6 +136,7 @@ def _normalize_v1_sample(raw: dict) -> FusedSample:
         observation_origin="base",
         view_observations={},
         contributing_views=list(raw.get("contributing_views", [])),
+        timestamp_seconds=_optional_float(raw.get("timestamp_seconds")),
     )
 
 
@@ -147,7 +155,18 @@ def _normalize_v2_sample(raw: dict) -> FusedSample:
         view_observations=dict(raw.get("view_observations", {})),
         contributing_views=list(raw.get("contributing_views", [])),
         authoritative_joint_eligible=bool(raw.get("authoritative_joint_eligible", False)),
+        timestamp_seconds=_optional_float(raw.get("timestamp_seconds")),
     )
+
+
+def _optional_float(value: object) -> float | None:
+    """读取可选浮点字段；None / 空串 / 非数值返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---- offline refinement(F1)产物 --------------------------------------------

@@ -178,7 +178,10 @@ def _read_trace_frame(
 ) -> np.ndarray:
     status = str(view.get("status", "unavailable"))
     source_index = view.get("source_frame_index")
-    if status != "available" or source_index is None:
+    # fallback_valid_start（窗口开头回退帧）与 available 一样可渲染：trace 记录的是
+    # 有效起点附近的近似帧，画面叠加 status 文本标注（2026-08-13 窗口开头黑屏修复）。
+    renderable = status in ("available", "fallback_valid_start")
+    if not renderable or source_index is None:
         return _unavailable_panel(view_id, status, str(view.get("selection_error_ms")))
     try:
         source_index = int(source_index)

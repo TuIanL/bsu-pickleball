@@ -364,3 +364,120 @@ def test_real_capture_pts_drift_and_seek_smoke(tmp_path):
     assert np.isfinite(drift_ppm)
     assert np.isfinite(offset_seconds)
     assert abs(drift_ppm) < 100_000
+
+
+def test_real_capture_joint_roster_cap_and_canonical_identity(tmp_path):
+    """真实素材 joint_tracking_v2 roster 验收（stabilize-joint-global-player-roster）。
+
+    硬断言：registry.players ≤ expected_player_count；公开轨迹身份 canonical Player_N
+    （无 `global_player_`）；structured data 与 roster.v1 产物生成。
+    """
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.core.config import get_settings
+    from app.schemas.analysis import AnalysisJobSummary
+    from app.services.multiview_result_composer import MultiViewResultComposer
+    from app.services.storage_service import StorageService
+
+    session, videos = _load_real_take()
+    fps, width, height = _read_media_probe(videos)
+    reference_id = session.camera_slots["cam_1"].camera_id
+    secondary_id = session.camera_slots["cam_2"].camera_id
+    sync = MultiViewSyncCalibration(
+        reference_camera=reference_id,
+        mappings={
+            secondary_id: SyncCalibration(
+                reference_camera=reference_id, camera_id=secondary_id,
+                offset_seconds=0.0, rate=1.0, drift_ppm=0.0, residual_rms_seconds=0.0,
+                anchor_count=2, quality="good",
+            )
+        },
+    )
+    providers = {}
+    for slot, media_path in videos.items():
+        sidecar = tmp_path / f"{slot}.registered.mp4.pts.jsonl"
+        write_frame_timing_sidecar(media_path, sidecar)
+        providers[slot] = FrameTimingProvider.from_sidecar(sidecar, media_path=media_path)
+    cam2_frames = [
+        FrameTiming(i, providers["cam_2"].timestamp_for_frame(i) if hasattr(providers["cam_2"], "timestamp_for_frame") else i / fps)
+        for i in range(24)
+    ]
+    clock = CanonicalAnalysisClock(
+        reference_view_id="cam_1", secondary_view_id="cam_2",
+        secondary_frames=cam2_frames, sync=sync, secondary_camera_id=secondary_id,
+        max_pairing_error_ms=1000.0 / fps,
+    )
+    roi = compute_expanded_detection_roi(None, width, height)
+    config = build_view_tracking_config(
+        get_settings(), build_match_context("doubles"), fps=fps, frame_stride=2,
+        frame_width=width, frame_height=height,
+    )
+    # 检测 bbox 为像素坐标（280..520, 180..370）；缩放 homography 映射进 20×44 球场
+    homography = np.array([[0.05, 0.0, 0.0], [0.0, 0.05, 0.0], [0.0, 0.0, 1.0]], dtype=float)
+    inverse_homography = np.linalg.inv(homography)
+    # 真实视频文件 + 脚本检测（快速、确定性；roster 机制与检测器解耦）
+    runtimes: dict[str, JointViewRuntime] = {}
+    for slot, media_path in videos.items():
+        session_config = replace(
+            config,
+            fps=fps, frame_width=width, frame_height=height, eligibility_policy="lock_only",
+            player_lock_bootstrap_min_frames=1, player_lock_bootstrap_max_frames=4,
+            identity_lost_buffer_frames=5, player_lock_enable_appearance_score=False,
+        )
+        session_obj = build_view_tracking_session(
+            detector=_ScriptedDetector(), homography=homography, roi_artifact=roi, config=session_config,
+        )
+        runtimes[slot] = JointViewRuntime(
+            view_input=JointViewInput(camera_slot=slot, camera_id=str(getattr(session.camera_slots[slot], "camera_id", slot))),
+            capture=cv2.VideoCapture(str(media_path)), fps=fps, frame_size=(width, height),
+            homography=homography, roi_artifact=roi, tracking_session=session_obj,
+            scope="full" if slot == "cam_1" else "perception",
+        )
+    registry = GlobalPlayerRegistry(expected_player_count=4)
+    associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
+    run = MultiViewJointRun(
+        run_id="mvr-roster-real", capture_take_id=session.capture_take_id, reference_view_id="cam_1",
+        clock=clock, runtimes=runtimes, registry=registry, associator=associator,
+        guidance_generator=GuidanceGenerator(CrossViewGuidancePolicy()),
+        orientations={"cam_1": CourtOrientation.identity, "cam_2": CourtOrientation.identity},
+        inverse_homography=inverse_homography, frame_width=width, frame_height=height,
+        debug_trace_enabled=False,
+    )
+    out = run.run(reference_frame_count=20, reference_fps=fps, frame_stride=2)
+    # 硬断言：整场 global 玩家数 ≤ 赛制人数（双打 4）
+    assert len(registry.players) <= registry.expected_player_count
+    assert out.diagnostics["expected_player_count"] == 4
+    assert out.diagnostics["roster_occupied_count"] <= 4
+    assert out.normalized.samples  # 至少形成 roster 轨迹
+    assert out.diagnostics["roster"]  # roster 快照存在
+    # compose：公开轨迹身份 canonical Player_N，无 global_player_
+    job = AnalysisJobSummary(
+        id="job-roster-real", status="completed", stage="report", progress=100,
+        createdAt="2026-08-14T00:00:00+00:00", updatedAt="2026-08-14T00:00:00+00:00",
+        videoId="vid", calibrationId="calib", analysisKind="multiview",
+        executionMode="joint_tracking_v2", frameStride=2, sourceFps=fps,
+        clipStartMs=0, clipEndMs=20000, viewRuns={}, referenceViewId="cam_1",
+        jointViewInputs=[], stages=[], metadata={
+            "fileName": "joint.mp4", "fileSize": 10, "matchTitle": "Roster smoke",
+            "venue": "Test", "matchDate": "2026-08-14", "matchFormat": "doubles",
+            "cameraAngle": "elevated", "athleteLabel": "T", "level": "MVP",
+        },
+    )
+    storage = StorageService()
+    take_dir = tmp_path / "take"
+    storage.register_capture_job("job-roster-real", take_dir)
+    composer = MultiViewResultComposer(storage)
+    joint_output = SimpleNamespace(
+        trajectory=out.trajectory, normalized=out.normalized,
+        diagnostics=out.diagnostics, debug_trace=None,
+    )
+    result = composer.compose_joint_result(
+        job=job, joint_output=joint_output, reference_view_id="cam_1", message="ok",
+    )
+    track_ids = {t.track_id for t in result.tracks if t.track_id}
+    assert track_ids
+    assert not any("global_player_" in tid for tid in track_ids)  # 公开身份无 global_player_
+    assert result.observed_player_count <= 4
+    assert result.artifacts.roster_url  # roster.v1 产物发布
+    assert result.artifacts.structured_visualization_data_path  # structured data 生成

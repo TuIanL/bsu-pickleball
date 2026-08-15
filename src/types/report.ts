@@ -1404,8 +1404,13 @@ export interface AnalysisPipelineResult {
     heatmaps_url?: string;
     scatter_plots_manifest_json_path?: string;
     scatter_plots_url?: string;
+    structured_visualization_data_path?: string;
     position_visualizations_status?: string;
     position_visualizations_detail?: string;
+    roster_manifest_json_path?: string;
+    roster_url?: string;
+    roster_status?: string;
+    roster_detail?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
     pose_overlay_status?: string;

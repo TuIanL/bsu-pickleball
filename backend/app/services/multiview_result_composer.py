@@ -116,6 +116,27 @@ def _copy_if_exists(src: Path, dst: Path) -> bool:
     return True
 
 
+def _sample_timestamp_seconds(sample: dict[str, object]) -> float:
+    """解析 fused 样本的秒级时间戳（2026-08-13 起 writer 必写 `timestamp_seconds`）。
+
+    优先级：`timestamp_seconds` → 回退 `take_timestamp_ms / 1000.0`（兼容历史产物）
+    → 仍缺失才 0.0。缺失时间戳会导致速度/厨房停留指标全 0、前端小地图时间窗口过滤全丢。
+    """
+    value = sample.get("timestamp_seconds")
+    if value is not None and value != "":
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+    take_ms = sample.get("take_timestamp_ms")
+    if take_ms is not None and take_ms != "":
+        try:
+            return float(take_ms) / 1000.0
+        except (TypeError, ValueError):
+            pass
+    return 0.0
+
+
 def _copy_tree_if_exists(src: Path, dst: Path) -> bool:
     """复制产物目录（如 serve_clips / position heatmaps 目录）到目标。"""
     if not src.exists():
@@ -188,11 +209,13 @@ class MultiViewResultComposer:
         fused_artifact: dict[str, object],
         *,
         eligible_only: bool = False,
+        roster_map: dict[str, str] | None = None,
     ) -> list[ProjectedTrackPoint]:
         """把 fused trajectory samples 转成标准球场轨迹点。
 
         `eligible_only=True` 仅取 metric-eligible 样本（进指标）；否则全部有坐标样本（可视化）。
-        以 `global_player_id` 作为 `track_id`，供现有指标数学按球员分组。
+        以 `global_player_id` 作为 `track_id`（可经 `roster_map` 映射为 canonical `Player_N`，
+        stabilize-joint-global-player-roster：公开轨迹身份不得为 `global_player_`）。
         """
         points: list[ProjectedTrackPoint] = []
         for sample in fused_artifact.get("samples", []):
@@ -204,11 +227,12 @@ class MultiViewResultComposer:
             y = sample.get("y_ft")
             if x is None or y is None:
                 continue
+            raw_gid = str(sample.get("global_player_id", ""))
             points.append(
                 ProjectedTrackPoint(
                     frame_index=int(sample.get("reference_frame_index", 0)),
-                    timestamp_seconds=float(sample.get("timestamp_seconds", 0.0)),
-                    track_id=str(sample.get("global_player_id", "")),
+                    timestamp_seconds=_sample_timestamp_seconds(sample),
+                    track_id=str(roster_map.get(raw_gid, raw_gid) if roster_map else raw_gid),
                     image_point=ImagePoint(x=0.0, y=0.0),  # 指标只消费 court_point，图像点占位
                     confidence=1.0,
                     side="unknown",
@@ -446,6 +470,113 @@ class MultiViewResultComposer:
             ),
         )
 
+    def _publish_joint_visual_artifacts(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        joint_output,
+        reference_view_id: str,
+        fused_artifact: dict[str, object],
+        artifacts: AnalysisArtifacts,
+        roster_map: dict[str, str] | None = None,
+        roster_entries: list[dict[str, object]] | None = None,
+    ) -> None:
+        """joint 模式产出前端视觉层产物（2026-08-13 修复：此前 artifacts 全空）。
+
+        - tracking_overlay（框架）：从 debug trace 聚合 reference view 检测，写 Parent 命名空间；
+        - heatmaps / scatter / structured data：从 fused metric tracks 生成（canonical Player_N）；
+        - roster.v1（诊断 / 映射 contract）：Global → Player_N 映射；
+        - pose_overlay / render_trajectory / detections：joint 模式无法真实生成，显式 unavailable + reason。
+        """
+        from app.core.config import get_settings
+        from app.services.joint_visual_artifacts import (
+            JOINT_DETECTIONS_UNAVAILABLE,
+            JOINT_POSE_UNAVAILABLE,
+            JOINT_RENDER_TRAJECTORY_UNAVAILABLE,
+            build_joint_position_visualizations,
+            build_joint_roster_artifact,
+            build_joint_tracking_overlay,
+        )
+
+        frame_size = (
+            joint_output.diagnostics.get("frame_size")
+            if isinstance(joint_output.diagnostics, dict)
+            else None
+        )
+        fps = float(job.sourceFps or 0.0)
+        stride = int(job.frameStride or 1)
+        video_id = job.videoId
+
+        # 1) tracking_overlay（框架）：debug trace 聚合
+        debug_trace = getattr(joint_output, "debug_trace", None)
+        if isinstance(debug_trace, dict) and isinstance(debug_trace.get("ticks"), list):
+            try:
+                overlay = build_joint_tracking_overlay(
+                    job_id=job.id,
+                    video_id=video_id,
+                    debug_trace=debug_trace,
+                    frame_size=frame_size if isinstance(frame_size, dict) else None,
+                    fps=fps,
+                    frame_stride=stride,
+                    reference_view_id=reference_view_id,
+                )
+                self.storage.write_json(
+                    self.storage.tracking_overlay_json_path(job.id), overlay.model_dump(mode="json")
+                )
+                artifacts.tracking_overlay_json_path = str(self.storage.tracking_overlay_json_path(job.id))
+                artifacts.tracking_overlay_url = f"/api/analysis/jobs/{job.id}/artifacts/tracking-overlay"
+                artifacts.tracking_overlay_status = overlay.status
+                artifacts.tracking_overlay_detail = overlay.detail
+            except Exception as exc:  # noqa: BLE001 - 视觉层失败不中断 compose
+                logger.warning("joint tracking overlay build failed: %s", exc)
+                artifacts.tracking_overlay_status = "unavailable"
+                artifacts.tracking_overlay_detail = f"joint tracking overlay 生成失败：{exc}"
+
+        # 2) heatmaps / scatter / structured data：从 fused metric-eligible 轨迹生成（canonical Player_N）
+        metric_tracks = standard_court_metric_points(
+            self.fused_to_projected_tracks(fused_artifact, eligible_only=True, roster_map=roster_map)
+        )
+        viz_fields = build_joint_position_visualizations(
+            storage=self.storage,
+            job_id=job.id,
+            metric_tracks=metric_tracks,
+            language=getattr(get_settings(), "visualization_language", "zh"),
+            roster_map=roster_map,
+        )
+        for key, value in viz_fields.items():
+            setattr(artifacts, key, value)
+
+        # 2b) global-player-roster.v1（诊断 / 映射 contract，非用户展示 identity）
+        if roster_entries is not None:
+            expected_count = int(
+                joint_output.diagnostics.get("expected_player_count", 4)
+                if isinstance(joint_output.diagnostics, dict)
+                else 4
+            )
+            roster_state = (
+                joint_output.diagnostics.get("roster_state", "BOOTSTRAPPING")
+                if isinstance(joint_output.diagnostics, dict)
+                else "BOOTSTRAPPING"
+            )
+            roster_fields = build_joint_roster_artifact(
+                storage=self.storage,
+                job_id=job.id,
+                roster=roster_entries,
+                roster_map=roster_map or {},
+                expected_player_count=expected_count,
+                status="confirmed" if roster_state == "ROSTER_ACTIVE" else "bootstrap",
+            )
+            for key, value in roster_fields.items():
+                setattr(artifacts, key, value)
+
+        # 3) 无法真实生成的产物显式 unavailable（不静默缺失）
+        artifacts.pose_overlay_status = "unavailable"
+        artifacts.pose_overlay_detail = JOINT_POSE_UNAVAILABLE
+        artifacts.player_render_trajectory_status = "unavailable"
+        artifacts.player_render_trajectory_detail = JOINT_RENDER_TRAJECTORY_UNAVAILABLE
+        artifacts.detections_status = "unavailable"
+        artifacts.detections_detail = JOINT_DETECTIONS_UNAVAILABLE
+
     def compose_joint_result(
         self,
         *,
@@ -470,6 +601,7 @@ class MultiViewResultComposer:
                 {
                     "global_player_id": s.global_player_id,
                     "take_timestamp_ms": s.take_timestamp_ms,
+                    "timestamp_seconds": s.timestamp_seconds,
                     "reference_frame_index": s.reference_frame_index,
                     "x_ft": s.x_ft,
                     "y_ft": s.y_ft,
@@ -480,13 +612,30 @@ class MultiViewResultComposer:
                 for s in joint_output.normalized.samples
             ],
         }
+        # Global Roster 公开映射（stabilize-joint-global-player-roster）：
+        # reference view binding 决定 canonical Player_N（display anchor），缺 reference 用 slot 顺序 fallback。
+        roster_entries = (
+            joint_output.diagnostics.get("roster", [])
+            if isinstance(joint_output.diagnostics, dict)
+            else []
+        )
+        roster_map = _build_roster_map(roster_entries)
         metrics = self.recompute_metrics(synthetic, match_context)
-        tracks = self.fused_to_projected_tracks(synthetic)  # track_id = GlobalPlayer_<id>
+        tracks = self.fused_to_projected_tracks(synthetic, roster_map=roster_map)  # track_id = Player_N
         artifacts = AnalysisArtifacts()
         artifacts.analysis_window = joint_output.diagnostics.get("analysis_window")
         video_id = job.videoId
         if video_id and not artifacts.source_video_url:
             artifacts.source_video_url = f"/api/videos/{video_id}/stream"
+        self._publish_joint_visual_artifacts(
+            job=job,
+            joint_output=joint_output,
+            reference_view_id=reference_view_id,
+            fused_artifact=synthetic,
+            artifacts=artifacts,
+            roster_map=roster_map,
+            roster_entries=roster_entries,
+        )
         self.publish_fused_artifacts(
             job.id,
             joint_output.trajectory,
@@ -511,11 +660,11 @@ class MultiViewResultComposer:
                 self.storage.write_json_atomic(manifest_path, manifest)
             except Exception:  # noqa: BLE001
                 pass
-        view_a = job.viewRuns.get("cam_1") if job.viewRuns else None
-        view_b = job.viewRuns.get("cam_2") if job.viewRuns else None
+        # joint 模式下 viewRuns 创建后不再更新（停在 queued），A/B 状态取 joint run 完成结论，
+        # 否则聚合 stage 会误报"A/B 机位分析失败"（2026-08-13 修复）。
         stages = _build_aggregate_stages(
-            view_a_status=view_a.status if view_a else "done",
-            view_b_status=view_b.status if view_b else "done",
+            view_a_status="succeeded",
+            view_b_status="succeeded",
             fusion_performed=True,
             composed=True,
         )
@@ -546,6 +695,31 @@ class MultiViewResultComposer:
                 else None
             ),
         )
+
+
+def _build_roster_map(roster_entries: list[dict[str, object]]) -> dict[str, str]:
+    """由 joint run 的 roster 快照构建 `global_player_id → canonical Player_N` 映射。
+
+    display anchor：优先采用 reference view binding 决定的 `player_id`；缺 reference binding
+    或冲突时用 deterministic slot 顺序 fallback（Player_1..N 按 roster 顺序分配，避免重跑漂移）。
+    """
+    roster_map: dict[str, str] = {}
+    used_ids: set[str] = set()
+    next_slot = 1
+    for entry in roster_entries:  # joint run 已按 global_player_id 排序（稳定）
+        gid = str(entry.get("global_player_id", ""))
+        pid = entry.get("player_id")
+        if pid and str(pid) not in used_ids:
+            roster_map[gid] = str(pid)
+            used_ids.add(str(pid))
+            continue
+        while f"Player_{next_slot}" in used_ids:
+            next_slot += 1
+        fallback = f"Player_{next_slot}"
+        roster_map[gid] = fallback
+        used_ids.add(fallback)
+        next_slot += 1
+    return roster_map
 
 
 def build_fallback_fused_artifact(

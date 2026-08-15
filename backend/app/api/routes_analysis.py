@@ -357,6 +357,7 @@ def read_analysis_artifact(
         "analysis-overlay-video",  # 分析叠加视频（mp4 文件）
         "position-heatmaps",  # 位置热力图清单
         "position-scatter-plots",  # 位置散点图清单
+        "roster",  # global-player-roster.v1（诊断 / 映射 contract）
         "pose-overlay",  # 姿态骨架叠加
         "player-trajectories",  # 球员轨迹
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
@@ -412,6 +413,8 @@ def read_analysis_artifact(
         path = _STORAGE.heatmaps_manifest_json_path(job_id)
     elif artifact_name == "position-scatter-plots":
         path = _STORAGE.scatter_plots_manifest_json_path(job_id)
+    elif artifact_name == "roster":
+        path = _STORAGE.roster_manifest_json_path(job_id)
     elif artifact_name == "pose-overlay":
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":

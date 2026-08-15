@@ -231,6 +231,7 @@ class MultiViewJointRun:
                 weak_after_ms=self.recovery_config.binding_weak_after_ms,
                 lost_after_ms=self.recovery_config.binding_lost_after_ms,
             )
+            self.registry.update_stale_eligibility(timestamp_s)
             predictions = self.registry.predict_all(timestamp_s)
             f0_predictions[tick_number] = {
                 gid: (value[0], value[1]) for gid, value in predictions.items()
@@ -396,7 +397,7 @@ class MultiViewJointRun:
                 )
 
             # ---- tick barrier:两路完成后才更新 global ----
-            updates = self.associator.process_tick(all_obs, timestamp_s, self.orientations)
+            updates = self.associator.process_tick(all_obs, timestamp_s, self.orientations, tick=tick_number)
             fused = self.associator.fuse_assignments(updates, include_tentative=True)
             for gid, (x, y, views) in fused.items():
                 self.registry.absorb_measurement(gid, x, y, timestamp_s)
@@ -619,6 +620,37 @@ class MultiViewJointRun:
             "p1_online_recovery_config": self.recovery_config.snapshot(),
             "recovery_funnel": dict(self.recovery_funnel),
             "association_counters": dict(getattr(self.associator, "diagnostics", {})),
+            # global-player-roster.v1 快照（stabilize-joint-global-player-roster）：
+            # reference view binding 决定 canonical Player_N（display anchor）
+            "roster": [
+                {
+                    "global_player_id": gid,
+                    "player_id": _roster_canonical_player_id(state, self.reference_view_id),
+                    "label": _roster_display_label(state, self.reference_view_id),
+                    "status": state.roster_status,
+                    "lifecycle": state.lifecycle,
+                    "cross_view_anchored": state.cross_view_anchored,
+                    "bindings": {
+                        view_id: {
+                            "view_player_id": binding.view_player_id,
+                            "track_id": binding.track_id,
+                            "visibility": binding.visibility,
+                        }
+                        for view_id, binding in state.view_bindings.items()
+                        if binding.view_player_id is not None
+                    },
+                }
+                for gid, state in sorted(self.registry.players.items())
+                if state.roster_status is not None
+            ],
+            "roster_state": self.registry.roster_state,
+            "expected_player_count": self.registry.expected_player_count,
+            "roster_occupied_count": sum(
+                1 for s in self.registry.players.values() if s.roster_status is not None
+            ),
+            "confirmed_player_count": sum(
+                1 for s in self.registry.players.values() if s.roster_status == "confirmed"
+            ),
         }
         if analysis_window is not None:
             diagnostics["analysis_window"] = analysis_window
@@ -1014,3 +1046,29 @@ class MultiViewJointRun:
                 )
             )
         return obs
+
+
+# ---- Global Roster 公开映射辅助（stabilize-joint-global-player-roster）----
+
+
+def _roster_canonical_player_id(state, reference_view_id: str) -> str | None:
+    """reference view binding 决定 canonical `Player_N`（display anchor）。
+
+    - 稳定绑定 reference view 的 local identity → 公开身份即该 `Player_N`；
+    - 仅有 non-reference evidence → 暂缓分配（返回 None）；
+    - 整场 reference 缺失 → 由 composer 用 deterministic fallback（slot 顺序）兜底。
+    """
+    binding = state.view_bindings.get(reference_view_id)
+    if binding is not None and binding.view_player_id:
+        pid = binding.view_player_id
+        if pid.startswith("Player_"):
+            return pid
+    return None
+
+
+def _roster_display_label(state, reference_view_id: str) -> str | None:
+    """`Player_N` → `Pn` 展示标签（与结构化热力图 P1..P4 对齐）。"""
+    pid = _roster_canonical_player_id(state, reference_view_id)
+    if not pid:
+        return None
+    return f"P{pid.rsplit('_', 1)[-1]}"

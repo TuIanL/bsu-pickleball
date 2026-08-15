@@ -147,6 +147,11 @@ class GlobalPlayerState:
     cross_view_anchored: bool = False
     view_bindings: dict[str, ViewBinding] = field(default_factory=dict)
     stable_dual_view_count: int = 0  # 历史双视角一致观测次数（anchored 依据）
+    # ---- roster 语义（stabilize-joint-global-player-roster）----
+    roster_status: str | None = None  # None（非 roster）/ provisional / confirmed
+    roster_confirm_ticks: int = 0  # provisional occupant 连续有测量的 tick 数（确认窗口依据）
+    last_seen_s: float | None = None  # 最近一次真实测量时间（stale 判定依据）
+    association_eligible: bool = True  # False = stale，退出普通紧门匹配（仅强恢复路径可回归）
 
 
 @dataclass
@@ -154,6 +159,32 @@ class _KalmanState:
     state: list[float]  # [x, y, vx, vy]
     cov: list[list[float]]
     last_timestamp_s: float | None = None
+
+
+@dataclass
+class GlobalRosterCandidate:
+    """Global Roster 候选：unmatched 正式观测在晋升前的暂存（candidate_N，非 global_player_N）。
+
+    - 归属规则见 `GlobalPlayerRegistry.find_or_create_candidate`（强 key → 弱 prior → geometry → 新建）。
+    - 不占 roster slot、不参与 `predict_all()`；满足晋升条件后 `promote_candidate` 占 slot。
+    """
+
+    candidate_id: str
+    first_tick: int
+    last_tick: int
+    hit_count: int = 0
+    dual_view_hit_count: int = 0
+    canonical_x_ft: float = 0.0
+    canonical_y_ft: float = 0.0
+    local_bindings: dict[str, dict[str, object]] = field(default_factory=dict)  # view_id -> {view_player_id, identity_epoch}
+    association_eligibility: bool = True
+    tick_views: set[str] = field(default_factory=set)  # 最近一个 tick 内涉及的 view 集合（tick 级双视角判定）
+    last_views_tick: int = -1
+    last_dual_tick: int = -1  # 最近一次发生跨视角一致的 tick（tick 级累积 dual_view_hit_count）
+
+
+def _candidate_distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
 class GlobalMotionEstimator:
@@ -216,19 +247,48 @@ def _uncertainty_radius(cov: list[list[float]]) -> float:
 
 
 class GlobalPlayerRegistry:
-    """持有 GlobalPlayerState 集合 + motion estimator。"""
+    """持有 GlobalPlayerState 集合 + motion estimator + Global Roster 语义。
+
+    roster 化（stabilize-joint-global-player-roster）：
+    - 知晓 `expected_player_count`（单打 2 / 双打 4），正式 global 身份由 `_allocate_roster_slot()` 分配，数量受限；
+    - unmatched 观测先进 `candidate_N` 候选池，晋升后占 slot（provisional occupant），
+      全部 slot 占用且每 occupant 稳定 K tick 或至少一次可靠 cross-view anchoring 后才进入 `ROSTER_ACTIVE`；
+    - `predict_all()` 仅返回 roster 内且具备普通关联资格（非 stale）的 global 预测；
+    - stale 玩家（uncertainty / last_seen_age 超阈值）退出普通匹配，仅强恢复路径回归。
+    """
 
     def __init__(
         self,
         estimator: GlobalMotionEstimator | None = None,
         anchored_dual_view_count: int = 3,
         confirm_dual_view_count: int = 3,
+        expected_player_count: int = 4,
+        roster_confirm_ticks: int = 30,
+        candidate_expire_ticks: int = 60,
+        candidate_promote_dual_ticks: int = 2,
+        candidate_promote_single_ticks: int = 5,
+        stale_uncertainty_ft: float = 6.0,
+        stale_last_seen_s: float = 10.0,
+        candidate_association_radius_ft: float = 3.0,
     ) -> None:
         self.estimator = estimator or GlobalMotionEstimator()
         self.players: dict[str, GlobalPlayerState] = {}
         self.anchored_dual_view_count = anchored_dual_view_count
         self.confirm_dual_view_count = confirm_dual_view_count
-        self._next_global = 1
+        self.expected_player_count = max(1, int(expected_player_count))
+        self.roster_confirm_ticks = max(1, int(roster_confirm_ticks))
+        self.candidate_expire_ticks = max(1, int(candidate_expire_ticks))
+        self.candidate_promote_dual_ticks = max(1, int(candidate_promote_dual_ticks))
+        self.candidate_promote_single_ticks = max(1, int(candidate_promote_single_ticks))
+        self.stale_uncertainty_ft = stale_uncertainty_ft
+        self.stale_last_seen_s = stale_last_seen_s
+        self.candidate_association_radius_ft = candidate_association_radius_ft
+        self.roster_state: str = "BOOTSTRAPPING"  # BOOTSTRAPPING | ROSTER_ACTIVE
+        self._next_candidate = 1
+        self.candidates: dict[str, GlobalRosterCandidate] = {}
+        self._last_tick: int | None = None
+        # (view_id, view_player_id) -> global（弱历史绑定，epoch reset 后仍保留为先验）
+        self.historical_bindings: dict[tuple[str, str], str] = {}
 
     def get(self, global_id: str) -> GlobalPlayerState | None:
         return self.players.get(global_id)
@@ -238,10 +298,172 @@ class GlobalPlayerRegistry:
             self.players[global_id] = GlobalPlayerState(global_player_id=global_id)
         return self.players[global_id]
 
-    def new_global_id(self) -> str:
-        gid = f"global_player_{self._next_global}"
-        self._next_global += 1
+    def _allocate_roster_slot(self) -> str | None:
+        """分配一个空闲 roster slot（`global_player_1..expected_player_count`）；满返回 None。
+
+        取代公开的 `new_global_id()`：普通 unmatched 观测不可达；仅 candidate 晋升 / roster 重建时使用。
+        """
+        for index in range(1, self.expected_player_count + 1):
+            gid = f"global_player_{index}"
+            if gid not in self.players:
+                return gid
+        return None
+
+    # ---- 候选池（GlobalRosterCandidate）----
+
+    def find_or_create_candidate(
+        self,
+        *,
+        view_id: str,
+        view_player_id: str,
+        identity_epoch: int,
+        canonical_x_ft: float,
+        canonical_y_ft: float,
+        tick: int,
+        local_track_id: int | None = None,
+    ) -> str:
+        """按归属规则把一次 unmatched 观测归入既有 candidate 或新建 candidate。
+
+        优先级：①同 `(view_id, view_player_id, epoch)` 复用（强 key）；②跨 epoch 的
+        `(view_id, view_player_id)` 弱 prior；③canonical geometry 邻域；④否则新建。
+        同 tick 同 candidate 每 view 至多接受一个 observation（由调用方在创建后调用
+        `note_candidate_observation` 累积，本方法只在创建/复用层面保证归属）。
+        """
+        strong_key = (view_id, view_player_id, identity_epoch)
+        for cid, cand in self.candidates.items():
+            if not cand.association_eligibility:
+                continue
+            binding = cand.local_bindings.get(view_id)
+            if binding is not None and binding.get("view_player_id") == view_player_id and int(binding.get("identity_epoch", -1)) == identity_epoch:
+                return cid  # ① 强 key
+        weak_key = (view_id, view_player_id)
+        for cid, cand in self.candidates.items():
+            binding = cand.local_bindings.get(view_id)
+            if binding is not None and binding.get("view_player_id") == view_player_id:
+                return cid  # ② 弱 prior（仅当该 view 历史绑定同 local 身份）
+        pos = (canonical_x_ft, canonical_y_ft)
+        best_cid: str | None = None
+        best_dist = float("inf")
+        for cid, cand in self.candidates.items():
+            if cand.local_bindings.get(view_id) is not None:
+                continue  # 排除同 view 已绑定候选：同 view 两个不同 local players 不得合并（tentative bootstrap view uniqueness）
+            dist = _candidate_distance(pos, (cand.canonical_x_ft, cand.canonical_y_ft))
+            if dist <= self.candidate_association_radius_ft and dist < best_dist:
+                best_cid = cid
+                best_dist = dist
+        if best_cid is not None:
+            return best_cid  # ③ geometry 邻域（仅跨 view）
+        cid = f"candidate_{self._next_candidate}"
+        self._next_candidate += 1
+        self.candidates[cid] = GlobalRosterCandidate(
+            candidate_id=cid,
+            first_tick=tick,
+            last_tick=tick,
+            canonical_x_ft=canonical_x_ft,
+            canonical_y_ft=canonical_y_ft,
+            local_bindings={
+                view_id: {"view_player_id": view_player_id, "identity_epoch": identity_epoch, "track_id": local_track_id}
+            },
+            last_views_tick=tick,
+            tick_views={view_id},
+        )
+        return cid  # ④ 新建
+
+    def note_candidate_observation(
+        self,
+        candidate_id: str,
+        *,
+        view_id: str,
+        view_player_id: str,
+        identity_epoch: int,
+        canonical_x_ft: float,
+        canonical_y_ft: float,
+        tick: int,
+        local_track_id: int | None = None,
+    ) -> None:
+        """累积一次 candidate 观测证据（同 tick 同 view 至多一次，由调用方保证）。"""
+        cand = self.candidates.get(candidate_id)
+        if cand is None:
+            return
+        cand.last_tick = tick
+        cand.hit_count += 1
+        cand.canonical_x_ft = canonical_x_ft
+        cand.canonical_y_ft = canonical_y_ft
+        if cand.last_views_tick != tick:
+            cand.last_views_tick = tick
+            cand.tick_views = {view_id}
+        else:
+            cand.tick_views.add(view_id)
+            if len(cand.tick_views) == 2 and cand.last_dual_tick != tick:
+                cand.dual_view_hit_count += 1
+                cand.last_dual_tick = tick
+        cand.local_bindings.setdefault(
+            view_id,
+            {"view_player_id": view_player_id, "identity_epoch": identity_epoch, "track_id": local_track_id},
+        )
+
+    def promote_candidate(self, candidate_id: str, tick: int) -> str | None:
+        """晋升 candidate 为 provisional roster occupant（占 slot）；无空闲 slot 返回 None。"""
+        cand = self.candidates.get(candidate_id)
+        if cand is None:
+            return None
+        gid = self._allocate_roster_slot()
+        if gid is None:
+            return None
+        state = self.ensure(gid)
+        state.x_ft, state.y_ft = cand.canonical_x_ft, cand.canonical_y_ft
+        state.lifecycle = "tentative"
+        state.roster_status = "provisional"
+        state.last_seen_s = None
+        state.association_eligible = True
+        for view_id, binding in cand.local_bindings.items():
+            player_id = binding.get("view_player_id")
+            epoch = int(binding.get("identity_epoch") or 0)
+            if player_id:
+                self.historical_bindings[(view_id, player_id)] = gid
+        self.candidates.pop(candidate_id, None)
         return gid
+
+    def expire_candidates(self, tick: int) -> None:
+        """过期清理未晋升候选（不影响 roster）。"""
+        stale = [cid for cid, cand in self.candidates.items() if tick - cand.last_tick > self.candidate_expire_ticks]
+        for cid in stale:
+            self.candidates.pop(cid, None)
+
+    def _maybe_confirm_roster(self) -> None:
+        """roster 确认：全部 slot 占用且每 occupant 稳定 K tick 或 ≥1 次可靠 cross-view anchoring → ROSTER_ACTIVE。"""
+        if self.roster_state != "BOOTSTRAPPING":
+            return
+        occupants = [s for s in self.players.values() if s.roster_status in ("provisional", "confirmed")]
+        if len(occupants) < self.expected_player_count:
+            return
+        if not all(
+            s.roster_confirm_ticks >= self.roster_confirm_ticks or s.cross_view_anchored for s in occupants
+        ):
+            return
+        for state in occupants:
+            state.roster_status = "confirmed"
+        self.roster_state = "ROSTER_ACTIVE"
+
+    def update_stale_eligibility(self, now_s: float) -> None:
+        """stale 判定：uncertainty / last_seen_age 超阈值 → 退出普通关联；确认窗口内 provisional 不受影响。"""
+        for state in self.players.values():
+            if state.roster_status is None:
+                continue
+            stale = (
+                state.position_uncertainty_ft > self.stale_uncertainty_ft
+                or (state.last_seen_s is not None and now_s - state.last_seen_s > self.stale_last_seen_s)
+            )
+            state.association_eligible = not stale
+
+    def reset_roster(self) -> None:
+        """销毁并重建 roster（仅 new_match / roster_reset / participant-change 触发）。"""
+        self.players.clear()
+        self.candidates.clear()
+        self.historical_bindings.clear()
+        self._next_candidate = 1
+        self.roster_state = "BOOTSTRAPPING"
+        self._last_tick = None
 
     def absorb_measurement(
         self,
@@ -258,16 +480,30 @@ class GlobalPlayerRegistry:
         pred = self.estimator.predict(global_id, timestamp_s)
         if pred is not None:
             state.position_uncertainty_ft = pred[2]
+        state.last_seen_s = timestamp_s
+        if state.roster_status == "provisional":
+            state.roster_confirm_ticks += 1
+            self._maybe_confirm_roster()
         return sx, sy
 
     def predict_all(self, timestamp_s: float) -> dict[str, tuple[float, float, float]]:
-        """全部 global player 的 (x, y, uncertainty)。"""
+        """roster 内且具备普通关联资格（非 stale）的 global 预测（不含候选池）。"""
         out: dict[str, tuple[float, float, float]] = {}
         for gid in list(self.players):
+            state = self.players[gid]
+            if state.roster_status is None or not state.association_eligible:
+                continue
             pred = self.estimator.predict(gid, timestamp_s)
             if pred is not None:
                 out[gid] = pred
         return out
+
+    def predict_for(self, global_id: str, timestamp_s: float) -> tuple[float, float, float] | None:
+        """任意 roster 玩家（含 stale）的预测，供弱历史绑定 / reacquire 使用。"""
+        state = self.players.get(global_id)
+        if state is None or state.roster_status is None:
+            return None
+        return self.estimator.predict(global_id, timestamp_s)
 
     def record_dual_consistent(self, global_id: str) -> None:
         """记录一次稳定双视角一致观测（cross_view_anchored 依据）。"""
@@ -277,6 +513,8 @@ class GlobalPlayerRegistry:
             state.cross_view_anchored = True
         if state.stable_dual_view_count >= self.confirm_dual_view_count:
             state.lifecycle = "confirmed"
+        if state.roster_status in ("provisional", "confirmed"):
+            self._maybe_confirm_roster()
 
     def set_binding(
         self,

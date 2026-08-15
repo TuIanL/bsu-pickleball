@@ -1210,6 +1210,9 @@ class RefinementOutcome:
     metrics: RefinementMetrics = field(default_factory=RefinementMetrics)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     reason: str | None = None
+    # stabilize-joint-global-player-roster：F1 冻结 roster 映射——refinement 输出
+    # 的 global_player_id 必须是 F0 snapshot 的子集（不新增 slot、不改映射）。
+    roster_frozen: bool = True
 
 
 def run_offline_refinement(
@@ -1445,6 +1448,11 @@ def run_offline_refinement(
             max_recovered_residual_p90=config.max_recovered_residual_p90,
         )
         verdict = gate.decide(f0_metrics, refusion.metrics)
+        # F1 冻结 roster 映射（stabilize-joint-global-player-roster）：refusion 样本的
+        # global_player_id 必须 ⊆ F0 snapshot 的 global_player_ids，绝不新增/重映射。
+        f0_gids = set(snapshot.global_player_ids)
+        refined_gids = {getattr(s, "global_player_id", None) for s in refusion.samples}
+        roster_frozen = all(gid in f0_gids for gid in refined_gids if gid)
         diagnostics = {
             "config": config.to_dict(),
             "windows": len(windows),
@@ -1453,6 +1461,7 @@ def run_offline_refinement(
             "verdict": "accepted" if verdict.accepted else "rejected",
             "reject_reason": None if verdict.accepted else verdict.reason,
             "suppressed": refusion.suppressed,
+            "roster_frozen": roster_frozen,
         }
         return RefinementOutcome(
             status="completed" if verdict.accepted else "rejected_by_safety_gate",
@@ -1462,6 +1471,7 @@ def run_offline_refinement(
             metrics=refusion.metrics,
             diagnostics=diagnostics,
             reason=verdict.reason,
+            roster_frozen=roster_frozen,
         )
     except Exception as exc:  # noqa: BLE001
         return RefinementOutcome(
