@@ -3,7 +3,8 @@
 ## 项目概况
 - 名称：`pre-pickleball`（产品名「拍动视析」），匹克球（pickleball）运动表现智能分析平台。
 - 定位：真实运行的视频分析产品 + 科研实验平台（大创竞赛项目）。基于视觉捕捉与 TENG-IMU 智能球拍。
-- 主流程：用户上传比赛视频 → 点选四角标定场地 → 创建分析任务 → 后台队列/Worker 执行视觉分析 → 输出 JSON 报告 + 视频 Overlay + stage telemetry → 前端展示数据看板与训练建议。
+- 主流程：用户上传比赛视频 → 自动识别 + 拖拽四角标定场地 → 创建分析任务 → 后台队列/Worker 执行视觉分析 → 输出 JSON 报告 + 视频 Overlay + stage telemetry → 前端展示数据看板与训练建议。
+- **场地标定组件统一**：`src/components/platform/CourtCornerCalibrator.tsx` 是三处标定入口（NewAnalysisPage 上传 / RecordingAnalyzePage 录制后 / MultiViewAnalysisSetupPage 双摄）的**唯一**实现，交互为"进入即自动标定 + 可拖拽四边形（四角+四边）"。不要在三页面内联复制标定逻辑。
 - 边界：当前真实结论聚焦人员检测、姿态叠加、轨迹投影、移动指标；球追踪/击球事件/回合分割/战术语义暂不作为真实输出。
 
 ## 技术栈
