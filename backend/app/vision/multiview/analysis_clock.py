@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from app.services.dual_camera_sync import FrameTiming, build_frame_map
+from app.services.dual_camera_sync import FrameTiming, build_frame_map, map_reference_time
 from app.services.frame_timing_provider import FrameTimingProvider
 from app.vision.multiview.sync import MultiViewSyncCalibration
 
@@ -170,9 +170,25 @@ class CanonicalAnalysisClock:
                     "unavailable_out_of_media_range",
                     "unavailable_selection_error",
                 } else "unavailable_no_sync"
-                frame_status[self.secondary_view_id] = status
-                diag["reason"] = status
-                self._record_status(status)
+                # 2026-08-13: 窗口开头（canonical 早于 valid_start，如 clipStart=0）回退到
+                # 有效起点附近的帧，status 标记 fallback_valid_start。fallback 帧不消费 tracker
+                # （MultiViewJointRun 只 step status=available），因此不违反单调不重复不变量；
+                # 其价值是让 debug replay 前段有副摄画面 + 结构化 fallback 状态。
+                fallback = (
+                    self._fallback_valid_start_frame(take_ms)
+                    if status == "unavailable_outside_valid_interval"
+                    else None
+                )
+                if fallback is not None:
+                    views[self.secondary_view_id] = fallback
+                    frame_status[self.secondary_view_id] = "fallback_valid_start"
+                    diag["reason"] = "fallback_valid_start"
+                    diag["fallback_selection_error_ms"] = fallback.selection_error_ms
+                    self._record_status("fallback_valid_start")
+                else:
+                    frame_status[self.secondary_view_id] = status
+                    diag["reason"] = status
+                    self._record_status(status)
 
         diag["frame_status_counts"] = dict(self.status_counts)
 
@@ -181,4 +197,33 @@ class CanonicalAnalysisClock:
             views=views,
             frame_status=frame_status,
             mapping_diagnostics=diag,
+        )
+
+    def _fallback_valid_start_frame(self, take_ms: float) -> FrameSample | None:
+        """窗口开头的回退帧：把目标时间钳制到 valid_start 并映射最近的 secondary 帧。
+
+        仅在 canonical 时间早于有效区间起点（selection 报 unavailable_outside_valid_interval）
+        时被调用；media 范围外或无法映射时返回 None（调用方保持细分不可用）。
+        """
+        calibration = self._sec_calibration
+        if calibration is None or calibration.valid_start_seconds is None or not self._sec_frames:
+            return None
+        seed_target = max(take_ms / 1000.0, calibration.valid_start_seconds)
+        try:
+            local = map_reference_time(calibration, seed_target)
+        except Exception:  # noqa: BLE001 - 映射异常时放弃回退
+            return None
+        ordered = sorted(self._sec_frames, key=lambda frame: frame.pts_seconds)
+        if local < ordered[0].pts_seconds or local > ordered[-1].pts_seconds:
+            return None
+        nearest = min(ordered, key=lambda frame: abs(frame.pts_seconds - local))
+        error_seconds = nearest.pts_seconds - local
+        return FrameSample(
+            source_frame_index=nearest.frame_index,
+            source_timestamp_ms=nearest.pts_seconds * 1000.0,
+            mapped_take_timestamp_ms=take_ms,
+            selection_error_ms=error_seconds * 1000.0,
+            timing_authority=self._secondary_timing_authority,
+            sync_quality=self._sync_quality,
+            frame=self._frame_provider(nearest.frame_index) if self._frame_provider else None,
         )
