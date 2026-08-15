@@ -123,27 +123,51 @@ The system SHALL provide a PowerShell helper that runs the Windows court-line se
 - **THEN** the helper fails before starting model training and prints a clear diagnostic that points to PyTorch/CUDA installation or NVIDIA driver setup
 
 ### Requirement: User-facing automatic calibration diagnostics
-The system SHALL expose actionable automatic court-line calibration diagnostics in the upload workflow for available, unavailable, rejected, and failed attempts.
+
+系统 SHALL 在 upload workflow 中为 available / unavailable / rejected / failed 的自动球场线标定尝试暴露可操作的诊断信息。开发诊断细节（confidence、模型信息、Mask 统计、选中帧、preview 等）SHALL 默认折叠隐藏，仅通过标题旁 Info (i) 图标展开，避免干扰用户聚焦可拖拽四边形主画面；识别中进度与失败/拒绝的操作指引 SHALL 保持默认可见，不进折叠。
 
 #### Scenario: Automatic calibration is available
+
 - **WHEN** automatic court-line calibration returns an available suggestion
-- **THEN** the upload workflow displays the confidence, selected frame reference, keypoint fill status, preview when available, and calibration quality diagnostics when returned
+- **THEN** the upload workflow SHALL 默认仅显示主画面与已自动铺设的可拖拽四边形
+- **AND** 开发诊断细节（confidence、selected frame reference、keypoint fill status、preview、calibration quality diagnostics）SHALL 折叠隐藏
+- **AND** 用户点击标题旁 Info (i) 图标后 SHALL 展开显示上述诊断细节，再次点击 SHALL 收起
+
+#### Scenario: 自动标定进行中显示进度
+
+- **WHEN** 自动标定请求处于上传或识别中（uploading / detecting）
+- **THEN** the upload workflow SHALL 默认可见地显示「正在自动识别球场边线…」进度文本
+- **AND** 该进度文本 SHALL NOT 被折叠隐藏
 
 #### Scenario: Automatic calibration model is unavailable
+
 - **WHEN** automatic court-line calibration returns unavailable because the model path is unset, missing, or cannot be loaded
-- **THEN** the upload workflow displays that model availability diagnosis, including configured model path when returned, and keeps manual four-corner calibration available
+- **THEN** the upload workflow SHALL 默认可见地显示模型不可用诊断（包括返回的 configured model path）与人工标定可用指引
+- **AND** manual four-corner calibration SHALL 保持可用
 
 #### Scenario: Automatic calibration geometry is rejected
+
 - **WHEN** automatic court-line calibration returns rejected because the mask or fitted geometry fails validation
-- **THEN** the upload workflow displays the backend rejection detail, mask confidence, mask area ratio, line count, selected frame reference, and preview when available
+- **THEN** the upload workflow SHALL 默认可见地显示拒绝指引（提示用户手动拖动或调整标定帧）
+- **AND** 用户点击 Info (i) 图标后 SHALL 展开显示 rejection detail、mask confidence、mask area ratio、line count、selected frame reference、preview 等诊断详情
 
 #### Scenario: Automatic calibration request fails
+
 - **WHEN** the automatic calibration request fails with an HTTP or network error
-- **THEN** the upload workflow displays the request failure status and backend detail when available while preserving the selected video, metadata, and manual calibration controls
+- **THEN** the upload workflow SHALL 默认可见地显示 request failure 状态与可用的后端 detail
+- **AND** 系统 SHALL 保留 selected video、metadata 与 manual calibration controls
 
 #### Scenario: Older automatic calibration response lacks diagnostics
+
 - **WHEN** the frontend receives an automatic calibration response without optional diagnostic fields
-- **THEN** the upload workflow remains stable and displays a concise unavailable diagnostic without crashing
+- **THEN** the upload workflow SHALL 保持稳定，默认显示 concise unavailable 诊断且不崩溃
+- **AND** Info (i) 图标 SHALL 在无任何诊断数据时不渲染或不可展开
+
+#### Scenario: 诊断区默认折叠且不持久化
+
+- **WHEN** 用户进入场地标定步骤且自动标定已有结果
+- **THEN** 开发诊断区 SHALL 默认处于折叠态
+- **AND** 每次进入标定（组件随 videoId 重置）SHALL 重置为折叠态，不持久化展开状态
 
 ### Requirement: Real-scene Court region adaptation dataset
 The system SHALL document and support using manually annotated `Court` region masks from real captured footage as a short-term domain adaptation path for automatic court calibration training.
@@ -177,4 +201,74 @@ The manual court calibration page SHALL validate that the two near-baseline corn
 #### Scenario: Calibration Y values are missing or non-finite
 - **WHEN** one or more of the four corner image Y values are not finite
 - **THEN** the calibration page SHALL treat the order check as inconclusive and proceed without prompting
+
+### Requirement: 自动标定进入即触发
+
+系统 SHALL 在场地标定组件挂载且视频已就绪后自动发起一次自动球场标定请求，无需用户手动点击触发；自动标定成功后 SHALL 将返回的四角点铺设成可拖拽四边形，失败或拒绝时 SHALL 提示用户并保留人工标定兜底。
+
+#### Scenario: 自动标定请求自动发起
+
+- **WHEN** 用户进入场地标定步骤且对应的视频已注册（`videoId` 就绪）
+- **THEN** 系统自动调用一次自动标定请求
+- **AND** 界面显示"识别中"等进度状态，而非要求用户先点击触发按钮
+
+#### Scenario: 自动标定可用并铺设四边形
+
+- **WHEN** 自动标定返回 `available` 且包含四个角点
+- **THEN** 系统将四个角点铺设成可拖拽四边形
+- **AND** 显示置信度、选中帧信息与预览（可用时）
+- **AND** 用户可直接确认进入下一步，或在此基础上拖拽修正
+
+#### Scenario: 自动标定失败或拒绝
+
+- **WHEN** 自动标定返回 `rejected`、`unavailable`，或请求发生 HTTP/网络错误
+- **THEN** 系统提示"标定失败"及可用的后端诊断信息
+- **AND** 保留人工标定（可拖拽四边形）作为兜底，用户仍可完成标定
+
+#### Scenario: 用户重新触发自动标定
+
+- **WHEN** 自动标定已失败或用户希望重新识别
+- **THEN** 系统提供"重新自动识别"操作，允许用户手动再次发起自动标定请求
+
+### Requirement: 自动标定抽帧位置固定靠前
+
+自动标定抽帧 SHALL 使用靠近视频开头固定位置抽帧，而非按 10% 时长比例定位；开头为黑场或过渡帧时 SHALL 可向后小步前跳以取到可用画面。
+
+#### Scenario: 按靠近开头位置抽帧
+
+- **WHEN** 自动标定发起且未显式指定抽帧位置
+- **THEN** 后端在靠近视频开头固定位置（如第 2~3 帧或约 0.5 秒处）抽取标定帧
+
+#### Scenario: 开头为黑场或过渡帧
+
+- **WHEN** 固定靠前位置抽到的是黑场或不可用过渡帧
+- **THEN** 自动标定可能被拒绝
+- **AND** 系统提示"标定失败"并回退人工标定（人工路径的视频抽帧仍会向后小步前跳以跳过黑场）
+
+### Requirement: 标定四边形拖拽交互
+
+手动/半自动标定界面 SHALL 以可拖拽四边形呈现四个角点，支持拖动四角与四条边；提交时 SHALL 仍回传四个角点的图像坐标，后端契约不变。
+
+#### Scenario: 拖动角点
+
+- **WHEN** 用户拖动四边形的某个角点
+- **THEN** 仅该角点的坐标更新，其余角点保持不变
+
+#### Scenario: 拖动边
+
+- **WHEN** 用户拖动四边形的某条边
+- **THEN** 该边两个端点一起平移
+- **AND** 平移后角点坐标 clamp 到画面范围内
+
+#### Scenario: 自动结果铺设四边形
+
+- **WHEN** 自动标定返回可用角点
+- **THEN** 四个角点按固定顺序（top_left、top_right、bottom_right、bottom_left）铺设成四边形
+- **AND** 用户可在此基础上拖拽角点或边进行修正
+
+#### Scenario: 提交拖拽后的角点坐标
+
+- **WHEN** 用户完成拖拽并确认提交
+- **THEN** 系统回传四个角点的图像坐标
+- **AND** 后端以与既有手工/半自动标定相同的契约创建标定记录
 
