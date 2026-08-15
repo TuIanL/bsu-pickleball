@@ -67,4 +67,12 @@ describe("JobStageStepper", () => {
     expect(screen.getAllByTestId("stage-capsule")).toHaveLength(5);
     expect(container.querySelector('[data-stage-active="true"]')).toBeNull();
   });
+
+  it("隐藏横向滚动条（scrollbar-none），同时保留横向可滚动容器", () => {
+    const { container } = render(<JobStageStepper stages={makeStages()} />);
+    const stepper = container.querySelector('[data-testid="job-stage-stepper"]');
+    expect(stepper).not.toBeNull();
+    expect(stepper?.className).toContain("scrollbar-none");
+    expect(stepper?.className).toContain("overflow-x-auto");
+  });
 });

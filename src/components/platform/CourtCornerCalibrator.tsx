@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Info } from "lucide-react";
 import type { AutomaticCalibrationResponse } from "../../types/report";
 import type { AnalysisApiError } from "../../services/analysisClient";
 import { DiagnosticNoticeCard } from "../DiagnosticNoticeCard";
@@ -30,6 +31,18 @@ export type CalibrationPointDraft = {
   y: number;
 };
 
+type CalibrationPointId = CalibrationPointDraft["id"];
+
+const calibrationEdges: { id: string; corners: [CalibrationPointId, CalibrationPointId] }[] = [
+  { id: "top", corners: ["top_left", "top_right"] },
+  { id: "right", corners: ["top_right", "bottom_right"] },
+  { id: "bottom", corners: ["bottom_right", "bottom_left"] },
+  { id: "left", corners: ["bottom_left", "top_left"] },
+];
+
+/** 自动标定抽帧位置：靠近开头固定位置（秒）。前后端统一。 */
+const CALIBRATION_FRAME_SECONDS = 0.5;
+
 /**
  * 校验四点标定的近端/远端底线 Y 顺序是否合理。
  * 正常标定下近端底线位于画面下方（图像 y 更大）。
@@ -58,6 +71,8 @@ export interface CourtCornerCalibratorProps {
   videoSrc: string;
   /** 已注册的视频 ID（用于调用后端标定 API） */
   videoId: string;
+  /** 视频尚未注册时，用于惰性上传/注册并返回 videoId（上传流程使用） */
+  ensureVideoId?: () => Promise<string>;
   /** 标定完成后回调，返回 calibrationId + 四个点的坐标 */
   onComplete: (calibrationId: string, points: CalibrationPointDraft[]) => void;
   /** 返回向导上一步或退出当前流程的文案 */
@@ -93,11 +108,37 @@ const isProbablyBlankFrame = (context: CanvasRenderingContext2D, width: number, 
   return samples > 0 && luminanceSum / samples < 14 && darkSamples / samples > 0.94;
 };
 
+/** 居中默认四边形（人工标定兜底时的起始矩形）。 */
+export function buildDefaultQuadPoints(width: number, height: number): CalibrationPointDraft[] {
+  const w = width > 0 ? width : 1280;
+  const h = height > 0 ? height : 720;
+  const marginX = 0.22;
+  const marginY = 0.18;
+  const coords: Record<CalibrationPointId, [number, number]> = {
+    top_left: [w * marginX, h * marginY],
+    top_right: [w * (1 - marginX), h * marginY],
+    bottom_right: [w * (1 - marginX), h * (1 - marginY)],
+    bottom_left: [w * marginX, h * (1 - marginY)],
+  };
+  return calibrationPointOrder.map((point) => {
+    const [x, y] = coords[point.id];
+    return {
+      id: point.id,
+      label: point.label,
+      x: Math.round(x),
+      y: Math.round(y),
+      viewX: (x / w) * 100,
+      viewY: (y / h) * 100,
+    };
+  });
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function CourtCornerCalibrator({
   videoSrc,
   videoId,
+  ensureVideoId,
   onComplete,
   onCancel,
   cancelLabel = "取消",
@@ -108,8 +149,16 @@ export function CourtCornerCalibrator({
   const calibrationCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const calibrationAutoSeekAttemptsRef = useRef(0);
   const calibrationAutoSeekEnabledRef = useRef(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const autoTriggeredRef = useRef(false);
+  const dragRef = useRef<{
+    cornerIds: CalibrationPointId[];
+    lastX: number;
+    lastY: number;
+  } | null>(null);
 
   const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPointDraft[]>(() => initialPoints ? [...initialPoints] : []);
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [calibrationFrameStatus, setCalibrationFrameStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [calibrationFrameError, setCalibrationFrameError] = useState<string | null>(null);
   const [calibrationFramePreviewUrl, setCalibrationFramePreviewUrl] = useState<string | null>(null);
@@ -118,11 +167,15 @@ export function CourtCornerCalibrator({
   const [automaticCalibrationStatus, setAutomaticCalibrationStatus] = useState<"idle" | "uploading" | "detecting" | "ready" | "unavailable" | "rejected" | "error">("idle");
   const [automaticCalibrationError, setAutomaticCalibrationError] = useState<AnalysisApiError | null>(null);
   const [error, setError] = useState<{ title: string; body: string } | null>(null);
+  /** 开发诊断区（就绪提示 + 指标 + 预览）是否展开，默认折叠，不持久化 */
+  const [showCalibrationDetails, setShowCalibrationDetails] = useState(false);
 
   const calibrationComplete = calibrationPoints.length === calibrationPointOrder.length;
   const calibrationFrameReady = calibrationFrameStatus === "ready";
-  const nextCalibrationPoint = calibrationPointOrder[calibrationPoints.length];
   const automaticPreviewUrl = resolveAnalysisAssetUrl(automaticCalibration?.preview_image_url);
+  const manualMode = automaticCalibrationStatus === "rejected" || automaticCalibrationStatus === "unavailable" || automaticCalibrationStatus === "error";
+  /** 是否存在开发诊断数据（决定标题旁 Info 图标是否渲染；无数据时图标隐藏） */
+  const hasCalibrationDiagnostics = automaticCalibration != null || automaticCalibrationError != null;
 
   // ── Video frame capture ──────────────────────────────────────────────────
 
@@ -136,6 +189,8 @@ export function CourtCornerCalibrator({
       setCalibrationFrameStatus("ready");
       return;
     }
+
+    setNaturalSize({ width, height });
 
     try {
       const canvas = calibrationCanvasRef.current ?? document.createElement("canvas");
@@ -185,7 +240,8 @@ export function CourtCornerCalibrator({
       return;
     }
 
-    const defaultTarget = Math.min(Math.max(duration * 0.1, 0.15), Math.max(duration - 0.05, 0));
+    // 靠近开头固定位置抽帧，避免跳到大视频深处导致等待过久
+    const defaultTarget = Math.min(CALIBRATION_FRAME_SECONDS, Math.max(duration - 0.05, 0));
     const nextTime = Math.min(Math.max(targetSeconds ?? defaultTarget, 0), Math.max(duration - 0.05, 0));
     setCalibrationFrameStatus("loading");
     setCalibrationFrameError(null);
@@ -200,52 +256,79 @@ export function CourtCornerCalibrator({
 
   const shiftCalibrationFrame = (seconds: number) => {
     const video = calibrationVideoRef.current;
-    if (!video || calibrationPoints.length > 0) return;
+    if (!video) return;
     calibrationAutoSeekAttemptsRef.current = 0;
     calibrationAutoSeekEnabledRef.current = false;
     seekCalibrationVideo(video.currentTime + seconds);
   };
 
-  // ── Manual calibration ──────────────────────────────────────────────────
+  // ── Quad calibration (drag) ─────────────────────────────────────────────
 
-  const handleCalibrationClick = (event: MouseEvent<HTMLButtonElement>) => {
-    if (calibrationPoints.length >= calibrationPointOrder.length) return;
-    if (!calibrationFrameReady) {
-      setError({
-        title: "标定画面未就绪",
-        body: "标定帧还没有加载完成，请等画面出现后再点选四角。",
-      });
-      return;
+  const pointById = (id: CalibrationPointId) => calibrationPoints.find((point) => point.id === id);
+
+  const toSvgPoint = (clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const transformed = point.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  };
+
+  const startDrag = (
+    event: ReactPointerEvent,
+    cornerIds: CalibrationPointId[],
+  ) => {
+    if (!calibrationFrameReady || isSubmitting) return;
+    const point = toSvgPoint(event.clientX, event.clientY);
+    if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      svgRef.current?.setPointerCapture(event.pointerId);
+    } catch {
+      // 某些浏览器在 pointerId 无效时会抛异常，忽略即可
     }
+    dragRef.current = { cornerIds, lastX: point.x, lastY: point.y };
+  };
 
-    const video = calibrationVideoRef.current;
-    if (!video) return;
+  const handleSvgPointerMove = (event: ReactPointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag || !naturalSize) return;
+    const point = toSvgPoint(event.clientX, event.clientY);
+    if (!point) return;
+    const dx = point.x - drag.lastX;
+    const dy = point.y - drag.lastY;
+    drag.lastX = point.x;
+    drag.lastY = point.y;
+    setCalibrationPoints((current) =>
+      current.map((draft) => {
+        if (!drag.cornerIds.includes(draft.id)) return draft;
+        const nx = Math.min(Math.max(draft.x + dx, 0), naturalSize.width);
+        const ny = Math.min(Math.max(draft.y + dy, 0), naturalSize.height);
+        return {
+          ...draft,
+          x: Math.round(nx),
+          y: Math.round(ny),
+          viewX: (nx / naturalSize.width) * 100,
+          viewY: (ny / naturalSize.height) * 100,
+        };
+      })
+    );
+  };
 
-    video.pause();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const nextPoint = calibrationPointOrder[calibrationPoints.length];
-    const naturalWidth = video.videoWidth || rect.width;
-    const naturalHeight = video.videoHeight || rect.height;
-    const mediaAspect = naturalWidth / naturalHeight;
-    const viewAspect = rect.width / rect.height;
-    const renderedWidth = viewAspect > mediaAspect ? rect.height * mediaAspect : rect.width;
-    const renderedHeight = viewAspect > mediaAspect ? rect.height : rect.width / mediaAspect;
-    const offsetX = (rect.width - renderedWidth) / 2;
-    const offsetY = (rect.height - renderedHeight) / 2;
-    const xInMedia = Math.min(Math.max(event.clientX - rect.left - offsetX, 0), renderedWidth);
-    const yInMedia = Math.min(Math.max(event.clientY - rect.top - offsetY, 0), renderedHeight);
-    setCalibrationPoints((current) => [
-      ...current,
-      {
-        id: nextPoint.id,
-        label: nextPoint.label,
-        x: Math.round(xInMedia * (naturalWidth / renderedWidth)),
-        y: Math.round(yInMedia * (naturalHeight / renderedHeight)),
-        viewX: ((offsetX + xInMedia) / rect.width) * 100,
-        viewY: ((offsetY + yInMedia) / rect.height) * 100,
-      },
-    ]);
-    setError(null);
+  const endDrag = (event: ReactPointerEvent) => {
+    if (dragRef.current) {
+      try {
+        svgRef.current?.releasePointerCapture?.(event.pointerId);
+      } catch {
+        // 忽略释放异常
+      }
+      dragRef.current = null;
+    }
   };
 
   const resetCalibration = () => {
@@ -276,6 +359,15 @@ export function CourtCornerCalibrator({
         };
       })
     );
+    setNaturalSize({ width, height });
+  };
+
+  const resolveVideoId = async (): Promise<string | null> => {
+    if (videoId) return videoId;
+    if (ensureVideoId) {
+      return ensureVideoId();
+    }
+    return null;
   };
 
   const handleAutomaticCalibration = async () => {
@@ -285,8 +377,16 @@ export function CourtCornerCalibrator({
     setAutomaticCalibration(null);
     setAutomaticCalibrationError(null);
     try {
+      setAutomaticCalibrationStatus(videoId ? "detecting" : "uploading");
+      const resolvedVideoId = await resolveVideoId();
+      if (!resolvedVideoId) {
+        setAutomaticCalibrationStatus("unavailable");
+        return;
+      }
       setAutomaticCalibrationStatus("detecting");
-      const response = await requestAutomaticCalibration(videoId);
+      const response = await requestAutomaticCalibration(resolvedVideoId, {
+        timestampSeconds: CALIBRATION_FRAME_SECONDS,
+      });
       setAutomaticCalibration(response);
       if (response.status === "available" && response.keypoints) {
         applyAutomaticKeypoints(response);
@@ -299,12 +399,12 @@ export function CourtCornerCalibrator({
     } catch (err) {
       setAutomaticCalibrationStatus("error");
       setAutomaticCalibrationError(isAnalysisApiError(err) ? err : null);
-      setError(errorToNotice("自动识别边线失败", "可以继续手动点选四个角点，已保留当前视频和比赛信息。", err));
+      setError(errorToNotice("自动识别边线失败", "可以继续手动拖动四角点，已保留当前视频和比赛信息。", err));
     }
   };
 
   const canRequestAutomaticCalibration =
-    Boolean(videoId) &&
+    Boolean(videoId || ensureVideoId) &&
     !isSubmitting &&
     automaticCalibrationStatus !== "uploading" &&
     automaticCalibrationStatus !== "detecting";
@@ -320,9 +420,7 @@ export function CourtCornerCalibrator({
   const handleSubmit = async () => {
     if (!calibrationComplete) return;
 
-    // 四点 Y 顺序校验：近端底线应位于画面下方（图像 y 更大）；
-    // 疑似颠倒或差值过小时弹确认框，由用户决定是否继续。
-    const frameHeight = calibrationVideoRef.current?.videoHeight ?? 0;
+    const frameHeight = naturalSize?.height ?? calibrationVideoRef.current?.videoHeight ?? 0;
     if (!isBaselineOrderPlausible(calibrationPoints, frameHeight)) {
       const confirmed = window.confirm(
         "检测到近端与远端底线可能颠倒（近端底线应位于画面下方）。请确认画面顶/底对应的场地底线，确认无误后继续。",
@@ -331,6 +429,12 @@ export function CourtCornerCalibrator({
     }
 
     try {
+      const resolvedVideoId = await resolveVideoId();
+      if (!resolvedVideoId) {
+        setError(errorToNotice("标定提交失败", "视频尚未注册，请稍后重试。", null));
+        return;
+      }
+
       const pointMap = calibrationPoints.reduce(
         (acc, point) => {
           acc[point.id] = { x: point.x, y: point.y };
@@ -342,11 +446,11 @@ export function CourtCornerCalibrator({
       const source = automaticCalibration?.status === "available" ? "automatic" : "corrected";
       const automaticAccepted =
         automaticCalibration?.status === "available"
-          ? await acceptAutomaticCalibration(videoId, pointMap, source)
+          ? await acceptAutomaticCalibration(resolvedVideoId, pointMap, source)
           : null;
       const calibrationId =
         automaticAccepted?.calibration_id ??
-        (await createManualCalibration(videoId, pointMap)).calibration_id;
+        (await createManualCalibration(resolvedVideoId, pointMap)).calibration_id;
 
       onComplete(calibrationId, calibrationPoints);
     } catch (err) {
@@ -356,18 +460,47 @@ export function CourtCornerCalibrator({
     }
   };
 
-  // ── Video lifecycle ─────────────────────────────────────────────────────
+  // ── Lifecycle ────────────────────────────────────────────────────────────
 
+  // Incoming drafts change when the wizard switches camera/video; reset the local editor state intentionally.
   useEffect(() => {
     calibrationAutoSeekAttemptsRef.current = 0;
     calibrationAutoSeekEnabledRef.current = Boolean(videoSrc);
-    // Incoming drafts change when the wizard switches camera/video; reset the local editor state intentionally.
+    autoTriggeredRef.current = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the local draft with new props
     setCalibrationPoints(initialPoints ? [...initialPoints] : []);
     setError(null);
+    setShowCalibrationDetails(false);
   }, [initialPoints, videoId, videoSrc]);
 
+  // 打开标定即自动触发一次自动标定（每个 videoId/ensureVideoId 仅一次）
+  useEffect(() => {
+    if (autoTriggeredRef.current) return;
+    if (!videoId && !ensureVideoId) return;
+    autoTriggeredRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 自动标定在挂载后异步发起，非同步 setState
+    void handleAutomaticCalibration();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在标定目标变化时触发一次
+  }, [videoId, ensureVideoId]);
+
+  // 自动标定失败 → 人工兜底：铺设居中默认四边形
+  useEffect(() => {
+    if (!manualMode) return;
+    if (calibrationPoints.length > 0) return;
+    if (!naturalSize) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 自动标定失败后填充默认草稿
+    setCalibrationPoints(buildDefaultQuadPoints(naturalSize.width, naturalSize.height));
+  }, [manualMode, naturalSize, calibrationPoints.length]);
+
   // ── Render ───────────────────────────────────────────────────────────────
+
+  const polygonPoints = calibrationPoints.map((point) => `${point.x},${point.y}`).join(" ");
+  const handleR = naturalSize ? Math.max(8, naturalSize.width * 0.006) : 8;
+  const handleHitR = naturalSize ? Math.max(22, naturalSize.width * 0.016) : 22;
+  const edgeStroke = naturalSize ? Math.max(2, naturalSize.width * 0.0018) : 2;
+  const edgeHitStroke = naturalSize ? Math.max(20, naturalSize.width * 0.014) : 20;
+  const handleStroke = naturalSize ? Math.max(2, naturalSize.width * 0.0015) : 2;
+  const labelFont = naturalSize ? Math.max(12, naturalSize.width * 0.014) : 12;
 
   return (
     <section className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4 sm:p-6">
@@ -375,27 +508,27 @@ export function CourtCornerCalibrator({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">四角标定</p>
-          <h2 className="mt-1 text-lg font-black text-[#14241B]">
-            {nextCalibrationPoint ? `点击画面中的${nextCalibrationPoint.label}` : "四个角点已记录"}
-          </h2>
+          <div className="mt-1 flex items-center gap-1.5">
+            <h2 className="text-lg font-black text-[#14241B]">
+              {manualMode ? "拖动四边形对齐球场四角" : "自动识别球场边线"}
+            </h2>
+            {hasCalibrationDiagnostics ? (
+              <button
+                aria-expanded={showCalibrationDetails}
+                aria-label="查看自动识别详细数据"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[#168A34]/30 bg-[#168A34]/10 text-[#168A34] transition-colors hover:bg-[#168A34]/20"
+                onClick={() => setShowCalibrationDetails((prev) => !prev)}
+                type="button"
+              >
+                <Info className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
           <p className="mt-1 text-xs font-semibold text-slate-500">
-            点选期间视频控件会隐藏，避免误触播放键或进度条。
+            拖动四角或四边，让四边形贴合球场边界。
           </p>
         </div>
-        <button className="quiet-button px-3 py-2 text-xs" onClick={resetCalibration} type="button">
-          重新点选
-        </button>
-      </div>
-
-      {/* Auto calibration */}
-      <div className="mt-3 grid gap-3 rounded-2xl border border-[#22C55E]/20 bg-white/70 p-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <strong className="text-sm text-[#14241B]">自动识别球场边线</strong>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              先上传视频并请求后端模型建议，识别结果会填入四角点，仍可手动修正。
-            </p>
-          </div>
+        <div className="flex flex-wrap gap-2">
           <button
             className="quiet-button px-3 py-2 text-xs"
             disabled={!canRequestAutomaticCalibration}
@@ -406,49 +539,77 @@ export function CourtCornerCalibrator({
               ? "上传中..."
               : automaticCalibrationStatus === "detecting"
                 ? "识别中..."
-                : "自动识别"}
+                : "重新自动识别"}
+          </button>
+          <button className="quiet-button px-3 py-2 text-xs" onClick={resetCalibration} type="button">
+            重置
           </button>
         </div>
-        {automaticCalibrationDiagnostic ? (
-          <DiagnosticNoticeCard
-            notice={automaticCalibrationDiagnostic}
-            tone={
-              automaticCalibrationStatus === "ready" ||
-              automaticCalibrationStatus === "detecting" ||
-              automaticCalibrationStatus === "uploading"
-                ? "info"
-                : "error"
-            }
-          />
+      </div>
+
+      {/* Auto calibration status */}
+      <div className="mt-3 grid gap-3 rounded-2xl border border-[#22C55E]/20 bg-white/70 p-3">
+        {/* 保留可见：识别中/上传中进度反馈 */}
+        {automaticCalibrationStatus === "uploading" || automaticCalibrationStatus === "detecting" ? (
+          automaticCalibrationDiagnostic ? (
+            <DiagnosticNoticeCard notice={automaticCalibrationDiagnostic} tone="info" />
+          ) : (
+            <p className="text-xs font-semibold text-slate-500">
+              {automaticCalibrationStatus === "uploading" ? "正在上传视频并自动识别球场边线…" : "正在自动识别球场边线…"}
+            </p>
+          )
         ) : null}
-        {automaticCalibration?.confidence_breakdown ? (
-          <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
-            {(
-              [
-                ["分割模型", automaticCalibration.confidence_breakdown.segmentation],
-                ["几何拟合", automaticCalibration.confidence_breakdown.geometry],
-                ["球场线校准", automaticCalibration.confidence_breakdown.reference],
-                ["综合置信度", automaticCalibration.confidence_breakdown.combined],
-              ] as const
-            ).map(([label, value]) => (
-              <div key={label} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-2 text-center">
-                <div className="font-black text-base text-[#17231D]">{(value * 100).toFixed(0)}%</div>
-                <div className="mt-0.5 text-slate-400">{label}</div>
+        {/* 保留可见：失败/拒绝/不可用 → 操作指引 + 错误诊断 */}
+        {automaticCalibrationStatus === "rejected" ||
+        automaticCalibrationStatus === "unavailable" ||
+        automaticCalibrationStatus === "error" ? (
+          <>
+            {manualMode ? (
+              <p className="text-xs font-semibold text-[#A45A00]">
+                自动标定失败，已切换到人工标定：拖动下方四边形对齐球场四角。
+              </p>
+            ) : null}
+            {automaticCalibrationDiagnostic ? (
+              <DiagnosticNoticeCard notice={automaticCalibrationDiagnostic} tone="error" />
+            ) : null}
+          </>
+        ) : null}
+        {/* 折叠区：仅展开时显示（就绪提示 + 开发指标 + 检测预览） */}
+        {showCalibrationDetails ? (
+          <>
+            {automaticCalibrationStatus === "ready" && automaticCalibrationDiagnostic ? (
+              <DiagnosticNoticeCard notice={automaticCalibrationDiagnostic} tone="info" />
+            ) : null}
+            {automaticCalibration?.confidence_breakdown ? (
+              <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
+                {(
+                  [
+                    ["分割模型", automaticCalibration.confidence_breakdown.segmentation],
+                    ["几何拟合", automaticCalibration.confidence_breakdown.geometry],
+                    ["球场线校准", automaticCalibration.confidence_breakdown.reference],
+                    ["综合置信度", automaticCalibration.confidence_breakdown.combined],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-2 text-center">
+                    <div className="font-black text-base text-[#17231D]">{(value * 100).toFixed(0)}%</div>
+                    <div className="mt-0.5 text-slate-400">{label}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : null}
-        {automaticPreviewUrl ? (
-          <img
-            alt=""
-            className="max-h-56 w-full rounded-xl border border-[#DDE9D6] object-contain"
-            src={automaticPreviewUrl}
-          />
+            ) : null}
+            {automaticPreviewUrl ? (
+              <img
+                alt="自动标定检测预览"
+                className="max-h-56 w-full rounded-xl border border-[#DDE9D6] object-contain"
+                src={automaticPreviewUrl}
+              />
+            ) : null}
+          </>
         ) : null}
       </div>
 
-      {/* Frame navigation */}
-      {!calibrationComplete && calibrationPoints.length === 0 ? (
+      {/* Frame navigation（仅人工标定模式需要） */}
+      {manualMode ? (
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             className="quiet-button px-3 py-2 text-xs"
@@ -476,7 +637,7 @@ export function CourtCornerCalibrator({
       <div className="relative mt-4 overflow-hidden rounded-2xl bg-[#091016]">
         <video
           className="block aspect-video w-full object-contain"
-          controls={calibrationComplete}
+          controls={false}
           muted
           onError={() => {
             setCalibrationFrameStatus("error");
@@ -496,33 +657,85 @@ export function CourtCornerCalibrator({
           }}
           onSeeked={() => captureCalibrationFrame()}
           playsInline
-          preload="auto"
+          preload="metadata"
           ref={calibrationVideoRef}
           src={videoSrc}
         />
-        {!calibrationComplete && calibrationFramePreviewUrl ? (
+        {calibrationFramePreviewUrl ? (
           <img
             alt=""
             className="pointer-events-none absolute inset-0 h-full w-full object-contain"
             src={calibrationFramePreviewUrl}
           />
         ) : null}
-        {!calibrationComplete ? (
-          <button
-            aria-label={nextCalibrationPoint ? `点击${nextCalibrationPoint.label}` : "标定画面"}
-            className={`absolute inset-0 text-left ${
-              calibrationFrameReady ? "cursor-crosshair bg-black/5" : "cursor-not-allowed bg-black/35"
-            }`}
-            disabled={!calibrationFrameReady}
-            onClick={handleCalibrationClick}
-            type="button"
+        {naturalSize && calibrationFrameReady && calibrationComplete ? (
+          <svg
+            ref={svgRef}
+            className="absolute inset-0 h-full w-full"
+            preserveAspectRatio="xMidYMid meet"
+            style={{ touchAction: "none" }}
+            viewBox={`0 0 ${naturalSize.width} ${naturalSize.height}`}
+            onPointerCancel={endDrag}
+            onPointerMove={handleSvgPointerMove}
+            onPointerUp={endDrag}
           >
-            <span className="absolute left-3 top-3 rounded-full border border-white/15 bg-black/55 px-3 py-1 text-xs font-black text-white shadow-lg">
-              {calibrationFrameReady && nextCalibrationPoint
-                ? `标定中 · ${calibrationPoints.length + 1}/4 · ${nextCalibrationPoint.label}`
-                : "正在准备标定画面"}
-            </span>
-          </button>
+            <polygon
+              fill="rgba(34,197,94,0.12)"
+              pointerEvents="none"
+              points={polygonPoints}
+              stroke="#22C55E"
+              strokeLinejoin="round"
+              strokeWidth={edgeStroke}
+            />
+            {calibrationEdges.map((edge) => {
+              const from = pointById(edge.corners[0]);
+              const to = pointById(edge.corners[1]);
+              if (!from || !to) return null;
+              return (
+                <line
+                  key={edge.id}
+                  stroke="transparent"
+                  strokeWidth={edgeHitStroke}
+                  style={{ cursor: "move" }}
+                  x1={from.x}
+                  x2={to.x}
+                  y1={from.y}
+                  y2={to.y}
+                  onPointerDown={(event) => startDrag(event, edge.corners)}
+                />
+              );
+            })}
+            {calibrationPoints.map((point, index) => (
+              <g
+                key={point.id}
+                style={{ cursor: "grab" }}
+                onPointerDown={(event) => startDrag(event, [point.id])}
+              >
+                <circle cx={point.x} cy={point.y} fill="transparent" r={handleHitR} />
+                <circle
+                  cx={point.x}
+                  cy={point.y}
+                  fill="#22C55E"
+                  r={handleR}
+                  stroke="#ffffff"
+                  strokeWidth={handleStroke}
+                />
+                <text
+                  fill="#ffffff"
+                  fontSize={labelFont}
+                  fontWeight="800"
+                  paintOrder="stroke"
+                  stroke="rgba(0,0,0,0.6)"
+                  strokeWidth={1}
+                  textAnchor="middle"
+                  x={point.x}
+                  y={point.y - handleR - 6}
+                >
+                  {index + 1}
+                </text>
+              </g>
+            ))}
+          </svg>
         ) : null}
         {!calibrationComplete && calibrationFrameStatus !== "ready" ? (
           <div className="pointer-events-none absolute inset-0 grid place-items-center px-5 text-center text-white">
@@ -531,25 +744,16 @@ export function CourtCornerCalibrator({
                 {calibrationFrameStatus === "error" ? "视频预览失败" : "正在读取可标定画面"}
               </strong>
               <p className="mt-1 text-xs leading-5 text-white/80">
-                {calibrationFrameError ?? "系统会自动跳过开头黑场，等画面出现后再点选四个场地角。"}
+                {calibrationFrameError ?? "系统会自动跳过开头黑场，等画面出现后再拖动四边形。"}
               </p>
             </div>
           </div>
         ) : null}
-        {calibrationPoints.map((point, index) => (
-          <span
-            className="pointer-events-none absolute grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#22C55E] text-xs font-black text-[#071008] shadow-lg"
-            key={point.id}
-            style={{ left: `${point.viewX}%`, top: `${point.viewY}%` }}
-          >
-            {index + 1}
-          </span>
-        ))}
       </div>
 
       {/* Point summary */}
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        {calibrationPointOrder.map((point, index) => {
+        {calibrationPointOrder.map((point) => {
           const match = calibrationPoints.find((p) => p.id === point.id);
           return (
             <div
@@ -560,7 +764,7 @@ export function CourtCornerCalibrator({
                   : "border-[#DDE9D6] bg-[#F8FBF5] text-slate-400"
               }`}
             >
-              {match ? `${match.id} ✓` : `${index + 1}. ${point.label}`}
+              {match ? `${point.label} · (${match.x}, ${match.y})` : point.label}
             </div>
           );
         })}

@@ -544,10 +544,15 @@ export async function createManualCalibration(
   });
 }
 
-export async function requestAutomaticCalibration(videoId: string): Promise<AutomaticCalibrationResponse> {
+export async function requestAutomaticCalibration(
+  videoId: string,
+  options?: { timestampSeconds?: number; frameIndex?: number }
+): Promise<AutomaticCalibrationResponse> {
   return requestJson<AutomaticCalibrationResponse>("/calibration/automatic", {
     body: JSON.stringify({
       video_id: videoId,
+      timestamp_seconds: options?.timestampSeconds,
+      frame_index: options?.frameIndex,
     }),
     method: "POST",
   });

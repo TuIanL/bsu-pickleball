@@ -72,7 +72,7 @@ export function JobStageStepper({
   return (
     <div
       aria-label={ariaLabel}
-      className={`overflow-x-auto overscroll-x-contain scroll-smooth [scrollbar-width:thin] ${className}`}
+      className={`scrollbar-none overflow-x-auto overscroll-x-contain scroll-smooth ${className}`}
       data-testid="job-stage-stepper"
       ref={containerRef}
       role="list"

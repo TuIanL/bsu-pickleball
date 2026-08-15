@@ -159,3 +159,13 @@ button {
     animation: none;
   }
 }
+
+/* 隐藏横向/纵向滚动条但保留滚动能力（跨浏览器） */
+.scrollbar-none {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 旧版 Edge */
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none; /* Chrome / Safari */
+}

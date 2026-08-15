@@ -67,7 +67,7 @@ export function automaticCalibrationNotice(
   if (status === "error") {
     return {
       title: "自动识别请求失败",
-      body: "可以继续手动点选四个角点，当前视频和比赛信息不会丢失。",
+      body: "可以继续手动拖动四个角点，当前视频和比赛信息不会丢失。",
       detailItems: [
         ["接口", error?.path],
         ["状态", error?.isNetworkError ? "网络请求失败" : error?.status ? `${error.status} ${error.statusText ?? ""}`.trim() : undefined],
@@ -85,12 +85,12 @@ export function automaticCalibrationNotice(
   const rejectedByReference = reference?.rejection_reason != null;
   const body =
     status === "ready"
-      ? "已填入自动角点，仍可手动重新点选修正。"
+      ? "已填入自动角点，仍可手动拖动修正。"
       : status === "rejected"
         ? rejectedByReference
-          ? `自动标定被拒绝：球场线参考支持度不足 (ref=${(reference?.reference_score ?? 0).toFixed(2)})。请手动点选或调整标定帧。`
-          : "检测结果未通过几何校验，请手动点选或调整标定帧。"
-        : "自动模型暂不可用，请继续手动点选四角。";
+          ? `自动标定被拒绝：球场线参考支持度不足 (ref=${(reference?.reference_score ?? 0).toFixed(2)})。请手动拖动或调整标定帧。`
+          : "检测结果未通过几何校验，请手动拖动或调整标定帧。"
+        : "自动模型暂不可用，请继续手动拖动四角。";
 
   return {
     title: status === "ready"
