@@ -1,3 +1,20 @@
+/**
+ * useCaptureRuntime 单元测试 —— 聚焦 reducer 状态机（captureRuntimeReducer）。
+ *
+ * 覆盖要点（对应录制生命周期）：
+ *  - idle → start → recording（正常启动）
+ *  - 启动失败转入 failed
+ *  - recording → stop_requested → stopping（停止请求）
+ *  - recording → stop_result_unknown → recovering → RECOVERED 状态映射
+ *  - recording → cancel → canceled（取消）
+ *  - 非法/越界动作被忽略（如 idle 下 STOP_REQUESTED 不改变阶段）
+ *  - completed → reset → idle（重置）
+ *  - recovering 下再次 stop / cancel 的合法转移
+ *  - RECOVERED 按 result.status（completed/partial/failed/缺失）映射到对应阶段
+ *
+ * 说明：本套测试只验证纯函数 reducer 的状态转移，不挂载 React 组件，
+ * 因此不依赖网络/定时器，运行速度快、确定性强。
+ */
 import { describe, it, expect } from "vitest";
 import { captureRuntimeReducer, type RuntimeAction } from "../hooks/useCaptureRuntime";
 import type { NormalizedCaptureStopResult } from "../types/capture";

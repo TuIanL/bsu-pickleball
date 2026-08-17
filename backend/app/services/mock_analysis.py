@@ -887,7 +887,10 @@ def _apply_pipeline_feedback(
         limited=limited,
         no_tracks=no_tracks,
     )
-    payload["playerMarkers"] = _tracks_to_player_markers(tracks)
+    payload["playerMarkers"] = _tracks_to_player_markers(
+        tracks,
+        doubles=(job.metadata.matchFormat == "doubles") if getattr(job.metadata, "matchFormat", None) else True,
+    )
     payload["shotTrajectories"] = []
     payload["videoOverlayLabels"] = [
         {
@@ -1156,20 +1159,34 @@ def _tracks_to_movement_path(tracks) -> list[dict]:
     ]
 
 
-def _tracks_to_player_markers(tracks) -> list[dict]:
+def _tracks_to_player_markers(tracks, doubles: bool = True) -> list[dict]:
     # 内部：为最多 4 名球员生成"球场标记"（颜色按 A/B/C/D 分配）。
+    # fix-multiview-player-identity D2：markers 按 canonical Player_N 数字升序，
+    # team 由槽位语义（canonical_player_side）计算，MUST NOT 按遍历顺序。
+    from app.schemas.analysis import canonical_player_side
+
     latest: dict[str, object] = {}
     for track in tracks:
         latest[track.track_id] = track
 
     colors = ["#22C55E", "#D9FF3F", "#2F80ED", "#FF9500"]
     markers = []
-    for index, (track_id, track) in enumerate(list(latest.items())[:4]):
+    ordered_ids = sorted(
+        (str(track_id) for track_id in latest),
+        key=lambda pid: (int(pid[len("Player_"):]) if pid.startswith("Player_") and pid[len("Player_"):].isdigit() else 2**31, pid),
+    )
+    for index, track_id in enumerate(ordered_ids[:4]):
+        track = latest[track_id]
+        team = canonical_player_side(track_id, doubles)
+        if not team:
+            # 非 canonical id 回退：按 court_point.y（近半场 y<22ft → near）推断
+            court = getattr(track, "court_point", None)
+            team = "near" if court is not None and getattr(court, "y", 22.0) < 22.0 else "far"
         markers.append(
             {
                 "id": str(track_id),
                 "label": chr(ord("A") + index),
-                "team": "near" if index < 2 else "far",
+                "team": team,
                 "x": 12 + (track.court_point.x / 20.0) * 76,
                 "y": 7 + (track.court_point.y / 44.0) * 42,
                 "color": colors[index % len(colors)],

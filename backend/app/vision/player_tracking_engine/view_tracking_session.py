@@ -158,6 +158,28 @@ class ViewFrameResult:
 
 
 @dataclass
+class PreparedViewFrame:
+    """事务型 prepare 阶段产物（B-Phase-2 same-tick usable-candidate recovery）。
+
+    - `prepare_frame` 产出（不碰 tracker）；`complete_frame` 消费（tracker.update 恰好一次，
+      committed=True）；第二次 complete 同一 prepared 帧抛异常（防重复 update）；
+    - `raw_detections` 仅诊断；`roi_filtered_base` 与成功的 `pre_tick_guided` 参与
+      pre-association（球场外人员不得成为强 candidate）；
+    - `merged_pre_tick` = base + pre-tick guided merge 结果，是后续 tracker 输入。
+    """
+
+    frame_index: int
+    timestamp: float
+    frame: object
+    raw_detections: list = field(default_factory=list)
+    roi_filtered_base: list = field(default_factory=list)
+    pre_tick_guided: list = field(default_factory=list)
+    guided_by_detection: dict[int, Any] = field(default_factory=dict)
+    merged_pre_tick: list = field(default_factory=list)
+    committed: bool = False
+
+
+@dataclass
 class ViewTrackingSessionOutputs:
     """结束阶段快照：session 累积的 tracking 产物 + 诊断 + selector 状态。
 
@@ -325,7 +347,26 @@ class ViewTrackingSession:
         timestamp: float,
         guidance: Sequence[Any] = (),
     ) -> ViewFrameResult:
-        """推进一帧：完整 tracking 链（检测→…→身份→渲染观测）。默认 guidance=() 时与重构前一致。"""
+        """推进一帧：完整 tracking 链（检测→…→身份→渲染观测）。默认 guidance=() 时与重构前一致。
+
+        事务型两阶段：`prepare_frame`（不 update tracker）+ `complete_frame`（一次 update）。
+        """
+        prepared = self.prepare_frame(frame, frame_index=frame_index, timestamp=timestamp, pre_tick_guidance=guidance)
+        return self.complete_frame(prepared, same_tick_guidance=())
+
+    def prepare_frame(
+        self,
+        frame: object,
+        *,
+        frame_index: int,
+        timestamp: float,
+        pre_tick_guidance: Sequence[Any] = (),
+    ) -> PreparedViewFrame:
+        """阶段 1：base YOLO → ROI filter → pre-tick guided ROI → merge；不碰 tracker。
+
+        产出 `PreparedViewFrame`（含 roi_filtered_base 与成功 pre_tick_guided，
+        供 pre-association 消费）；committed=False。
+        """
         # 1) 检测
         raw_detections = self._bind_detections_to_frame(
             self._detect_frame(frame, frame_index), frame_index
@@ -335,13 +376,63 @@ class ViewTrackingSession:
         self.roi_filtered_detection_count += roi_filtered
         if self.roi_artifact.status != "available":
             self.full_frame_fallback_count += 1
-        # 2b) guidance → guided re-detection（跨视角 feedback,pre-gate 在 tracker 之前,invariant 2/9）
+        # 2b) pre-tick guidance → guided re-detection（跨视角 feedback,pre-gate 在 tracker 之前）
         guided_by_detection: dict[int, Any] = {}
-        guided_detection_invoked = False
         guided_candidate_count = 0
-        guided_reject_reason_counts: dict[str, int] = {}
-        if guidance:
-            guided, guided_detection_invoked, guided_candidate_count = self._run_guided_detection(frame, guidance)
+        pre_tick_guided: list[Any] = []
+        if pre_tick_guidance:
+            guided, guided_detection_invoked, guided_candidate_count = self._run_guided_detection(frame, pre_tick_guidance)
+            self._last_guided_reject_reason_counts = dict(getattr(self, "_last_guided_reject_reason_counts", {}))
+            if guided:
+                detections, guided_by_detection = self._merge_detection_evidence(detections, guided)
+                pre_tick_guided = list(guided)
+                for candidate in guided:
+                    reason = getattr(candidate, "reject_reason", None)
+                    if reason:
+                        self._last_guided_reject_reason_counts[reason] = (
+                            self._last_guided_reject_reason_counts.get(reason, 0) + 1
+                        )
+        return PreparedViewFrame(
+            frame_index=frame_index,
+            timestamp=timestamp,
+            frame=frame,
+            raw_detections=raw_detections,
+            roi_filtered_base=list(detections),
+            pre_tick_guided=pre_tick_guided,
+            guided_by_detection=guided_by_detection,
+            merged_pre_tick=list(detections),
+            committed=False,
+        )
+
+    def complete_frame(
+        self,
+        prepared: PreparedViewFrame,
+        same_tick_guidance: Sequence[Any] = (),
+    ) -> ViewFrameResult:
+        """阶段 2（commit）：same-tick guided merge → tracker.update 恰好一次 → 后续链路。
+
+        第二次 complete 同一 prepared 帧抛异常（防重复 update，update-once invariant）。
+        """
+        if prepared.committed:
+            raise RuntimeError(
+                f"complete_frame called twice on prepared frame {prepared.frame_index} "
+                "(tracker.update-once invariant violated)"
+            )
+        frame = prepared.frame
+        frame_index = prepared.frame_index
+        timestamp = prepared.timestamp
+        detections = list(prepared.merged_pre_tick)
+        guided_by_detection: dict[int, Any] = dict(prepared.guided_by_detection)
+        guided_detection_invoked = bool(prepared.pre_tick_guided or same_tick_guidance)
+        guided_candidate_count = len(prepared.pre_tick_guided)
+        guided_reject_reason_counts: dict[str, int] = dict(
+            getattr(self, "_last_guided_reject_reason_counts", {})
+        )
+        # 2c) same-tick guided ROI（B-Phase-2）：commit 前补充，merge 后一次 update
+        if same_tick_guidance:
+            guided, same_tick_invoked, same_tick_candidate_count = self._run_guided_detection(frame, same_tick_guidance)
+            guided_detection_invoked = guided_detection_invoked or same_tick_invoked
+            guided_candidate_count += same_tick_candidate_count
             guided_reject_reason_counts.update(self._last_guided_reject_reason_counts)
             if guided:
                 detections, guided_by_detection = self._merge_detection_evidence(detections, guided)
@@ -349,6 +440,7 @@ class ViewTrackingSession:
                     reason = getattr(candidate, "reject_reason", None)
                     if reason:
                         guided_reject_reason_counts[reason] = guided_reject_reason_counts.get(reason, 0) + 1
+        prepared.committed = True
         # 3) 跟踪 + 重复抑制
         tracker_update = self._tracker_update_with_assignments(detections)
         tracks = tracker_update.tracks
@@ -505,7 +597,7 @@ class ViewTrackingSession:
                 detection.label = player_id.replace("Player_", "P")
 
         # 累积
-        self._raw_detections.extend(raw_detections)
+        self._raw_detections.extend(prepared.raw_detections)
         self._overlay_frames.append(
             DetectionOverlayFrame(
                 frame_index=frame_index,

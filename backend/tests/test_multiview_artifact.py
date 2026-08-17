@@ -322,3 +322,45 @@ def test_normalize_joint_v2_diagnostics_publishes_fusion_quality_fields():
     assert diagnostics["metric_eligible_count"] == 2
     assert diagnostics["view_disagreement"]["dual_samples"] == 1
     assert diagnostics["view_disagreement"]["median_distance_ft"] == 1.0
+
+
+# ---- fix-multiview-single-view-fallback：diagnostics 单视图归因（D4）----
+
+
+def test_diagnostics_single_view_attribution():
+    """single_view_fallback 按 global_player_id 归因：结构性单视图玩家可区分。"""
+    measurements = [
+        _measurement(gid="global_player_1", status="dual_observed", source="dual", eligible=True),
+        _measurement(gid="global_player_2", status="single_view_fallback", source="reference", eligible=True),
+        _measurement(gid="global_player_2", status="single_view_fallback", source="reference", eligible=True, t=1 / 30.0, take_ms=33.3, frame=1),
+        _measurement(gid="global_player_3", status="dual_observed", source="dual", eligible=True),
+        _measurement(gid="global_player_4", status="single_view_fallback", source="reference", eligible=True, t=2 / 30.0, take_ms=66.7, frame=2),
+    ]
+    diagnostics = build_fusion_diagnostics(
+        measurements,
+        run_id="mvf_1",
+        global_players=[],
+        orientations={},
+        reference_view_id="cam_1",
+        secondary_view_id="cam_2",
+    )
+    assert diagnostics["single_view_fallback_by_player"] == {
+        "global_player_2": 2,
+        "global_player_4": 1,
+    }
+    assert diagnostics["fusion_status_counts"]["single_view_fallback"] == 3
+
+
+def test_normalize_single_view_attribution_from_artifact():
+    """artifact 版（normalize 路径）同样产出按 player 归因。"""
+    artifact = {
+        "schema_version": "fused_player_trajectory.v2",
+        "samples": [
+            {"global_player_id": "global_player_1", "fusion_status": "dual_observed", "x_ft": 1.0, "y_ft": 2.0, "metric_eligible": True},
+            {"global_player_id": "global_player_2", "fusion_status": "single_view_fallback", "x_ft": 3.0, "y_ft": 4.0, "metric_eligible": True},
+            {"global_player_id": "global_player_2", "fusion_status": "single_view_fallback", "x_ft": 3.1, "y_ft": 4.1, "metric_eligible": True},
+        ],
+    }
+    diagnostics = normalize_fusion_diagnostics(artifact, {})
+    assert diagnostics["single_view_fallback_by_player"] == {"global_player_2": 2}
+    assert diagnostics["fusion_status_counts"]["single_view_fallback"] == 2

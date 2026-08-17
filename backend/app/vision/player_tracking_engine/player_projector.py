@@ -96,15 +96,24 @@ class PlayerProjector:
 
     def _classify_projection(self, court_position: list[float]) -> str:
         """分类投影点的空间状态。"""
-        from app.vision.courtvision_calibration_engine.court_geometry import standard_court
+        return classify_projection_status(court_position)
 
-        court = standard_court()
-        x, y = court_position
-        if court.is_in_court_bounds(x, y):
-            return "inside_court"
-        if court.is_in_tracking_bounds(x, y):
-            return "outside_court_visible"
-        return "outside_tracking_area"
+
+def classify_projection_status(court_position: Sequence[float]) -> str:
+    """共享纯函数：court position → 空间状态分类（inside_court / outside_court_visible / outside_tracking_area）。
+
+    pre-association 与正式 `PlayerProjector` 共用本函数，MUST NOT 各写一套，
+    防"pre-association 说投影有效、正式 projector 说 outside_tracking_area → drop"的前后不一致。
+    """
+    from app.vision.courtvision_calibration_engine.court_geometry import standard_court
+
+    court = standard_court()
+    x, y = float(court_position[0]), float(court_position[1])
+    if court.is_in_court_bounds(x, y):
+        return "inside_court"
+    if court.is_in_tracking_bounds(x, y):
+        return "outside_court_visible"
+    return "outside_tracking_area"
 
 
 def project_track_points(

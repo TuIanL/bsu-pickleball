@@ -353,6 +353,8 @@ class MultiViewResultComposer:
         fused_artifact: dict[str, object],
         diagnostics: dict[str, object],
         analysis_source: dict[str, str],
+        *,
+        fused_player_overlay_url: str | None = None,
     ) -> dict[str, object]:
         """把 fused + diagnostics 写入 Parent 命名空间，并写 fused_manifest.json 作为唯一出口。"""
         fused_path = self.storage.fused_trajectory_json_path(parent_job_id)
@@ -399,6 +401,11 @@ class MultiViewResultComposer:
                     "url": f"/api/analysis/jobs/{parent_job_id}/artifacts/fusion-diagnostics",
                 },
                 "referenceOverlay": {"source": analysis_source.get("source_view")},
+                "fusedPlayerOverlay": (
+                    {"source": "fused", "url": fused_player_overlay_url}
+                    if fused_player_overlay_url
+                    else None
+                ),
             },
         }
         self.storage.write_json_atomic(self.storage.fusion_manifest_json_path(parent_job_id), manifest)
@@ -507,7 +514,10 @@ class MultiViewResultComposer:
         stride = int(job.frameStride or 1)
         video_id = job.videoId
 
-        # 1) tracking_overlay（框架）：debug trace 聚合
+        # 1) tracking_overlay（框架）：debug trace 聚合。
+        #    joint 模式正式视觉层已由 fused_player_overlay 承担（add-multiview-
+        #    fused-player-overlay）；tracking_overlay 保留为历史 / debug fallback，
+        #    前端加载优先级 fused overlay → trackingOverlay。
         debug_trace = getattr(joint_output, "debug_trace", None)
         if isinstance(debug_trace, dict) and isinstance(debug_trace.get("ticks"), list):
             try:
@@ -526,7 +536,9 @@ class MultiViewResultComposer:
                 artifacts.tracking_overlay_json_path = str(self.storage.tracking_overlay_json_path(job.id))
                 artifacts.tracking_overlay_url = f"/api/analysis/jobs/{job.id}/artifacts/tracking-overlay"
                 artifacts.tracking_overlay_status = overlay.status
-                artifacts.tracking_overlay_detail = overlay.detail
+                artifacts.tracking_overlay_detail = (
+                    f"{overlay.detail}（joint 模式 debug fallback，正式视觉层见 fused_player_overlay）"
+                )
             except Exception as exc:  # noqa: BLE001 - 视觉层失败不中断 compose
                 logger.warning("joint tracking overlay build failed: %s", exc)
                 artifacts.tracking_overlay_status = "unavailable"
@@ -569,6 +581,27 @@ class MultiViewResultComposer:
             for key, value in roster_fields.items():
                 setattr(artifacts, key, value)
 
+        # 2c) multiview-fused-player-overlay.v1（joint 模式正式球员叠加层，
+        #      add-multiview-fused-player-overlay）：F0/F1 evidence + roster +
+        #      view geometry 只读消费，不依赖 debug trace。
+        self._publish_joint_fused_player_overlay(
+            job=job,
+            joint_output=joint_output,
+            reference_view_id=reference_view_id,
+            frame_size=frame_size if isinstance(frame_size, dict) else None,
+            roster_map=roster_map,
+            artifacts=artifacts,
+        )
+
+        # 2d) player-display-diagnostics.v1（逐球员逐 stage 显示漏斗，
+        #      add-player-display-diagnostics）：只读 observability，失败不影响核心结果。
+        self._publish_joint_player_display_diagnostics(
+            job=job,
+            joint_output=joint_output,
+            reference_view_id=reference_view_id,
+            artifacts=artifacts,
+        )
+
         # 3) 无法真实生成的产物显式 unavailable（不静默缺失）
         artifacts.pose_overlay_status = "unavailable"
         artifacts.pose_overlay_detail = JOINT_POSE_UNAVAILABLE
@@ -576,6 +609,133 @@ class MultiViewResultComposer:
         artifacts.player_render_trajectory_detail = JOINT_RENDER_TRAJECTORY_UNAVAILABLE
         artifacts.detections_status = "unavailable"
         artifacts.detections_detail = JOINT_DETECTIONS_UNAVAILABLE
+
+    def _publish_joint_fused_player_overlay(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        joint_output,
+        reference_view_id: str,
+        frame_size: dict[str, int] | None,
+        roster_map: dict[str, str] | None,
+        artifacts: AnalysisArtifacts,
+    ) -> None:
+        """joint 模式发布 `multiview-fused-player-overlay.v1` 正式叠加层。
+
+        数据源：F0 snapshot + accepted F1 recovered observations + final fused
+        trajectory + roster map + view geometry（经 executor 挂到
+        `joint_output.overlay_context`），**不依赖 debug trace**。
+        overlay_context 缺失 / 构建失败 → 显式 unavailable，不中断 compose。
+        """
+        try:
+            overlay_context = getattr(joint_output, "overlay_context", None)
+            if not isinstance(overlay_context, dict):
+                artifacts.fused_player_overlay_status = "unavailable"
+                artifacts.fused_player_overlay_detail = "joint output 缺少 overlay context（view geometry / F1 evidence）"
+                return
+            from app.vision.multiview.fused_overlay_builder import (
+                FusedPlayerOverlayBuilder,
+            )
+            from app.vision.multiview.fused_overlay_bundle import (
+                build_overlay_evidence_bundle,
+            )
+            from app.vision.multiview.fused_overlay_types import (
+                build_fused_player_overlay_payload,
+            )
+
+            geometry_map = overlay_context.get("view_geometry") or {}
+            if not geometry_map or reference_view_id not in geometry_map:
+                artifacts.fused_player_overlay_status = "unavailable"
+                artifacts.fused_player_overlay_detail = "缺少 reference view 投影几何，无法生成 fused overlay"
+                return
+
+            bundle = build_overlay_evidence_bundle(
+                f0_snapshot=getattr(joint_output, "f0_snapshot", None),
+                reference_view_id=reference_view_id,
+                roster_map=dict(roster_map or {}),
+                view_geometry=geometry_map,
+                fused_trajectory=joint_output.trajectory if isinstance(joint_output.trajectory, dict) else None,
+                recovered_observations=list(overlay_context.get("recovered_observations") or []),
+                final_source=str(overlay_context.get("final_source", "first_pass_f0")),
+            )
+            builder = FusedPlayerOverlayBuilder()
+            frames = builder.build(bundle=bundle)
+            expected_player_count = int(
+                joint_output.diagnostics.get("expected_player_count", 4)
+                if isinstance(joint_output.diagnostics, dict)
+                else 4
+            )
+            payload = build_fused_player_overlay_payload(
+                job_id=job.id,
+                video_id=job.videoId,
+                reference_view_id=reference_view_id,
+                frame_size=frame_size,
+                frames=frames,
+                status="available" if frames and any(f.players for f in frames) else "no_detections",
+                detail=(
+                    f"已生成 {len(frames)} 帧 fused overlay（{expected_player_count} 名 canonical 球员，"
+                    f"来源 F0/F1 evidence + roster + {reference_view_id} 几何）"
+                ),
+            )
+            overlay_path = self.storage.fused_player_overlay_json_path(job.id)
+            overlay_path.parent.mkdir(parents=True, exist_ok=True)
+            self.storage.write_json(overlay_path, payload)
+            artifacts.fused_player_overlay_json_path = str(overlay_path)
+            artifacts.fused_player_overlay_url = f"/api/analysis/jobs/{job.id}/artifacts/fused-player-overlay"
+            artifacts.fused_player_overlay_status = payload["status"]
+            artifacts.fused_player_overlay_detail = payload["detail"]
+        except Exception as exc:  # noqa: BLE001 - fused overlay 失败不中断 compose
+            logger.warning("joint fused player overlay build failed: %s", exc)
+            artifacts.fused_player_overlay_status = "unavailable"
+            artifacts.fused_player_overlay_detail = f"fused player overlay 生成失败：{exc}"
+
+    def _publish_joint_player_display_diagnostics(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        joint_output,
+        reference_view_id: str,
+        artifacts: AnalysisArtifacts,
+    ) -> None:
+        """joint 模式发布 `player-display-diagnostics.v1` 显示漏斗产物。
+
+        数据源：joint run 内已构建的 `display_diagnostics_payload`（只读 observability，
+        不依赖 debug trace）。产物缺失 / 构建失败 → 显式 unavailable/failed，
+        不中断 compose，不影响核心 joint result。
+        """
+        try:
+            payload = getattr(joint_output, "display_diagnostics_payload", None)
+            if not isinstance(payload, dict):
+                # fix-multiview-player-identity D1：payload 缺失/非 dict 时仍写盘占位
+                # artifact（status=unavailable），保证查询 API 不因文件缺失返回 404。
+                payload = {
+                    "schema_version": "player-display-diagnostics.v1",
+                    "job_id": job.id,
+                    "video_id": (
+                        getattr(joint_output, "capture_take_id", None) or job.videoId
+                    ),
+                    "reference_view_id": reference_view_id,
+                    "status": "unavailable",
+                    "detail": "joint output 缺少 player display diagnostics 产物",
+                    "rows": [],
+                }
+            diag_path = self.storage.player_display_diagnostics_json_path(job.id)
+            diag_path.parent.mkdir(parents=True, exist_ok=True)
+            self.storage.write_json(diag_path, payload)
+            artifacts.player_display_diagnostics_json_path = str(diag_path)
+            artifacts.player_display_diagnostics_url = (
+                f"/api/analysis/jobs/{job.id}/artifacts/player-display-diagnostics"
+            )
+            artifacts.player_display_diagnostics_status = str(payload.get("status", "available"))
+            artifacts.player_display_diagnostics_detail = str(payload.get("detail", ""))
+            error = getattr(joint_output, "display_diagnostics_error", None)
+            if error:
+                artifacts.player_display_diagnostics_status = "failed"
+                artifacts.player_display_diagnostics_detail = str(error)
+        except Exception as exc:  # noqa: BLE001 - 显示诊断失败不中断 compose
+            logger.warning("joint player display diagnostics publish failed: %s", exc)
+            artifacts.player_display_diagnostics_status = "failed"
+            artifacts.player_display_diagnostics_detail = f"player display diagnostics 发布失败：{exc}"
 
     def compose_joint_result(
         self,
@@ -650,6 +810,7 @@ class MultiViewResultComposer:
                     bool(joint_output.diagnostics.get("authoritative_joint_eligible", False))
                 ),
             },
+            fused_player_overlay_url=artifacts.fused_player_overlay_url,
         )
         if refinement is not None:
             # 把 offline refinement 生命周期写进 manifest(refinement.status / final_source / artifacts)

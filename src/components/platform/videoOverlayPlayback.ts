@@ -1,16 +1,22 @@
 import type {
   DetectionOverlayBox,
   DetectionOverlayFrame,
+  FusedPlayerOverlayEntity,
+  FusedPlayerOverlayFrame,
   PoseKeypoint,
   PoseOverlayFrame,
   PoseSubject,
 } from "../../types/report";
 import { formatPlayerId } from "../../utils/analysisHelpers";
 
-type OverlayFrame = DetectionOverlayFrame | PoseOverlayFrame;
+type OverlayFrame = DetectionOverlayFrame | PoseOverlayFrame | FusedPlayerOverlayFrame;
 
 /** 骨架帧空洞超过此阈值（秒）时，骨架淡出隐藏而非沿用上一帧。 */
 const MAX_POSE_GAP_SECONDS = 0.5;
+/** fused overlay 跨帧插值的最大 gap（秒）：超过禁止插值（spec video-overlay-hud）。 */
+const MAX_OVERLAY_GAP_SECONDS = 0.5;
+/** predicted_only 实体的最大展示时长（秒）：超过立即隐藏（spec video-overlay-hud）。 */
+const PREDICTED_TTL_SECONDS = 0.5;
 
 export type PoseResolutionResult = {
   frame: PoseOverlayFrame | undefined;
@@ -131,6 +137,76 @@ export function resolvePoseFrame(frames: PoseOverlayFrame[], currentTime: number
     },
     inGap: false,
   };
+}
+
+export type FusedPlayerOverlayResolution = {
+  frame: FusedPlayerOverlayFrame | undefined;
+  /** 当前时间是否落在 fused overlay 空洞区间（超出 MAX_OVERLAY_GAP_SECONDS）。 */
+  inGap: boolean;
+};
+
+export function resolveFusedPlayerOverlayFrame(
+  frames: FusedPlayerOverlayFrame[],
+  currentTime: number
+): FusedPlayerOverlayResolution {
+  const window = findFrameWindow(frames, currentTime);
+  if (!window.current) {
+    return { frame: undefined, inGap: false };
+  }
+  if (!window.next) {
+    return { frame: window.current, inGap: false };
+  }
+
+  // gap 语义：跨 gap 禁止插值（spec video-overlay-hud）
+  const gapSeconds = window.next.timestamp_seconds - window.current.timestamp_seconds;
+  const inGap = gapSeconds > MAX_OVERLAY_GAP_SECONDS;
+
+  const nextById = new Map(window.next.players.map((player) => [player.player_id, player]));
+  const players = window.current.players
+    // predicted_only TTL（spec video-overlay-hud）：连续 predicted 帧间隔超 TTL 视为预测中断
+    .filter((player) => {
+      if (player.evidence_type !== "predicted_only") {
+        return true;
+      }
+      const next = nextById.get(player.player_id);
+      if (!next || next.evidence_type !== "predicted_only") {
+        return true;
+      }
+      return gapSeconds <= PREDICTED_TTL_SECONDS;
+    })
+    .map((player) => {
+      if (inGap) {
+        return player; // 跨 gap 不插值
+      }
+      const next = nextById.get(player.player_id);
+      return next ? interpolateFusedPlayer(player, next, window.ratio) : player;
+    });
+
+  return {
+    frame: {
+      ...window.current,
+      timestamp_seconds: currentTime,
+      players,
+    },
+    inGap,
+  };
+}
+
+function interpolateFusedPlayer(
+  current: FusedPlayerOverlayEntity,
+  next: FusedPlayerOverlayEntity,
+  ratio: number
+): FusedPlayerOverlayEntity {
+  return {
+    ...current,
+    bbox: current.bbox && next.bbox ? lerpTuple(current.bbox, next.bbox, ratio) : null,
+    footpoint: current.footpoint && next.footpoint ? lerpTuple(current.footpoint, next.footpoint, ratio) : undefined,
+    overlay_confidence: lerp(current.overlay_confidence, next.overlay_confidence, ratio),
+  };
+}
+
+function lerpTuple(a: number[], b: number[], ratio: number): number[] {
+  return a.map((value, index) => lerp(value, b[index] ?? value, ratio));
 }
 
 function interpolateDetection(

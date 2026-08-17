@@ -6,13 +6,32 @@ guidance 只提供 ROI 搜索先验,不直接制造 observation(invariant 3)。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 from app.vision.multiview.court_frame import CourtOrientation, canonical_to_local
 from app.vision.multiview.global_state import GlobalPlayerState
+
+
+@dataclass
+class GuidanceDecision:
+    """side-effect-free guidance 决策可观测（player-display-diagnostics 消费）。
+
+    仅记录"生成 / 未生成 + 原因"，不改变 generate() 的返回与触发语义。
+
+    - `trigger_source`：为什么有资格（`visibility_age | available_miss | None`）；
+    - `reason`：最终为什么生成 / 拒绝（不包含 trigger 语义）。
+    """
+
+    global_player_id: str
+    target_view: str
+    tick: int
+    status: str  # generated | not_eligible
+    reason: str | None = None
+    guidance_id: str | None = None
+    trigger_source: str | None = None  # visibility_age | available_miss | None
 
 
 @dataclass
@@ -31,6 +50,13 @@ class CrossViewGuidancePolicy:
     min_donor_quality: float = 0.55
     donor_max_age_ms: float = 300.0
     donor_origins: tuple[str, ...] = ("base",)
+    # available-miss fast path：由 MultiViewJointRun.__init__ 从
+    # P1OnlineRecoveryConfig.fast_recovery_enabled 同步（配置真源唯一）。
+    fast_recovery_enabled: bool = True
+    # same-tick usable-candidate recovery（B-Phase-2）：由 MultiViewJointRun.__init__ 同步。
+    same_tick_recovery_enabled: bool = True
+    pre_association_gate_ft: float = 3.0
+    ambiguity_margin: float = 0.15
 
 
 @dataclass
@@ -63,6 +89,23 @@ class GuidanceGenerator:
     def __init__(self, policy: CrossViewGuidancePolicy | None = None) -> None:
         self.policy = policy or CrossViewGuidancePolicy()
         self._last_generated: dict[tuple[str, str], int] = {}  # (global, view) -> tick
+        # side-effect-free 决策可观测：最近一次 generate 调用的原因记录
+        self.last_decisions: list[GuidanceDecision] = []
+
+    def _record(self, *, gid: str, target_view: str, tick: int, status: str, reason: str | None = None,
+                guidance_id: str | None = None, trigger_source: str | None = None) -> None:
+        """追加一条 GuidanceDecision（只读可观测，不改任何逻辑）。"""
+        self.last_decisions.append(
+            GuidanceDecision(
+                global_player_id=gid,
+                target_view=target_view,
+                tick=tick,
+                status=status,
+                reason=reason,
+                guidance_id=guidance_id,
+                trigger_source=trigger_source,
+            )
+        )
 
     def generate(
         self,
@@ -81,24 +124,46 @@ class GuidanceGenerator:
         target_frame_available: bool = True,
         strict_donor: bool = False,
     ) -> CrossViewGuidance | None:
-        """对单个 confirmed+anchored global 生成 guidance;不满足条件返回 None。"""
+        """对单个 confirmed+anchored global 生成 guidance;不满足条件返回 None。
+
+        本方法为 side-effect-free 决策可观测记录 `last_decisions`（不改触发语义）。
+        """
         p = self.policy
+        gid = global_state.global_player_id
         if not target_frame_available:
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="target_frame_unavailable")
             return None
         if global_state.lifecycle != "confirmed" or not global_state.cross_view_anchored:
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="not_confirmed_anchored")
             return None
         if prediction is None:
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="prediction_unavailable")
             return None
         px, py, uncertainty = prediction
         if uncertainty > p.max_uncertainty_ft:
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="prediction_uncertain")
             return None
 
         binding = global_state.view_bindings.get(target_view)
-        # 触发条件:目标视角 binding weak/missing/lost
-        if binding is None or binding.visibility not in {"weak", "missing", "lost"}:
+        # 触发资格：共享 predicate（与 run 的 recovery opportunity/episode 同一语义，
+        # 避免两处漂移产生幽灵 guidance）。fast path 允许 visibility 仍为 observed
+        # 但上一 tick 出现 available miss 时提前触发。
+        from app.vision.multiview.recovery_config import is_target_recovery_eligible
+
+        if binding is None or not is_target_recovery_eligible(binding, p.fast_recovery_enabled):
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="target_not_missing")
             return None
+        # trigger_source：visibility age 优先，fast path 次之（仅诊断，不影响逻辑）
+        trigger_source = (
+            "visibility_age"
+            if binding.visibility in {"weak", "missing", "lost"}
+            else "available_miss"
+            if getattr(binding, "consecutive_available_misses", 0) >= 1
+            else None
+        )
         if strict_donor:
             if donor_binding is None or donor_view is None or donor_view == target_view:
+                self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="donor_unavailable", trigger_source=trigger_source)
                 return None
             last_donor_seen = donor_binding.last_seen_take_timestamp_ms
             donor_age = now_take_ms - (last_donor_seen if last_donor_seen is not None else now_take_ms)
@@ -107,27 +172,40 @@ class GuidanceGenerator:
                 or donor_binding.visibility not in {"observed", "weak"}
                 or donor_age > p.donor_max_age_ms
             ):
+                self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="donor_stale", trigger_source=trigger_source)
                 return None
             if donor_binding.quality < p.min_donor_quality:
+                self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="donor_low_quality", trigger_source=trigger_source)
                 return None
         # cooldown
         key = (global_state.global_player_id, target_view)
         last_tick = self._last_generated.get(key, -10**9)
         if tick - last_tick < p.guidance_cooldown_ticks:
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="cooldown", trigger_source=trigger_source)
             return None
 
-        # canonical → local → image
+        # canonical → local → image；ROI 复用共享纯函数（与 diagnostics 同一几何）
+        from app.vision.multiview.player_display_diagnostics import build_expected_player_region
+
+        region = build_expected_player_region(
+            predicted_canonical_position=(px, py),
+            uncertainty_ft=uncertainty,
+            orientation=orientation,
+            inverse_homography=inverse_homography,
+            frame_width=frame_width,
+            frame_height=frame_height,
+            policy=p,
+        )
+        if region.status != "available" or region.roi is None or region.expected_image_position is None:
+            self._record(gid=gid, target_view=target_view, tick=tick, status="not_eligible", reason="geometry_unavailable")
+            return None
+        (ix, iy) = region.expected_image_position
+        x1, y1, x2, y2 = region.roi
+        r_px = region.radius_px if region.radius_px is not None else 0.0
         lx, ly = canonical_to_local(px, py, orientation)
-        ix, iy = court_to_image_single((lx, ly), inverse_homography)
-        # ROI:由 uncertainty 决定像素半径
-        r_px = min(p.base_roi_margin_px + uncertainty * p.uncertainty_to_px_scale, p.max_roi_margin_px)
-        x1 = max(0.0, ix - r_px)
-        y1 = max(0.0, iy - r_px)
-        x2 = min(float(frame_width), ix + r_px)
-        y2 = min(float(frame_height), iy + r_px)
 
         guidance_id = f"g_{global_state.global_player_id}_{target_view}_{tick}"
-        return CrossViewGuidance(
+        guidance = CrossViewGuidance(
             global_player_id=global_state.global_player_id,
             target_view=target_view,
             predicted_canonical_position=(px, py),
@@ -146,6 +224,11 @@ class GuidanceGenerator:
             donor_origin=str(getattr(donor_binding, "observation_origin", "base")),
             expected_global_player_id=global_state.global_player_id,
         )
+        self._record(
+            gid=gid, target_view=target_view, tick=tick, status="generated", guidance_id=guidance_id,
+            trigger_source=trigger_source,
+        )
+        return guidance
 
     def generate_for_view(
         self,

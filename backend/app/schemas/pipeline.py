@@ -96,6 +96,16 @@ class AnalysisArtifacts(BaseModel):
     roster_url: str | None = None
     roster_status: str | None = None
     roster_detail: str | None = None
+    # multiview-fused-player-overlay.v1（joint 模式正式球员叠加层，add-multiview-fused-player-overlay）
+    fused_player_overlay_json_path: str | None = None
+    fused_player_overlay_url: str | None = None
+    fused_player_overlay_status: str | None = None
+    fused_player_overlay_detail: str | None = None
+    # player-display-diagnostics.v1（joint 模式逐球员逐 stage 显示漏斗，add-player-display-diagnostics）
+    player_display_diagnostics_json_path: str | None = None
+    player_display_diagnostics_url: str | None = None
+    player_display_diagnostics_status: str | None = None
+    player_display_diagnostics_detail: str | None = None
     court_view_roi_json_path: str | None = None
     court_view_roi_url: str | None = None
     source_video_url: str | None = None

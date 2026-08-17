@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, LineChart, Route, Timer } from "lucide-react";
+import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, Layers, LineChart, Route, Timer } from "lucide-react";
 import type { NavigateFn, AppPath, NavigatePath, ReportType } from "../app/navigationTypes";
-import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, StructuredVisualizationData } from "../types/report";
+import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, FusedPlayerOverlayArtifact, StructuredVisualizationData } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { RailMeta } from "../components/RailMeta";
@@ -17,7 +17,7 @@ import StructuredScatterPlot from "../components/platform/StructuredScatterPlot"
 import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap";
 import { supportedReportTypes } from "../app/router";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
-import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
+import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
 import { adaptPipelineResultToReport, isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles, buildPlayerRoster } from "../utils/analysisHelpers";
 
@@ -45,6 +45,8 @@ function useVisualAnalysisReport(jobId?: string) {
     serveEventsLoadState: OverlayLoadState;
     trackingOverlay: TrackingOverlayArtifact | null;
     trackingOverlayLoadState: OverlayLoadState;
+    fusedPlayerOverlay: FusedPlayerOverlayArtifact | null;
+    fusedPlayerOverlayLoadState: OverlayLoadState;
     videoSrc?: string;
   } | null>(null);
 
@@ -67,6 +69,8 @@ function useVisualAnalysisReport(jobId?: string) {
         serveEventsLoadState: OverlayLoadState;
         trackingOverlay: TrackingOverlayArtifact | null;
         trackingOverlayLoadState: OverlayLoadState;
+        fusedPlayerOverlay: FusedPlayerOverlayArtifact | null;
+        fusedPlayerOverlayLoadState: OverlayLoadState;
         heatmapsManifest: VisualizationManifest | null;
         heatmapsLoadState: OverlayLoadState;
         scatterManifest: VisualizationManifest | null;
@@ -85,6 +89,7 @@ function useVisualAnalysisReport(jobId?: string) {
         const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
         const adaptedReport = nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
         const shouldLoadTracking = Boolean(pipelineResult?.artifacts.tracking_overlay_url);
+        const shouldLoadFused = Boolean(pipelineResult?.artifacts.fused_player_overlay_url);
         const shouldLoadPose = Boolean(pipelineResult?.artifacts.pose_overlay_url);
         const shouldLoadServeEvents = Boolean(pipelineResult?.artifacts.serve_events_url);
         const shouldLoadBallTrajectory = Boolean(pipelineResult?.artifacts.cleaned_ball_trajectory_url ?? pipelineResult?.artifacts.ball_trajectory_url);
@@ -117,6 +122,8 @@ function useVisualAnalysisReport(jobId?: string) {
           serveEventsLoadState: shouldLoadServeEvents ? "loading" : "unavailable",
           trackingOverlay: null,
           trackingOverlayLoadState: shouldLoadTracking ? "loading" : "unavailable",
+          fusedPlayerOverlay: null,
+          fusedPlayerOverlayLoadState: shouldLoadFused ? "loading" : "unavailable",
           videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
         });
 
@@ -132,6 +139,22 @@ function useVisualAnalysisReport(jobId?: string) {
               setOverlayState({
                 trackingOverlay: null,
                 trackingOverlayLoadState: "failed",
+              });
+            });
+        }
+
+        if (pipelineResult && shouldLoadFused) {
+          getFusedPlayerOverlay(pipelineResult)
+            .then((overlay) => {
+              setOverlayState({
+                fusedPlayerOverlay: overlay,
+                fusedPlayerOverlayLoadState: overlay ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                fusedPlayerOverlay: null,
+                fusedPlayerOverlayLoadState: "failed",
               });
             });
         }
@@ -254,6 +277,8 @@ function useVisualAnalysisReport(jobId?: string) {
             serveEventsLoadState: "unavailable",
             trackingOverlay: null,
             trackingOverlayLoadState: "unavailable",
+            fusedPlayerOverlay: null,
+            fusedPlayerOverlayLoadState: "unavailable",
           });
         }
       }
@@ -287,6 +312,8 @@ function useVisualAnalysisReport(jobId?: string) {
       serveEventsLoadState: "idle" as OverlayLoadState,
       trackingOverlay: null,
       trackingOverlayLoadState: "idle" as OverlayLoadState,
+      fusedPlayerOverlay: null,
+      fusedPlayerOverlayLoadState: "idle" as OverlayLoadState,
       videoSrc: undefined,
     };
   }
@@ -312,6 +339,8 @@ function useVisualAnalysisReport(jobId?: string) {
       serveEventsLoadState: "idle" as OverlayLoadState,
       trackingOverlay: undefined,
       trackingOverlayLoadState: "idle" as OverlayLoadState,
+      fusedPlayerOverlay: undefined,
+      fusedPlayerOverlayLoadState: "idle" as OverlayLoadState,
       videoSrc: undefined,
     };
   }
@@ -336,6 +365,8 @@ function useVisualAnalysisReport(jobId?: string) {
     serveEventsLoadState: loadedResult.serveEventsLoadState,
     trackingOverlay: loadedResult.trackingOverlay,
     trackingOverlayLoadState: loadedResult.trackingOverlayLoadState,
+    fusedPlayerOverlay: loadedResult.fusedPlayerOverlay,
+    fusedPlayerOverlayLoadState: loadedResult.fusedPlayerOverlayLoadState,
     videoSrc: loadedResult.videoSrc,
   };
 }
@@ -361,6 +392,8 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
     serveEventsLoadState,
     trackingOverlay,
     trackingOverlayLoadState,
+    fusedPlayerOverlay,
+    fusedPlayerOverlayLoadState,
     videoSrc,
   } = useVisualAnalysisReport(jobId);
   const taskReturnPath = taskListPathForJob(job);
@@ -460,14 +493,26 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
               当前数据来源：{sourceLabel}。详细报告已收纳到右侧下级标签中，主画面只保留视频和状态。
             </p>
           </div>
-          <button
-            className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
-            onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/trajectory`))}
-            type="button"
-          >
-            <Route size={17} aria-hidden="true" />
-            查看球路
-          </button>
+          <div className="flex flex-wrap gap-3">
+            {job?.analysisKind === "multiview" && job?.status === "completed" && (
+              <button
+                className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
+                onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/multiview`))}
+                type="button"
+              >
+                <Layers size={17} aria-hidden="true" />
+                查看双摄协同详情
+              </button>
+            )}
+            <button
+              className="quiet-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
+              onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/trajectory`))}
+              type="button"
+            >
+              <Route size={17} aria-hidden="true" />
+              查看球路
+            </button>
+          </div>
         </section>
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
@@ -497,6 +542,10 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
               trackingOverlayLoadState={trackingOverlayLoadState}
               trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
               trackingOverlay={trackingOverlay ?? null}
+              fusedPlayerOverlayDetail={result?.artifacts.fused_player_overlay_detail}
+              fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
+              fusedPlayerOverlayStatus={result?.artifacts.fused_player_overlay_status}
+              fusedPlayerOverlay={fusedPlayerOverlay ?? null}
               // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
               videoSrc={videoSrc ?? undefined}
               fallbackVideoSrc={overlayVideoSrc ?? undefined}
@@ -614,6 +663,10 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
             trackingOverlayLoadState={trackingOverlayLoadState}
             trackingOverlayStatus={result?.artifacts.tracking_overlay_status}
             trackingOverlay={trackingOverlay ?? null}
+            fusedPlayerOverlayDetail={result?.artifacts.fused_player_overlay_detail}
+            fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
+            fusedPlayerOverlayStatus={result?.artifacts.fused_player_overlay_status}
+            fusedPlayerOverlay={fusedPlayerOverlay ?? null}
             // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
             videoSrc={videoSrc ?? undefined}
             fallbackVideoSrc={overlayVideoSrc ?? undefined}

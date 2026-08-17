@@ -32,11 +32,17 @@ class PlayerLockConfig:
     max_reconnect_distance_ft: float = 15.0
     # 重连空间门控：同侧但横向错配的候选侧分（与错侧同级惩罚），避免 position=0 的远距离候选靠运动/外观分数补足阈值
     reconnect_lateral_mismatch_score: float = 0.2
+    # fix-multiview-player-identity D4：同侧横向错配候选的总分乘法惩罚系数
+    # （side 相符但 left/right 不符时 score *= 该系数，防止跨身份互换）
+    reconnect_lateral_mismatch_penalty: float = 0.5
     # 重连硬距离门开关：候选超过"允许距离"（max_reconnect_distance_ft + 速度×流逝时间）时拒绝重连、保持 LOST
     reconnect_gate_enabled: bool = True
     bootstrap_court_margin_ft: float = 12.0
     lost_reconnect_court_margin_ft: float = 20.0
     enable_appearance_score: bool = False
+    # fix-multiview-player-identity D3：bootstrap 阶段"近端大尺寸高清晰"候选
+    # 放宽判定阈值（bbox 面积 / 画面面积 比例）。
+    near_large_bbox_ratio: float = 0.05
 
 
 @dataclass

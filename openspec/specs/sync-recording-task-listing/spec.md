@@ -109,3 +109,30 @@ TBD - created by syncing change refine-dual-camera-ui-and-listings.
 - **THEN** 页面 SHALL 返回双摄录制 tab
 - **AND** SHALL 保留当前双摄 session 上下文
 
+### Requirement: 分析任务分组网格布局
+
+双摄录制会话卡片内的分析任务分组 SHALL 采用网格化布局：**A 机位分析** 与 **B 机位分析** 并排于同一行，**双摄协同分析** 单独占据一行；当存在其他分析任务分组时 SHALL 保持尾部全宽展示。各组的最新任务、历史任务展开与任务操作行为 MUST NOT 因布局变化而改变。
+
+#### Scenario: A/B 机位分析并排
+
+- **WHEN** 双摄录制会话存在 A 机位与 B 机位分析任务分组
+- **THEN** 页面 SHALL 将两个分组卡片并排渲染在同一行
+- **AND** 每个分组 SHALL 保持独立的标题、任务数徽标、历史展开与操作按钮
+
+#### Scenario: 双摄协同分析独占一行
+
+- **WHEN** 双摄录制会话存在双摄协同分析任务分组
+- **THEN** 页面 SHALL 将该分组单独渲染为一行全宽卡片
+- **AND** 该分组 MUST NOT 与 A/B 机位分组并排
+
+#### Scenario: 窄屏回退为纵向堆叠
+
+- **WHEN** 视口宽度不足以容纳并排的两列任务分组
+- **THEN** 页面 SHALL 回退为纵向堆叠展示
+- **AND** 各分组 SHALL 保持完整功能
+
+#### Scenario: 其他分析任务保留尾部
+
+- **WHEN** 存在无法可靠映射到 A/B 机位的历史公开任务分组
+- **THEN** 该分组 SHALL 渲染在网格布局之后的全宽行
+

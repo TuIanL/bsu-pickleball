@@ -1317,6 +1317,21 @@ export function SyncRecordingTaskCard({
   const mergeStatus = getSyncMergeStatus(session);
   const canPlay = canUseSyncVideos(session);
   const storageUnavailable = Object.values(session.video_availability ?? {}).some((state) => state === "unavailable");
+  // 从存储根目录/会话目录/素材路径推断 macOS 外接卷名（如 /Volumes/Elements/... → "Elements"），
+  // 用于把"视频不可访问"翻译成"外接盘未挂载"这类可操作提示。
+  const externalVolumeName = (() => {
+    const candidates = [
+      session.storage_root,
+      session.session_dir,
+      session.output_dir,
+      ...(session.associated_video_paths ?? []),
+    ].filter((path): path is string => typeof path === "string" && path.length > 0);
+    for (const path of candidates) {
+      const match = /^\/Volumes\/([^/]+)/.exec(path);
+      if (match) return match[1];
+    }
+    return null;
+  })();
   const taskGroups = groupDualCameraAnalysisJobs(analysisJobs, session);
   const taskContext = { source: "sync_recording" as const, sessionId: session.session_id };
   const navigateWithTaskContext = (path: string) => onNavigate(withTaskListContext(path, taskContext));
@@ -1460,7 +1475,7 @@ export function SyncRecordingTaskCard({
     const hasHistory = group.history.length > 0;
     const historyExpanded = Boolean(expandedHistory[id]);
     return (
-      <div className="border-b border-[#E7EFE2] py-3 last:border-b-0">
+      <div className="rounded-xl border border-[#DDE9D6] bg-white p-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1549,7 +1564,33 @@ export function SyncRecordingTaskCard({
             <span className="rounded-full bg-[#17231D] px-2.5 py-1 text-xs font-black text-white">{analysisJobs.length} 个</span>
           )}
         </div>
-        <div className="mt-2 divide-y divide-[#E7EFE2]">
+        <div className="mt-2 grid gap-2">
+          {/* A/B 机位单视角分析并排同一行 */}
+          <div className="grid gap-2 sm:grid-cols-2">
+            {renderTaskGroup({
+              id: "cam_1",
+              title: "A 机位分析",
+              description: `${cam1Name} · 单视角工程分析入口`,
+              group: taskGroups.singleView.cam_1,
+              slot: "cam_1",
+              createLabel: "分析 A 机位",
+              createPath: `/capture/${session.session_id}/analyze?cam=cam_1`,
+              canCreate: Boolean(canPlay && cam1VideoId),
+              actionLabel: "A 机位分析",
+            })}
+            {renderTaskGroup({
+              id: "cam_2",
+              title: "B 机位分析",
+              description: `${cam2Name} · 单视角工程分析入口`,
+              group: taskGroups.singleView.cam_2,
+              slot: "cam_2",
+              createLabel: "分析 B 机位",
+              createPath: `/capture/${session.session_id}/analyze?cam=cam_2`,
+              canCreate: Boolean(canPlay && cam2VideoId),
+              actionLabel: "B 机位分析",
+            })}
+          </div>
+          {/* 双摄协同分析单独一行 */}
           {renderTaskGroup({
             id: "multiview",
             title: "双摄协同分析",
@@ -1559,28 +1600,6 @@ export function SyncRecordingTaskCard({
             createPath: session.capture_take_id ? `/capture/takes/${session.capture_take_id}/analyze?session=${session.session_id}` : undefined,
             canCreate: Boolean(canPlay && session.capture_take_id),
             actionLabel: "双摄分析",
-          })}
-          {renderTaskGroup({
-            id: "cam_1",
-            title: "A 机位分析",
-            description: `${cam1Name} · 单视角工程分析入口`,
-            group: taskGroups.singleView.cam_1,
-            slot: "cam_1",
-            createLabel: "分析 A 机位",
-            createPath: `/capture/${session.session_id}/analyze?cam=cam_1`,
-            canCreate: Boolean(canPlay && cam1VideoId),
-            actionLabel: "A 机位分析",
-          })}
-          {renderTaskGroup({
-            id: "cam_2",
-            title: "B 机位分析",
-            description: `${cam2Name} · 单视角工程分析入口`,
-            group: taskGroups.singleView.cam_2,
-            slot: "cam_2",
-            createLabel: "分析 B 机位",
-            createPath: `/capture/${session.session_id}/analyze?cam=cam_2`,
-            canCreate: Boolean(canPlay && cam2VideoId),
-            actionLabel: "B 机位分析",
           })}
           {unassignedGroup.all.length > 0 && renderTaskGroup({
             id: "unassigned",
@@ -1637,7 +1656,11 @@ export function SyncRecordingTaskCard({
         </div>
         {!canPlay && session.status === "completed" && mergeStatus !== "running" && (
           <span className="self-center text-xs text-slate-400">
-            {storageUnavailable ? "视频存储位置暂不可访问，恢复后请刷新" : mergeStatus === "failed" ? "视频合并失败，请重试" : "视频尚未合并"}
+            {storageUnavailable
+              ? externalVolumeName
+                ? `外接盘 ${externalVolumeName} 未挂载：请挂载外接盘后刷新页面`
+                : "视频存储位置暂不可访问，恢复后请刷新"
+              : mergeStatus === "failed" ? "视频合并失败，请重试" : "视频尚未合并"}
           </span>
         )}
       </div>

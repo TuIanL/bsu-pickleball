@@ -641,6 +641,8 @@ class PlayerIdentityDiagnostic(BaseModel):
         "side_quota_fallback_replaced",
         "fallback_tentative_promoted",
         "soft_takeover_assigned",
+        # fix-multiview-cam1-bootstrap-4player D5：bootstrap 结束后槽位未被填充
+        "slot_unfilled",
     ]
     player_id: str | None = None
     track_id: int | None = None

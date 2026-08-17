@@ -102,7 +102,12 @@ def _recovered_to_dict(r: RecoveredViewObservation) -> dict[str, object]:
 
 
 def _with_samples(out, f1_trajectory: dict[str, object]):
-    """构造一个 compose 消费的 F1 output(用 F1 trajectory + normalized samples)。"""
+    """构造一个 compose 消费的 F1 output(用 F1 trajectory + normalized samples)。
+
+    保留 F0 snapshot / recovery evidence 等只读证据，供 fused overlay 消费
+    （add-multiview-fused-player-overlay：overlay 需要 F0 snapshot 判定 strong/weak
+    分支、donor 与 recency）。
+    """
     from types import SimpleNamespace
 
     from app.vision.multiview.joint_artifact import load_fused_trajectory
@@ -113,6 +118,9 @@ def _with_samples(out, f1_trajectory: dict[str, object]):
         normalized=normalized,
         diagnostics=out.diagnostics,
         debug_trace=getattr(out, "debug_trace", None),
+        f0_snapshot=getattr(out, "f0_snapshot", None),
+        recovery_evidence=getattr(out, "recovery_evidence", None) or [],
+        overlay_context=getattr(out, "overlay_context", None),
     )
 
 
@@ -423,7 +431,10 @@ class MultiViewJointExecutor:
                 reference_timing_authority=reference_timing_provider.provenance.authority,
                 secondary_timing_authority=timing_providers[secondary_view_id].provenance.authority,
             )
-            registry = GlobalPlayerRegistry(expected_player_count=match_ctx.expected_player_count)
+            registry = GlobalPlayerRegistry(
+                expected_player_count=match_ctx.expected_player_count,
+                reference_view_id=reference_view_id,
+            )
             associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
             gen = GuidanceGenerator(CrossViewGuidancePolicy())
             run = MultiViewJointRun(
@@ -534,6 +545,7 @@ class MultiViewJointExecutor:
 
             f0_artifact = "fused_player_trajectory.f0.v2.json"
             compose_output = out  # 默认用 F0
+            refinement_outcome = None  # F1 结果（run_dir 缺失 / 异常时保持 None）
             refinement = build_refinement_manifest(
                 status="skipped_no_windows",
                 final_source="first_pass_f0",
@@ -606,6 +618,35 @@ class MultiViewJointExecutor:
 
             # 6) compose + 落盘
             self.store.update(parent.id, orchestrationStatus="composing")
+            # fused overlay 只读上下文（add-multiview-fused-player-overlay）：
+            # view geometry + F1 recovered evidence + final_source，随 compose_output 传递
+            try:
+                from app.vision.multiview.fused_overlay_bundle import ViewGeometry
+
+                overlay_geometry: dict[str, ViewGeometry] = {}
+                for view_id, geometry in view_geometry.items():
+                    if not geometry.get("available") or geometry.get("inverse_homography") is None:
+                        continue
+                    overlay_geometry[view_id] = ViewGeometry(
+                        view_id=view_id,
+                        orientation=geometry.get("orientation"),
+                        inverse_homography=geometry["inverse_homography"],
+                        frame_width=int(geometry.get("frame_width") or width),
+                        frame_height=int(geometry.get("frame_height") or height),
+                    )
+                recovered_list = (
+                    list(getattr(refinement_outcome, "recovered", None) or [])
+                    if refinement_outcome is not None
+                    else []
+                )
+                overlay_context = {
+                    "view_geometry": overlay_geometry,
+                    "recovered_observations": recovered_list,
+                    "final_source": str(getattr(refinement, "final_source", "first_pass_f0")),
+                }
+                setattr(compose_output, "overlay_context", overlay_context)
+            except Exception as exc:  # noqa: BLE001 - overlay 上下文缺失不中断 compose
+                logger.warning("build overlay context failed (fused overlay may be unavailable): %s", exc)
             composer = MultiViewResultComposer(storage)
             result = composer.compose_joint_result(
                 job=parent, joint_output=compose_output, reference_view_id=reference_view_id,

@@ -11,7 +11,7 @@ Additive P1：本模块是 `joint_tracking_v2` 的新类,不修改 P0 `GlobalTra
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # ---- 纯 Python 4x4 矩阵辅助（无外部依赖，手写 Kalman）----
 
@@ -119,6 +119,11 @@ class ViewBinding:
     observation_origin: str = "base"
     guidance_id: str | None = None
     donor_view: str | None = None
+    # ---- available-miss fast path（独立于 visibility 的可用性维度）----
+    consecutive_available_misses: int = 0
+    last_attempted_take_timestamp_ms: float | None = None
+    last_attempted_tick: int | None = None
+    last_observed_tick: int | None = None
 
     def update_visibility(self, now_take_ms: float, weak_after_ms: float, lost_after_ms: float) -> None:
         if self.last_seen_take_timestamp_ms is None:
@@ -131,6 +136,27 @@ class ViewBinding:
             self.visibility = "weak"
         else:
             self.visibility = "lost"
+
+    def record_attempt(self, *, observed: bool, take_ms: float, tick: int) -> None:
+        """记账一次 attempted available tick（幂等：相同 tick 不重复记账）。
+
+        - `observed=True`（该 global 在该 view 获得 AssociationUpdate）→ 清零 miss；
+        - `observed=False`（attempted available tick 但无 AssociationUpdate）
+          → available global-view miss，`consecutive_available_misses += 1`。
+
+        调用方保证仅在 `view_id ∈ view_results` 且 frame available 时调用
+        （attempt authority = view_results）；frame 不可用 / view 未被成功尝试
+        属于 availability/decode/runtime skip，不调用本方法。
+        """
+        if tick == self.last_attempted_tick:
+            return  # 幂等：相同 canonical tick 重复调用不重复记账
+        self.last_attempted_tick = tick
+        self.last_attempted_take_timestamp_ms = take_ms
+        if observed:
+            self.consecutive_available_misses = 0
+            self.last_observed_tick = tick
+        else:
+            self.consecutive_available_misses += 1
 
 
 @dataclass
@@ -270,6 +296,7 @@ class GlobalPlayerRegistry:
         stale_uncertainty_ft: float = 6.0,
         stale_last_seen_s: float = 10.0,
         candidate_association_radius_ft: float = 3.0,
+        reference_view_id: str | None = None,
     ) -> None:
         self.estimator = estimator or GlobalMotionEstimator()
         self.players: dict[str, GlobalPlayerState] = {}
@@ -289,6 +316,14 @@ class GlobalPlayerRegistry:
         self._last_tick: int | None = None
         # (view_id, view_player_id) -> global（弱历史绑定，epoch reset 后仍保留为先验）
         self.historical_bindings: dict[tuple[str, str], str] = {}
+        # fix-multiview-cam1-bootstrap-4player D3/D4：reference view 槽位唯一性观测。
+        # reference_view_id 为参考视角（display anchor）；槽位 (view_id, view_player_id)
+        # 在同一 view 内只允许一个 global 绑定，冲突走 reassociation 而非直接覆盖。
+        self.reference_view_id = reference_view_id
+        # (view_id, view_player_id) -> 冲突次数（tick 级累计，供 display diagnostics）
+        self.reference_slot_conflicts: dict[tuple[str, str], int] = {}
+        # 最近一次冲突事件（view_id, view_player_id, incumbent, challenger）
+        self.last_reference_slot_conflict: tuple[str, str, str, str] | None = None
 
     def get(self, global_id: str) -> GlobalPlayerState | None:
         return self.players.get(global_id)
@@ -446,13 +481,26 @@ class GlobalPlayerRegistry:
         self.roster_state = "ROSTER_ACTIVE"
 
     def update_stale_eligibility(self, now_s: float) -> None:
-        """stale 判定：uncertainty / last_seen_age 超阈值 → 退出普通关联；确认窗口内 provisional 不受影响。"""
+        """stale 判定：uncertainty / last_seen_age 超阈值 → 退出普通关联；确认窗口内 provisional 不受影响。
+
+        单视图活跃豁免（fix-multiview-single-view-fallback）：玩家存在任一 view binding
+        为 observed/weak 且 last_seen_s 新鲜（now - last_seen <= stale_last_seen_s）时，
+        SHALL 保持 association_eligible=True——跨视图 binding 缺失（如仅 cam_1 观测、
+        cam_2 过期）SHALL NOT 使单视图活跃玩家退出普通关联。豁免仅作用于 last_seen 维度；
+        position_uncertainty 超阈值 SHALL 仍无条件置 stale（不可靠预测不吸附观测）。
+        """
         for state in self.players.values():
             if state.roster_status is None:
                 continue
-            stale = (
-                state.position_uncertainty_ft > self.stale_uncertainty_ft
-                or (state.last_seen_s is not None and now_s - state.last_seen_s > self.stale_last_seen_s)
+            any_view_fresh = (
+                any(binding.visibility in ("observed", "weak") for binding in state.view_bindings.values())
+                and state.last_seen_s is not None
+                and (now_s - state.last_seen_s <= self.stale_last_seen_s)
+            )
+            stale = state.position_uncertainty_ft > self.stale_uncertainty_ft or (
+                state.last_seen_s is not None
+                and now_s - state.last_seen_s > self.stale_last_seen_s
+                and not any_view_fresh
             )
             state.association_eligible = not stale
 
@@ -524,10 +572,66 @@ class GlobalPlayerRegistry:
         now_take_ms: float,
         weak_after_ms: float = 300.0,
         lost_after_ms: float = 1000.0,
-    ) -> None:
+    ) -> bool:
+        """设置某 view 的绑定；槽位唯一性冲突时返回 False（不覆盖）。
+
+        fix-multiview-cam1-bootstrap-4player D3（扩展至全部 view）：同一 view 内
+        (view_id, view_player_id) 槽位只允许一个 global 绑定——每个 view 的 local
+        identity 槽位（Player_N）唯一对应一个物理球员。当 binding 的 view_player_id
+        非空且该槽位已被其他 roster 玩家占用时，本调用记录 slot_conflict 事件并
+        返回 False，MUST NOT 直接覆盖 incumbent（由其走 PendingReassociation 强证据切换）。
+
+        2026-08-16 修复残留：原实现仅保护 reference view，导致非 reference view
+        （如 cam_2）的槽位可被第二个 global 抢占 → gid 绑定冲突 → fused overlay
+        该 player 证据丢失。现扩展至所有 view。
+        """
         state = self.ensure(global_id)
+        # 槽位唯一性检查（任意 view + 有 view_player_id 时）
+        if binding.view_player_id:
+            incumbent = self.reference_slot_occupant(view_id, binding.view_player_id)
+            if incumbent is not None and incumbent != global_id:
+                key = (view_id, binding.view_player_id)
+                self.reference_slot_conflicts[key] = self.reference_slot_conflicts.get(key, 0) + 1
+                self.last_reference_slot_conflict = (view_id, binding.view_player_id, incumbent, global_id)
+                return False
         binding.update_visibility(now_take_ms, weak_after_ms, lost_after_ms)
         state.view_bindings[view_id] = binding
+        return True
+
+    def reference_slot_occupant(self, view_id: str, view_player_id: str) -> str | None:
+        """返回 (view_id, view_player_id) 槽位的当前占用 global（无则 None）。
+
+        遍历 roster 玩家（provisional/confirmed）的 view_bindings，找 view_player_id
+        匹配的绑定者。仅查询不修改。适用于任意 view（reference 与非 reference，
+        见 set_binding 槽位唯一性）。
+        """
+        if not view_player_id:
+            return None
+        for gid, state in self.players.items():
+            if state.roster_status not in ("provisional", "confirmed"):
+                continue
+            binding = state.view_bindings.get(view_id)
+            if binding is not None and binding.view_player_id == view_player_id:
+                return gid
+        return None
+
+    def release_view_slot(self, view_id: str, view_player_id: str) -> str | None:
+        """解除 (view_id, view_player_id) 槽位的占用（仅解除匹配的 binding 的 view_player_id）。
+
+        供 association 层**强证据 reassociation** 使用：同一 view 内 local 身份经
+        连续 N 帧强证据确认切换到另一 global 时，先解除 incumbent 的槽位占用，
+        再让 challenger 绑定——否则唯一性保护会错误拦截合法切换。
+
+        返回被解除的 global（槽位本为空返回 None）。
+        """
+        if not view_player_id:
+            return None
+        for gid, state in self.players.items():
+            binding = state.view_bindings.get(view_id)
+            if binding is not None and binding.view_player_id == view_player_id:
+                state.view_bindings[view_id] = replace(binding, view_player_id=None)
+                return gid
+        return None
 
     def age_bindings(
         self,

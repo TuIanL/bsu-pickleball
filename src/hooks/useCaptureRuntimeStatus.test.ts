@@ -12,13 +12,19 @@ import { renderHook, waitFor, cleanup } from "@testing-library/react";
 import { useCaptureRuntimeStatus, POLL_INTERVAL_MS } from "./useCaptureRuntimeStatus";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 
+// 用 vitest 的 spy 模拟后端"运行状态"接口，便于注入成功/失败/过期响应
 const mockGetRuntimeStatus = vi.fn();
 vi.mock("../services/analysisClient", () => ({
   getCaptureTakeRuntimeStatus: (...args: unknown[]) => mockGetRuntimeStatus(...args),
+  // 模拟 isAnalysisApiError：带 _isAnalysisApiError 标记的对象视为后端 API 错误
   isAnalysisApiError: (err: unknown) =>
     err && typeof err === "object" && "_isAnalysisApiError" in err,
 }));
 
+/**
+ * 构造一份"录制中"的运行状态快照作为测试基准，
+ * 允许通过 overrides 覆盖任意字段（如把 phase 改成 completed、注入 unavailable 指标等）。
+ */
 function makeSnapshot(overrides: Partial<CaptureTakeRuntimeStatus> = {}): CaptureTakeRuntimeStatus {
   const base: CaptureTakeRuntimeStatus = {
     captureTakeId: "ct_test",

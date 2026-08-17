@@ -61,6 +61,24 @@ function describeError(err: unknown): string {
   return "运行状态请求失败";
 }
 
+/**
+ * 轮询 CaptureTake 运行状态快照。
+ *
+ * 参数（UseCaptureRuntimeStatusOptions）：
+ *   - captureTakeId：当前 CaptureTake ID；未开始录制（idle）时为 null，此时不轮询。
+ *   - phase：录制阶段（来自 useCaptureRuntime.phase 或等价的录制状态机阶段）。
+ *            仅当 phase 属于 ACTIVE_POLLING_PHASES（recording/stopping/recovering）时才会轮询。
+ *
+ * 返回值（UseCaptureRuntimeStatusResult）：
+ *   - state：运行状态快照与请求元信息（见 CaptureRuntimeStatusState：snapshot / isLoading / error / lastSuccessAt）。
+ *   - isPolling：当前是否正在轮询（活跃阶段 + 页面可见 + 定时器运行中）。
+ *
+ * 关键逻辑：
+ *   - 活跃阶段每 POLL_INTERVAL_MS（2s）轮询；终态（completed/partial/failed/canceled）停止轮询并保留最后快照。
+ *   - 用 seqRef 丢弃过期响应，captureTakeId 切换时旧请求不会污染新状态。
+ *   - 首次请求置 loading；失败时保留最后成功快照 + error + lastSuccessAt。
+ *   - 页面不可见时暂停轮询，恢复可见时重启。
+ */
 export function useCaptureRuntimeStatus({
   captureTakeId,
   phase,
@@ -197,6 +215,7 @@ export function useCaptureRuntimeStatus({
     };
   }, [clearPollTimer]);
 
+  // 派生：是否在轮询 = 有 takeId 且处于活跃阶段且定时器仍存活
   const isPolling =
     captureTakeId !== null &&
     ACTIVE_POLLING_PHASES.has(phase) &&

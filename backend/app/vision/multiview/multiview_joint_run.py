@@ -39,6 +39,13 @@ class CancellationToken(Protocol):
 ProgressCallback = Callable[[int, int], None]
 
 
+class _LegacyCommittedResult:
+    """轻量 legacy runtime 的已 commit 结果包装（无两阶段能力时回退旧 step）。"""
+
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+
 @dataclass
 class MultiViewJointRunOutput:
     trajectory: dict[str, object]
@@ -53,6 +60,9 @@ class MultiViewJointRunOutput:
     debug_trace: dict[str, object] | None = None
     # Compact recovery evidence retained in memory even when raw debug trace is disabled.
     recovery_evidence: list[dict[str, object]] = field(default_factory=list)
+    # player display diagnostics（只读 observability；构建失败不影响核心结果）
+    display_diagnostics_payload: dict[str, object] | None = None
+    display_diagnostics_error: str | None = None
 
 
 class MultiViewJointRun:
@@ -108,6 +118,10 @@ class MultiViewJointRun:
             policy.max_uncertainty_ft = self.recovery_config.max_prediction_uncertainty_ft
             policy.guidance_cooldown_ticks = self.recovery_config.guidance_cooldown_ticks
             policy.max_regions_per_view_per_tick = self.recovery_config.max_regions_per_view_per_tick
+            policy.fast_recovery_enabled = self.recovery_config.fast_recovery_enabled
+            policy.same_tick_recovery_enabled = self.recovery_config.same_tick_recovery_enabled
+            policy.pre_association_gate_ft = self.recovery_config.pre_association_gate_ft
+            policy.ambiguity_margin = self.recovery_config.ambiguity_margin
         self.canonical_frame_ref = canonical_frame_ref
         self.reference_timing_provider = reference_timing_provider
         self.timing_authority_by_view = dict(timing_authority_by_view or {})
@@ -125,6 +139,12 @@ class MultiViewJointRun:
         self.recovery_funnel: dict[str, int] = {}
         self._recovery_episode_by_target: dict[tuple[str, str], str] = {}
         self._next_recovery_episode = 1
+        # player display diagnostics（只读；失败不影响核心结果）
+        self._display_diag_rows: list[Any] = []
+        self._display_diag_error: str | None = None
+        # same-tick RecoveryAttemptLedger（B-Phase-2）：同 pair 去重 + 每 view ROI 预算
+        self._same_tick_attempted: set[tuple[str, str]] = set()
+        self._same_tick_ledger: dict[str, list[Any]] = {view_id: [] for view_id in self.runtimes}
 
     # ---- 主循环 ---------------------------------------------------------------
 
@@ -179,6 +199,9 @@ class MultiViewJointRun:
                 timestamp_s = ref_idx / reference_fps
             metric_eligible_tick = metric_start <= ref_idx < metric_end
             funnel_before = dict(self.recovery_funnel)
+            # same-tick RecoveryAttemptLedger：预算按 canonical tick 重置
+            self._same_tick_attempted = set()
+            self._same_tick_ledger = {view_id: [] for view_id in self.runtimes}
             bundle = self.clock.tick(
                 reference_frame_index=ref_idx,
                 reference_timestamp_seconds=timestamp_s,
@@ -239,11 +262,17 @@ class MultiViewJointRun:
 
             # Freeze recovery denominator from the pre-tick state. A missing
             # target frame is an availability skip, not a visual opportunity.
+            # 触发资格用共享 predicate（与 guidance 同一语义，消灭幽灵 guidance）：
+            # visibility weak/missing/lost OR fast path（available miss >= 1）。
+            from app.vision.multiview.recovery_config import is_target_recovery_eligible
+
             for gid, state in self.registry.players.items():
                 pred = predictions.get(gid)
                 for target_view in self.runtimes:
                     binding = state.view_bindings.get(target_view)
-                    if binding is None or binding.visibility not in {"weak", "missing", "lost"}:
+                    if binding is None or not is_target_recovery_eligible(
+                        binding, self.recovery_config.fast_recovery_enabled
+                    ):
                         continue
                     episode_key = (gid, target_view)
                     if episode_key not in self._recovery_episode_by_target:
@@ -324,9 +353,13 @@ class MultiViewJointRun:
                     "guidance_generated_count", 0
                 ) + len(guidance_by_view[view_id])
 
-            # ---- View A/B perception(每 source frame 至多一次 tracker.update)----
+            # ---- View A/B perception：两阶段（B-Phase-2 same-tick usable-candidate recovery）----
+            # 阶段 1：每 view prepare（decode 一次 + base/ROI/pre-tick guided/merge，不 update tracker）
+            # 阶段 2（barrier 后）：pre-association → same-tick guidance → complete（tracker.update ONCE）
             all_obs: list[JointObservation] = []
             view_results: dict[str, Any] = {}
+            prepared_by_view: dict[str, Any] = {}
+            same_tick_guidance_by_view: dict[str, list[Any]] = {}
             for view_id, runtime in self.runtimes.items():
                 # 已 degraded 的视角不再 step
                 if view_id in self.view_degraded:
@@ -338,24 +371,10 @@ class MultiViewJointRun:
                 sample = bundle.views[view_id]
                 if sample is None:
                     continue
-                try:
-                    result = runtime.step(
-                        sample.source_frame_index,
-                        timestamp_s,
-                        guidance=tuple(guidance_by_view.get(view_id, ())),
-                        timing_context=sample,
-                    )
-                except TypeError as exc:
-                    # Keep lightweight legacy test/runtime adapters usable while
-                    # the production JointViewRuntime carries timing context.
-                    if "timing_context" not in str(exc):
-                        raise
-                    result = runtime.step(
-                        sample.source_frame_index,
-                        timestamp_s,
-                        guidance=tuple(guidance_by_view.get(view_id, ())),
-                    )
-                if result is None:
+                prepared = self._runtime_prepare(
+                    runtime, sample, timestamp_s, tuple(guidance_by_view.get(view_id, ()))
+                )
+                if prepared is None:
                     # 解码缺帧:累计;非 reference 视角连续缺失 → 降级(design D10 失败语义)
                     self._consecutive_missing[view_id] = self._consecutive_missing.get(view_id, 0) + 1
                     if guidance_by_view.get(view_id):
@@ -367,6 +386,28 @@ class MultiViewJointRun:
                         self.counter[f"{view_id}:degraded"] = self.counter.get(f"{view_id}:degraded", 0) + 1
                     continue
                 self._consecutive_missing[view_id] = 0
+                prepared_by_view[view_id] = prepared
+
+            # ---- current-tick barrier：两路 prepare 完成后做 same-tick 决策 ----
+            if self.recovery_config.same_tick_recovery_enabled and prepared_by_view:
+                same_tick_guidance_by_view = self._select_same_tick_guidance(
+                    prepared_by_view=prepared_by_view,
+                    predictions=predictions,
+                    take_ms=take_ms,
+                    tick_number=tick_number,
+                )
+
+            # ---- 阶段 2：complete（tracker.update ONCE/view）----
+            for view_id, runtime in self.runtimes.items():
+                prepared = prepared_by_view.get(view_id)
+                if prepared is None:
+                    continue
+                sample = bundle.views[view_id]
+                result = self._runtime_complete(
+                    runtime, prepared, tuple(same_tick_guidance_by_view.get(view_id, ())), sample
+                )
+                if result is None:
+                    continue
                 view_results[view_id] = result
                 if getattr(result, "guided_detection_invoked", False):
                     self.recovery_funnel["guided_candidate_count"] = self.recovery_funnel.get(
@@ -395,10 +436,101 @@ class MultiViewJointRun:
                 self.recovery_funnel["guided_local_identity_admitted_count"] = (
                     self.recovery_funnel.get("guided_local_identity_admitted_count", 0) + guided_obs_count
                 )
+                # same-tick 单独计数（B-Phase-2）：本 view 有 same-tick guidance 且形成 formal obs
+                if same_tick_guidance_by_view.get(view_id):
+                    self.recovery_funnel["same_tick_roi_invocation_count"] = (
+                        self.recovery_funnel.get("same_tick_roi_invocation_count", 0)
+                        + len(same_tick_guidance_by_view.get(view_id, ()))
+                    )
+                    same_tick_obs = [
+                        obs for obs in all_obs
+                        if obs.view_id == view_id and obs.detection_origin == "guided_roi"
+                        and obs.guidance_id and str(obs.guidance_id).startswith("st_")
+                    ]
+                    if same_tick_obs:
+                        self.recovery_funnel["same_tick_formal_observation_count"] = (
+                            self.recovery_funnel.get("same_tick_formal_observation_count", 0)
+                            + len(same_tick_obs)
+                        )
 
             # ---- tick barrier:两路完成后才更新 global ----
             updates = self.associator.process_tick(all_obs, timestamp_s, self.orientations, tick=tick_number)
             fused = self.associator.fuse_assignments(updates, include_tentative=True)
+
+            # ---- available-miss ledger（顺序冻结：association → ledger →
+            #      display diagnostics → fusion/debug）----
+            # attempt authority = view_results（view 本 tick 真实被 perception 成功尝试）；
+            # frame_status 仅表示 source availability；view_degraded / decode 失败
+            # （view_results 无该 view）不计 miss。
+            assigned_views: dict[tuple[str, str], bool] = {}
+            for update in updates:
+                assigned_views[(update.global_id, update.view_id)] = True
+            for gid, state in self.registry.players.items():
+                if state.lifecycle != "confirmed":
+                    continue
+                for view_id in self.runtimes:
+                    if view_id not in view_results:
+                        continue  # view 未被成功尝试（degraded / decode 失败等）→ skip
+                    if bundle.frame_status.get(view_id) != "available":
+                        continue  # source 不可用 → availability skip
+                    binding = state.view_bindings.get(view_id)
+                    if binding is None:
+                        continue
+                    binding.record_attempt(
+                        observed=assigned_views.get((gid, view_id), False),
+                        take_ms=take_ms,
+                        tick=tick_number,
+                    )
+
+            # ---- player display diagnostics（只读 observability；失败不影响核心结果）----
+            try:
+                from app.vision.multiview.player_display_diagnostics import build_display_diagnostics_rows
+
+                roster_snapshot = [
+                    {
+                        "global_player_id": gid,
+                        "player_id": _roster_canonical_player_id(state, self.reference_view_id),
+                        "lifecycle": state.lifecycle,
+                        "bindings": {
+                            view_id: {
+                                "view_player_id": binding.view_player_id,
+                                "visibility": binding.visibility,
+                                "available_miss_streak": binding.consecutive_available_misses,
+                            }
+                            for view_id, binding in state.view_bindings.items()
+                            if binding.view_player_id is not None
+                        },
+                    }
+                    for gid, state in self.registry.players.items()
+                    if state.roster_status is not None
+                ]
+                self._display_diag_rows.extend(
+                    build_display_diagnostics_rows(
+                        canonical_tick=tick_number,
+                        timestamp_ms=take_ms,
+                        reference_view_id=self.reference_view_id,
+                        view_results=view_results,
+                        frame_status=bundle.frame_status,
+                        predictions=predictions,
+                        view_geometry=self.view_geometry or {},
+                        policy=self.guidance_generator.policy,
+                        roster=roster_snapshot,
+                        association_decisions=self.associator.last_tick_decisions,
+                        guidance_decisions=self.guidance_generator.last_decisions,
+                        same_tick_guidance_by_view=same_tick_guidance_by_view,
+                        # fix-multiview-cam1-bootstrap-4player D4：reference 槽位冲突
+                        # 计数（association 只读观测）→ roster_conflict 字段
+                        roster_conflicts=(
+                            getattr(self.registry, "reference_slot_conflicts", None) or {}
+                        ),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 诊断构建失败不阻断核心 joint 分析
+                self._display_diag_error = f"{type(exc).__name__}: {exc}"
+                self.counter["player_display_diagnostics_failed"] = (
+                    self.counter.get("player_display_diagnostics_failed", 0) + 1
+                )
+
             for gid, (x, y, views) in fused.items():
                 self.registry.absorb_measurement(gid, x, y, timestamp_s)
                 gid_updates = [u for u in updates if u.global_id == gid and u.view_id in views]
@@ -704,6 +836,40 @@ class MultiViewJointRun:
             ticks=tuple(snapshot_ticks),
             config_snapshot={"p1_online_recovery": self.recovery_config.snapshot()},
         )
+        # ---- player display diagnostics 产物（构建失败不影响核心结果）----
+        display_diagnostics_payload: dict[str, object] | None = None
+        display_diagnostics_error = self._display_diag_error
+        if not self._display_diag_error and not self._display_diag_rows:
+            # 无确认球员/可用视角时仍产出空产物（status=unavailable），供前端区分
+            pass
+        try:
+            from app.vision.multiview.player_display_diagnostics import (
+                build_player_display_diagnostics_payload,
+            )
+
+            diag_status = "failed" if self._display_diag_error else ("available" if self._display_diag_rows else "unavailable")
+            display_diagnostics_payload = build_player_display_diagnostics_payload(
+                job_id=self.run_id,
+                video_id=self.capture_take_id,
+                reference_view_id=self.reference_view_id,
+                rows=self._display_diag_rows,
+                status=diag_status,
+                detail=display_diagnostics_error or "",
+            )
+        except Exception as exc:  # noqa: BLE001 产物构建失败不阻断核心结果
+            display_diagnostics_error = f"{type(exc).__name__}: {exc}"
+            # fix-multiview-player-identity D1：构建/校验失败也回退最小占位产物，
+            # 保证查询 API 永不因"产物文件不存在"而 404（status=failed + detail）
+            display_diagnostics_payload = _fallback_display_diagnostics_payload(
+                run_id=self.run_id,
+                capture_take_id=self.capture_take_id,
+                reference_view_id=self.reference_view_id,
+                status="failed",
+                detail=display_diagnostics_error,
+            )
+            self.counter["player_display_diagnostics_failed"] = (
+                self.counter.get("player_display_diagnostics_failed", 0) + 1
+            )
         return MultiViewJointRunOutput(
             trajectory=trajectory,
             normalized=NormalizedFusedTrajectory(
@@ -721,6 +887,8 @@ class MultiViewJointRun:
             f0_snapshot=f0_snapshot,
             debug_trace=debug_trace,
             recovery_evidence=list(self._recovery_evidence),
+            display_diagnostics_payload=display_diagnostics_payload,
+            display_diagnostics_error=display_diagnostics_error,
         )
 
     # ---- 内部 ---------------------------------------------------------------
@@ -964,6 +1132,184 @@ class MultiViewJointRun:
         }
 
     @staticmethod
+    def _runtime_prepare(runtime: Any, sample: Any, timestamp_s: float, pre_tick_guidance: tuple) -> Any | None:
+        """阶段 1：解帧一次 + tracking_session.prepare_frame（不 update tracker）。
+
+        兼容轻量 legacy runtime（无 prepare 方法）→ 回退旧 step 语义（内部一步完成）。
+        返回 None 表示 decode 失败。
+        """
+        prepare = getattr(runtime, "prepare", None)
+        if callable(prepare):
+            try:
+                return prepare(
+                    sample.source_frame_index, timestamp_s,
+                    pre_tick_guidance=pre_tick_guidance, timing_context=sample,
+                )
+            except TypeError:
+                return prepare(sample.source_frame_index, timestamp_s, pre_tick_guidance=pre_tick_guidance)
+        # legacy runtime：无 prepare → 直接用 step 并视为已 commit（无法两阶段）
+        try:
+            result = runtime.step(
+                sample.source_frame_index, timestamp_s,
+                guidance=pre_tick_guidance, timing_context=sample,
+            )
+        except TypeError:
+            result = runtime.step(
+                sample.source_frame_index, timestamp_s, guidance=pre_tick_guidance
+            )
+        if result is None:
+            return None
+        return _LegacyCommittedResult(result)
+
+    @staticmethod
+    def _runtime_complete(runtime: Any, prepared: Any, same_tick_guidance: tuple, sample: Any) -> Any | None:
+        """阶段 2（commit）：tracker.update ONCE + 后续链路；转发 complete_frame。
+
+        legacy 已 commit 结果直接返回。
+        """
+        if isinstance(prepared, _LegacyCommittedResult):
+            return prepared.result
+        complete = getattr(runtime, "complete", None)
+        if callable(complete):
+            try:
+                return complete(
+                    prepared, same_tick_guidance=same_tick_guidance, timing_context=sample
+                )
+            except TypeError:
+                return complete(prepared, same_tick_guidance=same_tick_guidance)
+        raise RuntimeError(f"runtime {runtime} has no complete() and prepared is not legacy")
+
+    def _select_same_tick_guidance(
+        self,
+        *,
+        prepared_by_view: dict[str, Any],
+        predictions: dict[str, tuple[float, float, float]],
+        take_ms: float,
+        tick_number: int,
+    ) -> dict[str, list[Any]]:
+        """same-tick opportunity selection：donor 有 strong base candidate、target 无 usable candidate。
+
+        产出 `view_id -> [CrossViewGuidance]`（same-tick ROI），复用 RecoveryAttemptLedger
+        预算（pre-tick + same-tick ≤ max_regions_per_view_per_tick；同 pair 去重）。
+        """
+        from app.vision.multiview.pre_association import pre_associate
+
+        out: dict[str, list[Any]] = {view_id: [] for view_id in prepared_by_view}
+        if len(prepared_by_view) < 2:
+            return out
+        # 1) 构建 view_evidence（只消费 ROI-filtered base + 成功 pre-tick guided）
+        view_evidence: dict[str, list[tuple[Any, str]]] = {}
+        homography_by_view: dict[str, Any] = {}
+        orientation_by_view: dict[str, Any] = {}
+        source_frame_index_by_view: dict[str, int] = {}
+        for view_id, prepared in prepared_by_view.items():
+            if isinstance(prepared, _LegacyCommittedResult):
+                continue
+            evidence: list[tuple[Any, str]] = []
+            for det in getattr(prepared, "roi_filtered_base", []) or []:
+                evidence.append((det, "base"))
+            for det in getattr(prepared, "pre_tick_guided", []) or []:
+                evidence.append((det, "guided_roi"))
+            view_evidence[view_id] = evidence
+            geometry = self.view_geometry.get(view_id, {})
+            homography_by_view[view_id] = geometry.get("inverse_homography")
+            orientation_by_view[view_id] = geometry.get("orientation")
+            source_frame_index_by_view[view_id] = getattr(prepared, "frame_index", 0)
+        pa = pre_associate(
+            view_evidence=view_evidence,
+            homography_by_view=homography_by_view,
+            orientation_by_view=orientation_by_view,
+            source_frame_index_by_view=source_frame_index_by_view,
+            global_predictions=predictions,
+            pre_association_gate_ft=self.recovery_config.pre_association_gate_ft,
+            ambiguity_margin=self.recovery_config.ambiguity_margin,
+        )
+        # 2) same-tick opportunity：donor 有 strong base candidate、target 无 usable candidate
+        #    donor 严格 base origin（防 guided→guided 自我强化）
+        donor_by_global: dict[str, tuple[str, Any]] = {}  # gid -> (view_id, candidate)
+        for cand in pa.candidates:
+            if cand.match_status == "strong" and cand.origin == "base" and cand.canonical_position_ft is not None:
+                donor_by_global.setdefault(cand.matched_global_id, (cand.view_id, cand))
+        if not donor_by_global:
+            return out
+        # target 已有 usable candidate 的 global（不补检）
+        covered: dict[str, set[str]] = {view_id: set() for view_id in prepared_by_view}
+        for cand in pa.candidates:
+            if cand.match_status == "strong" and cand.canonical_position_ft is not None:
+                covered.setdefault(cand.view_id, set()).add(cand.matched_global_id)
+        # 3) 每 target view 生成 same-tick guidance（donor 当前 canonical evidence 投影）
+        for target_view in prepared_by_view:
+            if isinstance(prepared_by_view[target_view], _LegacyCommittedResult):
+                continue
+            geometry = self.view_geometry.get(target_view, {})
+            orientation = geometry.get("orientation")
+            inverse_homography = geometry.get("inverse_homography")
+            if orientation is None or inverse_homography is None:
+                continue
+            for gid, (donor_view, donor_cand) in donor_by_global.items():
+                if donor_view == target_view:
+                    continue  # donor 必须是另一路
+                if gid in covered.get(target_view, set()):
+                    continue  # target 已有 usable candidate
+                # 预算：同 pair 去重 + pre-tick+same-tick ≤ max_regions
+                if (gid, target_view) in self._same_tick_attempted:
+                    continue
+                pre_count = len(self._same_tick_ledger[target_view])
+                if pre_count >= self.recovery_config.max_regions_per_view_per_tick:
+                    continue
+                # donor 当前 canonical position → target image（绝不复制 pixel bbox）
+                from app.vision.multiview.fused_overlay_projection import canonical_to_target_image
+                from app.vision.multiview.guidance import CrossViewGuidance
+
+                projection = canonical_to_target_image(
+                    canonical_position=donor_cand.canonical_position_ft,
+                    orientation=orientation,
+                    inverse_homography=inverse_homography,
+                    frame_width=int(geometry.get("frame_width") or 0),
+                    frame_height=int(geometry.get("frame_height") or 0),
+                )
+                if not projection.projection_valid:
+                    continue
+                # ROI 尺寸复用共享 build_expected_player_region
+                from app.vision.multiview.player_display_diagnostics import build_expected_player_region
+
+                policy = self.guidance_generator.policy
+                region = build_expected_player_region(
+                    predicted_canonical_position=donor_cand.canonical_position_ft,
+                    uncertainty_ft=None,
+                    orientation=orientation,
+                    inverse_homography=inverse_homography,
+                    frame_width=int(geometry.get("frame_width") or 0),
+                    frame_height=int(geometry.get("frame_height") or 0),
+                    policy=policy,
+                )
+                if region.status != "available" or region.roi is None:
+                    continue
+                guidance = CrossViewGuidance(
+                    global_player_id=gid,
+                    target_view=target_view,
+                    predicted_canonical_position=donor_cand.canonical_position_ft,
+                    uncertainty_ft=0.0,
+                    predicted_local_position=donor_cand.court_position_ft or donor_cand.canonical_position_ft,
+                    expected_image_position=projection.image_footpoint,
+                    roi=region.roi,
+                    confidence=1.0,
+                    expires_at=take_ms + 50.0,
+                    guidance_id=f"st_{gid}_{target_view}_{tick_number}",
+                    donor_view=donor_view,
+                    donor_quality=donor_cand.intrinsic_quality,
+                    donor_origin="base",
+                    expected_global_player_id=gid,
+                )
+                out[target_view].append(guidance)
+                self._same_tick_attempted.add((gid, target_view))
+                self._same_tick_ledger[target_view].append(guidance)
+                self.counter["same_tick_guidance_generated_count"] = (
+                    self.counter.get("same_tick_guidance_generated_count", 0) + 1
+                )
+        return out
+
+    @staticmethod
     def _result_to_observations(
         view_id: str,
         result: Any,
@@ -1072,3 +1418,31 @@ def _roster_display_label(state, reference_view_id: str) -> str | None:
     if not pid:
         return None
     return f"P{pid.rsplit('_', 1)[-1]}"
+
+
+def _fallback_display_diagnostics_payload(
+    *,
+    run_id: str,
+    capture_take_id: str | None,
+    reference_view_id: str,
+    status: str,
+    detail: str,
+) -> dict[str, object]:
+    """fix-multiview-player-identity D1：最小占位 display diagnostics 产物。
+
+    构建/校验失败时保证 `display_diagnostics_payload` 仍为 dict，composer 因此
+    一定会写盘 artifact，查询 API 不会因"产物文件不存在"返回 404。
+    """
+    from app.vision.multiview.player_display_diagnostics import (
+        PLAYER_DISPLAY_DIAGNOSTICS_SCHEMA,
+    )
+
+    return {
+        "schema_version": PLAYER_DISPLAY_DIAGNOSTICS_SCHEMA,
+        "job_id": run_id,
+        "video_id": capture_take_id,
+        "reference_view_id": reference_view_id,
+        "status": status,
+        "detail": detail,
+        "rows": [],
+    }

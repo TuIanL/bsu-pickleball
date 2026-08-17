@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisJobSummary } from "../types/report";
+import type { AnalysisJobSummary, PlayerDisplayDiagnosticsResponse } from "../types/report";
 import type { MultiviewObservabilitySummary, RecoveryEpisodePage } from "../types/multiviewObservability";
 import { MultiviewObservabilityPage } from "./MultiviewObservabilityPage";
 import * as analysisClient from "../services/analysisClient";
@@ -10,6 +10,7 @@ vi.mock("../services/analysisClient", () => ({
   getMultiviewObservability: vi.fn(),
   getMultiviewRecoveryEpisodes: vi.fn(),
   getMultiviewDebugVideoUrl: vi.fn((jobId: string) => `/api/analysis/jobs/${jobId}/multiview/debug-video`),
+  getPlayerDisplayDiagnostics: vi.fn(),
   isAnalysisApiError: vi.fn(() => false),
 }));
 
@@ -62,7 +63,7 @@ function makeSummary(overrides: Partial<MultiviewObservabilitySummary> = {}): Mu
   return { ...summary, ...overrides, sections: { ...summary.sections, ...(overrides.sections ?? {}) } };
 }
 
-function renderPage(summary: MultiviewObservabilitySummary | null, job = makeJob(), recoveryPage?: RecoveryEpisodePage) {
+function renderPage(summary: MultiviewObservabilitySummary | null, job = makeJob(), recoveryPage?: RecoveryEpisodePage, diagResponse?: PlayerDisplayDiagnosticsResponse) {
   vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
   vi.mocked(analysisClient.getMultiviewObservability).mockResolvedValue(summary);
   if (recoveryPage) {
@@ -70,6 +71,19 @@ function renderPage(summary: MultiviewObservabilitySummary | null, job = makeJob
   } else if (!vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).getMockImplementation()) {
     vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).mockResolvedValue({ items: [], total_estimate: 0, availability: "available" });
   }
+  const emptyDiag: PlayerDisplayDiagnosticsResponse = {
+    job_id: job.id,
+    player_id: "Player_1",
+    timestamp_ms: 0,
+    window_ms: 2000,
+    status: "available",
+    detail: "",
+    rows: [],
+  };
+  // 热力图分段拉取：首段返回 diagResponse（若提供），后续段返回空以提前停止
+  vi.mocked(analysisClient.getPlayerDisplayDiagnostics).mockImplementation((_jobId, _playerId, timestampMs) =>
+    Promise.resolve(diagResponse && timestampMs === 0 ? diagResponse : emptyDiag),
+  );
   return render(<MultiviewObservabilityPage jobId={job.id} onNavigate={vi.fn()} />);
 }
 
@@ -82,12 +96,12 @@ describe("MultiviewObservabilityPage", () => {
   it("shows authoritative sync, independent fusion and refinement rejection semantics", async () => {
     renderPage(makeSummary());
     expect(await screen.findByText("联合运行状态")).toBeTruthy();
-    expect(screen.getByText("authoritative")).toBeTruthy();
-    expect(screen.getAllByText("source_pts")).toHaveLength(2);
-    expect(screen.getAllByText("rejected_by_safety_gate")).toHaveLength(1);
+    expect((await screen.findAllByText("authoritative")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("source_pts").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("rejected_by_safety_gate").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("精修已完成")).toBeTruthy();
     expect(screen.getByText("发布被安全门拒绝")).toBeTruthy();
-    expect(screen.getByText("F0")).toBeTruthy();
+    expect(screen.getAllByText("F0").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/本任务未开启/)).toBeTruthy();
     expect(analysisClient.getMultiviewDebugVideoUrl).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("joint_debug_trace.v1.json");
@@ -102,9 +116,42 @@ describe("MultiviewObservabilityPage", () => {
         recovery: section("partial", "completed", { funnel: { recovery_opportunity_count: 3 }, episode_availability: "partial" }),
       },
     }));
-    expect(await screen.findAllByText("degraded")).toHaveLength(2);
+    expect((await screen.findAllByText("degraded")).length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText("部分可用").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/没有可分页的 recovery episode/)).toBeTruthy();
+  });
+
+  it("auto-loads debug replay when the canonical MP4 is available and supports unload/reload", async () => {
+    const summary = makeSummary({
+      sections: {
+        ...makeSummary().sections,
+        debug: section("available", "ready", { debug_trace_enabled: true, video_available: true }),
+      },
+    });
+    renderPage(summary);
+    await screen.findByText("Debug Replay");
+    // 资源可用时自动加载，无需手动点击
+    await waitFor(() => expect(analysisClient.getMultiviewDebugVideoUrl).toHaveBeenCalledWith("job-observe-ui"));
+    expect(document.querySelector("video")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加载 canonical MP4" })).toBeNull();
+    // 卸载 → 重新加载
+    fireEvent.click(screen.getByRole("button", { name: "卸载视频" }));
+    expect(document.querySelector("video")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重新加载 MP4" }));
+    expect(document.querySelector("video")).toBeTruthy();
+  });
+
+  it("shows unavailable hint when the debug MP4 is not generated", async () => {
+    const summary = makeSummary({
+      sections: {
+        ...makeSummary().sections,
+        debug: section("unavailable", "missing", { debug_trace_enabled: true, video_available: false }),
+      },
+    });
+    renderPage(summary);
+    expect(await screen.findByText("canonical debug MP4 尚未生成。")).toBeTruthy();
+    expect(document.querySelector("video")).toBeNull();
+    expect(analysisClient.getMultiviewDebugVideoUrl).not.toHaveBeenCalled();
   });
 
   it("marks late fusion recovery and refinement as not applicable", async () => {
@@ -137,7 +184,7 @@ describe("MultiviewObservabilityPage", () => {
     }));
     expect(await screen.findByText("精修执行异常，已回退 F0")).toBeTruthy();
     expect(screen.getByText("未发布（执行异常）")).toBeTruthy();
-    expect(screen.getByText("F0")).toBeTruthy();
+    expect(screen.getAllByText("F0").length).toBeGreaterThanOrEqual(1);
 
     cleanup();
     renderPage(makeSummary({
@@ -147,7 +194,7 @@ describe("MultiviewObservabilityPage", () => {
       },
     }));
     expect(await screen.findByText("安全门通过，发布 F1")).toBeTruthy();
-    expect(screen.getByText("F1")).toBeTruthy();
+    expect(screen.getAllByText("F1").length).toBeGreaterThanOrEqual(1);
   });
 
   it("supports episode filtering, cursor continuation, expand and backend seek", async () => {
@@ -170,5 +217,67 @@ describe("MultiviewObservabilityPage", () => {
     vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).mockResolvedValue(second);
     fireEvent.click(screen.getByRole("button", { name: /加载下一页/ }));
     await waitFor(() => expect(analysisClient.getMultiviewRecoveryEpisodes).toHaveBeenCalledWith("job-observe-ui", expect.objectContaining({ cursor: "cursor-2" })));
+  });
+});
+
+describe("PlayerDisplayDiagnosticsPanel", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("renders a display diagnostics heatmap from segmented window queries", async () => {
+    const diagResponse: PlayerDisplayDiagnosticsResponse = {
+      job_id: "job-observe-ui",
+      player_id: "Player_1",
+      timestamp_ms: 0,
+      window_ms: 2000,
+      status: "available",
+      detail: "",
+      rows: [
+        {
+          canonical_tick: 210,
+          timestamp_ms: 7000,
+          player_id: "Player_1",
+          view_id: "cam_1",
+          frame_status: "available",
+          expected_region_status: "available",
+          expected_image_position: [100, 200],
+          eligible_detections_in_expected_gate: 1,
+          eligible_detection_present: true,
+          position_present: false,
+          court_position_present: false,
+          projection_status: null,
+          projection_confidence: null,
+          formal_observation_emitted: false,
+          formal_local_observation: false,
+          local_player_id: "Player_1",
+          tracking_status: null,
+          global_associated: false,
+          association_reason: "no_association_input",
+          binding_visibility: "observed",
+          available_miss_streak: 1,
+          guidance_status: "not_eligible",
+          guidance_skip_reason: "donor_low_quality",
+          guidance_trigger_source: "available_miss",
+          overlay_evidence_type: null,
+          overlay_bbox_source: null,
+        },
+      ],
+    };
+    renderPage(makeSummary(), makeJob(), undefined, diagResponse);
+    expect(await screen.findByText("球员显示诊断")).toBeTruthy();
+    // 热力图分段拉取：首段携带 windowMs=2000
+    await waitFor(() => expect(analysisClient.getPlayerDisplayDiagnostics).toHaveBeenCalledWith("job-observe-ui", "Player_1", 0, 2000));
+    // 热力图容器渲染（jsdom 无 canvas 时降级为占位，但容器与图例仍在）
+    expect(screen.getByTestId("display-diagnostics-heatmap")).toBeTruthy();
+    expect(screen.getByText("通过")).toBeTruthy();
+    expect(screen.getByText("卡住")).toBeTruthy();
+  });
+
+  it("shows empty-state when the player has no diagnostics rows", async () => {
+    renderPage(makeSummary());
+    await screen.findByText("球员显示诊断");
+    expect(await screen.findByText(/该球员没有可用的显示诊断行/)).toBeTruthy();
   });
 });

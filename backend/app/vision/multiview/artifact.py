@@ -164,8 +164,16 @@ def fusion_quality_fields_from_artifact(artifact: dict[str, object]) -> dict[str
         for sample in samples
         if isinstance(sample, dict)
     )
+    # fix-multiview-single-view-fallback：single_view_fallback 按 global_player_id 归因，
+    # 供诊断"结构性单视图玩家"（如 P2 全程单视图）与"偶发单视图帧"的区别。
+    single_view_fallback_by_player = Counter(
+        str(sample.get("global_player_id", "unknown"))
+        for sample in samples
+        if isinstance(sample, dict) and str(sample.get("fusion_status", "unknown")) == "single_view_fallback"
+    )
     return {
         "fusion_status_counts": dict(status_counts),
+        "single_view_fallback_by_player": dict(single_view_fallback_by_player),
         "sample_count": len(samples),
         "metric_eligible_count": sum(
             1 for sample in samples if isinstance(sample, dict) and sample.get("metric_eligible") is True
@@ -345,6 +353,10 @@ def build_fusion_diagnostics(
     status_counts = Counter(m.fusion_status for m in measurements)
     eligible = sum(1 for m in measurements if m.metric_eligible)
     quality_scores = _view_quality_summary(measurements)
+    # fix-multiview-single-view-fallback：single_view_fallback 按 global_player_id 归因
+    single_view_fallback_by_player = Counter(
+        m.global_player_id for m in measurements if m.fusion_status == "single_view_fallback"
+    )
 
     diagnostics: dict[str, object] = {
         "schema_version": FUSED_DIAGNOSTICS_SCHEMA_VERSION,
@@ -367,6 +379,7 @@ def build_fusion_diagnostics(
         "view_disagreement": _view_disagreement(measurements),
         "frame_mapping_errors": _frame_mapping_errors(measurements),
         "fusion_status_counts": dict(status_counts),
+        "single_view_fallback_by_player": dict(single_view_fallback_by_player),
         "sample_count": len(measurements),
         "metric_eligible_count": eligible,
     }

@@ -16,6 +16,7 @@ import type {
   ReconstructedBallTrajectoryArtifact,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
+  FusedPlayerOverlayArtifact,
   StructuredVisualizationData,
   VisualizationManifest,
   VideoUploadResponse,
@@ -29,6 +30,7 @@ import type {
   AnalysisBatchDetail,
   FusedManifest,
   ShowcaseRuntimeStatus,
+  PlayerDisplayDiagnosticsResponse,
 } from "../types/report";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 import type {
@@ -885,6 +887,28 @@ export function resolveAnalysisAssetUrl(path?: string): string | undefined {
 export async function getTrackingOverlay(result: AnalysisPipelineResult): Promise<TrackingOverlayArtifact | null> {
   const path = result.artifacts.tracking_overlay_url;
   return path ? requestJson<TrackingOverlayArtifact>(path) : null;
+}
+
+export async function getFusedPlayerOverlay(
+  result: AnalysisPipelineResult,
+): Promise<FusedPlayerOverlayArtifact | null> {
+  const path = result.artifacts.fused_player_overlay_url;
+  return path ? requestJson<FusedPlayerOverlayArtifact>(path) : null;
+}
+
+export async function getPlayerDisplayDiagnostics(
+  jobId: string,
+  playerId: string,
+  timestampMs: number,
+  windowMs = 500,
+): Promise<PlayerDisplayDiagnosticsResponse> {
+  const query = new URLSearchParams({
+    timestamp_ms: String(timestampMs),
+    window_ms: String(windowMs),
+  });
+  return requestJson<PlayerDisplayDiagnosticsResponse>(
+    `/api/analysis/jobs/${jobId}/multiview/players/${playerId}/display-diagnostics?${query.toString()}`,
+  );
 }
 
 export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<PoseOverlayArtifact | null> {

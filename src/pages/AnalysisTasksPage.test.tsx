@@ -133,6 +133,43 @@ describe("SyncRecordingTaskCard 双摄分析任务", () => {
       "/analysis/job-context/vision?taskSource=sync_recording&taskSession=sync_1",
     );
   });
+
+  it("外接盘未挂载时提示具体挂载动作而非通用文案", () => {
+    render(
+      <SyncRecordingTaskCard
+        session={makeSession({
+          storage_root: "/Volumes/Elements/项目/匹克球/视频录制",
+          video_availability: { cam_1: "unavailable", cam_2: "unavailable" },
+        })}
+        analysisJobs={[]}
+        onDeleteAnalysis={vi.fn()}
+        onDeleteJob={vi.fn()}
+        onDelete={vi.fn()}
+        onNavigate={vi.fn()}
+        onPlay={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("外接盘 Elements 未挂载：请挂载外接盘后刷新页面")).toBeTruthy();
+  });
+
+  it("非外接盘路径不可访问时保留通用文案", () => {
+    render(
+      <SyncRecordingTaskCard
+        session={makeSession({
+          video_availability: { cam_1: "unavailable", cam_2: "unavailable" },
+        })}
+        analysisJobs={[]}
+        onDeleteAnalysis={vi.fn()}
+        onDeleteJob={vi.fn()}
+        onDelete={vi.fn()}
+        onNavigate={vi.fn()}
+        onPlay={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("视频存储位置暂不可访问，恢复后请刷新")).toBeTruthy();
+  });
 });
 
 describe("AnalysisTaskCard 列表卡进度区", () => {

@@ -63,16 +63,46 @@ class JointViewRuntime:
         guidance: tuple[Any, ...] = (),
         timing_context: Any | None = None,
     ) -> ViewFrameResult | None:
-        """解帧 + 推进 tracking session;无帧返回 None。"""
+        """解帧 + 推进 tracking session;无帧返回 None。兼容旧调用（prepare + complete 空 same-tick）。"""
+        prepared = self.prepare(
+            source_frame_index, timestamp_s,
+            pre_tick_guidance=guidance, timing_context=timing_context,
+        )
+        if prepared is None:
+            return None
+        return self.complete(prepared, same_tick_guidance=(), timing_context=timing_context)
+
+    def prepare(
+        self,
+        source_frame_index: int,
+        timestamp_s: float,
+        pre_tick_guidance: tuple[Any, ...] = (),
+        timing_context: Any | None = None,
+    ):
+        """阶段 1：解帧恰好一次 + tracking_session.prepare_frame（不 update tracker）。
+
+        decode 失败返回 None（decode skip，tracker.update 次数为 0）。
+        """
         frame = self.get_frame(source_frame_index)
         if frame is None:
             self.counters["missing_frame"] = self.counters.get("missing_frame", 0) + 1
             return None
-        result = self.tracking_session.step(
+        return self.tracking_session.prepare_frame(
             frame,
             frame_index=source_frame_index,
             timestamp=timestamp_s,
-            guidance=guidance,
+            pre_tick_guidance=tuple(pre_tick_guidance),
+        )
+
+    def complete(
+        self,
+        prepared,
+        same_tick_guidance: tuple[Any, ...] = (),
+        timing_context: Any | None = None,
+    ) -> ViewFrameResult | None:
+        """阶段 2（commit）：转发 tracking_session.complete_frame（committed 防重复 update）。"""
+        result = self.tracking_session.complete_frame(
+            prepared, same_tick_guidance=tuple(same_tick_guidance)
         )
         self.counters["stepped_frames"] = self.counters.get("stepped_frames", 0) + 1
         if timing_context is None:

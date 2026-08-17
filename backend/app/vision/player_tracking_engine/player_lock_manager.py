@@ -31,6 +31,7 @@ class PlayerLockManager:
         self.slots: dict[str, PlayerSlot] = {}
         self._bootstrap_complete = False
         self._bootstrap_tracklets: dict[int, _BootstrapTracklet] = {}
+        self._bootstrap_diagnostics: list[PlayerIdentityDiagnostic] = []
         self._track_to_slot: dict[int, str] = {}
         self._frame_width: int | None = None
         self._frame_height: int | None = None
@@ -104,6 +105,8 @@ class PlayerLockManager:
         for slot, candidate, score in recovery_assignments:
             previous_state = slot.state
             score_details = self._reconnect_score_details(slot, candidate)
+            # fix-multiview-player-identity D5：身份互换观测（owner 抢注 / 跨侧兜底）
+            swap_reason = self._suspected_identity_swap_reason(slot, candidate)
             slot.state = "locked"
             slot.current_track_id = candidate.track_id
             slot.lost_frames = 0
@@ -112,6 +115,18 @@ class PlayerLockManager:
             self._track_to_slot[candidate.track_id] = slot.identity_id
             track_hints[candidate.track_id] = slot.identity_id
             self._update_slot_from_position(slot, candidate, frame_index)
+            if swap_reason:
+                diagnostics.append(
+                    PlayerIdentityDiagnostic(
+                        frame_index=frame_index,
+                        event="identity_swap_suspected",
+                        player_id=slot.identity_id,
+                        track_id=candidate.track_id,
+                        score=score,
+                        reason=swap_reason,
+                        court_position_m=list(candidate.court_position) if candidate.court_position else None,
+                    )
+                )
             diagnostics.append(
                 PlayerIdentityDiagnostic(
                     frame_index=frame_index,
@@ -174,11 +189,18 @@ class PlayerLockManager:
 
         player_states = {slot.identity_id: slot.state for slot in self.slots.values()}
 
+        # fix-multiview-cam1-bootstrap-4player D5：合并 bootstrap 完整性诊断
+        # （slot_unfilled），仅在 bootstrap 刚完成的那一帧携带（之后清空）。
+        merged_diagnostics = diagnostics
+        if self._bootstrap_diagnostics:
+            merged_diagnostics = list(diagnostics) + list(self._bootstrap_diagnostics)
+            self._bootstrap_diagnostics = []
+
         return PlayerLockUpdate(
             eligible_track_ids=eligible_track_ids,
             track_identity_hints=track_hints,
             player_states=player_states,
-            diagnostics=diagnostics,
+            diagnostics=merged_diagnostics,
             newly_locked=newly_locked,
             newly_lost=newly_lost,
         )
@@ -266,7 +288,9 @@ class PlayerLockManager:
 
     def _collect_bootstrap_observations(self, frame_index: int, positions: Sequence[PlayerFramePosition]) -> None:
         for pos in positions:
-            if not self._is_identity_candidate(pos):
+            # fix-multiview-cam1-bootstrap-4player D1：bootstrap 收集用"纵向可判"
+            # 门槛（stage="bootstrap"），x 出界（outside_tracking_area）不拒绝。
+            if not self._is_identity_candidate(pos, stage="bootstrap"):
                 continue
             if not self._is_in_court_neighborhood(pos.court_position, self.config.bootstrap_court_margin_ft):
                 continue
@@ -278,6 +302,8 @@ class PlayerLockManager:
                 tl.court_ys.append(pos.court_position[1])
             if pos.bbox is not None and len(pos.bbox) >= 4:
                 tl.bbox_centers.append(((pos.bbox[0] + pos.bbox[2]) / 2.0, (pos.bbox[1] + pos.bbox[3]) / 2.0))
+                # fix-multiview-player-identity D3：记录 bbox 面积，供近端大尺寸优先排序
+                tl.bbox_areas.append(max(0.0, (pos.bbox[2] - pos.bbox[0]) * (pos.bbox[3] - pos.bbox[1])))
 
     def _try_early_lock(self, frame_index: int) -> None:
         self._assign_bootstrap_candidates(frame_index)
@@ -308,11 +334,37 @@ class PlayerLockManager:
                 slot.side_hint = slot.home_quadrant or slot.assignment_side
                 self._track_to_slot[track_id] = slot.identity_id
                 assigned.add(track_id)
+        # fix-multiview-cam1-bootstrap-4player D5：bootstrap 结束后仍 searching 的
+        # 槽位输出 slot_unfilled 诊断（只观测、不伪造锁定、不替换已锁定槽位）。
+        for slot in self.slots.values():
+            if slot.state != "searching":
+                continue
+            self._bootstrap_diagnostics.append(
+                PlayerIdentityDiagnostic(
+                    frame_index=frame_index,
+                    event="slot_unfilled",
+                    player_id=slot.identity_id,
+                    track_id=None,
+                    reason=f"home_quadrant={self._slot_home_quadrant(slot)}",
+                )
+            )
         self._bootstrap_complete = True
 
     def _bootstrap_candidate_entries(self) -> list[tuple[int, _BootstrapTracklet]]:
-        # 已通过门控/置信度过滤的候选，按"画面中心距离升序、置信度/出现帧数降序"排序（中心优先、向外扩散）。
+        # 已通过门控/置信度过滤的候选排序。
+        # fix-multiview-player-identity D3：近端大尺寸候选（画面近端、bbox 大、清晰）
+        # 优先于"距画面中心最近"，避免近端球员因 bbox 中心偏离画面中心而被远端候选抢占。
+        # fix-multiview-cam1-bootstrap-4player D1 修正：持续性（出现帧数）优先于中心距离——
+        # 短暂 track（如观众/裁判或检测抖动产生的短 track）不得靠"更靠画面中心"抢占
+        # 稳定球员的槽位（root cause：track 16 短 track 抢 near_right，track 4 稳定 90 帧被跳过）。
+        # 排序键：near_large(0=是,1=否) → 出现帧数降序 → 中心距离 → 置信度降序。
         entries: list[tuple[int, _BootstrapTracklet]] = []
+        frame_area = (
+            (self._frame_width or 0) * (self._frame_height or 0)
+            if self._frame_width and self._frame_height
+            else 0.0
+        )
+        half_length = self.court.length_ft / 2.0
         for track_id, tl in self._bootstrap_tracklets.items():
             if len(tl.frame_indices) < self.config.min_observed_frames:
                 continue
@@ -321,9 +373,10 @@ class PlayerLockManager:
             entries.append((track_id, tl))
         entries.sort(
             key=lambda item: (
+                0 if item[1].is_near_large(half_length, frame_area, self.config.near_large_bbox_ratio) else 1,
+                -len(item[1].frame_indices),
                 item[1].mean_center_distance(self._frame_width, self._frame_height),
                 -item[1].mean_confidence(),
-                -len(item[1].frame_indices),
             )
         )
         return entries
@@ -374,6 +427,9 @@ class PlayerLockManager:
 
     def _infer_quadrant(self, tl: _BootstrapTracklet) -> str | None:
         # 由球场中位坐标推断候选归属象限（近左/近右/远左/远右）；单打退化为近/远。
+        # fix-multiview-cam1-bootstrap-4player D2：court 投影 x 无法判 left/right
+        # （x 落在半场死区或超出 tracking bounds）时，用图像 bbox 中心 x 相对画面
+        # 宽度 50% 分界推断横向，完成象限归属（仅 x 出界/死区分支触发，正常投影优先）。
         half_length = self.court.length_ft / 2.0
         half_width = self.court.width_ft / 2.0
         side = tl.inferred_side(half_length)
@@ -382,9 +438,13 @@ class PlayerLockManager:
         if self.config.target_player_count <= 2:
             return side
         lateral = tl.inferred_lateral(half_width)
-        if lateral is None:
+        if lateral is not None:
+            return f"{side}_{lateral}"
+        # D2 松弛映射：court x 不可判时用图像横向位置推断 left/right
+        lateral_from_image = tl.inferred_image_lateral(self._frame_width)
+        if lateral_from_image is None:
             return None
-        return f"{side}_{lateral}"
+        return f"{side}_{lateral_from_image}"
 
     def _slot_home_quadrant(self, slot: PlayerSlot) -> str:
         # 槽位位置语义：Player_1..4 = 近左/近右/远左/远右；单打 = 近/远。
@@ -417,17 +477,49 @@ class PlayerLockManager:
 
     # ---------- spatial gating ----------
 
-    @staticmethod
-    def _is_identity_candidate(position: PlayerFramePosition) -> bool:
+    def _is_identity_candidate(
+        self, position: PlayerFramePosition, *, stage: str = "general"
+    ) -> bool:
         """Keep visible boundary observations eligible for player identity.
 
         ``valid`` describes the strict court rectangle, while a player can be
         visibly standing just beyond a baseline and still be inside the broad
         tracking area used by the primary-player selector.
+
+        ``stage`` 语义：
+        - ``general``（默认）：保持既有语义——tracking area 硬门 + D3 近端大尺寸放宽，
+          用于 reconnect/lost/find-new-candidate 等阶段；
+        - ``bootstrap``：fix-multiview-cam1-bootstrap-4player D1 —— 候选接纳以
+          "纵向可判"为门槛（court y 可判 near/far + bbox 非空），x 超出 tracking
+          bounds（outside_tracking_area）不单独拒绝。象限归属由 D2 松弛映射兜底。
         """
-        if position.court_position is None or not position.is_inside_tracking_area:
+        if position.court_position is None:
             return False
+        if stage == "bootstrap":
+            if position.bbox is None or len(position.bbox) < 4:
+                return False
+            return is_court_side_decidable(position.court_position, self.court)
+        if not position.is_inside_tracking_area:
+            if not self._is_near_large_high_conf(position):
+                return False
         return position.valid or position.projection_status == "outside_court_visible"
+
+    def _is_near_large_high_conf(self, position: PlayerFramePosition) -> bool:
+        """fix-multiview-player-identity D3：近端 + 大尺寸 + 高清晰 三重条件判定。"""
+        if position.confidence < self.config.searching_conf:
+            return False
+        if position.court_position is None:
+            return False
+        half_length = self.court.length_ft / 2.0
+        if position.court_position[1] >= half_length:
+            return False  # 仅放宽近端（court y < 网线 22ft）
+        if position.bbox is None or len(position.bbox) < 4:
+            return False
+        if not self._frame_width or not self._frame_height:
+            return False
+        frame_area = float(self._frame_width) * float(self._frame_height)
+        bbox_area = max(0.0, (position.bbox[2] - position.bbox[0]) * (position.bbox[3] - position.bbox[1]))
+        return bbox_area / frame_area >= self.config.near_large_bbox_ratio
 
     def _is_in_court_neighborhood(self, court_position: list[float], margin_ft: float) -> bool:
         x, y = court_position[0], court_position[1]
@@ -456,11 +548,17 @@ class PlayerLockManager:
     ) -> PlayerFramePosition | None:
         if slot.current_track_id is not None:
             for pos in positions:
-                if pos.track_id == slot.current_track_id and self._is_identity_candidate(pos):
-                    classification = self._classify_candidate(pos.court_position, slot.state)
-                    if classification != "outside":
-                        if pos.confidence >= self._conf_threshold_for_state(slot.state):
-                            return pos
+                if pos.track_id != slot.current_track_id:
+                    continue
+                # fix-multiview-cam1-bootstrap-4player D1：已绑定本槽位的 track
+                # 用"纵向可判"门槛持续匹配（bootstrap 已接纳的 x 出界候选不得因
+                # x 超界丢失跟踪），而非 general 硬门。
+                if not self._is_identity_candidate(pos, stage="bootstrap"):
+                    continue
+                classification = self._classify_candidate(pos.court_position, slot.state)
+                if classification != "outside":
+                    if pos.confidence >= self._conf_threshold_for_state(slot.state):
+                        return pos
         return None
 
     def _find_new_candidate(
@@ -511,6 +609,9 @@ class PlayerLockManager:
                 if self._classify_candidate(position.court_position, slot.state) == "outside":
                     continue
                 if position.confidence < self._conf_threshold_for_state(slot.state):
+                    continue
+                # fix-multiview-player-identity D4：跨侧候选直接不可选（防止 P1↔P2 互换）
+                if self._candidate_side_conflicts(slot, position):
                     continue
                 score = self._compute_reconnect_score(slot, position)
                 if score < self.config.reconnect_threshold:
@@ -646,12 +747,30 @@ class PlayerLockManager:
 
         best_candidate, best_score = self._find_best_reconnect(slot, positions)
         if best_candidate is not None and best_score >= self.config.reconnect_threshold:
+            # fix-multiview-player-identity D4/D5：重连前检查候选是否疑似来自他侧
+            # （跨侧互换的兜底观测——正常路径已被 _candidate_side_conflicts 拦截，
+            # 但若强证据绕过后仍要记录 identity_swap_suspected 供归因）。
+            swap_reason = self._suspected_identity_swap_reason(slot, best_candidate)
             slot.state = "locked"
             slot.current_track_id = best_candidate.track_id
             self._track_to_slot[best_candidate.track_id] = slot.identity_id
             track_hints[best_candidate.track_id] = slot.identity_id
             slot.lost_frames = 0
             details = self._reconnect_score_details(slot, best_candidate)
+            if swap_reason:
+                diagnostics.append(
+                    PlayerIdentityDiagnostic(
+                        frame_index=frame_index,
+                        event="identity_swap_suspected",
+                        player_id=slot.identity_id,
+                        track_id=best_candidate.track_id,
+                        score=best_score,
+                        reason=swap_reason,
+                        court_position_m=(
+                            list(best_candidate.court_position) if best_candidate.court_position else None
+                        ),
+                    )
+                )
             diagnostics.append(
                 PlayerIdentityDiagnostic(
                     frame_index=frame_index,
@@ -668,6 +787,34 @@ class PlayerLockManager:
 
         return "still_lost"
 
+    def _suspected_identity_swap_reason(self, slot: PlayerSlot, position: PlayerFramePosition) -> str | None:
+        """fix-multiview-player-identity D5：判定重连是否疑似身份互换。
+
+        返回 None（无嫌疑）或结构化 reason 字符串。两种嫌疑：
+        1. 候选 track 当前属于其他槽位（_track_to_slot 指向别的 identity）→ 直接互换；
+        2. 候选 court side 与槽位 home/side 语义冲突（跨侧兜底，正常路径被拦截）。
+        """
+        prev_owner = self._track_to_slot.get(position.track_id)
+        if prev_owner is not None and prev_owner != slot.identity_id:
+            return (
+                f"track_owner_swap owner={prev_owner} slot={slot.identity_id} "
+                f"home_quadrant={slot.home_quadrant or '?'} from_track={slot.current_track_id} "
+                f"to_track={position.track_id}"
+            )
+        expected = slot.home_quadrant or slot.side_hint or slot.assignment_side
+        if expected is None or position.court_position is None:
+            return None
+        expected_side = expected.split("_", 1)[0]
+        if expected_side not in {"near", "far"}:
+            return None
+        actual_side = "near" if position.court_position[1] < self.court.length_ft / 2.0 else "far"
+        if actual_side == expected_side:
+            return None
+        return (
+            f"cross_side_reconnect home_quadrant={slot.home_quadrant or '?'} "
+            f"candidate_side={actual_side} from_track={slot.current_track_id} to_track={position.track_id}"
+        )
+
     def _find_best_reconnect(
         self, slot: PlayerSlot, positions: Sequence[PlayerFramePosition]
     ) -> tuple[PlayerFramePosition | None, float]:
@@ -681,11 +828,30 @@ class PlayerLockManager:
                 continue
             if pos.confidence < self._conf_threshold_for_state("lost"):
                 continue
+            # fix-multiview-player-identity D4：跨侧候选直接不可选（防止 P1↔P2 互换）
+            if self._candidate_side_conflicts(slot, pos):
+                continue
             score = self._compute_reconnect_score(slot, pos)
             if score > best_score:
                 best_score = score
                 best_candidate = pos
         return best_candidate, best_score
+
+    def _candidate_side_conflicts(self, slot: PlayerSlot, position: PlayerFramePosition) -> bool:
+        """fix-multiview-player-identity D4：候选 side 与槽位 home/side 语义冲突判定。
+
+        槽位有可用的 side 语义（home_quadrant / side_hint / assignment_side）且候选
+        court_position 可判 side 时，若 side（near/far）不符 → 返回 True（拒绝重连）。
+        槽位无 side 语义或候选无法判 side → 返回 False（不拦截，交既有评分门控）。
+        """
+        expected = slot.home_quadrant or slot.side_hint or slot.assignment_side
+        if expected is None or position.court_position is None:
+            return False
+        expected_side = expected.split("_", 1)[0]
+        if expected_side not in {"near", "far"}:
+            return False
+        actual_side = "near" if position.court_position[1] < self.court.length_ft / 2.0 else "far"
+        return actual_side != expected_side
 
     def _compute_reconnect_score(self, slot: PlayerSlot, position: PlayerFramePosition) -> float:
         if slot.last_confirmed_position_m is None or position.court_position is None:
@@ -722,7 +888,17 @@ class PlayerLockManager:
             ratio = min(last_aspect, curr_aspect) / max(1e-6, max(last_aspect, curr_aspect))
             bbox_score = max(0.0, min(1.0, ratio))
 
-        return position_score * 0.40 + motion_score * 0.30 + side_score * 0.20 + bbox_score * 0.10
+        score = position_score * 0.40 + motion_score * 0.30 + side_score * 0.20 + bbox_score * 0.10
+        # fix-multiview-player-identity D4：同侧但横向错配（near_left 槽位接 near_right 候选）
+        # 时对总分施加强乘法惩罚，使 position/motion 高分无法单独凑够 reconnect_threshold。
+        if slot.home_quadrant is not None and position.court_position is not None and "_" in slot.home_quadrant:
+            expected_side, expected_lateral = slot.home_quadrant.split("_", 1)
+            actual_side = "near" if position.court_position[1] < self.court.length_ft / 2.0 else "far"
+            if actual_side == expected_side:
+                actual_lateral = "left" if position.court_position[0] < self.court.width_ft / 2.0 else "right"
+                if actual_lateral != expected_lateral:
+                    score *= self.config.reconnect_lateral_mismatch_penalty
+        return score
 
     def _reconnect_score_details(self, slot: PlayerSlot, position: PlayerFramePosition) -> str:
         if slot.last_confirmed_position_m is None or position.court_position is None:
@@ -762,6 +938,19 @@ class PlayerLockManager:
 # ---------- internal helpers ----------
 
 
+def is_court_side_decidable(court_position: Sequence[float] | None, court, dead_zone_ft: float = 2.0) -> bool:
+    """fix-multiview-cam1-bootstrap-4player D1：court 纵向（y）是否可判 near/far。
+
+    判定条件：court_position 非 None、长度 >= 2、且 court y 不在 SIDE_DEAD_ZONE
+    （|y - half_length| >= dead_zone）。横向（x）不参与判定——x 超出 tracking
+    bounds 不影响"该候选属于球场纵深内"的事实，可由图像位置松弛映射兜底象限。
+    """
+    if court_position is None or len(court_position) < 2:
+        return False
+    half_length = court.length_ft / 2.0
+    return abs(float(court_position[1]) - half_length) >= dead_zone_ft
+
+
 def _cosine_score(a: list[float], b: list[float]) -> float:
     norm_a = hypot(a[0], a[1])
     norm_b = hypot(b[0], b[1])
@@ -784,9 +973,27 @@ class _BootstrapTracklet:
     court_xs: list[float] = field(default_factory=list)
     court_ys: list[float] = field(default_factory=list)
     bbox_centers: list[tuple[float, float]] = field(default_factory=list)
+    # fix-multiview-player-identity D3：bbox 面积记录（近端大尺寸优先排序用）
+    bbox_areas: list[float] = field(default_factory=list)
 
     def mean_confidence(self) -> float:
         return sum(self.confidences) / len(self.confidences) if self.confidences else 0.0
+
+    def mean_bbox_area(self) -> float:
+        return sum(self.bbox_areas) / len(self.bbox_areas) if self.bbox_areas else 0.0
+
+    def is_near_large(self, half_length: float, frame_area: float, ratio: float) -> bool:
+        """fix-multiview-player-identity D3：近端 + 大尺寸候选判定。
+
+        近端 = 球场坐标 y 中位 < 半场（22ft，网线以内）；大尺寸 = 平均 bbox 面积
+        占画面面积比例 >= 阈值。两条件同时满足才为 true（配合置信度门控防误锁）。
+        """
+        if not self.court_ys or frame_area <= 0 or ratio <= 0:
+            return False
+        median_y = statistics.median(self.court_ys)
+        if median_y >= half_length:
+            return False
+        return self.mean_bbox_area() / frame_area >= ratio
 
     def inferred_side(self, half_length: float) -> str | None:
         if not self.court_ys:
@@ -803,6 +1010,17 @@ class _BootstrapTracklet:
         if abs(median_x - half_width) < self.SIDE_DEAD_ZONE_FT:
             return None
         return "left" if median_x < half_width else "right"
+
+    def inferred_image_lateral(self, frame_width: int | None) -> str | None:
+        """fix-multiview-cam1-bootstrap-4player D2：图像 bbox 中心 x 推断 left/right。
+
+        court 投影 x 无法判横向（半场死区或超出 tracking bounds）时，用平均 bbox
+        中心 x 与画面宽度 50% 分界比较。缺失画面尺寸或 bbox 记录时返回 None。
+        """
+        if not self.bbox_centers or not frame_width or frame_width <= 0:
+            return None
+        median_center_x = statistics.median(center_x for center_x, _center_y in self.bbox_centers)
+        return "left" if median_center_x < frame_width / 2.0 else "right"
 
     def mean_center_distance(self, frame_width: int | None, frame_height: int | None) -> float:
         # bbox 中心到画面中心的平均距离（像素）；缺失画面尺寸时返回 0（退化按置信度排序）。

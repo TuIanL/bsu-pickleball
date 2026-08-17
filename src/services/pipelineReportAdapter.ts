@@ -112,7 +112,7 @@ export function adaptPipelineResultToReport(
     },
     dashboardMetrics,
     reportDefinitions,
-    playerMarkers: tracksToPlayerMarkers(result),
+    playerMarkers: tracksToPlayerMarkers(result, job.metadata.matchFormat !== "singles"),
     shotTrajectories: [],
     videoOverlayLabels: [
       {
@@ -320,18 +320,50 @@ function tracksToMovementPath(result: AnalysisPipelineResult): MovementPoint[] {
     }));
 }
 
-function tracksToPlayerMarkers(result: AnalysisPipelineResult): PlayerMarker[] {
+export function tracksToPlayerMarkers(result: AnalysisPipelineResult, doubles: boolean): PlayerMarker[] {
   const latest = new Map<string, AnalysisPipelineResult["tracks"][number]>();
   result.tracks.forEach((track) => latest.set(track.track_id, track));
   const colors = ["#22C55E", "#D9FF3F", "#2F80ED", "#FF9500"];
-  return Array.from(latest.entries()).slice(0, 4).map(([trackId, track], index) => ({
-    id: trackId,
-    label: String.fromCharCode("A".charCodeAt(0) + index),
-    team: index < 2 ? "near" : "far",
-    x: 12 + (track.court_point.x / 20) * 76,
-    y: 7 + (track.court_point.y / 44) * 42,
-    color: colors[index % colors.length],
-  }));
+  // fix-multiview-player-identity D2：按 canonical Player_N 数字升序稳定排序，
+  // team 由槽位语义（playerSideFromId）计算，MUST NOT 按遍历顺序分配。
+  const orderedIds = Array.from(latest.keys())
+    .map((id) => ({ id, n: parseCanonicalPlayerNumber(id) }))
+    .sort((a, b) => a.n - b.n || a.id.localeCompare(b.id))
+    .slice(0, 4)
+    .map((entry) => entry.id);
+  return orderedIds.map((trackId, index) => {
+    const track = latest.get(trackId)!;
+    const team = playerSideFromId(trackId, doubles) ?? fallbackSideFromCourtY(track, doubles);
+    return {
+      id: trackId,
+      label: String.fromCharCode("A".charCodeAt(0) + index),
+      team,
+      x: 12 + (track.court_point.x / 20) * 76,
+      y: 7 + (track.court_point.y / 44) * 42,
+      color: colors[index % colors.length],
+    };
+  });
+}
+
+/** 解析 canonical `Player_N` 的数字；非 canonical 返回极大值（排最后）。 */
+function parseCanonicalPlayerNumber(id: string): number {
+  if (id.startsWith("Player_") && /^\d+$/.test(id.slice("Player_".length))) {
+    return Number(id.slice("Player_".length));
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+/** fix-multiview-player-identity D2：canonical 槽位语义（双打 1/2=near、3/4=far；单打 1=near、2=far）。 */
+export function playerSideFromId(id: string, doubles: boolean): "near" | "far" | null {
+  const n = parseCanonicalPlayerNumber(id);
+  if (n === Number.MAX_SAFE_INTEGER) return null;
+  if (!doubles) return n === 1 ? "near" : "far";
+  return n <= 2 ? "near" : "far";
+}
+
+/** 非 canonical id 回退：court_point.y < 22ft（近半场）→ near。 */
+function fallbackSideFromCourtY(track: AnalysisPipelineResult["tracks"][number], _doubles: boolean): "near" | "far" {
+  return track.court_point.y < 22 ? "near" : "far";
 }
 
 function metric(

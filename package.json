@@ -17,6 +17,7 @@
     "d3-array": "^3.2.4",
     "d3-interpolate": "^3.0.1",
     "d3-scale": "^4.0.2",
+    "echarts": "^6.1.0",
     "lucide-react": "^0.561.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",

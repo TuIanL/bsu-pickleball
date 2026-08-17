@@ -396,6 +396,22 @@ class PlayerMarker(BaseModel):
     color: str
 
 
+def canonical_player_side(player_id: str, doubles: bool) -> str:
+    """fix-multiview-player-identity D2：按 canonical `Player_N` 槽位语义求 side。
+
+    与 `player-lock-state-machine` 槽位位置语义一致：
+    - 双打：`Player_1`/`Player_2` → near，`Player_3`/`Player_4` → far；
+    - 单打：`Player_1` → near，`Player_2` → far。
+    非 canonical id（无法解析为 `Player_N`）返回空串，由调用方兜底（如按 court y 推断）。
+    """
+    if not (player_id.startswith("Player_") and player_id[len("Player_"):].isdigit()):
+        return ""
+    index = int(player_id[len("Player_"):])
+    if not doubles:
+        return "near" if index == 1 else "far"
+    return "near" if index <= 2 else "far"
+
+
 class ShotTrajectory(BaseModel):
     """击球轨迹（叠加层用）。"""
 

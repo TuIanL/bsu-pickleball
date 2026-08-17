@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useRef, useState, type CSSProperties, type C
 import type {
   BallTrajectoryArtifact,
   BounceEventsArtifact,
+  FusedPlayerOverlayArtifact,
+  FusedPlayerOverlayEntity,
   MatchSummary,
   PipelineTrackPoint,
   PlayerMarker,
@@ -12,7 +14,7 @@ import type {
   TrackingOverlayArtifact,
   VideoOverlayLabel,
 } from "../../types/report";
-import { resolveDetectionFrame, resolvePoseFrame } from "./videoOverlayPlayback";
+import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 import { CourtMinimap } from "./CourtMinimap";
 import { formatPlayerId } from "../../utils/analysisHelpers";
 
@@ -48,6 +50,11 @@ interface VideoAnalysisCardProps {
   trackingOverlayLoadState?: OverlayLoadState;
   trackingOverlayStatus?: string;
   trackingOverlay?: TrackingOverlayArtifact | null;
+  /** joint 模式正式球员叠加层（multiview-fused-player-overlay.v1），优先于 trackingOverlay */
+  fusedPlayerOverlay?: FusedPlayerOverlayArtifact | null;
+  fusedPlayerOverlayDetail?: string;
+  fusedPlayerOverlayLoadState?: OverlayLoadState;
+  fusedPlayerOverlayStatus?: string;
   videoSrc?: string;
   /** H.264 源视频兜底：当 videoSrc（overlay 视频）编码不被浏览器支持时自动回退 */
   fallbackVideoSrc?: string;
@@ -99,6 +106,10 @@ export function VideoAnalysisCard({
   trackingOverlayLoadState = "idle",
   trackingOverlayStatus,
   trackingOverlay,
+  fusedPlayerOverlay,
+  fusedPlayerOverlayDetail,
+  fusedPlayerOverlayLoadState = "idle",
+  fusedPlayerOverlayStatus,
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
@@ -129,6 +140,10 @@ export function VideoAnalysisCard({
           trackingOverlayDetail={trackingOverlayDetail}
           trackingOverlayLoadState={trackingOverlayLoadState}
           trackingOverlayStatus={trackingOverlayStatus}
+          fusedPlayerOverlay={fusedPlayerOverlay}
+          fusedPlayerOverlayDetail={fusedPlayerOverlayDetail}
+          fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
+          fusedPlayerOverlayStatus={fusedPlayerOverlayStatus}
           videoSrc={videoSrc}
           fallbackVideoSrc={fallbackVideoSrc}
           pipelineTracks={pipelineTracks}
@@ -321,6 +336,10 @@ function RealVideoOverlay({
   trackingOverlayDetail,
   trackingOverlayLoadState = "idle",
   trackingOverlayStatus,
+  fusedPlayerOverlay,
+  fusedPlayerOverlayDetail,
+  fusedPlayerOverlayLoadState = "idle",
+  fusedPlayerOverlayStatus,
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
@@ -346,6 +365,10 @@ function RealVideoOverlay({
   trackingOverlayDetail?: string;
   trackingOverlayLoadState?: OverlayLoadState;
   trackingOverlayStatus?: string;
+  fusedPlayerOverlay?: FusedPlayerOverlayArtifact | null;
+  fusedPlayerOverlayDetail?: string;
+  fusedPlayerOverlayLoadState?: OverlayLoadState;
+  fusedPlayerOverlayStatus?: string;
   videoSrc: string;
   fallbackVideoSrc?: string;
   /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
@@ -367,7 +390,14 @@ function RealVideoOverlay({
   const [showBounces, setShowBounces] = useState(true);
   const [showCourtHud, setShowCourtHud] = useState(false);
 
-  const source = trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
+  const source = fusedPlayerOverlay?.source ?? trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
+  // 加载优先级（spec multiview-fused-player-overlay）：joint 模式 fused overlay 优先，
+  // 不可用/无数据时 fallback 到 trackingOverlay（单摄行为完全不变）。
+  const useFusedOverlay = Boolean(fusedPlayerOverlay?.frames.length);
+  const fusedRenderFrame = useMemo(
+    () => resolveFusedPlayerOverlayFrame(fusedPlayerOverlay?.frames ?? [], currentTime),
+    [fusedPlayerOverlay, currentTime]
+  );
   const detectionRenderFrame = useMemo(
     () => resolveDetectionFrame(trackingOverlay?.frames ?? [], currentTime),
     [currentTime, trackingOverlay]
@@ -377,7 +407,9 @@ function RealVideoOverlay({
     [currentTime, poseOverlay]
   );
 
-  const boxCount = detectionRenderFrame?.detections.length ?? 0;
+  const boxCount = useFusedOverlay
+    ? (fusedRenderFrame?.frame?.players?.length ?? 0)
+    : (detectionRenderFrame?.detections.length ?? 0);
   const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
   const poseInGap = poseRenderFrame?.inGap ?? false;
   const ballPathSegments = useMemo(() => resolveBallPathSegments(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
@@ -388,15 +420,21 @@ function RealVideoOverlay({
     [allBounceMarkers, currentTime]
   );
   const ballCount = ballSamples.length;
-  const boxesAvailable = Boolean(trackingOverlay?.frames.length);
+  const boxesAvailable = useFusedOverlay
+    ? Boolean(fusedPlayerOverlay?.frames.length)
+    : Boolean(trackingOverlay?.frames.length);
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
   const ballAvailable = hasUsableBallSamples(ballTrajectory);
   const bounceAvailable = Boolean(allBounceMarkers.length);
-  const trackingStatusLabel = resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
+  const trackingStatusLabel = useFusedOverlay
+    ? resolveLayerStatus(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.status ?? fusedPlayerOverlayStatus)
+    : resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
   const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
   const ballStatusLabel = resolveLayerStatus(ballTrajectoryLoadState, ballTrajectory?.status ?? ballTrajectoryStatus);
   const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
-  const trackingDetail = layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
+  const trackingDetail = useFusedOverlay
+    ? layerDetail(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
+    : layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
   const ballDetail = layerDetail(ballTrajectoryLoadState, ballTrajectory?.detail ?? ballTrajectoryDetail, "球轨迹 layer");
   const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
@@ -587,7 +625,17 @@ function RealVideoOverlay({
           preserveAspectRatio="xMidYMid meet"
           viewBox={`0 0 ${source.width} ${source.height}`}
         >
-        {showBoxes && detectionRenderFrame?.detections.map((detection) => {
+        {showBoxes && useFusedOverlay
+          ? fusedRenderFrame?.frame?.players?.map((player) => (
+            <FusedPlayerBox
+              key={player.player_id}
+              entity={player}
+              source={source}
+              inGap={fusedRenderFrame?.inGap ?? false}
+            />
+          ))
+          : null}
+        {showBoxes && !useFusedOverlay && detectionRenderFrame?.detections.map((detection) => {
           const [x1, y1, x2, y2] = detection.bbox;
           const width = Math.max(0, x2 - x1);
           const height = Math.max(0, y2 - y1);
@@ -1151,4 +1199,155 @@ function isServeMarkerActive(marker: ServeMarker, currentTime: number): boolean 
   const start = marker.start_time_seconds ?? Math.max(0, marker.timestamp_seconds - 2);
   const end = marker.end_time_seconds ?? marker.timestamp_seconds + 4;
   return currentTime >= start && currentTime <= end;
+}
+
+// ---- 融合球员叠加层（multiview-fused-player-overlay.v1）渲染 -----------------
+
+const FUSED_EVIDENCE_STYLE = {
+  base_observed: { stroke: "#22C55E", dash: undefined, fill: "rgba(34,197,94,0.10)", label: "检测" },
+  guided_observed: { stroke: "#22C55E", dash: undefined, fill: "rgba(34,197,94,0.10)", label: "协同恢复" },
+  refined_observed: { stroke: "#38BDF8", dash: undefined, fill: "rgba(56,189,248,0.10)", label: "离线精修" },
+  cross_view_projected: { stroke: "#FACC15", dash: "8 6", fill: "rgba(250,204,21,0.08)", label: "双摄补全" },
+  predicted_only: { stroke: "#94A3B8", dash: "3 5", fill: "rgba(148,163,184,0.06)", label: "预测" },
+} as const;
+
+function FusedPlayerBox({
+  entity,
+  source,
+  inGap,
+}: {
+  entity: FusedPlayerOverlayEntity;
+  source: { width: number; height: number };
+  inGap: boolean;
+}) {
+  const style = FUSED_EVIDENCE_STYLE[entity.evidence_type];
+  const opacity = inGap ? 0 : 1;
+  const label = entity.label ?? entity.player_id;
+
+  if (entity.evidence_type === "predicted_only") {
+    // 预测仅光圈：footpoint + identity badge + uncertainty halo（不渲染人体框）
+    if (!entity.footpoint) {
+      return null;
+    }
+    return (
+      <g key={`fused-${entity.player_id}`} opacity={opacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
+        <circle
+          cx={entity.footpoint[0]}
+          cy={entity.footpoint[1]}
+          fill="none"
+          r={Math.max(14, source.width * 0.012)}
+          stroke="#94A3B8"
+          strokeDasharray="3 5"
+          strokeWidth={Math.max(1.5, source.width * 0.0012)}
+        />
+        <circle
+          cx={entity.footpoint[0]}
+          cy={entity.footpoint[1]}
+          fill="#94A3B8"
+          r={Math.max(3.5, source.width * 0.003)}
+          stroke="rgba(0,0,0,0.6)"
+          strokeWidth={1}
+        />
+        <text
+          fill="#CBD5E1"
+          fontSize={Math.max(12, source.width * 0.011)}
+          fontWeight="700"
+          paintOrder="stroke"
+          stroke="rgba(0,0,0,0.75)"
+          strokeWidth={Math.max(3, source.width * 0.002)}
+          textAnchor="middle"
+          x={entity.footpoint[0]}
+          y={Math.max(16, entity.footpoint[1] - Math.max(14, source.width * 0.012) - 6)}
+        >
+          {label} · 预测
+        </text>
+      </g>
+    );
+  }
+
+  if (!entity.bbox) {
+    // 无历史 bbox：footpoint + identity badge + halo（不伪造人体框）
+    if (!entity.footpoint) {
+      return null;
+    }
+    return (
+      <g key={`fused-${entity.player_id}`} opacity={opacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
+        <circle
+          cx={entity.footpoint[0]}
+          cy={entity.footpoint[1]}
+          fill="none"
+          r={Math.max(12, source.width * 0.01)}
+          stroke={style.stroke}
+          strokeDasharray="5 5"
+          strokeWidth={Math.max(1.5, source.width * 0.0012)}
+        />
+        <circle
+          cx={entity.footpoint[0]}
+          cy={entity.footpoint[1]}
+          fill={style.stroke}
+          r={Math.max(3.5, source.width * 0.003)}
+          stroke="rgba(0,0,0,0.6)"
+          strokeWidth={1}
+        />
+        <text
+          fill="#F8FAFC"
+          fontSize={Math.max(12, source.width * 0.011)}
+          fontWeight="700"
+          paintOrder="stroke"
+          stroke="rgba(0,0,0,0.75)"
+          strokeWidth={Math.max(3, source.width * 0.002)}
+          x={entity.footpoint[0]}
+          y={Math.max(16, entity.footpoint[1] - Math.max(12, source.width * 0.01) - 6)}
+          textAnchor="middle"
+        >
+          {label}
+          {entity.evidence_type === "cross_view_projected" ? ` · ${style.label}` : ""}
+        </text>
+      </g>
+    );
+  }
+
+  const [x1, y1, x2, y2] = entity.bbox;
+  const width = Math.max(0, x2 - x1);
+  const height = Math.max(0, y2 - y1);
+  const isProjected = entity.evidence_type === "cross_view_projected";
+  // 展示稳定性（stabilize-multiview-overlay-display）：
+  // - view_scale_profiled：尺度投影虚线框（来源标签区分真实检测）
+  // - bbox_stale：stale memory bbox 按 bbox_age_ms 淡化
+  const isScaleProfiled = entity.bbox_source === "view_scale_profiled";
+  const staleOpacity = entity.bbox_stale ? 0.55 : 1;
+  const boxOpacity = (isProjected ? 0.85 : 1) * staleOpacity;
+  const sourceLabel = isScaleProfiled
+    ? " · 尺度投影"
+    : entity.evidence_type !== "base_observed" && entity.evidence_type !== "guided_observed"
+      ? ` · ${style.label}`
+      : "";
+  return (
+    <g key={`fused-${entity.player_id}`} opacity={boxOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
+      <rect
+        fill={style.fill}
+        height={height}
+        rx={Math.max(4, source.width * 0.003)}
+        stroke={style.stroke}
+        strokeDasharray={isScaleProfiled ? "10 6" : style.dash}
+        strokeWidth={Math.max(2, source.width * 0.0018)}
+        width={width}
+        x={x1}
+        y={y1}
+      />
+      <text
+        fill="#D9FF3F"
+        fontSize={Math.max(13, source.width * 0.013)}
+        fontWeight="800"
+        paintOrder="stroke"
+        stroke="rgba(0,0,0,0.75)"
+        strokeWidth={Math.max(3, source.width * 0.002)}
+        x={x1}
+        y={Math.max(18, y1 - 8)}
+      >
+        {label}
+        {sourceLabel}
+      </text>
+    </g>
+  );
 }

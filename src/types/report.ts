@@ -1004,6 +1004,119 @@ export interface TrackingOverlayArtifact {
   frames: DetectionOverlayFrame[];
 }
 
+// ---- multiview-fused-player-overlay.v1（joint 模式正式球员叠加层）-----------
+
+export type FusedPlayerEvidenceType =
+  | "base_observed" // F0 strong/base 真实观测
+  | "guided_observed" // F0 guided_roi 真实观测（跨摄 guidance 重检测成功）
+  | "refined_observed" // accepted F1 recovered observation
+  | "cross_view_projected" // 本 view 无观测，donor 真实观测 + 投影补全
+  | "predicted_only"; // 双 view 无观测，短时预测兜底
+
+export type FusedPlayerBBoxSource = "last_good_bbox_reanchored" | "view_scale_profiled" | "none";
+
+export interface FusedPlayerOverlayEntity {
+  player_id: string;
+  label?: string;
+  /** 图像空间检测框 [x1,y1,x2,y2]；cross_view/predicted 且无历史 bbox 时为 null */
+  bbox: [number, number, number, number] | number[] | null;
+  footpoint?: [number, number] | number[] | null;
+  evidence_type: FusedPlayerEvidenceType;
+  /** 真实 detector/recovered evidence 的原始置信（cross_view 来自 donor） */
+  source_confidence: number;
+  /** 该 presentation entity 值得展示的程度（builder 决策输出） */
+  overlay_confidence: number;
+  donor_quality?: number | null;
+  /** cross_view_projected 必须携带 donor view */
+  donor_view?: string | null;
+  uncertainty_ft?: number | null;
+  bbox_source?: FusedPlayerBBoxSource | null;
+  provenance?: "offline_refinement" | null;
+  /** 迟滞状态机当前展示状态（stabilize-multiview-overlay-display） */
+  display_state?: string | null;
+  /** bbox 是否来自 stale memory（前端可淡化） */
+  bbox_stale?: boolean;
+  /** last real observed 距今毫秒（单一 freshness 权威） */
+  bbox_age_ms?: number | null;
+}
+
+export interface FusedPlayerOverlayFrame {
+  frame_index: number;
+  timestamp_seconds: number;
+  players: FusedPlayerOverlayEntity[];
+}
+
+export interface FusedPlayerOverlayArtifact {
+  schema_version: "multiview-fused-player-overlay.v1";
+  job_id: string;
+  video_id?: string;
+  reference_view_id: string;
+  status: "available" | "no_detections" | "unavailable";
+  detail: string;
+  frame_count: number;
+  processed_frame_count: number;
+  source: { width: number; height: number };
+  frames: FusedPlayerOverlayFrame[];
+}
+
+/** player-display-diagnostics.v1（joint 模式逐球员逐 stage 显示漏斗） */
+export type ExpectedRegionStatus =
+  | "available"
+  | "prediction_unavailable"
+  | "uncertainty_too_high"
+  | "target_geometry_unavailable";
+
+export interface PlayerDisplayDiagnosticsRow {
+  canonical_tick: number;
+  timestamp_ms: number;
+  /** canonical Player_N（产物层直接存 Player_N，不暴露 global id） */
+  player_id: string;
+  view_id: string;
+  frame_status: string;
+  expected_region_status: ExpectedRegionStatus;
+  expected_image_position?: [number, number] | number[] | null;
+  /** expected region 不可用时为 null（非 0） */
+  eligible_detections_in_expected_gate: number | null;
+  eligible_detection_present: boolean;
+  position_present: boolean;
+  court_position_present: boolean;
+  projection_status?: string | null;
+  projection_confidence?: number | null;
+  formal_observation_emitted: boolean;
+  formal_local_observation: boolean;
+  local_player_id?: string | null;
+  tracking_status?: string | null;
+  global_associated: boolean;
+  association_reason?: string | null;
+  binding_visibility?: string | null;
+  /** 连续 available global-view miss 计数（fast path 触发依据；缺失按 0） */
+  available_miss_streak?: number;
+  guidance_status?: string | null;
+  guidance_skip_reason?: string | null;
+  /** guidance 触发来源：visibility_age | available_miss | null */
+  guidance_trigger_source?: string | null;
+  /** same-tick usable-candidate recovery（B-Phase-2） */
+  pre_association_status?: string | null;
+  same_tick_guidance_status?: string | null;
+  /** reference 槽位身份冲突（两个 global 抢同一 Player_N；旧产物按 false） */
+  roster_conflict?: boolean;
+  /** 查询 API 合并的 fused overlay 展示层信息（可选） */
+  overlay_evidence_type?: string | null;
+  overlay_bbox_source?: string | null;
+}
+
+export interface PlayerDisplayDiagnosticsResponse {
+  job_id: string;
+  player_id: string;
+  timestamp_ms: number;
+  window_ms: number;
+  status: string;
+  detail: string;
+  rows: PlayerDisplayDiagnosticsRow[];
+  /** 产物缺失/不可用时后端返回结构化 unavailable（fix-multiview-player-identity T1.3） */
+  error?: { code: string; message: string; job_id?: string };
+}
+
 export interface PoseKeypoint {
   name: string;
   x: number;
@@ -1411,6 +1524,10 @@ export interface AnalysisPipelineResult {
     roster_url?: string;
     roster_status?: string;
     roster_detail?: string;
+    fused_player_overlay_json_path?: string;
+    fused_player_overlay_url?: string;
+    fused_player_overlay_status?: string;
+    fused_player_overlay_detail?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
     pose_overlay_status?: string;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowLeft, CircleDot, Loader2, Route, SlidersHorizontal } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
-import { taskContextForJob, withTaskListContext } from "../app/navigationContext";
+import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import { PageFrame } from "../components/PageFrame";
 import { BallTrajectoryScene } from "../components/platform/BallTrajectoryScene";
 import {
@@ -197,9 +197,14 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
                 ? errorMessage
                 : "当前任务没有足够的有效球场坐标形成连续轨迹。可以返回视觉分析检查球检测、轨迹清洗和场地标定状态。"}
             </p>
-            <button className="green-button mt-6 px-4 py-2.5" onClick={() => onNavigate(visionPath)} type="button">
-              返回视觉分析
-            </button>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <button className="green-button px-4 py-2.5" onClick={() => onNavigate(taskListPathForJob(job))} type="button">
+                返回任务管理
+              </button>
+              <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(visionPath)} type="button">
+                返回视觉分析
+              </button>
+            </div>
           </div>
         </div>
       </PageFrame>

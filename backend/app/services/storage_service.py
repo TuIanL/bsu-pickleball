@@ -277,6 +277,14 @@ class StorageService:
         # global-player-roster.v1（诊断 / 映射 contract）
         return self._job_artifact_root(job_id) / "roster.json"
 
+    def fused_player_overlay_json_path(self, job_id: str) -> Path:
+        # multiview-fused-player-overlay.v1（joint 模式正式球员叠加层）
+        return self._job_artifact_root(job_id) / "fused_player_overlay.json"
+
+    def player_display_diagnostics_json_path(self, job_id: str) -> Path:
+        # player-display-diagnostics.v1（joint 模式逐球员逐 stage 显示漏斗）
+        return self._job_artifact_root(job_id) / "player_display_diagnostics.json"
+
     def heatmaps_manifest_json_path(self, job_id: str) -> Path:
         # 热力图清单（索引）JSON
         return self.heatmaps_dir(job_id) / "manifest.json"

@@ -93,10 +93,30 @@ function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction
 
 /** useCaptureRuntime 配置参数 */
 type UseCaptureRuntimeOptions = {
-  fieldSessionId: string;                         // 场次 ID
-  onFieldSessionStarted?: (fs: FieldSession) => void; // 启动录制成功后回调
+  fieldSessionId: string;                         // 场次 ID（录制归属的场次）
+  onFieldSessionStarted?: (fs: FieldSession) => void; // 启动录制成功后、确保场次处于 live 状态的回调（可选）
 };
 
+/**
+ * useCaptureRuntime —— 统一前端录制生命周期 Hook（状态机）。
+ *
+ * 功能：以 reducer 状态机驱动录制全流程——hydration（重进发现活跃录制）、
+ * start、stop、recover（停止结果未知时自动恢复）、cancel、reset。
+ * 同时维护已录制时长（elapsedMs）计时、单/双摄的服务端会话轮询、
+ * 停止结果未知时的自动恢复重试（含超时判定）。
+ *
+ * 参数：见 UseCaptureRuntimeOptions（fieldSessionId、onFieldSessionStarted）。
+ *
+ * 返回值（见底部 return 逐字段注释）：
+ *   - phase：当前阶段（hydrating / idle / starting / recording / stopping /
+ *            recovering / completed / partial / failed / canceled）。
+ *   - session / result / error：依阶段暴露的会话、停止结果、错误信息。
+ *   - elapsedMs：已录制毫秒数。
+ *   - captureTakeId：当前 CaptureTake ID。
+ *   - isRecording / isStopped / isHydrating：布尔阶段标志。
+ *   - hydrationError / recoveryTimedOut / recoveryAttemptCount：错误与恢复诊断。
+ *   - start / stop / cancel / recover / hydrate / reset：生命周期操作方法。
+ */
 export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: UseCaptureRuntimeOptions) {
   const [state, dispatch] = useReducer(captureRuntimeReducer, { phase: "hydrating" });
   const [elapsedMs, setElapsedMs] = useState(0);             // 已录制毫秒数

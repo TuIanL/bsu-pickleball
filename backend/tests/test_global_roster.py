@@ -375,3 +375,105 @@ def test_offline_refinement_frozen_roster_outcome():
     for sample in outcome.candidate_samples:
         gid = getattr(sample, "global_player_id", None)
         assert gid is None or gid in snapshot.global_player_ids
+
+
+# ---- fix-multiview-single-view-fallback：单视图活跃豁免（D1）----
+
+
+def _binding(view_player_id: str, last_seen_ms: float, *, weak_after_ms: float = 300.0, lost_after_ms: float = 1000.0) -> ViewBinding:
+    """构造指定 last_seen 的 ViewBinding，visibility 按 gap 判定。"""
+    from app.vision.multiview.global_state import ViewBinding as _VB
+
+    b = _VB(view_player_id=view_player_id, last_seen_take_timestamp_ms=last_seen_ms, quality=0.8)
+    b.update_visibility(0.0, weak_after_ms=weak_after_ms, lost_after_ms=lost_after_ms)
+    return b
+
+
+def test_single_view_active_not_stale():
+    """单视图 binding 活跃（observed 且 last_seen 新鲜）→ 不置 stale，predict_all 返回其预测。"""
+    reg = _seed_roster(1)
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0)  # last_seen_s = 0.0
+    # 仅 cam_1 binding（observed），cam_2 无 binding → 跨视图缺失
+    reg.players["global_player_1"].view_bindings["cam_1"] = _binding("Player_1", last_seen_ms=100.0)  # observed (gap 100ms)
+    # now_s = 2.0：last_seen_s=0.0 → age 2s < stale_last_seen_s(10s)，binding observed → 豁免
+    reg.update_stale_eligibility(2.0)
+    assert reg.players["global_player_1"].association_eligible is True
+    assert "global_player_1" in reg.predict_all(2.0)
+
+
+def test_single_view_active_stale_only_when_binding_expired():
+    """单视图 binding 已过期（lost）且 last_seen 超阈值 → 仍置 stale（豁免不适用）。"""
+    reg = _seed_roster(1)
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0)  # last_seen_s = 0.0
+    reg.players["global_player_1"].view_bindings["cam_1"] = _binding("Player_1", last_seen_ms=5000.0)  # lost (gap 5s > 1s)
+    # now_s = 100.0：last_seen age 100s > 10s，binding lost → 豁免不适用 → stale
+    reg.update_stale_eligibility(100.0)
+    assert reg.players["global_player_1"].association_eligible is False
+    assert "global_player_1" not in reg.predict_all(100.0)
+
+
+def test_single_view_active_uncertainty_high_still_stale():
+    """即使单视图 binding observed，uncertainty 超阈值仍置 stale（uncertainty 门控不被豁免覆盖）。"""
+    reg = _seed_roster(1)
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0)
+    reg.players["global_player_1"].view_bindings["cam_1"] = _binding("Player_1", last_seen_ms=100.0)  # observed
+    reg.players["global_player_1"].position_uncertainty_ft = 20.0  # > stale_uncertainty_ft(6.0)
+    reg.update_stale_eligibility(2.0)
+    assert reg.players["global_player_1"].association_eligible is False
+
+
+# ---- fix-multiview-single-view-fallback：fusion 单视图 sample 产出（D2）----
+
+
+def test_single_view_fallback_samples():
+    """单视图玩家（仅 cam_1 观测）→ 每 tick 分配到该 global 并产出 single_view_fallback 语义。"""
+    reg = GlobalPlayerRegistry(expected_player_count=4, stale_last_seen_s=10.0)
+    positions = [(5.0, 8.0), (15.0, 8.0), (5.0, 30.0), (15.0, 30.0)]
+    for i, (x, y) in enumerate(positions):
+        gid = f"global_player_{i + 1}"
+        state = reg.ensure(gid)
+        state.roster_status = "confirmed"
+        state.position_uncertainty_ft = 1.0
+        reg.estimator.update(gid, x, y, 0.0)
+        reg.absorb_measurement(gid, x, y, 0.0)
+        state.view_bindings["cam_1"] = _binding(f"Player_{i + 1}", last_seen_ms=0.0)
+        if i != 3:  # global_player_4 无 cam_2 binding → 单视图
+            state.view_bindings["cam_2"] = _binding(f"Player_{i + 1}", last_seen_ms=0.0)
+
+    assoc = GlobalPlayerAssociator(reg)
+    n_fallback_samples = 0
+    for tick in range(1, 31):
+        ts = tick * 0.1
+        cam1 = [
+            JointObservation(
+                view_id="cam_1", source_frame_index=tick, take_timestamp_ms=ts * 1000.0,
+                local_x_ft=positions[i][0] + 0.01, local_y_ft=positions[i][1],
+                view_player_id=f"Player_{i + 1}", local_identity_epoch=0,
+                track_id=i + 1, confidence=0.7,
+            )
+            for i in range(4)
+        ]
+        cam2 = [
+            JointObservation(
+                view_id="cam_2", source_frame_index=tick, take_timestamp_ms=ts * 1000.0,
+                local_x_ft=positions[i][0] - 0.01, local_y_ft=positions[i][1],
+                view_player_id=f"Player_{i + 1}", local_identity_epoch=0,
+                track_id=i + 1, confidence=0.7,
+            )
+            for i in range(3)
+        ]
+        reg.update_stale_eligibility(ts)
+        updates = assoc.process_tick(cam1 + cam2, ts, {"cam_1": IDENTITY, "cam_2": IDENTITY}, tick=tick)
+        fused = assoc.fuse_assignments(updates)
+        for gid, (_, _, views) in fused.items():
+            # joint_run.py 判定：len(views) >= 2 → dual_observed，否则 single_view_fallback
+            status = "dual_observed" if len(views) >= 2 else "single_view_fallback"
+            if gid == "global_player_4":
+                assert status == "single_view_fallback", f"P2 应 single_view_fallback, got {status}"
+                assert views == ["cam_1"]
+                n_fallback_samples += 1
+        for gid, (x, y, _) in fused.items():
+            reg.absorb_measurement(gid, x, y, ts)
+
+    assert n_fallback_samples == 30, f"P2 应有 30 个 single_view_fallback sample, got {n_fallback_samples}"
+    assert reg.players["global_player_4"].association_eligible is True

@@ -80,6 +80,23 @@ class AssociationUpdate:
     tentative: bool = False
 
 
+@dataclass
+class AssociationDecision:
+    """只读 per-observation 关联决策记录（player-display-diagnostics 消费）。
+
+    仅在既有决策分支附加记录，不改变 `process_tick()` 的算法结果与门限。
+    `result` 为 `assigned | rejected | pending | candidate`；`global_id` 仅在
+    分配/保持时非空。
+    """
+
+    view_id: str
+    observation_key: str
+    result: str  # assigned | rejected | pending | candidate
+    global_id: str | None = None
+    reason: str | None = None
+    tentative: bool = False
+
+
 def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
     return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
@@ -115,6 +132,8 @@ class GlobalPlayerAssociator:
         self.switch_margin = switch_margin
         self.reassociation_frames = max(1, int(reassociation_frames))
         self.diagnostics: dict[str, int] = {}
+        # 只读决策可观测：最近一次 process_tick 的 per-observation 决策记录
+        self.last_tick_decisions: list[AssociationDecision] = []
         # (view_id, view_player_id, identity_epoch) -> global_id.
         # Track-only observations remain compatible through a synthetic key.
         self.mapping: dict[tuple[str, str, int], str] = {}
@@ -125,6 +144,27 @@ class GlobalPlayerAssociator:
     def observation_key(obs: JointObservation) -> str:
         return obs.view_player_id or str(obs.track_id)
 
+    def _record_decision(
+        self,
+        obs: JointObservation,
+        result: str,
+        *,
+        global_id: str | None = None,
+        reason: str | None = None,
+        tentative: bool = False,
+    ) -> None:
+        """附加一条只读 AssociationDecision（不改任何算法行为）。"""
+        self.last_tick_decisions.append(
+            AssociationDecision(
+                view_id=obs.view_id,
+                observation_key=self.observation_key(obs),
+                result=result,
+                global_id=global_id,
+                reason=reason,
+                tentative=tentative,
+            )
+        )
+
     @classmethod
     def mapping_key(cls, obs: JointObservation) -> tuple[str, str, int]:
         return (obs.view_id, cls.observation_key(obs), int(obs.local_identity_epoch))
@@ -132,10 +172,21 @@ class GlobalPlayerAssociator:
     # ---- uncertainty-aware gate（D5）----
 
     def _pair_gate_ft(self, obs: JointObservation, gid: str, predictions) -> float:
-        """按关联状态返回门宽：稳定连续紧门 / 换人尝试严格门 / reacquire 随 uncertainty 扩展。"""
+        """按关联状态返回门宽：已绑定保持优先（宽门容忍减速漂移）/ 换人尝试严格门 / reacquire 随 uncertainty 扩展。
+
+        fix-multiview-cam1-bootstrap-4player 残留修复（2026-08-16 二次修正）：incumbent
+        分支原用固定 base_gate_ft（3.0）——Kalman 常速模型对减速球员预测持续超前
+        （tick 115 差 0.8ft 累积到 tick 139 差 3.24ft），一旦略超 base_gate 观测被拒
+        → 不 absorb → 预测更超前 → 死锁（P4 fused overlay 消失、gid_1 预测漂出球场）。
+
+        已绑定观测（mapping incumbent）应**保持优先**：门宽放宽到 max_reacquire_gate，
+        容忍正常减速/转向导致的预测漂移，让观测持续修正 Kalman；身份正确性由
+        challenger 严格 switch_gate + PendingReassociation 强证据切换把关，不受影响。
+        """
         incumbent = self.mapping.get(self.mapping_key(obs))
         if incumbent == gid:
-            return self.base_gate_ft
+            # 已绑定：保持优先（宽门容忍预测漂移；>max_reacquire 的跳变仍触发 reassociation 评估）
+            return self.max_reacquire_gate_ft
         if incumbent is not None and incumbent != gid:
             return self.switch_gate_ft
         unc = 1.0
@@ -160,6 +211,8 @@ class GlobalPlayerAssociator:
         - roster 未满（BOOTSTRAPPING）→ 候选池（candidate_N）；roster 已满（ROSTER_ACTIVE）→ unresolved。
         """
         tick = tick if tick is not None else (max((o.source_frame_index for o in observations), default=0))
+        # 只读决策可观测：每 tick 重置，供 display diagnostics 消费
+        self.last_tick_decisions = []
         # 1) canonical 化 + 清理失效强绑定
         for obs in observations:
             identity_key = self.observation_key(obs)
@@ -183,14 +236,14 @@ class GlobalPlayerAssociator:
             expected = obs.expected_global_player_id
             if expected not in self.registry.players or expected not in predictions:
                 self.diagnostics["guided_expected_missing"] = self.diagnostics.get("guided_expected_missing", 0) + 1
+                self._record_decision(obs, "rejected", reason="guided_expected_missing")
                 assigned_obs.add(id(obs))
                 continue
             px, py = predictions[expected][0], predictions[expected][1]
             geometry = _dist((obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0), (px, py))
             gate = self._pair_gate_ft(obs, expected, predictions)
             if geometry <= gate:
-                self.mapping[self.mapping_key(obs)] = expected
-                self.registry.set_binding(
+                binding_ok = self.registry.set_binding(
                     expected, obs.view_id,
                     ViewBinding(
                         view_player_id=obs.view_player_id or None,
@@ -206,12 +259,26 @@ class GlobalPlayerAssociator:
                     ),
                     obs.take_timestamp_ms,
                 )
+                if not binding_ok:
+                    # fix-multiview-cam1-bootstrap-4player D3：reference 槽位已被其他
+                    # global 占用 → 不覆盖，记录冲突事件；观测落入 unresolved（后续轮次处理）。
+                    self._record_decision(
+                        obs, "rejected", global_id=expected, reason="reference_slot_conflict"
+                    )
+                    self.diagnostics["reference_slot_conflict"] = (
+                        self.diagnostics.get("reference_slot_conflict", 0) + 1
+                    )
+                    assigned_obs.add(id(obs))
+                    continue
+                self.mapping[self.mapping_key(obs)] = expected
                 updates.append(AssociationUpdate(expected, obs.view_id, obs, 1.0 / (1.0 + geometry)))
                 assigned_obs.add(id(obs))
                 self.diagnostics["guided_expected_preserved"] = self.diagnostics.get("guided_expected_preserved", 0) + 1
+                self._record_decision(obs, "assigned", global_id=expected, reason="guided_expected_preserved")
             else:
                 # 几何不可行 → reject（不转投其他 global）
                 self.diagnostics["guided_expected_rejected"] = self.diagnostics.get("guided_expected_rejected", 0) + 1
+                self._record_decision(obs, "rejected", reason="guided_expected_rejected")
                 assigned_obs.add(id(obs))
 
         # 3) 逐 view 用 min_cost_matching 把剩余观测分配给预测 global（per-pair uncertainty-aware gate）
@@ -265,21 +332,51 @@ class GlobalPlayerAssociator:
                         if pending[gid] >= self.reassociation_frames:
                             self.diagnostics["reassociated"] = self.diagnostics.get("reassociated", 0) + 1
                             pending.clear()
-                            self._accept_pair(obs, gid, feasibility[key][gid], updates)
-                            assigned_obs.add(id(obs))
+                            # fix-multiview-cam1-bootstrap-4player：强证据切换允许覆盖
+                            # 槽位（先 release incumbent），避免唯一性保护拦截合法 reassociation。
+                            if self._accept_pair(
+                                obs, gid, feasibility[key][gid], updates, override_slot=True
+                            ):
+                                assigned_obs.add(id(obs))
+                                self._record_decision(obs, "assigned", global_id=gid, reason="reassociated")
+                            else:
+                                self._record_decision(
+                                    obs, "rejected", global_id=gid, reason="reference_slot_conflict"
+                                )
                         else:
                             self.diagnostics["reassoc_pending"] = self.diagnostics.get("reassoc_pending", 0) + 1
-                            self._accept_pair(obs, incumbent, feasibility[key].get(incumbent, 1.0), updates, tentative=True)
-                            assigned_obs.add(id(obs))
+                            if self._accept_pair(
+                                obs, incumbent, feasibility[key].get(incumbent, 1.0), updates, tentative=True
+                            ):
+                                assigned_obs.add(id(obs))
+                                self._record_decision(
+                                    obs, "pending", global_id=incumbent, reason="reassoc_pending", tentative=True
+                                )
+                            else:
+                                self._record_decision(
+                                    obs, "rejected", global_id=incumbent, reason="reference_slot_conflict"
+                                )
                     else:
                         pending.clear()
-                        self._accept_pair(obs, incumbent, feasibility[key].get(incumbent, 1.0), updates, tentative=True)
-                        assigned_obs.add(id(obs))
+                        if self._accept_pair(
+                            obs, incumbent, feasibility[key].get(incumbent, 1.0), updates, tentative=True
+                        ):
+                            assigned_obs.add(id(obs))
+                            self._record_decision(
+                                obs, "assigned", global_id=incumbent, reason="incumbent_kept", tentative=True
+                            )
+                        else:
+                            self._record_decision(
+                                obs, "rejected", global_id=incumbent, reason="reference_slot_conflict"
+                            )
                 else:
                     if incumbent == gid:
                         self._pending_reassoc.pop(self.mapping_key(obs), None)
-                    self._accept_pair(obs, gid, feasibility[key][gid], updates)
-                    assigned_obs.add(id(obs))
+                    if self._accept_pair(obs, gid, feasibility[key][gid], updates):
+                        assigned_obs.add(id(obs))
+                        self._record_decision(obs, "assigned", global_id=gid, reason="matched")
+                    else:
+                        self._record_decision(obs, "rejected", global_id=gid, reason="reference_slot_conflict")
 
         # 4) 未匹配观测：continuity / 候选池 / unresolved
         unmatched = [o for o in observations if id(o) not in assigned_obs]
@@ -297,8 +394,9 @@ class GlobalPlayerAssociator:
                     self.diagnostics["continuity_rejected_geometry"] = (
                         self.diagnostics.get("continuity_rejected_geometry", 0) + 1
                     )
+                    self._record_decision(obs, "rejected", reason="continuity_rejected_geometry")
                 else:
-                    self.registry.set_binding(
+                    binding_ok = self.registry.set_binding(
                         existing, obs.view_id,
                         ViewBinding(
                             view_player_id=obs.view_player_id or None,
@@ -313,8 +411,21 @@ class GlobalPlayerAssociator:
                         ),
                         obs.take_timestamp_ms,
                     )
+                    if not binding_ok:
+                        # D3：reference 槽位已被其他 global 占用 → 不覆盖（continuity 也受限）
+                        self._record_decision(
+                            obs, "rejected", global_id=existing, reason="reference_slot_conflict"
+                        )
+                        self.diagnostics["reference_slot_conflict"] = (
+                            self.diagnostics.get("reference_slot_conflict", 0) + 1
+                        )
+                        assigned_obs.add(id(obs))
+                        continue
                     updates.append(AssociationUpdate(existing, obs.view_id, obs, 0.0, tentative=True))
                     assigned_obs.add(id(obs))
+                    self._record_decision(
+                        obs, "assigned", global_id=existing, reason="continuity_preserved", tentative=True
+                    )
                     continue
             # 4b) 弱历史绑定（D4）：epoch reset 后经 geometry 重新证明回原 global（可含 stale 玩家）
             historical = self.registry.historical_bindings.get((obs.view_id, self.observation_key(obs)))
@@ -326,7 +437,7 @@ class GlobalPlayerAssociator:
                 ) <= self._pair_gate_ft(obs, historical, {historical: pred}):
                     self.mapping[key] = historical
                     self.diagnostics["historical_reacquired"] = self.diagnostics.get("historical_reacquired", 0) + 1
-                    self.registry.set_binding(
+                    binding_ok = self.registry.set_binding(
                         historical, obs.view_id,
                         ViewBinding(
                             view_player_id=obs.view_player_id or None,
@@ -341,12 +452,27 @@ class GlobalPlayerAssociator:
                         ),
                         obs.take_timestamp_ms,
                     )
+                    if not binding_ok:
+                        # D3：reference 槽位已被其他 global 占用 → 不覆盖（historical 也受限）
+                        self.mapping.pop(key, None)
+                        self._record_decision(
+                            obs, "rejected", global_id=historical, reason="reference_slot_conflict"
+                        )
+                        self.diagnostics["reference_slot_conflict"] = (
+                            self.diagnostics.get("reference_slot_conflict", 0) + 1
+                        )
+                        assigned_obs.add(id(obs))
+                        continue
                     updates.append(AssociationUpdate(historical, obs.view_id, obs, 0.0, tentative=True))
                     assigned_obs.add(id(obs))
+                    self._record_decision(
+                        obs, "assigned", global_id=historical, reason="historical_reacquired", tentative=True
+                    )
                     continue
             # 4c) 候选池（roster 未满） / unresolved（roster 已满）
             if self.registry.roster_state == "ROSTER_ACTIVE" or len(self.registry.players) >= self.registry.expected_player_count:
                 self.diagnostics["unresolved_no_slot"] = self.diagnostics.get("unresolved_no_slot", 0) + 1
+                self._record_decision(obs, "rejected", reason="unresolved_no_slot")
                 continue
             cid = self.registry.find_or_create_candidate(
                 view_id=obs.view_id,
@@ -368,6 +494,7 @@ class GlobalPlayerAssociator:
                 local_track_id=obs.track_id,
             )
             self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
+            self._record_decision(obs, "candidate", reason="candidate_admitted")
 
         # 5) 候选晋升（D2 / tasks 2.3）+ 候选过期
         for cid in list(self.registry.candidates):
@@ -413,11 +540,20 @@ class GlobalPlayerAssociator:
         updates: list[AssociationUpdate],
         *,
         tentative: bool = False,
-    ) -> None:
-        """接受一对观测→global 绑定并产出 update。"""
-        self.mapping[self.mapping_key(obs)] = gid
-        dist = max(0.0, feasibility_value) * self.base_gate_ft  # 归一化距离还原（仅诊断）
-        self.registry.set_binding(
+        override_slot: bool = False,
+    ) -> bool:
+        """接受一对观测→global 绑定并产出 update。
+
+        fix-multiview-cam1-bootstrap-4player D3：reference 槽位被其他 global 占用时
+        返回 False 且不写 mapping/binding（由调用方按冲突处理），不直接覆盖 incumbent。
+
+        ``override_slot``（强证据 reassociation 专用）：连续 N 帧强证据确认同 view
+        local 身份应从 incumbent 切换到 challenger 时，先 release 旧槽位再绑定，
+        否则唯一性保护会错误拦截合法切换。
+        """
+        if override_slot and obs.view_player_id:
+            self.registry.release_view_slot(obs.view_id, obs.view_player_id)
+        binding_ok = self.registry.set_binding(
             gid,
             obs.view_id,
             ViewBinding(
@@ -434,7 +570,15 @@ class GlobalPlayerAssociator:
             ),
             obs.take_timestamp_ms,
         )
+        if not binding_ok:
+            self.diagnostics["reference_slot_conflict"] = (
+                self.diagnostics.get("reference_slot_conflict", 0) + 1
+            )
+            return False
+        self.mapping[self.mapping_key(obs)] = gid
+        dist = max(0.0, feasibility_value) * self.base_gate_ft  # 归一化距离还原（仅诊断）
         updates.append(AssociationUpdate(gid, obs.view_id, obs, 1.0 / (1.0 + dist), tentative=tentative))
+        return True
 
     @staticmethod
     def fuse_assignments(

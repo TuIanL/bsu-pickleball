@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+import json
+
 # Literal：限定某个参数只能取固定的几个字符串值（这里用于限定 artifact 名称白名单）
 # Union：表示返回值"可能是多种类型之一"
 # Query：URL 查询参数
@@ -339,6 +341,87 @@ def read_multiview_debug_video(job_id: str, request: Request) -> StreamingRespon
     return _debug_video_response(path, request)
 
 
+@router.get("/jobs/{job_id}/multiview/players/{player_id}/display-diagnostics", response_model=None)
+def read_player_display_diagnostics(
+    job_id: str,
+    player_id: str,
+    timestamp_ms: float = Query(default=0, ge=0),
+    window_ms: float = Query(default=500, ge=0),
+) -> JSONResponse:
+    """Return the per-player display diagnostics funnel for a time window.
+
+    - `player_id` 仅接受 canonical `Player_N`；产物行直接按该 id 过滤（不反查 global id）。
+    - 返回窗口内该球员两路 view 的漏斗行（按 canonical tick 升序）。
+    - 产物不存在时返回结构化 `unavailable` + reason。
+    """
+    job = get_mock_job(job_id)
+    if job is None:
+        return _multiview_error(404, "not_found", "Analysis job not found.", job_id)
+    if job.analysisKind != "multiview":
+        return _multiview_error(
+            404, "not_applicable", "Player display diagnostics are not applicable to this job.", job_id
+        )
+    if not (player_id.startswith("Player_") and player_id[len("Player_"):].isdigit()):
+        return _multiview_error(422, "invalid_player_id", "player_id must be canonical Player_N.", job_id)
+    payload_path = _STORAGE.player_display_diagnostics_json_path(job_id)
+    if not payload_path.exists():
+        # fix-multiview-player-identity D1/T1.3：产物缺失是业务状态而非资源错误，
+        # 返回结构化 unavailable（HTTP 200），前端显示"诊断暂不可用"而非 404 报错。
+        return JSONResponse(
+            status_code=200,
+            content=structured_error(
+                "unavailable",
+                "This task has no player display diagnostics artifact.",
+                job_id=job_id,
+            ),
+        )
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _multiview_error(500, "artifact_unreadable", f"Failed to read artifact: {exc}", job_id)
+    rows = payload.get("rows", []) or []
+    lo, hi = timestamp_ms - window_ms / 2.0, timestamp_ms + window_ms / 2.0
+    filtered = [
+        row
+        for row in rows
+        if row.get("player_id") == player_id
+        and (row.get("timestamp_ms") or 0.0) >= lo
+        and (row.get("timestamp_ms") or 0.0) <= hi
+    ]
+    filtered.sort(key=lambda row: (row.get("timestamp_ms") or 0.0, row.get("view_id") or ""))
+    # 合并 fused overlay 展示层 evidence_type（若存在）
+    overlay_path = _STORAGE.fused_player_overlay_json_path(job_id)
+    overlay_by_tick: dict[int, dict[str, str]] = {}
+    if overlay_path.exists():
+        try:
+            overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+            for frame in overlay.get("frames", []) or []:
+                entry: dict[str, str] = {}
+                for p in frame.get("players", []) or []:
+                    if p.get("player_id") == player_id:
+                        entry["evidence_type"] = str(p.get("evidence_type") or "")
+                        entry["bbox_source"] = str(p.get("bbox_source") or "")
+                overlay_by_tick[int(frame.get("frame_index") or 0)] = entry
+        except (OSError, ValueError):
+            pass  # overlay 合并是可选增强，失败不影响诊断响应
+    for row in filtered:
+        overlay_entry = overlay_by_tick.get(int(row.get("canonical_tick") or -1))
+        if overlay_entry:
+            row.setdefault("overlay_evidence_type", overlay_entry.get("evidence_type"))
+            row.setdefault("overlay_bbox_source", overlay_entry.get("bbox_source"))
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "player_id": player_id,
+            "timestamp_ms": timestamp_ms,
+            "window_ms": window_ms,
+            "status": payload.get("status", "available"),
+            "detail": payload.get("detail", ""),
+            "rows": filtered,
+        }
+    )
+
+
 # 允许的 artifact（分析产物）名称白名单。
 # 用 Literal 限定后，只有这些名字能被这个路由匹配，避免用户随意访问任意文件，更安全。
 @router.get("/jobs/{job_id}/artifacts/{artifact_name}", response_model=None)
@@ -358,6 +441,8 @@ def read_analysis_artifact(
         "position-heatmaps",  # 位置热力图清单
         "position-scatter-plots",  # 位置散点图清单
         "roster",  # global-player-roster.v1（诊断 / 映射 contract）
+        "fused-player-overlay",  # multiview-fused-player-overlay.v1（joint 模式正式球员叠加层）
+        "player-display-diagnostics",  # player-display-diagnostics.v1（逐球员逐 stage 显示漏斗）
         "pose-overlay",  # 姿态骨架叠加
         "player-trajectories",  # 球员轨迹
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
@@ -415,6 +500,10 @@ def read_analysis_artifact(
         path = _STORAGE.scatter_plots_manifest_json_path(job_id)
     elif artifact_name == "roster":
         path = _STORAGE.roster_manifest_json_path(job_id)
+    elif artifact_name == "fused-player-overlay":
+        path = _STORAGE.fused_player_overlay_json_path(job_id)
+    elif artifact_name == "player-display-diagnostics":
+        path = _STORAGE.player_display_diagnostics_json_path(job_id)
     elif artifact_name == "pose-overlay":
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":

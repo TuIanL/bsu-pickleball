@@ -65,6 +65,28 @@ function makeSegment(
   };
 }
 
+/**
+ * useLiveCoding —— 实时编码（Live Coding）Hook。
+ *
+ * 功能：在录制过程中让教练/操作员通过快捷键实时标注比赛结构——创建
+ * 时间线事件（Timeline Events）、管理比分段（Sets/Games/Rallies，即 Segments）、
+ * 维护可撤销栈，并将标注动作通过"离线优先"的 Outbox 队列可靠同步到服务端。
+ * 有 captureTakeId 时走 Outbox（离线/弱网可用）；无 captureTakeId 时直接写服务端并本地乐观更新。
+ *
+ * 参数（UseLiveCodingOptions，见上方类型注释）：
+ *   - fieldSessionId：场次 ID（直接写时间线事件的归属场次）。
+ *   - captureTakeId：CaptureTake ID；非空时启用 Outbox 异步同步。
+ *   - captureMode：采集模式（match/practice/engineering），决定可用快捷事件集。
+ *   - phase：录制阶段，用于自动创建初始 non_play_start 等逻辑。
+ *   - elapsedMs：已录制毫秒数（无 startedAt 时作为时间基准）。
+ *   - startedAt：录制开始时间 ISO 字符串（优先用于计算事件时间戳）。
+ *
+ * 返回值：见底部 return 逐字段注释——
+ *   liveCodingState（服务端编码状态）、outboxItems/outboxHealth（离线队列与健康状况）、
+ *   segments/timelineEvents（段与事件）、quickEvents（当前模式可用快捷事件）、
+ *   freeze（冻结发送）、addTimelineEvent（添加事件/段）、flushWithDeadline（带超时刷新）、
+ *   retrySync（重试同步）、outboxSenderRef（发送器引用）。
+ */
 export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phase, elapsedMs, startedAt }: UseLiveCodingOptions) {
   const [liveCodingState, setLiveCodingState] = useState<LiveCodingState | null>(null);   // 服务端编码状态
   const [outboxItems, setOutboxItems] = useState<CodingOutboxItem[]>([]);                  // Outbox 队列
@@ -430,14 +452,17 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     }
   }, [captureTakeId, fieldSessionId]);
 
-  const quickEvents = quickEventsForMode(captureMode);
+  const quickEvents = quickEventsForMode(captureMode); // 根据模式筛选可用快捷事件
 
   return {
-    liveCodingState,
-    outboxItems, outboxHealth,
-    segments, timelineEvents,
-    quickEvents,
-    freeze, addTimelineEvent, flushWithDeadline, retrySync,
-    outboxSenderRef,
+    liveCodingState,                 // 服务端编码状态（revision + 段/事件摘要）
+    outboxItems, outboxHealth,       // Outbox 队列内容与健康状态（synced/pending/offline）
+    segments, timelineEvents,        // 本地维护的段列表与时间线事件列表
+    quickEvents,                     // 当前模式可用的快捷事件定义
+    freeze,                          // 冻结发送器（停止 Outbox 推送，例如录制结束前）
+    addTimelineEvent,                // 添加时间线事件 / 段（核心交互入口）
+    flushWithDeadline,               // 带超时地强制刷新 Outbox
+    retrySync,                       // 重试被阻塞的 Outbox 项 / 重新拉取时间线
+    outboxSenderRef,                 // 底层 Outbox 发送器引用（供上层直接操作）
   };
 }
