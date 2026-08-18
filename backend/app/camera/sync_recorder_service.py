@@ -1438,6 +1438,9 @@ class SyncRecordingService:
                 and len(session.registered_video_ids) >= len(session.camera_slots)
                 and self._registered_video_ids_are_available(session)
             ):
+                # 已完成会话的短路分支也保证 timing 可用：幂等快路径补写缺失 sidecar，
+                # 使"merge 完成"与"timing 可用"同生命周期。
+                self._repair_session_timing_sidecars(session)
                 return session
             if not self._session_has_ts(session):
                 raise RuntimeError("没有找到可合并的 TS 分段")
@@ -1608,6 +1611,35 @@ class SyncRecordingService:
             results[slot] = result_payload
         self._persist_capture_track_timing(session.capture_take_id, results)
         return results
+
+    @staticmethod
+    def _repair_session_timing_sidecars(session: SyncRecordingSession) -> None:
+        """Ensure every registered video of a completed session has a PTS sidecar.
+
+        Idempotent fast path: existing valid sidecars are reused without
+        touching the media; missing ones are generated via the shared
+        per-video-locked materializer.  Failures degrade to warnings and never
+        raise to the merge caller.
+        """
+        from app.services.multiview_acceptance import materialize_registered_video_timing
+        from app.services.video_service import video_service
+
+        for role, video_id in (session.registered_video_ids or {}).items():
+            metadata = video_service.get_available_video(video_id)
+            if metadata is None:
+                logger.warning("merge 收尾补写跳过 %s/%s: 视频不可用", session.session_id, role)
+                continue
+            try:
+                result = materialize_registered_video_timing(metadata.path)
+                if result.status != "ready" or result.timing_authority != "source_pts":
+                    logger.warning(
+                        "merge 收尾补写 sidecar 失败 %s/%s: %s",
+                        session.session_id,
+                        role,
+                        result.reason or "unknown",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("merge 收尾补写 sidecar 异常 %s/%s: %s", session.session_id, role, exc)
 
     @staticmethod
     def _materialize_registered_video_timing(media_path: str | os.PathLike[str]) -> dict[str, object]:

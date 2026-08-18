@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -16,6 +17,23 @@ from app.services.dual_camera_sync import (
 
 
 PTS_SIDECAR_SUFFIX = ".pts.jsonl"
+
+# Per-media-path locks serializing sidecar materialization across trigger
+# sources (materialize API, startup backfill, merge wrap-up).  The lock key is
+# the resolved media path, so two callers addressing the same video through
+# different relative/absolute spellings still serialize on one lock.
+_TIMING_LOCKS: dict[str, threading.Lock] = {}
+_TIMING_LOCKS_GUARD = threading.Lock()
+
+
+def _timing_lock_for(media_path: str | os.PathLike[str]) -> threading.Lock:
+    key = str(Path(media_path).expanduser().resolve(strict=False))
+    with _TIMING_LOCKS_GUARD:
+        lock = _TIMING_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TIMING_LOCKS[key] = lock
+        return lock
 
 
 @dataclass(frozen=True)
@@ -190,6 +208,28 @@ def timing_sidecar_path(media_path: str | os.PathLike[str]) -> Path:
 
 
 def materialize_registered_video_timing(
+    media_path: str | os.PathLike[str],
+    *,
+    slot: str = "",
+    sidecar_path: str | os.PathLike[str] | None = None,
+    ffprobe_bin: str = "ffprobe",
+) -> TimingPreparationResult:
+    """Materialize or reuse a registered-video PTS sidecar without fallback.
+
+    Concurrent callers addressing the same media are serialized by a
+    per-media-path lock so a heavy ffprobe extraction never runs twice; once a
+    winner writes the sidecar atomically, everyone else takes the reuse path.
+    """
+    with _timing_lock_for(media_path):
+        return _materialize_registered_video_timing_unlocked(
+            media_path,
+            slot=slot,
+            sidecar_path=sidecar_path,
+            ffprobe_bin=ffprobe_bin,
+        )
+
+
+def _materialize_registered_video_timing_unlocked(
     media_path: str | os.PathLike[str],
     *,
     slot: str = "",

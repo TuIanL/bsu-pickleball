@@ -134,6 +134,25 @@ class VideoService:
             return None
         return metadata
 
+    def list_videos(self) -> list[VideoMetadata]:
+        """Return every registered video (disk-persisted metadata + memory cache).
+
+        Disk JSON files are the source of truth after a restart; the in-memory
+        cache may additionally hold newer entries not yet flushed.  Malformed
+        or unrelated JSON files are skipped silently.
+        """
+        result: dict[str, VideoMetadata] = {}
+        for path in self.storage.uploads_dir.glob("*.json"):
+            try:
+                payload = self.storage.read_json(path)
+                metadata = VideoMetadata.model_validate(payload)
+                result[metadata.id] = metadata
+            except Exception:  # noqa: BLE001
+                continue
+        for video_id, metadata in VIDEOS.items():
+            result[video_id] = metadata
+        return list(result.values())
+
 
 # 全局单例：整个进程共用一个 VideoService（MVP 阶段足够）
 video_service = VideoService()

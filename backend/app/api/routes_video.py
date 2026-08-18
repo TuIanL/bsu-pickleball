@@ -26,12 +26,18 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
-from app.schemas.video import VideoMetadata, VideoTimingResponse, VideoUploadResponse
+from app.schemas.video import (
+    VideoMetadata,
+    VideoTimingMaterializeResponse,
+    VideoTimingResponse,
+    VideoUploadResponse,
+)
 
 # 导入真正干活的"视频服务"对象 video_service（逻辑在 services 层，不在路由层）
 # UnsupportedVideoError 是我们自定义的异常：当上传的文件不是受支持的视频格式时抛出
 from app.services.video_service import UnsupportedVideoError, video_service
 from app.services.dual_camera_sync import read_frame_timing_sidecar, summarize_frame_timing_sidecar
+from app.services.multiview_acceptance import materialize_registered_video_timing
 
 # 创建一个路由表：
 # - prefix="/api/videos" 表示本文件里所有接口的路径都以 /api/videos 开头
@@ -151,6 +157,47 @@ def read_video_timing(video_id: str) -> VideoTimingResponse:
             }
             for frame in frames
         ],
+    )
+
+
+@router.post("/{video_id}/timing/materialize", response_model=VideoTimingMaterializeResponse)
+def materialize_video_timing(video_id: str) -> VideoTimingMaterializeResponse:
+    """Synchronously materialize (or reuse) a registered video's PTS sidecar.
+
+    Idempotent repair endpoint for the sync-anchor workbench: when a video is
+    missing its ``.pts.jsonl`` sidecar (e.g. a historical session completed
+    before the materialization mechanism existed), this endpoint regenerates it
+    from the registered media via ffprobe.  Runs on the thread pool (sync
+    ``def``) so long extractions never block the event loop.
+    """
+    video = video_service.get_available_video(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Registered video not found or unavailable")
+
+    media_path = Path(video.path).resolve(strict=False)
+    result = materialize_registered_video_timing(media_path)
+    if result.status != "ready" or result.timing_authority != "source_pts":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_pts_invalid",
+                "message": result.reason or "Failed to materialize source PTS sidecar",
+                "video_id": video_id,
+            },
+        )
+
+    summary = result.summary or {}
+    return VideoTimingMaterializeResponse(
+        authority=result.timing_authority,
+        status=result.status,
+        reused=result.reused,
+        frame_count=int(summary.get("frame_count") or 0),
+        fps=float(summary["fps"]) if summary.get("fps") is not None else None,
+        first_pts_seconds=float(summary["first_pts_seconds"])
+        if summary.get("first_pts_seconds") is not None else None,
+        last_pts_seconds=float(summary["last_pts_seconds"])
+        if summary.get("last_pts_seconds") is not None else None,
+        sidecar_path=result.sidecar_path,
     )
 
 

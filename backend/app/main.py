@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.database import init_db
 from app.services.mock_analysis import recover_zombie_jobs, start_analysis_worker, stop_analysis_worker
+from app.services.timing_backfill import start_timing_backfill
 
 # 配置日志系统
 configure_logging()
@@ -41,6 +42,8 @@ async def lifespan(_: FastAPI):
     start_analysis_worker()
     recover_zombie_jobs()
     _cleanup_stale_leases()
+    # 异步后台补写缺失的 registered video PTS sidecar；失败仅告警，不阻塞启动
+    start_timing_backfill()
     try:
         yield
     finally:

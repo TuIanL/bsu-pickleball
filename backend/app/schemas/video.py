@@ -62,3 +62,22 @@ class VideoTimingResponse(BaseModel):
     first_pts_seconds: float | None = None
     last_pts_seconds: float | None = None
     frames: list[VideoTimingFrame]
+
+
+class VideoTimingMaterializeResponse(BaseModel):
+    """Result of synchronously materializing a registered video's PTS sidecar.
+
+    Mirrors the sidecar summary returned by the materialization pipeline; on a
+    reuse fast path ``reused`` is true and the media was never touched.
+    """
+
+    schema_version: str = "frame_timing_provider.v1"
+    authority: str  # "source_pts" | "missing"
+    status: str  # "ready" | "failed"
+    reused: bool = False
+    frame_count: int = Field(ge=0)
+    fps: float | None = None
+    first_pts_seconds: float | None = None
+    last_pts_seconds: float | None = None
+    sidecar_path: str | None = None
+    reason: str | None = None

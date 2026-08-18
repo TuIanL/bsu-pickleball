@@ -426,3 +426,120 @@ def test_capture_track_repair_rejects_identity_conflict(tmp_path: Path, monkeypa
 
     assert not result["ok"]
     assert any("camera identity conflict" in issue for issue in result["issues"])
+
+def _merge_ffprobe_payload():
+    """Return a fake subprocess.CompletedProcess with two usable PTS frames."""
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "frames": [
+                    {"best_effort_timestamp_time": "1.400000", "pkt_dts_time": "1.400000", "key_frame": 1},
+                    {"best_effort_timestamp_time": "1.416667", "pkt_dts_time": "1.416667", "key_frame": 0},
+                ]
+            }
+        ),
+        stderr="",
+    )
+
+
+def _merge_test_session(session_id: str) -> "object":
+    """Build a completed dual-camera session with both slots registered."""
+    from app.camera.models import CameraSlotConfig, SyncRecordingSession
+
+    return SyncRecordingSession(
+        session_id=session_id,
+        status="completed",
+        camera_slots={
+            "cam_1": CameraSlotConfig(role="cam_1", camera_id="174"),
+            "cam_2": CameraSlotConfig(role="cam_2", camera_id="175"),
+        },
+        registered_video_ids={"cam_1": "rec-174", "cam_2": "rec-175"},
+        merge_status="completed",
+    )
+
+
+def _merge_test_video_metadata(video_id: str, path: Path):
+    from datetime import UTC, datetime
+
+    from app.schemas.video import VideoMetadata
+
+    return VideoMetadata(
+        id=video_id,
+        original_filename=f"{video_id}.mp4",
+        content_type="video/mp4",
+        size_bytes=path.stat().st_size,
+        path=str(path),
+        uploaded_at=datetime.now(UTC),
+        source="recording",
+    )
+
+
+def test_request_merge_completed_session_backfills_missing_sidecars(tmp_path, monkeypatch):
+    """completed 会话缺失 sidecar 时 request_merge 短路分支仍补写。"""
+    from app.camera import sync_recorder_service as module
+    from app.services.video_service import video_service
+
+    media_1 = tmp_path / "cam_1.mp4"
+    media_1.write_bytes(b"registered-media-1")
+    media_2 = tmp_path / "cam_2.mp4"
+    media_2.write_bytes(b"registered-media-2")
+    session = _merge_test_session("sync-merge-backfill")
+    module.SYNC_SESSIONS[session.session_id] = session
+
+    def fake_get(video_id):
+        if video_id == "rec-174":
+            return _merge_test_video_metadata("rec-174", media_1)
+        if video_id == "rec-175":
+            return _merge_test_video_metadata("rec-175", media_2)
+        return None
+
+    monkeypatch.setattr(video_service, "get_available_video", fake_get)
+    service = module.SyncRecordingService()
+
+    try:
+        with patch("app.services.dual_camera_sync.subprocess.run", return_value=_merge_ffprobe_payload()):
+            result = service.request_merge(session.session_id)
+
+        assert result.merge_status == "completed"
+        assert (tmp_path / "cam_1.mp4.pts.jsonl").is_file()
+        assert (tmp_path / "cam_2.mp4.pts.jsonl").is_file()
+    finally:
+        module.SYNC_SESSIONS.pop(session.session_id, None)
+
+
+def test_request_merge_completed_session_reuses_existing_sidecars(tmp_path, monkeypatch):
+    """completed 会话已具备 sidecar 时 request_merge 走幂等快路径，不重复 ffprobe。"""
+    from app.camera import sync_recorder_service as module
+    from app.services.video_service import video_service
+
+    media_1 = tmp_path / "cam_1.mp4"
+    media_1.write_bytes(b"registered-media-1")
+    media_2 = tmp_path / "cam_2.mp4"
+    media_2.write_bytes(b"registered-media-2")
+    for media in (media_1, media_2):
+        Path(f"{media}.pts.jsonl").write_text(
+            '{"frame_index":0,"pts_seconds":0.033333,"dts_seconds":0.033333,"keyframe":true}\n',
+            encoding="utf-8",
+        )
+    session = _merge_test_session("sync-merge-reuse")
+    module.SYNC_SESSIONS[session.session_id] = session
+
+    def fake_get(video_id):
+        if video_id == "rec-174":
+            return _merge_test_video_metadata("rec-174", media_1)
+        if video_id == "rec-175":
+            return _merge_test_video_metadata("rec-175", media_2)
+        return None
+
+    monkeypatch.setattr(video_service, "get_available_video", fake_get)
+    service = module.SyncRecordingService()
+
+    try:
+        with patch("app.services.dual_camera_sync.subprocess.run", return_value=_merge_ffprobe_payload()) as run:
+            result = service.request_merge(session.session_id)
+
+        assert result.merge_status == "completed"
+        run.assert_not_called()
+    finally:
+        module.SYNC_SESSIONS.pop(session.session_id, None)

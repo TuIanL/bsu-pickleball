@@ -19,15 +19,16 @@ import {
 import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { PageFrame } from "../components/PageFrame";
 import {
+  confirmSyncAnchors,
   getCaptureTake,
   getSyncAnchorDraft,
+  getSyncAnchorExportUrl,
   getSyncAnchorStatus,
   getSyncRecording,
   getVideoStreamUrl,
   getVideoTiming,
   isAnalysisApiError,
-  confirmSyncAnchors,
-  getSyncAnchorExportUrl,
+  materializeVideoTiming,
   saveSyncAnchorDraft,
   type VideoTimingResponse,
 } from "../services/analysisClient";
@@ -249,6 +250,8 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
   const [notice, setNotice] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [repairing, setRepairing] = useState(false);
+  const [repairError, setRepairError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncAnchorStatus | null>(null);
   const [draftRevision, setDraftRevision] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
@@ -330,6 +333,32 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
     void load();
     return () => { cancelled = true; };
   }, [applyDraftResponse, captureTakeId]);
+
+  const handleRepairTiming = useCallback(async () => {
+    if (!captureTakeId || repairing) return;
+    setRepairing(true);
+    setRepairError(null);
+    try {
+      const takeData = await getCaptureTake(captureTakeId);
+      const sessionData = await getSyncRecording(takeData.source_session_id);
+      const videoIds = SLOTS
+        .map((slot) => sessionData.registered_video_ids?.[slot])
+        .filter((videoId): videoId is string => Boolean(videoId));
+      if (!videoIds.length) {
+        throw new Error("未找到两路 registered video_id，无法修复。");
+      }
+      for (const videoId of videoIds) {
+        await materializeVideoTiming(videoId);
+      }
+      // 全部补写成功：自动重新加载工作台
+      window.location.reload();
+    } catch (error) {
+      // 任一失败：在错误卡追加失败原因，保留"返回双摄分析"出口，可再次尝试
+      setRepairError(errorMessage(error));
+    } finally {
+      setRepairing(false);
+    }
+  }, [captureTakeId, repairing]);
 
   useEffect(() => {
     if (!captureTakeId || !anchors.length) return;
@@ -567,7 +596,23 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
         <div className="mx-auto mt-16 max-w-lg rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-6">
           <div className="flex items-center gap-2 text-sm font-bold text-[#991B1B]"><AlertTriangle size={17} /> 工作台无法打开</div>
           <p className="mt-3 text-sm leading-6 text-[#B91C1C]">{loadError ?? "双摄 registered video 或 source timing 不完整。"}</p>
-          <button className="quiet-button mt-5 px-4 py-2 text-sm" onClick={() => onNavigate(returnTo)} type="button"><ArrowLeft size={15} />返回双摄分析</button>
+          {repairError && (
+            <p className="mt-3 rounded-xl border border-[#FCA5A5] bg-[#FEE2E2] p-3 text-sm leading-6 text-[#991B1B]">
+              修复失败：{repairError}
+            </p>
+          )}
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              className="inline-flex items-center gap-2 rounded-xl bg-[#168A34] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#116B28] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={handleRepairTiming}
+              disabled={repairing}
+              type="button"
+            >
+              <RefreshCw size={15} className={repairing ? "animate-spin" : ""} />
+              {repairing ? "正在补写 source PTS…" : "尝试修复"}
+            </button>
+            <button className="quiet-button px-4 py-2 text-sm" onClick={() => onNavigate(returnTo)} type="button"><ArrowLeft size={15} />返回双摄分析</button>
+          </div>
         </div>
       </PageFrame>
     );

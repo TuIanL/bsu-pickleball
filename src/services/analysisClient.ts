@@ -880,6 +880,30 @@ export async function getVideoTiming(videoId: string): Promise<VideoTimingRespon
   return requestJson<VideoTimingResponse>(`/api/videos/${videoId}/timing`);
 }
 
+export interface VideoTimingMaterializeResponse {
+  schema_version: string;
+  authority: "source_pts" | "missing";
+  status: "ready" | "failed";
+  reused: boolean;
+  frame_count: number;
+  fps?: number | null;
+  first_pts_seconds?: number | null;
+  last_pts_seconds?: number | null;
+  sidecar_path?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * 同步补写（或复用）registered video 的 source PTS sidecar。
+ * 视频不存在/不可用 → AnalysisApiError(status 404)；
+ * PTS 无法生成（媒体损坏、ffprobe 失败等）→ AnalysisApiError(status 409, code source_pts_invalid)。
+ */
+export async function materializeVideoTiming(videoId: string): Promise<VideoTimingMaterializeResponse> {
+  return requestJson<VideoTimingMaterializeResponse>(`/api/videos/${videoId}/timing/materialize`, {
+    method: "POST",
+  });
+}
+
 export function resolveAnalysisAssetUrl(path?: string): string | undefined {
   return path ? toApiUrl(path) : undefined;
 }
