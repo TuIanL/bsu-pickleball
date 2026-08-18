@@ -160,6 +160,22 @@ class ViewBinding:
 
 
 @dataclass
+class MeasurementUpdateResult:
+    """一次测量吸收的结果（fix-multiview-reacquire-after-fusion-pollution D2）。
+
+    `accepted=False`（innovation guard 拒绝）语义 = "这一帧没看见该 player"：
+    MUST NOT 刷新 last_seen_s / roster_confirm_ticks / position/velocity。
+    """
+
+    accepted: bool
+    x_ft: float
+    y_ft: float
+    innovation_ft: float | None = None
+    gate_ft: float | None = None
+    reason: str | None = None
+
+
+@dataclass
 class GlobalPlayerState:
     """一个 global player 的运行时状态。"""
 
@@ -172,6 +188,12 @@ class GlobalPlayerState:
     lifecycle: str = "tentative"  # tentative | confirmed | lost
     cross_view_anchored: bool = False
     view_bindings: dict[str, ViewBinding] = field(default_factory=dict)
+    # ---- fix-multiview-reacquire-after-fusion-pollution：risk 生命周期（D2/D3）----
+    # 最近一次 estimator 风险事件 tick（innovation_rejected / conflict_no_measurement）
+    last_state_risk_tick: int | None = None
+    state_risk_reason: str | None = None  # innovation_rejected | conflict_no_measurement
+    # 连续 clean accepted measurement 计数（>= risk_clear_clean_ticks 清除 risk）
+    clean_measurement_ticks: int = 0
     stable_dual_view_count: int = 0  # 历史双视角一致观测次数（anchored 依据）
     # ---- roster 语义（stabilize-joint-global-player-roster）----
     roster_status: str | None = None  # None（非 roster）/ provisional / confirmed
@@ -297,6 +319,12 @@ class GlobalPlayerRegistry:
         stale_last_seen_s: float = 10.0,
         candidate_association_radius_ft: float = 3.0,
         reference_view_id: str | None = None,
+        # ---- fix-multiview-reacquire-after-fusion-pollution：innovation guard（D2）----
+        innovation_floor_ft: float = 8.0,
+        innovation_uncertainty_k: float = 2.0,
+        # ---- risk 生命周期（D2/D3）----
+        reanchor_risk_window_ticks: int = 90,
+        risk_clear_clean_ticks: int = 5,
     ) -> None:
         self.estimator = estimator or GlobalMotionEstimator()
         self.players: dict[str, GlobalPlayerState] = {}
@@ -310,6 +338,10 @@ class GlobalPlayerRegistry:
         self.stale_uncertainty_ft = stale_uncertainty_ft
         self.stale_last_seen_s = stale_last_seen_s
         self.candidate_association_radius_ft = candidate_association_radius_ft
+        self.innovation_floor_ft = innovation_floor_ft
+        self.innovation_uncertainty_k = innovation_uncertainty_k
+        self.reanchor_risk_window_ticks = max(1, int(reanchor_risk_window_ticks))
+        self.risk_clear_clean_ticks = max(1, int(risk_clear_clean_ticks))
         self.roster_state: str = "BOOTSTRAPPING"  # BOOTSTRAPPING | ROSTER_ACTIVE
         self._next_candidate = 1
         self.candidates: dict[str, GlobalRosterCandidate] = {}
@@ -519,9 +551,30 @@ class GlobalPlayerRegistry:
         x_ft: float,
         y_ft: float,
         timestamp_s: float,
-    ) -> tuple[float, float]:
-        """吸收融合测量并更新状态、uncertainty。"""
+        tick: int | None = None,
+    ) -> MeasurementUpdateResult:
+        """吸收融合测量并更新状态、uncertainty（fix-multiview-reacquire-after-fusion-pollution D2）。
+
+        前置 innovation guard：`r = dist(measurement, predicted)`，当
+        `r > max(innovation_floor_ft, innovation_uncertainty_k × uncertainty)` 时拒绝——
+        MUST NOT 更新 position/velocity/uncertainty、MUST NOT 刷新 last_seen_s、
+        MUST NOT 增加 roster_confirm_ticks（拒绝语义 = "这一帧没看见该 player"）。
+        """
         state = self.ensure(global_id)
+        pred = self.estimator.predict(global_id, timestamp_s)
+        innovation = None
+        gate = None
+        if pred is not None:
+            innovation = ((x_ft - pred[0]) ** 2 + (y_ft - pred[1]) ** 2) ** 0.5
+            gate = max(self.innovation_floor_ft, self.innovation_uncertainty_k * pred[2])
+            if innovation > gate:
+                state.last_state_risk_tick = tick if tick is not None else self._last_tick
+                state.state_risk_reason = "innovation_rejected"
+                state.clean_measurement_ticks = 0
+                return MeasurementUpdateResult(
+                    accepted=False, x_ft=pred[0], y_ft=pred[1],
+                    innovation_ft=innovation, gate_ft=gate, reason="innovation_rejected",
+                )
         sx, sy = self.estimator.update(global_id, x_ft, y_ft, timestamp_s)
         state.x_ft, state.y_ft = sx, sy
         state.vx_ft_s, state.vy_ft_s = _velocity_from_estimator(self.estimator, global_id)
@@ -529,10 +582,65 @@ class GlobalPlayerRegistry:
         if pred is not None:
             state.position_uncertainty_ft = pred[2]
         state.last_seen_s = timestamp_s
+        # 连续 clean accepted 测量清除 risk 标记
+        if state.last_state_risk_tick is not None:
+            state.clean_measurement_ticks += 1
+            if state.clean_measurement_ticks >= self.risk_clear_clean_ticks:
+                state.last_state_risk_tick = None
+                state.state_risk_reason = None
+                state.clean_measurement_ticks = 0
         if state.roster_status == "provisional":
             state.roster_confirm_ticks += 1
             self._maybe_confirm_roster()
-        return sx, sy
+        return MeasurementUpdateResult(
+            accepted=True, x_ft=sx, y_ft=sy,
+            innovation_ft=innovation if pred is not None else None,
+            gate_ft=gate if pred is not None else None,
+        )
+
+    def mark_state_risk(self, global_id: str, reason: str, tick: int | None = None) -> None:
+        """记录一次 estimator 风险事件（conflict_no_measurement 等），供 reanchor 决策查询。"""
+        state = self.ensure(global_id)
+        state.last_state_risk_tick = tick if tick is not None else self._last_tick
+        state.state_risk_reason = reason
+        state.clean_measurement_ticks = 0
+
+    def reseed(
+        self,
+        global_id: str,
+        x_ft: float,
+        y_ft: float,
+        timestamp_s: float,
+        tick: int | None = None,
+    ) -> MeasurementUpdateResult:
+        """灾难恢复：以可信观测重置 estimator（fix-multiview-reacquire-after-fusion-pollution D3）。
+
+        position = 观测位置、velocity = 0、covariance = 初始值、timestamp = 当前。
+        由 MultiViewJointRun 在 fusion 后对 reanchor update 调用（唯一执行点）。
+        """
+        state = self.ensure(global_id)
+        self.estimator.reset(global_id)
+        sx, sy = self.estimator.update(global_id, x_ft, y_ft, timestamp_s)
+        state.x_ft, state.y_ft = sx, sy
+        state.vx_ft_s, state.vy_ft_s = 0.0, 0.0
+        state.position_uncertainty_ft = 1.0
+        state.last_seen_s = timestamp_s
+        state.last_state_risk_tick = None
+        state.state_risk_reason = None
+        state.clean_measurement_ticks = 0
+        if state.roster_status == "provisional":
+            state.roster_confirm_ticks += 1
+            self._maybe_confirm_roster()
+        return MeasurementUpdateResult(accepted=True, x_ft=sx, y_ft=sy)
+
+    def in_risk_window(self, global_id: str, now_tick: int | None = None) -> bool:
+        """该 global 是否处于 reanchor 风险窗口内（供 D3 reanchor 决策查询）。"""
+        state = self.players.get(global_id)
+        if state is None or state.last_state_risk_tick is None:
+            return False
+        if now_tick is None:
+            return True
+        return (now_tick - state.last_state_risk_tick) <= self.reanchor_risk_window_ticks
 
     def predict_all(self, timestamp_s: float) -> dict[str, tuple[float, float, float]]:
         """roster 内且具备普通关联资格（非 stale）的 global 预测（不含候选池）。"""

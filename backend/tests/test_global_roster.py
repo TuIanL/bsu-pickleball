@@ -11,7 +11,11 @@
 
 from __future__ import annotations
 
-from app.vision.multiview.association_global import GlobalPlayerAssociator, JointObservation
+from app.vision.multiview.association_global import (
+    AssociationUpdate,
+    GlobalPlayerAssociator,
+    JointObservation,
+)
 from app.vision.multiview.court_frame import CourtOrientation
 from app.vision.multiview.global_state import GlobalPlayerRegistry
 
@@ -477,3 +481,268 @@ def test_single_view_fallback_samples():
 
     assert n_fallback_samples == 30, f"P2 应有 30 个 single_view_fallback sample, got {n_fallback_samples}"
     assert reg.players["global_player_4"].association_eligible is True
+
+
+# ===========================================================================
+# fix-multiview-reacquire-after-fusion-pollution：D1 conflict arbitration
+# ===========================================================================
+
+
+def _fusion_updates(gid="global_player_1"):
+    """构造一对双视角观测（canonical 坐标直接指定，跳过 process_tick 转换）。"""
+    cam1 = _obs("cam_1", 0.0, 0.0, pid="Player_1", tid=1, frame=0)
+    cam1.canonical_x_ft, cam1.canonical_y_ft = 19.1, -4.1
+    cam1.confidence = 0.31
+    cam1.intrinsic_quality = 0.42
+    cam2 = _obs("cam_2", 0.0, 0.0, pid="Player_1", tid=1, frame=0)
+    cam2.canonical_x_ft, cam2.canonical_y_ft = 7.4, 33.6  # 40ft 离群
+    cam2.confidence = 0.81
+    cam2.intrinsic_quality = 0.87
+    return [
+        AssociationUpdate(gid, "cam_1", cam1, 0.31),
+        AssociationUpdate(gid, "cam_2", cam2, 0.81),
+    ]
+
+
+def test_conflict_poison_rejects_cam2_outlier():
+    """回归先行：pre-tick prediction≈cam_1；cam_2 相距 40ft 且 conf 0.81 > 0.31 → 必须选 cam_1。"""
+    reg = _seed_roster(1, positions=[(19.0, -4.0)])
+    assoc = GlobalPlayerAssociator(reg)
+    updates = _fusion_updates()
+    preds = {"global_player_1": (19.5, -4.2, 1.0)}  # pre-tick prediction ≈ cam_1
+    fused = assoc.fuse_assignments(updates, predictions=preds)
+    assert "global_player_1" in fused
+    x, y, views = fused["global_player_1"]
+    assert views == ["cam_1"], f"必须选 cam_1（innovation plausible），got views={views}"
+    assert abs(x - 19.1) < 0.5 and abs(y + 4.1) < 0.5, f"位置应来自 cam_1, got ({x:.2f},{y:.2f})"
+    assert assoc.diagnostics.get("fusion_conflict_cam1_selected", 0) == 1
+    assert assoc.diagnostics.get("fusion_conflict", 0) == 1
+
+
+def test_conflict_both_implausible_no_measurement():
+    """两路均超门限 → 不产出 fused entry（不 absorb / 本 tick 无 metric sample）。"""
+    reg = _seed_roster(1, positions=[(19.0, -4.0)])
+    assoc = GlobalPlayerAssociator(reg)
+    updates = _fusion_updates()
+    # prediction 在远处（两路都离它 > gate）
+    preds = {"global_player_1": (0.0, 40.0, 1.0)}
+    fused = assoc.fuse_assignments(updates, predictions=preds)
+    assert "global_player_1" not in fused, "两路都不 plausible → 不产出 fused entry"
+    assert assoc.diagnostics.get("fusion_conflict_no_measurement", 0) == 1
+
+
+def test_conflict_both_plausible_residual_dominates_intrinsic():
+    """双 plausible：cam1 residual 0.8ft/intrinsic 0.42 vs cam2 residual 5.5ft/intrinsic 0.87 → 选 cam1。"""
+    reg = _seed_roster(1, positions=[(19.0, -4.0)])
+    assoc = GlobalPlayerAssociator(reg)
+    cam1 = _obs("cam_1", 0.0, 0.0, pid="Player_1", tid=1, frame=0)
+    cam1.canonical_x_ft, cam1.canonical_y_ft = 19.1, -4.1  # residual 0.8ft
+    cam1.confidence = 0.5
+    cam1.intrinsic_quality = 0.42
+    cam2 = _obs("cam_2", 0.0, 0.0, pid="Player_1", tid=1, frame=0)
+    cam2.canonical_x_ft, cam2.canonical_y_ft = 19.6, 1.0  # residual ~5.5ft（同侧但较远）
+    cam2.confidence = 0.8
+    cam2.intrinsic_quality = 0.87
+    updates = [
+        AssociationUpdate("global_player_1", "cam_1", cam1, 0.5),
+        AssociationUpdate("global_player_1", "cam_2", cam2, 0.8),
+    ]
+    preds = {"global_player_1": (19.3, -3.6, 1.0)}
+    fused = assoc.fuse_assignments(updates, predictions=preds)
+    assert "global_player_1" in fused
+    x, y, views = fused["global_player_1"]
+    assert views == ["cam_1"], f"residual 主导：应选 cam_1（r1≈0.8 < r2≈5.5），got views={views}"
+    assert abs(x - 19.1) < 0.5 and abs(y + 4.1) < 0.5
+
+
+# ===========================================================================
+# fix-multiview-reacquire-after-fusion-pollution：D2 innovation guard
+# ===========================================================================
+
+
+def test_innovation_guard_rejects_catastrophic_jump():
+    """测量距预测 15ft、uncertainty ~1ft → accepted=False，位置/速度不变。"""
+    reg = _seed_roster(1, positions=[(5.0, 8.0)])
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0)  # 建立状态
+    # 预测在 (5,8) 附近（velocity=0）；测量跳到 20ft 外
+    result = reg.absorb_measurement("global_player_1", 25.0, 8.0, 0.1, tick=1)
+    assert result.accepted is False
+    assert result.reason == "innovation_rejected"
+    assert result.innovation_ft is not None and result.innovation_ft > 8.0
+    # 状态未被污染
+    st = reg.players["global_player_1"]
+    assert abs(st.x_ft - 5.0) < 0.5 and abs(st.y_ft - 8.0) < 0.5
+    assert abs(st.vx_ft_s) < 0.5
+
+
+def test_innovation_reject_does_not_refresh_last_seen():
+    """reject 后 last_seen_s 不变、roster_confirm_ticks 不增（reject 语义=没看见）。"""
+    reg = _seed_roster(1, positions=[(5.0, 8.0)])
+    reg.players["global_player_1"].roster_status = "provisional"
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0)
+    assert reg.players["global_player_1"].last_seen_s == 0.0
+    ticks_before = reg.players["global_player_1"].roster_confirm_ticks
+    # 灾难性跳变 → reject
+    result = reg.absorb_measurement("global_player_1", 30.0, 8.0, 0.1, tick=1)
+    assert result.accepted is False
+    st = reg.players["global_player_1"]
+    assert st.last_seen_s == 0.0, "reject 不得刷新 last_seen_s"
+    assert st.roster_confirm_ticks == ticks_before, "reject 不得增加 roster_confirm_ticks"
+    assert st.last_state_risk_tick is not None
+    assert st.state_risk_reason == "innovation_rejected"
+
+
+def test_innovation_guard_allows_legitimate_maneuver():
+    """5ft 位移且 uncertainty 已扩展 → 正常吸收，不误报。"""
+    reg = _seed_roster(1, positions=[(5.0, 8.0)])
+    reg.players["global_player_1"].position_uncertainty_ft = 5.0  # 高 uncertainty
+    # 用 estimator 建立带 uncertainty 的状态
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0)
+    # 5ft 移动（gate = max(8, 2*unc) ≥ 8 > 5）→ accepted
+    result = reg.absorb_measurement("global_player_1", 10.0, 8.0, 0.1, tick=1)
+    assert result.accepted is True, f"5ft 位移不应被拒, got {result.reason}"
+    # Kalman 平滑：位置应向测量移动（介于预测 5.0 与测量 10.0 之间）
+    assert 5.0 < result.x_ft < 10.0, f"平滑后位置应在预测与测量之间, got {result.x_ft}"
+
+
+# ===========================================================================
+# fix-multiview-reacquire-after-fusion-pollution：D3 trusted historical reanchor
+# ===========================================================================
+
+
+def _make_reanchor_registry(positions=None):
+    """构造 reanchor 场景：G1 在 (19,-4) 且处于 risk 状态 + 历史绑定 (cam_1, Player_1)→G1。"""
+    reg = _seed_roster(2, positions=positions or [(19.0, -4.0), (5.0, 8.0)])
+    reg.players["global_player_1"].roster_status = "confirmed"
+    reg.players["global_player_2"].roster_status = "confirmed"
+    # 建立 motion 状态（G1 在 19,-4）
+    reg.absorb_measurement("global_player_1", 19.0, -4.0, 0.0, tick=0)
+    reg.absorb_measurement("global_player_2", 5.0, 8.0, 0.0, tick=0)
+    # 历史绑定：cam_1/Player_1 曾稳定属于 G1
+    reg.historical_bindings[("cam_1", "Player_1")] = "global_player_1"
+    # G1 处于 risk 状态（innovation_rejected，tick 90 内）
+    reg.mark_state_risk("global_player_1", "innovation_rejected", tick=50)
+    return reg
+
+
+def test_reanchor_restores_after_pollution():
+    """prediction 偏 14ft + 历史绑定 + 连续 3 帧稳定观测 + 无歧义 → reanchor=True 决策。"""
+    reg = _make_reanchor_registry()
+    # 污染 G1 的 estimator：跳到 (5,9)（靠近 G2 位置），制造 14ft 漂移
+    reg.estimator.update("global_player_1", 5.5, 9.0, 1.0)
+    reg.players["global_player_1"].position_uncertainty_ft = 1.0
+    assoc = GlobalPlayerAssociator(reg, max_association_distance_ft=3.0)
+    # 连续 3 帧正确观测 [19,-4] 邻域（帧间位移 < 3ft）
+    reanchor_found = False
+    for frame in (1, 2, 3):
+        obs = _obs("cam_1", 19.1, -4.1, pid="Player_1", tid=1, ts=frame, frame=frame)
+        obs.canonical_x_ft, obs.canonical_y_ft = 19.1, -4.1
+        updates = assoc.process_tick([obs], float(frame), {"cam_1": IDENTITY}, tick=frame)
+        for u in updates:
+            if u.global_id == "global_player_1" and u.reanchor:
+                reanchor_found = True
+    assert reanchor_found, "连续 3 帧正确观测应触发 reanchor=True 决策"
+    assert assoc.diagnostics.get("reanchor_pending", 0) >= 1
+    assert assoc.diagnostics.get("reanchor_succeeded", 0) == 1
+
+
+def test_reanchor_reseed_clears_pollution():
+    """reanchor 后 reseed：position=观测、velocity=0、covariance=初始（不保留污染速度）。"""
+    reg = _make_reanchor_registry()
+    reg.estimator.update("global_player_1", 5.5, 9.0, 1.0)  # 污染
+    reg.players["global_player_1"].position_uncertainty_ft = 5.0
+    result = reg.reseed("global_player_1", 19.0, -4.0, 1.5, tick=55)
+    assert result.accepted is True
+    st = reg.players["global_player_1"]
+    assert abs(st.x_ft - 19.0) < 0.5 and abs(st.y_ft + 4.0) < 0.5, "reseed 位置=观测"
+    assert abs(st.vx_ft_s) < 0.1 and abs(st.vy_ft_s) < 0.1, "reseed velocity=0"
+    assert st.position_uncertainty_ft <= 1.5, "reseed covariance=初始"
+    assert st.last_state_risk_tick is None, "reseed 后清除 risk 标记"
+
+
+def test_reanchor_rejects_ambiguous():
+    """恢复观测对两个 global residual 都接近（差 < margin）→ 不 reanchor，走 unresolved。"""
+    reg = _make_reanchor_registry()
+    # 污染 G1 预测漂到 (15.5, 2.5)（两次 update 收敛）；G2 仍在 (5,8)
+    reg.estimator.update("global_player_1", 12.0, 9.0, 1.0)
+    reg.estimator.update("global_player_1", 12.0, 9.0, 1.0)
+    reg.players["global_player_1"].position_uncertainty_ft = 1.0
+    # 观测在两预测中点 (10.25, 5.25)：r_G1≈r_G2≈5.9，差 < margin 2.0 → 歧义
+    assoc = GlobalPlayerAssociator(reg, max_association_distance_ft=3.0)
+    obs = _obs("cam_1", 10.25, 5.25, pid="Player_1", tid=1, ts=1.0, frame=1)
+    obs.canonical_x_ft, obs.canonical_y_ft = 10.25, 5.25
+    updates = assoc.process_tick([obs], 1.0, {"cam_1": IDENTITY}, tick=1)
+    assert not any(u.reanchor for u in updates), "歧义时不得 reanchor"
+    assert assoc.diagnostics.get("reanchor_rejected_ambiguous", 0) == 1
+
+
+def test_reanchor_skips_when_not_risk():
+    """G 无 risk 标记 → 不进入 reanchor 路径。"""
+    reg = _make_reanchor_registry()
+    reg.players["global_player_1"].last_state_risk_tick = None  # 清除 risk
+    reg.estimator.update("global_player_1", 5.5, 9.0, 1.0)
+    assoc = GlobalPlayerAssociator(reg, max_association_distance_ft=3.0)
+    obs = _obs("cam_1", 19.1, -4.1, pid="Player_1", tid=1, ts=1.0, frame=1)
+    obs.canonical_x_ft, obs.canonical_y_ft = 19.1, -4.1
+    updates = assoc.process_tick([obs], 1.0, {"cam_1": IDENTITY}, tick=1)
+    assert not any(u.reanchor for u in updates), "无 risk 标记不得 reanchor"
+    assert assoc.diagnostics.get("reanchor_pending", 0) == 0
+
+
+def test_risk_marker_clears_after_clean_window():
+    """连续 M 帧 clean accepted 测量 → 清除 risk 标记。"""
+    reg = _seed_roster(1, positions=[(5.0, 8.0)])
+    reg.mark_state_risk("global_player_1", "innovation_rejected", tick=10)
+    assert reg.in_risk_window("global_player_1", now_tick=20) is True
+    # 连续 5 帧 clean accepted
+    for i in range(5):
+        reg.absorb_measurement("global_player_1", 5.0 + i * 0.1, 8.0, 0.1 + i * 0.1, tick=11 + i)
+    st = reg.players["global_player_1"]
+    assert st.last_state_risk_tick is None, "连续 clean 测量后应清除 risk"
+    assert reg.in_risk_window("global_player_1", now_tick=50) is False
+
+
+# ===========================================================================
+# fix-multiview-reacquire-after-fusion-pollution：D4 可诊断事件
+# ===========================================================================
+
+
+def test_diagnostics_conflict_attribution():
+    """conflict 场景 → last_tick_fusion_decisions 含两路 residual 与 selected_source，聚合计数存在。"""
+    reg = _seed_roster(1, positions=[(19.0, -4.0)])
+    assoc = GlobalPlayerAssociator(reg)
+    updates = _fusion_updates()
+    preds = {"global_player_1": (19.5, -4.2, 1.0)}
+    assoc.fuse_assignments(updates, predictions=preds)
+    # 聚合计数
+    assert assoc.diagnostics.get("fusion_conflict", 0) == 1
+    assert assoc.diagnostics.get("fusion_conflict_cam1_selected", 0) == 1
+    # 结构化明细：含 per-view residual 与 selected_source
+    assert len(assoc.last_tick_fusion_decisions) == 1
+    d = assoc.last_tick_fusion_decisions[0]
+    assert d["global_player_id"] == "global_player_1"
+    assert d["selected_source"] == "cam_1"
+    assert d["reason"] == "only_cam1_plausible"
+    assert d["r_cam1"] < d["r_cam2"], "cam_1 residual 应远小于 cam_2"
+    assert d["cam1_xy"] == [19.1, -4.1] or d["cam1_xy"] == (19.1, -4.1)
+    assert d["cam2_xy"] == [7.4, 33.6] or d["cam2_xy"] == (7.4, 33.6)
+    assert d["gate"] > 0
+
+
+# ===========================================================================
+# fix-multiview-reacquire-after-fusion-pollution：5.1 D1 regression
+# ===========================================================================
+
+
+def test_single_view_active_not_stale_regression():
+    """回归：D1/D2/D3 改动后，单视图持续活跃玩家仍不因 stale 被踢出。"""
+    reg = _seed_roster(1)
+    reg.absorb_measurement("global_player_1", 5.0, 8.0, 0.0, tick=0)
+    reg.players["global_player_1"].view_bindings["cam_1"] = _binding("Player_1", last_seen_ms=100.0)
+    reg.update_stale_eligibility(2.0)
+    assert reg.players["global_player_1"].association_eligible is True
+    assert "global_player_1" in reg.predict_all(2.0)
+    # 单视图活跃玩家在 innovation guard 下正常吸收（未超 gate）
+    result = reg.absorb_measurement("global_player_1", 5.2, 8.1, 3.0, tick=30)
+    assert result.accepted is True
+    assert reg.players["global_player_1"].association_eligible is True

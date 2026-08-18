@@ -78,6 +78,7 @@ class AssociationUpdate:
     observation: JointObservation
     confidence: float
     tentative: bool = False
+    reanchor: bool = False  # fix-multiview-reacquire-after-fusion-pollution D3：灾难恢复 reseed 请求
 
 
 @dataclass
@@ -101,6 +102,16 @@ def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
     return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
+def _intrinsic_of(us: list[AssociationUpdate], view_id: str) -> float | None:
+    """取某 view 观测的 intrinsic_quality（未显式提供时回退 confidence）。"""
+    for u in us:
+        if u.view_id == view_id:
+            if u.observation.intrinsic_quality is not None:
+                return u.observation.intrinsic_quality
+            return u.observation.confidence
+    return None
+
+
 class GlobalPlayerAssociator:
     """global-centric 观测分配器（roster 化：unmatched → 候选池 / unresolved，禁止 new_global）。"""
 
@@ -119,6 +130,10 @@ class GlobalPlayerAssociator:
         # ---- PendingReassociation（D6）----
         switch_margin: float = 0.15,
         reassociation_frames: int = 5,
+        # ---- trusted historical identity reanchor（fix-multiview-reacquire-after-fusion-pollution D3）----
+        reanchor_frames: int = 3,
+        reanchor_max_step_ft: float = 3.0,
+        reanchor_ambiguity_margin_ft: float = 2.0,
     ) -> None:
         self.registry = registry
         self.max_association_distance_ft = max_association_distance_ft
@@ -131,9 +146,17 @@ class GlobalPlayerAssociator:
         self.switch_gate_ft = switch_gate_ft
         self.switch_margin = switch_margin
         self.reassociation_frames = max(1, int(reassociation_frames))
+        self.reanchor_frames = max(1, int(reanchor_frames))
+        self.reanchor_max_step_ft = reanchor_max_step_ft
+        self.reanchor_ambiguity_margin_ft = reanchor_ambiguity_margin_ft
         self.diagnostics: dict[str, int] = {}
         # 只读决策可观测：最近一次 process_tick 的 per-observation 决策记录
         self.last_tick_decisions: list[AssociationDecision] = []
+        # 结构化 conflict 仲裁明细（D4）：{global_player_id, cam1_xy, cam2_xy,
+        # r_cam1, r_cam2, gate, selected_source, reason}
+        self.last_tick_fusion_decisions: list[dict] = []
+        # reanchor 连续候选帧跟踪：(view_id, observation_key) -> (连续帧数, 上一帧位置)
+        self._reanchor_tracker: dict[tuple[str, str], tuple[int, tuple[float, float]]] = {}
         # (view_id, view_player_id, identity_epoch) -> global_id.
         # Track-only observations remain compatible through a synthetic key.
         self.mapping: dict[tuple[str, str, int], str] = {}
@@ -469,6 +492,12 @@ class GlobalPlayerAssociator:
                         obs, "assigned", global_id=historical, reason="historical_reacquired", tentative=True
                     )
                     continue
+                # D3:geometry 硬门拒绝 → trusted historical-identity reanchor 评估
+                # （历史绑定 + risk 状态 + 连续 N 帧稳定 + 无歧义 → reanchor=True 决策；
+                #  执行由 JointRun 在 fusion 后 reseed，associator 不直接改 GlobalState）
+                if self._evaluate_reanchor(obs, historical, timestamp_s, tick, updates):
+                    assigned_obs.add(id(obs))
+                    continue
             # 4c) 候选池（roster 未满） / unresolved（roster 已满）
             if self.registry.roster_state == "ROSTER_ACTIVE" or len(self.registry.players) >= self.registry.expected_player_count:
                 self.diagnostics["unresolved_no_slot"] = self.diagnostics.get("unresolved_no_slot", 0) + 1
@@ -532,6 +561,77 @@ class GlobalPlayerAssociator:
 
         return updates
 
+    def _evaluate_reanchor(
+        self,
+        obs: JointObservation,
+        historical: str,
+        timestamp_s: float,
+        tick: int | None,
+        updates: list[AssociationUpdate],
+    ) -> bool:
+        """trusted historical-identity reanchor 评估（D3）：满足全部条件才产出 reanchor=True 决策。
+
+        五条件：
+        1. (view_id, observation_key) 存在弱历史绑定 → historical（调用处已确认）；
+        2. historical 处于 risk 窗口（last_state_risk_tick 在 reanchor_risk_window_ticks 内）；
+        3. local identity 稳定（同 view_player_id 连续出现——由 tracker 连续帧隐含）；
+        4. 观测连续 reanchor_frames 帧在运动连续邻域（帧间位移 < reanchor_max_step_ft）；
+        5. 无歧义：观测对 historical 的 residual 显著小于对其它 eligible global 的 residual
+           （margin = reanchor_ambiguity_margin_ft）。
+
+        本方法只做决策并产出 AssociationUpdate(reanchor=True)，MUST NOT 直接
+        reseed/absorb（state update owner 唯一 = MultiViewJointRun）。
+        """
+        key = (obs.view_id, self.observation_key(obs))
+        obs_xy = (obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0)
+        # 条件 2：risk 窗口
+        if not self.registry.in_risk_window(historical, now_tick=tick):
+            return False
+        # 条件 4：运动连续邻域
+        prev = self._reanchor_tracker.get(key)
+        if prev is not None:
+            prev_count, prev_xy = prev
+            if _dist(obs_xy, prev_xy) > self.reanchor_max_step_ft:
+                self._reanchor_tracker[key] = (1, obs_xy)  # 位移过大 → 重新计数
+                return False
+            count = prev_count + 1
+        else:
+            count = 1
+        # 条件 5：无歧义（对其它 association-eligible global 的 residual 比较）
+        pred_hist = self.registry.predict_for(historical, timestamp_s)
+        r_hist = _dist(obs_xy, (pred_hist[0], pred_hist[1])) if pred_hist is not None else float("inf")
+        for gid2, state in self.registry.players.items():
+            if gid2 == historical or not state.association_eligible:
+                continue
+            p2 = self.registry.predict_for(gid2, timestamp_s)
+            if p2 is None:
+                continue
+            r2 = _dist(obs_xy, (p2[0], p2[1]))
+            # 歧义 = 另一 global 与观测也接近（residual 差距在 margin 内，无法区分）→ 不 reanchor
+            if abs(r2 - r_hist) <= self.reanchor_ambiguity_margin_ft:
+                self.diagnostics["reanchor_rejected_ambiguous"] = (
+                    self.diagnostics.get("reanchor_rejected_ambiguous", 0) + 1
+                )
+                self._reanchor_tracker.pop(key, None)
+                self._record_decision(
+                    obs, "rejected", global_id=historical, reason="reanchor_rejected_ambiguous"
+                )
+                return False
+        if count < self.reanchor_frames:
+            self._reanchor_tracker[key] = (count, obs_xy)
+            self.diagnostics["reanchor_pending"] = self.diagnostics.get("reanchor_pending", 0) + 1
+            self._record_decision(obs, "pending", global_id=historical, reason="reanchor_pending")
+            return True
+        # 连续 N 帧达成 → reanchor 决策
+        self._reanchor_tracker.pop(key, None)
+        self.mapping[key] = historical
+        self.diagnostics["reanchor_succeeded"] = self.diagnostics.get("reanchor_succeeded", 0) + 1
+        updates.append(
+            AssociationUpdate(historical, obs.view_id, obs, obs.confidence, reanchor=True)
+        )
+        self._record_decision(obs, "assigned", global_id=historical, reason="reanchor_requested")
+        return True
+
     def _accept_pair(
         self,
         obs: JointObservation,
@@ -580,16 +680,24 @@ class GlobalPlayerAssociator:
         updates.append(AssociationUpdate(gid, obs.view_id, obs, 1.0 / (1.0 + dist), tentative=tentative))
         return True
 
-    @staticmethod
     def fuse_assignments(
+        self,
         updates: list[AssociationUpdate],
         include_tentative: bool = True,
         max_plausible_distance_ft: float = 3.0,
+        predictions: Mapping[str, tuple[float, float, float]] | None = None,
+        residual_margin_ft: float = 2.0,
     ) -> dict[str, tuple[float, float, list[str]]]:
         """按 global 聚合分配到的观测,做置信度加权 canonical 均值融合。
 
         复用 P0 融合数学的 `pair_consistency` 作为冲突门:双视角观测若 inter-view 距离
-        超出 `max_plausible_distance_ft` → 视为 conflict,只保留最高置信度视角。
+        超出 `max_plausible_distance_ft` → 视为 conflict,进入 prediction-aware 仲裁
+        (fix-multiview-reacquire-after-fusion-pollution D1):
+        - 显式计算 r_cam1/r_cam2 (per-view residual to pre-tick prediction)；
+        - 仅一路 plausible → 选该路；两路 plausible 且 |r1-r2| > residual_margin →
+          residual 更小者优先；两路 plausible 且 residual 接近 → intrinsic 仲裁；
+        - 两路都不 plausible → conflict_no_measurement(不产出 fused entry)。
+        raw confidence 不再单独决定 conflict winner(仅作排序证据之一)。
         `include_tentative=True` 时 tentative 单视角也吸收测量(bootstrap 收敛)。
         """
         grouped: dict[str, list[AssociationUpdate]] = {}
@@ -602,20 +710,25 @@ class GlobalPlayerAssociator:
             # P0 quality 复用:pair_consistency 冲突门
             obs_by_view: dict[str, JointObservation] = {u.view_id: u.observation for u in us}
             if len(obs_by_view) >= 2 and "cam_1" in obs_by_view and "cam_2" in obs_by_view:
-                pair = pair_consistency(
+                cam1_xy = (
                     (obs_by_view["cam_1"].canonical_x_ft, obs_by_view["cam_1"].canonical_y_ft)
-                    if obs_by_view["cam_1"].canonical_x_ft is not None else None,
-                    (obs_by_view["cam_2"].canonical_x_ft, obs_by_view["cam_2"].canonical_y_ft)
-                    if obs_by_view["cam_2"].canonical_x_ft is not None else None,
-                    None,
-                    max_plausible_distance_ft,
+                    if obs_by_view["cam_1"].canonical_x_ft is not None else None
                 )
+                cam2_xy = (
+                    (obs_by_view["cam_2"].canonical_x_ft, obs_by_view["cam_2"].canonical_y_ft)
+                    if obs_by_view["cam_2"].canonical_x_ft is not None else None
+                )
+                pair = pair_consistency(cam1_xy, cam2_xy, None, max_plausible_distance_ft)
                 if (
                     pair.inter_view_distance_ft is not None
                     and pair.inter_view_distance_ft > max_plausible_distance_ft
                 ):
-                    # conflict:只保留最高置信度视角,避免两路矛盾位置互相平均
-                    us = [max(us, key=lambda u: u.observation.confidence)]
+                    # conflict:prediction-aware 仲裁(D1),不再按 raw confidence 选 winner
+                    self.diagnostics["fusion_conflict"] = self.diagnostics.get("fusion_conflict", 0) + 1
+                    self._fuse_conflict_arbitrate(
+                        us, gid, cam1_xy, cam2_xy, predictions, max_plausible_distance_ft,
+                        residual_margin_ft,
+                    )
             wsum = 0.0
             wx = 0.0
             wy = 0.0
@@ -627,3 +740,110 @@ class GlobalPlayerAssociator:
             if wsum > 0:
                 fused[gid] = (wx / wsum, wy / wsum, [u.view_id for u in us])
         return fused
+
+    def _fuse_conflict_arbitrate(
+        self,
+        us: list[AssociationUpdate],
+        gid: str,
+        cam1_xy: tuple[float, float] | None,
+        cam2_xy: tuple[float, float] | None,
+        predictions: Mapping[str, tuple[float, float, float]] | None,
+        max_plausible_distance_ft: float,
+        residual_margin_ft: float,
+    ) -> None:
+        """冲突仲裁(D1):显式 per-view residual 决策,修改 `us` 为仲裁后保留的观测列表。
+
+        仲裁依据为 pre-tick prediction(不得包含当前 tick 已吸收状态)。prediction 缺失时
+        回退到 raw confidence(保守兼容既有行为)。
+        """
+        pred = (predictions or {}).get(gid) if predictions else None
+        if pred is None or cam1_xy is None or cam2_xy is None:
+            # 无 prediction 可仲裁:回退 raw confidence(不新增 diagnostics 承诺)
+            us[:] = [max(us, key=lambda u: u.observation.confidence)]
+            return
+
+        pred_xy = (pred[0], pred[1])
+        unc = pred[2] if len(pred) >= 3 else 1.0
+        gate = min(self.max_reacquire_gate_ft, self.base_gate_ft + self.uncertainty_scale * unc)
+        r1 = _dist(cam1_xy, pred_xy)
+        r2 = _dist(cam2_xy, pred_xy)
+        p1 = r1 <= gate
+        p2 = r2 <= gate
+
+        def _pick(view_id: str, reason: str) -> None:
+            chosen = [u for u in us if u.view_id == view_id]
+            if chosen:
+                us[:] = chosen
+            key = f"fusion_conflict_{'cam1' if view_id == 'cam_1' else 'cam2' if view_id == 'cam_2' else view_id}_selected"
+            self.diagnostics[key] = self.diagnostics.get(key, 0) + 1
+            self._record_fusion_decision(
+                gid, cam1_xy, cam2_xy, r1, r2, gate, view_id, reason,
+            )
+
+        if p1 and not p2:
+            _pick("cam_1", "only_cam1_plausible")
+        elif p2 and not p1:
+            _pick("cam_2", "only_cam2_plausible")
+        elif p1 and p2:
+            if abs(r1 - r2) > residual_margin_ft:
+                # residual 主导
+                _pick("cam_1" if r1 < r2 else "cam_2", "residual_dominates")
+            else:
+                # residual 接近 → intrinsic 仲裁
+                q1 = _intrinsic_of(us, "cam_1")
+                q2 = _intrinsic_of(us, "cam_2")
+                if q1 is not None and q2 is not None and abs(q1 - q2) > 0.05:
+                    _pick("cam_1" if q1 > q2 else "cam_2", "intrinsic_arbitrated")
+                else:
+                    # quality 仍接近 → continuity/binding tie-break(保留 incumbent)
+                    incumbent = {u.view_id: u for u in us}
+                    bound = [u for u in us if self.mapping.get(self.mapping_key(u.observation)) == gid]
+                    if bound:
+                        us[:] = [bound[0]]
+                        self.diagnostics["fusion_conflict_prediction_selected"] = (
+                            self.diagnostics.get("fusion_conflict_prediction_selected", 0) + 1
+                        )
+                        self._record_fusion_decision(
+                            gid, cam1_xy, cam2_xy, r1, r2, gate, bound[0].view_id, "binding_tie_break",
+                        )
+                    else:
+                        # 无 binding 偏好:默认置信度(证据均已 plausible,影响小)
+                        us[:] = [max(us, key=lambda u: u.observation.confidence)]
+                        self.diagnostics["fusion_conflict_prediction_selected"] = (
+                            self.diagnostics.get("fusion_conflict_prediction_selected", 0) + 1
+                        )
+                        self._record_fusion_decision(
+                            gid, cam1_xy, cam2_xy, r1, r2, gate, us[0].view_id, "confidence_tie_break",
+                        )
+        else:  # 两路都不 plausible
+            us[:] = []
+            self.diagnostics["fusion_conflict_no_measurement"] = (
+                self.diagnostics.get("fusion_conflict_no_measurement", 0) + 1
+            )
+            self._record_fusion_decision(
+                gid, cam1_xy, cam2_xy, r1, r2, gate, None, "conflict_no_measurement",
+            )
+
+    def _record_fusion_decision(
+        self,
+        gid: str,
+        cam1_xy: tuple[float, float] | None,
+        cam2_xy: tuple[float, float] | None,
+        r1: float,
+        r2: float,
+        gate: float,
+        selected_source: str | None,
+        reason: str,
+    ) -> None:
+        """结构化 conflict 决策明细(D4),供 fused_diagnostics 消费。"""
+        decision = {
+            "global_player_id": gid,
+            "cam1_xy": cam1_xy,
+            "cam2_xy": cam2_xy,
+            "r_cam1": round(r1, 3),
+            "r_cam2": round(r2, 3),
+            "gate": round(gate, 3),
+            "selected_source": selected_source,
+            "reason": reason,
+        }
+        self.last_tick_fusion_decisions.append(decision)

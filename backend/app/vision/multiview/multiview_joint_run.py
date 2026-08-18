@@ -455,7 +455,10 @@ class MultiViewJointRun:
 
             # ---- tick barrier:两路完成后才更新 global ----
             updates = self.associator.process_tick(all_obs, timestamp_s, self.orientations, tick=tick_number)
-            fused = self.associator.fuse_assignments(updates, include_tentative=True)
+            # D1:conflict 仲裁使用 pre-tick prediction（tick barrier 前冻结,含 uncertainty）
+            fused = self.associator.fuse_assignments(
+                updates, include_tentative=True, predictions=predictions,
+            )
 
             # ---- available-miss ledger（顺序冻结：association → ledger →
             #      display diagnostics → fusion/debug）----
@@ -532,7 +535,18 @@ class MultiViewJointRun:
                 )
 
             for gid, (x, y, views) in fused.items():
-                self.registry.absorb_measurement(gid, x, y, timestamp_s)
+                # D3:reanchor update 由 JointRun 唯一执行 reseed（决策与执行分离）
+                reanchor_updates = [u for u in updates if u.global_id == gid and getattr(u, "reanchor", False)]
+                if reanchor_updates:
+                    self.registry.reseed(gid, x, y, timestamp_s, tick=tick_number)
+                    self.counter["reanchor_succeeded"] = self.counter.get("reanchor_succeeded", 0) + 1
+                else:
+                    update_result = self.registry.absorb_measurement(gid, x, y, timestamp_s, tick=tick_number)
+                    if not update_result.accepted:
+                        # D2:innovation guard 拒绝 → 计数（associator.diagnostics 之外的 estimator 侧事件）
+                        self.counter["measurement_innovation_rejected"] = (
+                            self.counter.get("measurement_innovation_rejected", 0) + 1
+                        )
                 gid_updates = [u for u in updates if u.global_id == gid and u.view_id in views]
                 if len(views) >= 2 and all(u.observation.detection_origin == "base" for u in gid_updates):
                     self.registry.record_dual_consistent(gid)
@@ -611,6 +625,13 @@ class MultiViewJointRun:
                             authoritative_joint_eligible=tick_authoritative,
                         )
                     )
+
+            # D2:conflict_no_measurement → 标记 estimator 风险（供 D3 reanchor 决策查询）
+            for fusion_decision in getattr(self.associator, "last_tick_fusion_decisions", []):
+                if fusion_decision.get("reason") == "conflict_no_measurement":
+                    gid = fusion_decision.get("global_player_id")
+                    if gid is not None:
+                        self.registry.mark_state_risk(gid, "conflict_no_measurement", tick=tick_number)
 
             if self.debug_trace_enabled:
                 self._debug_ticks.append(
@@ -752,6 +773,9 @@ class MultiViewJointRun:
             "p1_online_recovery_config": self.recovery_config.snapshot(),
             "recovery_funnel": dict(self.recovery_funnel),
             "association_counters": dict(getattr(self.associator, "diagnostics", {})),
+            # fix-multiview-reacquire-after-fusion-pollution：joint 侧 estimator/reanchor 计数
+            # （D2 innovation guard 拒绝、D3 reanchor 执行），与 association_counters 分层。
+            "joint_counters": dict(self.counter),
             # global-player-roster.v1 快照（stabilize-joint-global-player-roster）：
             # reference view binding 决定 canonical Player_N（display anchor）
             "roster": [
