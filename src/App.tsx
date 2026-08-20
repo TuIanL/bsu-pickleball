@@ -16,11 +16,17 @@ function App() {
   const navigate = useCallback((path: NavigatePath, options: NavigateOptions = {}) => {
     const url = new URL(path, window.location.origin);
     const nextRoute = parseLocation(url.pathname, url.search);
-    const nextHref = `${url.pathname}${url.search}${url.hash}`;
-    if (options.replace) {
-      window.history.replaceState({}, "", nextHref);
+    let resolvedPath = url.pathname;
+    let resolvedSearch = url.search;
+    // D10：/workspace canonical redirect 到 /library（replaceState），地址栏收敛为 /library
+    if (nextRoute.name === "library" && (url.pathname === "/workspace")) {
+      resolvedPath = "/library";
+    }
+    const resolvedHref = `${resolvedPath}${resolvedSearch}${url.hash}`;
+    if (options.replace || resolvedPath !== url.pathname) {
+      window.history.replaceState({}, "", resolvedHref);
     } else {
-      window.history.pushState({}, "", nextHref);
+      window.history.pushState({}, "", resolvedHref);
     }
     setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: "smooth" });

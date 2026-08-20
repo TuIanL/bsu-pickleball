@@ -20,6 +20,8 @@ import type {
   StructuredVisualizationData,
   VisualizationManifest,
   VideoUploadResponse,
+  VideoCatalogResponse,
+  VideoMetadata,
   RawPlayerRenderTrajectory,
   CodingActionRequest,
   CodingActionResponse,
@@ -526,6 +528,15 @@ export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
   const body = new FormData();
   body.append("file", file);
   return requestForm<VideoUploadResponse>("/api/videos/upload", body);
+}
+
+/**
+ * 只读枚举全部已注册视频（Library 的 upload 素材目录）。
+ * 供 libraryAdapter 构建 upload LibraryItem，前端不依赖 listAnalysisJobs 反推有哪些上传视频。
+ */
+export async function listVideosCatalog(): Promise<VideoMetadata[]> {
+  const response = await requestJson<VideoCatalogResponse>("/api/videos");
+  return response.videos ?? [];
 }
 
 export async function createManualCalibration(

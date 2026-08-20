@@ -12,6 +12,8 @@ const routeMeta = {
   landing: { shellMode: "landing", navigationSection: null },
   upload: { shellMode: "landing", navigationSection: null },
   workspace: { shellMode: "standard", navigationSection: "capture" },
+  library: { shellMode: "standard", navigationSection: "library" },
+  "library-item": { shellMode: "standard", navigationSection: "library" },
   tasks: { shellMode: "standard", navigationSection: "analysis" },
   captureHome: { shellMode: "standard", navigationSection: "videos" },
   captureNew: { shellMode: "standard", navigationSection: "capture" },
@@ -41,7 +43,25 @@ export function parsePath(pathname: string): RouteState {
   }
 
   if (pathname === "/workspace") {
-    return { name: "workspace", path: "/workspace", ...routeMeta.workspace };
+    // D10：工作台保留路由但 canonical redirect 到比赛库（App 层负责 replaceState）
+    return { name: "library", path: "/library", ...routeMeta.library };
+  }
+
+  if (pathname === "/library") {
+    return { name: "library", path: "/library", ...routeMeta.library };
+  }
+
+  const libraryItemMatch = pathname.match(/^\/library\/(upload|recording|sync_recording)\/(.+)$/);
+  if (libraryItemMatch) {
+    const [, kind, sourceId] = libraryItemMatch;
+    return {
+      name: "library-item",
+      path: `/library/${kind}/${sourceId}`,
+      kind: kind as "upload" | "recording" | "sync_recording",
+      sourceId,
+      view: "overview",
+      ...routeMeta["library-item"],
+    };
   }
 
   if (pathname === "/sync-calibration") {
@@ -270,6 +290,14 @@ export function parseLocation(pathname: string, search: string): RouteState {
       }
     }
     return route;
+  }
+
+  if (route.name === "library-item") {
+    const params = new URLSearchParams(search);
+    const rawView = params.get("view");
+    const validViews = ["overview", "video", "analysis", "trajectory", "report", "segments", "technical"];
+    const view = rawView && validViews.includes(rawView) ? rawView : "overview";
+    return { ...route, view };
   }
 
   return route;

@@ -1,12 +1,9 @@
 import {
   Activity,
   AlertTriangle,
-  FileText,
-  LayoutDashboard,
+  Library,
   Loader2,
   Monitor,
-  PlaySquare,
-  Settings,
   Square,
   Video,
 } from "lucide-react";
@@ -21,13 +18,11 @@ interface NavItem {
   path: AppPath;
 }
 
+// P3 4.1：一级导航收敛为 Library-first（比赛库 / 现场采集 / 设备管理）
 const navItems: NavItem[] = [
-  { section: "capture", label: "工作台", icon: LayoutDashboard, path: "/workspace" as AppPath },
-  { section: "videos", label: "视频管理", icon: Video, path: "/capture" },
-  { section: "analysis", label: "分析任务", icon: PlaySquare, path: "/analysis/tasks" },
-  { section: "reports", label: "报告中心", icon: FileText, path: "/reports/movement" },
+  { section: "library", label: "比赛库", icon: Library, path: "/library" },
+  { section: "capture", label: "现场采集", icon: Video, path: "/capture" },
   { section: "devices", label: "设备管理", icon: Monitor, path: "/camera" },
-  { section: "settings", label: "设置", icon: Settings, path: "/training" },
 ];
 
 interface AppSidebarProps {

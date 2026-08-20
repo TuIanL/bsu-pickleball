@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
 from app.schemas.video import (
+    VideoCatalogResponse,
     VideoMetadata,
     VideoTimingMaterializeResponse,
     VideoTimingResponse,
@@ -81,6 +82,20 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
 
     # 成功则把视频信息返回给前端
     return VideoUploadResponse(video=video)
+
+
+# 定义一个"查询视频目录"的接口
+# GET /api/videos：只读枚举全部已注册视频元数据，供 Library 的 upload 素材目录使用。
+# 不新建数据表、不创建新实体，仅把现有 video registry 暴露为可枚举 catalog。
+@router.get("", response_model=VideoCatalogResponse)
+def list_videos_catalog() -> VideoCatalogResponse:
+    """
+    列出所有已注册视频（只读）
+
+    返回一个视频元数据列表。该接口供前端 Library 构建 upload 类型素材的独立资产目录，
+    前端不再需要从分析任务列表反推「有哪些上传视频」。
+    """
+    return VideoCatalogResponse(videos=video_service.list_videos())
 
 
 # 定义一个"查询视频元数据"的接口

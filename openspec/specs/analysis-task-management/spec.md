@@ -19,29 +19,6 @@ TBD - created by archiving change rework-video-analysis-task-flow. Update Purpos
 - **THEN** 返回结果 SHALL 额外包含 internal child
 - **AND** 该模式 SHALL 仅用于开发/诊断界面
 
-### Requirement: Analysis task management page
-
-任务管理页 MUST 对每个双摄分析只展示一张 Parent 卡片，卡片标注「双摄协同分析」与 A/B/融合子状态，不再出现两张无关联的机位任务卡片。双摄任务卡片 SHALL 在 Parent、A 机位和 B 机位之间建立明确的任务分组；每组默认展示最新公开任务，并提供历史任务入口。双摄任务卡片的 CTA 按当前 Parent 状态区分：完成 → 查看报告；失败/取消 → 提供「重新双摄分析」入口；运行中 → 展示进度。
-
-#### Scenario: 双摄任务单卡片
-
-- **WHEN** 任务列表包含一个或多个属于同一双摄录制的 multiview Parent
-- **THEN** 该录制 SHALL 以一张卡片展示最新 Parent
-- **AND** 卡片 SHALL 含「双摄协同分析」标题、A 机位/B 机位/多视角融合子状态与数据来源
-- **AND** 其 internal child SHALL 不单独出现在列表中
-
-#### Scenario: 多个 Parent 保留历史
-
-- **WHEN** 同一双摄录制存在多个公开 multiview Parent
-- **THEN** 卡片 SHALL 默认展示最近更新的 Parent
-- **AND** SHALL 提供展开入口查看其他 Parent 任务
-
-#### Scenario: 失败/取消的 Parent 可重新分析
-
-- **WHEN** 当前 multiview Parent 状态为 `failed` 或 `canceled`
-- **THEN** 录制卡片 SHALL 提供「重新双摄分析」入口（导航到 `MultiViewAnalysisSetupPage`）
-- **AND** SHALL NOT 误显示为「分析中」
-
 ### Requirement: Task status actions
 The system SHALL expose task actions according to each analysis task's current status, including cancellation for active tasks and delete actions for eligible historical tasks.
 
@@ -194,30 +171,6 @@ The system SHALL provide clear feedback for cancellation actions from task manag
 - **THEN** 主视图 SHALL 展示该类型最近更新任务的状态
 - **AND** SHALL 显示历史任务数量与展开入口
 - **AND** SHALL 不将旧任务静默覆盖或丢弃
-
-### Requirement: Terminal task bulk cleanup
-The system SHALL provide a one-click action on the analysis task management page that deletes all failed and canceled analysis tasks in the upload-task list, reusing the existing batch deletion path.
-
-#### Scenario: User clears failed and canceled tasks
-- **WHEN** the upload-task list contains at least one task with status `failed` or `canceled`
-- **THEN** the clear control is enabled and, after the user confirms, the frontend submits the eligible task ids to the existing batch delete endpoint
-- **AND** the frontend reports per-task deletion results using the existing delete feedback summary
-
-#### Scenario: No terminal tasks exist
-- **WHEN** the upload-task list contains no tasks with status `failed` or `canceled`
-- **THEN** the clear control is disabled or performs no action
-
-#### Scenario: User cancels cleanup confirmation
-- **WHEN** the user dismisses the cleanup confirmation dialog
-- **THEN** no backend deletion request is made and the task list remains unchanged
-
-#### Scenario: Cleanup has partial results
-- **WHEN** a cleanup request includes tasks that are missing or blocked
-- **THEN** the frontend reports which tasks were deleted and which require attention
-
-#### Scenario: Cleanup keeps the local fallback store consistent
-- **WHEN** a cleanup succeeds through the backend
-- **THEN** the frontend removes the same demo tasks from the browser local fallback store so the local list stays consistent
 
 ### Requirement: Analysis task list sorting
 The system SHALL allow users to sort the upload-task list by creation time or update time, in ascending or descending order, on the analysis task management page.
@@ -502,4 +455,36 @@ The system SHALL present active analysis task progress on task-management cards 
 #### Scenario: Failed task card de-emphasizes progress
 - **WHEN** a task on the task-management page has status `failed`
 - **THEN** the task card shows the failure context as the primary message and does not show an active progress bar
+
+### Requirement: 工程任务控制台入口
+分析任务管理能力 SHALL 作为 Engineering Task Console 保留，但从用户一级导航移除，通过工程/开发者模式进入。
+
+#### Scenario: 工程入口可达
+- **WHEN** 用户处于工程模式并进入分析任务
+- **THEN** 系统 SHALL 呈现完整的 task management 能力（Parent/child 可见、进度、stage、cancel、delete、batch delete、retry、历史任务、失败状态、internal visibility）
+
+#### Scenario: 普通用户默认不可达
+- **WHEN** 普通用户在默认导航浏览
+- **THEN** 分析任务管理 SHALL 不作为一级入口出现
+
+### Requirement: 用户层消费 LibraryItem 而非后台 Job
+单摄/双摄/上传的分析任务 SHALL 通过 LibraryItem 与 LibraryItemWorkspace 呈现，而不要求普通用户直接面对 AnalysisJob。
+
+#### Scenario: 上传任务以素材呈现
+- **WHEN** 一个上传任务存在
+- **THEN** 用户层 SHALL 以一个 LibraryItem（upload）呈现，其分析状态作为该素材的生命周期
+- **AND** 用户不直接首层面对 AnalysisJobRecord
+
+### Requirement: 删除 AnalysisJob 不删除 Library 源资产
+Engineering Console 删除 AnalysisJob SHALL 只删除 job 及其 artifacts，不得连带删除 Library source video / RecordingSession；源资产删除为经 LibraryItem 显式触发的独立动作。
+
+#### Scenario: 删除最后的 Job 保留上传源视频
+- **WHEN** 用户删除最后一个引用某 upload video 的 AnalysisJob
+- **THEN** 系统 SHALL 仅删除该 job 及其产物
+- **AND** SHALL NOT 删除 source video，`LibraryItem(upload)` 继续存在
+
+#### Scenario: 录制/双摄资产不受 Job 删除影响
+- **WHEN** 用户删除某录制派生的分析任务
+- **THEN** 系统 SHALL 仅删除 job 产物
+- **AND** RecordingSession / SyncRecordingSession（MediaAsset）SHALL 保留，LibraryItem 卡不消失
 

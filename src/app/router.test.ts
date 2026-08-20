@@ -28,7 +28,18 @@ describe("parsePath", () => {
       },
     },
     // Workspace
-    { pathname: "/workspace", expected: { name: "workspace", path: "/workspace", shellMode: "standard", navigationSection: "capture" } },
+    { pathname: "/workspace", expected: { name: "library", path: "/library", shellMode: "standard", navigationSection: "library" } },
+    // Library
+    { pathname: "/library", expected: { name: "library", path: "/library", shellMode: "standard", navigationSection: "library" } },
+    {
+      pathname: "/library/sync_recording/sync-1",
+      expected: { name: "library-item", path: "/library/sync_recording/sync-1", kind: "sync_recording", sourceId: "sync-1", view: "overview", shellMode: "standard", navigationSection: "library" },
+    },
+    {
+      pathname: "/library/upload/vid-9",
+      expected: { name: "library-item", path: "/library/upload/vid-9", kind: "upload", sourceId: "vid-9", view: "overview", shellMode: "standard", navigationSection: "library" },
+    },
+    { pathname: "/library/recording/rec-2", expected: { name: "library-item", path: "/library/recording/rec-2", kind: "recording", sourceId: "rec-2", view: "overview", shellMode: "standard", navigationSection: "library" } },
     // Analysis routes
     { pathname: "/analysis/tasks", expected: { name: "analysis-tasks", path: "/analysis/tasks", shellMode: "standard", navigationSection: "analysis" } },
     { pathname: "/analysis/job-1", expected: { name: "analysis-job", path: "/analysis/job-1", jobId: "job-1", shellMode: "standard", navigationSection: "analysis" } },
@@ -97,6 +108,23 @@ describe("parseLocation", () => {
   it("hands normal routes through to parsePath ignoring search", () => {
     const result = parseLocation("/tasks", "?foo=bar");
     expect(result).toEqual({ name: "tasks", path: "/tasks", shellMode: "standard", navigationSection: "analysis" });
+  });
+
+  it("parses library-item view from query with fallback", () => {
+    expect(parseLocation("/library/recording/rec-1", "?view=report")).toMatchObject({
+      name: "library-item",
+      kind: "recording",
+      sourceId: "rec-1",
+      view: "report",
+    });
+    expect(parseLocation("/library/recording/rec-1", "?view=invalid")).toMatchObject({
+      name: "library-item",
+      view: "overview",
+    });
+    expect(parseLocation("/library/upload/v1", "")).toMatchObject({
+      name: "library-item",
+      view: "overview",
+    });
   });
 
   it("restores the dual-camera task tab and session from the URL", () => {

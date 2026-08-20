@@ -859,10 +859,16 @@ export interface VideoMetadata {
   size_bytes: number;
   path: string;
   uploaded_at: string;
+  /** 视频来源：upload=用户上传（Library upload 素材），也可能是 recording 等录制注册视频 */
+  source?: string;
 }
 
 export interface VideoUploadResponse {
   video: VideoMetadata;
+}
+
+export interface VideoCatalogResponse {
+  videos: VideoMetadata[];
 }
 
 export interface CalibrationPoint {

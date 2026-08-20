@@ -3,22 +3,6 @@
 ## Purpose
 TBD - created by archiving change group-recorded-tasks-by-field-session. Update Purpose after archive.
 ## Requirements
-### Requirement: 按采集任务分组展示录制视频任务
-系统 SHALL 在「分析任务」页面的「录制视频任务」Tab 中，按 `FieldSession`（采集任务）对 `RecordingSession` 进行分组展示：先呈现采集任务大分组卡，再在其下分类展示属于该采集任务的录制任务条。
-
-#### Scenario: 录制归属于某采集任务
-- **WHEN** 一条 `RecordingSession` 的 `field_session_id` 指向一个已存在的 `FieldSession`
-- **THEN** 系统 SHALL 将该录制任务条渲染在对应采集任务分组卡之下
-- **AND** 该分组卡的录制数徽标 SHALL 随之增加
-
-#### Scenario: 进入录制 Tab 加载分组骨架
-- **WHEN** 用户切换到「录制视频任务」Tab
-- **THEN** 前端 SHALL 先获取全量 `FieldSession` 列表作为分组骨架，再获取全部 `RecordingSession` 并按 `field_session_id` 分发到对应分组
-
-#### Scenario: 复用既有录制任务条
-- **WHEN** 录制被渲染在分组内
-- **THEN** 系统 SHALL 复用既有的 `RecordingTaskCard`（含播放、开始分析、查看分析结果、删除等动作），不重写其行为
-
 ### Requirement: 采集任务分组卡展现采集上下文
 系统 SHALL 在每组采集任务的大分组卡头部展示足以辨识该采集任务的上下文信息。
 
@@ -85,4 +69,15 @@ TBD - created by archiving change group-recorded-tasks-by-field-session. Update 
 #### Scenario: 统计与分组解耦
 - **WHEN** 用户查看「录制视频任务」Tab
 - **THEN** 顶部统计卡片的数字 SHALL 基于录制全量计算，不受分组展开/收起或分组顺序影响
+
+### Requirement: FieldSession 分组能力迁移至 Library
+`recorded-task-grouping` 中「按 FieldSession 对 RecordingSession 分组」的资产组织能力 SHALL 从任务页迁移到比赛库，作为 Collection / Folder 组织方式，而非继续嵌在「录制视频任务」Tab。
+
+#### Scenario: FieldSession 作为库文件夹
+- **WHEN** 比赛库存在属于同一 FieldSession 的若干 LibraryItem
+- **THEN** 这些素材 SHALL 在该 FieldSession 分组下组织展示
+
+#### Scenario: 分组能力不丢失
+- **WHEN** 用户从比赛库浏览
+- **THEN** FieldSession 分组 SHALL 仍可呈现「8 月 20 日北体训练采集」这类采集批次容器
 

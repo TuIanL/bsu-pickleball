@@ -36,6 +36,12 @@ class VideoUploadResponse(BaseModel):
     video: VideoMetadata
 
 
+class VideoCatalogResponse(BaseModel):
+    """视频目录接口（GET /api/videos）的响应：只读枚举全部已注册视频元数据。"""
+
+    videos: list[VideoMetadata]
+
+
 class VideoReadError(BaseModel):
     """读取视频出错时的统一错误结构。"""
 

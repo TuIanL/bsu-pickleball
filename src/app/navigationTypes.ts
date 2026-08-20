@@ -8,7 +8,8 @@ export type NavigationSection =
   | "analysis"
   | "reports"
   | "devices"
-  | "settings";
+  | "settings"
+  | "library";
 
 export type TaskListSource = "upload" | "recorded" | "sync_recording";
 
@@ -42,6 +43,8 @@ export type AppPath =
   | `/analysis/${string}/trajectory`
   | `/analysis/${string}/multiview`
   | `/analysis/${string}/reports/${ReportType}`
+  | "/library"
+  | `/library/${string}/${string}`
   | "/training"
   | "/hardware"
   | `/reports/${ReportType}`
@@ -79,6 +82,8 @@ export type RouteState =
   | { name: "recording-analyze"; path: `/capture/${string}/analyze`; sessionId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "multiview-setup"; path: `/capture/takes/${string}/analyze`; captureTakeId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "sync-calibration"; path: "/sync-calibration"; captureTakeId: string; returnPath?: NavigatePath; shellMode: "standard"; navigationSection: "analysis" }
-  | { name: "showcase"; path: `/showcase/${string}`; runtimeId: string; shellMode: "landing"; navigationSection: null };
+  | { name: "showcase"; path: `/showcase/${string}`; runtimeId: string; shellMode: "landing"; navigationSection: null }
+  | { name: "library"; path: "/library"; shellMode: "standard"; navigationSection: "library" }
+  | { name: "library-item"; path: `/library/${string}/${string}`; kind: "upload" | "recording" | "sync_recording"; sourceId: string; view: string; shellMode: "standard"; navigationSection: "library" };
 
 export type NavigateFn = (path: NavigatePath, options?: NavigateOptions) => void;
