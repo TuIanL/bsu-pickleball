@@ -213,15 +213,26 @@ class ZoneStat:
 
 @dataclass(frozen=True)
 class ZoneFeedback:
-    """网前控制反馈（等级 + 文案）。"""
+    """网前站位描述性反馈（档位 + 文案）。
 
-    level: str  # excellent / good / insufficient
-    summary: str  # 中文反馈文案
+    add-performance-insights-and-feedback-report：文案只描述站位与 NVZ 占用事实，
+    不表达网前控制能力评价（评价性判断由 Performance Insights Engine 综合推导）。
+    level：near_line（贴近线）/ moderate（适中）/ deep（距线较远）。
+    """
+
+    level: str  # near_line / moderate / deep
+    summary: str  # 中文描述性文案
 
 
 @dataclass(frozen=True)
 class PlayerZoneStats:
-    """单名球员的区域占用统计与网前控制指标。"""
+    """单名球员的区域占用统计与站位指标。
+
+    - nvz_occupancy_rate：canonical 字段——非截击区（NVZ）占用率，纯描述性；
+    - kitchen_control_rate：deprecated alias（与 nvz_occupancy_rate 同值同分母），
+      兼容迁移期保留，下一轮删除；
+    - avg_distance_to_kitchen_line_m：量球员所属半场（own-side）厨房线的时间加权平均距离。
+    """
 
     id: str
     label: str
@@ -229,7 +240,8 @@ class PlayerZoneStats:
     denominator_seconds: float  # 分母：Σ窗口长度 或 总时长
     tracked_seconds: float  # 窗口内实际跟踪到的时间
     data_sufficiency: str  # sufficient / insufficient
-    kitchen_control_rate: float  # kitchen_seconds / denominator_seconds
+    nvz_occupancy_rate: float  # NVZ 占用率（canonical）
+    kitchen_control_rate: float  # deprecated alias：与 nvz_occupancy_rate 同值
     avg_distance_to_kitchen_line_m: float
     zones: list[ZoneStat] = field(default_factory=list)
     feedback: ZoneFeedback | None = None

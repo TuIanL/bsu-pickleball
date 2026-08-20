@@ -28,6 +28,12 @@ class FrameSample:
     timing_authority: str = "source_pts"
     sync_quality: str = "unknown"
     frame: Any | None = None
+    # 锚点区间外对称外推显示（fix-multiview-anchor-span-debug-frame-mapping）。
+    # 仅用于 Debug Replay 可视化，不进入 tracker/fusion：因此不推进 last_consumed 游标。
+    # mapping_mode ∈ {"pre_anchor_extrapolation","post_anchor_extrapolation"}；
+    # extrapolation_distance_ms 为 canonical t 到最近 anchor boundary 的时间差（毫秒）。
+    mapping_mode: str | None = None
+    extrapolation_distance_ms: float | None = None
 
 
 @dataclass
@@ -170,21 +176,27 @@ class CanonicalAnalysisClock:
                     "unavailable_out_of_media_range",
                     "unavailable_selection_error",
                 } else "unavailable_no_sync"
-                # 2026-08-13: 窗口开头（canonical 早于 valid_start，如 clipStart=0）回退到
-                # 有效起点附近的帧，status 标记 fallback_valid_start。fallback 帧不消费 tracker
-                # （MultiViewJointRun 只 step status=available），因此不违反单调不重复不变量；
-                # 其价值是让 debug replay 前段有副摄画面 + 结构化 fallback 状态。
-                fallback = (
-                    self._fallback_valid_start_frame(take_ms)
-                    if status == "unavailable_outside_valid_interval"
-                    else None
-                )
-                if fallback is not None:
-                    views[self.secondary_view_id] = fallback
-                    frame_status[self.secondary_view_id] = "fallback_valid_start"
-                    diag["reason"] = "fallback_valid_start"
-                    diag["fallback_selection_error_ms"] = fallback.selection_error_ms
-                    self._record_status("fallback_valid_start")
+                # 2026-08-19 (fix-multiview-anchor-span-debug-frame-mapping): 锚点区间外不再把
+                # 首个锚点附近帧 clamp 给 debug replay（旧 fallback_valid_start 会冻结前段），
+                # 改用 affine mapping 对称外推选最近真实媒体帧，标记 available_extrapolated。
+                # 该帧只供 Debug Replay 显示，不消费 tracker（不更新 last_consumed 游标），
+                # 因此 MultiViewJointRun 仍因 status != "available" 跳过 perception；映射越出
+                # Cam-2 媒体或 selection error 超限则细分 unavailable，不冒充 available。
+                if status == "unavailable_outside_valid_interval":
+                    ex_frame, ex_status = self._select_extrapolated_display_frame(take_ms)
+                    if ex_frame is not None:
+                        views[self.secondary_view_id] = ex_frame
+                        frame_status[self.secondary_view_id] = ex_status
+                        diag["reason"] = "anchor_span_extrapolation"
+                        diag["mapping_mode"] = ex_frame.mapping_mode
+                        diag["extrapolation_distance_ms"] = ex_frame.extrapolation_distance_ms
+                        diag["display_selection_error_ms"] = ex_frame.selection_error_ms
+                        diag["display_selection_status"] = ex_status
+                    else:
+                        frame_status[self.secondary_view_id] = ex_status
+                        diag["reason"] = ex_status
+                        diag["display_selection_status"] = ex_status
+                    self._record_status(ex_status)
                 else:
                     frame_status[self.secondary_view_id] = status
                     diag["reason"] = status
@@ -199,31 +211,60 @@ class CanonicalAnalysisClock:
             mapping_diagnostics=diag,
         )
 
-    def _fallback_valid_start_frame(self, take_ms: float) -> FrameSample | None:
-        """窗口开头的回退帧：把目标时间钳制到 valid_start 并映射最近的 secondary 帧。
+    def _select_extrapolated_display_frame(self, take_ms: float) -> tuple[FrameSample | None, str]:
+        """锚点区间外对称外推显示帧（替代旧 fallback clamp）。
 
-        仅在 canonical 时间早于有效区间起点（selection 报 unavailable_outside_valid_interval）
-        时被调用；media 范围外或无法映射时返回 None（调用方保持细分不可用）。
+        仅用于 Debug Replay 可视化。对锚点区间外（canonical 早于/晚于 anchor span）的 tick，
+        直接用 affine mapping 计算 Cam-2 本地时间（**不钳制**到 valid_start），并选最近真实媒体帧：
+          - 映射越出 Cam-2 媒体 PTS 范围 → ``(None, "unavailable_out_of_media_range")``
+          - 最近帧 selection error 超过质量门 → ``(None, "unavailable_selection_error")``
+          - 否则 → ``(FrameSample, "available_extrapolated")``
+
+        pre/post 两端对称：低侧（``canonical < valid_start``）与高侧（``canonical > valid_end``）
+        走同一外推路径；只有真正越出媒体才 unavailable。返回的 FrameSample 不更新
+        ``last_consumed_source_frame_index``（由 ``tick`` 保证），因此不喂给有状态 tracker。
         """
         calibration = self._sec_calibration
-        if calibration is None or calibration.valid_start_seconds is None or not self._sec_frames:
-            return None
-        seed_target = max(take_ms / 1000.0, calibration.valid_start_seconds)
+        if calibration is None or not self._sec_frames:
+            return None, "unavailable_no_sync"
+        canonical_seconds = take_ms / 1000.0
         try:
-            local = map_reference_time(calibration, seed_target)
-        except Exception:  # noqa: BLE001 - 映射异常时放弃回退
-            return None
+            local = map_reference_time(calibration, canonical_seconds)
+        except Exception:  # noqa: BLE001 - 映射异常时放弃外推
+            return None, "unavailable_out_of_media_range"
         ordered = sorted(self._sec_frames, key=lambda frame: frame.pts_seconds)
         if local < ordered[0].pts_seconds or local > ordered[-1].pts_seconds:
-            return None
+            return None, "unavailable_out_of_media_range"
         nearest = min(ordered, key=lambda frame: abs(frame.pts_seconds - local))
         error_seconds = nearest.pts_seconds - local
-        return FrameSample(
-            source_frame_index=nearest.frame_index,
-            source_timestamp_ms=nearest.pts_seconds * 1000.0,
-            mapped_take_timestamp_ms=take_ms,
-            selection_error_ms=error_seconds * 1000.0,
-            timing_authority=self._secondary_timing_authority,
-            sync_quality=self._sync_quality,
-            frame=self._frame_provider(nearest.frame_index) if self._frame_provider else None,
+        # 复用 authoritative 质量门：外推只放宽 anchor-span authority gate，
+        # 不放松 frame-selection 质量（selection error 超限仍细分 unavailable）。
+        if abs(error_seconds) > self._max_pairing_error_s:
+            return None, "unavailable_selection_error"
+        # 外推方向 + 到最近 anchor boundary 的时间差（毫秒）。
+        valid_start = calibration.valid_start_seconds
+        valid_end = calibration.valid_end_seconds
+        if valid_start is not None and canonical_seconds < valid_start:
+            mode = "pre_anchor_extrapolation"
+            distance_s = valid_start - canonical_seconds
+        elif valid_end is not None and canonical_seconds > valid_end:
+            mode = "post_anchor_extrapolation"
+            distance_s = canonical_seconds - valid_end
+        else:
+            # 防御分支：调用前提为 unavailable_outside_valid_interval，正常不会到达。
+            mode = "pre_anchor_extrapolation"
+            distance_s = abs(canonical_seconds - (valid_start or canonical_seconds))
+        return (
+            FrameSample(
+                source_frame_index=nearest.frame_index,
+                source_timestamp_ms=nearest.pts_seconds * 1000.0,
+                mapped_take_timestamp_ms=take_ms,
+                selection_error_ms=error_seconds * 1000.0,
+                timing_authority=self._secondary_timing_authority,
+                sync_quality=self._sync_quality,
+                frame=self._frame_provider(nearest.frame_index) if self._frame_provider else None,
+                mapping_mode=mode,
+                extrapolation_distance_ms=distance_s * 1000.0,
+            ),
+            "available_extrapolated",
         )

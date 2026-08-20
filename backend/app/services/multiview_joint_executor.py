@@ -12,6 +12,7 @@ Parent 被 claim 后:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import replace
 from datetime import UTC, datetime
 from collections.abc import Mapping
@@ -647,6 +648,42 @@ class MultiViewJointExecutor:
                 setattr(compose_output, "overlay_context", overlay_context)
             except Exception as exc:  # noqa: BLE001 - overlay 上下文缺失不中断 compose
                 logger.warning("build overlay context failed (fused overlay may be unavailable): %s", exc)
+
+            # ---- Bootstrap 启动窗口展示回填（fix-joint-bootstrap-visual-gap）----
+            # display-only 旁路产物：把 reference view 已真实检测、但 bootstrap 窗口内未被
+            # display 显示的观测按最终锁定身份 retrospective 填充。受开关控制（默认开），
+            # 关闭即一键回滚，无数据迁移。失败不中断主流程。
+            try:
+                if os.environ.get("ENABLE_BOOTSTRAP_DISPLAY_BACKFILL", "1").lower() in {"1", "true", "yes"}:
+                    from app.vision.multiview.bootstrap_display_backfill import (
+                        BootstrapDisplayBackfillBuilder,
+                    )
+
+                    ref_runtime = runtimes.get(reference_view_id)
+                    if ref_runtime is not None and ref_runtime.tracking_session is not None:
+                        ref_snapshot = ref_runtime.tracking_session.snapshot()
+                        ref_orientation = orientations.get(reference_view_id)
+                        backfill_result = BootstrapDisplayBackfillBuilder().build(
+                            initial_lock_assignments=ref_snapshot.initial_lock_assignments,
+                            reference_positions=ref_snapshot.positions,
+                            reference_orientation=ref_orientation,
+                            reference_view_id=reference_view_id,
+                            frame_stride=int(parent.frameStride or 1),
+                            fps=float(fps),
+                        )
+                        setattr(
+                            compose_output,
+                            "bootstrap_display_backfill",
+                            backfill_result.observations,
+                        )
+                        try:
+                            bb_path = storage.bootstrap_display_backfill_json_path(parent.id)
+                            bb_path.parent.mkdir(parents=True, exist_ok=True)
+                            storage.write_json_atomic(bb_path, backfill_result.to_payload())
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("bootstrap_display_backfill 落盘失败（不影响主流程）：%s", exc)
+            except Exception as exc:  # noqa: BLE001 - 回填失败不中断 compose
+                logger.warning("bootstrap display backfill 构建失败（不影响主流程）：%s", exc)
             composer = MultiViewResultComposer(storage)
             result = composer.compose_joint_result(
                 job=parent, joint_output=compose_output, reference_view_id=reference_view_id,

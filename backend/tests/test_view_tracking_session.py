@@ -27,7 +27,7 @@ from app.vision.player_tracking_engine.person_detector import (
 )
 from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
 from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
-from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
+from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig, PlayerLockUpdate
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
 from app.vision.player_tracking_engine.view_tracking_session import (
@@ -163,6 +163,43 @@ def test_person_detector_batch_region_results_preserve_roi_coordinates(monkeypat
 def test_empty_person_detector_detect_regions_returns_empty():
     detector = EmptyPersonDetector()
     assert detector.detect_regions(None, [(0, 0, 100, 100)]) == []
+
+
+def test_step_emits_disjoint_candidate_detections_under_lock_only():
+    """debug-only 候选层：formal(frame_detections) 与 candidate_detections 同 tick 集合互斥。
+
+    构造 track A(1) 已 lock eligible / track B(2) 存活未锁定：formal 仅含 A、
+    candidate 仅含 B 且不带 player_id（候选无 formal 身份）。
+    """
+
+    class StubLockManager:
+        """固定 eligible={1}：确定性复现"部分 track 已锁定、部分未锁定"。"""
+
+        _initial_lock_assignments: dict = {}
+
+        def update(self, **_kwargs):
+            return PlayerLockUpdate(eligible_track_ids={1})
+
+    config = _make_config()
+    config.eligibility_policy = "lock_only"
+    session = build_view_tracking_session(
+        detector=ScriptedDetector({0: [_det([280, 150, 310, 300]), _det([340, 160, 370, 350])]}),
+        homography=SCALE_HOMOGRAPHY,
+        roi_artifact=_make_roi_artifact(),
+        config=config,
+    )
+    session.player_lock_manager = StubLockManager()
+
+    result = session.step(object(), frame_index=0, timestamp=0.0)
+
+    formal_ids = {int(d.track_id) for d in result.frame_detections}
+    candidate_ids = {int(d.track_id) for d in result.candidate_detections}
+    assert formal_ids == {1}
+    assert candidate_ids == {2}
+    # 硬不变量：同一 tick 内 formal 与 candidate 集合互斥
+    assert formal_ids & candidate_ids == set()
+    # 候选不带 formal 身份
+    assert all(d.player_id is None for d in result.candidate_detections)
 
 
 def test_non_empty_guidance_runs_joint_path_but_default_path_stays_legacy():

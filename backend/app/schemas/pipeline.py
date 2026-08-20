@@ -91,6 +91,11 @@ class AnalysisArtifacts(BaseModel):
     player_render_trajectory_url: str | None = None
     player_render_trajectory_status: str | None = None
     player_render_trajectory_detail: str | None = None
+    # performance-insights.v1（post-pipeline 洞察产物，Insight Engine 写入并支持独立再生成）
+    performance_insights_json_path: str | None = None
+    performance_insights_url: str | None = None
+    performance_insights_status: str | None = None
+    performance_insights_detail: str | None = None
     # global-player-roster.v1（joint 模式，诊断 / 映射 contract，stabilize-joint-global-player-roster）
     roster_manifest_json_path: str | None = None
     roster_url: str | None = None

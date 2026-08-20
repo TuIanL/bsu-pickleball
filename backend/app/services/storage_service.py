@@ -285,6 +285,10 @@ class StorageService:
         # player-display-diagnostics.v1（joint 模式逐球员逐 stage 显示漏斗）
         return self._job_artifact_root(job_id) / "player_display_diagnostics.json"
 
+    def bootstrap_display_backfill_json_path(self, job_id: str) -> Path:
+        # bootstrap_display_backfill.v1（joint 启动阶段展示回填，display-only 旁路产物）
+        return self._job_artifact_root(job_id) / "bootstrap_display_backfill.json"
+
     def heatmaps_manifest_json_path(self, job_id: str) -> Path:
         # 热力图清单（索引）JSON
         return self.heatmaps_dir(job_id) / "manifest.json"
@@ -324,6 +328,10 @@ class StorageService:
     def player_trajectory_json_path(self, job_id: str) -> Path:
         # 球员轨迹 JSON
         return self._job_artifact_root(job_id) / "players_trajectory.json"
+
+    def performance_insights_json_path(self, job_id: str) -> Path:
+        # performance-insights.v1（表现洞察事实层，post-pipeline 可独立再生成）
+        return self._job_artifact_root(job_id) / "performance_insights.json"
 
     def player_trajectory_csv_path(self, job_id: str) -> Path:
         # 球员轨迹 CSV（方便用 Excel 打开）

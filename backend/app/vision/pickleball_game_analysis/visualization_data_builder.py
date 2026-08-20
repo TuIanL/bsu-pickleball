@@ -278,6 +278,8 @@ def _structured_to_dict(data: StructuredVisualizationData) -> dict:
                     "denominator_seconds": player.denominator_seconds,
                     "tracked_seconds": player.tracked_seconds,
                     "data_sufficiency": player.data_sufficiency,
+                    "nvz_occupancy_rate": player.nvz_occupancy_rate,
+                    # deprecated alias（与 nvz_occupancy_rate 同值同分母，兼容迁移期保留）
                     "kitchen_control_rate": player.kitchen_control_rate,
                     "avg_distance_to_kitchen_line_m": player.avg_distance_to_kitchen_line_m,
                     "zones": [

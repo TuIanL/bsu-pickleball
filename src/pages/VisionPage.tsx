@@ -18,7 +18,7 @@ import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap"
 import { supportedReportTypes } from "../app/router";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
-import { adaptPipelineResultToReport, isPipelineResult } from "../services/pipelineReportAdapter";
+import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles, buildPlayerRoster } from "../utils/analysisHelpers";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
@@ -87,7 +87,9 @@ function useVisualAnalysisReport(jobId?: string) {
       try {
         const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
         const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
-        const adaptedReport = nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
+        // real-job 报告只消费权威 /report API；报告缺失时走显式"报告尚未生成"状态，
+        // 不再前端拼装近似报告（pipelineReportAdapter 已 deprecated）。
+        const adaptedReport = nextReport ?? null;
         const shouldLoadTracking = Boolean(pipelineResult?.artifacts.tracking_overlay_url);
         const shouldLoadFused = Boolean(pipelineResult?.artifacts.fused_player_overlay_url);
         const shouldLoadPose = Boolean(pipelineResult?.artifacts.pose_overlay_url);
@@ -371,7 +373,7 @@ function useVisualAnalysisReport(jobId?: string) {
   };
 }
 
-export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null }) {
+export function VisionPage({ jobId, onNavigate, recentJob, seekToMs }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null; seekToMs?: number }) {
   const {
     error,
     ballTrajectory,
@@ -550,6 +552,7 @@ export function VisionPage({ jobId, onNavigate, recentJob }: { jobId?: string; o
               videoSrc={videoSrc ?? undefined}
               fallbackVideoSrc={overlayVideoSrc ?? undefined}
               pipelineTracks={result?.tracks}
+              seekToMs={seekToMs}
             />
             <VisualizationArtifactGallery
               heatmapsManifest={heatmapsManifest ?? null}

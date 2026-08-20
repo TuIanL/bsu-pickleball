@@ -657,6 +657,7 @@ class MultiViewResultComposer:
                 fused_trajectory=joint_output.trajectory if isinstance(joint_output.trajectory, dict) else None,
                 recovered_observations=list(overlay_context.get("recovered_observations") or []),
                 final_source=str(overlay_context.get("final_source", "first_pass_f0")),
+                bootstrap_backfill=getattr(joint_output, "bootstrap_display_backfill", None),
             )
             builder = FusedPlayerOverlayBuilder()
             frames = builder.build(bundle=bundle)

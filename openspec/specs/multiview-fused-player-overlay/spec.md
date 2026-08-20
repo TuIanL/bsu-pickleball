@@ -1,9 +1,7 @@
 ## Purpose
 
 `multiview-fused-player-overlay` 定义 joint_tracking_v2 模式下的正式球员视频叠加层：把双摄融合后的全局球员证据（F0 观测、F1 离线找回、最终融合轨迹、Global Roster）以只读方式重新投影到用户正在观看的 reference camera，生成来源可解释、证据分级、身份统一的融合预览叠加层。它取代"参考摄像头本地 YOLO 检测"成为 joint 模式视频回放的数据源。
-
 ## Requirements
-
 ### Requirement: 正式 fused overlay 不依赖 debug trace
 
 joint 模式正式视频叠加层 SHALL 以 `F0RefinementSnapshot`、accepted F1 recovered observations、final fused trajectory、roster map 与 target-view geometry 为数据源，MUST NOT 依赖 `joint_debug_trace`（opt-in 诊断产物）。`debugTraceEnabled=false` 时 fused overlay 仍 MUST 正常生成。
@@ -22,13 +20,26 @@ joint 模式正式视频叠加层 SHALL 以 `F0RefinementSnapshot`、accepted F1
 
 ### Requirement: Evidence 分支决策链
 
-每个 `(Player_N, canonical_tick)` 在参考画面上的展示证据 SHALL 按**分支决策链**（而非固定优先级排序）判定：reference view 有 F0 **strong** observation（origin=base/guided_roi）→ `base_observed`/`guided_observed`；否则 `final_source == refined_f1` 且该 view/tick 存在 accepted recovered observation → `refined_observed`；否则 reference view 有 F0 **weak** observation → `base_observed`/`guided_observed`；否则 donor view 有真实 observation 且 final fused sample 非 predicted/conflict 且 geometry 有效 → `cross_view_projected`；否则存在短时 predicted sample 且 TTL 未过 → `predicted_only`；否则不渲染。`refined_observed` SHALL 优先于 weak F0 observation，但 SHALL NOT 覆盖 strong F0 observation。系统 SHALL NOT 为了"始终显示全部球员"而制造无证据的展示框。**分支决策链 SHALL 仅决定 `evidence_type`（真实证据来源，权威不变）；实际展示形态（display_state）SHALL 由跨 tick 迟滞状态机（stabilize-multiview-overlay-display）决定，且 MUST NOT 反写或伪装 `evidence_type`。**
+每个 `(Player_N, canonical_tick)` 在参考画面上的展示证据 SHALL 按**分支决策链**（而非固定优先级排序）判定：reference view 有 F0 **strong** observation（origin=base/guided_roi）→ `base_observed`/`guided_observed`；否则 `final_source == refined_f1` 且该 view/tick 存在 accepted recovered observation → `refined_observed`；否则 reference view 有 F0 **weak** observation → `base_observed`/`guided_observed`；否则 donor view 有真实 observation 且 final fused sample 非 predicted/conflict 且 geometry 有效 → `cross_view_projected`；否则存在短时 predicted sample 且 TTL 未过 → `predicted_only`；否则不渲染。`refined_observed` SHALL 优先于 weak F0 observation，但 SHALL NOT 覆盖 strong F0 observation。系统 SHALL NOT 为了"始终显示全部球员"而制造无证据的展示框。**分支决策链 SHALL 仅决定 `evidence_type`（真实证据来源，权威不变）；实际展示形态（display_state）SHALL 由跨 tick 迟滞状态机（stabilize-multiview-overlay-display）决定，且 MUST NOT 反写或伪装 `evidence_type`。** **reference view 单边 strong observation SHALL 足以渲染该球员（`base_observed`/`REAL_BOX`），SHALL NOT 因该玩家无 cross-view binding（另一 view binding 缺失/过期）而拒绝渲染；该分支的 fused sample 数据源（final fused trajectory / roster map）SHALL 包含单视图 binding 玩家的 `single_view_fallback` sample 或等价证据供给。**
 
 #### Scenario: 参考机位 strong 检测优先
 
 - **WHEN** reference view 在 canonical tick 有 F0 strong observation（origin=base）
 - **THEN** 该帧该球员的 `evidence_type` SHALL 为 `base_observed`
 - **AND** `display_state` SHALL 为 `REAL_BOX`（或经迟滞保持的等价状态）
+
+#### Scenario: 单视图 binding 玩家 strong 观测渲染
+
+- **WHEN** reference view 有 F0 strong observation 且该玩家无 cross-view binding（如仅 cam_1 观测、cam_2 缺失）
+- **THEN** `evidence_type` SHALL 为 `base_observed`
+- **AND** `display_state` SHALL 为 `REAL_BOX`
+- **AND** SHALL NOT 因跨视图 binding 缺失而降级为 `HIDDEN` 或依赖 donor 投影
+
+#### Scenario: 单视图玩家断帧后恢复渲染
+
+- **WHEN** 单视图 binding 玩家在 reference view 短暂漏检（≤ 数帧）后恢复 strong observation
+- **THEN** 恢复帧 SHALL 重新渲染该球员（`base_observed`/`REAL_BOX`）
+- **AND** SHALL NOT 因先前断帧使该球员永久隐藏
 
 #### Scenario: 跨摄 guidance 重检测成功
 
@@ -71,7 +82,6 @@ joint 模式正式视频叠加层 SHALL 以 `F0RefinementSnapshot`、accepted F1
 
 - **WHEN** 全部证据不足、或预测 TTL / last real observation age 超限
 - **THEN** 该帧 SHALL 不渲染该球员（`display_state` 进入 `HIDDEN`）
-
 
 ### Requirement: F0 origin provenance mapper
 
@@ -122,7 +132,6 @@ Builder SHALL 通过统一的 provenance mapper `classify_f0_origin(origin)` 将
 - **WHEN** `last_real_observed_at` 距今超过 `bbox_memory_ttl_ms + bbox_memory_grace_ms` 且 scale profile 不可用
 - **THEN** 该 Player 的展示 SHALL 从 bbox 降级为 footpoint 光圈
 
-
 ### Requirement: 置信度语义拆分
 
 overlay contract SHALL 区分 `source_confidence`（真实 detector / recovered evidence 的原始置信）与 `overlay_confidence`（该 presentation entity 值得展示的程度），SHALL NOT 使用单一 `confidence` 字段混两种语义。`cross_view_projected` 的 `source_confidence` SHALL 来自 donor 视图的真实观测置信，SHALL NOT 伪装为 reference-view 检测置信。`uncertainty_ft` SHALL 可空：当前 snapshot 无 prediction covariance 时 SHALL 为 `null`，并以 `donor_quality + fusion_status + geometry_valid + recency` 作为 gate，SHALL NOT 制造无依据的数值 uncertainty。
@@ -169,3 +178,35 @@ overlay 帧 SHALL 以 `F0TickSnapshot.reference_frame_index` 为 `frame_index`�
 - **WHEN** builder 生成 canonical tick 的 overlay 帧
 - **THEN** `frame_index` SHALL 等于该 tick 的 `reference_frame_index`
 - **AND** `timestamp_seconds` SHALL 等于 canonical timestamp（秒）
+
+### Requirement: bootstrap display 证据分支（最低优先级兜底）
+`fused_overlay_builder` 既有「五种 evidence（`base_observed` / `guided_observed` / `refined_observed` / `cross_view_projected` / `predicted_only`）+ hidden outcome」决策链 SHALL 增加最低优先的 `bootstrap_backfill` 分支：仅当五级证据全部缺失、且 `frame < 该 player 的 locked_frame_index`、且存在 `bootstrap_backfill` 真实观测时启用。该分支 MUST NOT 覆盖任何更高级别证据，也 MUST NOT 产生「不渲染」之外的额外 outcome。
+
+#### Scenario: 填补 bootstrap 空窗
+- **WHEN** 五级证据在 bootstrap 窗口内均缺失，但存在该 player 的 `bootstrap_backfill` 真实观测
+- **THEN** `evidence_type` SHALL 为 `bootstrap_backfill`
+- **AND** 展示状态映射 SHALL 将其归为带真实 bbox 的展示态（如 `REAL_BOX`）
+
+#### Scenario: 不降级既有证据
+- **WHEN** 某帧某 player 同时存在 stronger 证据与 `bootstrap_backfill` 数据
+- **THEN** 系统 SHALL 优先采用 stronger 证据
+- **AND** `bootstrap_backfill` 数据 SHALL 被抑制，不替换原证据
+
+#### Scenario: 契约一致性
+- **WHEN** overlay 写出 player entity 且 `evidence_type=bootstrap_backfill`
+- **THEN** 后端 `EvidenceType` Literal 与前端 `FusedPlayerEvidenceType` SHALL 均包含 `bootstrap_backfill`，且 `FUSED_EVIDENCE_STYLE` SHALL 提供其展示样式；否则验证/构建 SHALL 失败
+
+### Requirement: player entity 携带 canonical court position
+`fused_player_overlay` 的每个 player entity SHALL 携带 `canonical_court_position_ft`（由回填或既有路径经 `local_to_canonical` 得到），使人物框与小地图共用同一展示时间语义、同源同 tick。
+
+#### Scenario: 小地图同源
+- **WHEN** 前端 `CourtMinimap` 读取展示轨迹
+- **THEN** SHALL 可从 overlay 的 `canonical_court_position_ft` 获取球员位置（joint 模式 display authority = fusedPlayerOverlay）
+- **AND** 单摄模式仍保持 `pipelineTracks` 路径；joint 模式若 fused overlay 可用则用 overlay-derived display tracks，仅旧任务/不可用时 fallback `result.tracks`
+- **AND** MUST NOT 新增第三个 `display_player_trajectory` artifact，也 MUST NOT 直接修改 authoritative `result.tracks` 语义
+
+#### Scenario: 坐标契约
+- **WHEN** overlay 写出 `canonical_court_position_ft`
+- **THEN** 字段 SHALL 为 `[x, y] | null`（英尺，canonical court 坐标系）
+- **AND** 建议同时携带 `court_frame_version="canonical_court_frame.v1"` 与 `court_unit="ft"` 以强化契约，避免前端单位猜测
+

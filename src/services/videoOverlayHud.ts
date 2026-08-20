@@ -1,6 +1,7 @@
 import type {
   BallTrajectoryArtifact,
   BounceEventsArtifact,
+  FusedPlayerOverlayFrame,
   PipelineTrackPoint,
 } from "../types/report";
 import { canonicalPlayerNumber, formatPlayerId } from "../utils/analysisHelpers";
@@ -55,6 +56,12 @@ export interface VideoOverlayHudOptions {
   maxTrailJumpFt?: number;
   /** 球员最新点落后当前播放时间超过该阈值即标记为停滞（秒） */
   staleThresholdSeconds?: number;
+  /**
+   * joint 模式展示权威：fused overlay 逐帧实体。其 `canonical_court_position_ft` 携带
+   * 启动 bootstrap 回填的真实观测，并入 minimap 后可消除「前 1~2 秒小地图为空」。
+   * 单摄模式（frames 为空）时忽略，回退到 pipelineTracks。
+   */
+  overlayFrames?: FusedPlayerOverlayFrame[];
 }
 
 const DEFAULT_OPTIONS: Required<VideoOverlayHudOptions> = {
@@ -69,6 +76,7 @@ const DEFAULT_OPTIONS: Required<VideoOverlayHudOptions> = {
   playerTrailSeconds: 3,
   maxTrailJumpFt: 6,
   staleThresholdSeconds: 0.5,
+  overlayFrames: [],
 };
 
 function finiteNumber(value: unknown): number | null {
@@ -188,6 +196,39 @@ export function buildVideoOverlayHud(
     const values = groupedPlayers.get(key) ?? [];
     values.push(track);
     groupedPlayers.set(key, values);
+  }
+
+  // joint 启动回填：把 fused overlay 帧的真实观测（canonical_court_position_ft）并入球员轨迹。
+  // 仅在 overlay 帧存在时生效；bootstrap_backfill 覆盖 bootstrap 窗口内的 pre-lock 帧，
+  // 与 tracks（lock 之后）衔接成连续轨迹，消除小地图前 1~2 秒空白（display-only，不修改 metrics）。
+  for (const frame of options.overlayFrames ?? []) {
+    if (!frame || !Number.isFinite(frame.timestamp_seconds) || frame.timestamp_seconds > currentTime || frame.timestamp_seconds < playerCutoff) continue;
+    for (const entity of frame.players ?? []) {
+      const cp = entity.canonical_court_position_ft;
+      if (!Array.isArray(cp) || cp.length !== 2 || !Number.isFinite(cp[0]) || !Number.isFinite(cp[1])) continue;
+      const point = validPoint(
+        cp[0],
+        cp[1],
+        frame.timestamp_seconds,
+        entity.source_confidence ?? null,
+        false,
+        config.courtWidth,
+        config.courtLength,
+      );
+      if (!point) continue;
+      const key = canonicalPlayerNumber(entity.player_id)?.toString() ?? entity.player_id;
+      const values = groupedPlayers.get(key) ?? [];
+      values.push({
+        frame_index: frame.frame_index,
+        timestamp_seconds: frame.timestamp_seconds,
+        track_id: entity.player_id,
+        image_point: { x: Array.isArray(entity.footpoint) ? entity.footpoint[0] : 0, y: 0 },
+        confidence: entity.source_confidence ?? 0,
+        side: "unknown",
+        court_point: { x: cp[0], y: cp[1] },
+      });
+      groupedPlayers.set(key, values);
+    }
   }
 
   const players = Array.from(groupedPlayers.entries())

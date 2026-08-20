@@ -275,8 +275,6 @@ joint_tracking_v2 模式的 `compose_joint_result` SHALL 产出或继承前端�
 - **THEN** 用户可见的轨迹身份 / 热力图标签 / report SHALL NOT 包含 `global_player_`
 - **AND** 全部使用 canonical `Player_N / Pn`
 
-## ADDED Requirements
-
 ### Requirement: global-player-roster.v1 产物（诊断 / 映射 contract）
 joint compose SHALL 产出 `global-player-roster.v1` 产物（JSON，定位为**内部诊断 / 映射 contract**，非用户展示 identity）：包含 `schema_version`、`expected_player_count`、`roster_occupied_count`、`confirmed_player_count`、`status`（`bootstrap` / `confirmed`）与每个 roster 玩家的 `global_player_id`、canonical `player_id`（`Player_N`）、`label`（`Pn`）及 `bindings`（各 view 的 `view_player_id` 与 track provenance）。该产物与内部 diagnostics 可保留 internal `global_player_N`；用户可见的 trajectory / metrics / structured visualization / report 中 SHALL NOT 出现 `global_player_`。Composer 将 fused 样本转 tracks 时 SHALL 以 roster 映射将 `global_player_id` 转换为 canonical `Player_N`。**canonical `Player_N` 由 reference view 的 formal local identity 决定（display anchor）**：稳定绑定 reference view 的 `Player_N` 则公开身份为该 `Player_N`；仅有 non-reference evidence 时暂缓分配，reference binding 出现后再确定；整场 reference 缺失使用 deterministic fallback（如 slot 顺序）并在产物中标注。
 

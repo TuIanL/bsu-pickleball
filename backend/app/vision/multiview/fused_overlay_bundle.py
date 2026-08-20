@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from app.vision.multiview.offline_refinement import F0RefinementSnapshot, RecoveredViewObservation
+from app.vision.multiview.bootstrap_display_backfill import BootstrapBackfillObservation
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class JointOverlayEvidenceBundle:
     final_source: str = "first_pass_f0"
     # 每 view 最近真实观测时间（global_player_id, view_id) → take_timestamp_ms（供 recency gate）
     last_real_observed_ms: dict[tuple[str, str], float] = field(default_factory=dict)
+    # bootstrap 启动窗口展示回填：(player_id, reference_frame_index) → 真实观测（display-only）
+    bootstrap_backfill: dict[tuple[str, int], BootstrapBackfillObservation] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "view_ids", tuple(self.view_ids))
@@ -62,6 +65,7 @@ class JointOverlayEvidenceBundle:
         })
         object.__setattr__(self, "recovered_observations", dict(self.recovered_observations))
         object.__setattr__(self, "last_real_observed_ms", dict(self.last_real_observed_ms))
+        object.__setattr__(self, "bootstrap_backfill", dict(self.bootstrap_backfill))
 
     # ---- 只读查询 ----------------------------------------------------------
 
@@ -92,6 +96,12 @@ class JointOverlayEvidenceBundle:
     def has_recovered_evidence(self) -> bool:
         return self.final_source == "refined_f1" and bool(self.recovered_observations)
 
+    def bootstrap_for(
+        self, player_id: str, reference_frame_index: int
+    ) -> BootstrapBackfillObservation | None:
+        """查询某 (Player_N, tick) 的 bootstrap 回填观测（display-only 兜底）。"""
+        return self.bootstrap_backfill.get((player_id, reference_frame_index))
+
 
 def build_overlay_evidence_bundle(
     *,
@@ -102,11 +112,13 @@ def build_overlay_evidence_bundle(
     fused_trajectory: Mapping[str, Any] | None = None,
     recovered_observations: list[RecoveredViewObservation] | None = None,
     final_source: str = "first_pass_f0",
+    bootstrap_backfill: list[BootstrapBackfillObservation] | None = None,
 ) -> JointOverlayEvidenceBundle:
     """从 joint run 产物组装只读 evidence bundle。
 
     - `fused_trajectory`：`fused_player_trajectory.v2` payload（含 samples）；
-    - `recovered_observations`：F1 accepted observations（无则空）。
+    - `recovered_observations`：F1 accepted observations（无则空）；
+    - `bootstrap_backfill`：启动窗口 retrospective 真实观测回填（display-only）。
     """
     fused_samples: dict[str, dict[int, dict[str, Any]]] = {}
     fused_positions: dict[str, dict[int, tuple[float, float]]] = {}
@@ -147,6 +159,10 @@ def build_overlay_evidence_bundle(
                         if current is None or observed_ms > current:
                             last_real_observed_ms[key] = observed_ms
 
+    bootstrap_map: dict[tuple[str, int], BootstrapBackfillObservation] = {}
+    for obs in bootstrap_backfill or []:
+        bootstrap_map[(obs.player_id, obs.frame_index)] = obs
+
     return JointOverlayEvidenceBundle(
         f0_snapshot=f0_snapshot,
         reference_view_id=reference_view_id,
@@ -158,4 +174,5 @@ def build_overlay_evidence_bundle(
         recovered_observations=recovered_map,
         final_source=str(final_source),
         last_real_observed_ms=last_real_observed_ms,
+        bootstrap_backfill=bootstrap_map,
     )

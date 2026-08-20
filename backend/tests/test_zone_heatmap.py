@@ -108,21 +108,53 @@ def test_data_sufficiency_marks_insufficient_when_sparse():
 
 
 def test_avg_distance_to_kitchen_line_time_weighted_in_meters():
-    # 站在厨房线上 → 距离 0m → excellent
+    # 站在厨房线上 → 距离 0m → near_line（描述性档位，非能力评价）
     on_line = compute_zone_stats(_points([("P", 10, 15, 0.0), ("P", 10, 15, 1.0)]))[0]
     assert on_line.avg_distance_to_kitchen_line_m == 0.0
-    assert on_line.feedback.level == "excellent"
+    assert on_line.feedback.level == "near_line"
 
-    # 距厨房线 4ft ≈ 1.2m → good（0.9 < 1.2 ≤ 1.35）
+    # 距厨房线 4ft ≈ 1.2m → moderate（0.9 < 1.2 ≤ 1.35）
     good = compute_zone_stats(_points([("P", 10, 19, 0.0), ("P", 10, 19, 1.0)]))[0]
     assert good.avg_distance_to_kitchen_line_m == round(4 * 0.3048, 1)
-    assert good.feedback.level == "good"
+    assert good.feedback.level == "moderate"
 
-    # 距厨房线 7ft ≈ 2.13m → insufficient
+    # 距厨房线 7ft ≈ 2.13m → deep
     far = compute_zone_stats(_points([("P", 10, 8, 0.0), ("P", 10, 8, 1.0)]))[0]
     assert far.avg_distance_to_kitchen_line_m == round(7 * 0.3048, 1)
-    assert far.feedback.level == "insufficient"
+    assert far.feedback.level == "deep"
     assert "参考基准" in far.feedback.summary
+    # 描述性文案不携带能力评价措辞（design D4）。
+    for word in ("优秀", "良好", "不足"):
+        assert word not in far.feedback.summary
+
+
+def test_nvz_occupancy_rate_and_deprecated_alias():
+    """nvz_occupancy_rate 为 canonical 字段；kitchen_control_rate 为同值 deprecated alias。"""
+    player = compute_zone_stats(_points([("Player_1", 10, 15, 0.0), ("Player_1", 10, 15, 1.0)]))[0]
+    assert player.nvz_occupancy_rate == player.kitchen_control_rate
+
+
+def test_avg_distance_own_side_kitchen_line():
+    """own-side 口径：球员主半场为 near 时量 near 厨房线，不量对方线。
+
+    near 侧厨房线 y=15（距网 7ft）；far 侧厨房线 y=29。球员站 y=4（near 后场）：
+    - own-side 距离 = |4-15| = 11ft；
+    - 旧口径（最近线）也是 11ft（near 线更近），此处验证跨中线点不量对方线。
+    """
+    # 球员主半场 near（中位 y=10 < net 22），单点短暂越过中线到 y=30（对方 NVZ 附近）。
+    # own-side：该点仍量 near 线 |30-15|=15ft；旧口径会量 far 线 |30-29|=1ft。
+    points = _points(
+        [
+            ("Player_1", 10, 5, 0.0),
+            ("Player_1", 10, 10, 1.0),
+            ("Player_1", 10, 10, 2.0),
+            ("Player_1", 10, 30, 3.0),
+        ]
+    )
+    player = compute_zone_stats(points)[0]
+    # 时间加权：[(5→10): 5ft, (10→10): 0ft, (10→30): 15ft] → 平均 (5+0+15)/3 ≈ 6.67ft ≈ 2.0m
+    expected_ft = (5.0 + 0.0 + 15.0) / 3.0
+    assert player.avg_distance_to_kitchen_line_m == round(expected_ft * 0.3048, 1)
 
 
 def test_zone_stats_ordered_like_scatter():

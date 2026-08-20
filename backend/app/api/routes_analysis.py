@@ -446,6 +446,7 @@ def read_analysis_artifact(
         "pose-overlay",  # 姿态骨架叠加
         "player-trajectories",  # 球员轨迹
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
+        "performance-insights",  # performance-insights.v1（表现洞察事实层）
         "fused-trajectory",  # 多视角融合球员轨迹（Parent 命名空间产物）
         "fusion-diagnostics",  # 多视角融合诊断（融合质量）
         "fused-manifest",  # 多视角产物清单（Parent 唯一产品出口）
@@ -510,6 +511,8 @@ def read_analysis_artifact(
         path = _STORAGE.player_trajectory_json_path(job_id)
     elif artifact_name == "player-render-trajectories":
         path = _STORAGE.player_render_trajectory_path(job_id)
+    elif artifact_name == "performance-insights":
+        path = _STORAGE.performance_insights_json_path(job_id)
     elif artifact_name == "fused-trajectory":
         path = _STORAGE.fused_trajectory_json_path(job_id)
     elif artifact_name == "fusion-diagnostics":

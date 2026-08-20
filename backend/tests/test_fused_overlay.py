@@ -19,6 +19,11 @@ from app.vision.multiview.fused_overlay_bundle import (
     ViewGeometry,
     build_overlay_evidence_bundle,
 )
+from app.vision.multiview.overlay_display_state import (
+    DisplayContext,
+    OverlayDisplayStateMachine,
+)
+from app.vision.multiview.bootstrap_display_backfill import BootstrapBackfillObservation
 from app.vision.multiview.fused_overlay_projection import canonical_to_target_image
 from app.vision.multiview.fused_overlay_types import (
     build_fused_player_overlay_payload,
@@ -109,6 +114,7 @@ def _make_bundle(
     recovered: list[RecoveredViewObservation] | None = None,
     final_source: str = "first_pass_f0",
     roster_map: dict | None = None,
+    bootstrap_backfill: dict | None = None,
 ) -> JointOverlayEvidenceBundle:
     return JointOverlayEvidenceBundle(
         f0_snapshot=f0_snapshot,
@@ -123,6 +129,7 @@ def _make_bundle(
         },
         final_source=final_source,
         last_real_observed_ms={("global_player_1", "cam_1"): 1000.0},
+        bootstrap_backfill=dict(bootstrap_backfill or {}),
     )
 
 
@@ -693,3 +700,132 @@ class TestSingleViewOverlayRendering:
         assert len(recovered) == 1
         assert recovered[0].evidence_type == "base_observed"
         assert recovered[0].display_state == "REAL_BOX"
+
+
+# ===========================================================================
+# fix-joint-bootstrap-visual-gap：启动窗口展示回填必须真正注入 fused overlay
+# ===========================================================================
+
+
+def _make_bootstrap_obs(
+    player_id: str = "Player_1",
+    track_id: int = 3,
+    frame_index: int = 0,
+    timestamp_seconds: float = 0.0,
+    bbox: tuple[float, ...] = (785.0, 89.0, 838.0, 202.0),
+    canonical: tuple[float, float] = (3.7, 8.96),
+    source_confidence: float = 0.64,
+) -> BootstrapBackfillObservation:
+    return BootstrapBackfillObservation(
+        player_id=player_id,
+        track_id=track_id,
+        frame_index=frame_index,
+        timestamp_seconds=timestamp_seconds,
+        bbox=list(bbox),
+        court_position_local_ft=(float(canonical[0]), float(canonical[1])),
+        canonical_court_position_ft=(float(canonical[0]), float(canonical[1])),
+        source_confidence=source_confidence,
+        evidence_type="bootstrap_backfill",
+        display_only=True,
+        metric_eligible=False,
+    )
+
+
+class TestBootstrapBackfillDisplay:
+    """启动窗口回填观测必须以 REAL_BOX 渲染，且绝不伪造（无回填则不渲染）。"""
+
+    def test_state_machine_renders_bootstrap_backfill_as_real_box(self) -> None:
+        machine = OverlayDisplayStateMachine()
+        plan = machine.step(
+            player_id="Player_1",
+            view_id="cam_1",
+            ctx=DisplayContext(
+                now_ms=0.0,
+                evidence_type="bootstrap_backfill",
+                has_real_bbox=True,
+                has_valid_point=False,  # 启动窗口无 fused 位置/投影，仅靠真实检测框
+                geometry_valid=True,
+            ),
+        )
+        assert plan.render is True
+        assert plan.state == "REAL_BOX"
+
+    def test_state_machine_bootstrap_without_real_bbox_shows_no_fabricated_box(self) -> None:
+        # 防御：bootstrap 是真实观测，即便底层检测缺 bbox，也应渲染（作为点）而非隐藏；
+        # 但不得伪造框几何（preferred_bbox_source 必须为 none）。
+        machine = OverlayDisplayStateMachine()
+        plan = machine.step(
+            player_id="Player_1",
+            view_id="cam_1",
+            ctx=DisplayContext(now_ms=0.0, evidence_type="bootstrap_backfill", has_real_bbox=False),
+        )
+        assert plan.render is True
+        assert plan.state == "REAL_BOX"
+        assert plan.preferred_bbox_source == "none"
+
+    def test_builder_renders_bootstrap_at_pre_lock_frame(self) -> None:
+        # 真实场景：Player_1 在快照全局存在（frame 68 锁定），但 frame 0 尚无 f0 观测；
+        # 回填携带 frame 0 的真实检测观测，必须渲染为 bootstrap_backfill / REAL_BOX。
+        snapshot = F0RefinementSnapshot(
+            run_id="run-1",
+            reference_view_id="cam_1",
+            view_ids=("cam_1", "cam_2"),
+            global_player_ids=("global_player_1",),
+            ticks=(
+                # frame 0：无 f0 观测（启动窗口身份未锁定），仅有回填
+                _make_tick(
+                    canonical_tick=0,
+                    reference_frame_index=0,
+                    canonical_timestamp_ms=0.0,
+                    observations=(),
+                ),
+                # frame 68：锁定后 base_observed
+                _make_tick(
+                    canonical_tick=68,
+                    reference_frame_index=68,
+                    canonical_timestamp_ms=1133.0,
+                    observations=(("global_player_1", "cam_1", _make_state(origin="base", quality=0.8)),),
+                    global_positions=(("global_player_1", (10.0, 20.0)),),
+                ),
+            ),
+        )
+        bundle = _make_bundle(
+            f0_snapshot=snapshot,
+            bootstrap_backfill={("Player_1", 0): _make_bootstrap_obs()},
+        )
+        frames = FusedPlayerOverlayBuilder().build(bundle=bundle)
+        assert len(frames) == 2
+
+        pre_lock = frames[0].players
+        assert len(pre_lock) == 1
+        assert pre_lock[0].player_id == "Player_1"
+        assert pre_lock[0].evidence_type == "bootstrap_backfill"
+        assert pre_lock[0].display_state == "REAL_BOX"
+        assert pre_lock[0].bbox == [785.0, 89.0, 838.0, 202.0]
+        assert pre_lock[0].canonical_court_position_ft == [3.7, 8.96]
+
+        # 锁定后无缝衔接为 base_observed，且不应重复出现 bootstrap_backfill
+        post_lock = frames[1].players
+        assert len(post_lock) == 1
+        assert post_lock[0].evidence_type == "base_observed"
+
+    def test_builder_no_fabrication_without_bootstrap(self) -> None:
+        # 启动窗口无回填观测 → 该帧不渲染任何球员（诚实留空，绝不编造框）
+        snapshot = F0RefinementSnapshot(
+            run_id="run-1",
+            reference_view_id="cam_1",
+            view_ids=("cam_1", "cam_2"),
+            global_player_ids=("global_player_1",),
+            ticks=(
+                _make_tick(
+                    canonical_tick=0,
+                    reference_frame_index=0,
+                    canonical_timestamp_ms=0.0,
+                    observations=(),
+                ),
+            ),
+        )
+        bundle = _make_bundle(f0_snapshot=snapshot)  # 无 bootstrap_backfill
+        frames = FusedPlayerOverlayBuilder().build(bundle=bundle)
+        assert len(frames) == 1
+        assert frames[0].players == []

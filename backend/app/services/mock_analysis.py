@@ -76,7 +76,13 @@ def _demo_settings():
 
 
 def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
-    # Worker 完成回调：保存结果，并（若成功）生成报告。
+    # Worker 完成回调：保存基础结果 → 生成 insights（含 result 二次持久化）→ 生成报告。
+    # 顺序（change design.md D2）：基础 result → insights 落盘 → artifacts 更新 +
+    # result.json 重写 + RESULTS cache 同步 → 最后 Report Projector。
+    if result.status == "completed" and job.analysisMode != "demo":
+        from app.services.performance_insights.service import generate_and_persist_insights
+
+        result, _insights = generate_and_persist_insights(job, result, storage=_STORAGE)
     with _LOCK:
         RESULTS[job.id] = result
     if result.status == "completed":
@@ -795,17 +801,18 @@ def _first_failed_stage(stages: list[AnalysisStage]) -> str:
     return first_failed_stage(stages)
 
 
-def build_mock_report(
+def build_demo_report(
     job: AnalysisJobSummary,
     metadata: AnalysisUploadMetadata,
     report_id: str,
     generated_at: str,
-    result: AnalysisPipelineResult | None = None,
 ) -> AnalysisReport:
-    # 构造一份报告：先深拷贝样例报告，再填入本次任务的元信息；
-    # 若不是 demo 模式，则根据真实 pipeline 结果覆盖成"真实数据反馈"。
+    """demo 任务专用报告：深拷贝样例报告并填入任务元信息（source=demo）。
+
+    仅在 analysisMode=demo 时调用；真实任务走 build_real_performance_report。
+    """
     payload = deepcopy(DEMO_REPORT)
-    payload["source"] = "job"
+    payload["source"] = "demo"
     payload["jobId"] = job.id
     payload["reportId"] = report_id
     payload["generatedAt"] = generated_at
@@ -821,383 +828,34 @@ def build_mock_report(
     payload["session"]["date"] = metadata.matchDate
     payload["session"]["level"] = metadata.level
     payload["session"]["reportId"] = report_id
-
-    if job.analysisMode != "demo":
-        # 非 demo：用真实 pipeline 结果填充报告
-        _apply_pipeline_feedback(payload, job, result)
-
     return AnalysisReport.model_validate(payload)
 
 
-def _apply_pipeline_feedback(
-    payload: dict,
+def build_mock_report(
     job: AnalysisJobSummary,
-    result: AnalysisPipelineResult | None,
-) -> None:
-    # 内部：把真实 pipeline 产出的轨迹/指标，写进报告各字段（给前端展示"真东西"）。
-    tracks = result.tracks if result is not None else []
-    metrics = result.metrics if result is not None else None
-    # 汇总几个关键数字
-    total_distance = sum(item.distance_ft for item in metrics.distances) if metrics else 0.0
-    avg_speed = _mean([item.average_speed_ft_per_s for item in metrics.speeds]) if metrics else 0.0
-    max_speed = max([item.max_speed_ft_per_s for item in metrics.speeds], default=0.0) if metrics else 0.0
-    kitchen_seconds = sum(item.kitchen_seconds for item in metrics.kitchen_dwell) if metrics else 0.0
-    track_count = len({track.track_id for track in tracks})
-    point_count = len(tracks)
-    limited = job.analysisMode == "limited" or job.calibrationId is None
-    no_tracks = point_count == 0
+    metadata: AnalysisUploadMetadata,
+    report_id: str,
+    generated_at: str,
+    result: AnalysisPipelineResult | None = None,
+) -> AnalysisReport:
+    """报告构建统一入口（按任务模式分发）。
 
-    payload["match"]["subtitle"] = "真实上传视频 · MVP 移动分析" if not limited else "真实上传视频 · 未标定有限分析"
-    payload["match"]["teams"] = payload["metadata"]["athleteLabel"]
-    payload["match"]["score"] = "MVP"
-    payload["match"]["currentRally"] = "移动轨迹分析" if not no_tracks else "未生成可用轨迹"
-    payload["match"]["currentTime"] = "完成"
-    payload["match"]["duration"] = "pipeline"
+    - demo 任务 → build_demo_report（样例报告，source=demo）；
+    - 真实任务 → real_report_builder.build_real_performance_report
+      （从真实 pipeline 数据从零构建 v2 报告，绝不继承 DEMO_REPORT）。
+    """
+    if job.analysisMode == "demo":
+        return build_demo_report(job, metadata, report_id, generated_at)
+    from app.services.real_report_builder import build_real_performance_report
 
-    # 一段文字总结：根据是否有轨迹/是否受限给出不同措辞
-    payload["session"]["summary"] = (
-        f"本次分析基于上传视频生成，检测到 {track_count} 条球员轨迹、{point_count} 个场地坐标点，"
-        f"累计移动距离约 {total_distance:.1f} 英尺。"
-        if not no_tracks
-        else (
-            "本次任务已处理上传视频，但当前 MVP 没有生成可用的场地轨迹。请检查四角标定、拍摄角度、模型依赖和视频清晰度。"  # noqa: E501
-            if not limited
-            else "本次任务未提供有效场地标定，因此只保留上传与任务状态，不生成场地投影移动指标。"
-        )
+    return build_real_performance_report(
+        job=job,
+        metadata=metadata,
+        report_id=report_id,
+        generated_at=generated_at,
+        result=result,
+        storage=_STORAGE,
     )
-    payload["session"]["landingPoints"] = []
-    payload["session"]["routes"] = []
-    payload["session"]["movementPath"] = _tracks_to_movement_path(tracks)
-    payload["session"]["rallies"] = []
-
-    # 仪表盘指标 + 报告定义 + 球员标记 + 各类卡片
-    payload["dashboardMetrics"] = _pipeline_dashboard_metrics(
-        total_distance=total_distance,
-        avg_speed=avg_speed,
-        max_speed=max_speed,
-        kitchen_seconds=kitchen_seconds,
-        point_count=point_count,
-    )
-    payload["reportDefinitions"] = _pipeline_report_definitions(
-        total_distance=total_distance,
-        avg_speed=avg_speed,
-        max_speed=max_speed,
-        kitchen_seconds=kitchen_seconds,
-        point_count=point_count,
-        limited=limited,
-        no_tracks=no_tracks,
-    )
-    payload["playerMarkers"] = _tracks_to_player_markers(
-        tracks,
-        doubles=(job.metadata.matchFormat == "doubles") if getattr(job.metadata, "matchFormat", None) else True,
-    )
-    payload["shotTrajectories"] = []
-    payload["videoOverlayLabels"] = [
-        {
-            "id": "source-real",
-            "label": "真实上传视频",
-            "tone": "training",
-            "x": 50,
-            "y": 18,
-        },
-        {
-            "id": "limited" if limited else "movement",
-            "label": "缺少标定" if limited else f"{point_count} 个轨迹点",
-            "tone": "risk" if limited or no_tracks else "advantage",
-            "x": 53,
-            "y": 42,
-        },
-    ]
-    payload["timelineMarkers"] = [
-        {
-            "id": "pipeline",
-            "time": "完成",
-            "position": 88,
-            "label": result.message if result else "pipeline 结果不可用",
-            "tone": "risk" if limited or no_tracks else "advantage",
-        }
-    ]
-    payload["highlights"] = [
-        {
-            "id": "movement-summary",
-            "title": "移动轨迹摘要",
-            "time": "MVP",
-            "result": "算法输出",
-            "tone": "risk" if limited or no_tracks else "advantage",
-            "description": payload["session"]["summary"],
-        }
-    ]
-    payload["coachNotes"] = [
-        {
-            "id": "real-source",
-            "tone": "training",
-            "title": "数据来源已切换为上传视频",
-            "body": "本页优先展示后端 pipeline 产出的人员移动、速度和轨迹指标。",
-        },
-        {
-            "id": "movement-evidence",
-            "tone": "advantage" if not no_tracks else "risk",
-            "title": "移动指标" if not no_tracks else "轨迹暂不可用",
-            "body": (
-                f"累计移动 {total_distance:.1f} 英尺，平均速度 {avg_speed:.1f} 英尺/秒，最高速度 {max_speed:.1f} 英尺/秒。"  # noqa: E501
-                if not no_tracks
-                else "当前没有可用球员轨迹，建议重新标定四角或确认模型推理配置。"
-            ),
-        },
-    ]
-    payload["diagnoses"] = [
-        {
-            "id": "mvp-limited-diagnosis",
-            "issue": "动作诊断暂不可用",
-            "severity": "低",
-            "evidence": "当前 MVP 未接入姿态动作诊断模型。",
-            "suggestion": "先使用移动距离、速度和热力图作为训练反馈依据。",
-            "expectedOutcome": "避免把样例动作诊断误认为上传视频结论。",
-            "priority": "说明",
-        }
-    ]
-    payload["trainingRecommendations"] = []
-    payload["drillRecommendations"] = [
-        {
-            "id": "drill-court-coverage",
-            "title": "场地覆盖与回位节奏",
-            "goal": "围绕热区和移动路径做 5 组回位练习。",
-            "duration": "18 分钟",
-            "evidence": payload["session"]["summary"],
-            "difficulty": "进阶",
-            "linkedReport": "movement",
-        }
-    ]
-    payload["shotRows"] = []
-    payload["skillRatings"] = [
-        {
-            "id": "movement-coverage",
-            "label": "移动数据完整度",
-            "score": min(100, max(0, point_count * 8)),
-            "note": "分数来自可用轨迹点数量，不代表技术评分。",
-        }
-    ]
-    payload["progressPoints"] = [
-        {
-            "match": "本次上传",
-            "performance": min(100, max(0, int(total_distance))),
-            "errors": 0,
-            "thirdShot": 0,
-            "kitchen": min(100, max(0, int(kitchen_seconds * 10))),
-        }
-    ]
-
-
-def _pipeline_dashboard_metrics(
-    *,
-    total_distance: float,
-    avg_speed: float,
-    max_speed: float,
-    kitchen_seconds: float,
-    point_count: int,
-) -> list[dict]:
-    # 内部：把汇总数字包装成"仪表盘指标"列表（每个含 id/标签/值/进度条等）。
-    return [
-        _metric(
-            "distance",
-            "activity",
-            "累计移动距离",
-            f"{total_distance:.1f} ft",
-            "来自场地投影轨迹的累计距离",
-            "真实视频",
-            min(100, int(total_distance)),
-        ),
-        _metric(
-            "avg-speed",
-            "timer",
-            "平均移动速度",
-            f"{avg_speed:.1f} ft/s",
-            f"最高速度 {max_speed:.1f} ft/s",
-            "pipeline",
-            min(100, int(avg_speed * 12)),
-        ),
-        _metric(
-            "kitchen",
-            "waves",
-            "厨房区停留",
-            f"{kitchen_seconds:.1f}s",
-            "按投影点统计的非截击区停留时间",
-            "真实视频",
-            min(100, int(kitchen_seconds * 10)),
-        ),
-        _metric(
-            "tracks",
-            "radar",
-            "可用轨迹点",
-            str(point_count),
-            "用于生成可视化和热力图的点数量",
-            "算法输出",
-            min(100, point_count * 8),
-        ),
-    ]
-
-
-def _pipeline_report_definitions(
-    *,
-    total_distance: float,
-    avg_speed: float,
-    max_speed: float,
-    kitchen_seconds: float,
-    point_count: int,
-    limited: bool,
-    no_tracks: bool,
-) -> list[dict]:
-    # 内部：生成"报告定义"列表（移动报告 + 诊断不可用说明）。
-    unavailable = "当前 MVP 未生成该类动作诊断数据。"
-    source_note = "未提供有效标定，移动报告处于有限模式。" if limited else "来自上传视频的 pipeline 结果。"
-    if no_tracks and not limited:
-        source_note = "pipeline 已完成，但没有检测到可用球员轨迹。"
-
-    movement_metrics = _pipeline_dashboard_metrics(
-        total_distance=total_distance,
-        avg_speed=avg_speed,
-        max_speed=max_speed,
-        kitchen_seconds=kitchen_seconds,
-        point_count=point_count,
-    )
-    return [
-        {
-            "type": "movement",
-            "title": "移动与场地覆盖报告",
-            "eyebrow": "移动分析报告",
-            "summary": source_note,
-            "heroMetric": f"{total_distance:.1f} ft",
-            "heroMetricLabel": "累计移动距离",
-            "visualization": "movement",
-            "metrics": movement_metrics,
-            "insights": [
-                _note("movement-source", "training", "真实 pipeline 输出", source_note),
-                _note(
-                    "movement-speed",
-                    "advantage" if point_count else "risk",
-                    "速度与覆盖",
-                    f"平均速度 {avg_speed:.1f} ft/s，最高速度 {max_speed:.1f} ft/s。",
-                ),
-            ],
-            "trainingLink": "基于移动路径安排回位训练",
-        },
-        {
-            "type": "diagnosis",
-            "title": "动作诊断暂不可用",
-            "eyebrow": "动作诊断报告",
-            "summary": unavailable,
-            "heroMetric": "N/A",
-            "heroMetricLabel": "姿态诊断",
-            "visualization": "diagnosis",
-            "metrics": [_metric("diagnosis-na", "alert", "动作诊断", "未接入", unavailable, "MVP 限制", 0)],
-            "insights": [
-                _note("diagnosis-note", "training", "需要姿态模型", "RTMPose 或同等姿态模型接入后才能输出动作证据。")
-            ],
-            "trainingLink": "先依据移动指标训练",
-        },
-    ]
-
-
-def _metric(
-    metric_id: str,
-    icon: str,
-    label: str,
-    value: str,
-    detail: str,
-    trend: str,
-    progress: int,
-) -> dict:
-    # 内部：构造单个指标字典（进度裁剪到 0~100，附一个迷你 sparkline）。
-    progress = min(100, max(0, progress))
-    return {
-        "id": metric_id,
-        "icon": icon,
-        "label": label,
-        "value": value,
-        "detail": detail,
-        "trend": trend,
-        "direction": "steady",
-        "progress": progress,
-        "sparkline": [max(0, progress - 18), max(0, progress - 10), progress, progress],
-    }
-
-
-def _note(note_id: str, tone: str, title: str, body: str) -> dict:
-    # 内部：构造一段"洞察/备注"小卡片。
-    return {"id": note_id, "tone": tone, "title": title, "body": body}
-
-
-def _heatmap_to_points(heatmap) -> list[dict]:
-    # 内部：把热力图网格转成前端可画的点（带强度/坐标百分比）。
-    if heatmap is None or not heatmap.cells:
-        return []
-    max_count = max(cell.count for cell in heatmap.cells) or 1
-    points = []
-    for index, cell in enumerate(heatmap.cells):
-        points.append(
-            {
-                "id": f"heat-{index}",
-                "x": ((cell.col + 0.5) / heatmap.cols) * 100,
-                "y": ((cell.row + 0.5) / heatmap.rows) * 100,
-                "intensity": min(1.0, cell.count / max_count),
-                "label": f"热区 {cell.row + 1}-{cell.col + 1}",
-            }
-        )
-    return points
-
-
-def _tracks_to_movement_path(tracks) -> list[dict]:
-    # 内部：取第一条轨迹的前 24 个点，映射到球场百分比坐标，作为"移动路径"。
-    first_track_id = tracks[0].track_id if tracks else None
-    selected = [track for track in tracks if track.track_id == first_track_id][:24]
-    return [
-        {
-            "x": 12 + (track.court_point.x / 20.0) * 76,
-            "y": (track.court_point.y / 44.0) * 100,
-        }
-        for track in selected
-    ]
-
-
-def _tracks_to_player_markers(tracks, doubles: bool = True) -> list[dict]:
-    # 内部：为最多 4 名球员生成"球场标记"（颜色按 A/B/C/D 分配）。
-    # fix-multiview-player-identity D2：markers 按 canonical Player_N 数字升序，
-    # team 由槽位语义（canonical_player_side）计算，MUST NOT 按遍历顺序。
-    from app.schemas.analysis import canonical_player_side
-
-    latest: dict[str, object] = {}
-    for track in tracks:
-        latest[track.track_id] = track
-
-    colors = ["#22C55E", "#D9FF3F", "#2F80ED", "#FF9500"]
-    markers = []
-    ordered_ids = sorted(
-        (str(track_id) for track_id in latest),
-        key=lambda pid: (int(pid[len("Player_"):]) if pid.startswith("Player_") and pid[len("Player_"):].isdigit() else 2**31, pid),
-    )
-    for index, track_id in enumerate(ordered_ids[:4]):
-        track = latest[track_id]
-        team = canonical_player_side(track_id, doubles)
-        if not team:
-            # 非 canonical id 回退：按 court_point.y（近半场 y<22ft → near）推断
-            court = getattr(track, "court_point", None)
-            team = "near" if court is not None and getattr(court, "y", 22.0) < 22.0 else "far"
-        markers.append(
-            {
-                "id": str(track_id),
-                "label": chr(ord("A") + index),
-                "team": team,
-                "x": 12 + (track.court_point.x / 20.0) * 76,
-                "y": 7 + (track.court_point.y / 44.0) * 42,
-                "color": colors[index % len(colors)],
-            }
-        )
-    return markers
-
-
-def _mean(values: list[float]) -> float:
-    # 内部：安全求平均（空列表返回 0）。
-    return sum(values) / len(values) if values else 0.0
 
 
 # 演示用样例报告（写死的占位数据，demo 模式直接返回它）。
@@ -1273,6 +931,12 @@ DEMO_REPORT = {
         },
     ],
     "reportActions": [
+        {
+            "type": "performance",
+            "title": "本场表现报告",
+            "description": "总结优势与首要问题，并转化为下一次训练目标。",
+            "path": "/reports/performance",
+        },
         {
             "type": "movement",
             "title": "步法移动报告",

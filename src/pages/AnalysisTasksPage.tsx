@@ -1234,6 +1234,13 @@ export function AnalysisTaskCard({
                 <button className="green-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/vision`)} type="button">
                   查看分析结果
                 </button>
+                <button
+                  className="quiet-button px-4 py-2.5"
+                  onClick={() => onNavigate(`/analysis/${job.id}/reports/performance`)}
+                  type="button"
+                >
+                  本场表现报告
+                </button>
                 <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/details`)} type="button">
                   分析详情
                 </button>

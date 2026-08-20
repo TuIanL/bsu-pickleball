@@ -7,7 +7,7 @@ export type TrendDirection = "up" | "down" | "steady";
 export type CourtMode = "movement";
 
 /** 报告类型 */
-export type ReportType = "movement" | "diagnosis";
+export type ReportType = "movement" | "diagnosis" | "performance";
 
 /** 分析任务状态 */
 export type AnalysisJobStatus =
@@ -1011,7 +1011,8 @@ export type FusedPlayerEvidenceType =
   | "guided_observed" // F0 guided_roi 真实观测（跨摄 guidance 重检测成功）
   | "refined_observed" // accepted F1 recovered observation
   | "cross_view_projected" // 本 view 无观测，donor 真实观测 + 投影补全
-  | "predicted_only"; // 双 view 无观测，短时预测兜底
+  | "predicted_only" // 双 view 无观测，短时预测兜底
+  | "bootstrap_backfill"; // 启动 bootstrap 窗口内 retrospective 真实观测回填（display-only）
 
 export type FusedPlayerBBoxSource = "last_good_bbox_reanchored" | "view_scale_profiled" | "none";
 
@@ -1038,6 +1039,8 @@ export interface FusedPlayerOverlayEntity {
   bbox_stale?: boolean;
   /** last real observed 距今毫秒（单一 freshness 权威） */
   bbox_age_ms?: number | null;
+  /** bootstrap_backfill 携带的 canonical court 坐标 [x, y]（英尺），供小地图消费；其余类型可为 null */
+  canonical_court_position_ft?: [number, number] | number[] | null;
 }
 
 export interface FusedPlayerOverlayFrame {
@@ -1751,9 +1754,100 @@ export interface ReportDefinition {
 
 // ── 完整分析报告 ──
 
+/** 六维表现维度（performance insights） */
+export type PerformanceDimension =
+  | "court_positioning"
+  | "movement_recovery"
+  | "placement_control"
+  | "rally_consistency"
+  | "transition_decision"
+  | "doubles_cooperation";
+
+/** 维度状态（6 态：Rule Engine 权威输出，前端只展示） */
+export type DimensionStatus =
+  | "strength"
+  | "stable"
+  | "needs_improvement"
+  | "insufficient_evidence"
+  | "not_applicable"
+  | "unsupported";
+
+/** Finding 评估（4 态：具体发现） */
+export type FindingAssessment = "strength" | "stable" | "needs_improvement" | "insufficient_evidence";
+
+/** 证据时间窗（毫秒，跳转 /analysis/{jobId}/vision?t={start_ms}） */
+export interface EvidenceWindow {
+  start_ms: number;
+  end_ms: number;
+  rally_id?: string | null;
+}
+
+export interface PerformanceSubject {
+  id: string; // Player_1..Player_4 / team_near / team_far
+  label: string;
+  kind: "player" | "team";
+}
+
+export interface ProjectedDimensionCard {
+  dimension: PerformanceDimension;
+  label: string;
+  subject_id: string;
+  status: DimensionStatus;
+  summary: string;
+}
+
+export interface ProjectedFinding {
+  id: string;
+  subject_id: string;
+  dimension: PerformanceDimension;
+  dimension_label: string;
+  assessment: FindingAssessment;
+  priority: number;
+  confidence: "high" | "medium" | "low";
+  title: string;
+  diagnosis: string;
+  impact: string;
+  evidence_ids: string[];
+  evidence_windows: EvidenceWindow[];
+}
+
+export interface ProjectedRecommendation {
+  id: string;
+  subject_id: string;
+  title: string;
+  detail: string;
+  metric: string;
+  baseline: string;
+  next_target: string;
+  direction: "increase" | "decrease" | "maintain";
+  finding_id?: string | null;
+}
+
+export interface ProjectedCandidateFact {
+  kind: "bounce_candidates" | "ball_trajectory";
+  count: number | null;
+  detail: string;
+  sample_windows: EvidenceWindow[];
+}
+
+/** AnalysisReport v2 的 performanceInsights 投影子集（用户可读） */
+export interface ReportPerformanceInsights {
+  status: "available" | "unavailable";
+  unavailable_reason?: string | null;
+  match_format?: "singles" | "doubles" | null;
+  rule_profile_version?: string | null;
+  data_quality_summary?: string | null;
+  subjects: PerformanceSubject[];
+  dimensions: ProjectedDimensionCard[];
+  findings: ProjectedFinding[];
+  recommendations: ProjectedRecommendation[];
+  candidate_facts: ProjectedCandidateFact[];
+  primary_focus_finding_id?: string | null;
+}
+
 /** 分析报告（聚合所有可视化数据） */
 export interface AnalysisReport {
-  version: "analysis-report-v1";
+  version: "analysis-report-v1" | "analysis-report-v2";
   source: "demo" | "job";
   jobId?: string;
   reportId: string;
@@ -1776,6 +1870,8 @@ export interface AnalysisReport {
   shotRows: ShotRow[];
   skillRatings: SkillRating[];
   progressPoints: ProgressPoint[];
+  /** v2 新增：performance insights 投影（旧 v1 报告无此字段） */
+  performanceInsights?: ReportPerformanceInsights | null;
 }
 
 // ── 结构化可视化数据（前端 SVG 渲染） ──────────────────────────────
@@ -1813,7 +1909,7 @@ export interface ZoneStat {
 }
 
 export interface ZoneFeedback {
-  level: string;         // excellent / good / insufficient
+  level: string;         // near_line / moderate / deep（描述性档位，非能力评价）
   summary: string;
 }
 
@@ -1824,6 +1920,9 @@ export interface PlayerZoneStats {
   denominator_seconds: number;
   tracked_seconds: number;
   data_sufficiency: string;   // sufficient / insufficient
+  /** NVZ 占用率（canonical，纯描述性） */
+  nvz_occupancy_rate?: number;
+  /** deprecated alias（与 nvz_occupancy_rate 同值同分母，兼容迁移期保留） */
   kitchen_control_rate: number;
   avg_distance_to_kitchen_line_m: number;
   zones: ZoneStat[];

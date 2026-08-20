@@ -434,7 +434,11 @@ class FusedPlayerOverlayBuilder:
         )
         # cross_view 场景：是否有 synthetic bbox 可用（reanchor 或 scale profile）
         evidence_type = raw.evidence_type if raw is not None else None
-        has_real_bbox = evidence_type in ("base_observed", "guided_observed", "refined_observed") and raw.bbox is not None
+        has_real_bbox = (
+            evidence_type in ("base_observed", "guided_observed", "refined_observed", "bootstrap_backfill")
+            and raw is not None
+            and raw.bbox is not None
+        )
         has_synthetic_bbox = False
         if evidence_type == "cross_view_projected" and projection is not None:
             reanchored = self.bbox_memory.reanchor(
@@ -574,6 +578,31 @@ class FusedPlayerOverlayBuilder:
                     sample=sample,
                     projection=projection if projection is not None and projection.projection_valid else None,
                 )
+
+        # 7) bootstrap_backfill：启动窗口内 retrospective 真实观测（最低优先级兜底）
+        #    仅当五级证据全缺、且本 (Player_N, frame) 存在回填真实观测时启用；
+        #    绝不覆盖更高级别证据（前 6 步已优先返回），也绝不编造（builder 只产出真实观测）。
+        bb = bundle.bootstrap_for(player_id, frame_index)
+        if bb is not None:
+            bbox = bb.bbox  # reference image 真实检测框
+            footpoint = (
+                [(bbox[0] + bbox[2]) / 2.0, bbox[3]]
+                if bbox is not None and len(bbox) == 4
+                else None
+            )
+            canon = bb.canonical_court_position_ft
+            return FusedPlayerOverlayPlayer(
+                player_id=player_id,
+                label=_player_label(player_id),
+                bbox=list(bbox) if bbox is not None else None,
+                footpoint=footpoint,
+                evidence_type="bootstrap_backfill",
+                source_confidence=round(float(bb.source_confidence or 0.0), 4),
+                overlay_confidence=round(float(bb.source_confidence or 0.0), 4),
+                canonical_court_position_ft=(
+                    [float(canon[0]), float(canon[1])] if canon is not None and len(canon) == 2 else None
+                ),
+            )
 
         # 6) 全部证据不足 → 不渲染
         return None

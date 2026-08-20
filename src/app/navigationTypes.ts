@@ -1,4 +1,4 @@
-export type ReportType = "movement" | "diagnosis";
+export type ReportType = "movement" | "diagnosis" | "performance";
 
 export type AppShellMode = "landing" | "standard" | "capture";
 
@@ -67,7 +67,7 @@ export type RouteState =
   | { name: "analysis-job"; path: `/analysis/${string}`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "analysis-details"; path: `/analysis/${string}/details`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "vision"; path: "/vision"; shellMode: "standard"; navigationSection: "analysis" }
-  | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string; seekToMs?: number; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "ball-trajectory"; path: `/analysis/${string}/trajectory`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "multiview-observability"; path: `/analysis/${string}/multiview`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "report"; path: `/reports/${ReportType}`; reportType: ReportType; shellMode: "standard"; navigationSection: "reports" }

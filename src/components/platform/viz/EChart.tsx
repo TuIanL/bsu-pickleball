@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts/core";
-import { BarChart, FunnelChart, GaugeChart, HeatmapChart, LineChart, PieChart } from "echarts/charts";
+import { BarChart, FunnelChart, GaugeChart, HeatmapChart, LineChart, PieChart, ScatterChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent, VisualMapComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { EChartsCoreOption } from "echarts/core";
 
 // 按需注册：只打包本页使用的图表与组件，控制产物体积
-echarts.use([
+export const REGISTERED_ECHART_MODULES = [
   BarChart,
   FunnelChart,
   GaugeChart,
   HeatmapChart,
   LineChart,
   PieChart,
+  ScatterChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -20,7 +21,9 @@ echarts.use([
   TitleComponent,
   VisualMapComponent,
   CanvasRenderer,
-]);
+];
+
+echarts.use(REGISTERED_ECHART_MODULES);
 
 /** 项目语义色（与页面绿/黄/红/灰一致）。 */
 export const VIZ_PALETTE = {

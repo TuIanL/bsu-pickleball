@@ -2,9 +2,7 @@
 
 ## Purpose
 joint 模式逐球员逐 stage 显示漏斗：对每个 `(roster confirmed player, available view, canonical tick)` 生成 `player-display-diagnostics.v1` 紧凑诊断，回答"该球员此刻为何这样显示 / 为何不显示"。v1 漏斗起点为 post-lock eligible detection，不依赖 `joint_debug_trace`，`debugTraceEnabled=false` 时仍生成；产物 `player_id` 直接为 canonical `Player_N`。
-
 ## Requirements
-
 ### Requirement: 逐 tick 显示漏斗产物
 
 joint run 对每个 `(roster confirmed player, available view, canonical tick)` SHALL 生成紧凑的逐 stage 显示诊断行（`player-display-diagnostics.v1`），回答"该球员此刻为何这样显示 / 为何不显示"。产物 SHALL 独立于 `joint_debug_trace`，`debugTraceEnabled=false` 时 MUST 仍生成。漏斗行 SHALL 至少包含：`canonical_tick / timestamp_ms / player_id / view_id / frame_status`、`expected_region_status / expected_image_position`、`eligible_detections_in_expected_gate`、分层断裂状态（`eligible_detection_present / position_present / court_position_present / projection_status / projection_confidence / formal_observation_emitted`）、`global_associated / association_reason`、`binding_visibility`、`guidance_status / guidance_skip_reason`。产物中的 `player_id` SHALL 直接为 canonical `Player_N`。
@@ -125,13 +123,26 @@ joint run 对每个 `(roster confirmed player, available view, canonical tick)` 
 
 ### Requirement: 诊断失败隔离
 
-显示诊断构建失败 MUST NOT 导致核心 joint 分析失败。当漏斗构建器抛错或产物写盘失败时，核心 joint result SHALL 保持成功，`player_display_diagnostics_status` SHALL 为 `failed` 并附结构化 reason。
+显示诊断构建失败 MUST NOT 导致核心 joint 分析失败。当漏斗构建器抛错或产物写盘失败时，核心 joint result SHALL 保持成功，`player_display_diagnostics_status` SHALL 为 `failed` 并附结构化 reason。产物缺失或构建失败时，composer SHALL 仍写盘一个占位 artifact（`status=failed` 或 `status=unavailable`），使查询 API 能返回结构化响应，MUST NOT 留下"文件不存在"状态导致 API 404。
 
 #### Scenario: 诊断构建失败不影响核心结果
 
 - **WHEN** joint run 完成但显示漏斗构建器抛出异常
 - **THEN** 核心 joint result SHALL 仍为成功
 - **AND** 系统 SHALL 记录 `player_display_diagnostics_status=failed` 与 reason
+- **AND** composer SHALL 写盘占位 artifact（`status=failed`），查询 API 可读
+
+#### Scenario: joint output 缺少 payload 时写占位产物
+
+- **WHEN** joint run 完成但 `joint_output.display_diagnostics_payload` 缺失或非 dict（如构建失败、行数为空且校验拒绝）
+- **THEN** composer SHALL 写盘一个占位 artifact（`status=unavailable`，`detail` 说明原因）
+- **AND** 查询 API SHALL 返回该占位响应，MUST NOT 返回 404 "no artifact"
+
+#### Scenario: 无确认球员/可用视角时仍产出空产物
+
+- **WHEN** joint run 全程没有 roster confirmed player 或任何 available view
+- **THEN** 系统 SHALL 产出 `status=unavailable` 的空 rows 产物（`rows=[]`）
+- **AND** 查询 API SHALL 返回结构化 `unavailable` 而非 404
 
 ### Requirement: 产物体积控制
 
@@ -186,3 +197,63 @@ joint run 对每个 `(roster confirmed player, available view, canonical tick)` 
 - **WHEN** 查询历史任务的显示诊断产物（无该两字段）
 - **THEN** 前端 SHALL 按未评估显示
 - **AND** 查询 API SHALL NOT 因字段缺失报错
+
+### Requirement: 身份冲突显式观测
+
+`player-display-diagnostics.v1` 漏斗行 SHALL 增加 `roster_conflict` 字段（bool，缺省 false），表示该 `(player_id, view_id)` 行对应的 reference 槽位在本 tick 存在多 global 竞争（数据来源：`GlobalPlayerAssociator` 的 `reference_slot_conflict` 事件或等价只读观测）。duplicate 去重（保留首行）SHALL 保留，但身份冲突 SHALL 通过 `roster_conflict=true` 显式呈现，MUST NOT 仅靠"保留首行"掩盖。字段缺省兼容旧产物（前端按 false 显示）。
+
+#### Scenario: 冲突槽位的行标记
+
+- **WHEN** 某 tick cam_1 的 Player_1 槽位存在 gid_1/gid_3 竞争
+- **THEN** 该 tick 的 `(Player_1, cam_1)` 漏斗行 SHALL `roster_conflict=true`
+- **AND** 去重仍保留首行，但冲突可被观测
+
+#### Scenario: 无冲突行不标记
+
+- **WHEN** 某 tick 无多 global 竞争该槽位
+- **THEN** 漏斗行 SHALL `roster_conflict=false`（或缺省）
+
+#### Scenario: 旧产物兼容
+
+- **WHEN** 查询历史任务的显示诊断产物（无 `roster_conflict` 字段）
+- **THEN** 前端 SHALL 按 false 展示
+- **AND** 查询 API SHALL NOT 因字段缺失报错
+
+### Requirement: 查询 API 产物缺失时返回结构化 unavailable
+
+`GET /analysis/jobs/{job_id}/multiview/players/{player_id}/display-diagnostics` 在产物文件缺失、产物 `status=unavailable/failed`、或窗口内无该球员行时，SHALL 返回结构化 `unavailable` 响应（携带 `reason` 与 `job_id`），前端据此显示"诊断暂不可用"状态。API SHALL NOT 以 404 HTTP 状态码表达"产物未生成"这一业务状态。
+
+#### Scenario: 产物文件缺失
+
+- **WHEN** `player_display_diagnostics_json_path(job_id)` 不存在（历史任务或构建完全失败）
+- **THEN** API SHALL 返回结构化 `unavailable` 响应与 reason
+- **AND** 响应 SHALL 携带 `job_id` 且 HTTP 状态码为非 404（如 200 或 422 语义错误之外的状态）
+
+#### Scenario: 窗口内无该球员行
+
+- **WHEN** 产物存在但窗口内没有 `player_id` 匹配的行
+- **THEN** API SHALL 返回空 `rows` 列表的结构化响应
+- **AND** SHALL NOT 返回错误或伪造数据
+
+### Requirement: 全时间范围序列获取
+
+display-diagnostics 查询 SHALL 支持为前端热力图提供跨窗口的时间序列数据。客户端 SHALL 以分段窗口（如 `window_ms=2000`）多次调用现有 `timestamp_ms + window_ms` 查询并本地拼接为 `(stage × tick)` 矩阵；服务端 SHALL 对 `window_ms` 不设低于 2000ms 的硬限制，或在超限时返回结构化 `partial` 与 reason，MUST NOT 报错或伪造缺失行。
+
+#### Scenario: 分段拉取拼接
+
+- **WHEN** 前端以 `window_ms=2000` 从 `timestamp_ms=0` 开始逐段查询某球员显示诊断
+- **THEN** 前端 SHALL 按 canonical tick 升序拼接各段结果
+- **AND** 拼接矩阵 SHALL 覆盖视频全时长，缺失段以"未触发"占位且不伪造行
+
+#### Scenario: 大窗口请求
+
+- **WHEN** 客户端请求 `window_ms=10000` 或更大窗口
+- **THEN** 服务端 SHALL 返回窗口内全部漏斗行（受现有产物存在性约束）
+- **AND** 若服务端存在窗口上限，SHALL 返回结构化 `partial` 与 reason 而非 500
+
+#### Scenario: 球员切换重取
+
+- **WHEN** 热力图切换球员
+- **THEN** 前端 SHALL 以新 `player_id` 重新分段拉取
+- **AND** 旧球员热力图 SHALL 被替换，不残留旧数据
+

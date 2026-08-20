@@ -148,11 +148,11 @@ def test_clock_reports_interval_range_selection_error_and_provenance():
         secondary_timing_authority="source_pts",
     )
     before = clock.tick(reference_frame_index=0, reference_timestamp_seconds=0.1)
-    # 2026-08-13 起：窗口开头（< valid_start）回退到有效起点帧，status=fallback_valid_start
-    assert before.frame_status["cam_2"] == "fallback_valid_start"
-    assert before.mapping_diagnostics["reason"] == "fallback_valid_start"
-    assert before.views["cam_2"] is not None
-    assert before.views["cam_2"].source_frame_index == 0  # 回退到 valid_start 最近的帧
+    # 该 fixture 的 Cam-2 媒体本身仅 [0.2s, 0.8s]（两帧），t=0.1 映射到 0.1s 落在媒体起点之前，
+    # 真实媒体中不存在该帧 → unavailable_out_of_media_range（诚实的"无帧可显"，而非旧 clamp 到 0.2s 帧的
+    # fallback_valid_start）。selection-error 门的验证由下方 error(t=0.5) 用例承担。
+    assert before.frame_status["cam_2"] == "unavailable_out_of_media_range"
+    assert before.views["cam_2"] is None
 
     error = clock.tick(reference_frame_index=1, reference_timestamp_seconds=0.5)
     assert error.frame_status["cam_2"] == "unavailable_selection_error"
@@ -163,9 +163,11 @@ def test_clock_reports_interval_range_selection_error_and_provenance():
 
 
 def test_clock_window_start_falls_back_to_valid_start_frame():
-    """窗口开头（canonical 早于 valid_start）回退到有效起点帧，status=fallback_valid_start。
+    """窗口开头（canonical 早于 valid_start）改用对称外推选 t=0 真实帧，status=available_extrapolated。
 
-    debug replay 前段因此有副摄画面（2026-08-13 修复），且不消费 tracker（单调不变量保持）。
+    fix-multiview-anchor-span-debug-frame-mapping：pre-anchor 不再 clamp 到 valid_start 帧
+    （旧 fallback_valid_start 行为，导致 debug replay 前段副摄冻结数秒），而是 affine 映射选最近
+    真实媒体帧并经 selection-error 质量门；不消费 tracker（单调不变量仍由 available 路径维护）。
     """
     calibration = SyncCalibration(
         reference_camera="cam_1",
@@ -190,13 +192,16 @@ def test_clock_window_start_falls_back_to_valid_start_frame():
         secondary_camera_id="cam_2",
         max_pairing_error_ms=16.7,
     )
-    # 窗口开头：t=0 早于 valid_start 3.4s → 回退到 valid_start 附近的帧
+    # 窗口开头：t=0 早于 valid_start 3.4s → 对称外推选 t=0 的真实媒体帧（不再 clamp 到 204）
     early = clock.tick(reference_frame_index=0, reference_timestamp_seconds=0.0)
-    assert early.frame_status["cam_2"] == "fallback_valid_start"
+    assert early.frame_status["cam_2"] == "available_extrapolated"
     assert early.views["cam_2"] is not None
-    assert early.views["cam_2"].source_frame_index == round(3.4 * 60)  # ≈204
-    assert early.mapping_diagnostics["reason"] == "fallback_valid_start"
-    assert early.mapping_diagnostics["fallback_selection_error_ms"] is not None
+    assert early.views["cam_2"].source_frame_index == 0  # 外推到 t=0 的真实帧，而非 clamp 到 204
+    assert early.mapping_diagnostics["reason"] == "anchor_span_extrapolation"
+    assert early.mapping_diagnostics["mapping_mode"] == "pre_anchor_extrapolation"
+    assert early.mapping_diagnostics["extrapolation_distance_ms"] == pytest.approx(3400.0, abs=1.0)
+    # available_extrapolated 不推进 tracker 消费游标（D3）：单调不变量仍由 available 路径维护
+    assert clock.last_consumed_source_frame_index.get("cam_2") is None
 
     # 有效区间内：正常 available
     inside = clock.tick(reference_frame_index=300, reference_timestamp_seconds=5.0)

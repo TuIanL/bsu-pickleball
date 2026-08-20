@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame } from "./videoOverlayPlayback";
+import { buildVideoOverlayHud } from "../../services/videoOverlayHud";
 import type { DetectionOverlayFrame, FusedPlayerOverlayEntity, FusedPlayerOverlayFrame } from "../../types/report";
 
 function detection(
@@ -135,5 +136,81 @@ describe("resolveFusedPlayerOverlayFrame", () => {
     frames[1] = { frame_index: 1, timestamp_seconds: 0.4, players: [entity("Player_4", 0.4, "predicted_only", null)] };
     const { frame } = resolveFusedPlayerOverlayFrame(frames, 0.2);
     expect(frame?.players.some((p) => p.player_id === "Player_4")).toBe(true);
+  });
+});
+
+describe("buildVideoOverlayHud bootstrap_backfill", () => {
+  function overlayEntity(
+    playerId: string,
+    timestamp: number,
+    canonical: [number, number],
+    evidenceType: FusedPlayerOverlayEntity["evidence_type"] = "bootstrap_backfill",
+  ): FusedPlayerOverlayEntity {
+    return {
+      player_id: playerId,
+      label: playerId.replace("Player_", "P"),
+      bbox: [0, 0, 100, 200],
+      footpoint: [50, 200],
+      evidence_type: evidenceType,
+      source_confidence: 0.85,
+      overlay_confidence: 0.85,
+      canonical_court_position_ft: canonical,
+    };
+  }
+
+  function overlayFrames(
+    entries: Array<{ playerId: string; timestamp: number; canonical: [number, number] }>,
+    evidenceType: FusedPlayerOverlayEntity["evidence_type"] = "bootstrap_backfill",
+  ): FusedPlayerOverlayFrame[] {
+    return entries.map((entry, index) => ({
+      frame_index: index,
+      timestamp_seconds: entry.timestamp,
+      players: [overlayEntity(entry.playerId, entry.timestamp, entry.canonical, evidenceType)],
+    }));
+  }
+
+  it("fills the bootstrap window minimap gap from overlay positions", () => {
+    // 模拟：pipelineTracks 在 lock 之后才出现（t>=1.0），而 bootstrap 回填覆盖 t=0..0.3
+    const bootstrapOverlay = overlayFrames([
+      { playerId: "Player_1", timestamp: 0.0, canonical: [5, 10] },
+      { playerId: "Player_1", timestamp: 0.1, canonical: [5.5, 12] },
+      { playerId: "Player_1", timestamp: 0.2, canonical: [6, 14] },
+    ]);
+    const pipelineTracks: any[] = [
+      { frame_index: 30, timestamp_seconds: 1.0, track_id: "Player_1", image_point: { x: 0, y: 0 }, confidence: 0.9, side: "near", court_point: { x: 7, y: 18 } },
+    ];
+
+    // 播放头在 t=0.25：pipelineTracks（t=1.0）超出 currentTime 被排除，bootstrap 回填生效
+    const hud = buildVideoOverlayHud(pipelineTracks, null, null, 0.25, { overlayFrames: bootstrapOverlay });
+    expect(hud.visiblePlayerCount).toBe(1);
+    const player = hud.players.find((p) => p.label === "P1");
+    expect(player).toBeTruthy();
+    const latest = player!.latest!;
+    expect(latest.x).toBeCloseTo(6, 5);
+    expect(latest.y).toBeCloseTo(14, 5);
+  });
+
+  it("does not break when overlayFrames is empty", () => {
+    const hud = buildVideoOverlayHud([], null, null, 0.25, { overlayFrames: [] });
+    expect(hud.visiblePlayerCount).toBe(0);
+    expect(() => buildVideoOverlayHud(null, null, null, 0.25, { overlayFrames: undefined })).not.toThrow();
+  });
+
+  it("merges bootstrap backfill with post-lock tracks into one continuous trajectory", () => {
+    const bootstrapOverlay = overlayFrames([
+      { playerId: "Player_1", timestamp: 0.0, canonical: [5, 10] },
+      { playerId: "Player_1", timestamp: 0.1, canonical: [5.5, 12] },
+    ]);
+    const pipelineTracks: any[] = [
+      { frame_index: 30, timestamp_seconds: 1.0, track_id: "Player_1", image_point: { x: 0, y: 0 }, confidence: 0.9, side: "near", court_point: { x: 7, y: 18 } },
+    ];
+
+    // 播放头在 t=1.0：bootstrap 与 pipelineTracks 都在窗口内，应合并为同一球员的多点轨迹
+    const hud = buildVideoOverlayHud(pipelineTracks, null, null, 1.0, { overlayFrames: bootstrapOverlay });
+    expect(hud.visiblePlayerCount).toBe(1);
+    const player = hud.players.find((p) => p.label === "P1");
+    expect(player).toBeTruthy();
+    const totalPoints = player!.segments.reduce((sum, segment) => sum + segment.length, 0);
+    expect(totalPoints).toBeGreaterThanOrEqual(3); // 2 bootstrap + 1 pipeline
   });
 });

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { BallTrajectoryArtifact, BounceEventsArtifact, PipelineTrackPoint } from "../../types/report";
+import type { BallTrajectoryArtifact, BounceEventsArtifact, FusedPlayerOverlayFrame, PipelineTrackPoint } from "../../types/report";
 import { buildVideoOverlayHud, type HudPoint } from "../../services/videoOverlayHud";
 
 const COURT_WIDTH_FT = 20;
@@ -20,6 +20,8 @@ interface CourtMinimapProps {
   showBallPath?: boolean;
   showBounces?: boolean;
   className?: string;
+  /** joint 模式展示权威：fused overlay 逐帧实体，携带 bootstrap 回填真实观测，消除启动窗口小地图空白 */
+  overlayFrames?: FusedPlayerOverlayFrame[];
 }
 
 interface PointMapper {
@@ -75,11 +77,12 @@ export function CourtMinimap({
   showBallPath = true,
   showBounces = true,
   className = "",
+  overlayFrames = [],
 }: CourtMinimapProps) {
   const mapper = useMemo(() => createMapper(), []);
   const hud = useMemo(
-    () => buildVideoOverlayHud(tracks, ballTrajectory, bounceEvents, currentTimeSec, { playerTrailSeconds: trailSeconds }),
-    [ballTrajectory, bounceEvents, currentTimeSec, tracks, trailSeconds],
+    () => buildVideoOverlayHud(tracks, ballTrajectory, bounceEvents, currentTimeSec, { playerTrailSeconds: trailSeconds, overlayFrames }),
+    [ballTrajectory, bounceEvents, currentTimeSec, tracks, trailSeconds, overlayFrames],
   );
 
   const courtPolygon = useMemo(() => [

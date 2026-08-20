@@ -48,7 +48,7 @@ from app.vision.player_tracking_engine.multi_object_tracker import (
     TrackingUpdate,
 )
 from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
-from app.vision.player_tracking_engine.player_lock_manager import PlayerLockManager
+from app.vision.player_tracking_engine.player_lock_manager import InitialLockAssignment, PlayerLockManager
 from app.vision.player_tracking_engine.player_lock_types import PlayerLockConfig
 from app.vision.player_tracking_engine.player_projector import PlayerProjector
 from app.vision.player_tracking_engine.primary_player_selector import PrimaryPlayerSelector
@@ -138,6 +138,7 @@ class ViewFrameResult:
     frame_positions: list[PlayerFramePosition]
     render_raw_by_track: dict[int, dict[str, Any]]
     player_motion_pixels: float | None
+    candidate_detections: list[FrameDetection] = field(default_factory=list)
     source_timestamp_ms: float | None = None
     mapped_take_timestamp_ms: float | None = None
     selection_error_ms: float | None = None
@@ -196,6 +197,7 @@ class ViewTrackingSessionOutputs:
     player_multitarget_detections: list[MultiTargetDetection]
     selection_diagnostics: list[Any]
     lock_diagnostics: list[PlayerIdentityDiagnostic]
+    initial_lock_assignments: dict[str, InitialLockAssignment]
     latest_selection_training_samples: list[Any]
     roi_filtered_detection_count: int
     full_frame_fallback_count: int
@@ -326,6 +328,8 @@ class ViewTrackingSession:
         self.player_multitarget_detections: list[MultiTargetDetection] = []
         self.selection_diagnostics: list[Any] = []
         self.lock_diagnostics: list[PlayerIdentityDiagnostic] = []
+        # fix-joint-bootstrap-visual-gap：首次 lock 映射（从 PlayerLockManager 同步，仅首次锁定）
+        self.initial_lock_assignments: dict[str, InitialLockAssignment] = {}
         # 最新快照（每帧覆盖），非累计列表
         self.latest_selection_training_samples: list[Any] = []
         self.roi_filtered_detection_count = 0
@@ -506,6 +510,8 @@ class ViewTrackingSession:
             frame_height=self.config.frame_height,
         )
         self.lock_diagnostics.extend(lock_update.diagnostics)
+        # fix-joint-bootstrap-visual-gap：同步首次 lock 映射（manager 内部已保证仅记录一次）
+        self.initial_lock_assignments.update(self.player_lock_manager._initial_lock_assignments)
         if self.config.eligibility_policy == "lock_only":
             eligible_track_ids = set(lock_update.eligible_track_ids)
         else:
@@ -518,6 +524,22 @@ class ViewTrackingSession:
             self.config.frame_width,
             self.config.frame_height,
             eligible_track_ids,
+        )
+        # 9b) debug-only 候选层：live 但未进入 formal eligibility 的存活 track。
+        # 硬不变量：formal_track_ids ∩ candidate_track_ids == ∅（同一 tick 集合互斥）。
+        live_track_ids = {track.track_id for track in tracks if not track.lost}
+        candidate_track_ids = live_track_ids - set(eligible_track_ids)
+        candidate_detections = (
+            self._tracks_to_frame_detections(
+                tracks,
+                frame_index,
+                timestamp,
+                self.config.frame_width,
+                self.config.frame_height,
+                candidate_track_ids,
+            )
+            if candidate_track_ids
+            else []
         )
         # 10) 身份管理
         player_samples = self.identity_manager.update(
@@ -676,6 +698,7 @@ class ViewTrackingSession:
             frame_positions=frame_positions,
             render_raw_by_track=render_raw_by_track,
             player_motion_pixels=player_motion_pixels,
+            candidate_detections=candidate_detections,
             local_identity_by_track={int(k): v for k, v in player_by_track.items() if int(k) in surviving_track_ids},
             local_identity_epoch_by_track=identity_epoch_by_track,
             observation_origin_by_track=origin_by_track,
@@ -710,6 +733,7 @@ class ViewTrackingSession:
             player_multitarget_detections=self.player_multitarget_detections,
             selection_diagnostics=self.selection_diagnostics,
             lock_diagnostics=self.lock_diagnostics,
+            initial_lock_assignments=self.initial_lock_assignments,
             latest_selection_training_samples=self.latest_selection_training_samples,
             roi_filtered_detection_count=self.roi_filtered_detection_count,
             full_frame_fallback_count=self.full_frame_fallback_count,

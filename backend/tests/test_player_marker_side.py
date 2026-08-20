@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.schemas.analysis import canonical_player_side
-from app.services.mock_analysis import _tracks_to_player_markers
+from app.services.real_report_builder import _tracks_to_player_markers
 
 
 def _fake_track(track_id: str, x_ft: float = 5.0, y_ft: float = 10.0):

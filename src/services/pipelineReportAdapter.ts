@@ -13,6 +13,16 @@ export function isPipelineResult(value: AnalysisPipelineResult | AnalysisJobSumm
   return Boolean(value && "job_id" in value && "metrics" in value);
 }
 
+/**
+ * @deprecated 前端不再为 real job 自行拼装报告（add-performance-insights-and-feedback-report Phase 1）。
+ *
+ * 真实任务的报告唯一权威是后端 `GET /api/analysis/jobs/{job_id}/report`；
+ * 报告缺失时页面应显示显式"报告生成中/尚未生成"状态，而不是用 demo fallback
+ * 或 pipeline result 在浏览器里拼一份"近似报告"（会造成双真值 + demo 泄漏）。
+ *
+ * 本函数仅为兼容既有单测/旧数据路径保留；新 runtime 不得调用。
+ * `isPipelineResult` / `tracksToPlayerMarkers` / `playerSideFromId` 仍在正常使用。
+ */
 export function adaptPipelineResultToReport(
   job: AnalysisJobSummary,
   result: AnalysisPipelineResult | null,

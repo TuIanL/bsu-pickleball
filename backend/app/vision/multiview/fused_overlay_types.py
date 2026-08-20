@@ -26,13 +26,14 @@ logger = logging.getLogger(__name__)
 
 FUSED_PLAYER_OVERLAY_SCHEMA = "multiview-fused-player-overlay.v1"
 
-# 五级展示证据类型（分支决策链的最终结果）
+# 五级展示证据类型（分支决策链的最终结果）+ bootstrap 展示回填（最低优先级兜底）
 EvidenceType = Literal[
     "base_observed",  # F0 strong/base 真实观测
     "guided_observed",  # F0 guided_roi 真实观测（跨摄 guidance 重检测成功）
     "refined_observed",  # accepted F1 recovered observation
     "cross_view_projected",  # 本 view 无观测，donor 真实观测 + 投影补全
     "predicted_only",  # 双 view 无观测，短时预测兜底
+    "bootstrap_backfill",  # 启动 bootstrap 窗口内 retrospective 真实观测回填（display-only）
 ]
 
 BBoxSource = Literal[
@@ -64,6 +65,8 @@ class FusedPlayerOverlayPlayer(BaseModel):
     bbox_source: BBoxSource | None = None
     # 仅 refined_observed 使用
     provenance: Literal["offline_refinement"] | None = None
+    # bootstrap_backfill 携带的 canonical court 坐标 [x, y]（英尺），供小地图消费；其余类型可为 None
+    canonical_court_position_ft: list[float] | None = Field(default=None, min_length=2, max_length=2)
     # ---- 展示稳定性（stabilize-multiview-overlay-display）----
     # 迟滞状态机当前展示状态（REAL_BOX/ASSISTED_BOX/PROJECTED_BOX/PROJECTED_POINT/PREDICTED_POINT/HIDDEN）
     display_state: str | None = None
@@ -94,6 +97,18 @@ class FusedPlayerOverlayPlayer(BaseModel):
         point = [float(item) for item in value]
         if not all(isfinite(item) for item in point):
             raise ValueError("footpoint must contain only finite numeric values")
+        return point
+
+    @field_validator("canonical_court_position_ft")
+    @classmethod
+    def _validate_canonical_court_position(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return None
+        if len(value) != 2:
+            raise ValueError("canonical_court_position_ft must contain exactly 2 numeric values")
+        point = [float(item) for item in value]
+        if not all(isfinite(item) for item in point):
+            raise ValueError("canonical_court_position_ft must contain only finite numeric values")
         return point
 
 
@@ -160,6 +175,7 @@ def validate_fused_player_overlay(payload: object) -> None:
                 "refined_observed",
                 "cross_view_projected",
                 "predicted_only",
+                "bootstrap_backfill",
             }:
                 raise ValueError(
                     f"overlay frame {index} player {player_id!r} invalid evidence_type {evidence_type!r}"

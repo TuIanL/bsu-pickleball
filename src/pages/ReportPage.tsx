@@ -1,7 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ArrowRight, Dumbbell } from "lucide-react";
-import type { NavigateFn, AppPath } from "../app/navigationTypes";
-import type { AnalysisReport, ReportType, AnalysisJobSummary } from "../types/report";
+import type {
+  AnalysisReport,
+  NavigateFn,
+  AppPath,
+  ReportType,
+  AnalysisJobSummary,
+} from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import { PageFrame } from "../components/PageFrame";
@@ -10,7 +15,9 @@ import { MetricCard } from "../components/platform/MetricCard";
 import { ReportVisualization } from "../components/platform/ReportVisualization";
 import { supportedReportTypes } from "../app/router";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport } from "../services/analysisClient";
+import { PerformanceInsightsPanel } from "../components/platform/PerformanceInsightsPanel";
 import { formatDateTime, toneStyles, errorToNotice } from "../utils/analysisHelpers";
+import PbVisionReportLayout from "../components/pb-vizion/PbVisionReportLayout";
 
 function useJobReport(jobId?: string) {
   const [loadedReport, setLoadedReport] = useState<{
@@ -77,6 +84,24 @@ function useJobReport(jobId?: string) {
   };
 }
 
+/** 基于原生 URLSearchParams 读取当前 query，无需 react-router-dom。 */
+function useCurrentSearchParams(): URLSearchParams {
+  const [params, setParams] = useState<URLSearchParams>(() => {
+    if (typeof window === "undefined") return new URLSearchParams();
+    return new URLSearchParams(window.location.search);
+  });
+  useEffect(() => {
+    const onChange = () => setParams(new URLSearchParams(window.location.search));
+    window.addEventListener("popstate", onChange);
+    window.addEventListener("searchparams:change", onChange);
+    return () => {
+      window.removeEventListener("popstate", onChange);
+      window.removeEventListener("searchparams:change", onChange);
+    };
+  }, []);
+  return params;
+}
+
 export function ReportPage({
   jobId,
   onNavigate,
@@ -87,7 +112,20 @@ export function ReportPage({
   reportType: ReportType;
 }) {
   const { error, job, report } = useJobReport(jobId);
+  const searchParams = useCurrentSearchParams();
   const taskReturnPath = taskListPathForJob(job);
+
+  // 2.4 读取 legacy 标记：
+  //   - query: ?legacy=1 优先
+  //   - 否则 fallback localStorage.reportLegacy==='1'
+  const useLegacyLayout = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const fromQuery = searchParams.get("legacy");
+    if (fromQuery !== null) {
+      return fromQuery === "1" || fromQuery === "true";
+    }
+    return window.localStorage.getItem("reportLegacy") === "1";
+  }, [searchParams]);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载分析报告" body="正在读取该任务生成的轻量报告数据。" onNavigate={onNavigate} backPath={taskReturnPath} />;
@@ -130,7 +168,7 @@ export function ReportPage({
                   body: "任务取消后保留执行记录，但不会生成报告。",
                   detailItems: [["取消时间", job.canceledAt ? formatDateTime(job.canceledAt) : undefined]],
                 }
-            : null
+              : null
         }
         onNavigate={onNavigate}
         backPath={taskReturnPath}
@@ -149,7 +187,14 @@ export function ReportPage({
     );
   }
 
-  const analysis = report ?? demoReport;
+  const analysis = (report ?? demoReport) as AnalysisReport;
+
+  // —— 默认：渲染 PB Vision 风格（新布局）
+  if (!useLegacyLayout) {
+    return <PbVisionReportLayout report={analysis} />;
+  }
+
+  // —— legacy=true：渲染旧布局（深绿风格）
   const supportedDefinitions = analysis.reportDefinitions.filter((item) => supportedReportTypes.includes(item.type));
   const definition =
     supportedDefinitions.find((item) => item.type === reportType) ??
@@ -161,6 +206,26 @@ export function ReportPage({
 
   return (
     <PageFrame>
+      {/* 任务 7.6：在旧版页面顶部也放一个切回新版的按钮，避免用户卡死在 legacy 版本 */}
+      <div className="mb-4 flex justify-end">
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-lg border border-[#22C55E]/40 bg-white px-3 py-1.5 text-xs font-semibold text-[#168A34] hover:bg-[#22C55E]/10 transition"
+          onClick={() => {
+            if (typeof window !== "undefined") {
+              window.localStorage.removeItem("reportLegacy");
+              // 同时清掉 URL 上的 legacy query，保证之后都走默认新布局
+              const next = new URL(window.location.href);
+              next.searchParams.delete("legacy");
+              window.location.href = next.toString();
+            }
+          }}
+        >
+          <span>✨</span>
+          <span>切换到新版</span>
+        </button>
+      </div>
+
       <section className="sport-card overflow-hidden">
         <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.45fr] lg:p-8">
           <div>
@@ -197,6 +262,29 @@ export function ReportPage({
           <MetricCard key={`${definition.type}-${metric.id}`} metric={metric} />
         ))}
       </section>
+
+      {reportType === "performance" ? (
+        <section className="mt-6">
+          {analysis.performanceInsights ? (
+            <PerformanceInsightsPanel
+              insights={analysis.performanceInsights}
+              jobId={analysis.jobId ?? jobId}
+              job={job}
+              onNavigate={onNavigate}
+            />
+          ) : (
+            /* demo 任务 / v1 旧报告访问 performance 路由：显示样例说明，不用 demo 数据冒充真实洞察。 */
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6">
+              <p className="text-sm font-bold text-slate-600">该报告不含表现洞察数据</p>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {analysis.source === "demo"
+                  ? "当前为样例报告：表现洞察只对真实分析任务生成，样例数据不会冒充洞察结论。"
+                  : "该任务的报告版本较早（v1），未包含表现洞察字段。重新运行分析即可生成。"}
+              </p>
+            </div>
+          )}
+        </section>
+      ) : null}
 
       <div className="mt-6">
         <ReportVisualization

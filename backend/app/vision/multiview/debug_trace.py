@@ -104,6 +104,11 @@ def validate_joint_debug_trace(payload: object) -> None:
                 raise ValueError(f"trace tick {index}/{view_id} observations/detections must be lists")
             if not isinstance(view["guidance"], list) or not isinstance(view["bindings"], dict):
                 raise ValueError(f"trace tick {index}/{view_id} guidance/bindings have invalid types")
+            # debug-only 可选候选层：缺失 → 通过；存在但非 list → 失败（list 级校验，
+            # 不做逐元素加强，保证历史 trace 全量兼容；元素形状由 producer 单测锁定）。
+            candidate_detections = view.get("candidate_detections")
+            if candidate_detections is not None and not isinstance(candidate_detections, list):
+                raise ValueError(f"trace tick {index}/{view_id} candidate_detections must be a list")
 
 
 def build_joint_debug_manifest(

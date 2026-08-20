@@ -334,6 +334,12 @@ export const coachNotes: CoachNote[] = [
 
 export const reportActions: ReportAction[] = [
   {
+    type: "performance",
+    title: "本场表现报告",
+    description: "总结优势与首要问题，并转化为下一次训练目标。",
+    path: "/reports/performance",
+  },
+  {
     type: "movement",
     title: "步法移动报告",
     description: "拆解回位路径、覆盖平衡和启动延迟。",

@@ -154,17 +154,23 @@ Refinement section SHALL 分别表达离线精修执行状态、Candidate F1 生
 
 ### Requirement: Debug replay 帧选择与 clock 回退一致
 
-Debug replay 渲染 SHALL 以 trace 中每 tick 的 `source_frame_index` 与 `frame_status` 为准。若 clock 回退策略生效，trace 前段 view SHALL 为回退帧且 status 标记 fallback；渲染器 SHALL 显示回退帧画面并叠加对应状态标记，SHALL NOT 显示 UNAVAILABLE 面板。
+Debug replay 渲染 SHALL 以 trace 中每 tick 的 `source_frame_index` 与 `frame_status` 为准。若 clock 外推策略生效，trace 前段 view SHALL 为外推帧且 status 标记 `available_extrapolated`（或历史产物的 `fallback_valid_start`）；渲染器 SHALL 显示真实外推帧画面并叠加对应状态标记，SHALL NOT 显示 UNAVAILABLE 面板。渲染器 SHALL 兼容历史 `fallback_valid_start` 产物（旧 trace 仍渲染回退帧）。外推帧的 `source_frame_index` 在连续 canonical tick 正常递增时，渲染器 SHALL 解码对应真实帧（不再因人为 clamp 而重复同一帧）。
 
-#### Scenario: 回退帧正常渲染
+#### Scenario: 外推帧正常渲染
 
-- **WHEN** trace 前段 cam_2 status 为 fallback 且含 `source_frame_index`
-- **THEN** debug replay SHALL 显示该回退帧画面
-- **AND** 画面叠加 SHALL 标注 fallback 状态
+- **WHEN** trace 前段 cam_2 status 为 `available_extrapolated` 或历史 `fallback_valid_start` 且含 `source_frame_index`
+- **THEN** debug replay SHALL 显示该真实帧画面
+- **AND** 画面叠加 SHALL 标注对应 status
+
+#### Scenario: 外推帧连续递增不重复冻结
+
+- **WHEN** 连续 canonical tick 的 `available_extrapolated` 帧 `source_frame_index` 递增
+- **THEN** renderer SHALL 解码对应递增真实帧，cam_2 视角 SHALL 持续运动
+- **AND** MUST NOT 把同一帧重复写入多秒（不再有开头定格现象）
 
 #### Scenario: 细分不可用仍清晰呈现
 
-- **WHEN** cam_2 仍为不可用状态（无回退可用）
+- **WHEN** cam_2 仍为不可用状态（如 `unavailable_out_of_media_range` / `unavailable_selection_error`）
 - **THEN** debug replay SHALL 显示 UNAVAILABLE 面板与结构化原因
 - **AND** SHALL 包含 `selection_error_ms` 等诊断信息
 
@@ -217,3 +223,66 @@ Debug replay 渲染 SHALL 以 trace 中每 tick 的 `source_frame_index` 与 `fr
 - **WHEN** Debug section 为 `unavailable` 或 `video_available=false`
 - **THEN** 面板 SHALL 保持既有不可用提示（如"未开启详细诊断回放"或"canonical debug MP4 尚未生成"）
 - **AND** MUST NOT 渲染空视频播放器
+
+### Requirement: 分层可视化展示
+
+联合运行状态页面 SHALL 在保持后端投影语义不变的前提下，以 L1 概览层、L2 图形层、L3 明细层组织展示。L1 SHALL 包含一句话结论、健康度与四阶段流水线状态灯；L2 SHALL 以图表形式呈现四大域事实；L3 SHALL 保留等价于现状的完整明细。页面 MUST NOT 因可视化升级而重算或改写后端已发布结论。
+
+#### Scenario: 概览层呈现
+
+- **WHEN** summary 可用且页面加载完成
+- **THEN** 页面 SHALL 在首屏呈现一句话结论、健康度评分与 SYNC / FUSION / RECOVERY / REFINEMENT 流水线状态灯
+- **AND** 概览层内容 SHALL 全部源自 summary 既有字段，不引入新算法结论
+
+#### Scenario: 四大域图表化
+
+- **WHEN** 页面加载完成
+- **THEN** SYNC SHALL 以双视角对比可视化呈现 per-view authority 与参考机位
+- **AND** FUSION SHALL 以环形图呈现 `effective_multiview_ratio`、以堆叠条呈现 `status_counts`
+- **AND** RECOVERY SHALL 以六段漏斗图呈现 `funnel` 计数
+- **AND** REFINEMENT SHALL 以门控流程呈现 execution / publication 决策与 `final_source`
+
+#### Scenario: 明细层等价保留
+
+- **WHEN** 用户展开 L3 明细层
+- **THEN** 每个分域 SHALL 呈现与可视化改造前等价的指标明细与 reason 文本
+- **AND** 缺失字段 SHALL 显示 "-"（沿用现有 `MetricRow` 语义），MUST NOT 伪造
+
+### Requirement: 状态与可用性语义延续
+
+各分域 `availability` 与状态灯展示 SHALL 延续现有独立状态域语义：某一分域 `not_applicable` MUST NOT 渲染为失败；`partial` MUST 附带缺失证据 reason；前端推导的健康度评分 MUST 标注为展示汇总。
+
+#### Scenario: 不适用分域展示
+
+- **WHEN** 任务为 `late_fusion_v1` 且 recovery / refinement 为 `not_applicable`
+- **THEN** 对应流水线阶段与图表 SHALL 显示"不适用"灰色状态
+- **AND** 其余分域 SHALL 独立正常展示，不受影响
+
+#### Scenario: 评分标注汇总性质
+
+- **WHEN** 页面显示健康度评分
+- **THEN** 评分旁 SHALL 标注"前端基于后端事实汇总"
+- **AND** 页脚 SHALL 保留"页面不重新计算算法结论"说明
+
+### Requirement: Display-only 帧标注未执行跟踪
+
+Debug Replay 中状态为 `available_extrapolated` 或历史 `fallback_valid_start` 的 view 帧（仅用于显示、该 tick 未执行 perception / tracker 未 step）SHALL 在画面上叠加明确的固定标识（如 `DISPLAY ONLY · TRACKING NOT STEPPED`），区分"此帧未运行跟踪"与"检测漏检"两种完全不同的语义。此类帧 SHALL NOT 绘制或伪造任何 candidate/formal bbox，SHALL NOT 将空 `detections` 呈现为算法漏检。既有要求（显示真实源帧、叠加 status 标记、不显示 UNAVAILABLE 面板）SHALL 保持不变。
+
+#### Scenario: 外推帧显示未跟踪横幅
+
+- **WHEN** trace 某 tick 的 cam-2 状态为 `available_extrapolated`（或 `fallback_valid_start`）且含 `source_frame_index`
+- **THEN** debug replay SHALL 显示该真实源帧画面并叠加 `DISPLAY ONLY · TRACKING NOT STEPPED` 类标识
+- **AND** 画面 SHALL NOT 出现任何检测框（formal 或候选）
+
+#### Scenario: 进入 available tick 后横幅消失
+
+- **WHEN** 同一 view 在后续 tick 状态变为 `available`（perception 实际执行）
+- **THEN** 该标识 SHALL 不再显示
+- **AND** 检测框显示 SHALL 恢复 formal `detections`（及可选 `candidate_detections`）驱动的正常语义
+
+#### Scenario: 与候选层语义不混淆
+
+- **WHEN** 用户在 replay 前段看到 cam-2 无框且带 DISPLAY ONLY 标识、随后在 available tick 看到 cam-2 出现 `candidate` 弱框
+- **THEN** 两种状态 SHALL 可视觉区分（横幅 vs 候选框）
+- **AND** SHALL NOT 在 display-only tick 中以候选框形式伪造"已检测"表象
+

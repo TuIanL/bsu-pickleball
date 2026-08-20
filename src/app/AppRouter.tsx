@@ -56,7 +56,7 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
       case "analysis-details":
         return <AnalysisDetailsPage jobId={route.jobId} onNavigate={onNavigate} />;
       case "vision":
-        return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={onNavigate} recentJob={recentJob} />;
+        return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={onNavigate} recentJob={recentJob} seekToMs={"seekToMs" in route ? route.seekToMs : undefined} />;
       case "ball-trajectory":
         return (
           <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[#667085]">正在加载球路视图…</div>}>

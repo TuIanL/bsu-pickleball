@@ -61,6 +61,7 @@
 - **WHEN** 网前两名球员交叉跑位，单帧另一 candidate 距离更近
 - **THEN** 系统 SHALL NOT 单帧切换
 - **AND** 仅当连续 `reassociation_frames` 帧该 candidate 持续为强证据才切换
+
 ### Requirement: 关联在 canonical 空间执行
 
 跨视角关联 MUST 在 Canonical Physical Court Frame 空间执行，其代价基于 canonical 坐标距离与运动预测残差，而非 local 坐标。
@@ -150,6 +151,7 @@ GlobalState.predict(t)
 - **WHEN** registry 处于 `ROSTER_ACTIVE` 且观测无法匹配 P1-P4
 - **THEN** 该观测 SHALL 记为 unresolved / recovery / noise
 - **AND** SHALL NOT 创建新 global player
+
 ### Requirement: 单视角缺失不阻塞
 
 当某 global player 在一路视角不可见时,另一路观测 SHALL 仍能分配到其 global state;缺失视角 SHALL 视为该 view binding 过期,而非阻止关联。
@@ -206,7 +208,39 @@ GlobalState.predict(t)
 - **THEN** registry SHALL 保持现有 roster
 - **AND** 该事件 SHALL NOT 触发 roster 销毁或重建
 
-## ADDED Requirements
+### Requirement: reference view binding 槽位唯一性
+
+`GlobalPlayerAssociator` 对 reference view 的 `(view_id, view_player_id)` 映射 SHALL 保持唯一：同一 view 内同一个 `Player_N` 槽位 SHALL 至多绑定一个 global player。新 global 尝试占用已被其他 global 占用的槽位时，SHALL 走 reassociation（`PendingReassociation`，连续强证据帧数达到 `reassociation_frames` 才切换），MUST NOT 直接覆盖既有 mapping。
+
+#### Scenario: 两个 global 抢同一 reference 槽位不覆盖
+
+- **WHEN** gid_1 已绑定 cam_1 的 Player_1，gid_3 的观测试图关联到 cam_1 的 Player_1
+- **THEN** 系统 SHALL 将该候选标记为 reassoc pending（记录 challenger 连续强证据帧数）
+- **AND** 在 `reassociation_frames` 帧强证据前，mapping SHALL 保持 gid_1 → Player_1
+- **AND** SHALL NOT 立即把 Player_1 重新绑定到 gid_3
+
+#### Scenario: 强证据达标后切换
+
+- **WHEN** challenger（gid_3）对 cam_1 Player_1 连续强证据 ≥ `reassociation_frames`
+- **THEN** mapping SHALL 切换到 gid_3 → Player_1
+- **AND** 原绑定（gid_1）SHALL 进入 reacquire 候选池（historical_reacquired 语义）
+
+### Requirement: 槽位冲突可观测
+
+系统 SHALL 记录 reference view 槽位冲突事件（如 `event: "reference_slot_conflict"` + `view_id` + `view_player_id` + `incumbent_global` + `challenger_global` + `epoch`），供身份冲突归因（display diagnostics 的 `roster_conflict` 字段数据来源）。该观测 SHALL 只读，MUST NOT 改变 association 算法与门限。
+
+#### Scenario: 冲突事件记录
+
+- **WHEN** 第二个 global 尝试占用已绑定的 reference 槽位
+- **THEN** 系统 SHALL 记录 `reference_slot_conflict` 事件（含双方 gid 与槽位）
+- **AND** 该事件 SHALL 可在 job 观测产物中检索
+
+#### Scenario: 观测不改变关联结果
+
+- **WHEN** 发生槽位冲突且触发 reassoc pending
+- **THEN** 冲突事件 SHALL 仅记录观测信息
+- **AND** 关联算法、门限、晋升逻辑 SHALL 与实施前一致
+
 ### Requirement: uncertainty-aware association gate
 `GlobalPlayerAssociator` SHALL 以 uncertainty-aware gate 替代固定单值几何门：`gate_ft = min(max_reacquire_gate_ft, base_gate_ft + uncertainty_scale × prediction_uncertainty_ft)`。不同关联状态 SHALL 使用不同门宽：稳定连续匹配用 `base_gate_ft`（约 3ft）；历史 local 重连 / 跨 epoch reacquire 允许随 Kalman uncertainty 扩展至上限 `max_reacquire_gate_ft`；尝试把已有 global 换成另一个 global 时 SHALL 使用更严格门。具体参数 SHALL 用真实双摄 trace 的 residual 分布标定，MUST NOT 未经数据预拍为唯一标准。
 

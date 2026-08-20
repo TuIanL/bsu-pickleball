@@ -86,6 +86,9 @@ def _player_stats(
     tracked_seconds = 0.0
     dist_weighted_sum = 0.0
     dist_weight = 0.0
+    # own-side 口径：按有效时间内 y 中位数推断球员所属半场，只量该半场厨房线；
+    # 无法判定时回退最近厨房线（反馈文案标注口径受限）。
+    own_side = _infer_own_side(tracked, effective_windows, court)
 
     for previous, current in zip(tracked, tracked[1:], strict=False):
         delta = max(0.0, (current.timestamp_seconds or 0.0) - (previous.timestamp_seconds or 0.0))
@@ -100,16 +103,13 @@ def _player_stats(
             zone = zone_for(previous.x_ft, previous.y_ft, court)
             if zone is not None:
                 zone_seconds[zone] += delta
-            # 平均站位距厨房线：取最近一条厨房线的纵向距离，时间加权。
-            distance_ft = min(
-                abs(previous.y_ft - court.near_kitchen_y_ft),
-                abs(previous.y_ft - court.far_kitchen_y_ft),
-            )
+            # 平均站位距厨房线（own-side）：量所属半场厨房线的纵向距离，时间加权。
+            distance_ft = _own_side_distance_ft(previous.y_ft, own_side, court)
             dist_weighted_sum += distance_ft * delta
             dist_weight += delta
 
     kitchen_seconds = zone_seconds["kitchen"]
-    kcr = max(0.0, min(1.0, kitchen_seconds / denominator)) if denominator > 0 else 0.0
+    nvz_occupancy = max(0.0, min(1.0, kitchen_seconds / denominator)) if denominator > 0 else 0.0
     data_sufficiency = (
         "sufficient"
         if denominator > 0 and tracked_seconds / denominator >= DATA_SUFFICIENCY_THRESHOLD
@@ -134,11 +134,44 @@ def _player_stats(
         denominator_seconds=round(denominator, 2),
         tracked_seconds=round(tracked_seconds, 2),
         data_sufficiency=data_sufficiency,
-        kitchen_control_rate=round(kcr, 4),
+        nvz_occupancy_rate=round(nvz_occupancy, 4),
+        kitchen_control_rate=round(nvz_occupancy, 4),  # deprecated alias：同值同分母
         avg_distance_to_kitchen_line_m=round(avg_distance_m, 1),
         zones=zones,
-        feedback=_feedback(avg_distance_m, reference_distance_m, kcr),
+        feedback=_feedback(avg_distance_m, reference_distance_m, nvz_occupancy, own_side_known=own_side is not None),
     )
+
+
+def _infer_own_side(
+    tracked: list[Any],
+    effective_windows: list[tuple[float, float]] | None,
+    court: PickleballCourtGeometry,
+) -> str | None:
+    """按有效时间内 y 中位数推断球员所属半场（near / far）；无法判定返回 None。"""
+    net_y = court.net_y_ft
+    ys = [
+        point.y_ft
+        for point in tracked
+        if point.y_ft is not None and _in_windows(point.timestamp_seconds or 0.0, effective_windows)
+    ]
+    if not ys:
+        return None
+    ys.sort()
+    median = ys[len(ys) // 2]
+    if median < net_y:
+        return "near"
+    if median > net_y:
+        return "far"
+    return None
+
+
+def _own_side_distance_ft(y_ft: float, own_side: str | None, court: PickleballCourtGeometry) -> float:
+    """own-side 厨房线距离：量所属半场厨房线；无法判定半场时回退最近厨房线。"""
+    if own_side == "near":
+        return abs(y_ft - court.near_kitchen_y_ft)
+    if own_side == "far":
+        return abs(y_ft - court.far_kitchen_y_ft)
+    return min(abs(y_ft - court.near_kitchen_y_ft), abs(y_ft - court.far_kitchen_y_ft))
 
 
 def _denominator_seconds(
@@ -160,33 +193,42 @@ def _in_windows(timestamp: float, windows: list[tuple[float, float]] | None) -> 
     return any(start <= timestamp < end for start, end in windows)
 
 
-def _feedback(avg_distance_m: float, reference_m: float, kcr: float) -> ZoneFeedback:
-    """按平均站位距厨房线相对参考基准生成反馈等级与文案。
+def _feedback(
+    avg_distance_m: float,
+    reference_m: float,
+    nvz_occupancy: float,
+    *,
+    own_side_known: bool,
+) -> ZoneFeedback:
+    """按平均站位距厨房线相对参考基准生成描述性反馈档位与文案。
 
+    文案只陈述站位与 NVZ 占用事实（design D4：删除"网前控制优秀/良好/不足"能力评价），
     参考基准是硬编码常数（设计选型 A），文案强制标注"参考基准"而非真实同水平规范数据。
+    own_side_known=False 时标注口径受限（回退最近厨房线估算）。
     """
-    kcr_percent = kcr * 100
+    nvz_percent = nvz_occupancy * 100
+    basis_note = "" if own_side_known else "（按最近厨房线估算，未能确定所属半场）"
     if avg_distance_m <= reference_m:
         return ZoneFeedback(
-            level="excellent",
+            level="near_line",
             summary=(
-                f"网前控制优秀，平均站位距厨房线 {avg_distance_m:.1f}m，"
-                f"贴近参考基准 {reference_m:.1f}m（KCR {kcr_percent:.0f}%）。"
+                f"平均站位较接近厨房线（{avg_distance_m:.1f}m，参考基准 {reference_m:.1f}m），"
+                f"非截击区占用率 {nvz_percent:.0f}%{basis_note}。"
             ),
         )
     if avg_distance_m <= reference_m * 1.5:
         return ZoneFeedback(
-            level="good",
+            level="moderate",
             summary=(
-                f"网前控制良好，平均站位距厨房线 {avg_distance_m:.1f}m，"
-                f"略高于参考基准 {reference_m:.1f}m（KCR {kcr_percent:.0f}%）。"
+                f"平均站位距厨房线 {avg_distance_m:.1f}m，略高于参考基准 {reference_m:.1f}m，"
+                f"非截击区占用率 {nvz_percent:.0f}%{basis_note}。"
             ),
         )
     return ZoneFeedback(
-        level="insufficient",
+        level="deep",
         summary=(
             f"平均站位距厨房线 {avg_distance_m:.1f}m，高于参考基准 {reference_m:.1f}m，"
-            f"网前控制不足（KCR {kcr_percent:.0f}%）。"
+            f"非截击区占用率 {nvz_percent:.0f}%{basis_note}。"
         ),
     )
 

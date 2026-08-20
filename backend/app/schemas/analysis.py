@@ -11,13 +11,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.performance_insights import ReportPerformanceInsights
+
 # 比赛制式
 MatchFormat = Literal["singles", "doubles"]
 
 # 趋势方向：上升 / 下降 / 持平
 TrendDirection = Literal["up", "down", "steady"]
 # 报告类型：运动表现 / 诊断
-ReportType = Literal["movement", "diagnosis"]
+ReportType = Literal["movement", "diagnosis", "performance"]
 # 洞察语气：优势 / 风险 / 错误 / 训练
 InsightTone = Literal["advantage", "risk", "error", "training"]
 # 任务业务状态
@@ -491,7 +493,7 @@ class ReportDefinition(BaseModel):
     summary: str
     heroMetric: str
     heroMetricLabel: str
-    visualization: Literal["movement", "diagnosis"]
+    visualization: Literal["movement", "diagnosis", "performance"]
     metrics: list[Metric]
     insights: list[CoachNote]
     trainingLink: str
@@ -605,9 +607,14 @@ def _count_match_score(actual: int, expected: int) -> float:
 
 
 class AnalysisReport(BaseModel):
-    """完整分析报告：前端报告页渲染所需的全部结构化数据。"""
+    """完整分析报告：前端报告页渲染所需的全部结构化数据。
 
-    version: Literal["analysis-report-v1"]
+    version 沿用既有字段扩展（不新增第二套 schema_version 字段）：
+    - v1：旧 job 已落盘报告 / demo 报告（照常可读）；
+    - v2：新 real report，新增可选 performanceInsights（洞察投影子集）。
+    """
+
+    version: Literal["analysis-report-v1", "analysis-report-v2"]
     source: Literal["demo", "job"]  # 数据来源（演示/真实任务）
     jobId: str | None = None
     reportId: str
@@ -630,3 +637,5 @@ class AnalysisReport(BaseModel):
     shotRows: list[ShotRow]
     skillRatings: list[SkillRating]
     progressPoints: list[ProgressPoint]
+    # v2 新增：performance insights 用户可读投影（旧 v1 报告无此字段，向后兼容）。
+    performanceInsights: ReportPerformanceInsights | None = None

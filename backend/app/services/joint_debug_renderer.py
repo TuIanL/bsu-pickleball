@@ -178,9 +178,10 @@ def _read_trace_frame(
 ) -> np.ndarray:
     status = str(view.get("status", "unavailable"))
     source_index = view.get("source_frame_index")
-    # fallback_valid_start（窗口开头回退帧）与 available 一样可渲染：trace 记录的是
-    # 有效起点附近的近似帧，画面叠加 status 文本标注（2026-08-13 窗口开头黑屏修复）。
-    renderable = status in ("available", "fallback_valid_start")
+    # available / fallback_valid_start（历史窗口开头回退帧）/ available_extrapolated（锚点区间外
+    # 对称外推显示帧）都可直接渲染：trace 已记录真实源帧索引，渲染器只负责解码呈现，
+    # 不替换/伪造帧。历史 fallback_valid_start 仍保留兼容（2026-08-13 窗口开头黑屏修复）。
+    renderable = status in ("available", "fallback_valid_start", "available_extrapolated")
     if not renderable or source_index is None:
         return _unavailable_panel(view_id, status, str(view.get("selection_error_ms")))
     try:
@@ -215,20 +216,54 @@ def _read_trace_frame(
     return _fit_panel(frame, 640, 360)
 
 
+# display-only 帧状态：该 tick 未执行 perception（tracker 未 step），只供回放显示
+_DISPLAY_ONLY_STATUSES = ("available_extrapolated", "fallback_valid_start")
+_DISPLAY_ONLY_BANNER_COLOR = (80, 130, 255)  # BGR 醒目橙红
+# tracker 候选框（live 但未满足 lock_only formal eligibility）：细线弱色
+_CANDIDATE_COLOR = (0, 170, 190)  # BGR 柔和琥珀
+_FORMAL_DETECTED_COLOR = (0, 190, 255)  # BGR 高亮橙（既有正式框样式）
+
+
 def _draw_view_overlays(frame: np.ndarray, view: dict[str, object]) -> None:
+    status = str(view.get("status", "unavailable"))
+    if status in _DISPLAY_ONLY_STATUSES:
+        # display-only 帧：主动禁止一切检测框/footpoint/guidance overlay（design D3），
+        # 不依赖生产端恰好为空——即使异常 trace 带有 detections 也不画，杜绝伪造框。
+        _draw_status_line(frame, view)
+        cv2.putText(
+            frame,
+            "DISPLAY ONLY | TRACKING NOT STEPPED",
+            (12, 52),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            _DISPLAY_ONLY_BANNER_COLOR,
+            2,
+            cv2.LINE_AA,
+        )
+        return
     for detection in view.get("detections", []):
         if not isinstance(detection, dict):
             continue
         bbox = detection.get("bbox")
         if isinstance(bbox, list) and len(bbox) == 4:
             x1, y1, x2, y2 = (int(float(value)) for value in bbox)
-            color = (0, 190, 255) if detection.get("tracking_status") == "detected" else (150, 150, 150)
+            color = _FORMAL_DETECTED_COLOR if detection.get("tracking_status") == "detected" else (150, 150, 150)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             label = str(detection.get("player_id") or detection.get("track_id") or "person")
             cv2.putText(frame, label, (x1, max(16, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
         footpoint = detection.get("image_footpoint")
         if isinstance(footpoint, list) and len(footpoint) == 2:
             cv2.circle(frame, (int(float(footpoint[0])), int(float(footpoint[1]))), 4, (0, 255, 0), -1)
+    # debug-only 候选层：细线弱色，统一 tracker candidate 标签（无 Player_N 正式身份）
+    for detection in view.get("candidate_detections", []):
+        if not isinstance(detection, dict):
+            continue
+        bbox = detection.get("bbox")
+        if isinstance(bbox, list) and len(bbox) == 4:
+            x1, y1, x2, y2 = (int(float(value)) for value in bbox)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), _CANDIDATE_COLOR, 1)
+            label = f"track_{detection.get('track_id')} | tracker candidate"
+            cv2.putText(frame, label, (x1, max(16, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, _CANDIDATE_COLOR, 1, cv2.LINE_AA)
     for guidance in view.get("guidance", []):
         if not isinstance(guidance, dict):
             continue
@@ -236,9 +271,15 @@ def _draw_view_overlays(frame: np.ndarray, view: dict[str, object]) -> None:
         if isinstance(roi, list) and len(roi) == 4:
             x1, y1, x2, y2 = (int(float(value)) for value in roi)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 80, 210), 2)
+    _draw_status_line(frame, view)
+
+
+def _draw_status_line(frame: np.ndarray, view: dict[str, object]) -> None:
+    mapping_mode = view.get("mapping_mode")
+    mode_label = f" mode={mapping_mode}" if mapping_mode else ""
     cv2.putText(
         frame,
-        f"status={view.get('status')} obs={view.get('observation_status')}",
+        f"status={view.get('status')} obs={view.get('observation_status')}{mode_label}",
         (12, 24),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
@@ -264,17 +305,75 @@ def _compose_canvas(
     return np.vstack((np.hstack((first, second)), np.hstack((court, status))))
 
 
+@dataclass(frozen=True)
+class _CourtLayout:
+    """横置 canonical court 的等比布局（44 ft 横轴 × 20 ft 纵轴，单一 px/ft）。"""
+
+    origin_x: int
+    origin_y: int
+    scale: float  # px/ft，横向纵向共用同一比例（不得分别拉伸）
+    court_width_px: int
+    court_height_px: int
+
+
+def _court_layout(panel_width: int = 640, panel_height: int = 260) -> _CourtLayout:
+    """在面板内以单一 px/ft 比例排布 44×20 ft 球场（约 484×220，真实 2.2:1）。"""
+    horizontal_margin = 20.0
+    top_margin = 20.0
+    bottom_margin = 20.0
+    available_width = panel_width - 2.0 * horizontal_margin
+    available_height = panel_height - top_margin - bottom_margin
+    scale = min(available_width / 44.0, available_height / 20.0)
+    court_width_px = int(44.0 * scale)
+    court_height_px = int(20.0 * scale)
+    return _CourtLayout(
+        origin_x=(panel_width - court_width_px) // 2,
+        origin_y=int(top_margin + (available_height - court_height_px) / 2.0),
+        scale=scale,
+        court_width_px=court_width_px,
+        court_height_px=court_height_px,
+    )
+
+
+def _court_to_panel(x_ft: float, y_ft: float, layout: _CourtLayout) -> tuple[int, int]:
+    """canonical 球场坐标 → 面板像素（显示层轴交换：screen_x ← y_ft、screen_y ← x_ft）。
+
+    保留既有 [0,20]×[0,44] clamp；canonical (x_ft, y_ft) 数据本身不修改。
+    """
+    clamped_x = max(0.0, min(20.0, float(x_ft)))
+    clamped_y = max(0.0, min(44.0, float(y_ft)))
+    return (
+        int(layout.origin_x + clamped_y * layout.scale),
+        int(layout.origin_y + clamped_x * layout.scale),
+    )
+
+
 def _court_panel(tick: dict[str, object], trajectory) -> np.ndarray:
     panel = np.full((260, 640, 3), 245, dtype=np.uint8)
-    left, top, width, height = 55, 15, 530, 225
-    cv2.rectangle(panel, (left, top), (left + width, top + height), (35, 80, 35), 2)
-    cv2.line(panel, (left, top + height // 2), (left + width, top + height // 2), (35, 80, 35), 2)
-    cv2.putText(panel, "canonical court", (14, 248), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (30, 30, 30), 1, cv2.LINE_AA)
+    layout = _court_layout()
+    left, top = layout.origin_x, layout.origin_y
+    right = layout.origin_x + layout.court_width_px
+    bottom = layout.origin_y + layout.court_height_px
+    line_color = (35, 80, 35)
+    # 外边界（44×20 ft，等比）
+    cv2.rectangle(panel, (left, top), (right, bottom), line_color, 2)
+    # 网：y_ft = 22（横向中点）
+    net_x, _ = _court_to_panel(0.0, 22.0, layout)
+    cv2.line(panel, (net_x, top), (net_x, bottom), line_color, 2)
+    # 两侧 NVZ line（距网 7 ft：y_ft = 15 / 29）
+    for nvz_y_ft in (15.0, 29.0):
+        nvz_x, _ = _court_to_panel(0.0, nvz_y_ft, layout)
+        cv2.line(panel, (nvz_x, top), (nvz_x, bottom), line_color, 1)
+    # 两段 service centerline（x_ft = 10，NVZ → 底线）
+    for y_from, y_to in ((0.0, 15.0), (29.0, 44.0)):
+        start = _court_to_panel(10.0, y_from, layout)
+        end = _court_to_panel(10.0, y_to, layout)
+        cv2.line(panel, start, end, line_color, 1)
+    cv2.putText(panel, "canonical court 44x20 ft (to scale)", (14, 248), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (30, 30, 30), 1, cv2.LINE_AA)
     for sample in trajectory.samples:
         if sample.reference_frame_index != int(tick.get("reference_frame_index", -1)):
             continue
-        x = left + int(max(0.0, min(20.0, sample.x_ft)) / 20.0 * width)
-        y = top + int(max(0.0, min(44.0, sample.y_ft)) / 44.0 * height)
+        x, y = _court_to_panel(sample.x_ft, sample.y_ft, layout)
         cv2.circle(panel, (x, y), 6, (30, 70, 220), -1)
         cv2.putText(panel, sample.global_player_id, (x + 8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (30, 30, 30), 1, cv2.LINE_AA)
     return panel

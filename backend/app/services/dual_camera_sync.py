@@ -36,6 +36,10 @@ class SyncCalibration:
     anchor_count: int
     quality: str
     reason: str | None = None
+    # anchor evidence span：人工同步锚点所覆盖的 reference-camera 时间区间 [start, end]。
+    # 仅表示"有直接证据验证 affine mapping"的范围，并非 Cam-2 媒体可用的有效窗口。
+    # 锚点区间外的 canonical tick 仍可能映射到 Cam-2 真实媒体帧（外推显示），
+    # 见 analysis_clock._select_extrapolated_display_frame。字段名/读写保持历史 artifact 兼容。
     valid_start_seconds: float | None = None
     valid_end_seconds: float | None = None
 

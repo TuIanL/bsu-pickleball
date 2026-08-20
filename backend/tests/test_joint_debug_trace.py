@@ -19,6 +19,7 @@ from app.vision.multiview.debug_trace import (
     build_joint_debug_manifest,
     build_joint_debug_trace,
     load_joint_debug_trace,
+    validate_joint_debug_trace,
     write_joint_debug_trace,
 )
 from app.vision.multiview.fusion_run import default_run_output_dir
@@ -84,6 +85,37 @@ def test_trace_writer_and_manifest_are_versioned_and_atomic(tmp_path):
     manifest = build_joint_debug_manifest(run_id="mvr_debug", capture_take_id="take_debug", config={"frame_stride": 1})
     assert manifest["trace_schema"] == "joint_debug_trace.v1"
     assert manifest["debug_trace_enabled"] is True
+
+
+def test_candidate_detections_optional_field_is_list_level_validated(tmp_path):
+    """debug-only 候选层：字段缺失兼容、list 通过、非 list 失败（不做逐元素加强）。"""
+    # 旧 trace（无 candidate_detections 字段）照常写入与加载
+    trace_path = write_joint_debug_trace(tmp_path / "old_trace.json", _trace())
+    loaded = load_joint_debug_trace(trace_path)
+    assert "candidate_detections" not in loaded["ticks"][0]["views"]["cam_1"]
+
+    # 新 trace 携带 candidate_detections（list）→ 校验通过
+    tick = _trace()["ticks"][0]
+    tick["views"]["cam_1"]["candidate_detections"] = [
+        {"bbox": [1.0, 2.0, 3.0, 4.0], "track_id": 7, "confidence": 0.5}
+    ]
+    enriched = build_joint_debug_trace(
+        run_id="mvr_debug",
+        capture_take_id="take_debug",
+        reference_view_id="cam_1",
+        timing_authority_by_view={"cam_1": "source_pts", "cam_2": "source_pts"},
+        sync_quality="good",
+        execution_mode="joint_authoritative",
+        authoritative_joint_eligible=True,
+        ticks=[tick],
+    )
+    assert enriched["ticks"][0]["views"]["cam_1"]["candidate_detections"][0]["track_id"] == 7
+
+    # 字段存在但不是 list → 校验失败
+    invalid = json.loads(json.dumps(enriched))
+    invalid["ticks"][0]["views"]["cam_1"]["candidate_detections"] = {"track_id": 7}
+    with pytest.raises(ValueError, match="candidate_detections"):
+        validate_joint_debug_trace(invalid)
 
 
 def _make_joint_run(*, debug_trace_enabled: bool) -> MultiViewJointRun:

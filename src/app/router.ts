@@ -1,7 +1,7 @@
 import type { AppShellMode, NavigatePath, NavigationSection, ReportType, RouteState } from "./navigationTypes";
 import { parseTaskListContext } from "./navigationContext";
 
-export const supportedReportTypes: ReportType[] = ["movement", "diagnosis"];
+export const supportedReportTypes: ReportType[] = ["performance", "movement", "diagnosis"];
 
 type RouteMeta = {
   shellMode: AppShellMode;
@@ -255,6 +255,21 @@ export function parseLocation(pathname: string, search: string): RouteState {
       videoId: params.get("videoId") ?? undefined,
       source: params.get("source") ?? undefined,
     };
+  }
+
+  // vision 证据 seek 契约（performance finding → 视频证据跳转）：
+  // 解析 t 查询参数（毫秒）；非法值（非数字/负数）忽略，由 VisionPage 在 metadata
+  // loaded 后执行 currentTime = t/1000 并 clamp 到 [0, duration]。
+  if (route.name === "vision" && route.jobId && search) {
+    const params = new URLSearchParams(search);
+    const raw = params.get("t");
+    if (raw !== null) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return { ...route, seekToMs: Math.round(parsed) };
+      }
+    }
+    return route;
   }
 
   return route;

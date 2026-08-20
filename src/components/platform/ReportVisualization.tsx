@@ -1,4 +1,4 @@
-import { AlertTriangle, Footprints } from "lucide-react";
+import { AlertTriangle, Footprints, Gauge } from "lucide-react";
 import type {
   Diagnosis,
   MovementPoint,
@@ -14,6 +14,7 @@ interface ReportVisualizationProps {
 const iconMap = {
   movement: Footprints,
   diagnosis: AlertTriangle,
+  performance: Gauge,
 };
 
 const COURT = {

@@ -24,6 +24,21 @@ def _distance(a: list[float], b: list[float]) -> float:
     return hypot(a[0] - b[0], a[1] - b[1])
 
 
+@dataclass
+class InitialLockAssignment:
+    """首次 lock 映射（仅记录一次，永不覆盖）。
+
+    用于 bootstrap 展示回填：离线任务结束后，用「Player_N 最终锁定的 track_id」
+    反查其在 lock 之前已真实存在的原始观测。该映射与 `lock_diagnostics.player_locked`
+    不同——bootstrap 首次锁定走 `_assign_candidate_to_slot`（不写 diagnostic），而这里
+    在任意 slot 第一次进入 `locked` 时可靠记录，作为回填 authoritative source。
+    """
+
+    player_id: str
+    track_id: int
+    locked_frame_index: int
+
+
 class PlayerLockManager:
     def __init__(self, config: PlayerLockConfig | None = None) -> None:
         self.config = config or PlayerLockConfig()
@@ -32,6 +47,8 @@ class PlayerLockManager:
         self._bootstrap_complete = False
         self._bootstrap_tracklets: dict[int, _BootstrapTracklet] = {}
         self._bootstrap_diagnostics: list[PlayerIdentityDiagnostic] = []
+        # fix-joint-bootstrap-visual-gap：首次 lock 映射（仅在第一次进入 locked 时记录）
+        self._initial_lock_assignments: dict[str, InitialLockAssignment] = {}
         self._track_to_slot: dict[int, str] = {}
         self._frame_width: int | None = None
         self._frame_height: int | None = None
@@ -110,6 +127,7 @@ class PlayerLockManager:
             slot.state = "locked"
             slot.current_track_id = candidate.track_id
             slot.lost_frames = 0
+            self._record_initial_lock(slot.identity_id, candidate.track_id, frame_index)
             locked_track_ids.add(candidate.track_id)
             reconnect_candidates.add(candidate.track_id)
             self._track_to_slot[candidate.track_id] = slot.identity_id
@@ -228,6 +246,20 @@ class PlayerLockManager:
             if slot.assignment_side == "far" and slot.state in ("tentative", "locked", "lost", "fallback_tentative")
         )
 
+    def _record_initial_lock(self, player_id: str, track_id: int, frame_index: int) -> None:
+        """记录某 slot 第一次进入 locked 的 (track_id, locked_frame_index)。
+
+        仅在 player_id 尚未记录时写入，永不覆盖——即使后续 reconnect / tentative 切换
+        也不会改变首次锁定映射。这是 bootstrap 展示回填的 authoritative source。
+        """
+        if player_id in self._initial_lock_assignments:
+            return
+        self._initial_lock_assignments[player_id] = InitialLockAssignment(
+            player_id=player_id,
+            track_id=track_id,
+            locked_frame_index=frame_index,
+        )
+
     def _side_has_capacity(self, side: str | None) -> bool:
         if side == "near":
             return self.near_occupancy < self.config.near_side_quota
@@ -266,6 +298,7 @@ class PlayerLockManager:
                 slot.state = "locked"
                 slot.locked_since_frame = frame_index
                 slot.lost_frames = 0
+                self._record_initial_lock(slot.identity_id, track_id, frame_index)
 
     def _can_replace_fallback(
         self,
@@ -672,6 +705,7 @@ class PlayerLockManager:
         slot.lost_frames = 0
         if slot.state == "lost":
             slot.state = "locked"
+            self._record_initial_lock(slot.identity_id, pos.track_id, frame_index)
 
     def _try_lock_slot(
         self,
@@ -700,6 +734,7 @@ class PlayerLockManager:
                 slot.state = "locked"
                 slot.locked_since_frame = frame_index
                 slot.lost_frames = 0
+                self._record_initial_lock(slot.identity_id, pos.track_id, frame_index)
                 newly_locked.append(slot.identity_id)
                 diagnostics.append(
                     PlayerIdentityDiagnostic(
@@ -753,6 +788,7 @@ class PlayerLockManager:
             swap_reason = self._suspected_identity_swap_reason(slot, best_candidate)
             slot.state = "locked"
             slot.current_track_id = best_candidate.track_id
+            self._record_initial_lock(slot.identity_id, best_candidate.track_id, frame_index)
             self._track_to_slot[best_candidate.track_id] = slot.identity_id
             track_hints[best_candidate.track_id] = slot.identity_id
             slot.lost_frames = 0

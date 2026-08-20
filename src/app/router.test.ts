@@ -43,6 +43,10 @@ describe("parsePath", () => {
       pathname: "/analysis/job-1/reports/diagnosis",
       expected: { name: "report", path: "/analysis/job-1/reports/diagnosis", reportType: "diagnosis", jobId: "job-1", shellMode: "standard", navigationSection: "reports" },
     },
+    {
+      pathname: "/analysis/job-1/reports/performance",
+      expected: { name: "report", path: "/analysis/job-1/reports/performance", reportType: "performance", jobId: "job-1", shellMode: "standard", navigationSection: "reports" },
+    },
     // Standalone reports
     { pathname: "/reports/movement", expected: { name: "report", path: "/reports/movement", reportType: "movement", shellMode: "standard", navigationSection: "reports" } },
     { pathname: "/reports/diagnosis", expected: { name: "report", path: "/reports/diagnosis", reportType: "diagnosis", shellMode: "standard", navigationSection: "reports" } },
@@ -120,6 +124,33 @@ describe("parseLocation", () => {
     expect(parseLocation("/analysis/tasks", "?source=unknown")).toMatchObject({
       name: "analysis-tasks",
       taskSource: "upload",
+    });
+  });
+
+  // ── vision 证据 seek 契约（performance finding → 视频证据跳转）──
+
+  it("parses vision t param in milliseconds", () => {
+    expect(parseLocation("/analysis/job-1/vision", "?t=184200")).toMatchObject({
+      name: "vision",
+      jobId: "job-1",
+      seekToMs: 184200,
+    });
+  });
+
+  it("ignores invalid vision t params (negative / non-numeric)", () => {
+    const negative = parseLocation("/analysis/job-1/vision", "?t=-1");
+    expect(negative).toMatchObject({ name: "vision", jobId: "job-1" });
+    expect("seekToMs" in negative).toBe(false);
+    const nonNumeric = parseLocation("/analysis/job-1/vision", "?t=abc");
+    expect(nonNumeric).toMatchObject({ name: "vision", jobId: "job-1" });
+    expect("seekToMs" in nonNumeric).toBe(false);
+  });
+
+  it("rounds fractional vision t params to milliseconds", () => {
+    expect(parseLocation("/analysis/job-1/vision", "?t=184200.6")).toMatchObject({
+      name: "vision",
+      jobId: "job-1",
+      seekToMs: 184201,
     });
   });
 });

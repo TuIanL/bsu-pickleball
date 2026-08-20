@@ -42,7 +42,13 @@ EVIDENCE_TO_STATE: dict[str, DisplayState] = {
     "refined_observed": "ASSISTED_BOX",
     "cross_view_projected": "PROJECTED_POINT",  # 默认无 bbox；有 bbox 时 builder 升级为 PROJECTED_BOX
     "predicted_only": "PREDICTED_POINT",
+    "bootstrap_backfill": "REAL_BOX",  # 回填基于真实检测框（display-only），按真实框展示
 }
+
+# 携带真实 target-view bbox 的 evidence（base/guided/refined + 启动回填）。
+# 状态机按 REAL_BOX 渲染；bootstrap_backfill 是启动窗口 retrospective 真实观测，
+# 其证据判定已由 builder 分支决策链权威产出，状态机只据此落地几何形态（不伪造）。
+REAL_BBOX_EVIDENCES = ("base_observed", "guided_observed", "refined_observed", "bootstrap_backfill")
 
 
 @dataclass(frozen=True)
@@ -134,7 +140,7 @@ class OverlayDisplayStateMachine:
             return DisplayPlan(state="HIDDEN", render=False)
 
         # 2) 真实 bbox 立即升级（最高优先，清空 confirm counter）
-        if ctx.has_real_bbox and evidence in ("base_observed", "guided_observed", "refined_observed"):
+        if ctx.has_real_bbox and evidence in REAL_BBOX_EVIDENCES:
             target = EVIDENCE_TO_STATE.get(evidence, "REAL_BOX")
             st.state = target
             st.synthetic_confirm_count = 0
@@ -148,7 +154,7 @@ class OverlayDisplayStateMachine:
             )
 
         # 3) 真实证据但无当前 bbox（如 weak base 无 bbox）→ 按 evidence 映射
-        if evidence in ("base_observed", "guided_observed", "refined_observed"):
+        if evidence in REAL_BBOX_EVIDENCES:
             target = EVIDENCE_TO_STATE.get(evidence, "REAL_BOX")
             st.state = target
             st.last_box_ts = ctx.now_ms

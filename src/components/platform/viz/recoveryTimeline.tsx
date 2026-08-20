@@ -1,5 +1,5 @@
-import { useCallback, useMemo } from "react";
-import type { EChartsCoreOption } from "echarts/core";
+import { useCallback, useMemo, useState } from "react";
+import type { EChartsCoreOption }  from "echarts/core";
 import type { RecoveryEpisode, RecoveryOutcome } from "../../../types/multiviewObservability";
 import { EChart, VIZ_PALETTE } from "./EChart";
 
@@ -22,58 +22,92 @@ interface RecoveryTimelineProps {
 }
 
 /**
- * 恢复事件时间线：episodes 按 start_ms 分布，outcome 着色，点击定位视频。
+ * 从 ECharts 点击事件的 params 中解析 episode 索引。
+ * ECharts 点击事件的 params 可能是 `{ value: [...] }` 或 `{ data: { value: [...] } }`，
+ * 且 value 形如 `[startSec, outcomeIndex, episodeIndex]`。
+ */
+export function resolveEpisodeIndex(params: unknown): number | undefined {
+  const p = params as { value?: unknown; data?: { value?: unknown } };
+  const raw = Array.isArray(p.value) ? p.value : p.data?.value;
+  const index = Array.isArray(raw) ? raw[2] : undefined;
+  return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : undefined;
+}
+
+/** 构建恢复事件时间线的 ECharts option（纯函数，便于测试）。 */
+export function buildRecoveryTimelineOption(episodes: RecoveryEpisode[], selectedIndex?: number): EChartsCoreOption | null {
+  if (episodes.length === 0) return null;
+  return {
+    grid: { left: 96, right: 24, top: 16, bottom: 48 },
+    tooltip: {
+      formatter: (params: { dataIndex: number }) => {
+        const episode = episodes[params.dataIndex];
+        if (!episode) return "";
+        const meta = OUTCOME_META[episode.outcome];
+        const durationSec = ((episode.end_ms ?? episode.start_ms) - episode.start_ms) / 1000;
+        return `${meta.label}<br/>起始 ${(episode.start_ms / 1000).toFixed(1)}s · 持续 ${durationSec.toFixed(1)}s${episode.target_view ? `<br/>目标 ${episode.target_view} · 供体 ${episode.donor_view ?? "-"}` : ""}<br/>引导尝试 ${episode.guidance_attempts}`;
+      },
+    },
+    xAxis: { type: "value", name: "s", nameTextStyle: { color: "#94A3B8" }, axisLabel: { color: "#64748B" }, splitLine: { lineStyle: { color: "#E7EFE2" } } },
+    // 固定 6 个 outcome 类别占位，与图例一一对应（空类也显示，避免"看似没有数据"）
+    yAxis: { type: "category", data: OUTCOME_ORDER.map((outcome) => OUTCOME_META[outcome].label), axisLabel: { color: "#475569", fontSize: 11 } },
+    series: [
+      {
+        type: "scatter",
+        data: episodes.map((episode, index) => ({
+          value: [Number((episode.start_ms / 1000).toFixed(2)), OUTCOME_ORDER.indexOf(episode.outcome), index],
+          itemStyle: {
+            color: OUTCOME_META[episode.outcome].color,
+            opacity: 0.9,
+            borderColor: index === selectedIndex ? "#14241B" : "#FFFFFF",
+            borderWidth: index === selectedIndex ? 3 : 1.5,
+          },
+        })),
+        symbolSize: (value: number[]) => {
+          const episode = episodes[value[ 2]];
+          const durationSec = ((episode?.end_ms ?? episode?.start_ms ?? 0) - (episode?.start_ms ?? 0)) / 1000;
+          return Math.max(11, Math.min(24, 11 + durationSec * 8));
+        },
+        label: { show: false },
+      },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0 },
+      { type: "slider", xAxisIndex: 0, bottom: 8, height: 18, borderColor: "#E7EFE2", textStyle: { color: "#64748B" } },
+    ],
+  };
+}
+
+/**
+ * 恢复事件时间线：episodes 按 start_ms 分布，outcome 着色，点击定位视频；
+ * 任一 episode 被点击都会更新选中样式，仅当 debug 可用时触发 onSeek。
  */
 export function RecoveryTimeline({ episodes, onSeek, debugAvailable }: RecoveryTimelineProps) {
-  const option = useMemo<EChartsCoreOption | null>(() => {
-    if (episodes.length === 0) return null;
-    return {
-      grid: { left: 96, right: 24, top: 16, bottom: 48 },
-      tooltip: {
-        formatter: (params: { dataIndex: number }) => {
-          const episode = episodes[params.dataIndex];
-          if (!episode) return "";
-          const meta = OUTCOME_META[episode.outcome];
-          const durationSec = ((episode.end_ms ?? episode.start_ms) - episode.start_ms) / 1000;
-          return `${meta.label}<br/>起始 ${(episode.start_ms / 1000).toFixed(1)}s · 持续 ${durationSec.toFixed(1)}s${episode.target_view ? `<br/>目标 ${episode.target_view} · 供体 ${episode.donor_view ?? "-"}` : ""}<br/>引导尝试 ${episode.guidance_attempts}`;
-        },
-      },
-      xAxis: { type: "value", name: "s", nameTextStyle: { color: "#94A3B8" }, axisLabel: { color: "#64748B" }, splitLine: { lineStyle: { color: "#E7EFE2" } } },
-      // 固定 6 个 outcome 类别占位，与图例一一对应（空类也显示，避免"看似没有数据"）
-      yAxis: { type: "category", data: OUTCOME_ORDER.map((outcome) => OUTCOME_META[outcome].label), axisLabel: { color: "#475569", fontSize: 11 } },
-      series: [
-        {
-          type: "scatter",
-          data: episodes.map((episode, index) => ({
-            value: [Number((episode.start_ms / 1000).toFixed(2)), OUTCOME_ORDER.indexOf(episode.outcome), index],
-            itemStyle: { color: OUTCOME_META[episode.outcome].color, opacity: 0.9, borderColor: "#FFFFFF", borderWidth: 1.5 },
-          })),
-          symbolSize: (value: number[]) => {
-            const episode = episodes[value[2]];
-            const durationSec = ((episode?.end_ms ?? episode?.start_ms ?? 0) - (episode?.start_ms ?? 0)) / 1000;
-            return Math.max(11, Math.min(24, 11 + durationSec * 8));
-          },
-          label: { show: false },
-        },
-      ],
-      dataZoom: [
-        { type: "inside", xAxisIndex: 0 },
-        { type: "slider", xAxisIndex: 0, bottom: 8, height: 18, borderColor: "#E7EFE2", textStyle: { color: "#64748B" } },
-      ],
-    };
-  }, [episodes]);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+
+  const option = useMemo<EChartsCoreOption | null>(
+    () => buildRecoveryTimelineOption(episodes, selectedIndex ?? undefined),
+    [episodes, selectedIndex],
+  );
 
   const handleClick = useCallback(
     (params: unknown) => {
-      const p = params as { data?: number[] };
-      const index = p?.data?.[2];
-      const episode = index != null ? episodes[index] : undefined;
-      if (episode && debugAvailable && onSeek) onSeek(episode);
+      const index = resolveEpisodeIndex(params);
+      if (index == null || index >= episodes.length) return;
+      setSelectedIndex(index);
+      const episode = episodes[index];
+      if (debugAvailable && onSeek) onSeek(episode);
     },
-    [debugAvailable, episodes, onSeek],
+    [episodes, debugAvailable, onSeek],
   );
 
-  if (episodes.length === 0) return null;
+  if (episodes.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F7FBF5] p-4 text-sm leading-6 text-slate-600">
+        当前没有可展示的恢复事件时间线数据。
+      </div>
+    );
+  }
+
   return (
     <div>
       <EChart ariaLabel="恢复事件时间线" height={200} onEvents={{ click: handleClick }} option={option ?? {}} testId="recovery-timeline" />
@@ -84,7 +118,7 @@ export function RecoveryTimeline({ episodes, onSeek, debugAvailable }: RecoveryT
             {OUTCOME_META[outcome].label}
           </span>
         ))}
-        {debugAvailable ? <span className="ml-auto">点击事件可定位到 Debug Replay</span> : null}
+        {debugAvailable ? <span className="ml-auto">点击数据点定位到 Debug Replay</span> : null}
       </div>
     </div>
   );

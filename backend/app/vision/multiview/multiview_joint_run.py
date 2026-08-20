@@ -235,6 +235,16 @@ class MultiViewJointRun:
                             if bundle.views.get(view_id) is not None
                             else None
                         ),
+                        "mapping_mode": (
+                            bundle.views[view_id].mapping_mode
+                            if bundle.views.get(view_id) is not None
+                            else None
+                        ),
+                        "extrapolation_distance_ms": (
+                            bundle.views[view_id].extrapolation_distance_ms
+                            if bundle.views.get(view_id) is not None
+                            else None
+                        ),
                         "timing_authority": (
                             bundle.views[view_id].timing_authority
                             if bundle.views.get(view_id) is not None
@@ -961,6 +971,8 @@ class MultiViewJointRun:
             "source_timestamp_ms": sample.source_timestamp_ms if sample is not None else None,
             "mapped_take_timestamp_ms": sample.mapped_take_timestamp_ms if sample is not None else None,
             "selection_error_ms": sample.selection_error_ms if sample is not None else None,
+            "mapping_mode": sample.mapping_mode if sample is not None else None,
+            "extrapolation_distance_ms": sample.extrapolation_distance_ms if sample is not None else None,
             "timing_authority": sample.timing_authority if sample is not None else "missing",
             "sync_quality": sample.sync_quality if sample is not None else "unknown",
         }
@@ -1031,6 +1043,17 @@ class MultiViewJointRun:
                         ),
                     }
                 )
+            # debug-only 候选层：live 但未满足 lock_only formal eligibility 的 track。
+            # 仅 perception 实际执行（result 存在）的 view 写入；不含 player_id（无 formal 身份）。
+            candidate_detections = []
+            for detection in getattr(result, "candidate_detections", []) if result is not None else []:
+                candidate_detections.append(
+                    {
+                        "bbox": list(detection.bbox),
+                        "track_id": int(detection.track_id) if detection.track_id is not None else None,
+                        "confidence": detection.confidence,
+                    }
+                )
             bindings: dict[str, object] = {}
             for global_id, state in self.registry.players.items():
                 binding = state.view_bindings.get(view_id)
@@ -1061,6 +1084,8 @@ class MultiViewJointRun:
                 "source_timestamp_ms": sample.source_timestamp_ms if sample is not None else None,
                 "mapped_take_timestamp_ms": sample.mapped_take_timestamp_ms if sample is not None else None,
                 "selection_error_ms": sample.selection_error_ms if sample is not None else None,
+                "mapping_mode": sample.mapping_mode if sample is not None else None,
+                "extrapolation_distance_ms": sample.extrapolation_distance_ms if sample is not None else None,
                 "timing_authority": sample.timing_authority if sample is not None else "missing",
                 "sync_quality": sample.sync_quality if sample is not None else "unknown",
                 "observations": observations,
@@ -1071,6 +1096,9 @@ class MultiViewJointRun:
                 "guidance": [self._guidance_debug_row(item) for item in guidance_by_view.get(view_id, ())],
                 "bindings": bindings,
             }
+            # display-only tick（perception 未执行、result 缺失）不写 candidate_detections 字段
+            if result is not None:
+                views[view_id]["candidate_detections"] = candidate_detections
         recovery = {
             key: self.recovery_funnel.get(key, 0) - funnel_before.get(key, 0)
             for key in set(self.recovery_funnel) | set(funnel_before)

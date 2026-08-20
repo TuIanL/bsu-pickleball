@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary, PlayerDisplayDiagnosticsResponse } from "../types/report";
 import type { MultiviewObservabilitySummary, RecoveryEpisodePage } from "../types/multiviewObservability";
@@ -217,6 +217,30 @@ describe("MultiviewObservabilityPage", () => {
     vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).mockResolvedValue(second);
     fireEvent.click(screen.getByRole("button", { name: /加载下一页/ }));
     await waitFor(() => expect(analysisClient.getMultiviewRecoveryEpisodes).toHaveBeenCalledWith("job-observe-ui", expect.objectContaining({ cursor: "cursor-2" })));
+  });
+
+  it("applies time range only to episode queries while the funnel stays backend-authoritative", async () => {
+    // 窗口 [100, 500] 内只有 1 个 episode；后端漏斗 opportunity=2。
+    // 若前端用窗口内 episodes 重算漏斗（已删除的 windowFunnel 行为），「恢复机会」会变成 1。
+    const inWindow = { recovery_episode_id: "re_in", start_ms: 100, end_ms: 300, global_player_id: "global_1", donor_view: "cam_1", target_view: "cam_2", outcome: "guided_recovery_success", guidance_attempts: 1, pre_gate_rejections: 0, lock_rejections: 0, debug_video_seek_ms: 120 } as const;
+    const outWindow = { recovery_episode_id: "re_out", start_ms: 900, end_ms: 1000, global_player_id: "global_2", donor_view: "cam_1", target_view: "cam_2", outcome: "guidance_failed", guidance_attempts: 1, pre_gate_rejections: 0, lock_rejections: 0, debug_video_seek_ms: 920 } as const;
+    vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).mockResolvedValue({ items: [inWindow, outWindow], total_estimate: 2, availability: "available" });
+    const job = makeJob();
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
+    vi.mocked(analysisClient.getMultiviewObservability).mockResolvedValue(makeSummary());
+    render(<MultiviewObservabilityPage jobId={job.id} onNavigate={vi.fn()} />);
+    await screen.findByTestId("recovery-panel");
+    const funnelStat = (label: string) => within(screen.getByTestId("recovery-panel")).getAllByText(label).map((node) => node.parentElement?.textContent ?? "");
+    expect(funnelStat("恢复机会")).toEqual(["恢复机会2"]);
+    fireEvent.change(screen.getByLabelText("起始时间"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("结束时间"), { target: { value: "500" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用范围" }));
+    // 时间线全量拉取（limit=100）与分页列表（limit=8）都携带 from_ms/to_ms
+    await waitFor(() => expect(analysisClient.getMultiviewRecoveryEpisodes).toHaveBeenCalledWith("job-observe-ui", expect.objectContaining({ limit: 100, from_ms: 100, to_ms: 500 })));
+    await waitFor(() => expect(analysisClient.getMultiviewRecoveryEpisodes).toHaveBeenCalledWith("job-observe-ui", expect.objectContaining({ limit: 8, from_ms: 100, to_ms: 500 })));
+    // 漏斗仍为后端权威统计（opportunity=2、基础自恢复=1），不随窗口重算
+    expect(funnelStat("恢复机会")).toEqual(["恢复机会2"]);
+    expect(funnelStat("基础自恢复").every((text) => text.includes("1"))).toBe(true);
   });
 });
 

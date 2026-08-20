@@ -169,3 +169,144 @@ button {
 .scrollbar-none::-webkit-scrollbar {
   display: none; /* Chrome / Safari */
 }
+
+/* ============================================================
+   PB Vision Style Report —— 作用域主题变量
+   仅在 class=".pb-vision-theme" 的 DOM 树下生效，不影响其他页面
+   ============================================================ */
+.pb-vision-theme {
+  /* 主色 */
+  --pb-primary: #00ff41;          /* 荧光亮绿：按钮、选中态、进度条 */
+  --pb-primary-dark: #00cc33;     /* 深绿次色：边框、强调文字 */
+  --pb-primary-soft: #e6ffe9;     /* 浅绿底：hover / 弱强调背景 */
+
+  /* 页面 & 卡片 */
+  --pb-page-bg: #f0f4f2;          /* 浅灰白页面底 */
+  --pb-card-bg: #ffffff;          /* 卡片白 */
+  --pb-card-border: #e5e7eb;      /* 卡片边框 */
+  --pb-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+
+  /* 文字色 */
+  --pb-text-primary: #111827;     /* 近黑主文 */
+  --pb-text-secondary: #6b7280;   /* 中灰次文 */
+  --pb-text-muted: #9ca3af;       /* 淡灰辅助 */
+
+  /* 6 维度专属彩色（Kitchen Game / Ball Control / Defense / Offense / Court IQ / Targeting） */
+  --pb-dim-kitchen: #a855f7;      /* 紫 */
+  --pb-dim-ballctrl: #3b82f6;     /* 蓝 */
+  --pb-dim-defense: #06b6d4;      /* 青 */
+  --pb-dim-offense: #f97316;      /* 红橙 */
+  --pb-dim-courtiq: #eab308;      /* 金 */
+  --pb-dim-targeting: #ec4899;    /* 粉 */
+
+  /* 6 维度浅色底（卡片背景用） */
+  --pb-dim-kitchen-bg: #faf5ff;
+  --pb-dim-ballctrl-bg: #eff6ff;
+  --pb-dim-defense-bg: #ecfeff;
+  --pb-dim-offense-bg: #fff7ed;
+  --pb-dim-courtiq-bg: #fffbeb;
+  --pb-dim-targeting-bg: #fdf2f8;
+
+  /* 热力图 PB Vision 三段渐变 */
+  --pb-heat-low: #fbbf24;         /* 黄 */
+  --pb-heat-mid: #00ff41;         /* 绿 */
+  --pb-heat-high: #ec4899;        /* 粉 */
+
+  /* 状态色 */
+  --pb-success: #00ff41;          /* 成功/In（和主色一致） */
+  --pb-warning: #f59e0b;          /* 警告 */
+  --pb-error: #ef4444;            /* 错误 */
+  --pb-net: #e879f9;              /* 洋红：Net 擦网 */
+
+  /* Coach's Insight 米黄卡 */
+  --pb-coach-bg: #fff7e6;
+  --pb-coach-border: #fde68a;
+}
+
+/* PB 风格卡片容器 */
+.pb-card {
+  background: var(--pb-card-bg, #ffffff);
+  border: 1px solid var(--pb-card-border, #e5e7eb);
+  border-radius: 1rem; /* rounded-2xl */
+  box-shadow: var(--pb-card-shadow, 0 1px 3px rgba(0, 0, 0, 0.04));
+  color: var(--pb-text-primary, #111827);
+}
+
+/* PB 风格按钮 */
+.pb-btn-primary {
+  background: var(--pb-primary, #00ff41);
+  color: #052e16;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  transition: transform 0.08s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+.pb-btn-primary:hover {
+  filter: brightness(0.95);
+  box-shadow: 0 0 0 3px rgba(0, 255, 65, 0.2);
+}
+.pb-btn-primary:active {
+  transform: translateY(1px);
+}
+
+/* PB 风格原生 range 滑块（Shot Quality 用） */
+.pb-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 9999px;
+  outline: none;
+}
+.pb-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--pb-primary, #00ff41);
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+.pb-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+.pb-range-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--pb-primary, #00ff41);
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+}
+
+/* PB 3D 球场视角按钮容器（覆盖默认） */
+.pb-vision-theme .pb-3d-view-btns button {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  color: #111827 !important;
+  border-radius: 0.5rem !important;
+  width: 44px !important;
+  height: 44px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+.pb-vision-theme .pb-3d-view-btns button[data-active="true"] {
+  border-color: var(--pb-primary, #00ff41) !important;
+  box-shadow: 0 0 0 2px rgba(0, 255, 65, 0.25) !important;
+}
+
+/* 长期平均对比线 & Δ 值占位（初始隐藏，未来接真实数据时移除 display:none 即可） */
+.pb-long-term-compare {
+  display: none;
+}
+.pb-dim-delta {
+  display: none;
+}
+/* 解除占位示例：.pb-vision-theme.has-history .pb-long-term-compare { display:block; } */
+

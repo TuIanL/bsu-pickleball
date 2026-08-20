@@ -3,7 +3,7 @@
 ## Purpose
 
 定义全局比赛球员名单（Global Roster）：一场比赛固定人数（单打 2 / 双打 4）的 global player 集合，由 candidate pool 经"晋升→确认"两级流程建立，进入 ROSTER_ACTIVE 后不再创建新 global；覆盖 candidate 自身归属规则、生命周期状态机、roster 重建边界、confirmed roster 不 GC、统计语义、F1 冻结与 `global-player-roster.v1` 产物及 Global→canonical Player 映射。
-
+## Requirements
 ### Requirement: Registry 知晓本场比赛人数
 
 `GlobalPlayerRegistry` SHALL 在创建时接收 `expected_player_count`（来自 `match_context`：singles=2、doubles=4）。registry SHALL 只允许 roster 内的 global player 占用正式身份；roster 满后 `allocate_roster_slot()` SHALL 返回 None。
@@ -100,7 +100,7 @@
 
 ### Requirement: confirmed roster 不参与普通 GC，但存在与关联资格分离
 
-candidate 与从未 confirmed 的 tentative SHALL 可过期淘汰；已进入 roster 的 confirmed global 出画 SHALL 只降级 weak → lost 并等待 recovery，SHALL NOT 被删除。仅 roster reset 才销毁。同时，`GlobalPlayerState` 的"存在于 registry"与"有资格参与普通 association"SHALL 分离：当 `position_uncertainty_ft > threshold` 或 `last_seen_age > threshold`（配置）时，该玩家 SHALL 退出普通紧门匹配，仅允许经 historical local continuity / guided recovery / strong reacquire 路径回归。
+candidate 与从未 confirmed 的 tentative SHALL 可过期淘汰；已进入 roster 的 confirmed global 出画 SHALL 只降级 weak → lost 并等待 recovery，SHALL NOT 被删除。仅 roster reset 才销毁。同时，`GlobalPlayerState` 的"存在于 registry"与"有资格参与普通 association"SHALL 分离：当 `position_uncertainty_ft > threshold` 或 `last_seen_age > threshold`（配置）时，该玩家 SHALL 退出普通紧门匹配，仅允许经 historical local continuity / guided recovery / strong reacquire 路径回归。**stale 判定 SHALL 区分"单视图持续活跃"与"跨视图缺失"：若玩家存在任一 view binding 且 `last_seen_s` 新鲜（`now_s - last_seen_s <= stale_last_seen_s`），则该玩家 SHALL 保持普通关联资格，即使其他 view binding 缺失/过期——豁免仅作用于 last_seen 维度，`position_uncertainty_ft` 超阈值仍无条件置 stale；仅全视图离场（所有 binding 过期）才因 last_seen 维度触发 stale。**
 
 #### Scenario: P3 出画不删
 
@@ -113,6 +113,12 @@ candidate 与从未 confirmed 的 tentative SHALL 可过期淘汰；已进入 ro
 - **WHEN** Global P3 失踪超过阈值（uncertainty / last_seen_age 超限）
 - **THEN** P3 SHALL 退出普通紧门匹配，不吸附其他玩家观测
 - **AND** 仅经 historical continuity / guided recovery / strong reacquire 路径回归
+
+#### Scenario: 单视图活跃玩家保持关联资格
+
+- **WHEN** Global P2 仅 cam_1 binding 为 `observed` 且 last_seen 距当前 < `stale_last_seen_s`，cam_2 binding 缺失/过期
+- **THEN** P2 SHALL 保持 `association_eligible=True`
+- **AND** P2 的预测 SHALL 参与普通关联，cam_1 观测 SHALL 可分配给它（而非全部落入 unresolved）
 
 ### Requirement: 球员计数语义
 
@@ -164,3 +170,4 @@ F1 offline refinement SHALL NOT 改变 roster 身份映射：不得修改 `globa
 - **WHEN** F1 运行于已确认 roster 之上
 - **THEN** F1 输出 SHALL 保持 F0 的 global→canonical 映射
 - **AND** SHALL NOT 新增或重分配 roster slot
+

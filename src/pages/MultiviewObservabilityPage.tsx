@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, Film, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
@@ -184,35 +184,19 @@ function RecoveryPanel({ jobId, section, canSeek, onSeek }: { jobId: string; sec
   }, [fromInput, toInput, loadAll]);
 
   const funnel = data.funnel;
-  // 时间筛选生效时，用窗口内 episodes 聚合漏斗（episode 层面统计，机会数≈episode 数）
-  const windowFunnel = useMemo(() => {
-    if (!timeRange.fromMs && !timeRange.toMs) return null;
-    if (!allEpisodes) return null;
-    const total = allEpisodes.length;
-    const guided = allEpisodes.filter((episode) => episode.outcome === "guided_recovery_success").length;
-    const base = allEpisodes.filter((episode) => episode.outcome === "base_recovered").length;
-    return {
-      recovery_opportunity_count: total,
-      guidance_generated_count: total,
-      guided_recovery_success_count: guided,
-      base_recovered_count: base,
-      guided_candidate_count: guided + base,
-      guided_expected_global_preserved_count: guided + base,
-    };
-  }, [timeRange.fromMs, timeRange.toMs, allEpisodes]);
 
   const timelineEpisodes = allEpisodes ?? page?.items ?? [];
 
   return <Panel id="panel-recovery" title="跨视角恢复" eyebrow="RECOVERY" section={section} testId="recovery-panel">
-    <RecoveryFunnelChart funnel={windowFunnel ?? funnel} availability={section.availability} />
+    <RecoveryFunnelChart funnel={funnel} availability={section.availability} />
+    <p className="mt-2 text-xs text-slate-500">恢复漏斗：全场权威统计 · 时间范围仅筛选下方恢复事件</p>
     <div className="mt-4 flex flex-wrap items-end gap-2 rounded-2xl border border-[#DDE9D6] bg-[#FBFDF9] p-3">
       <label className="text-xs font-bold text-slate-500">时间范围 (ms)<input aria-label="起始时间" className="field-input mt-1 block py-2" min={0} placeholder="起始" type="number" value={fromInput} onChange={(event) => setFromInput(event.target.value)} /></label>
       <label className="text-xs font-bold text-slate-500">至<input aria-label="结束时间" className="field-input mt-1 block py-2" min={0} placeholder="结束" type="number" value={toInput} onChange={(event) => setToInput(event.target.value)} /></label>
       <button className="green-button px-3 py-2" onClick={applyRange} type="button">应用范围</button>
       <button className="quiet-button px-3 py-2" onClick={() => { setFromInput(""); setToInput(""); setTimeRange({ fromMs: null, toMs: null }); loadAll(null, null); }} type="button">重置</button>
     </div>
-    {loadingTimeline ? <p className="mt-2 text-xs text-slate-500">正在加载全量恢复事件…</p> : null}
-    {timelineEpisodes.length > 0 ? <div className="mt-4"><RecoveryTimeline episodes={timelineEpisodes} debugAvailable={canSeek} onSeek={onSeek} /></div> : null}
+    <div className="mt-4">{loadingTimeline ? <p className="text-xs text-slate-500">正在加载全量恢复事件…</p> : <RecoveryTimeline debugAvailable={canSeek} episodes={timelineEpisodes} onSeek={onSeek} />}</div>
     <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
       <label className="text-xs font-bold text-slate-500">结果<select aria-label="恢复结果" className="field-input mt-1 py-2" value={outcome} onChange={(event) => setOutcome(event.target.value as RecoveryOutcome | "")}><option value="">全部</option>{Object.entries(outcomeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label className="text-xs font-bold text-slate-500">目标视角<select aria-label="目标视角" className="field-input mt-1 py-2" value={targetView} onChange={(event) => setTargetView(event.target.value)}><option value="">全部</option><option value="cam_1">cam_1</option><option value="cam_2">cam_2</option></select></label>

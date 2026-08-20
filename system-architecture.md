@@ -69,7 +69,7 @@ flowchart TD
 - **fused 轨迹时间戳**：`fused_player_trajectory.v2` 样本必带 `timestamp_seconds`（writer 由 `take_timestamp_ms/1000` 派生；composer 读取优先级 `timestamp_seconds` → `take_timestamp_ms/1000` → 0.0）。缺失会导致速度/厨房停留指标全 0、前端小地图按时间窗口过滤后空白。
 - **视觉层产物**：joint 模式无 child 单摄产物可继承，由 `joint_visual_artifacts.py` 从 debug trace / fused 轨迹生成：tracking_overlay（框架，从 debug trace 聚合）、heatmaps/scatter（复用 PositionVisualizer）；pose_overlay（骨架）与 player_render_trajectory 显式 `unavailable` + reason（joint 模式未接入 RTMPose / 无逐帧图像坐标）。
 - **聚合 stage**：joint 模式 A/B 机位状态取 joint run 完成结论，不读创建后停摆的 `viewRuns`，避免误报 failed。
-- **窗口开头副摄回退**：canonical 时间早于 sync `valid_start_seconds`（如 clipStart=0 时前 3.4s）时，clock 回退到有效起点帧并标记 `fallback_valid_start`（不消费 tracker），debug replay 渲染该近似帧画面而非 UNAVAILABLE 黑屏。
+- **窗口开头副摄外推（2026-08-19 修正，替换旧 `fallback_valid_start`）**：canonical 时间早于 sync `valid_start_seconds`（锚点证据区间起点，如 clipStart=0 时前 3.4s）时，clock 用 affine 映射选最近的真实媒体帧并经 `selection_error` 质量门：媒体内→标记 `available_extrapolated`（source_frame_index 正常递增，debug replay 副摄持续运动，不消费 tracker）；媒体外/超误差门→诚实标记 `unavailable_out_of_media_range` / `unavailable_selection_error`（无帧可显，不再冻结到第一锚点静止帧）。历史 `fallback_valid_start` trace 仍由 renderer 兼容渲染。
 - **双摄产物落盘**：capture_take 的 session_dir 位于外接盘（`/Volumes/Elements/项目/匹克球/视频录制/captures/.../analysis/`），含 job 产物与 `multiview/mvr_<run_id>` 调试产物；本机 `backend/data/outputs` 仅存 report/job json。
 
 ## 5.1 Global Roster 全局比赛球员名单（2026-08-14）

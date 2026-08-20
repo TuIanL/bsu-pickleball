@@ -1,10 +1,8 @@
 # observability-viz-layer Specification
 
 ## Purpose
-联合运行状态页面的前端可视化层：ECharts 图表组件封装、三层信息架构（L1 概览 / L2 图形 / L3 明细）、流水线状态灯、健康度推导与悬停/下钻/时间筛选/视频定位交互。本能力只负责展示组织，MUST NOT 重算后端算法结论。
-
+TBD - created by archiving change multiview-observability-visualization. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: 三层信息架构
 
 联合运行状态页面 SHALL 按 L1 概览层、L2 图形层、L3 明细层纵向组织。L1 SHALL 位于首屏上部，包含一句话结论、整体健康度与四阶段流水线状态灯；L2 SHALL 以图表卡呈现四大域；L3 SHALL 默认折叠，包含现有 MetricRow 明细、Recovery Episodes 表格与技术运行详情。
@@ -80,13 +78,25 @@ L1 流水线 SHALL 以 SYNC → FUSION → RECOVERY → REFINEMENT 顺序展示�
 
 ### Requirement: 时间范围筛选联动
 
-恢复卡片 SHALL 提供时间范围筛选控件，驱动恢复漏斗过滤与 episodes 查询的 `from_ms`/`to_ms` 参数，并与恢复时间线联动。
+恢复卡片 SHALL 提供时间范围筛选控件，仅驱动 episodes 查询的 `from_ms`/`to_ms` 参数并过滤恢复时间线展示的数据集合。恢复漏斗 SHALL 始终展示后端已发布的完整 run 权威统计；前端 MUST NOT 基于窗口内 episodes 重算漏斗计数，因为 episode 数、guidance 数、candidate 数、expected-global-preserved 数与 opportunity 数为不同的 runtime 事实，不可互换。此要求强化「页面不重新计算算法结论」的不变量（见 `observability-viz-layer` 健康度评分推导 requirement）。
 
 #### Scenario: 刷选联动
 
 - **WHEN** 用户调整时间范围
-- **THEN** 恢复漏斗计数 SHALL 按窗口内 episodes 重新统计
-- **AND** episodes 请求 SHALL 携带 `from_ms`/`to_ms`，时间线 SHALL 缩放至该范围
+- **THEN** episodes 请求 SHALL 携带 `from_ms`/`to_ms` 参数并过滤恢复时间线展示的数据集合
+- **AND** 恢复漏斗 MUST NOT 随窗口变化被前端重算
+
+#### Scenario: 漏斗统计来源不变
+
+- **WHEN** 用户应用或重置时间范围
+- **THEN** 恢复漏斗数字 SHALL 与未筛选时完全一致（后端权威统计）
+- **AND** 前端 MUST NOT 用窗口内 episode 聚合替代后端漏斗
+
+#### Scenario: 页面不重新计算声明自洽
+
+- **WHEN** 用户使用时间范围筛选观察恢复区
+- **THEN** 页面顶部「后端已发布事实分域展示，页面不重新计算算法结论」的声明 SHALL 对恢复漏斗保持成立
+- **AND** 任何随窗口变化的展示 SHALL 仅限于 episodes 列表与时间线数据集合过滤
 
 ### Requirement: 视频定位联动
 
@@ -97,3 +107,4 @@ L1 流水线 SHALL 以 SYNC → FUSION → RECOVERY → REFINEMENT 顺序展示�
 - **WHEN** 用户点击恢复时间线上某 episode 事件或热力图某格
 - **THEN** Debug Replay 视频 SHALL 定位至该事件 `debug_video_seek_ms`（或对应 tick 时间）
 - **AND** 若 debug 视频不可用，点击 SHALL 仅高亮事件，不报错
+

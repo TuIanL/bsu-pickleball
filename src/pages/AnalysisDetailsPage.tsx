@@ -12,7 +12,7 @@ import { AnalysisJobPage } from "./AnalysisJobPage";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl } from "../services/analysisClient";
 import { buildCourtTrackSummaries, type CourtTrackSummary } from "../services/courtProjectionTracks";
 import { formatPercent, formatSeconds } from "../services/analysisDiagnostics";
-import { adaptPipelineResultToReport, isPipelineResult } from "../services/pipelineReportAdapter";
+import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { isActiveAnalysisJob, analysisStatusMeta, cameraAngleLabel, analysisModeLabel, formatDateTime, errorToNotice, formatPlayerId } from "../utils/analysisHelpers";
 
 export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
@@ -505,7 +505,9 @@ export function useAnalysisResultReport(jobId?: string) {
       try {
         const [nextJob, nextReport, nextResult] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId), getAnalysisResult(jobId)]);
         const pipelineResult = isPipelineResult(nextResult) ? nextResult : null;
-        const adaptedReport = nextReport ?? (nextJob && pipelineResult ? adaptPipelineResultToReport(nextJob, pipelineResult) : null);
+        // real-job 报告只消费权威 /report API；报告缺失时走显式状态，
+        // 不再前端拼装近似报告（pipelineReportAdapter 已 deprecated）。
+        const adaptedReport = nextReport ?? null;
 
         if (alive) {
           setLoadedResult({

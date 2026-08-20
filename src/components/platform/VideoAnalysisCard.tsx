@@ -60,6 +60,8 @@ interface VideoAnalysisCardProps {
   fallbackVideoSrc?: string;
   /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
   pipelineTracks?: PipelineTrackPoint[];
+  /** 证据 seek 契约：video metadata loaded 后跳转到该毫秒位置 */
+  seekToMs?: number;
 }
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
@@ -113,6 +115,7 @@ export function VideoAnalysisCard({
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
+  seekToMs,
 }: VideoAnalysisCardProps) {
   if (videoSrc) {
     return (
@@ -147,6 +150,7 @@ export function VideoAnalysisCard({
           videoSrc={videoSrc}
           fallbackVideoSrc={fallbackVideoSrc}
           pipelineTracks={pipelineTracks}
+          seekToMs={seekToMs}
         />
       </article>
     );
@@ -343,6 +347,7 @@ function RealVideoOverlay({
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
+  seekToMs,
 }: {
   match: MatchSummary;
   ballTrajectory?: BallTrajectoryArtifact | null;
@@ -373,9 +378,12 @@ function RealVideoOverlay({
   fallbackVideoSrc?: string;
   /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
   pipelineTracks?: PipelineTrackPoint[];
+  /** 证据 seek 契约：video metadata loaded 后跳转到该毫秒位置（clamp 到 [0, duration]） */
+  seekToMs?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const seekAppliedRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [activeVideoSrc, setActiveVideoSrc] = useState<string | undefined>(videoSrc);
@@ -458,6 +466,8 @@ function RealVideoOverlay({
     if (!video) {
       return;
     }
+    // seekToMs 变化（新的证据跳转）时允许再次应用 seek。
+    seekAppliedRef.current = false;
 
     let animationId = 0;
     let videoFrameCallbackId = 0;
@@ -496,6 +506,16 @@ function RealVideoOverlay({
       if (video.videoWidth && video.videoHeight) {
         setNaturalSize({ width: video.videoWidth, height: video.videoHeight });
       }
+      // 证据 seek 契约：metadata loaded 后跳转（clamp 到 [0, duration]；每个 seekToMs 只应用一次）。
+      if (seekToMs !== undefined && !seekAppliedRef.current && seekToMs >= 0) {
+        seekAppliedRef.current = true;
+        const targetSeconds = seekToMs / 1000;
+        if (Number.isFinite(video.duration) && video.duration > 0) {
+          video.currentTime = Math.min(Math.max(targetSeconds, 0), video.duration);
+        } else {
+          video.currentTime = targetSeconds;
+        }
+      }
       syncTime();
     };
     const handleDurationChange = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
@@ -532,7 +552,7 @@ function RealVideoOverlay({
         window.cancelAnimationFrame(animationId);
       }
     };
-  }, [videoSrc]);
+  }, [videoSrc, seekToMs]);
 
   const togglePlayback = () => {
     const video = videoRef.current;
@@ -845,6 +865,7 @@ function RealVideoOverlay({
                     tracks={pipelineTracks ?? []}
                     currentTimeSec={currentTime}
                     trailSeconds={3}
+                    overlayFrames={fusedPlayerOverlay?.frames ?? []}
                   />
                 </CourtMinimapErrorBoundary>
               </div>
@@ -1209,6 +1230,7 @@ const FUSED_EVIDENCE_STYLE = {
   refined_observed: { stroke: "#38BDF8", dash: undefined, fill: "rgba(56,189,248,0.10)", label: "离线精修" },
   cross_view_projected: { stroke: "#FACC15", dash: "8 6", fill: "rgba(250,204,21,0.08)", label: "双摄补全" },
   predicted_only: { stroke: "#94A3B8", dash: "3 5", fill: "rgba(148,163,184,0.06)", label: "预测" },
+  bootstrap_backfill: { stroke: "#FB7185", dash: undefined, fill: "rgba(251,113,133,0.10)", label: "启动回填" },
 } as const;
 
 function FusedPlayerBox({
