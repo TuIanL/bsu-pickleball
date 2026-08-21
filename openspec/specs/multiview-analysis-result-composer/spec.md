@@ -295,6 +295,7 @@ joint compose SHALL 产出 `global-player-roster.v1` 产物（JSON，定位为**
 - **WHEN** 检查 `global-player-roster.v1` 或内部 diagnostics
 - **THEN** 其中 SHALL 可包含 internal `global_player_N`
 - **AND** 用户可见产物 SHALL NOT 包含该字符串
+
 ### Requirement: 球员计数语义
 Composer / report 的球员统计 SHALL 区分并明确语义：`expected_player_count`（赛制人数）、`roster_occupied_count`（已占 slot 数）、`confirmed_player_count`（已确认玩家数）、`observed_player_count`（实际有观测的玩家数）。报告摘要 SHALL 按实际确认 / 观测人数如实呈现，MUST NOT 为避免大量碎片轨迹而硬写 `expected_player_count`。
 
@@ -309,6 +310,7 @@ Composer / report 的球员统计 SHALL 区分并明确语义：`expected_player
 - **WHEN** 分析产生大量 transient candidate（从未晋升）
 - **THEN** 球员计数 SHALL 基于 roster / confirmed / observed 玩家
 - **AND** candidate 数 SHALL NOT 计入公开球员计数
+
 ### Requirement: F1 offline refinement 冻结 roster 映射
 F1 offline refinement SHALL NOT 改变 roster 身份映射：不得修改 `global → Player_N` 对应关系，SHALL NOT 在 F1 阶段分配新 roster slot。roster snapshot SHALL 与 F0 snapshot 一起冻结；F1 仅可补充 observation、改善 fused position。
 
@@ -317,3 +319,22 @@ F1 offline refinement SHALL NOT 改变 roster 身份映射：不得修改 `globa
 - **WHEN** F1 运行于已确认 roster 之上
 - **THEN** F1 输出 SHALL 保持 F0 的 global→canonical 映射
 - **AND** SHALL NOT 新增或重分配 roster slot
+
+### Requirement: joint 模式发布球立体产物
+系统 SHALL 使 `multiview_analysis_result_composer` 在 joint 模式下正式发布球相关产物：不可变 `multiview_ball_stereo_evidence.v1` 与用户轨迹 `reconstructed_ball_trajectory.v3`。
+
+#### Scenario: 发布 stereo evidence
+- **WHEN** joint 任务已生成球立体证据
+- **THEN** composer SHALL 发布 `multiview_ball_stereo_evidence.json`
+- **AND** 该 evidence SHALL 为不可变原始证据，供审计与后续重建引用
+
+#### Scenario: 发布 v3 用户轨迹
+- **WHEN** joint 任务已生成多视角估算三维球路
+- **THEN** composer SHALL 在同一语义 slug 发布 `reconstructed_ball_trajectory.json`（schema `.v3`）
+- **AND** 输出整体可用状态 `FULL_ESTIMATED_3D / PARTIAL_3D / LANDING_ONLY / UNAVAILABLE` 与指标级 validity 分级
+
+#### Scenario: 产物可用性降级
+- **WHEN** 双摄 3D 证据不足但落点权威可用
+- **THEN** composer SHALL 发布 `LANDING_ONLY` 状态与可用落点
+- **AND** 不得回退为假 2.5D 默认产物
+

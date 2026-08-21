@@ -5,7 +5,7 @@ TBD - created by archiving change reframe-library-and-match-workspace. Update Pu
 ## Requirements
 ### Requirement: 统一 LibraryItem 投影
 
-系统 SHALL 将 upload / recording / sync_recording 三类来源投影为统一的 `LibraryItemViewModel`，作为用户层主对象，暴露统一身份、三轴生命周期状态（media × availability × analysis）与展示元数据。
+系统 SHALL 将 upload / recording / sync_recording 三类来源投影为统一的 `LibraryItemViewModel`，作为用户层主对象，暴露统一身份、三轴生命周期状态（media × availability × analysis）、统一展示状态（displayState）与展示元数据。
 
 #### Scenario: 三类来源统一被投影为 LibraryItem
 - **WHEN** 前端存在一个 upload video、一个 RecordingSession、一个 SyncRecordingSession
@@ -13,7 +13,12 @@ TBD - created by archiving change reframe-library-and-match-workspace. Update Pu
 
 #### Scenario: 展示元数据
 - **WHEN** 渲染某个 LibraryItem
-- **THEN** 系统 SHALL 提供 title、thumbnailUrl、previewUrl、sourceType、matchFormat、cameraSetup、startedAt、durationSec、venue、courtName 等字段（缺失时隐藏对应展示而非伪造）
+- **THEN** 系统 SHALL 提供 title、displayState、thumbnailUrl、previewUrl、sourceType、matchFormat、cameraSetup、startedAt、durationSec、venue、courtName 等字段（缺失时隐藏对应展示而非伪造）
+
+#### Scenario: 语义化标题
+- **WHEN** 渲染某 LibraryItem 的标题
+- **THEN** 系统 SHALL 按分析 metadata.matchTitle → FieldSession 标题 →「时间 + 比赛形式」→ raw id 的优先级解析语义标题
+- **AND** `court_name` 只作为 `courtName` 次要 metadata，SHALL NOT 直接当作用户可见主标题
 
 ### Requirement: LibraryItem identity 与 AnalysisJob identity 分离
 
@@ -47,7 +52,7 @@ Upload LibraryItem 的资产身份（`videoId`）SHALL 独立于任一 AnalysisJ
 
 ### Requirement: 三轴生命周期状态
 
-LibraryItem SHALL 使用正交的媒体生命周期（mediaState）、可访问性（availabilityState）与分析生命周期（analysisState），而非单一合并状态。
+LibraryItem SHALL 使用正交的媒体生命周期（mediaState）、可访问性（availabilityState）与分析生命周期（analysisState），而非单一合并状态；并额外派生统一的用户展示状态 `displayState`（待处理 / 正在分析 / 分析完成 / 失败 / 待合并 等）供 UI 直接消费。
 
 #### Scenario: 状态派生
 - **WHEN** mediaState 为 `ready` 且 analysisState 为 `running`
@@ -67,6 +72,16 @@ LibraryItem SHALL 使用正交的媒体生命周期（mediaState）、可访问�
 - **WHEN** mediaState 为 `ready`、analysisState 为 `succeeded` 且 availabilityState 为 `unavailable`（如外置存储掉线）
 - **THEN** UI SHALL 显示「分析完成 · 视频存储暂不可用」
 - **AND** SHALL NOT 将 mediaState 解释为 `failed`
+
+#### Scenario: displayState 统一派生
+- **WHEN** Adapter 投影一个 LibraryItem
+- **THEN** 系统 SHALL 派生 `displayState`：requiredAction=merge → 待合并；mediaState=ready 且 analysisState=running → 正在分析；analysisState=succeeded → 分析完成；analysisState=failed → 分析失败；其余 → 待处理
+- **AND** UI 的「状态筛选」SHALL 消费 `displayState` 而非直接读取底层多轴状态
+
+#### Scenario: displayState 与底层状态解耦
+- **WHEN** mediaState=ready 且 analysisState=running
+- **THEN** `displayState` SHALL 为「正在分析」
+- **AND** 系统 SHALL NOT 将其落入「已完成」筛选
 
 ### Requirement: source-specific 状态映射与 requiredAction
 
@@ -97,4 +112,17 @@ LibraryItem 的 `primaryAnalysisJobId` SHALL 由显式契约决定，`latestPubl
 #### Scenario: analysisHistoryCount
 - **WHEN** ViewModel 渲染
 - **THEN** 系统 SHALL 提供 `analysisHistoryCount` 以展示历史分析数量
+
+### Requirement: 双摄封面机位流地址
+
+`sync_recording` 的展示元数据 SHALL 暴露两路机位流地址（`cam_1`/`cam_2`），供双摄封面左右拼接渲染；`coverVideoUrl` 作为兼容字段保留。
+
+#### Scenario: 双摄投影暴露机位流
+- **WHEN** `libraryAdapter` 投影一个 `sync_recording` LibraryItem 且 `registered_video_ids.cam_1/cam_2` 存在
+- **THEN** ViewModel SHALL 携带 `cameraCoverSources: { cam_1?: string; cam_2?: string }`，其值由 `getVideoStreamUrl()` 构建
+- **AND** `buildLibraryItems` 与 `resolveLibraryItemByRef` 两处 SHALL 保持一致
+
+#### Scenario: 机位流缺失
+- **WHEN** 某一路（或两路）`registered_video_ids` 不存在
+- **THEN** 对应字段 SHALL 省略（undefined），由封面渲染层据此做占位/退让，而非伪造
 

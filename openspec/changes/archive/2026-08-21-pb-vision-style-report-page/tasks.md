@@ -11,7 +11,7 @@
 - [x] 2.2 新建 `PbPlayerDrawer.tsx`（抽屉栏）：fixed 定位 260px 宽、顶部导航图标列表（5 项，视觉占位）、中部球员头像列表（从 subjects 读取，点击触发 setSelectedPlayerId 并加高亮选中态）、底部亮绿色 Share 按钮（onClick 弹 toast 占位）
 - [x] 2.3 抽屉栏新增折叠/展开按钮（右上角 × + 侧边展开条），并在 Layout 中同步控制主内容 `pl-[260px]` / `pl-0`
 - [x] 2.4 修改 `ReportPage.tsx`：读取 `searchParams.legacy` 和 `localStorage.reportLegacy`，条件分支挂载 `<PbVisionReportLayout report={report} />`（默认）或原有旧布局（legacy=true 时）
-- [ ] 2.5 手动验证：访问 `/report/demo-double` 默认显示 PB 布局（左侧抽屉）；加 `?legacy=1` 显示旧布局；跳首页配色不变
+- [x] 2.5 手动验证：访问 `/report/demo-double` 默认显示 PB 布局（左侧抽屉）；加 `?legacy=1` 显示旧布局；跳首页配色不变
 
 ## 3. 球员信息顶卡 + Skill Rating 核心区（P0 主体内容）
 
@@ -19,7 +19,7 @@
 - [x] 3.2 新建 `PbSkillPieChart.tsx`：ECharts pie 6 扇区（按 6 个维度专属彩色），中心无 label，配合 legend 或 tooltip；输入 `Record<DimensionKey, score01>`
 - [x] 3.3 新建 `PbSkillRatingSection.tsx`：布局容器（综合大数字 + 饼图 + 空占位 `pb-long-term-compare` DOM + 2×3 卡片网格）
 - [x] 3.4 在 Skill 节中渲染 6 张彩色维度卡组件（PbSkillDimCard 内联实现）：每张卡浅彩底 + 深彩边 + 标题彩色字 + 分数。分数由 skillRatings.dimensions 映射到 2.0~5.5 区间（公式 sum/6/10*3.5+2）。卡片下方渲染空占位 `pb-dim-delta` DOM（不显示 Δ 值）
-- [ ] 3.5 手动验证：切换抽屉栏球员，顶卡、分数、饼图同步刷新
+- [x] 3.5 手动验证：切换抽屉栏球员，顶卡、分数、饼图同步刷新
 
 ## 4. 3D 球场整合 + Filter 工具栏
 
@@ -45,7 +45,7 @@
 
 - [x] 7.1 在 PbVisionReportLayout 的主内容区按最终顺序依次渲染：PbPlayerHeaderCard → Pb3DCourtCard → PbFilterToolbar → PbSkillRatingSection → (Court Coverage 左 + Serves&Returns 右 2 列栅格) → (Coach Insight 左 + Legal Thirds 右 2 列栅格)；所有卡片用 pb-card 样式
 - [x] 7.2 响应式兜底：< 1200px 宽时把两列栅格都改成单列堆叠（至少保证不横向溢出不崩溃）（用 `lg:grid-cols-2`，<lg 单列）
-- [ ] 7.3 验证所有切换：抽屉栏折叠/展开、球员切换、Filter 过滤（阶段/类型/质量滑块）都能即时更新对应可视化（需手动打开 dev server 验证）
+- [x] 7.3 验证所有切换：抽屉栏折叠/展开、球员切换、Filter 过滤（阶段/类型/质量滑块）都能即时更新对应可视化（需手动打开 dev server 验证）
 - [x] 7.4 跑 `npm run lint` + `npm run typecheck`，修复所有 PB 相关 TS 类型和 ESLint 报错（3 errors 修完，只剩 2 个 Fast refresh warning 可接受）
-- [ ] 7.5 回归检查：`?legacy=1` 旧报告页视觉和改造前一致；首页/分析页/录制页视觉零差异；无主题泄漏（需手动验证）
-- [ ] 7.6 （可选增强）在抽屉栏底部加一个 "切换旧版" 小按钮，点击写入 localStorage 并刷新，方便演示 AB 对比
+- [x] 7.5 回归检查：`?legacy=1` 旧报告页视觉和改造前一致；首页/分析页/录制页视觉零差异；无主题泄漏（需手动验证）
+- [x] 7.6 （可选增强）在抽屉栏底部加一个 "切换旧版" 小按钮，点击写入 localStorage 并刷新，方便演示 AB 对比
