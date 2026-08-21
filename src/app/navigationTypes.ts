@@ -60,7 +60,7 @@ export type RouteState =
   | { name: "landing"; path: "/"; shellMode: "landing"; navigationSection: null }
   | { name: "upload"; path: "/upload"; videoId?: string; source?: string; shellMode: "landing"; navigationSection: null }
   | { name: "workspace"; path: "/workspace"; shellMode: "standard"; navigationSection: "capture" }
-  | { name: "captureHome"; path: "/capture"; shellMode: "standard"; navigationSection: "videos" }
+  | { name: "captureHome"; path: "/capture"; shellMode: "standard"; navigationSection: "capture" }
   | { name: "captureNew"; path: "/capture/new"; shellMode: "standard"; navigationSection: "capture" }
   | { name: "captureConsole"; path: `/capture/${string}`; sessionId: string; shellMode: "capture"; navigationSection: "capture" }
   | { name: "segmentManager"; path: `/capture/${string}/takes/${string}/segments`; fieldSessionId: string; takeId: string; shellMode: "standard"; navigationSection: "capture" }

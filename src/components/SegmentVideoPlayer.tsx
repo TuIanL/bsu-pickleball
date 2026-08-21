@@ -127,7 +127,7 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
     };
 
     return (
-      <div className="rounded-2xl border border-[#DDE9D6] bg-black overflow-hidden" onKeyDown={handleKeyDown} tabIndex={0}>
+      <div className="rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-video,#24302b)] overflow-hidden" onKeyDown={handleKeyDown} tabIndex={0}>
         <video
           ref={videoRef}
           src={videoUrl}

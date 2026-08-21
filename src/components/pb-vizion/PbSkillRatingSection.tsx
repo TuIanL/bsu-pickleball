@@ -1,114 +1,30 @@
 import { useMemo } from "react";
 import { usePbReport } from "../../contexts/PbReportContext";
-import type { PbDimensionKey } from "../../types/pbReport";
-import {
-  PB_DIMENSION_META,
-  PB_DIMENSION_ORDER,
-} from "../../types/pbReport";
-import type { SkillRating } from "../../types/report";
-import PbSkillPieChart from "./PbSkillPieChart";
+import { PB_DIMENSION_META, PB_DIMENSION_ORDER } from "../../types/pbReport";
+import PbEvidenceUnavailable from "./PbEvidenceUnavailable";
 
-const DIM_COLORS: Record<PbDimensionKey, string> = {
-  kitchen: "#A855F7",
-  ballctrl: "#3B82F6",
-  defense: "#06B6D4",
-  offense: "#F97316",
-  courtiq: "#EAB308",
-  targeting: "#EC4899",
-};
-
-const DIM_BG: Record<PbDimensionKey, string> = {
-  kitchen: "#FAF5FF",
-  ballctrl: "#EFF6FF",
-  defense: "#ECFEFF",
-  offense: "#FFF7ED",
-  courtiq: "#FEFCE8",
-  targeting: "#FDF2F8",
-};
-
-const LABEL_TO_DIM: Record<string, PbDimensionKey> = {
-  "Kitchen Game": "kitchen",
-  "网前对抗": "kitchen",
-  "Ball Control": "ballctrl",
-  "控球能力": "ballctrl",
-  Defense: "defense",
-  防守: "defense",
-  Offense: "offense",
-  进攻: "offense",
-  "Court IQ": "courtiq",
-  "球场智商": "courtiq",
-  Targeting: "targeting",
-  "落点精准": "targeting",
-};
-
+/**
+ * 设计 D5（fail-closed）：正式六维评分模型（player-skill-rating.v1 + modelVersion）
+ * 出现前，job 模式一律不显示 PB 式 2.0~5.5 评分。模块改名为「本场表现概览」，
+ * 展示六维标签位（无分数），并提示"技能评分模型尚未生成"。不误用旧 skillRatings。
+ */
 export default function PbSkillRatingSection() {
   const { report } = usePbReport();
 
-  const skillRatings = useMemo<SkillRating[]>(() => {
-    return report?.skillRatings ?? [];
-  }, [report?.skillRatings]);
+  const isDemo = report?.source === "demo";
 
-  const scoresRecord = useMemo<Record<PbDimensionKey, number>>(() => {
-    const result: Record<PbDimensionKey, number> = {
-      kitchen: 0.5,
-      ballctrl: 0.5,
-      defense: 0.5,
-      offense: 0.5,
-      courtiq: 0.5,
-      targeting: 0.5,
-    };
+  // 仅 demo 允许代表性演示表现；否则一律"模型尚未生成"
+  const showDemoOverview = isDemo;
 
-    if (!skillRatings || skillRatings.length === 0) return result;
+  // 正式模型存在性判定（无 player-skill-rating.v1 → 恒为 false）
+  const hasFormalModel = useMemo(() => {
+    return false; // 正式 skill-rating model artifact 尚未定义
+  }, []);
 
-    const mappedScores = new Map<PbDimensionKey, number>();
-
-    for (const rating of skillRatings) {
-      const dim =
-        LABEL_TO_DIM[rating.label] ??
-        (Object.keys(LABEL_TO_DIM).find((k) =>
-          rating.label?.includes(k)
-        )
-          ? LABEL_TO_DIM[
-              Object.keys(LABEL_TO_DIM).find((k) =>
-                rating.label?.includes(k)
-              ) as string
-            ]
-          : undefined);
-
-      if (dim) {
-        const raw = Math.max(0, Math.min(10, rating.score ?? 5));
-        mappedScores.set(dim, raw / 10);
-      }
-    }
-
-    let idx = 0;
-    for (const key of PB_DIMENSION_ORDER) {
-      if (mappedScores.has(key)) {
-        result[key] = mappedScores.get(key) as number;
-      } else if (skillRatings[idx]) {
-        const raw = Math.max(0, Math.min(10, skillRatings[idx].score ?? 5));
-        result[key] = raw / 10;
-        idx++;
-      }
-    }
-
-    return result;
-  }, [skillRatings]);
-
-  const scaledScores = useMemo<Record<PbDimensionKey, number>>(() => {
-    const result = {} as Record<PbDimensionKey, number>;
-    for (const key of PB_DIMENSION_ORDER) {
-      const raw01 = scoresRecord[key] ?? 0.5;
-      result[key] = Math.round((raw01 * 3.5 + 2) * 100) / 100;
-    }
-    return result;
-  }, [scoresRecord]);
-
-  const compositeScore = useMemo(() => {
-    const values = PB_DIMENSION_ORDER.map((k) => scaledScores[k]);
-    const avg = values.reduce((a, b) => a + b, 0) / values.length;
-    return Math.round(avg * 100) / 100;
-  }, [scaledScores]);
+  if (hasFormalModel) {
+    // 未来正式模型接入后，在此渲染"单场技能评分"（含 6 维饼图/值）。暂未定义。
+    return null;
+  }
 
   return (
     <div className="pb-card p-6">
@@ -117,76 +33,34 @@ export default function PbSkillRatingSection() {
           单场比赛
         </p>
         <h2 className="mt-1 text-2xl font-black text-[var(--pb-text-primary,#111827)]">
-          技能评分
+          {showDemoOverview ? "演示表现概览" : "本场表现概览"}
         </h2>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-6 items-center mb-8">
-        <div className="text-center shrink-0">
-          <div
-            className="text-6xl font-black"
-            style={{
-              color: "var(--pb-text-primary,#111827)",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {compositeScore.toFixed(2)}
-          </div>
-          <div className="mt-2 text-sm text-[var(--pb-text-secondary,#6b7280)] font-medium">
-            综合评分
-          </div>
-        </div>
-
-        <div className="w-full max-w-[280px] shrink-0">
-          <PbSkillPieChart scores={scoresRecord} />
-        </div>
-
-        <div className="pb-long-term-compare flex-1 hidden">
-          <div className="h-[220px] w-full rounded-xl border border-dashed border-gray-200 flex items-center justify-center text-sm text-gray-400">
-            长期对比（预留）
-          </div>
-        </div>
+      <div className="mb-6">
+        <PbEvidenceUnavailable
+          reason={
+            showDemoOverview
+              ? "演示数据：正式技能评分模型尚未接入"
+              : "技能评分模型尚未生成"
+          }
+        />
       </div>
 
+      {/* 仅保留六维标签位（无语义分数，避免伪 2.0~5.5） */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {PB_DIMENSION_ORDER.map((key) => {
           const meta = PB_DIMENSION_META[key];
-          const color = DIM_COLORS[key];
-          const bg = DIM_BG[key];
-          const score = scaledScores[key];
           return (
             <div
               key={key}
-              className="rounded-xl p-4 border"
-              style={{
-                backgroundColor: bg,
-                borderColor: color,
-              }}
+              className="rounded-xl p-4 border border-dashed bg-white"
             >
-              <div className="flex items-baseline justify-between mb-2 gap-2 flex-wrap">
-                <div>
-                  <span
-                    className="font-bold text-sm"
-                    style={{ color }}
-                  >
-                    {meta.label}
-                  </span>
-                </div>
+              <div className="font-bold text-sm text-[var(--pb-text-secondary,#6b7280)]">
+                {meta.label}
               </div>
-              <div
-                className="text-3xl font-black"
-                style={{
-                  color,
-                  fontVariantNumeric: "tabular-nums",
-                }}
-              >
-                {score.toFixed(2)}
-              </div>
-              <div
-                className="pb-dim-delta text-sm font-semibold mt-2 hidden"
-                style={{ color: "#16A34A" }}
-              >
-                +0.01
+              <div className="mt-2 text-sm text-[var(--pb-text-muted,#9ca3af)]">
+                模型尚未生成
               </div>
             </div>
           );

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Upload } from "lucide-react";
-import type { NavigateFn } from "../app/navigationTypes";
+import { ArrowLeft, Camera, Upload } from "lucide-react";
+import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
 import type { AnalysisUploadMetadata } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
@@ -30,6 +30,9 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   // 支持直接传入 videoId（如从其他页面跳转）
   const [searchParams] = useState(() => new URLSearchParams(window.location.search));
   const returnTaskContext = taskContextFromLocation();
+  const returnParam = new URLSearchParams(window.location.search).get("return");
+  // 从 Library 进入时优先回到来源工作区；否则回任务列表（既有行为）
+  const goReturn = () => onNavigate((returnParam ?? taskListPath(returnTaskContext)) as NavigatePath);
   const videoIdParam = searchParams.get("videoId");
   const sourceFpsParam = Number(searchParams.get("fps") ?? NaN);
 
@@ -137,7 +140,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         enablePoseInference,
       });
       rememberAnalysisJob(job);
-      onNavigate(taskListPath(returnTaskContext));
+      goReturn();
     } catch (error) {
       setError(
         errorToNotice(
@@ -153,6 +156,14 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
   return (
     <PageFrame>
+      <button
+        className="mb-6 inline-flex items-center gap-1.5 text-sm font-bold text-[#168A34] transition hover:text-[#0F7A2B]"
+        onClick={() => onNavigate("/library")}
+        type="button"
+      >
+        <ArrowLeft size={16} aria-hidden="true" />
+        返回比赛库
+      </button>
       <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <div>
           <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">

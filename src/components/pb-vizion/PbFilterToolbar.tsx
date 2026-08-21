@@ -15,7 +15,7 @@ export default function PbFilterToolbar() {
   } = usePbReport();
 
   const selectBaseClass =
-    "rounded-lg border border-[var(--pb-card-border,#d1d5db)] bg-white px-3 py-2 text-sm font-medium text-[var(--pb-text-primary,#111827)] focus:outline-none focus:ring-2 focus:ring-[var(--pb-primary,#00FF41)] focus:border-[var(--pb-primary,#00FF41)] transition-colors";
+    "rounded-lg border border-[var(--pb-card-border,#d1d5db)] bg-white px-3 py-2 text-sm font-medium text-[var(--pb-text-primary,#111827)] focus:outline-none focus:ring-2 focus:ring-[var(--pb-primary,#23985b)] focus:border-[var(--pb-primary,#23985b)] transition-colors";
 
   return (
     <div className="pb-card p-3 sm:p-4">

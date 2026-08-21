@@ -4,9 +4,10 @@ import type { NavigateFn } from "../app/navigationTypes";
 import type { LibraryItemViewModel, LibraryItemKind } from "../services/libraryAdapter";
 import { buildLibraryItems } from "../services/libraryAdapter";
 import { mergeSyncRecording, deleteRecording, deleteSyncRecording, getVideoStreamUrl } from "../services/analysisClient";
+import { libraryAnalysisPathFor } from "../services/libraryAnalysisRouting";
 import { LibraryCard } from "../components/library/LibraryCard";
 
-type StatusFilter = "all" | "recording" | "processing" | "ready" | "failed";
+type StatusFilter = "all" | "pending" | "analyzing" | "completed" | "failed";
 
 interface LibraryPageProps {
   onNavigate: NavigateFn;
@@ -21,6 +22,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
 
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 重新请求时重置加载态
     setLoading(true);
     buildLibraryItems()
       .then((result) => {
@@ -56,13 +58,10 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
     if (url) window.open(url, "_blank", "noopener");
   };
 
-  // 重新分析：跳转到对应分析创建入口
+  // 重新分析 / 开始分析：按素材类型分派到对应分析创建入口
   const handleReanalyze = (item: LibraryItemViewModel) => {
-    if (item.ref.kind === "upload") {
-      onNavigate(`/upload?videoId=${encodeURIComponent(item.ref.sourceId)}` as never);
-    } else {
-      onNavigate("/analysis/new");
-    }
+    const path = libraryAnalysisPathFor(item);
+    if (path) onNavigate(path);
   };
 
   // 查看技术信息：进入 workspace 技术详情 view
@@ -91,10 +90,11 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
   const filtered = useMemo(() => {
     let list = items;
     if (kind !== "all") list = list.filter((it) => it.sourceType === kind);
-    if (status === "recording") list = list.filter((it) => it.mediaState === "recording");
-    else if (status === "processing") list = list.filter((it) => it.mediaState === "processing");
-    else if (status === "failed") list = list.filter((it) => it.mediaState === "failed" || it.analysisState === "failed");
-    else if (status === "ready") list = list.filter((it) => it.mediaState === "ready");
+    // P2C：状态筛选基于统一 displayState（待处理/正在分析/分析完成/失败），不再直接读底层多轴状态
+    if (status === "pending") list = list.filter((it) => it.displayState === "pending");
+    else if (status === "analyzing") list = list.filter((it) => it.displayState === "analyzing");
+    else if (status === "completed") list = list.filter((it) => it.displayState === "completed");
+    else if (status === "failed") list = list.filter((it) => it.displayState === "failed");
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter(
@@ -107,23 +107,35 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
 
   const statusTabs: { key: StatusFilter; label: string }[] = [
     { key: "all", label: "全部" },
-    { key: "processing", label: "正在分析" },
-    { key: "ready", label: "已完成" },
+    { key: "pending", label: "待处理" },
+    { key: "analyzing", label: "正在分析" },
+    { key: "completed", label: "已完成" },
     { key: "failed", label: "失败" },
   ];
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+    <div className="min-h-screen"
+      style={{
+        background: "linear-gradient(180deg, #F4F8F6 0%, #EEF3F1 100%)",
+      }}
+    >
+      {/* 顶部弱径向渐变氛围 */}
+      <div
+        className="pointer-events-none fixed inset-0"
+        style={{
+          background: "radial-gradient(circle at 85% 0%, rgba(87,181,142,0.10), transparent 30%)",
+        }}
+      />
+      <div className="relative mx-auto max-w-7xl px-4 py-6 sm:px-6">
         {/* 页头 */}
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-black text-[#182230]">比赛库</h1>
-            <p className="mt-1 text-sm text-[#667085]">统一管理比赛、训练与采集视频及其分析结果</p>
+            <h1 className="text-2xl font-black text-[var(--capture-text-primary,#182b24)]">比赛库</h1>
+            <p className="mt-1 text-sm text-[var(--capture-text-secondary,#64736c)]">统一管理比赛、训练与采集视频及其分析结果</p>
           </div>
           <div className="flex items-center gap-2">
             <button
-              className="inline-flex items-center gap-1.5 rounded-full border border-[#E4E7EC] bg-white px-4 py-2 text-sm font-bold text-[#182230] transition hover:bg-[#F9FAFB]"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-card,#ffffff)] px-4 py-2 text-sm font-bold text-[var(--capture-text-primary,#182b24)] transition hover:bg-[var(--capture-surface-soft,#f7faf8)]"
               onClick={() => onNavigate("/upload")}
               type="button"
             >
@@ -131,7 +143,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
               上传视频
             </button>
             <button
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#19B84C] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#168A34]"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--capture-brand-strong,#197947)] px-4 py-2 text-sm font-bold text-white transition hover:bg-[var(--capture-brand-primary-hover,#14683d)]"
               onClick={() => onNavigate("/capture")}
               type="button"
             >
@@ -143,19 +155,19 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
         {/* 搜索与来源筛选 */}
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3]" aria-hidden="true" />
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--capture-text-muted,#8f9d96)]" aria-hidden="true" />
             <input
-              className="w-full rounded-lg border border-[#E4E7EC] bg-white py-2 pl-9 pr-3 text-sm text-[#182230] outline-none placeholder:text-[#98A2B3] focus:border-[#22C55E]"
+              className="w-full rounded-lg border border-[var(--capture-border-default,#d9e3dd)] bg-[#FAFCFB] py-2 pl-9 pr-3 text-sm text-[var(--capture-text-primary,#182b24)] outline-none placeholder:text-[var(--capture-text-muted,#8f9d96)] focus:border-[var(--capture-brand-primary,#23985b)]"
               placeholder="搜索比赛..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-1 rounded-lg border border-[#E4E7EC] bg-white p-1">
+          <div className="flex items-center gap-1 rounded-lg border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-soft,#f7faf8)] p-1">
             {(["all", "upload", "recording", "sync_recording"] as const).map((k) => (
               <button
                 key={k}
-                className={`rounded-md px-3 py-1 text-xs font-bold transition ${kind === k ? "bg-[#EAF7EE] text-[#168A34]" : "text-[#667085] hover:bg-[#F2F4F7]"}`}
+                className={`rounded-md px-3 py-1 text-xs font-bold transition ${kind === k ? "bg-[#E4F2E9] text-[var(--capture-brand-primary,#23985b)]" : "text-[var(--capture-text-secondary,#64736c)] hover:bg-[var(--capture-border-default,#d9e3dd)]/40"}`}
                 onClick={() => setKind(k)}
                 type="button"
               >
@@ -166,11 +178,11 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
         </div>
 
         {/* 状态 tab */}
-        <div className="mb-5 flex items-center gap-1 border-b border-[#E4E7EC]">
+        <div className="mb-5 flex items-center gap-1 border-b border-[var(--capture-border-default,#d9e3dd)]">
           {statusTabs.map((tab) => (
             <button
               key={tab.key}
-              className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-bold transition ${status === tab.key ? "border-[#168A34] text-[#168A34]" : "border-transparent text-[#667085] hover:text-[#182230]"}`}
+              className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-bold transition ${status === tab.key ? "border-[var(--capture-brand-primary,#23985b)] text-[var(--capture-brand-primary,#23985b)]" : "border-transparent text-[var(--capture-text-secondary,#64736c)] hover:text-[var(--capture-text-primary,#182b24)]"}`}
               onClick={() => setStatus(tab.key)}
               type="button"
             >
@@ -181,11 +193,11 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
 
         {/* 内容 */}
         {loading ? (
-          <div className="grid place-items-center py-24 text-sm text-[#98A2B3]">加载比赛中…</div>
+          <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">加载比赛中…</div>
         ) : filtered.length === 0 ? (
           <div className="grid place-items-center py-24 text-center">
-            <p className="text-sm font-bold text-[#667085]">未找到比赛</p>
-            <p className="mt-1 text-xs text-[#98A2B3]">试试调整筛选，或上传/采集一段视频</p>
+            <p className="text-sm font-bold text-[var(--capture-text-secondary,#64736c)]">未找到比赛</p>
+            <p className="mt-1 text-xs text-[var(--capture-text-muted,#8f9d96)]">试试调整筛选，或上传/采集一段视频</p>
           </div>
         ) : (
           <LibraryGrid
@@ -201,6 +213,28 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
       </div>
     </div>
   );
+}
+
+/** 场次分组的语义化标题（不暴露 raw fieldSessionId） */
+function formatDate(iso?: string): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return "";
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  } catch {
+    return "";
+  }
+}
+
+function groupLabel(list: LibraryItemViewModel[]): string {
+  const first = list[0];
+  if (!first) return "比赛素材";
+  const date = first.startedAt ? formatDate(first.startedAt) : "";
+  const venue = first.courtName ?? first.venue;
+  if (date && venue) return `${date} · ${venue}`;
+  if (date) return date;
+  return "比赛素材";
 }
 
 /** 按 FieldSession（场次）分组的卡片网格；无场次归属的素材落在「最近比赛」区 */
@@ -258,7 +292,7 @@ function LibraryGrid({
     <div className="space-y-8">
       {[...grouped.groups.entries()].map(([fieldSessionId, list]) => (
         <section key={fieldSessionId}>
-          <h2 className="mb-3 text-sm font-black text-[#182230]">场次 {fieldSessionId}</h2>
+          <h2 className="mb-3 text-sm font-black text-[#182230]">{groupLabel(list)}</h2>
           {renderGrid(list)}
         </section>
       ))}

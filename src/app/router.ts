@@ -15,7 +15,7 @@ const routeMeta = {
   library: { shellMode: "standard", navigationSection: "library" },
   "library-item": { shellMode: "standard", navigationSection: "library" },
   tasks: { shellMode: "standard", navigationSection: "analysis" },
-  captureHome: { shellMode: "standard", navigationSection: "videos" },
+  captureHome: { shellMode: "standard", navigationSection: "capture" },
   captureNew: { shellMode: "standard", navigationSection: "capture" },
   captureConsole: { shellMode: "capture", navigationSection: "capture" },
   segmentManager: { shellMode: "standard", navigationSection: "capture" },
@@ -280,7 +280,7 @@ export function parseLocation(pathname: string, search: string): RouteState {
   // vision 证据 seek 契约（performance finding → 视频证据跳转）：
   // 解析 t 查询参数（毫秒）；非法值（非数字/负数）忽略，由 VisionPage 在 metadata
   // loaded 后执行 currentTime = t/1000 并 clamp 到 [0, duration]。
-  if (route.name === "vision" && route.jobId && search) {
+  if (route.name === "vision" && "jobId" in route && route.jobId && search) {
     const params = new URLSearchParams(search);
     const raw = params.get("t");
     if (raw !== null) {

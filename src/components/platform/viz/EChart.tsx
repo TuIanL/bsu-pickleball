@@ -79,6 +79,7 @@ export function EChart({ option, height = 260, ariaLabel, testId, fallbackText =
       for (const [eventName, handler] of Object.entries(onEvents ?? {})) {
         chart.on(eventName, handler);
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 初始化成功后清除失败标记
       setFailed(false);
       if (typeof ResizeObserver !== "undefined") {
         resizeObserver = new ResizeObserver(() => chart?.resize());

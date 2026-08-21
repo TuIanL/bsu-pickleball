@@ -9,7 +9,7 @@ describe("parsePath", () => {
     { pathname: "", expected: { name: "landing", path: "/", shellMode: "landing", navigationSection: null } },
     { pathname: "/upload", expected: { name: "upload", path: "/upload", shellMode: "landing", navigationSection: null } },
     { pathname: "/tasks", expected: { name: "tasks", path: "/tasks", shellMode: "standard", navigationSection: "analysis" } },
-    { pathname: "/capture", expected: { name: "captureHome", path: "/capture", shellMode: "standard", navigationSection: "videos" } },
+    { pathname: "/capture", expected: { name: "captureHome", path: "/capture", shellMode: "standard", navigationSection: "capture" } },
     { pathname: "/capture/new", expected: { name: "captureNew", path: "/capture/new", shellMode: "standard", navigationSection: "capture" } },
     { pathname: "/showcase/showcase-1", expected: { name: "showcase", path: "/showcase/showcase-1", runtimeId: "showcase-1", shellMode: "landing", navigationSection: null } },
     // captureConsole (dynamic sessionId)

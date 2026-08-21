@@ -42,11 +42,11 @@ function ZoneHeatmapBody({
       ? {
           courtBg: "transparent",
           courtStroke: "#334155", // slate-700
-          netStroke: "#00FF41", // PB 荧光亮绿
+          netStroke: "#3AAF6B", // 可视化绿
           kitchenStroke: "#A855F7", // PB 紫色（kitchen 色）
           labelColor: "#0F172A", // slate-900
-          // heatmap 渐变（亮绿 → 深紫）
-          heatStops: ["#00FF41", "#34D399", "#22D3EE", "#6366F1", "#A855F7", "#7E22CE"],
+          // heatmap 渐变（可视化绿 → 青 → 紫）
+          heatStops: ["#3AAF6B", "#34D399", "#22D3EE", "#6366F1", "#A855F7", "#7E22CE"],
           textHeaderColor: "#0F172A",
           textSupportColor: "#475569",
           progressBg: "#E2E8F0",

@@ -17,6 +17,12 @@ import type {
 import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 import { CourtMinimap } from "./CourtMinimap";
 import { formatPlayerId } from "../../utils/analysisHelpers";
+import {
+  resolveDisplayGeometry,
+  resolveEffectiveDisplayState,
+  resolveEvidencePresentation,
+  resolvePlayerIdentityHue,
+} from "../../utils/overlayPresentation";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
@@ -387,6 +393,10 @@ function RealVideoOverlay({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [activeVideoSrc, setActiveVideoSrc] = useState<string | undefined>(videoSrc);
+  // 视频健壮性（Vision 页加载抖动修复）：显式失败态 + 重试，杜绝无限转圈
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const loadTimeoutRef = useRef<number | undefined>(undefined);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -461,6 +471,33 @@ function RealVideoOverlay({
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
 
+  // 源同步：videoSrc 就绪后应用（避免挂载早期 src=undefined 卡在不加载）。
+  // 用微任务/定时器把 setState 移出 effect 同步体，满足 react-hooks 规则且行为不变。
+  useEffect(() => {
+    if (!videoSrc) return;
+    const t = window.setTimeout(() => {
+      setActiveVideoSrc((prev) => (prev !== videoSrc ? videoSrc : prev));
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [videoSrc]);
+
+  // 加载超时护栏：拒绝无限转圈 —— 12s 内未拿到 metadata 则显式失败并允许重试
+  useEffect(() => {
+    window.clearTimeout(loadTimeoutRef.current);
+    if (activeVideoSrc && duration <= 0 && !loadError) {
+      loadTimeoutRef.current = window.setTimeout(() => {
+        setLoadError((prev) => prev ?? "视频加载超时，请重试");
+      }, 12000);
+    }
+    return () => window.clearTimeout(loadTimeoutRef.current);
+  }, [activeVideoSrc, duration, loadError]);
+
+  const retryVideo = () => {
+    setLoadError(null);
+    setDuration(0);
+    setReloadKey((n) => n + 1);
+  };
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) {
@@ -502,6 +539,7 @@ function RealVideoOverlay({
       syncTime();
     };
     const handleLoadedMetadata = () => {
+      setLoadError(null);
       setDuration(Number.isFinite(video.duration) ? video.duration : 0);
       if (video.videoWidth && video.videoHeight) {
         setNaturalSize({ width: video.videoWidth, height: video.videoHeight });
@@ -614,6 +652,8 @@ function RealVideoOverlay({
         { failedSrc: activeVideoSrc, fallback: fallbackVideoSrc },
       );
       setActiveVideoSrc(fallbackVideoSrc);
+    } else {
+      setLoadError("视频加载失败（浏览器无法解码或网络中断）");
     }
   };
 
@@ -626,6 +666,7 @@ function RealVideoOverlay({
       >
         <video
           className="absolute inset-0 h-full w-full bg-black object-contain"
+          key={`${activeVideoSrc ?? "no-src"}-${reloadKey}`}
           muted={isMuted}
           playsInline
           preload="metadata"
@@ -633,7 +674,19 @@ function RealVideoOverlay({
           src={activeVideoSrc}
           onError={handleVideoError}
         />
-        {activeVideoSrc && duration === 0 && (
+        {activeVideoSrc && duration === 0 && loadError && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
+            <span className="text-sm font-semibold text-white/90">{loadError}</span>
+            <button
+              className="pointer-events-auto green-button min-h-10 px-4 text-sm"
+              onClick={retryVideo}
+              type="button"
+            >
+              重新加载
+            </button>
+          </div>
+        )}
+        {activeVideoSrc && duration === 0 && !loadError && (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" />
             <span className="text-sm text-white/70">正在加载视频（大文件可能需要几秒）…</span>
@@ -1224,14 +1277,15 @@ function isServeMarkerActive(marker: ServeMarker, currentTime: number): boolean 
 
 // ---- 融合球员叠加层（multiview-fused-player-overlay.v1）渲染 -----------------
 
-const FUSED_EVIDENCE_STYLE = {
-  base_observed: { stroke: "#22C55E", dash: undefined, fill: "rgba(34,197,94,0.10)", label: "检测" },
-  guided_observed: { stroke: "#22C55E", dash: undefined, fill: "rgba(34,197,94,0.10)", label: "协同恢复" },
-  refined_observed: { stroke: "#38BDF8", dash: undefined, fill: "rgba(56,189,248,0.10)", label: "离线精修" },
-  cross_view_projected: { stroke: "#FACC15", dash: "8 6", fill: "rgba(250,204,21,0.08)", label: "双摄补全" },
-  predicted_only: { stroke: "#94A3B8", dash: "3 5", fill: "rgba(148,163,184,0.06)", label: "预测" },
-  bootstrap_backfill: { stroke: "#FB7185", dash: undefined, fill: "rgba(251,113,133,0.10)", label: "启动回填" },
-} as const;
+/** 把 identity hue（hex）转成低透明度填充，用于检测框底色（不改变 identity 主色）。 */
+function hueWithAlpha(hex: string, alpha: number): string {
+  const m = /^#([0-9A-Fa-f]{6})$/.exec(hex);
+  if (!m) {
+    return hex;
+  }
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
 
 function FusedPlayerBox({
   entity,
@@ -1242,71 +1296,43 @@ function FusedPlayerBox({
   source: { width: number; height: number };
   inGap: boolean;
 }) {
-  const style = FUSED_EVIDENCE_STYLE[entity.evidence_type];
-  const opacity = inGap ? 0 : 1;
+  // 三层展示职责（stabilize-multiview-overlay-temporal-continuity）：
+  // identity hue（player_id 恒定）· topology（display_state）· provenance（evidence_type）
+  const hue = resolvePlayerIdentityHue(entity.player_id);
+  const pres = resolveEvidencePresentation(entity.evidence_type);
+  const effectiveState = resolveEffectiveDisplayState(entity);
+  const geometry = resolveDisplayGeometry(effectiveState)
+    ?? (entity.evidence_type === "predicted_only" ? "point" : entity.bbox ? "box" : "point");
+  const baseOpacity = inGap ? 0 : pres.opacity;
   const label = entity.label ?? entity.player_id;
 
-  if (entity.evidence_type === "predicted_only") {
-    // 预测仅光圈：footpoint + identity badge + uncertainty halo（不渲染人体框）
-    if (!entity.footpoint) {
-      return null;
-    }
-    return (
-      <g key={`fused-${entity.player_id}`} opacity={opacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
-        <circle
-          cx={entity.footpoint[0]}
-          cy={entity.footpoint[1]}
-          fill="none"
-          r={Math.max(14, source.width * 0.012)}
-          stroke="#94A3B8"
-          strokeDasharray="3 5"
-          strokeWidth={Math.max(1.5, source.width * 0.0012)}
-        />
-        <circle
-          cx={entity.footpoint[0]}
-          cy={entity.footpoint[1]}
-          fill="#94A3B8"
-          r={Math.max(3.5, source.width * 0.003)}
-          stroke="rgba(0,0,0,0.6)"
-          strokeWidth={1}
-        />
-        <text
-          fill="#CBD5E1"
-          fontSize={Math.max(12, source.width * 0.011)}
-          fontWeight="700"
-          paintOrder="stroke"
-          stroke="rgba(0,0,0,0.75)"
-          strokeWidth={Math.max(3, source.width * 0.002)}
-          textAnchor="middle"
-          x={entity.footpoint[0]}
-          y={Math.max(16, entity.footpoint[1] - Math.max(14, source.width * 0.012) - 6)}
-        >
-          {label} · 预测
-        </text>
-      </g>
-    );
+  if (geometry === "hidden") {
+    return null;
   }
 
-  if (!entity.bbox) {
-    // 无历史 bbox：footpoint + identity badge + halo（不伪造人体框）
+  if (geometry === "point") {
+    // 光圈：footpoint + identity badge + halo（不伪造人体框）
     if (!entity.footpoint) {
       return null;
     }
+    const haloR = effectiveState === "PREDICTED_POINT"
+      ? Math.max(14, source.width * 0.012)
+      : Math.max(12, source.width * 0.01);
     return (
-      <g key={`fused-${entity.player_id}`} opacity={opacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
+      <g key={`fused-${entity.player_id}`} opacity={baseOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
         <circle
           cx={entity.footpoint[0]}
           cy={entity.footpoint[1]}
           fill="none"
-          r={Math.max(12, source.width * 0.01)}
-          stroke={style.stroke}
-          strokeDasharray="5 5"
+          r={haloR}
+          stroke={hue}
+          strokeDasharray={pres.solid ? "5 5" : "3 5"}
           strokeWidth={Math.max(1.5, source.width * 0.0012)}
         />
         <circle
           cx={entity.footpoint[0]}
           cy={entity.footpoint[1]}
-          fill={style.stroke}
+          fill={hue}
           r={Math.max(3.5, source.width * 0.003)}
           stroke="rgba(0,0,0,0.6)"
           strokeWidth={1}
@@ -1318,47 +1344,49 @@ function FusedPlayerBox({
           paintOrder="stroke"
           stroke="rgba(0,0,0,0.75)"
           strokeWidth={Math.max(3, source.width * 0.002)}
-          x={entity.footpoint[0]}
-          y={Math.max(16, entity.footpoint[1] - Math.max(12, source.width * 0.01) - 6)}
           textAnchor="middle"
+          x={entity.footpoint[0]}
+          y={Math.max(16, entity.footpoint[1] - haloR - 6)}
         >
           {label}
-          {entity.evidence_type === "cross_view_projected" ? ` · ${style.label}` : ""}
+          {` · ${pres.label}`}
         </text>
       </g>
     );
   }
 
+  if (!entity.bbox) {
+    return null;
+  }
   const [x1, y1, x2, y2] = entity.bbox;
   const width = Math.max(0, x2 - x1);
   const height = Math.max(0, y2 - y1);
-  const isProjected = entity.evidence_type === "cross_view_projected";
   // 展示稳定性（stabilize-multiview-overlay-display）：
   // - view_scale_profiled：尺度投影虚线框（来源标签区分真实检测）
   // - bbox_stale：stale memory bbox 按 bbox_age_ms 淡化
   const isScaleProfiled = entity.bbox_source === "view_scale_profiled";
   const staleOpacity = entity.bbox_stale ? 0.55 : 1;
-  const boxOpacity = (isProjected ? 0.85 : 1) * staleOpacity;
+  const boxOpacity = baseOpacity * staleOpacity;
   const sourceLabel = isScaleProfiled
     ? " · 尺度投影"
-    : entity.evidence_type !== "base_observed" && entity.evidence_type !== "guided_observed"
-      ? ` · ${style.label}`
-      : "";
+    : entity.evidence_type === "base_observed"
+      ? ""
+      : ` · ${pres.label}`;
   return (
     <g key={`fused-${entity.player_id}`} opacity={boxOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
       <rect
-        fill={style.fill}
+        fill={hueWithAlpha(hue, 0.1)}
         height={height}
         rx={Math.max(4, source.width * 0.003)}
-        stroke={style.stroke}
-        strokeDasharray={isScaleProfiled ? "10 6" : style.dash}
+        stroke={hue}
+        strokeDasharray={isScaleProfiled ? "10 6" : pres.solid ? undefined : "8 6"}
         strokeWidth={Math.max(2, source.width * 0.0018)}
         width={width}
         x={x1}
         y={y1}
       />
       <text
-        fill="#D9FF3F"
+        fill={hue}
         fontSize={Math.max(13, source.width * 0.013)}
         fontWeight="800"
         paintOrder="stroke"

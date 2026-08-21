@@ -343,7 +343,7 @@ export function tracksToPlayerMarkers(result: AnalysisPipelineResult, doubles: b
     .map((entry) => entry.id);
   return orderedIds.map((trackId, index) => {
     const track = latest.get(trackId)!;
-    const team = playerSideFromId(trackId, doubles) ?? fallbackSideFromCourtY(track, doubles);
+    const team = playerSideFromId(trackId, doubles) ?? fallbackSideFromCourtY(track);
     return {
       id: trackId,
       label: String.fromCharCode("A".charCodeAt(0) + index),
@@ -372,7 +372,7 @@ export function playerSideFromId(id: string, doubles: boolean): "near" | "far" |
 }
 
 /** 非 canonical id 回退：court_point.y < 22ft（近半场）→ near。 */
-function fallbackSideFromCourtY(track: AnalysisPipelineResult["tracks"][number], _doubles: boolean): "near" | "far" {
+function fallbackSideFromCourtY(track: AnalysisPipelineResult["tracks"][number]): "near" | "far" {
   return track.court_point.y < 22 ? "near" : "far";
 }
 

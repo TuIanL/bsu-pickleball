@@ -533,6 +533,7 @@ export const progressPoints: ProgressPoint[] = [
 const reportMetricMap: Record<ReportDefinition["type"], DashboardMetric[]> = {
   movement: dashboardMetrics.filter((metric) => ["overall", "kitchen", "rally-length", "errors"].includes(metric.id)),
   diagnosis: dashboardMetrics.filter((metric) => ["errors", "third", "dink", "overall"].includes(metric.id)),
+  performance: dashboardMetrics.filter((metric) => ["overall", "third", "kitchen", "errors"].includes(metric.id)),
 };
 
 export const reportDefinitions: ReportDefinition[] = [

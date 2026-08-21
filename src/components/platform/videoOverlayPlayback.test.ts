@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame } from "./videoOverlayPlayback";
 import { buildVideoOverlayHud } from "../../services/videoOverlayHud";
-import type { DetectionOverlayFrame, FusedPlayerOverlayEntity, FusedPlayerOverlayFrame } from "../../types/report";
+import type { DetectionOverlayFrame, FusedPlayerOverlayEntity, FusedPlayerOverlayFrame, PipelineTrackPoint } from "../../types/report";
 
 function detection(
   trackId: string,
@@ -176,7 +176,7 @@ describe("buildVideoOverlayHud bootstrap_backfill", () => {
       { playerId: "Player_1", timestamp: 0.1, canonical: [5.5, 12] },
       { playerId: "Player_1", timestamp: 0.2, canonical: [6, 14] },
     ]);
-    const pipelineTracks: any[] = [
+    const pipelineTracks: PipelineTrackPoint[] = [
       { frame_index: 30, timestamp_seconds: 1.0, track_id: "Player_1", image_point: { x: 0, y: 0 }, confidence: 0.9, side: "near", court_point: { x: 7, y: 18 } },
     ];
 
@@ -201,7 +201,7 @@ describe("buildVideoOverlayHud bootstrap_backfill", () => {
       { playerId: "Player_1", timestamp: 0.0, canonical: [5, 10] },
       { playerId: "Player_1", timestamp: 0.1, canonical: [5.5, 12] },
     ]);
-    const pipelineTracks: any[] = [
+    const pipelineTracks: PipelineTrackPoint[] = [
       { frame_index: 30, timestamp_seconds: 1.0, track_id: "Player_1", image_point: { x: 0, y: 0 }, confidence: 0.9, side: "near", court_point: { x: 7, y: 18 } },
     ];
 

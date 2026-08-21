@@ -2,21 +2,60 @@
 
 :root {
   color: #17231d;
-  background: #f5f8f2;
+  background: #f1f5f3;
 
-  /* Capture workspace tokens */
-  --capture-surface-page: #f7f8fa;
-  --capture-surface-card: #ffffff;
-  --capture-surface-video: #101828;
-  --capture-border-default: #e4e7ec;
-  --capture-border-strong: #d0d5dd;
-  --capture-text-primary: #182230;
-  --capture-text-secondary: #475467;
-  --capture-text-muted: #98a2b3;
-  --capture-brand-primary: #3baa62;
-  --capture-brand-soft: #eaf7ee;
+  /* Global product tokens.
+     --capture-* prefix retained for backward compatibility. */
+
+  /* 底色层级 */
+  --capture-surface-page: #f1f5f3;     /* canvas 最外层 */
+  --capture-surface-soft: #f7faf8;     /* Workspace/筛选栏/页面区域 */
+  --capture-surface-card: #ffffff;     /* 卡片 surface */
+  --capture-surface-elevated: #ffffff; /* 浮层/弹层 */
+  --capture-surface-video: #24302b;    /* 播放器外框（替代纯黑） */
+
+  /* 边框 */
+  --capture-border-default: #d9e3dd;   /* 普通边框 */
+  --capture-border-strong: #c7d5cd;    /* 卡片/模块主要边界 */
+
+  /* 品牌绿（按用途分级，保证白字可读性与 hover 层级） */
+  --capture-brand-primary: #23985b;            /* 品牌标识/图标/Tab underline/大色块 */
+  --capture-brand-strong: #197947;             /* 白字 Primary Button/较小绿色文字 */
+  --capture-brand-primary-hover: #14683d;      /* hover/pressed */
+  --capture-brand-soft: #ddf1e5;               /* 绿色浅底 */
+
+  /* 文字三级 */
+  --capture-text-primary: #182b24;
+  --capture-text-secondary: #64736c;
+  --capture-text-muted: #8f9d96;
+
+  /* 辅助色（使用边界见 change design D5） */
+  --capture-accent: #72b8c4;           /* AI/双摄/技术提示、辅助 icon；不做 Primary CTA */
+  --capture-lime: #b8de64;             /* 数据高亮/运动感微点缀；占比 < 5% */
+
+  /* 侧边栏 */
+  --capture-sidebar-bg: #fafcfb;
+  --capture-sidebar-border: #dce5e0;
+  --capture-nav-active-bg: #e6f3ea;
+  --capture-nav-active-text: #1b824c;
+
+  /* 状态色板（业务语义命名；前景加深，Badge 小字号对比度 ≥ ~4.5:1） */
+  --capture-status-pending: #475569;
+  --capture-status-pending-soft: #eef2f6;
+  --capture-status-processing: #8a570e;
+  --capture-status-processing-soft: #fff3dc;
+  --capture-status-success: #176b3c;
+  --capture-status-success-soft: #e5f4ea;
+  --capture-status-merge: #9a5300;
+  --capture-status-merge-soft: #fff0da;
+  --capture-status-failed: #b42318;
+  --capture-status-failed-soft: #fde8e7;
+  --capture-status-ai: #2f6f7b;
+  --capture-status-ai-soft: #e8f4f6;
+
+  /* 功能语义色：原值保留（不参与品牌换色） */
   --capture-status-recording: #e5484d;
-  --capture-status-success: #3baa62;
+  --capture-status-recording-soft: #fde8e7; /* 录制状态 Badge 浅底 */
   --capture-status-warning: #f59e42;
   --capture-status-info: #4f7df3;
   --capture-timeline-set: #f08a3c;
@@ -25,30 +64,19 @@
   --capture-timeline-highlight: #8b5cf6;
   --capture-timeline-playhead: #e5484d;
   --capture-timeline-side-change: #ec6d9e;
+
+  /* 圆角 / 阴影 */
   --capture-radius-sm: 8px;
   --capture-radius-md: 12px;
   --capture-radius-lg: 16px;
-  --capture-shadow-card: 0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.03);
+  --capture-shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.03);
+
   font-family:
     Inter, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial,
     "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --surface-0: #f5f8f2;
-  --surface-1: #ffffff;
-  --surface-2: #eef6ea;
-  --surface-3: #dfeada;
-  --surface-4: #cbdcc7;
-  --text-strong: #17231d;
-  --text-soft: #5f6f66;
-  --line-dark: rgba(31, 61, 43, 0.12);
-  --action-green: #19b84c;
-  --glow-green: #22c55e;
-  --pickle-lime: #d9ff3f;
-  --court-blue: #2f80ed;
-  --warning-orange: #ff9500;
-  --error-red: #ff4d4f;
 }
 
 * {
@@ -57,7 +85,7 @@
 
 html {
   min-width: 320px;
-  background: #f5f8f2;
+  background: #f1f5f3;
   scroll-behavior: smooth;
 }
 
@@ -175,23 +203,23 @@ button {
    仅在 class=".pb-vision-theme" 的 DOM 树下生效，不影响其他页面
    ============================================================ */
 .pb-vision-theme {
-  /* 主色 */
-  --pb-primary: #00ff41;          /* 荧光亮绿：按钮、选中态、进度条 */
-  --pb-primary-dark: #00cc33;     /* 深绿次色：边框、强调文字 */
-  --pb-primary-soft: #e6ffe9;     /* 浅绿底：hover / 弱强调背景 */
+  /* 主色（--pb-* 保留为 compatibility aliases，引用全局 Token） */
+  --pb-primary: var(--capture-brand-primary);        /* 深绿 #23985B：按钮、选中态、进度条 */
+  --pb-primary-dark: var(--capture-brand-strong);    /* #197947：边框、强调文字 */
+  --pb-primary-soft: var(--capture-brand-soft);      /* #DDF1E5：hover / 弱强调背景 */
 
   /* 页面 & 卡片 */
-  --pb-page-bg: #f0f4f2;          /* 浅灰白页面底 */
-  --pb-card-bg: #ffffff;          /* 卡片白 */
-  --pb-card-border: #e5e7eb;      /* 卡片边框 */
+  --pb-page-bg: var(--capture-surface-page);         /* #F1F5F3 浅灰白页面底 */
+  --pb-card-bg: #ffffff;                             /* 卡片白 */
+  --pb-card-border: var(--capture-border-default);   /* #D9E3DD 卡片边框 */
   --pb-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
 
   /* 文字色 */
-  --pb-text-primary: #111827;     /* 近黑主文 */
-  --pb-text-secondary: #6b7280;   /* 中灰次文 */
-  --pb-text-muted: #9ca3af;       /* 淡灰辅助 */
+  --pb-text-primary: var(--capture-text-primary);    /* #182B24 近黑主文 */
+  --pb-text-secondary: var(--capture-text-secondary);/* #64736C 中灰次文 */
+  --pb-text-muted: var(--capture-text-muted);        /* #8F9D96 淡灰辅助 */
 
-  /* 6 维度专属彩色（Kitchen Game / Ball Control / Defense / Offense / Court IQ / Targeting） */
+  /* 6 维度专属彩色（原值保留：Kitchen Game / Ball Control / Defense / Offense / Court IQ / Targeting） */
   --pb-dim-kitchen: #a855f7;      /* 紫 */
   --pb-dim-ballctrl: #3b82f6;     /* 蓝 */
   --pb-dim-defense: #06b6d4;      /* 青 */
@@ -199,7 +227,7 @@ button {
   --pb-dim-courtiq: #eab308;      /* 金 */
   --pb-dim-targeting: #ec4899;    /* 粉 */
 
-  /* 6 维度浅色底（卡片背景用） */
+  /* 6 维度浅色底（卡片背景用，原值保留） */
   --pb-dim-kitchen-bg: #faf5ff;
   --pb-dim-ballctrl-bg: #eff6ff;
   --pb-dim-defense-bg: #ecfeff;
@@ -207,18 +235,18 @@ button {
   --pb-dim-courtiq-bg: #fffbeb;
   --pb-dim-targeting-bg: #fdf2f8;
 
-  /* 热力图 PB Vision 三段渐变 */
+  /* 热力图三段渐变（黄 → 可视化绿 → 粉；mid 独立可视化绿，不绑定品牌色） */
   --pb-heat-low: #fbbf24;         /* 黄 */
-  --pb-heat-mid: #00ff41;         /* 绿 */
+  --pb-heat-mid: #3aaf6b;         /* 可视化绿 */
   --pb-heat-high: #ec4899;        /* 粉 */
 
   /* 状态色 */
-  --pb-success: #00ff41;          /* 成功/In（和主色一致） */
+  --pb-success: var(--capture-status-success);       /* #176B3C 成功/In */
   --pb-warning: #f59e0b;          /* 警告 */
   --pb-error: #ef4444;            /* 错误 */
   --pb-net: #e879f9;              /* 洋红：Net 擦网 */
 
-  /* Coach's Insight 米黄卡 */
+  /* Coach's Insight 米黄卡（原值保留） */
   --pb-coach-bg: #fff7e6;
   --pb-coach-border: #fde68a;
 }
@@ -232,10 +260,10 @@ button {
   color: var(--pb-text-primary, #111827);
 }
 
-/* PB 风格按钮 */
+/* PB 风格按钮（白字 Primary 用 brand-strong，保证对比度） */
 .pb-btn-primary {
-  background: var(--pb-primary, #00ff41);
-  color: #052e16;
+  background: var(--pb-primary-dark, #197947);
+  color: #ffffff;
   font-weight: 600;
   border-radius: 0.5rem;
   padding: 0.5rem 1rem;
@@ -243,7 +271,7 @@ button {
 }
 .pb-btn-primary:hover {
   filter: brightness(0.95);
-  box-shadow: 0 0 0 3px rgba(0, 255, 65, 0.2);
+  box-shadow: 0 0 0 3px rgba(25, 121, 71, 0.25);
 }
 .pb-btn-primary:active {
   transform: translateY(1px);
@@ -264,7 +292,7 @@ button {
   width: 18px;
   height: 18px;
   border-radius: 9999px;
-  background: var(--pb-primary, #00ff41);
+  background: var(--pb-primary, #23985b);
   border: 2px solid #ffffff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
   cursor: pointer;
@@ -277,7 +305,7 @@ button {
   width: 18px;
   height: 18px;
   border-radius: 9999px;
-  background: var(--pb-primary, #00ff41);
+  background: var(--pb-primary, #23985b);
   border: 2px solid #ffffff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
   cursor: pointer;
@@ -297,8 +325,8 @@ button {
   transition: all 0.12s ease;
 }
 .pb-vision-theme .pb-3d-view-btns button[data-active="true"] {
-  border-color: var(--pb-primary, #00ff41) !important;
-  box-shadow: 0 0 0 2px rgba(0, 255, 65, 0.25) !important;
+  border-color: var(--pb-primary, #23985b) !important;
+  box-shadow: 0 0 0 2px rgba(35, 152, 91, 0.25) !important;
 }
 
 /* 长期平均对比线 & Δ 值占位（初始隐藏，未来接真实数据时移除 display:none 即可） */

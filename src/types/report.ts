@@ -655,6 +655,8 @@ export interface CaptureTakeSummary {
   duration_ms?: number;
   revision: number;
   sync_anchor_status?: import("./syncAnchors").SyncAnchorStatus | null;
+  /** 可播放视频源（来自 capture_tracks，按机位 cam_1→cam_2 排序） */
+  video_ids?: string[];
 }
 
 export interface CaptureSegmentSummary {
@@ -1265,10 +1267,18 @@ export interface ReconstructedTrajectoryQuality {
 
 export type ShotOwnershipStatus = "confirmed" | "ambiguous" | "unassigned" | "not_applicable";
 
+export type ReconstructedBallTrajectoryMode =
+  | "event_anchored_2_5d"
+  | "dual_anchor_warp"
+  | "single_anchor_warp"
+  | "image_only"
+  | "local_visual_arc"
+  | "multiview_estimated_3d";
+
 export interface ReconstructedBallTrajectorySegment {
   segment_id: string;
-  reconstruction_mode: "dual_anchor_warp" | "single_anchor_warp" | "image_only" | "local_visual_arc";
-  status: "reconstructed" | "insufficient_spatial_anchors";
+  reconstruction_mode: ReconstructedBallTrajectoryMode;
+  status: "reconstructed" | "insufficient_spatial_anchors" | "FULL_ESTIMATED_3D" | "PARTIAL_3D" | "LANDING_ONLY" | "UNAVAILABLE";
   start_event_id?: string | null;
   end_event_id?: string | null;
   start_event_type?: string | null;
@@ -1285,6 +1295,11 @@ export interface ReconstructedBallTrajectorySegment {
   ownership_status?: ShotOwnershipStatus;
   ownership_confidence?: number | null;
   ownership_source_event_id?: string | null;
+  // v3（多视角估算三维）指标与覆盖率
+  reprojection_error_px?: number;
+  stereo_coverage?: number;
+  prediction_ratio?: number;
+  metrics?: MultiviewBallTrajectoryMetrics;
 }
 
 export interface ReconstructedBallTrajectoryAttribution {
@@ -1329,15 +1344,57 @@ export interface ReconstructedBallTrajectoryArtifact {
   job_id: string;
   status: "available" | "no_candidates" | "partial" | "unavailable" | "skipped" | "failed";
   detail: string;
-  reconstruction_mode: "event_anchored_2_5d";
+  reconstruction_mode: ReconstructedBallTrajectoryMode;
   coordinate_semantics?: {
     xy?: string;
     z?: string;
     metric_validity?: string;
+    validity?: string;
   };
   player_roster?: PlayerRosterEntry[];
   events: ReconstructedBallTrajectoryEvent[];
   segments: ReconstructedBallTrajectorySegment[];
+  // v3（多视角估算三维）落点权威与整体可用状态
+  bounce_source?: string;
+  landing_point?: {
+    landing_x_ft?: number | null;
+    landing_y_ft?: number | null;
+    landing_source?: string;
+    landing_validity?: string;
+    geometry_quality?: number;
+  } | null;
+  overall_status?: "FULL_ESTIMATED_3D" | "PARTIAL_3D" | "LANDING_ONLY" | "UNAVAILABLE";
+}
+
+export interface MultiviewBallTrajectoryMetrics {
+  average_speed_kmh?: number | null;
+  average_speed_validity?: "estimated" | "unavailable";
+  speed_eligibility_reason?: string | null;
+  peak_height_ft?: number | null;
+  net_height_ft?: number | null;
+  derived_from?: string;
+}
+
+export interface MultiviewStereoMeasurement {
+  take_timestamp_ms: number;
+  cam1_timestamp_ms: number;
+  cam2_timestamp_ms: number;
+  cam1_image_xy: [number, number];
+  cam2_image_xy: [number, number];
+  estimated_xy_ft: [number, number];
+  estimated_z_ft: number;
+  reprojection_error_cam1_px: number;
+  reprojection_error_cam2_px: number;
+  geometry_quality: number;
+  confidence: number;
+  source: string;
+}
+
+export interface MultiviewBallStereoEvidenceArtifact {
+  schema_version: string;
+  take_id?: string;
+  measurements: MultiviewStereoMeasurement[];
+  pairings?: unknown[];
 }
 
 export interface ServeEventCandidate {

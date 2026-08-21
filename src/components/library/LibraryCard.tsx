@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Download, ExternalLink, FileText, MoreHorizontal, Play, Trash2, Video } from "lucide-react";
+import { FileText, MoreHorizontal, Play, Trash2, Video } from "lucide-react";
 import type { NavigateFn } from "../../app/navigationTypes";
 import type { LibraryItemViewModel } from "../../services/libraryAdapter";
+import { LibraryCover } from "./LibraryCover";
+import { libraryAnalysisPathFor } from "../../services/libraryAnalysisRouting";
 
 const KIND_LABEL: Record<LibraryItemViewModel["sourceType"], string> = {
   upload: "上传",
@@ -9,42 +11,68 @@ const KIND_LABEL: Record<LibraryItemViewModel["sourceType"], string> = {
   sync_recording: "双摄",
 };
 
-function stateBadge(item: LibraryItemViewModel): { text: string; tone: "green" | "blue" | "amber" | "gray" | "red" } {
+/** 业务语义状态 tone：UI 不依赖颜色名，只表达状态 */
+type StatusTone = "pending" | "processing" | "success" | "merge" | "failed" | "ai" | "recording";
+
+function stateBadge(item: LibraryItemViewModel): { text: string; tone: StatusTone } {
   // 媒体生命周期
-  if (item.mediaState === "recording") return { text: "正在录制", tone: "red" };
-  if (item.mediaState === "canceled") return { text: "已取消", tone: "gray" };
-  if (item.mediaState === "failed") return { text: "失败", tone: "red" };
+  if (item.mediaState === "recording") return { text: "正在录制", tone: "recording" };
+  if (item.mediaState === "canceled") return { text: "已取消", tone: "pending" };
+  if (item.mediaState === "failed") return { text: "失败", tone: "failed" };
   if (item.mediaState === "processing") {
-    if (item.requiredAction === "merge") return { text: "待合并", tone: "amber" };
-    if (item.requiredAction === "retry_merge") return { text: "合并失败", tone: "red" };
-    return { text: "视频处理中", tone: "blue" };
+    if (item.requiredAction === "merge") return { text: "待合并", tone: "merge" };
+    if (item.requiredAction === "retry_merge") return { text: "合并失败", tone: "failed" };
+    return { text: "视频处理中", tone: "ai" };
   }
   // 分析生命周期
   switch (item.analysisState) {
     case "not_started":
-      return { text: "待分析", tone: "gray" };
+      return { text: "待分析", tone: "pending" };
     case "queued":
-      return { text: "队列中", tone: "blue" };
+      return { text: "队列中", tone: "ai" };
     case "running":
-      return { text: "正在分析", tone: "amber" };
+      return { text: "正在分析", tone: "processing" };
     case "succeeded":
-      return { text: "分析完成", tone: "green" };
+      return { text: "分析完成", tone: "success" };
     case "failed":
-      return { text: "分析失败", tone: "red" };
+      return { text: "分析失败", tone: "failed" };
     case "canceled":
-      return { text: "分析已取消", tone: "gray" };
+      return { text: "分析已取消", tone: "pending" };
     default:
-      return { text: "待分析", tone: "gray" };
+      return { text: "待分析", tone: "pending" };
   }
 }
 
-const toneClass: Record<string, string> = {
-  green: "bg-[#E7F7EC] text-[#168A34]",
-  blue: "bg-[#EAF2FF] text-[#2563EB]",
-  amber: "bg-[#FFF4E5] text-[#B45309]",
-  gray: "bg-[#F2F4F7] text-[#667085]",
-  red: "bg-[#FEE4E2] text-[#D92D20]",
+const toneClass: Record<StatusTone, string> = {
+  pending: "bg-[var(--capture-status-pending-soft,#eef2f6)] text-[var(--capture-status-pending,#475569)]",
+  processing: "bg-[var(--capture-status-processing-soft,#fff3dc)] text-[var(--capture-status-processing,#8a570e)]",
+  success: "bg-[var(--capture-status-success-soft,#e5f4ea)] text-[var(--capture-status-success,#176b3c)]",
+  merge: "bg-[var(--capture-status-merge-soft,#fff0da)] text-[var(--capture-status-merge,#9a5300)]",
+  failed: "bg-[var(--capture-status-failed-soft,#fde8e7)] text-[var(--capture-status-failed,#b42318)]",
+  ai: "bg-[var(--capture-status-ai-soft,#e8f4f6)] text-[var(--capture-status-ai,#2f6f7b)]",
+  recording: "bg-[var(--capture-status-recording-soft,#fde8e7)] text-[var(--capture-status-recording,#e5484d)]",
 };
+
+/** 属性标签去重：source 类型 + 比赛形式；camera 设置若被 source 类型隐含则不重复展示 */
+function attributeTags(item: LibraryItemViewModel): string[] {
+  const tags: string[] = [];
+  const setupShown =
+    (item.sourceType === "sync_recording" && item.cameraSetup === "dual") ||
+    (item.sourceType === "recording" && item.cameraSetup === "single") ||
+    item.sourceType === "upload";
+  if (!setupShown && item.cameraSetup) {
+    tags.push(item.cameraSetup === "dual" ? "双摄" : "单摄");
+  }
+  if (item.matchFormat === "singles") tags.push("单打");
+  else if (item.matchFormat === "doubles") tags.push("双打");
+  return tags;
+}
+
+function creditCardRoot(item: LibraryItemViewModel): { label: string; action?: () => void } | null {
+  return {
+    label: KIND_LABEL[item.sourceType],
+  };
+}
 
 export function LibraryCard({
   item,
@@ -83,23 +111,63 @@ export function LibraryCard({
     action();
   };
 
+  const kind = creditCardRoot(item)?.label ?? "";
+  const extraTags = attributeTags(item);
+
+  // 未接通/无 context 的菜单项直接隐藏，不保留「看似可用其实 no-op」的死项
+  const needsMerge = item.requiredAction === "merge" || item.requiredAction === "retry_merge";
+  const canOpenVideo = item.ref.kind === "upload" && Boolean(onOpenVideo);
+  const canReanalyze = Boolean(onReanalyze) && Boolean(libraryAnalysisPathFor(item));
+  const canDelete = item.ref.kind !== "upload" && Boolean(onDelete);
+  // 已分析 → 「再次分析」；未分析 → 「开始分析」
+  const analyzeLabel = item.analysisState === "succeeded" ? "再次分析" : "开始分析";
+
   return (
-    <div className="group overflow-hidden rounded-2xl border border-[#E4E7EC] bg-white shadow-sm transition hover:shadow-md">
+    <article className="group relative overflow-hidden rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-card,#ffffff)] shadow-sm transition hover:shadow-md">
+      {/* 点击区：缩略图 + 信息，作为单一可点击实体（不再包整卡 button，避免 nested button） */}
       <button
         className="block w-full text-left"
         onClick={() => onNavigate(detailPath)}
         type="button"
       >
-        {/* 视频缩略图区（placeholder；有 thumbnailUrl/previewUrl 时接入真实画面） */}
-        <div className="relative aspect-video bg-gradient-to-br from-[#EAF7EE] to-[#D1FADF]">
-          <div className="absolute inset-0 grid place-items-center text-[#168A34]/60">
-            <Video size={36} aria-hidden="true" />
-          </div>
+        {/* 视频缩略图区：有稳定图片端点用图；否则按来源分派渲染首帧封面（单画面 / 双摄左右拼接）；均带会话内缓存 */}
+        <div className="relative aspect-video bg-gradient-to-br from-[#E7EEEB] to-[#DCE7E2]">
+          {item.thumbnailUrl ? (
+            <img
+              src={item.thumbnailUrl}
+              alt={item.title}
+              loading="lazy"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : item.coverVideoUrl || item.cameraCoverSources ? (
+            <div className="absolute inset-0">
+              <LibraryCover item={item} />
+            </div>
+          ) : (
+            <div className="absolute inset-0 grid place-items-center text-[var(--capture-text-muted,#8f9d96)]">
+              <Video size={36} aria-hidden="true" />
+            </div>
+          )}
+          {!item.thumbnailUrl && !item.coverVideoUrl && !item.cameraCoverSources && (
+            /* 无真实封面时叠一层轻球场线纹理，克制占位 */
+            <svg
+              className="pointer-events-none absolute inset-0 h-full w-full opacity-15"
+              viewBox="0 0 100 60"
+              preserveAspectRatio="xMidYMid slice"
+              aria-hidden="true"
+            >
+              <rect x="4" y="3" width="92" height="54" fill="none" stroke="#475569" strokeWidth="0.6" />
+              <line x1="4" y1="30" x2="96" y2="30" stroke="#475569" strokeWidth="0.6" />
+              <line x1="4" y1="20" x2="96" y2="20" stroke="#475569" strokeWidth="0.6" strokeDasharray="2 1.6" />
+              <line x1="4" y1="40" x2="96" y2="40" stroke="#475569" strokeWidth="0.6" strokeDasharray="2 1.6" />
+              <line x1="50" y1="3" x2="50" y2="57" stroke="#475569" strokeWidth="0.6" />
+            </svg>
+          )}
           {item.analysisState === "running" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/45 text-white">
               <span className="text-xs font-bold">正在分析中</span>
               <div className="h-1 w-24 overflow-hidden rounded-full bg-white/30">
-                <div className="h-full w-2/3 rounded-full bg-[#21C55D]" />
+                <div className="h-full w-2/3 rounded-full bg-[var(--capture-brand-primary,#23985b)]" />
               </div>
             </div>
           )}
@@ -109,57 +177,50 @@ export function LibraryCard({
           </span>
         </div>
 
-        {/* 生命周期动作（D6 requiredAction）：如待合并 → 合并视频 */}
-        {(item.requiredAction === "merge" || item.requiredAction === "retry_merge") && onMerge && (
-          <div className="border-b border-[#F2F4F7] px-3 py-2">
-            <button
-              className="w-full rounded-lg bg-[#FFF4E5] px-3 py-1.5 text-xs font-bold text-[#B45309] transition hover:bg-[#FFEAC0]"
-              onClick={(e) => {
-                e.stopPropagation();
-                onMerge(item);
-              }}
-              type="button"
-            >
-              {item.requiredAction === "retry_merge" ? "重新合并视频" : "合并视频"}
-            </button>
-          </div>
-        )}
-        {item.requiredAction === "retry_merge" && !onMerge && (
-          <div className="border-b border-[#F2F4F7] px-3 py-2">
-            <span className="text-xs font-bold text-[#B45309]">合并失败，请重试</span>
-          </div>
-        )}
-
         {/* 信息区 */}
         <div className="space-y-1.5 p-3">
-          <p className="truncate text-sm font-bold text-[#182230]">{item.title}</p>
-          <p className="text-xs text-[#667085]">
+          <p className="truncate text-sm font-bold text-[var(--capture-text-primary,#182b24)]">{item.title}</p>
+          <p className="text-xs text-[var(--capture-text-secondary,#64736c)]">
             {formatDate(item.startedAt)}
             {item.courtName ? ` · ${item.courtName}` : ""}
           </p>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#98A2B3]">
-            <span className="inline-flex items-center gap-1 rounded border border-[#E4E7EC] px-1.5 py-0.5">
-              {KIND_LABEL[item.sourceType]}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--capture-text-muted,#8f9d96)]">
+            <span className="inline-flex items-center gap-1 rounded border border-[var(--capture-border-default,#d9e3dd)] px-1.5 py-0.5">
+              {kind}
             </span>
-            {item.cameraSetup === "dual" ? (
-              <span>双摄</span>
-            ) : item.cameraSetup === "single" ? (
-              <span>单摄</span>
-            ) : null}
-            {item.matchFormat === "singles" ? <span>单打</span> : item.matchFormat === "doubles" ? <span>双打</span> : null}
-            {item.primaryAnalysisJobId ? (
+            {extraTags.map((tag) => (
+              <span key={tag}>{tag}</span>
+            ))}
+            {item.primaryAnalysisJobId && (
               <span className="inline-flex items-center gap-1">
                 <Play size={10} aria-hidden="true" />
                 {item.analysisHistoryCount > 1 ? `${item.analysisHistoryCount} 次分析` : "查看分析"}
               </span>
-            ) : item.requiredAction === "merge" ? (
-              <span className="text-[#B45309]">待合并</span>
-            ) : null}
+            )}
+            {!item.primaryAnalysisJobId && needsMerge && <span className="text-[var(--capture-status-merge,#9a5300)]">待合并</span>}
           </div>
         </div>
       </button>
 
-      {/* ··· 操作菜单（低频操作折叠；源视频删除为显式独立动作） */}
+      {/* 生命周期动作（如待合并 → 合并视频）；独立于点击实体，避免 nested button */}
+      {needsMerge && onMerge && (
+        <div className="border-t border-[var(--capture-border-default,#d9e3dd)] px-3 py-2">
+          <button
+            className="w-full rounded-lg bg-[var(--capture-status-merge-soft,#fff0da)] px-3 py-1.5 text-xs font-bold text-[var(--capture-status-merge,#9a5300)] transition hover:bg-[#FFEAC0]"
+            onClick={() => onMerge(item)}
+            type="button"
+          >
+            {item.requiredAction === "retry_merge" ? "重新合并视频" : "合并视频"}
+          </button>
+        </div>
+      )}
+      {item.requiredAction === "retry_merge" && !onMerge && (
+        <div className="border-t border-[var(--capture-border-default,#d9e3dd)] px-3 py-2">
+          <span className="text-xs font-bold text-[var(--capture-status-merge,#9a5300)]">合并失败，请重试</span>
+        </div>
+      )}
+
+      {/* ··· 操作菜单（低频操作折叠；未接通项隐藏而非禁用） */}
       <div ref={menuRef} className="absolute right-2 top-2 z-10">
         <button
           className="rounded-md p-1 text-white/80 hover:bg-white/20"
@@ -173,41 +234,42 @@ export function LibraryCard({
           <MoreHorizontal size={16} />
         </button>
         {menuOpen && (
-          <div className="absolute right-0 top-8 w-48 rounded-xl border border-[#E4E7EC] bg-white py-1 shadow-lg">
-            <MenuItem icon={<Copy size={14} />} label="重命名" disabled />
-            <MenuItem icon={<FileText size={14} />} label="加入场次/文件夹" disabled />
-            <MenuItem
-              icon={<Play size={14} />}
-              label="重新分析"
-              onClick={() => runAction(() => onReanalyze?.(item))}
-              disabled={!onReanalyze}
-            />
-            <MenuItem
-              icon={<Video size={14} />}
-              label="查看原视频"
-              onClick={() => runAction(() => onOpenVideo?.(item))}
-              disabled={!onOpenVideo}
-            />
-            <MenuItem icon={<Download size={14} />} label="下载" disabled />
-            <MenuItem icon={<ExternalLink size={14} />} label="分享" disabled />
+          <div className="absolute right-0 top-8 w-48 rounded-xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-card,#ffffff)] py-1 shadow-lg">
+            {canReanalyze && (
+              <MenuItem
+                icon={<Play size={14} />}
+                label={analyzeLabel}
+                onClick={() => runAction(() => onReanalyze?.(item))}
+              />
+            )}
+            {canOpenVideo && (
+              <MenuItem
+                icon={<Video size={14} />}
+                label="查看原视频"
+                onClick={() => runAction(() => onOpenVideo?.(item))}
+              />
+            )}
             <MenuItem
               icon={<FileText size={14} />}
               label="查看技术信息"
               onClick={() => runAction(() => onOpenTechnical?.(item))}
               disabled={!onOpenTechnical}
             />
-            <div className="my-1 border-t border-[#F2F4F7]" />
-            <MenuItem
-              icon={<Trash2 size={14} />}
-              label="删除"
-              tone="danger"
-              onClick={() => runAction(() => onDelete?.(item))}
-              disabled={!onDelete}
-            />
+            {canDelete && (
+              <>
+                <div className="my-1 border-t border-[var(--capture-border-default,#d9e3dd)]" />
+                <MenuItem
+                  icon={<Trash2 size={14} />}
+                  label="删除"
+                  tone="danger"
+                  onClick={() => runAction(() => onDelete?.(item))}
+                />
+              </>
+            )}
           </div>
         )}
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -226,7 +288,7 @@ function MenuItem({
 }) {
   return (
     <button
-      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold ${disabled ? "cursor-not-allowed text-[#C0C5CE]" : `${tone === "danger" ? "text-[#D92D20] hover:bg-[#FEE4E2]" : "text-[#475467] hover:bg-[#F2F4F7]"}`}`}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold ${disabled ? "cursor-not-allowed text-[var(--capture-text-muted,#8f9d96)]" : `${tone === "danger" ? "text-[var(--capture-status-failed,#b42318)] hover:bg-[var(--capture-status-failed-soft,#fde8e7)]" : "text-[var(--capture-text-secondary,#64736c)] hover:bg-[var(--capture-surface-soft,#f7faf8)]"}`}`}
       onClick={onClick}
       disabled={disabled}
       type="button"

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Activity, ArrowLeft, ArrowRight, Bug, Camera, CheckCircle2, Link2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
-import type { NavigateFn } from "../app/navigationTypes";
+import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { taskListPath, withTaskListContext } from "../app/navigationContext";
 import { CourtCornerCalibrator, type CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { PageFrame } from "../components/PageFrame";
@@ -106,11 +106,14 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
 
   // 路由带 `?session=`（录制卡片传入），缺失时回退到 take.source_session_id 反查
   const routeSessionId = new URLSearchParams(window.location.search).get("session");
+  const returnParam = new URLSearchParams(window.location.search).get("return");
   const taskContext = {
     source: "sync_recording" as const,
     sessionId: session?.session_id ?? routeSessionId ?? undefined,
   };
   const taskReturnPath = () => taskListPath(taskContext);
+  // 从 Library 进入时优先回到来源工作区，否则回双摄任务列表
+  const goReturn = () => onNavigate((returnParam ?? taskReturnPath()) as NavigatePath);
 
   // ── Load take + source session ────────────────────────────────────────────
 
@@ -284,7 +287,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
-            onClick={() => onNavigate(taskReturnPath())}
+            onClick={() => goReturn()}
             type="button"
           >
             返回双摄任务
@@ -314,7 +317,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         {/* Header */}
         <button
           className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
-          onClick={() => onNavigate(taskReturnPath())}
+          onClick={() => goReturn()}
           type="button"
         >
           <ArrowLeft size={16} aria-hidden="true" />
@@ -465,7 +468,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
               </div>
             )}
             <div className="mt-6 flex justify-end gap-3">
-              <button className="quiet-button px-4 py-2 text-sm" onClick={() => onNavigate(taskReturnPath())} type="button">
+              <button className="quiet-button px-4 py-2 text-sm" onClick={() => goReturn()} type="button">
                 <ArrowLeft size={15} aria-hidden="true" />
                 退出向导
               </button>

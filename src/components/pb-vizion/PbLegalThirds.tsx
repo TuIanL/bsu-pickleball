@@ -1,99 +1,18 @@
-import { useMemo } from "react";
 import { usePbReport } from "../../contexts/PbReportContext";
-import type {
-  AnalysisReport,
-  CoachNote,
-  TrainingRecommendation,
-} from "../../types/report";
+import PbEvidenceUnavailable from "./PbEvidenceUnavailable";
 
-const THIRD_KEYWORDS = ["第三拍", "三拍", "third", "third shot"] as const;
-
-function containsThirdKeyword(text: string): boolean {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return THIRD_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
-}
-
-function getThirdAdvice(report: AnalysisReport): string {
-  const candidates: string[] = [];
-
-  try {
-    const coachNotes = report?.coachNotes;
-    if (Array.isArray(coachNotes)) {
-      for (const note of coachNotes as CoachNote[]) {
-        const haystack = `${note?.title || ""} ${note?.body || ""}`;
-        if (containsThirdKeyword(haystack)) {
-          if (note?.body && note.body.trim()) candidates.push(note.body.trim());
-          else if (note?.title && note.title.trim())
-            candidates.push(note.title.trim());
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  try {
-    const recs = report?.trainingRecommendations;
-    if (Array.isArray(recs)) {
-      for (const r of recs as TrainingRecommendation[]) {
-        const haystack = `${r?.title || ""} ${r?.learningContent || ""} ${
-          r?.practiceTask || ""
-        } ${r?.nextTarget || ""}`;
-        if (containsThirdKeyword(haystack)) {
-          if (r?.learningContent && r.learningContent.trim())
-            candidates.push(r.learningContent.trim());
-          else if (r?.practiceTask && r.practiceTask.trim())
-            candidates.push(r.practiceTask.trim());
-          else if (r?.title && r.title.trim())
-            candidates.push(r.title.trim());
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  try {
-    const pi = report?.performanceInsights;
-    if (pi?.recommendations && Array.isArray(pi.recommendations)) {
-      for (const r of pi.recommendations) {
-        const haystack = `${r?.title || ""} ${r?.detail || ""}`;
-        if (containsThirdKeyword(haystack)) {
-          if (r?.detail && r.detail.trim()) candidates.push(r.detail.trim());
-          else if (r?.title && r.title.trim())
-            candidates.push(r.title.trim());
-        }
-      }
-    }
-    if (pi?.findings && Array.isArray(pi.findings)) {
-      for (const f of pi.findings) {
-        const haystack = `${f?.title || ""} ${f?.diagnosis || ""} ${
-          f?.impact || ""
-        }`;
-        if (containsThirdKeyword(haystack)) {
-          if (f?.diagnosis && f.diagnosis.trim())
-            candidates.push(f.diagnosis.trim());
-          else if (f?.title && f.title.trim())
-            candidates.push(f.title.trim());
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  if (candidates.length > 0) {
-    return candidates[0];
-  }
-
-  return "第三拍是匹克球中最关键的技术转换环节，建议使用稳定的轻吊或精准抽击把球送到对方非惯用侧过渡区，避免盲目扣杀导致被反击。若想精进第三拍，查看训练视频或咨询教练。";
-}
-
+/**
+ * 设计 D6：LegalThirds 只在有 numerator/denominator 时显示"第三拍成功率 X% · n/m"；
+ * 否则降级为"第三拍训练建议"或"本次分析暂无第三拍统计"。绝不无比例自称"合法第三拍率"。
+ */
 export default function PbLegalThirds() {
-  const { report } = usePbReport();
+  const { evidence } = usePbReport();
 
-  const advice = useMemo(() => getThirdAdvice(report), [report]);
+  const thirdShot = evidence?.insights.thirdShot;
+
+  const hasRatio = thirdShot?.status === "available" && thirdShot.value != null;
+
+  const title = hasRatio ? "第三拍成功率" : "第三拍训练建议";
 
   return (
     <div className="pb-card p-5 sm:p-6">
@@ -117,32 +36,24 @@ export default function PbLegalThirds() {
             className="font-bold text-2xl"
             style={{ color: "var(--pb-text-primary, #111827)" }}
           >
-            合法第三拍率
+            {title}
           </h3>
           <div className="mt-3 h-px bg-[var(--pb-card-border,#e5e7eb)]" />
 
-          <p
-            className="mt-4 text-sm leading-relaxed"
-            style={{ color: "var(--pb-text-secondary, #6b7280)" }}
-          >
-            {advice}
-          </p>
-
-          <div className="mt-6 flex justify-end">
-            <a
-              href="#"
-              className="pb-btn-primary inline-flex items-center gap-1.5 text-sm"
-              onClick={(e) => {
-                e.preventDefault();
-                console.warn(
-                  "合法第三拍跳转占位"
-                );
-              }}
-            >
-              查看你的击球数据
-              <span aria-hidden>→</span>
-            </a>
-          </div>
+          {hasRatio ? (
+            <div className="mt-4">
+              <div className="text-3xl font-black text-[var(--pb-primary,#23985b)]">
+                {Math.round((thirdShot.value.numerator / thirdShot.value.denominator) * 100)}%
+              </div>
+              <div className="mt-1 text-sm text-[var(--pb-text-secondary,#6b7280)]">
+                {thirdShot.value.numerator} / {thirdShot.value.denominator} 次
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4">
+              <PbEvidenceUnavailable reason="本次分析暂无第三拍统计" />
+            </div>
+          )}
         </div>
       </div>
     </div>

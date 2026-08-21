@@ -19,7 +19,7 @@ import {
   type EstimatedBallTrajectory,
 } from "../services/ballTrajectoryVisualization";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
-import type { AnalysisJobSummary } from "../types/report";
+import type { AnalysisJobSummary, ReconstructedBallTrajectoryArtifact } from "../types/report";
 
 type LoadState = "loading" | "available" | "empty" | "failed";
 type ConfidenceFilter = "all" | "high";
@@ -29,6 +29,8 @@ type PlayerFilter = "all" | "unassigned" | string;
 interface BallTrajectoryPageProps {
   jobId: string;
   onNavigate: NavigateFn;
+  /** embedded：嵌入 Library Workspace 时隐藏页面级头部外壳（返回按钮/标题） */
+  embedded?: boolean;
 }
 
 function formatTime(seconds: number): string {
@@ -65,8 +67,9 @@ function ownershipBadge(status: string): { label: string; className: string } | 
   }
 }
 
-export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProps) {
+export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajectoryPageProps) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [v3Artifact, setV3Artifact] = useState<ReconstructedBallTrajectoryArtifact | null>(null);
   const [job, setJob] = useState<AnalysisJobSummary | null>(null);
   const [data, setData] = useState<BallTrajectoryVisualizationData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
@@ -89,9 +92,12 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
         if (!result) throw new Error("该任务尚未生成可读取的分析结果");
 
         const trajectoryArtifact = await getReconstructedBallTrajectory(result);
+        const isV3 = trajectoryArtifact?.reconstruction_mode === "multiview_estimated_3d";
+        setV3Artifact(isV3 ? trajectoryArtifact : null);
         let nextData = buildReconstructedBallTrajectoryVisualization(trajectoryArtifact);
-        // 无重建产物（旧任务 / 重建不可用）时降级到原始轨迹模式
-        if (nextData.trajectories.length === 0) {
+        // v3（多视角估算 3D）：即使可视化尚空，也按整体状态展示 v3 面板 + 明确降级，
+        // 不伪造 2.5D；非 v3 且无轨迹时才降级到原始轨迹模式。
+        if (!isV3 && nextData.trajectories.length === 0) {
           const legacyArtifact = await getBallTrajectory(result);
           nextData = buildBallTrajectoryVisualization(legacyArtifact);
         }
@@ -99,7 +105,7 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
         setJob(nextJob);
         setData(nextData);
         setSelectedShotId(nextData.shots[0]?.shotId ?? nextData.trajectories[0]?.id ?? null);
-        setLoadState(nextData.trajectories.length ? "available" : "empty");
+        setLoadState(isV3 ? "available" : nextData.trajectories.length ? "available" : "empty");
       } catch (error) {
         if (!alive) return;
         setErrorMessage(error instanceof Error ? error.message : "无法读取球轨迹数据");
@@ -213,33 +219,80 @@ export function BallTrajectoryPage({ jobId, onNavigate }: BallTrajectoryPageProp
 
   return (
     <PageFrame>
-      <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="min-w-0">
-          <button
-            className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-[#667085] transition hover:text-[#168A34]"
-            onClick={() => onNavigate(visionPath)}
-            type="button"
-          >
-            <ArrowLeft size={16} aria-hidden="true" />
-            返回视觉分析
-          </button>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-[#98A2B3]">任务 {jobId}</span>
+      {v3Artifact ? (
+        <section className="mb-5 rounded-xl border border-[#16B364]/20 bg-[#EAF8F0]/50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-bold text-[#182230]">多视角估算 3D 球路</h3>
+            <span className="rounded bg-[#168A34] px-2 py-0.5 text-[10px] font-bold text-white">
+              {v3Artifact.overall_status ?? "UNAVAILABLE"}
+            </span>
           </div>
-          <h1 className="mt-3 text-3xl font-black text-[#182230] sm:text-4xl">球路可视化</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#667085]">
-            {job?.metadata.matchTitle ?? "比赛分析"}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[#E4E7EC] py-3 lg:border-y-0 lg:py-0">
-          <Metric label="球路（Shot）" value={`${totalShots}`} />
-          <Metric label="较高可信" value={`${highConfidenceShots}`} />
-          <Metric label="累计时长" value={`${totalDuration.toFixed(1)}s`} />
-          {[...perPlayerCounts.entries()].map(([playerId, count]) => (
-            <Metric key={playerId} label={playerId.replace("Player_", "P")} value={`${count}`} />
-          ))}
-        </div>
-      </header>
+          {v3Artifact.overall_status === "UNAVAILABLE" ? (
+            <p className="mt-2 text-xs leading-5 text-[#667085]">
+              双摄三维证据不足以重建可信 3D 球路，系统未伪造球路。落点/球速按各自可用性单独给出（如有）。
+            </p>
+          ) : (
+            <div className="mt-2 grid gap-2 text-xs text-[#344054] sm:grid-cols-3">
+              <div>
+                <span className="text-[#98A2B3]">落点</span>
+                <div className="font-semibold">
+                  {v3Artifact.landing_point?.landing_x_ft != null && v3Artifact.landing_point?.landing_y_ft != null
+                    ? `(${v3Artifact.landing_point.landing_x_ft.toFixed(1)}, ${v3Artifact.landing_point.landing_y_ft.toFixed(1)}) ft`
+                    : "—"}
+                </div>
+                <div className="text-[#98A2B3]">{v3Artifact.landing_point?.landing_source ?? "—"}</div>
+              </div>
+              <div>
+                <span className="text-[#98A2B3]">段数</span>
+                <div className="font-semibold">{v3Artifact.segments?.length ?? 0}</div>
+                <div className="text-[#98A2B3]">
+                  {v3Artifact.segments?.[0]?.stereo_coverage != null
+                    ? `覆盖率 ${(v3Artifact.segments[0].stereo_coverage * 100).toFixed(0)}%`
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <span className="text-[#98A2B3]">平均球速</span>
+                <div className="font-semibold">
+                  {v3Artifact.segments?.[0]?.metrics?.average_speed_kmh != null
+                    ? `${v3Artifact.segments[0].metrics.average_speed_kmh.toFixed(0)} km/h`
+                    : "—"}
+                </div>
+                <div className="text-[#98A2B3]">{v3Artifact.segments?.[0]?.metrics?.average_speed_validity ?? "—"}</div>
+              </div>
+            </div>
+          )}
+        </section>
+      ) : null}
+      {!embedded && (
+        <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <button
+              className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-[#667085] transition hover:text-[#168A34]"
+              onClick={() => onNavigate(visionPath)}
+              type="button"
+            >
+              <ArrowLeft size={16} aria-hidden="true" />
+              返回视觉分析
+            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-[#98A2B3]">任务 {jobId}</span>
+            </div>
+            <h1 className="mt-3 text-3xl font-black text-[#182230] sm:text-4xl">球路可视化</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-[#667085]">
+              {job?.metadata.matchTitle ?? "比赛分析"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[#E4E7EC] py-3 lg:border-y-0 lg:py-0">
+            <Metric label="球路（Shot）" value={`${totalShots}`} />
+            <Metric label="较高可信" value={`${highConfidenceShots}`} />
+            <Metric label="累计时长" value={`${totalDuration.toFixed(1)}s`} />
+            {[...perPlayerCounts.entries()].map(([playerId, count]) => (
+              <Metric key={playerId} label={playerId.replace("Player_", "P")} value={`${count}`} />
+            ))}
+          </div>
+        </header>
+      )}
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_304px]">
         <div className="min-w-0">

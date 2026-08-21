@@ -38,7 +38,7 @@ export function LandingPage({ onNavigate }: { onNavigate: NavigateFn }) {
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <button
               className="green-button flex items-center gap-2 px-8 py-4 text-lg font-bold"
-              onClick={() => onNavigate("/capture")}
+              onClick={() => onNavigate("/library")}
               type="button"
             >
               <Camera size={22} aria-hidden="true" />

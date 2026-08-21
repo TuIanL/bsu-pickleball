@@ -1,5 +1,8 @@
 // =============================================================
 // PB Vision 报告页 —— 全局 Context + usePbReport() hook
+// -------------------------------------------------------------
+// 设计 D1：报告主体只允许 canonical player（kind === "player"）。
+// 设计 D2：通过 usePlayerReportEvidence 提供证据层，PB 组件统一消费。
 // =============================================================
 import {
   createContext,
@@ -11,63 +14,32 @@ import {
 } from "react";
 import type {
   AnalysisReport,
-  PlayerInfo,
-  TeamSubjectInfo,
+  PerformanceSubject,
 } from "../types/report";
 import type {
   PbReportContextValue,
   PbShotTypeFilter,
   PbStageFilter,
 } from "../types/pbReport";
+import { usePlayerReportEvidence } from "../hooks/usePlayerReportEvidence";
+import { resolveCanonicalPlayerId } from "../evidence/playerIdentity";
 
 const PbReportContext = createContext<PbReportContextValue | null>(null);
 
-/** 从报告里安全提取所有球员（兼容 subjects 为数组或 record 两种形态） */
-function getAllSubjects(
+/** 从报告里提取 PLAYER-ONLY 主体（kind === "player"），team 永不进入 player report。 */
+function getAllPlayerSubjects(
   report: AnalysisReport
 ): { id: string; name: string; role?: string }[] {
-  const subjects = report?.performanceInsights?.subjects;
-  if (!subjects) {
-    // fallback: 如果没有 performanceInsights.subjects，取 match/teams 的 teams
-    const teams = (report as unknown as { teams?: unknown }).teams;
-    if (Array.isArray(teams)) {
-      const arr: { id: string; name: string; role?: string }[] = [];
-      for (const t of teams as { players?: PlayerInfo[]; teamName?: string }[]) {
-        if (t?.players) {
-          for (const p of t.players) {
-            if (p?.playerId) arr.push({ id: p.playerId, name: p.name || p.playerId });
-          }
-        }
-      }
-      return arr.length
-        ? arr
-        : [{ id: "T1", name: "球员 1" }, { id: "T2", name: "球员 2" }];
-    }
-    return [{ id: "T1", name: "球员 1" }, { id: "T2", name: "球员 2" }];
-  }
-
-  // subjects 可能是 TeamSubjectInfo[] 或 Record<id, TeamSubjectInfo>
-  if (Array.isArray(subjects)) {
+  const subjects = report?.performanceInsights?.subjects as
+    | PerformanceSubject[]
+    | undefined;
+  if (Array.isArray(subjects) && subjects.length) {
     return subjects
-      .filter((s) => !!s?.id)
-      .map((s) => ({
-        id: s.id,
-        name: s.name || s.id,
-        role: (s as TeamSubjectInfo).role,
-      }));
+      .filter((s) => !!s?.id && s.kind === "player")
+      .map((s) => ({ id: s.id, name: s.label || s.id }));
   }
-
-  if (typeof subjects === "object" && subjects !== null) {
-    return Object.entries(subjects as Record<string, TeamSubjectInfo>).map(
-      ([id, s]) => ({
-        id,
-        name: s?.name || id,
-        role: s?.role,
-      })
-    );
-  }
-
-  return [{ id: "T1", name: "球员 1" }];
+  // 无 player subject → 返回空（调用方显示"暂无可用球员主体"，不把 team/占位当默认）
+  return [];
 }
 
 // ============== Provider ==============
@@ -77,10 +49,10 @@ export function PbReportProvider(props: {
 }) {
   const { report, children } = props;
 
-  const subjects = useMemo(() => getAllSubjects(report), [report]);
+  const players = useMemo(() => getAllPlayerSubjects(report), [report]);
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>(
-    () => subjects[0]?.id ?? "T1"
+    () => players[0]?.id ?? ""
   );
   const [stageFilter, setStageFilter] = useState<PbStageFilter>("third");
   const [typeFilter, setTypeFilter] = useState<PbShotTypeFilter>("all");
@@ -90,13 +62,22 @@ export function PbReportProvider(props: {
     setDrawerOpen((v) => !v);
   }, []);
 
+  // 同步：report 变化后，若当前选中的不是合法 player，回退到第一个 player
+  const effectivePlayerId = useMemo(() => {
+    if (players.some((p) => p.id === selectedPlayerId)) return selectedPlayerId;
+    return players[0]?.id ?? "";
+  }, [players, selectedPlayerId]);
+
   const selectedSubject = useMemo(() => {
-    return subjects.find((s) => s.id === selectedPlayerId) ?? subjects[0];
-  }, [subjects, selectedPlayerId]);
+    return players.find((p) => p.id === effectivePlayerId) ?? players[0];
+  }, [players, effectivePlayerId]);
+
+  // 证据层（IO hook）：jobId 传 report.jobId，供后续 artifact 抓取
+  const evidence = usePlayerReportEvidence(report.jobId, report, effectivePlayerId || resolveCanonicalPlayerId(report.playerMarkers?.[0]?.id ?? "", null) || "");
 
   const value: PbReportContextValue = {
     report,
-    selectedPlayerId,
+    selectedPlayerId: effectivePlayerId,
     setSelectedPlayerId,
     stageFilter,
     setStageFilter,
@@ -108,7 +89,26 @@ export function PbReportProvider(props: {
     setDrawerOpen,
     toggleDrawer,
     selectedSubject,
+    evidence,
   };
+
+  if (!effectivePlayerId) {
+    // 无 player subject：只显示空态，不渲染整份报告（避免出现"球员 0 击球"的幻影主体）
+    return (
+      <PbReportContext.Provider value={value}>
+        <div className="pb-vision-theme flex min-h-[40vh] items-center justify-center p-8">
+          <div className="pb-card max-w-md p-6 text-center">
+            <div className="text-lg font-bold text-[var(--pb-text-primary,#111827)]">
+              暂无可用球员主体
+            </div>
+            <div className="mt-2 text-sm text-[var(--pb-text-secondary,#6b7280)]">
+              本次分析未识别到具体球员，无法生成球员报告。
+            </div>
+          </div>
+        </div>
+      </PbReportContext.Provider>
+    );
+  }
 
   return (
     <PbReportContext.Provider value={value}>
@@ -128,8 +128,8 @@ export function usePbReport(): PbReportContextValue {
   return ctx;
 }
 
-/** 方便非受控场景读取所有球员列表 */
+/** 方便非受控场景读取所有球员列表（Player-only） */
 export function usePbAllSubjects() {
   const { report } = usePbReport();
-  return useMemo(() => getAllSubjects(report), [report]);
+  return useMemo(() => getAllPlayerSubjects(report), [report]);
 }

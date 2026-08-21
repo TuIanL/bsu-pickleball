@@ -39,7 +39,7 @@ function NavItem({
       className={
         "flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors " +
         (active
-          ? "bg-[var(--pb-primary-soft,#e6ffe9)] text-[var(--pb-primary-dark,#00cc33)] font-semibold"
+          ? "bg-[var(--pb-primary-soft,#ddf1e5)] text-[var(--pb-primary-dark,#197947)] font-semibold"
           : "text-[var(--pb-text-secondary,#6b7280)] hover:bg-black/5 hover:text-[var(--pb-text-primary,#111827)]")
       }
     >
@@ -181,7 +181,7 @@ export function PbDrawerExpander() {
       type="button"
       aria-label="展开抽屉"
       onClick={toggleDrawer}
-      className="fixed left-0 top-1/2 -translate-y-1/2 z-40 w-6 h-20 rounded-r-lg border border-l-0 border-[var(--pb-card-border,#e5e7eb)] bg-white/90 backdrop-blur text-[var(--pb-text-secondary,#6b7280)] hover:text-[var(--pb-primary-dark,#00cc33)] hover:border-[var(--pb-primary,#00FF41)] transition-all shadow-sm flex items-center justify-center text-sm font-bold"
+      className="fixed left-0 top-1/2 -translate-y-1/2 z-40 w-6 h-20 rounded-r-lg border border-l-0 border-[var(--pb-card-border,#e5e7eb)] bg-white/90 backdrop-blur text-[var(--pb-text-secondary,#6b7280)] hover:text-[var(--pb-primary-dark,#197947)] hover:border-[var(--pb-primary,#23985b)] transition-all shadow-sm flex items-center justify-center text-sm font-bold"
     >
       ›
     </button>

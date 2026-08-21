@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary, RecordingSession, SyncRecordingSession, VideoMetadata } from "../types/report";
 import { buildLibraryItems, type LibraryItemRef } from "./libraryAdapter";
+import { getVideoStreamUrl } from "./analysisClient";
 
 function meta(partial: Record<string, unknown> = {}): AnalysisJobSummary["metadata"] {
   return {
@@ -85,6 +86,8 @@ vi.mock("./analysisClient", async () => {
   return {
     ...actual,
     listAnalysisJobs: () => listAnalysisJobs(),
+    listFieldSessions: () => Promise.resolve([]),
+    getFieldSession: () => Promise.reject(new Error("field session not found")),
   };
 });
 
@@ -140,6 +143,36 @@ describe("buildLibraryItems", () => {
     expect(item).toMatchObject({ mediaState: "processing", requiredAction: "merge" });
   });
 
+  it("双摄投影暴露两路机位流 cameraCoverSources（缺失省略）", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    const syncs = await buildLibraryItems({
+      videos: [], recordings: [],
+      syncRecordings: [
+        sync({
+          session_id: "sync-cab",
+          registered_video_ids: { cam_1: "cam1-vid", cam_2: "cam2-vid" },
+          default_analysis_video_id: "analysis-vid",
+        }),
+        sync({
+          session_id: "sync-1cam",
+          registered_video_ids: { cam_1: "cam1-only" },
+        }),
+      ],
+      jobs: [],
+    });
+    const twoCam = syncs.find((i) => i.ref.sourceId === "sync-cab")!;
+    expect(twoCam.coverVideoUrl).toBe(getVideoStreamUrl("analysis-vid")); // coverVideoUrl 为兼容保留
+    expect(twoCam.cameraCoverSources).toEqual({
+      cam_1: getVideoStreamUrl("cam1-vid"),
+      cam_2: getVideoStreamUrl("cam2-vid"),
+    });
+
+    const oneCam = syncs.find((i) => i.ref.sourceId === "sync-1cam")!.cameraCoverSources!;
+    expect(oneCam).toEqual({ cam_1: getVideoStreamUrl("cam1-only") });
+    expect(oneCam.cam_1).toBe(getVideoStreamUrl("cam1-only"));
+    expect(oneCam.cam_2).toBeUndefined();
+  });
+
   it("recording 素材按 recordingSessionId 归属取 primary", async () => {
     const recJob = job({
       id: "r-job", analysisKind: "single_view", recordingSessionId: "rec-1",
@@ -163,5 +196,74 @@ describe("buildLibraryItems", () => {
     const ref: LibraryItemRef = uploadItem[0].ref;
     expect(ref.kind).toBe("upload");
     expect(uploadItem[0].analysisState).toBe("not_started");
+  });
+
+  it("sync 无 multiview Parent 时 primary 为 undefined，A/B 单摄 NEVER primary", async () => {
+    const aSingle = job({
+      id: "a-1", analysisKind: "single_view", recordingSessionId: "sync-1", cameraSlot: "cam_1",
+      updatedAt: "2026-08-20T10:32:00Z", metadata: meta({ recording_session_id: "sync-1" }), visibility: "public",
+    });
+    const bSingle = job({
+      id: "b-1", analysisKind: "single_view", recordingSessionId: "sync-1", cameraSlot: "cam_2",
+      updatedAt: "2026-08-20T10:33:00Z", metadata: meta({ recording_session_id: "sync-1" }), visibility: "public",
+    });
+    listAnalysisJobs.mockResolvedValue([aSingle, bSingle]);
+    const items = await buildLibraryItems({
+      videos: [], recordings: [],
+      syncRecordings: [sync({ capture_take_id: "take-1", merge_status: "completed" })],
+      jobs: [aSingle, bSingle],
+    });
+    const item = items.find((i) => i.ref.kind === "sync_recording")!;
+    expect(item.primaryAnalysisJobId).toBeUndefined();
+    expect(item.analysisState).toBe("not_started");
+  });
+
+  it("displayState 派生：无分析 upload=pending；running 任务=analyzing；完成=succeeded→completed；待合并=pending_merge", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    const idle = await buildLibraryItems({ videos: [video({})], recordings: [], syncRecordings: [], jobs: [] });
+    expect(idle[0].displayState).toBe("pending");
+
+    const recJob = job({
+      id: "r-job", analysisKind: "single_view", recordingSessionId: "rec-1",
+      metadata: meta({ recording_session_id: "rec-1" }), status: "processing", progress: 62,
+    });
+    listAnalysisJobs.mockResolvedValue([recJob]);
+    const analyzing = await buildLibraryItems({
+      videos: [], recordings: [recording({ session_id: "rec-1" })], syncRecordings: [], jobs: [recJob],
+    });
+    expect(analyzing.find((i) => i.ref.kind === "recording")?.displayState).toBe("analyzing");
+
+    const doneJob = job({ id: "done", analysisKind: "single_view", recordingSessionId: "rec-1", metadata: meta({ recording_session_id: "rec-1" }), status: "completed" });
+    listAnalysisJobs.mockResolvedValue([doneJob]);
+    const completed = await buildLibraryItems({
+      videos: [], recordings: [recording({ session_id: "rec-1" })], syncRecordings: [], jobs: [doneJob],
+    });
+    expect(completed.find((i) => i.ref.kind === "recording")?.displayState).toBe("completed");
+
+    listAnalysisJobs.mockResolvedValue([]);
+    const pendingMerge = await buildLibraryItems({
+      videos: [], recordings: [], syncRecordings: [sync({ merge_status: "pending" })], jobs: [],
+    });
+    expect(pendingMerge.find((i) => i.ref.kind === "sync_recording")?.displayState).toBe("pending_merge");
+  });
+
+  it("语义标题优先取 analysis metadata.matchTitle，其次 court_name 与时间+形式", async () => {
+    const titledJob = job({
+      id: "t", analysisKind: "single_view", recordingSessionId: "rec-1",
+      metadata: meta({ recording_session_id: "rec-1", matchTitle: "北京公开赛 · 男双决赛" }), status: "completed",
+    });
+    listAnalysisJobs.mockResolvedValue([titledJob]);
+    const items = await buildLibraryItems({
+      videos: [], recordings: [recording({ session_id: "rec-1", court_name: "北体 3 号场" })], syncRecordings: [], jobs: [titledJob],
+    });
+    expect(items.find((i) => i.ref.kind === "recording")?.title).toBe("北京公开赛 · 男双决赛");
+
+    listAnalysisJobs.mockResolvedValue([]);
+    const untitled = await buildLibraryItems({
+      videos: [], recordings: [recording({ session_id: "rec-1", court_name: "北体 3 号场", match_format: "singles", started_at: "2026-08-20T08:00:00Z" }), ],
+      syncRecordings: [], jobs: [],
+    });
+    // matchTitle / FieldSession 标题缺失时，用「时间 + 比赛形式」而非 court_name 当主标题
+    expect(untitled.find((i) => i.ref.kind === "recording")?.title).toBe("8月20日 单打");
   });
 });

@@ -117,7 +117,7 @@ export function eventsForRecording(
   });
 }
 
-export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: string; onNavigate: NavigateFn }) {
+export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { sessionId: string; onNavigate: NavigateFn; embedded?: boolean }) {
   const [pageState, setPageState] = useState<PageState>({ status: "loading" });
   const [fieldSession, setFieldSession] = useState<FieldSession | null>(null);
   const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
@@ -317,21 +317,23 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* 头部 */}
-      <div className="flex items-center gap-4">
-        <button
-          aria-label={isDual ? "返回双摄任务管理" : "返回录制任务管理"}
-          className="quiet-button p-2"
-          onClick={() => onNavigate(taskReturnPath(type))}
-          type="button"
-          title={isDual ? "返回双摄任务管理" : "返回录制任务管理"}
-        >
-          <ArrowLeft size={18} />
-        </button>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-black text-[#14241B] truncate">{title}</h1>
-          <p className="text-sm text-slate-500 truncate">{subtitle}</p>
+      {!embedded && (
+        <div className="flex items-center gap-4">
+          <button
+            aria-label={isDual ? "返回双摄任务管理" : "返回录制任务管理"}
+            className="quiet-button p-2"
+            onClick={() => onNavigate(taskReturnPath(type))}
+            type="button"
+            title={isDual ? "返回双摄任务管理" : "返回录制任务管理"}
+          >
+            <ArrowLeft size={18} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl font-black text-[#14241B] truncate">{title}</h1>
+            <p className="text-sm text-slate-500 truncate">{subtitle}</p>
+          </div>
         </div>
-      </div>
+      )}
 
       {session.capture_take_id && (
         <VidatWorkbenchPanel captureTakeId={session.capture_take_id} onImported={refreshDerivedData} />
@@ -339,7 +341,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
 
       {/* 视频区 */}
       <div className={`grid gap-4 ${isDual ? "lg:grid-cols-2" : "grid-cols-1"}`}>
-        <div className="rounded-2xl border border-[#DDE9D6] bg-black aspect-video overflow-hidden relative">
+        <div className="rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-video,#24302b)] aspect-video overflow-hidden relative">
           {cam1VideoId && !playbackErrors.cam_1 ? (
               <video
                 ref={video1Ref}
@@ -367,7 +369,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate }: { sessionId: s
           </span>
         </div>
         {isDual && (
-          <div className="rounded-2xl border border-[#DDE9D6] bg-black aspect-video overflow-hidden relative">
+          <div className="rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-video,#24302b)] aspect-video overflow-hidden relative">
             {cam2VideoId && !playbackErrors.cam_2 ? (
               <video
                 ref={video2Ref}

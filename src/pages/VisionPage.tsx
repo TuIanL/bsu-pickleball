@@ -373,7 +373,7 @@ function useVisualAnalysisReport(jobId?: string) {
   };
 }
 
-export function VisionPage({ jobId, onNavigate, recentJob, seekToMs }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null; seekToMs?: number }) {
+export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null; seekToMs?: number; embedded?: boolean }) {
   const {
     error,
     ballTrajectory,
@@ -476,46 +476,48 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs }: { jobId?:
   if (jobId) {
     return (
       <PageFrame>
-        <section className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <button
-              className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
-              onClick={() => onNavigate(taskReturnPath)}
-              type="button"
-            >
-              <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
-              返回任务管理
-            </button>
-            <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
-              <Camera size={16} aria-hidden="true" />
-              智能视频分析
-            </p>
-            <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">视频分析结果</h1>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-              当前数据来源：{sourceLabel}。详细报告已收纳到右侧下级标签中，主画面只保留视频和状态。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {job?.analysisKind === "multiview" && job?.status === "completed" && (
+        {!embedded && (
+          <section className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
               <button
-                className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
-                onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/multiview`))}
+                className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+                onClick={() => onNavigate(taskReturnPath)}
                 type="button"
               >
-                <Layers size={17} aria-hidden="true" />
-                查看双摄协同详情
+                <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
+                返回任务管理
               </button>
-            )}
-            <button
-              className="quiet-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
-              onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/trajectory`))}
-              type="button"
-            >
-              <Route size={17} aria-hidden="true" />
-              查看球路
-            </button>
-          </div>
-        </section>
+              <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+                <Camera size={16} aria-hidden="true" />
+                智能视频分析
+              </p>
+              <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">视频分析结果</h1>
+              <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
+                当前数据来源：{sourceLabel}。详细报告已收纳到右侧下级标签中，主画面只保留视频和状态。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {job?.analysisKind === "multiview" && job?.status === "completed" && (
+                <button
+                  className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
+                  onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/multiview`))}
+                  type="button"
+                >
+                  <Layers size={17} aria-hidden="true" />
+                  查看双摄协同详情
+                </button>
+              )}
+              <button
+                className="quiet-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
+                onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/trajectory`))}
+                type="button"
+              >
+                <Route size={17} aria-hidden="true" />
+                查看球路
+              </button>
+            </div>
+          </section>
+        )}
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
           <div className="grid gap-5">

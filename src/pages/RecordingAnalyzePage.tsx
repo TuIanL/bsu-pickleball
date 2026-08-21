@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, Camera } from "lucide-react";
 import type { SyncRecordingSession } from "../types/report";
-import type { NavigateFn } from "../app/navigationTypes";
+import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { taskListPath, withTaskListContext } from "../app/navigationContext";
 import type { CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { CourtCornerCalibrator } from "../components/platform/CourtCornerCalibrator";
@@ -70,7 +70,10 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
 
   const camSlot = cam ?? "cam_1";
   const taskContext = { source: "recorded" as const, sessionId, cameraSlot: cam ?? undefined };
+  const returnParam = new URLSearchParams(window.location.search).get("return");
   const taskReturnPath = taskListPath(taskContext);
+  // 从 Library 进入时优先回到来源工作区，否则回录制任务列表
+  const goReturn = () => onNavigate((returnParam ?? taskReturnPath) as NavigatePath);
   const videoId = session?.registered_video_ids?.[camSlot];
   const videoSrc = videoId ? (getVideoStreamUrl(videoId) ?? undefined) : undefined;
 
@@ -145,7 +148,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
-            onClick={() => onNavigate(taskReturnPath)}
+            onClick={() => goReturn()}
             type="button"
           >
             返回任务列表
@@ -179,7 +182,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
-            onClick={() => onNavigate(taskReturnPath)}
+            onClick={() => goReturn()}
             type="button"
           >
             返回任务列表
@@ -196,7 +199,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
       <section className="mx-auto max-w-5xl">
         {/* Header */}
         <div className="mb-6">
-          <button className="quiet-button mb-4 px-3 py-2 text-sm" onClick={() => onNavigate(taskReturnPath)} type="button">
+          <button className="quiet-button mb-4 px-3 py-2 text-sm" onClick={() => goReturn()} type="button">
             返回录制任务
           </button>
           <div className="flex items-center gap-3">
@@ -238,7 +241,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           videoSrc={videoSrc}
           videoId={videoId}
           onComplete={handleCalibrationComplete}
-          onCancel={() => onNavigate(taskReturnPath)}
+          onCancel={() => goReturn()}
           isSubmitting={isSubmitting}
         />
 

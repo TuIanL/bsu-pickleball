@@ -124,11 +124,11 @@ export interface PbServeReturnDepth {
 }
 
 // ── PbReportContext 数据结构 ────────────────────────────────
-import type { AnalysisReportResponse } from "./report";
+import type { AnalysisReport } from "./report";
 
 export interface PbReportContextValue {
   // --- 原始数据 ---
-  report: AnalysisReportResponse;
+  report: AnalysisReport;
 
   // --- 用户交互状态 ---
   selectedPlayerId: string;
@@ -149,4 +149,7 @@ export interface PbReportContextValue {
 
   // --- 派生：当前选中球员 ---
   selectedSubject?: { id: string; name: string; role?: string };
+
+  // --- 证据层（设计 D2）：Player-only、playerId 关联后的证据 ---
+  evidence?: import("../evidence/evidenceTypes").PlayerReportEvidence;
 }

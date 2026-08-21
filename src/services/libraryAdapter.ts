@@ -17,14 +17,18 @@ import type {
   SyncRecordingSession,
   VideoMetadata,
   CameraSlotRole,
+  FieldSession,
 } from "../types/report";
 import {
   listVideosCatalog,
   listRecordings,
   listSyncRecordings,
   listAnalysisJobs,
+  listFieldSessions,
+  getFieldSession,
   getSyncRecording,
   getRecording,
+  getVideoStreamUrl,
 } from "./analysisClient";
 import { isAnalysisJobForSyncRecording } from "./dualCameraAnalysisGrouping";
 
@@ -50,6 +54,16 @@ export type LibraryAnalysisState =
 // 用户需要采取的动作槽（避免 UI 显示「处理中」实则在等用户点按钮）
 export type LibraryRequiredAction = "merge" | "retry_merge" | "start_analysis";
 
+// 用户可读的统一展示状态（派生只读，供筛选/徽章/门控消费，不替代三轴状态真源）
+export type LibraryDisplayState =
+  | "pending" // 待处理
+  | "recording" // 正在录制
+  | "pending_merge" // 待合并
+  | "analyzing" // 正在分析
+  | "completed" // 分析完成
+  | "failed" // 失败（视频或分析）
+  | "canceled"; // 已取消
+
 export interface LibraryItemViewModel {
   ref: LibraryItemRef;
   title: string;
@@ -58,14 +72,21 @@ export interface LibraryItemViewModel {
   mediaState: LibraryMediaState;
   availabilityState: LibraryAvailabilityState;
   analysisState: LibraryAnalysisState;
+  displayState: LibraryDisplayState;
   requiredAction?: LibraryRequiredAction;
 
   /** primary 分析结果（D9 契约选择）；与 ref 解耦，重跑分析不影响 identity */
   primaryAnalysisJobId?: string;
   analysisHistoryCount: number;
+  /** 素材的历史分析任务（公开项，新→旧），供「概览」逐任务删除/取消（保留视频） */
+  analysisJobs: LibraryAnalysisJobView[];
 
   thumbnailUrl?: string;
   previewUrl?: string;
+  /** 封面可播放视频流地址（用于 <video> 绘制真实首帧；非图片端点） */
+  coverVideoUrl?: string;
+  /** 双摄素材的两路机位流地址，供封面左右拼接渲染 */
+  cameraCoverSources?: { cam_1?: string; cam_2?: string };
 
   matchFormat?: "singles" | "doubles";
   cameraSetup?: "single" | "dual";
@@ -77,6 +98,26 @@ export interface LibraryItemViewModel {
   // 来源引用（供工程层 / 详情地址）
   fieldSessionId?: string;
   captureTakeId?: string;
+  /** 源视频 id（单摄录制分析入口需要；upload 用 ref.sourceId） */
+  videoId?: string;
+}
+
+/** 素材历史分析任务的轻量视图（仅需渲染与删除/取消所需字段） */
+export interface LibraryAnalysisJobView {
+  id: string;
+  status: AnalysisJobSummary["status"];
+  analysisKind?: AnalysisJobSummary["analysisKind"];
+  createdAt: string;
+}
+
+/** 组装公开历史任务（新→旧），排除双摄 internal Source Job */
+function toAnalysisJobViews(jobs: AnalysisJobSummary[]): LibraryAnalysisJobView[] {
+  return newestFirst(jobs.filter((j) => !isInternalChild(j))).map((j) => ({
+    id: j.id,
+    status: j.status,
+    analysisKind: j.analysisKind,
+    createdAt: j.createdAt,
+  }));
 }
 
 // ── Primary Analysis Selection（D9） ──
@@ -85,13 +126,48 @@ function isInternalChild(job: AnalysisJobSummary): boolean {
 }
 
 function pickPrimarySyncJob(jobs: AnalysisJobSummary[]): AnalysisJobSummary | undefined {
-  // 优先 multiview Parent，内部 child 排除，A/B 单摄不作为 primary
+  // D9：sync 的 primary 永远是「最新 public multiview Parent」；
+  // 无 multiview Parent → undefined；A/B 单摄 NEVER 成为 primary。
   const candidates = jobs.filter((job) => job.analysisKind === "multiview" && !isInternalChild(job));
-  if (candidates.length) {
-    return newestFirst(candidates)[0];
-  }
-  // 无 multiview 时回退到历史 single-view（按上游分组语义仍排除 internal child）
   return newestFirst(candidates)[0];
+}
+
+// ── displayState / 语义标题（用户可读派生） ──
+function deriveDisplayState(s: {
+  mediaState: LibraryMediaState;
+  analysisState: LibraryAnalysisState;
+  requiredAction?: LibraryRequiredAction;
+}): LibraryDisplayState {
+  if (s.requiredAction === "merge" || s.requiredAction === "retry_merge") return "pending_merge";
+  if (s.mediaState === "recording") return "recording";
+  if (s.mediaState === "failed") return "failed";
+  if (s.mediaState === "canceled" || s.analysisState === "canceled") return "canceled";
+  if (s.analysisState === "failed") return "failed";
+  if (s.mediaState === "processing") return "pending";
+  if (s.analysisState === "running" || s.analysisState === "queued") return "analyzing";
+  if (s.analysisState === "succeeded") return "completed";
+  return "pending";
+}
+
+function semanticTitle(opts: {
+  matchTitle?: string;
+  fieldSessionTitle?: string;
+  startedAt?: string;
+  matchFormat?: "singles" | "doubles";
+  fallback: string;
+}): string {
+  if (opts.matchTitle) return opts.matchTitle;
+  if (opts.fieldSessionTitle) return opts.fieldSessionTitle;
+  // 「时间 + 比赛形式」：如「8月20日 双打」
+  const date = opts.startedAt ? (() => {
+    const d = new Date(opts.startedAt);
+    if (Number.isNaN(d.getTime())) return "";
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  })() : "";
+  const form = opts.matchFormat === "doubles" ? "双打" : opts.matchFormat === "singles" ? "单打" : "";
+  if (date && form) return `${date} ${form}`;
+  if (date) return date;
+  return opts.fallback;
 }
 
 function newestFirst(jobs: AnalysisJobSummary[]): AnalysisJobSummary[] {
@@ -204,12 +280,16 @@ async function safeList<T>(fetch: () => Promise<T[]>): Promise<T[]> {
 export async function buildLibraryItems(
   options: BuildLibraryOptions = {},
 ): Promise<LibraryItemViewModel[]> {
-  const [jobs, videos, recordings, syncRecordings] = await Promise.all([
+  const [jobs, videos, recordings, syncRecordings, fieldSessions] = await Promise.all([
     options.jobs ?? safeList(listAnalysisJobs),
     options.videos ?? safeList(listVideosCatalog),
     options.recordings ?? safeList(listRecordings),
     options.syncRecordings ?? safeList(listSyncRecordings),
+    safeList(listFieldSessions),
   ]);
+  // P2A：一次批量 join FieldSession（建立 Map），禁止每张卡 N+1 拉取
+  const fieldSessionById = new Map<string, FieldSession>();
+  for (const fs of fieldSessions) fieldSessionById.set(fs.id, fs);
 
   const items: LibraryItemViewModel[] = [];
 
@@ -224,16 +304,35 @@ export async function buildLibraryItems(
       (j) => j.analysisKind === "multiview" && !isInternalChild(j),
     ).length;
     const { mediaState, requiredAction } = mapMediaAndRequired("sync_recording", sync);
+    const analysisState = mapAnalysisState(owned, primary);
+    const fs = sync.field_session_id ? fieldSessionById.get(sync.field_session_id) : undefined;
     items.push({
       ref: { kind: "sync_recording", sourceId: sync.session_id },
-      title: sync.court_name || `同步录制 · ${sync.session_id}`,
+      title: semanticTitle({
+        matchTitle: primary?.metadata?.matchTitle,
+        fieldSessionTitle: fs?.title,
+        startedAt: sync.started_at,
+        matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,
+        fallback: sync.court_name || `同步录制 · ${sync.session_id}`,
+      }),
       sourceType: "sync_recording",
       mediaState,
       availabilityState: mapAvailability(sync),
-      analysisState: mapAnalysisState(owned, primary),
+      analysisState,
+      displayState: deriveDisplayState({ mediaState, analysisState, requiredAction }),
       requiredAction,
+      // 双摄封面用可播放视频流（default analysis 优先，其次任一注册机位），让前端 <video> 画出首帧
+      coverVideoUrl: getVideoStreamUrl(
+        sync.default_analysis_video_id ?? sync.registered_video_ids?.cam_1 ?? sync.registered_video_ids?.cam_2,
+      ),
+      // 双摄封面左右拼接：暴露两路机位流地址（存在才填充，缺失由封面渲染层占位）
+      cameraCoverSources: {
+        ...(sync.registered_video_ids?.cam_1 ? { cam_1: getVideoStreamUrl(sync.registered_video_ids.cam_1) } : {}),
+        ...(sync.registered_video_ids?.cam_2 ? { cam_2: getVideoStreamUrl(sync.registered_video_ids.cam_2) } : {}),
+      },
       primaryAnalysisJobId: primary?.id,
       analysisHistoryCount: historyCount,
+      analysisJobs: toAnalysisJobViews(owned),
       cameraSetup: "dual",
       matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,
       startedAt: sync.started_at,
@@ -248,16 +347,27 @@ export async function buildLibraryItems(
     const owned = jobs.filter((job) => jobBelongsToRecording(job, rec));
     const primary = newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
     const { mediaState, requiredAction } = mapMediaAndRequired("recording", rec);
+    const analysisState = mapAnalysisState(owned, primary);
+    const fs = rec.field_session_id ? fieldSessionById.get(rec.field_session_id) : undefined;
     items.push({
       ref: { kind: "recording", sourceId: rec.session_id },
-      title: rec.court_name || `录制 · ${rec.session_id}`,
+      title: semanticTitle({
+        matchTitle: primary?.metadata?.matchTitle,
+        fieldSessionTitle: fs?.title,
+        startedAt: rec.started_at,
+        matchFormat: rec.match_format === "doubles" || rec.match_format === "singles" ? rec.match_format : undefined,
+        fallback: rec.court_name || `录制 · ${rec.session_id}`,
+      }),
       sourceType: "recording",
       mediaState,
       availabilityState: mapAvailability(rec),
-      analysisState: mapAnalysisState(owned, primary),
+      analysisState,
+      displayState: deriveDisplayState({ mediaState, analysisState, requiredAction }),
       requiredAction,
+      coverVideoUrl: getVideoStreamUrl(rec.video_id),
       primaryAnalysisJobId: primary?.id,
       analysisHistoryCount: owned.filter((j) => !isInternalChild(j)).length,
+      analysisJobs: toAnalysisJobViews(owned),
       cameraSetup: "single",
       matchFormat: rec.match_format === "doubles" || rec.match_format === "singles" ? rec.match_format : undefined,
       startedAt: rec.started_at,
@@ -265,6 +375,7 @@ export async function buildLibraryItems(
       courtName: rec.court_name,
       fieldSessionId: rec.field_session_id,
       captureTakeId: rec.capture_take_id,
+      videoId: rec.video_id,
     });
   }
 
@@ -277,16 +388,21 @@ export async function buildLibraryItems(
         && !allSessions.some((s) => "session_id" in s && isAnalysisJobForSyncRecording(job, s as SyncRecordingSession)),
     );
     const primary = newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
+    const analysisState = mapAnalysisState(owned, primary);
+    const requiredAction = !primary ? "start_analysis" : undefined;
     items.push({
       ref: { kind: "upload", sourceId: video.id },
       title: video.original_filename.replace(/\.(mp4|mov|m4v)$/i, "") || video.id,
       sourceType: "upload",
       mediaState: "ready",
       availabilityState: "available",
-      analysisState: mapAnalysisState(owned, primary),
-      requiredAction: !primary ? "start_analysis" : undefined,
+      analysisState,
+      displayState: deriveDisplayState({ mediaState: "ready", analysisState, requiredAction }),
+      requiredAction,
+      coverVideoUrl: getVideoStreamUrl(video.id),
       primaryAnalysisJobId: primary?.id,
       analysisHistoryCount: owned.filter((j) => !isInternalChild(j)).length,
+      analysisJobs: toAnalysisJobViews(owned),
       cameraSetup: "single",
       startedAt: video.uploaded_at,
       courtName: undefined,
@@ -314,16 +430,33 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
     const owned = jobs.filter((job) => isAnalysisJobForSyncRecording(job, sync));
     const primary = pickPrimarySyncJob(owned);
     const { mediaState, requiredAction } = mapMediaAndRequired("sync_recording", sync);
+    const analysisState = mapAnalysisState(owned, primary);
+    const fs = sync.field_session_id ? await getFieldSessionSafe(sync.field_session_id) : undefined;
     return {
       ref,
-      title: sync.court_name || `同步录制 · ${sync.session_id}`,
+      title: semanticTitle({
+        matchTitle: primary?.metadata?.matchTitle,
+        fieldSessionTitle: fs?.title,
+        startedAt: sync.started_at,
+        matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,
+        fallback: sync.court_name || `同步录制 · ${sync.session_id}`,
+      }),
       sourceType: "sync_recording",
       mediaState,
       availabilityState: mapAvailability(sync),
-      analysisState: mapAnalysisState(owned, primary),
+      analysisState,
+      displayState: deriveDisplayState({ mediaState, analysisState, requiredAction }),
       requiredAction,
+      // 双摄封面用可播放视频流（default analysis 优先），让前端 <video> 画出首帧
+      coverVideoUrl: getVideoStreamUrl(sync.default_analysis_video_id ?? sync.registered_video_ids?.cam_1 ?? sync.registered_video_ids?.cam_2),
+      // 双摄封面左右拼接：暴露两路机位流地址（存在才填充，缺失由封面渲染层占位）
+      cameraCoverSources: {
+        ...(sync.registered_video_ids?.cam_1 ? { cam_1: getVideoStreamUrl(sync.registered_video_ids.cam_1) } : {}),
+        ...(sync.registered_video_ids?.cam_2 ? { cam_2: getVideoStreamUrl(sync.registered_video_ids.cam_2) } : {}),
+      },
       primaryAnalysisJobId: primary?.id,
       analysisHistoryCount: owned.filter((j) => j.analysisKind === "multiview" && !isInternalChild(j)).length,
+      analysisJobs: toAnalysisJobViews(owned),
       cameraSetup: "dual",
       matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,
       startedAt: sync.started_at,
@@ -340,16 +473,27 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
     const owned = jobs.filter((job) => jobBelongsToRecording(job, rec));
     const primary = newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
     const { mediaState, requiredAction } = mapMediaAndRequired("recording", rec);
+    const analysisState = mapAnalysisState(owned, primary);
+    const fs = rec.field_session_id ? await getFieldSessionSafe(rec.field_session_id) : undefined;
     return {
       ref,
-      title: rec.court_name || `录制 · ${rec.session_id}`,
+      title: semanticTitle({
+        matchTitle: primary?.metadata?.matchTitle,
+        fieldSessionTitle: fs?.title,
+        startedAt: rec.started_at,
+        matchFormat: rec.match_format === "doubles" || rec.match_format === "singles" ? rec.match_format : undefined,
+        fallback: rec.court_name || `录制 · ${rec.session_id}`,
+      }),
       sourceType: "recording",
       mediaState,
       availabilityState: mapAvailability(rec),
-      analysisState: mapAnalysisState(owned, primary),
+      analysisState,
+      displayState: deriveDisplayState({ mediaState, analysisState, requiredAction }),
       requiredAction,
+      coverVideoUrl: getVideoStreamUrl(rec.video_id),
       primaryAnalysisJobId: primary?.id,
       analysisHistoryCount: owned.filter((j) => !isInternalChild(j)).length,
+      analysisJobs: toAnalysisJobViews(owned),
       cameraSetup: "single",
       matchFormat: rec.match_format === "doubles" || rec.match_format === "singles" ? rec.match_format : undefined,
       startedAt: rec.started_at,
@@ -357,6 +501,7 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
       courtName: rec.court_name,
       fieldSessionId: rec.field_session_id,
       captureTakeId: rec.capture_take_id,
+      videoId: rec.video_id,
     };
   }
 
@@ -367,16 +512,20 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
   const allSessions: RecordingSession[] = [];
   const owned = jobs.filter((job) => jobBelongsToVideo(job, video) && !allSessions.some((s) => jobBelongsToRecording(job, s)));
   const primary = newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
+  const analysisState = mapAnalysisState(owned, primary);
+  const requiredAction = !primary ? "start_analysis" : undefined;
   return {
     ref,
     title: video.original_filename.replace(/\.(mp4|mov|m4v)$/i, "") || video.id,
     sourceType: "upload",
     mediaState: "ready",
     availabilityState: "available",
-    analysisState: mapAnalysisState(owned, primary),
-    requiredAction: !primary ? "start_analysis" : undefined,
+    analysisState,
+    displayState: deriveDisplayState({ mediaState: "ready", analysisState, requiredAction }),
+    requiredAction,
     primaryAnalysisJobId: primary?.id,
     analysisHistoryCount: owned.filter((j) => !isInternalChild(j)).length,
+      analysisJobs: toAnalysisJobViews(owned),
     cameraSetup: "single",
     startedAt: video.uploaded_at,
   };
@@ -393,6 +542,14 @@ async function getSyncRecordingSafe(sessionId: string): Promise<SyncRecordingSes
 async function getRecordingSafe(sessionId: string): Promise<RecordingSession | null> {
   try {
     return await getRecording(sessionId);
+  } catch {
+    return null;
+  }
+}
+
+async function getFieldSessionSafe(id: string): Promise<FieldSession | null> {
+  try {
+    return await getFieldSession(id);
   } catch {
     return null;
   }

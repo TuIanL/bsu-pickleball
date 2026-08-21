@@ -1,69 +1,8 @@
 import { useMemo } from "react";
 import { usePbReport } from "../../contexts/PbReportContext";
 import StructuredZoneHeatmap from "../platform/StructuredZoneHeatmap";
-import type {
-  AnalysisReport,
-  HeatmapPlayerGrid,
-  MovementPoint,
-  StructuredVisualizationData,
-  VisualHeatmaps,
-} from "../../types/report";
-
-function getDistanceFt(report: AnalysisReport, playerId: string): number {
-  try {
-    const metricsAny = (report as unknown as { metrics?: unknown }).metrics;
-    if (metricsAny && typeof metricsAny === "object") {
-      const distances = (
-        metricsAny as {
-          distances?: Array<{ track_id?: string; player_id?: string; distance_ft?: number }>;
-        }
-      ).distances;
-      if (Array.isArray(distances)) {
-        const match = distances.find(
-          (d) =>
-            (d.track_id && d.track_id === playerId) ||
-            (d.player_id && d.player_id === playerId)
-        );
-        if (match && typeof match.distance_ft === "number") {
-          return Math.round(match.distance_ft);
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  const movement: MovementPoint[] | undefined = report?.session?.movementPath;
-  if (Array.isArray(movement) && movement.length > 0) {
-    return Math.round(movement.length * 0.3);
-  }
-
-  return 727;
-}
-
-function getPlayerHeatmap(
-  report: AnalysisReport,
-  playerId: string
-): HeatmapPlayerGrid | null {
-  try {
-    const reportAny = report as unknown as {
-      metrics?: { heatmap?: VisualHeatmaps };
-      visualizations?: StructuredVisualizationData;
-    };
-    const sources: (VisualHeatmaps | undefined)[] = [];
-    if (reportAny.metrics?.heatmap) sources.push(reportAny.metrics.heatmap);
-    if (reportAny.visualizations?.heatmaps) sources.push(reportAny.visualizations.heatmaps);
-    for (const src of sources) {
-      if (src?.players && Array.isArray(src.players)) {
-        const match = src.players.find((p) => p.id === playerId);
-        if (match) return match;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
+import type { StructuredVisualizationData } from "../../types/report";
+import PbEvidenceUnavailable from "./PbEvidenceUnavailable";
 
 function PickleballCourtPlaceholder() {
   return (
@@ -85,31 +24,20 @@ function PickleballCourtPlaceholder() {
 }
 
 export default function PbCourtCoverage() {
-  const { selectedPlayerId, report } = usePbReport();
+  const { evidence } = usePbReport();
 
-  const distanceFt = useMemo(
-    () => getDistanceFt(report, selectedPlayerId),
-    [report, selectedPlayerId]
-  );
-
-  const playerHeatmap = useMemo(
-    () => getPlayerHeatmap(report, selectedPlayerId),
-    [report, selectedPlayerId]
-  );
+  const distanceFt = evidence?.courtCoverage.distanceFt;
+  const heatmap = evidence?.courtCoverage.heatmap;
 
   const heatmapDataForStructured = useMemo<StructuredVisualizationData | null>(() => {
-    if (!playerHeatmap) return null;
+    if (!heatmap || heatmap.status !== "available") return null;
     return {
       court: { court_width_ft: 20, court_length_ft: 44 },
-      heatmaps: { players: [playerHeatmap] },
-      scatter_plots: {
-        players: [],
-        ball: [],
-        bounces: [],
-      },
+      heatmaps: { players: [heatmap.value] },
+      scatter_plots: { players: [], ball: [], bounces: [] },
       player_trajectories: [],
     } as unknown as StructuredVisualizationData;
-  }, [playerHeatmap]);
+  }, [heatmap]);
 
   return (
     <div className="pb-card p-5 sm:p-6">
@@ -123,11 +51,18 @@ export default function PbCourtCoverage() {
           </span>
           <div className="flex-1 h-px bg-[var(--pb-card-border,#e5e7eb)]" />
         </div>
-        <p className="mt-3 text-2xl font-black text-[var(--pb-text-primary,#111827)]">
-          移动距离：{" "}
-          <span className="text-[var(--pb-primary,#00FF41)]">{distanceFt}</span>{" "}
-          <span className="text-lg font-semibold">英尺</span>
-        </p>
+        {/* 设计 invariant #3：无真实距离 → 明确 unavailable，不造 727 */}
+        {distanceFt?.status === "available" ? (
+          <p className="mt-3 text-2xl font-black text-[var(--pb-text-primary,#111827)]">
+            移动距离：{" "}
+            <span className="text-[var(--pb-primary,#23985b)]">{distanceFt.value}</span>{" "}
+            <span className="text-lg font-semibold">英尺</span>
+          </p>
+        ) : (
+          <p className="mt-3 text-lg font-semibold text-[var(--pb-text-muted,#9ca3af)]">
+            暂无移动距离数据
+          </p>
+        )}
       </div>
 
       <div
@@ -142,7 +77,13 @@ export default function PbCourtCoverage() {
             />
           </div>
         ) : (
-          <PickleballCourtPlaceholder />
+          <div className="w-full h-full">
+            {heatmap?.status === "unavailable" ? (
+              <PbEvidenceUnavailable reason={heatmap.reason} />
+            ) : (
+              <PickleballCourtPlaceholder />
+            )}
+          </div>
         )}
       </div>
     </div>

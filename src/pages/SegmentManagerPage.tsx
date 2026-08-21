@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw } from "lucide-react";
 import type { CaptureSegmentSummary, CaptureTakeSummary, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn } from "../app/navigationTypes";
-import { getCaptureTake, listSegments, patchSegment, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents } from "../services/analysisClient";
+import { getCaptureTake, listSegments, patchSegment, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl } from "../services/analysisClient";
 import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
 import { EditableSegmentTimeline } from "../components/EditableSegmentTimeline";
 
@@ -12,10 +12,12 @@ export function SegmentManagerPage({
   fieldSessionId,
   takeId,
   onNavigate,
+  embedded,
 }: {
   fieldSessionId: string;
   takeId: string;
   onNavigate: NavigateFn;
+  embedded?: boolean;
 }) {
   const [take, setTake] = useState<CaptureTakeSummary | null>(null);
   const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
@@ -24,21 +26,41 @@ export function SegmentManagerPage({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editingLabel, setEditingLabel] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [activeVideoIndex, setActiveVideoIndex] = useState(0);
+  const [loadError, setLoadError] = useState(false);
   const playerRef = useRef<SegmentVideoPlayerHandle>(null);
 
-  const videoUrl = `/api/videos/${take?.source_session_id ?? ""}/stream`;
+  // 可播放视频源来自 take.video_ids（按机位顺序），单摄即单选项、双摄可切换机位。
+  // 不使用 source_session_id（采集会话 ID ≠ video_id，流地址会 404）。
+  const trackOptions = useMemo(
+    () =>
+      (take?.video_ids ?? []).map((id, i) => ({
+        label: (take?.video_ids?.length ?? 0) > 1 ? `机位${i + 1}` : "原视频",
+        url: getVideoStreamUrl(id) ?? "",
+      })),
+    [take?.video_ids],
+  );
+  const activeVideoUrl = trackOptions[activeVideoIndex]?.url ?? "";
 
   const loadData = useCallback(async () => {
+    // 三个数据源相互独立：take 详情（渲染必需）、segments、timeline-events，
+    // 各自独立兜底，任一失败不得让整页永久停在「加载中...」。
+    let takeFailed = false;
     try {
-      const [t, segs, evts] = await Promise.all([
-        getCaptureTake(takeId),
-        listSegments(takeId),
-        listTimelineEvents(fieldSessionId, { capture_take_id: takeId }),
-      ]);
+      const t = await getCaptureTake(takeId);
       setTake(t);
+    } catch {
+      takeFailed = true;
+    }
+    try {
+      const segs = await listSegments(takeId);
       setSegments(segs ?? []);
+    } catch { /* 片段列表缺失仅降级为空列表 */ }
+    try {
+      const evts = await listTimelineEvents(fieldSessionId, { capture_take_id: takeId });
       setEvents(evts ?? []);
-    } catch { /* ignore */ }
+    } catch { /* 时间轴事件缺失不影响片段列表与播放 */ }
+    if (takeFailed) setLoadError(true);
   }, [takeId, fieldSessionId]);
 
   useEffect(() => {
@@ -136,17 +158,35 @@ export function SegmentManagerPage({
     });
   };
 
+  if (loadError) {
+    return (
+      <div className="p-8 text-center space-y-3">
+        <p className="text-sm text-[#EF4444]">片段数据加载失败，请重试</p>
+        <button
+          className="rounded-lg border border-[#2F80ED] px-4 py-1.5 text-sm text-[#2F80ED] font-bold hover:bg-[#2F80ED]/5 transition"
+          onClick={() => { setLoadError(false); setTake(null); void loadData(); }}
+        >
+          重试
+        </button>
+      </div>
+    );
+  }
+
   if (!take) return <div className="p-8 text-slate-400">加载中...</div>;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <button className="text-sm text-[#2F80ED] flex items-center gap-1" onClick={() => onNavigate(`/capture/${fieldSessionId}`)}>
-          <ArrowLeft size={16} /> 返回采集任务
-        </button>
-        <h2 className="text-lg font-bold text-[#14241B]">片段管理</h2>
-        <div className="flex items-center gap-2">
+      <div className="flex items-center gap-4">
+        {!embedded && (
+          <>
+            <button className="text-sm text-[#2F80ED] flex items-center gap-1" onClick={() => onNavigate(`/capture/${fieldSessionId}`)}>
+              <ArrowLeft size={16} /> 返回采集任务
+            </button>
+            <h2 className="text-lg font-bold text-[#14241B]">片段管理</h2>
+          </>
+        )}
+        <div className="ml-auto flex items-center gap-2">
           {saveStatus === "saving" && <span className="text-xs text-[#E8A838]">保存中...</span>}
           {saveStatus === "saved" && <span className="text-xs text-[#22C55E]">已保存</span>}
           {saveStatus === "error" && <span className="text-xs text-[#EF4444]">保存失败</span>}
@@ -163,12 +203,20 @@ export function SegmentManagerPage({
       {/* Main layout */}
       <div className="grid grid-cols-[1fr_320px] gap-4">
         {/* Player */}
-        <SegmentVideoPlayer
-          ref={playerRef}
-          videoUrl={videoUrl}
-          fps={take.capture_mode === "dual" ? 30 : 30}
-          onTimeUpdate={() => { /* timeline sync */ }}
-        />
+        {activeVideoUrl ? (
+          <SegmentVideoPlayer
+            ref={playerRef}
+            videoUrl={activeVideoUrl}
+            fps={take.capture_mode === "dual" ? 30 : 30}
+            trackOptions={trackOptions}
+            onTrackChange={(i) => setActiveVideoIndex(i)}
+            onTimeUpdate={() => { /* timeline sync */ }}
+          />
+        ) : (
+          <div className="grid aspect-video place-items-center rounded-2xl border border-[#DDE9D6] bg-slate-50 text-sm text-[#98A2B3]">
+            暂无可用视频回放
+          </div>
+        )}
 
         {/* Segment list */}
         <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4 max-h-[500px] overflow-y-auto">

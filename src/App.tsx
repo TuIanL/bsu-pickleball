@@ -17,7 +17,7 @@ function App() {
     const url = new URL(path, window.location.origin);
     const nextRoute = parseLocation(url.pathname, url.search);
     let resolvedPath = url.pathname;
-    let resolvedSearch = url.search;
+    const resolvedSearch = url.search;
     // D10：/workspace canonical redirect 到 /library（replaceState），地址栏收敛为 /library
     if (nextRoute.name === "library" && (url.pathname === "/workspace")) {
       resolvedPath = "/library";

@@ -15,7 +15,7 @@ import { formatPercent, formatSeconds } from "../services/analysisDiagnostics";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { isActiveAnalysisJob, analysisStatusMeta, cameraAngleLabel, analysisModeLabel, formatDateTime, errorToNotice, formatPlayerId } from "../utils/analysisHelpers";
 
-export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
+export function AnalysisDetailsPage({ jobId, onNavigate, embedded }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean }) {
   const { error, job, report, result } = useAnalysisResultReport(jobId);
 
   if (job === undefined || report === undefined) {
@@ -87,39 +87,41 @@ export function AnalysisDetailsPage({ jobId, onNavigate }: { jobId: string; onNa
 
   return (
     <PageFrame>
-      <section className="sport-card overflow-hidden">
-        <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.42fr] lg:p-8">
-          <div>
-            <button
-              className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
-              onClick={() => onNavigate(returnPath)}
-              type="button"
-            >
-              <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
-              返回任务管理
-            </button>
-            <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
-              <LineChart size={16} aria-hidden="true" />
-              分析详情
-            </p>
-            <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{job.metadata.matchTitle}</h1>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-              当前页面保留任务元数据、算法状态和标准匹克球场二维平面图。坐标转换和人员位移捕捉完成后，会在同一张 20 x 44 ft 球场上投影可视化。
-            </p>
+      {!embedded && (
+        <section className="sport-card overflow-hidden">
+          <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.42fr] lg:p-8">
+            <div>
+              <button
+                className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+                onClick={() => onNavigate(returnPath)}
+                type="button"
+              >
+                <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
+                返回任务管理
+              </button>
+              <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+                <LineChart size={16} aria-hidden="true" />
+                分析详情
+              </p>
+              <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{job.metadata.matchTitle}</h1>
+              <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
+                当前页面保留任务元数据、算法状态和标准匹克球场二维平面图。坐标转换和人员位移捕捉完成后，会在同一张 20 x 44 ft 球场上投影可视化。
+              </p>
+            </div>
+            <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
+              <span className="text-sm font-bold text-[#168A34]">状态摘要</span>
+              <strong className="mt-4 block text-4xl font-black text-[#13A12C]">{analysisStatusMeta(job.status).label}</strong>
+              <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
+                {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
+              </p>
+              <button className="mt-5 green-button w-full" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/vision`))} type="button">
+                打开视频分析
+                <ArrowRight size={16} aria-hidden="true" />
+              </button>
+            </div>
           </div>
-          <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
-            <span className="text-sm font-bold text-[#168A34]">状态摘要</span>
-            <strong className="mt-4 block text-4xl font-black text-[#13A12C]">{analysisStatusMeta(job.status).label}</strong>
-            <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
-              {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
-            </p>
-            <button className="mt-5 green-button w-full" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/vision`))} type="button">
-              打开视频分析
-              <ArrowRight size={16} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_380px]">
         <StandardCourtPlan tracks={result?.tracks ?? []} />

@@ -111,6 +111,7 @@ export function DisplayHeatmap({ jobId, onSeek, debugAvailable }: DisplayHeatmap
   }, [jobId, playerId]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 依赖变化时触发重新加载
     load();
   }, [load]);
 

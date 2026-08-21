@@ -70,9 +70,9 @@ function ActiveRecordingBlock({
   };
 
   return (
-    <div className="border-t border-[#E4E7EC]">
+    <div className="border-t border-[var(--capture-sidebar-border,#dce5e0)]">
       <button
-        className="px-3 py-3 w-full text-left hover:bg-[#F9FAFB] transition"
+        className="px-3 py-3 w-full text-left hover:bg-[var(--capture-surface-soft,#f7faf8)] transition"
         onClick={() => {
           const route = `/capture/${activeTake.fieldSessionId}` as AppPath;
           onNavigate(route);
@@ -85,17 +85,17 @@ function ActiveRecordingBlock({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E5484D] opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-[#E5484D]" />
             </span>
-            <span className="text-xs font-bold text-[#182230]">
+            <span className="text-xs font-bold text-[var(--capture-text-primary,#182b24)]">
               {isInsane ? "--:--:--" : formatElapsed(elapsedMs)}
             </span>
           </div>
           {activeTake.title && (
-            <p className="text-xs text-[#475467] truncate">{activeTake.title}</p>
+            <p className="text-xs text-[var(--capture-text-secondary,#64736c)] truncate">{activeTake.title}</p>
           )}
           {activeTake.courtName && (
-            <p className="text-xs text-[#98A2B3] truncate">{activeTake.courtName}</p>
+            <p className="text-xs text-[var(--capture-text-muted,#8f9d96)] truncate">{activeTake.courtName}</p>
           )}
-          <p className="text-xs text-[#98A2B3]">
+          <p className="text-xs text-[var(--capture-text-muted,#8f9d96)]">
             {activeTake.captureMode === "dual" ? "双路同步" : "单路录制"}
             {activeTake.videoSpec ? ` · ${formatVideoSpec(activeTake.videoSpec)}` : ""}
           </p>
@@ -129,16 +129,16 @@ export function AppSidebar({ navigationSection, onNavigate }: AppSidebarProps) {
   const { activeTake, isOrphan, forceCancel, forceCancelling } = useActiveCaptureTake();
 
   return (
-    <aside className="fixed left-0 top-0 bottom-0 w-16 sm:w-[216px] bg-white border-r border-[#E4E7EC] flex flex-col z-40">
-      <button className="flex items-center justify-center gap-2 px-2 sm:justify-start sm:px-4 h-16 shrink-0 w-full text-left hover:bg-[#F9FAFB] transition" onClick={() => onNavigate("/")} type="button">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-[#22C55E]/30 bg-[#19B84C]/14 text-[#168A34]">
+    <aside className="fixed left-0 top-0 bottom-0 w-16 sm:w-[216px] bg-[var(--capture-sidebar-bg,#fafcfb)] border-r border-[var(--capture-sidebar-border,#dce5e0)] flex flex-col z-40">
+      <button className="flex items-center justify-center gap-2 px-2 sm:justify-start sm:px-4 h-16 shrink-0 w-full text-left hover:bg-[var(--capture-surface-soft,#f7faf8)] transition" onClick={() => onNavigate("/")} type="button">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-[var(--capture-brand-primary,#23985b)]/30 bg-[var(--capture-brand-soft,#ddf1e5)] text-[var(--capture-brand-strong,#197947)]">
           <Activity size={20} aria-hidden="true" />
         </span>
         <span className="hidden min-w-0 sm:block">
-          <span className="block text-sm font-black tracking-[0.02em] text-[#182230]">
+          <span className="block text-sm font-black tracking-[0.02em] text-[var(--capture-text-primary,#182b24)]">
             拍动视析
           </span>
-          <span className="block text-[10px] text-[#98A2B3]">匹克球运动分析</span>
+          <span className="block text-[10px] text-[var(--capture-text-muted,#8f9d96)]">匹克球运动分析</span>
         </span>
       </button>
 
@@ -148,14 +148,17 @@ export function AppSidebar({ navigationSection, onNavigate }: AppSidebarProps) {
           return (
             <button
               key={item.section}
-              className={`w-full flex items-center justify-center gap-2.5 px-2 py-2.5 sm:justify-start sm:px-3 rounded-lg text-sm font-medium transition ${
+              className={`relative w-full flex items-center justify-center gap-2.5 px-2 py-2.5 sm:justify-start sm:px-3 rounded-lg text-sm font-medium transition ${
                 isActive
-                  ? "bg-[#EAF7EE] text-[#3BAA62]"
-                  : "text-[#475467] hover:bg-[#F2F4F7]"
+                  ? "bg-[var(--capture-nav-active-bg,#e6f3ea)] text-[var(--capture-nav-active-text,#1b824c)]"
+                  : "text-[var(--capture-text-secondary,#64736c)] hover:bg-[var(--capture-surface-soft,#f7faf8)]"
               }`}
               onClick={() => onNavigate(item.path)}
               type="button"
             >
+              {isActive && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r bg-[var(--capture-brand-primary,#23985b)]" />
+              )}
               <item.icon size={18} aria-hidden="true" />
               <span className="hidden sm:inline">{item.label}</span>
             </button>
