@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from collections.abc import Mapping
 from uuid import uuid4
@@ -232,6 +232,58 @@ def _deserialize_joint_view_input(payload: Mapping[str, object]) -> JointViewInp
         calibration_id=str(payload.get("calibration_id") or payload.get("calibrationId") or ""),
         court_orientation=payload.get("court_orientation") or payload.get("courtOrientation"),
     )
+
+
+@dataclass
+class JointViewInput:
+    """每路视角的输入契约（video + calibration + court orientation）。"""
+
+    camera_slot: str = ""
+    capture_track_id: str = ""
+    camera_id: str = ""
+    video_id: str = ""
+    calibration_id: str = ""
+    court_orientation: object | None = None
+
+
+def _run_joint_ball_post_stage(parent, storage, videos: Mapping[str, object], view_inputs) -> None:
+    """joint 模式球 3D 后置阶段（非阻塞，绝不影响权威结果）。
+
+    复用 real_data_runner 的球链：对两路已解析的视频+标定跑球 3D，写入 evidence v1 + v3。
+    窗口按 clip 取，上限 60s 控制耗时。球链失败仅告警，不破坏球员结果。
+    """
+    try:
+        from app.vision.multiview.ball_stereo.real_data_runner import ViewConfig, run_real_data
+
+        if get_settings().ball_model_path is None:
+            return
+        if len(view_inputs) < 2:
+            return
+
+        def _view_config(vi):
+            orientation = getattr(vi.court_orientation, "value", None) or vi.court_orientation or "identity"
+            return ViewConfig(
+                video_path=str(videos[vi.camera_slot].path),
+                calibration_path=str(storage.calibration_json_path(vi.calibration_id)),
+                orientation=str(orientation),
+                camera_id=vi.camera_id or vi.camera_slot,
+            )
+
+        cam1 = _view_config(view_inputs[0])
+        cam2 = _view_config(view_inputs[1])
+        start_s = float(parent.clipStartMs or 0) / 1000.0
+        end_s = float(parent.clipEndMs if parent.clipEndMs else start_s + 60000) / 1000.0
+        if end_s - start_s > 60.0:  # 控制在 60s 内，避免长时间计算
+            end_s = start_s + 60.0
+        run_real_data(
+            cam1=cam1, cam2=cam2,
+            window_start_s=start_s, window_end_s=end_s, frame_stride=2,
+            take_id=parent.metadata.capture_take_id or "",
+            job_id=parent.id, write_evidence_to_job=True,
+        )
+        logger.info("joint ball post-stage wrote evidence + v3 for job %s", parent.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("joint ball post-stage failed (non-blocking): %s", exc)
 
 
 class MultiViewJointExecutor:
@@ -695,6 +747,9 @@ class MultiViewJointExecutor:
             )
             result = storage.publicize_pipeline_result(result)
             storage.write_json(storage.output_json_path(parent.id), result.model_dump(mode="json"))
+
+            # Joint 模式球 3D 后置阶段（非阻塞）：产出 evidence v1 + v3（若有球模型）
+            _run_joint_ball_post_stage(parent, storage, videos, view_inputs)
 
             # Debug Replay is rendered only after the authoritative result and
             # refinement artifacts are published. Rendering consumes persisted

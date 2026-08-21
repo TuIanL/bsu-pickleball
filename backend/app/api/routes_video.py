@@ -237,15 +237,13 @@ def stream_video(video_id: str, request: Request) -> StreamingResponse:
         # 元数据在，但磁盘上的文件丢失了（比如被误删）
         raise HTTPException(status_code=404, detail="Video file not found")
 
-    # 如果是 .ts 文件，尝试返回同目录下的 *._merged.mp4（浏览器支持 MP4 但不支持 TS）
-    filename = video.original_filename
-    media_type = video.content_type or "video/mp4"
-    if path.suffix.lower() == ".ts":
-        merged = path.parent / f"{path.stem}_merged.mp4"
-        if merged.exists():
-            path = merged
-            filename = merged.name
-            media_type = "video/mp4"
+    # 解析为浏览器可直接播放的路径：TS→合并 MP4→faststart 播放版（存在时）
+    from app.camera.ffmpeg_utils import resolve_browser_stream_path
+
+    path = resolve_browser_stream_path(path)
+    filename = path.name
+    if path.suffix.lower() in (".mp4",):
+        media_type = "video/mp4"
 
     file_size = path.stat().st_size
     range_header = request.headers.get("range")

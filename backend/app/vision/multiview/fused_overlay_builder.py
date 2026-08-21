@@ -245,6 +245,9 @@ class FusedPlayerOverlayBuilder:
             predicted_ttl_ms=self.config.predicted_ttl_ms,
         )
         self._scale_profiles: dict[str, ViewPersonScaleProfile] = {}
+        # 时间连续性（stabilize-multiview-overlay-temporal-continuity）：
+        # (gid, view) → 最近一次 materialize 的 presentation bbox + ts（供 held_presentation 复用）
+        self._last_presentation_bbox: dict[tuple[str, str], tuple[list[float], float]] = {}
 
     # ---- 决策辅助 ----------------------------------------------------------
 
@@ -730,6 +733,13 @@ class FusedPlayerOverlayBuilder:
         stale = plan.bbox_stale
         age_ms = plan.bbox_age_ms
 
+        # held_presentation：模板瞬失宽限段复用最近一次 materialize 的演示 bbox（projected_box_hold_ms 内）
+        held = None
+        if plan.preferred_bbox_source == "held_presentation":
+            mem = self._last_presentation_bbox.get((gid, reference_view_id))
+            if mem is not None and (now_ms - mem[1]) <= self.config.projected_box_hold_ms:
+                held = mem[0]
+
         reanchored = self.bbox_memory.reanchor(
             global_player_id=gid,
             view_id=reference_view_id,
@@ -740,7 +750,11 @@ class FusedPlayerOverlayBuilder:
         scaled = None
         if profile is not None:
             scaled = profile.query(projection.image_footpoint[1])
-        if reanchored is not None and not stale:
+        if held is not None:
+            bbox = held
+            bbox_source = "last_good_bbox_reanchored"
+            stale = True
+        elif reanchored is not None and not stale:
             # fresh personal memory（age ≤ ttl）
             bbox = list(reanchored.bbox)
             bbox_source = "last_good_bbox_reanchored"
@@ -756,6 +770,13 @@ class FusedPlayerOverlayBuilder:
             bbox = list(reanchored.bbox)
             bbox_source = "last_good_bbox_reanchored"
             stale = True
+        else:
+            bbox = None
+            bbox_source = "none"
+
+        # 刷新演示 bbox 记忆（真实/投影 materialize 均刷新；预测光圈不刷新）
+        if bbox is not None:
+            self._last_presentation_bbox[(gid, reference_view_id)] = (bbox, now_ms)
 
         return FusedPlayerOverlayPlayer(
             player_id=player_id,

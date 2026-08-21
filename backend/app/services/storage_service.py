@@ -249,6 +249,10 @@ class StorageService:
         # 事件切分重建球轨迹 JSON（第三套数据）
         return self._job_artifact_root(job_id) / "reconstructed_ball_trajectory.json"
 
+    def multiview_ball_stereo_evidence_path(self, job_id: str) -> Path:
+        # 多视角球立体证据 JSON（不可变原始证据，v1）
+        return self._job_artifact_root(job_id) / "multiview_ball_stereo_evidence.json"
+
     def analysis_overlay_video_path(self, job_id: str) -> Path:
         # 分析叠加视频（mp4）
         return self._job_artifact_root(job_id) / "analysis_overlay.mp4"

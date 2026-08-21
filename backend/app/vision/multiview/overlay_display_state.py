@@ -56,7 +56,7 @@ class DisplayPlan:
     """状态机输出：决定几何形态与 bbox 来源（builder 据此 materialize entity）。"""
 
     state: DisplayState
-    preferred_bbox_source: str = "none"  # real | reanchor | scale_profile | none
+    preferred_bbox_source: str = "none"  # real | reanchor | scale_profile | held_presentation | none
     bbox_stale: bool = False
     bbox_age_ms: float | None = None
     # 该 tick 是否仍渲染（HIDDEN 时为 False）
@@ -90,8 +90,11 @@ class _PlayerDisplayState:
     state: DisplayState = "HIDDEN"
     synthetic_confirm_count: int = 0
     last_synthetic_tick_ts: float | None = None
-    last_box_ts: float | None = None
     last_point_ts: float | None = None
+    # 时间连续性（stabilize-multiview-overlay-temporal-continuity D3）：
+    last_real_bbox_ts: float | None = None   # hysteresis_grace_ms 计时权威（真实观测）
+    last_valid_box_ts: float | None = None   # projected_box_hold_ms 计时权威（最后有效演示 bbox 几何）
+    last_state_transition_ts: float | None = None  # 诊断（跨状态转换时间戳）
 
 
 class OverlayDisplayStateMachine:
@@ -133,21 +136,27 @@ class OverlayDisplayStateMachine:
         key = (player_id, view_id)
         st = self._states.setdefault(key, _PlayerDisplayState())
         evidence = ctx.evidence_type
+        now = ctx.now_ms
 
-        # 1) 硬 stop：prediction 超 TTL 且无有效 point → 必须 HIDDEN
+        def _emit(state: DisplayState, **plan) -> DisplayPlan:
+            if st.state != state:
+                st.last_state_transition_ts = now
+                st.state = state
+            return DisplayPlan(state=state, **plan)
+
+        # 1) 硬 stop（最高优先级）：prediction 超 TTL 且无有效 point → 必须 HIDDEN
         if ctx.prediction_expired and not ctx.has_valid_point:
-            st.state = "HIDDEN"
-            return DisplayPlan(state="HIDDEN", render=False)
+            return _emit("HIDDEN", render=False)
 
-        # 2) 真实 bbox 立即升级（最高优先，清空 confirm counter）
+        # 2) 真实 bbox 立即升级（次高优先，清空 confirm counter）
         if ctx.has_real_bbox and evidence in REAL_BBOX_EVIDENCES:
             target = EVIDENCE_TO_STATE.get(evidence, "REAL_BOX")
-            st.state = target
             st.synthetic_confirm_count = 0
             st.last_synthetic_tick_ts = None
-            st.last_box_ts = ctx.now_ms
-            return DisplayPlan(
-                state=target,
+            st.last_real_bbox_ts = now
+            st.last_valid_box_ts = now  # 真实 bbox 是最新有效几何（作 hold 起点）
+            return _emit(
+                target,
                 preferred_bbox_source="real",
                 bbox_stale=False,
                 bbox_age_ms=0.0,
@@ -156,64 +165,83 @@ class OverlayDisplayStateMachine:
         # 3) 真实证据但无当前 bbox（如 weak base 无 bbox）→ 按 evidence 映射
         if evidence in REAL_BBOX_EVIDENCES:
             target = EVIDENCE_TO_STATE.get(evidence, "REAL_BOX")
-            st.state = target
-            st.last_box_ts = ctx.now_ms
-            return DisplayPlan(state=target, preferred_bbox_source="none")
+            st.last_real_bbox_ts = now
+            return _emit(target, preferred_bbox_source="none")
 
         # 4) 硬 stop：geometry invalid → 禁 synthetic box
         if not ctx.geometry_valid:
-            st.state = "PROJECTED_POINT" if ctx.has_valid_point else "HIDDEN"
+            target = "PROJECTED_POINT" if ctx.has_valid_point else "HIDDEN"
             st.synthetic_confirm_count = 0
-            return DisplayPlan(
-                state=st.state,
-                preferred_bbox_source="none",
-                render=st.state != "HIDDEN",
-            )
+            return _emit(target, preferred_bbox_source="none", render=target != "HIDDEN")
 
-        # 5) cross_view_projected：donor 有可靠位置
+        # 5) cross_view_projected：donor/global 有 projected 位置证据
         if evidence == "cross_view_projected":
-            # 5a) 有 synthetic bbox（reanchor / scale profile）→ PROJECTED_BOX
-            if ctx.has_synthetic_bbox:
-                if st.state in ("REAL_BOX", "ASSISTED_BOX"):
-                    # 真实框短暂漏检：诚实降级 evidence（builder 已改 evidence_type），
-                    # 但保持框形态（虚线），不立即变点
-                    st.state = "PROJECTED_BOX"
-                    st.last_box_ts = ctx.now_ms
-                elif st.state == "PROJECTED_BOX":
-                    # 已处于 projected box：保持（几何形态稳定）
-                    st.last_box_ts = ctx.now_ms
-                else:
-                    # HIDDEN / PROJECTED_POINT / PREDICTED_POINT：synthetic upgrade
-                    # 需稳定确认（连续 + gap 约束）
-                    if self._confirm_synthetic(st, ctx.now_ms):
-                        st.state = "PROJECTED_BOX"
-                        st.last_box_ts = ctx.now_ms
-                    else:
-                        st.state = "PROJECTED_POINT"
-                return DisplayPlan(
-                    state=st.state,
-                    preferred_bbox_source=("reanchor" if not ctx.bbox_stale else "scale_profile"),
-                    bbox_stale=ctx.bbox_stale,
-                    bbox_age_ms=ctx.bbox_age_ms,
-                )
-            # 5b) 无 synthetic bbox → PROJECTED_POINT
-            st.state = "PROJECTED_POINT"
-            st.last_point_ts = ctx.now_ms
-            st.synthetic_confirm_count = 0
-            return DisplayPlan(state="PROJECTED_POINT", preferred_bbox_source="none")
+            return self._cross_view(ctx, st, now)
 
-        # 6) predicted_only：prediction 未超 TTL → PREDICTED_POINT
+        # 6) predicted_only：仅预测，无 projected 位置证据 → 绝不画人体框
         if evidence == "predicted_only":
             if not ctx.prediction_expired:
-                st.state = "PREDICTED_POINT"
-                st.last_point_ts = ctx.now_ms
-                return DisplayPlan(state="PREDICTED_POINT", preferred_bbox_source="none")
-            st.state = "HIDDEN"
-            return DisplayPlan(state="HIDDEN", render=False)
+                return _emit("PREDICTED_POINT", preferred_bbox_source="none")
+            return _emit("HIDDEN", render=False)
 
         # 7) 无证据 → HIDDEN
-        st.state = "HIDDEN"
-        return DisplayPlan(state="HIDDEN", render=False)
+        return _emit("HIDDEN", render=False)
+
+    def _cross_view(self, ctx: DisplayContext, st: _PlayerDisplayState, now: float) -> DisplayPlan:
+        """cross_view 降级链：hysteresis_grace（真实刚丢）+ projected_box_hold（模板瞬失）。
+
+        - 有具体模板（synthetic bbox）→ PROJECTED_BOX；刷新 hold 权威；点→框需稳定确认。
+        - 无模板但距最后有效演示几何 ≤ projected_box_hold_ms → 保持 BOX（模板瞬失宽限）。
+        - 无模板且真实刚丢 ≤ hysteresis_grace_ms → 保持 BOX（grace 保护）。
+        - 否则 → PROJECTED_POINT（不凭空造框）。
+        """
+        had_box = st.state in ("REAL_BOX", "ASSISTED_BOX", "PROJECTED_BOX")
+        within_grace = self._within_ts(st.last_real_bbox_ts, self.hysteresis_grace_ms, now)
+        within_hold = self._within_ts(st.last_valid_box_ts, self.projected_box_hold_ms, now)
+
+        if ctx.has_synthetic_bbox:
+            st.last_valid_box_ts = now  # 具体模板 → 刷新 hold 权威
+            upgrade = had_box or within_grace or self._confirm_synthetic(st, now)
+            if not upgrade:
+                # 点→框仍处于确认期：保留 confirm 计数继续累计（不 reset）
+                return self._point(ctx, st, now)
+            return self._plan_box(ctx, st, had_held=False)
+
+        # 无模板：模板瞬失宽限（hold）或真实刚丢（grace）内保持上一份演示几何
+        st.synthetic_confirm_count = 0  # 模板消失，确认计数作废
+        if within_hold or within_grace:
+            if had_box or within_grace:
+                return self._plan_box(ctx, st, had_held=True)
+        return self._point(ctx, st, now)
+
+    def _plan_box(self, ctx: DisplayContext, st: _PlayerDisplayState, *, had_held: bool) -> DisplayPlan:
+        """收敛到 PROJECTED_BOX，并给出 bbox source 提示（template / held presentation）。"""
+        if st.state != "PROJECTED_BOX":
+            st.last_state_transition_ts = ctx.now_ms
+            st.state = "PROJECTED_BOX"
+        bbox_source = "held_presentation" if had_held else (
+            "reanchor" if not ctx.bbox_stale else "scale_profile"
+        )
+        return DisplayPlan(
+            state="PROJECTED_BOX",
+            preferred_bbox_source=bbox_source,
+            bbox_stale=ctx.bbox_stale,
+            bbox_age_ms=ctx.bbox_age_ms,
+        )
+
+    def _point(self, ctx: DisplayContext, st: _PlayerDisplayState, now: float) -> DisplayPlan:
+        """收敛到 PROJECTED_POINT / PREDICTED_POINT（footpoint 光圈，不造框）。"""
+        target: DisplayState = "PROJECTED_POINT"
+        if st.state != target:
+            st.last_state_transition_ts = now
+            st.state = target
+        if ctx.has_valid_point:
+            st.last_point_ts = now
+        return DisplayPlan(state=target, preferred_bbox_source="none")
+
+    @staticmethod
+    def _within_ts(ts: float | None, window_ms: float, now: float) -> bool:
+        return ts is not None and (now - ts) <= window_ms
 
     def _confirm_synthetic(self, st: _PlayerDisplayState, now_ms: float) -> bool:
         """PROJECTED_POINT → PROJECTED_BOX 的稳定确认（连续 + gap 约束）。"""

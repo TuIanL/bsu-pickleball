@@ -437,6 +437,7 @@ def read_analysis_artifact(
         "cleaned-ball-trajectory",  # 清洗后的球轨迹
         "bounce-events",  # 弹跳事件
         "reconstructed-ball-trajectory",  # 事件切分重建球轨迹
+        "multiview-ball-stereo-evidence",  # 多视角球立体证据（不可变原始证据）
         "analysis-overlay-video",  # 分析叠加视频（mp4 文件）
         "position-heatmaps",  # 位置热力图清单
         "position-scatter-plots",  # 位置散点图清单
@@ -493,6 +494,8 @@ def read_analysis_artifact(
         path = _STORAGE.bounce_events_json_path(job_id)
     elif artifact_name == "reconstructed-ball-trajectory":
         path = _STORAGE.reconstructed_ball_trajectory_json_path(job_id)
+    elif artifact_name == "multiview-ball-stereo-evidence":
+        path = _STORAGE.multiview_ball_stereo_evidence_path(job_id)
     elif artifact_name == "analysis-overlay-video":
         path = _STORAGE.analysis_overlay_video_path(job_id)
     elif artifact_name == "position-heatmaps":

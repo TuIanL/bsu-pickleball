@@ -80,5 +80,7 @@ class CaptureTakeSummary(BaseModel):
     duration_ms: int | None = None
     revision: int
     sync_anchor_status: SyncAnchorStatus | None = None
+    # 可播放视频源（来自 capture_tracks，按机位 cam_1→cam_2 排序）
+    video_ids: list[str] = Field(default_factory=list, description="已注册的可播放 video_id，按机位顺序排列")
 
     model_config = {"from_attributes": True}

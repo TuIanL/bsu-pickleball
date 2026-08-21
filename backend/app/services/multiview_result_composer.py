@@ -78,6 +78,14 @@ _INHERITED_ARTIFACT_SPECS: dict[str, tuple[str, str, str, str | None, bool]] = {
         "reconstructed_ball_trajectory_status",
         True,
     ),
+    # 多视角球立体证据（不可变原始证据，joint 模式球 3D 链的输入证据）
+    "multiview_ball_stereo_evidence_path": (
+        "multiview_ball_stereo_evidence_path",
+        "multiview-ball-stereo-evidence",
+        "multiview_ball_stereo_evidence_url",
+        "multiview_ball_stereo_evidence_status",
+        True,
+    ),
     # 叠加视频体积大（可达 GB 级），不复制到 Parent 命名空间，直接引用 child 的 URL。
     "analysis_overlay_video_path": ("analysis_overlay_video_path", "analysis-overlay-video", "analysis_overlay_video_url", "analysis_overlay_video_status", False),
     "heatmaps_manifest_json_path": ("heatmaps_manifest_json_path", "position-heatmaps", "heatmaps_url", "position_visualizations_status", True),

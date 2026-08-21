@@ -178,6 +178,102 @@ def test_no_flicker_on_stable_evidence_sequence() -> None:
     assert "REAL_BOX" not in states
 
 
+# ---- 5b. 时间连续性（Stage 1.6：迟滞作用域 / hold 计时权威 / hard TTL）--------
+
+
+def test_observed_to_predicted_no_box_even_within_grace() -> None:
+    """observed → predicted_only（无 projected 位置证据）→ 直接 PREDICTED_POINT，绝不画人体框。"""
+    sm = OverlayDisplayStateMachine(hysteresis_grace_ms=100.0)
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="predicted_only", has_valid_point=True, now=1033),
+    )
+    assert plan.state == "PREDICTED_POINT"
+    assert plan.preferred_bbox_source == "none"
+
+
+def test_miss_with_projected_evidence_degrades_to_projected_box_not_real() -> None:
+    """真实 bbox 丢失且有 projected 证据 → 立即 PROJECTED_BOX（MUST NOT 保留 REAL_BOX）。"""
+    sm = OverlayDisplayStateMachine()
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=True, now=1033),
+    )
+    assert plan.state == "PROJECTED_BOX"
+    assert plan.state != "REAL_BOX"
+
+
+def test_template_transient_loss_holds_box_within_projected_box_hold() -> None:
+    """synthetic 模板瞬失 ≤ projected_box_hold_ms → 保持 BOX（不 BOX→POINT→BOX）。"""
+    sm = OverlayDisplayStateMachine(projected_box_hold_ms=400.0)
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    p = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=True, now=1100),
+    )
+    assert p.state == "PROJECTED_BOX"
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=False, now=1200),
+    )
+    assert plan.state == "PROJECTED_BOX"  # 距 last_valid(1100)=100ms ≤ 400 → 保持框
+    assert plan.preferred_bbox_source == "held_presentation"
+
+
+def test_hold_authority_from_last_valid_geometry_not_last_real() -> None:
+    """projected_box_hold 从 last_valid_box_ts（最后成功演示 bbox）起算，而非 last_real_bbox_ts。"""
+    sm = OverlayDisplayStateMachine(projected_box_hold_ms=200.0)
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=True, now=1100))
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=True, now=1200))
+    # last_valid=1200；now=1250 距 last_valid=50ms ≤ 200 → BOX（若从 last_real=1000 算则 250>200 会误塌点）
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=False, now=1250),
+    )
+    assert plan.state == "PROJECTED_BOX"
+    assert plan.preferred_bbox_source == "held_presentation"
+
+
+def test_hold_overrun_downgrades_to_point() -> None:
+    """template 不可用超过 projected_box_hold_ms → PROJECTED_POINT（不得长期赖框）。"""
+    sm = OverlayDisplayStateMachine(projected_box_hold_ms=200.0)
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=True, now=1200))
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=False, now=1500),
+    )
+    assert plan.state == "PROJECTED_POINT"
+
+
+def test_hard_ttl_overrides_hold_and_grace() -> None:
+    """预测 TTL 超限且无有效 point → HIDDEN（硬 stop 优先于任何 hold/grace）。"""
+    sm = OverlayDisplayStateMachine()
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="predicted_only", prediction_expired=True, has_valid_point=False, now=1600),
+    )
+    assert plan.state == "HIDDEN"
+    assert plan.render is False
+
+
+def test_real_recovers_immediately_after_hold() -> None:
+    """真实观察恢复 → 零延迟恢复 REAL_BOX（不被 hysteresis/hold/confirm 延迟）。"""
+    sm = OverlayDisplayStateMachine()
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1000))
+    sm.step(player_id="Player_1", view_id="cam_1", ctx=_ctx(evidence="cross_view_projected", has_synthetic_bbox=True, now=1100))
+    plan = sm.step(
+        player_id="Player_1", view_id="cam_1",
+        ctx=_ctx(evidence="base_observed", has_real_bbox=True, now=1200),
+    )
+    assert plan.state == "REAL_BOX"
+    assert plan.preferred_bbox_source == "real"
+
+
 # ---- 6. ViewPersonScaleProfile -----------------------------------------------
 
 

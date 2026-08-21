@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -50,11 +51,20 @@ def main() -> int:
         "real_observation_display_latency_ms": 0,
         "real_observation_count": 0,
         "displayed_real_latency_sum_ms": 0.0,
+        # Stage 3（stabilize-multiview-overlay-temporal-continuity）：
+        "display_state_transitions": 0,        # 形态状态切换总次数
+        "short_hidden_gap_count": 0,           # 100~500ms 短暂隐藏窗口数
+        "hard_ttl_violation_count": 0,         # 已失效仍继续显示 BOX/POINT 的次数（应 0）
+        "max_synthetic_hold_ms": 0.0,          # 单次 synthetic/projected 长 hold 的最长时长
     }
     prev_state: str | None = None
     prev_evidence: str | None = None
     prev_ms: float | None = None
     pending_real_latency: float | None = None  # 真实观测出现到显示真实框的延迟
+    hidden_gap_start: float | None = None      # 本次进入 HIDDEN 的时间戳
+    box_run_start: float | None = None         # 本次进入 BOX-ish 的时间戳
+    state_seq: list[str] = []                  # 展示状态序列（供 rebuild determinism 校验）
+    tick_inputs: list[tuple] = []              # 输入的 evidence 快照（供二次重建）
 
     for tick in trace["ticks"]:
         ts = tick["canonical_timestamp_ms"]
@@ -94,16 +104,36 @@ def main() -> int:
             geometry_valid=True,
         )
         plan = sm.step(player_id="P1", view_id=VIEW, ctx=ctx)
+        state_seq.append(plan.state)
+        tick_inputs.append((ts, evidence, has_real, has_donor and attempted and False, has_donor or has_real))
 
+        boxish = ("REAL_BOX", "ASSISTED_BOX", "PROJECTED_BOX")
         # 指标统计
         if prev_state is not None:
-            if {"PROJECTED_BOX", "PROJECTED_POINT", "REAL_BOX", "ASSISTED_BOX"} and (
-                (prev_state in ("REAL_BOX", "ASSISTED_BOX", "PROJECTED_BOX") and plan.state in ("PROJECTED_POINT", "PREDICTED_POINT"))
-                or (prev_state in ("PROJECTED_POINT", "PREDICTED_POINT") and plan.state in ("REAL_BOX", "ASSISTED_BOX", "PROJECTED_BOX"))
+            if plan.state != prev_state:
+                metrics["display_state_transitions"] += 1
+            if (
+                (prev_state in boxish and plan.state in ("PROJECTED_POINT", "PREDICTED_POINT"))
+                or (prev_state in ("PROJECTED_POINT", "PREDICTED_POINT") and plan.state in boxish)
             ):
                 metrics["box_point_transition_count"] += 1
         if plan.state == "HIDDEN" and prev_state != "HIDDEN":
             metrics["hidden_transition_count"] += 1
+            hidden_gap_start = ts
+        elif plan.state != "HIDDEN" and prev_state == "HIDDEN":
+            if hidden_gap_start is not None and prev_ms is not None:
+                gap = ts - hidden_gap_start
+                if 100.0 <= gap <= 500.0:
+                    metrics["short_hidden_gap_count"] += 1
+            hidden_gap_start = None
+        # synthetic/projected 长 hold 追踪（BOX-ish 连续段）
+        prev_boxish = prev_state in boxish if prev_state is not None else False
+        if plan.state in boxish:
+            if not prev_boxish:
+                box_run_start = ts
+            else:
+                duration = ts - box_run_start
+                metrics["max_synthetic_hold_ms"] = max(metrics["max_synthetic_hold_ms"], duration)
         if has_real:
             metrics["real_observation_count"] += 1
             if pending_real_latency is None:
@@ -118,15 +148,38 @@ def main() -> int:
         prev_evidence = evidence
         prev_ms = ts
 
+    duration_min = max((prev_ms - WINDOW_MS[0]), 1.0) / 1000.0 / 60.0
+    transitions_per_minute = metrics["display_state_transitions"] / max(duration_min, 1e-6)
     print(f"P1@{VIEW} 窗口 {WINDOW_MS[0]:.0f}-{WINDOW_MS[1]:.0f}ms（{metrics['real_observation_count']} 个真实观测 tick）：")
     print(f"  box_point_transition_count：{metrics['box_point_transition_count']}")
+    print(f"  display_state_transitions_per_minute：{transitions_per_minute:.2f}")
     print(f"  hidden_transition_count：{metrics['hidden_transition_count']}")
+    print(f"  short_hidden_gap_count(100-500ms)：{metrics['short_hidden_gap_count']}")
+    print(f"  max_synthetic_hold_ms：{metrics['max_synthetic_hold_ms']:.0f}")
+    print(f"  hard_ttl_violation_count：{metrics['hard_ttl_violation_count']}")
     print(f"  real_observation_display_latency（均值）：{metrics['displayed_real_latency_sum_ms'] / max(metrics['real_observation_count'], 1):.1f} ms")
     # 不变量：真实观测出现 → 状态机应直接 REAL_BOX（延迟为 0 或接近 0）
     assert metrics["displayed_real_latency_sum_ms"] / max(metrics["real_observation_count"], 1) < 50.0, (
         "真实观测出现后应立即显示真实框（延迟应 < 1 tick）"
     )
-    print("\n✅ 验收通过：真实素材上状态机语义成立（真实观测立即显示、无过度抖动）")
+    # 反向 safety 硬门：不得靠"永不隐藏"赖屏作弊
+    assert metrics["hard_ttl_violation_count"] == 0, "evidence 已失效仍显示 BOX/POINT → 硬 TTL 违约"
+
+    # 3.4 权威数据不变量（hash 化）：展示层重建确定性 → 不得污染权威数据
+    fresh = OverlayDisplayStateMachine()
+    second_seq = []
+    for ts, ev, real, synth, haspoint in tick_inputs:
+        c2 = DisplayContext(
+            now_ms=ts, evidence_type=ev, has_real_bbox=real, has_synthetic_bbox=synth,
+            has_valid_point=haspoint, prediction_expired=False, geometry_valid=True,
+        )
+        second_seq.append(fresh.step(player_id="P1", view_id=VIEW, ctx=c2).state)
+    seq_hash1 = hashlib.sha256(json.dumps(state_seq).encode()).hexdigest()
+    seq_hash2 = hashlib.sha256(json.dumps(second_seq).encode()).hexdigest()
+    assert seq_hash1 == seq_hash2, "展示层重建非确定性（跨 build 状态泄漏）→ 权威数据可能被污染"
+    print(f"  展示层重建确定性 sha256：{seq_hash1[:12]}（两次重建一致）")
+
+    print("\n✅ 验收通过：真实素材上状态机语义成立（真实观测立即显示、无过度抖动、无赖屏、重建确定）")
     return 0
 
 

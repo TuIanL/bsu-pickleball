@@ -157,6 +157,38 @@ def _parse_ip_from_url(url: str) -> str:
         return "unknown"
 
 
+def _ensure_playback_mp4(mp4_path: str | os.PathLike[str]) -> Path | None:
+    """为合并源视频生成/复用浏览器可播的 faststart 播放版。
+
+    输入通常为分片封装的 `{camera}_merged.mp4`，浏览器原生 `<video>` 无法可靠播放；
+    这里通过 `-c copy +faststart` 生成 `{camera}_playback.mp4`（不重编码，帧/PTS 不变），
+    供流接口优先返回。best-effort：失败保留源、记录 warn、返回 None。
+    """
+    from app.camera.ffmpeg_utils import probe_decodable, remux_faststart
+
+    src = Path(mp4_path)
+    if src.suffix.lower() != ".mp4" or not src.is_file() or src.stat().st_size <= 0:
+        return None
+    base = src.stem[:-len("_merged")] if src.stem.endswith("_merged") else src.stem
+    playback = src.parent / f"{base}_playback.mp4"
+    if playback.is_file() and playback.stat().st_size > 0:
+        return playback
+
+    temp = src.parent / f"{playback.stem}.{uuid.uuid4().hex}.part.mp4"
+    if remux_faststart(src, temp) and probe_decodable(temp):
+        try:
+            os.replace(temp, playback)
+            logger.info("已生成浏览器可播播放版: %s", playback)
+            return playback
+        except OSError as exc:
+            logger.warning("写入播放版失败 %s: %s", playback, exc)
+            temp.unlink(missing_ok=True)
+            return None
+    temp.unlink(missing_ok=True)
+    logger.warning("生成浏览器可播播放版失败（保留分片源）: %s", src)
+    return None
+
+
 def _probe_media_diagnostics(video_file: str) -> tuple[int, float, float]:
     """返回视频包数、媒体时长和由两者推导出的实际帧率。"""
     if not os.path.exists(video_file):
@@ -2020,6 +2052,9 @@ class SyncRecordingService:
                 if take_id:
                     set_merge_status(take_id, "failed", f"{slot.camera_id} 合并失败：输出文件不存在")
                 return None
+
+            # 为浏览器流播补生成 faststart 播放版（best-effort，不阻塞合并登记）
+            _ensure_playback_mp4(file_path)
 
             _extract_first_and_last_frames(str(file_path))
 

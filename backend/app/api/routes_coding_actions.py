@@ -10,8 +10,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.camera.capture_finalizer import get_merge_status
+from app.camera.session_service import session_service
+from app.camera.sync_recorder_service import sync_recording_service
 from app.database import get_db
 from app.models.field_session import FieldSession
+from app.api.routes_segment_editing import _seg_dict
 from app.schemas.capture_runtime_status import CaptureTakeRuntimeStatus
 from app.schemas.coding_actions import (
     CaptureTakeSummary,
@@ -25,6 +28,7 @@ from app.schemas.sync_anchor import (
     SyncAnchorError,
 )
 from app.services import capture_runtime_status_service, capture_take_service, coding_actions_service
+from app.services.capture_track_service import get_tracks_for_take
 from app.services.sync_anchor_service import (
     SyncAnchorAssetService,
     SyncAnchorConflictError,
@@ -299,6 +303,34 @@ def get_capture_take_detail(
         sync_anchor_status = SyncAnchorAssetService(db).status(take.id)
     except SyncAnchorNotFoundError:
         sync_anchor_status = None
+    # 可播放视频源：优先取已注册 video_id 的轨道（按机位 cam_1→cam_2 排序）。
+    # 轨道无 video_id（legacy/测试 take）时回退到来源会话的已注册视频，保证仍可播放。
+    slot_order = {"cam_1": 0, "cam_2": 1}
+    video_ids = [
+        track.video_id
+        for track in sorted(
+            get_tracks_for_take(db, take.id),
+            key=lambda t: slot_order.get(t.slot.value, 99),
+        )
+        if track.video_id
+    ]
+    if not video_ids:
+        if take.source_session_type.value == "sync_recording":
+            sync = sync_recording_service.get_session(take.source_session_id)
+            if sync is not None:
+                video_ids = [
+                    v
+                    for v in (
+                        sync.registered_video_ids.get("cam_1"),
+                        sync.registered_video_ids.get("cam_2"),
+                        sync.default_analysis_video_id,
+                    )
+                    if v
+                ]
+        else:
+            rec = session_service.get_session(take.source_session_id)
+            if rec is not None and rec.video_id:
+                video_ids = [rec.video_id]
     return CaptureTakeSummary(
         id=take.id,
         field_session_id=take.field_session_id,
@@ -316,6 +348,7 @@ def get_capture_take_detail(
         duration_ms=take.duration_ms,
         revision=take.revision,
         sync_anchor_status=sync_anchor_status,
+        video_ids=video_ids,
     )
 
 
@@ -361,18 +394,5 @@ def list_segments(
 ):
     """列出录制下的所有分段（集/局/回合），可按 segment_type 过滤。"""
     segs = seg_svc.list_segments(db, capture_take_id, segment_type=segment_type)
-    return [
-        {
-            "id": s.id,
-            "segment_type": s.segment_type.value,
-            "ordinal": s.ordinal,
-            "label": s.label,
-            "start_ms": s.start_ms,
-            "end_ms": s.end_ms,
-            "status": s.status.value,
-            "source": s.source.value,
-            "is_highlight": s.is_highlight,
-            "parent_segment_id": s.parent_segment_id,
-        }
-        for s in segs
-    ]
+    # 复用权威序列化器，暴露 edit_status/edit_version/corrected_*/effective_* 完整契约
+    return [_seg_dict(s) for s in segs]

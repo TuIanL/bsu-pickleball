@@ -106,9 +106,35 @@ class BallTracker:
         homography: Sequence[Sequence[float]] | None = None,
         player_motion_pixels: float | None = None,
     ) -> BallFrameSample:
-        self._cached_frame_height = float(frame.shape[0])
-        raw_candidates = self.detector.detect(frame, conf=self.config.confidence)
-        candidates, extract_reasons = self._extract_candidates(raw_candidates, frame.shape, roi_corners)
+        # behavior-preserving 路径：detector 在此跑一次，然后委托给候选集合版 update_from_candidates
+        view_candidates = list(self.detector.detect(frame, conf=self.config.confidence))
+        return self.update_from_candidates(
+            frame_index=frame_index,
+            timestamp_sec=timestamp_sec,
+            view_candidates=view_candidates,
+            frame_shape=frame.shape,
+            roi_corners=roi_corners,
+            homography=homography,
+            player_motion_pixels=player_motion_pixels,
+        )
+
+    def update_from_candidates(
+        self,
+        frame_index: int,
+        timestamp_sec: float,
+        view_candidates: Sequence[BallCandidate],
+        frame_shape: Sequence[int],
+        roi_corners: tuple[tuple[int, int], tuple[int, int]] | None = None,
+        homography: Sequence[Sequence[float]] | None = None,
+        player_motion_pixels: float | None = None,
+    ) -> BallFrameSample:
+        """从一份已（经基础视觉过滤前）的候选集合更新跟踪状态。
+
+        P2 双视角兄弟路径直接注入同一份 candidate 证据，避免 tracker 再自跑一次 detector。
+        单摄路径 `update()` 仍只调用一次 detector 后委托到这里，因此本方法为 behavior-preserving。
+        """
+        self._cached_frame_height = float(frame_shape[0]) if frame_shape else 0.0
+        candidates, extract_reasons = self._extract_candidates(view_candidates, frame_shape, roi_corners)
         self._update_stationary_blacklist(candidates)
 
         predicted_pos = self._predict_next_position() if self.trajectory else None
@@ -130,7 +156,7 @@ class BallTracker:
                 image_xy=None,
                 court_xy=None,
                 confidence=None,
-                visible=bool(raw_candidates),
+                visible=bool(view_candidates),
                 accepted=False,
                 candidate_count=len(candidates),
                 reject_reason=reason,
