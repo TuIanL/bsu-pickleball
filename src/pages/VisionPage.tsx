@@ -17,6 +17,7 @@ import StructuredScatterPlot from "../components/platform/StructuredScatterPlot"
 import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap";
 import { supportedReportTypes } from "../app/router";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
+import type { LibraryView } from "../components/library/viewCapabilities";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles, buildPlayerRoster } from "../utils/analysisHelpers";
@@ -373,7 +374,7 @@ function useVisualAnalysisReport(jobId?: string) {
   };
 }
 
-export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null; seekToMs?: number; embedded?: boolean }) {
+export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, onSelectView }: { jobId?: string; onNavigate: NavigateFn; recentJob?: AnalysisJobSummary | null; seekToMs?: number; embedded?: boolean; onSelectView?: (view: LibraryView) => void }) {
   const {
     error,
     ballTrajectory,
@@ -401,14 +402,23 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }:
   const taskReturnPath = taskListPathForJob(job);
 
   if (jobId && (job === undefined || report === undefined)) {
+    if (embedded) {
+      return <div className="grid min-h-[50vh] place-items-center text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载视觉分析…</div>;
+    }
     return <StatusState title="正在加载视觉分析" body="正在读取该任务生成的分析报告。" onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (jobId && error) {
+    if (embedded) {
+      return <div className="grid min-h-[50vh] place-items-center px-6 text-center text-sm text-[var(--capture-text-muted,#8f9d96)]">{error.body}</div>;
+    }
     return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
   if (jobId && !job) {
+    if (embedded) {
+      return <div className="grid min-h-[50vh] place-items-center px-6 text-center text-sm text-[var(--capture-text-muted,#8f9d96)]">未找到该分析任务。</div>;
+    }
     return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，无法打开视觉分析。`} onNavigate={onNavigate} backPath={taskReturnPath} />;
   }
 
@@ -473,7 +483,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }:
   const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
   const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
 
-  if (jobId) {
+      if (jobId) {
     return (
       <PageFrame>
         {!embedded && (
@@ -500,7 +510,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }:
               {job?.analysisKind === "multiview" && job?.status === "completed" && (
                 <button
                   className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
-                  onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/multiview`))}
+                  onClick={() => (embedded && onSelectView ? onSelectView("technical") : onNavigate(contextualPath(`/analysis/${jobId}/multiview`)))}
                   type="button"
                 >
                   <Layers size={17} aria-hidden="true" />
@@ -509,11 +519,38 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }:
               )}
               <button
                 className="quiet-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
-                onClick={() => onNavigate(contextualPath(`/analysis/${jobId}/trajectory`))}
+                onClick={() => (embedded && onSelectView ? onSelectView("trajectory") : onNavigate(contextualPath(`/analysis/${jobId}/trajectory`)))}
                 type="button"
               >
                 <Route size={17} aria-hidden="true" />
                 查看球路
+              </button>
+            </div>
+          </section>
+        )}
+
+        {job?.analysisKind === "multiview" && result && (
+          <section className="mb-5 flex flex-col gap-3 rounded-xl border border-[#DDE5E0] bg-[#F8FAF9] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <Route className="mt-0.5 shrink-0 text-[#168A34]" size={18} aria-hidden="true" />
+              <div>
+                <h2 className="text-sm font-bold text-[#182230]">双摄球路分析</h2>
+                <p className="mt-1 text-xs leading-5 text-[#667085]">
+                  {result.artifacts.reconstructed_ball_trajectory_detail ?? "球路状态由 Parent 分析结果统一发布。"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-[#344054]">
+                {result.artifacts.reconstructed_ball_trajectory_status ?? "unavailable"}
+              </span>
+              <button
+                className="quiet-button inline-flex min-h-9 items-center gap-2 px-3 py-2 text-xs"
+                onClick={() => (embedded && onSelectView ? onSelectView("trajectory") : onNavigate(contextualPath(`/analysis/${jobId}/trajectory`)))}
+                type="button"
+              >
+                查看球路
+                <ChevronRight size={14} aria-hidden="true" />
               </button>
             </div>
           </section>
@@ -576,6 +613,8 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded }:
             bounceEventsLoadState={bounceEventsLoadState}
             job={job}
             onNavigate={onNavigate}
+            embedded={embedded}
+            onSelectView={onSelectView}
             poseOverlay={poseOverlay ?? null}
             poseOverlayLoadState={poseOverlayLoadState}
             reportPath={reportPath}
@@ -886,6 +925,8 @@ function AnalysisStatusRail({
   heatmapsLoadState,
   job,
   onNavigate,
+  embedded,
+  onSelectView,
   poseOverlay,
   poseOverlayLoadState,
   reportPath,
@@ -906,6 +947,8 @@ function AnalysisStatusRail({
   heatmapsLoadState: OverlayLoadState;
   job?: AnalysisJobSummary | null;
   onNavigate: NavigateFn;
+  embedded?: boolean;
+  onSelectView?: (view: LibraryView) => void;
   poseOverlay: PoseOverlayArtifact | null;
   poseOverlayLoadState: OverlayLoadState;
   reportPath: (type: ReportType) => NavigatePath;
@@ -1030,7 +1073,7 @@ function AnalysisStatusRail({
           {job?.id ? (
             <button
               className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
-                onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/details`))}
+              onClick={() => (embedded && onSelectView ? onSelectView("technical") : onNavigate(contextualPath(`/analysis/${job.id}/details`)))}
               type="button"
             >
               分析详情
@@ -1041,7 +1084,7 @@ function AnalysisStatusRail({
             <button
               className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
               key={action.type}
-              onClick={() => onNavigate(reportPath(action.type))}
+              onClick={() => (embedded && onSelectView ? onSelectView("report") : onNavigate(reportPath(action.type)))}
               type="button"
             >
               {action.title}
@@ -1049,9 +1092,11 @@ function AnalysisStatusRail({
             </button>
           ))}
         </div>
-        <button className="quiet-button mt-4 w-full px-4 py-2.5" onClick={() => onNavigate(taskReturnPath)} type="button">
-          返回任务管理
-        </button>
+        {!embedded ? (
+          <button className="quiet-button mt-4 w-full px-4 py-2.5" onClick={() => onNavigate(taskReturnPath)} type="button">
+            返回任务管理
+          </button>
+        ) : null}
       </section>
     </aside>
   );

@@ -977,6 +977,9 @@ def _sample_from_measurement(measurement: Any, *, observation_origin: str = "bas
         observation_origin=observation_origin,
         view_observations=details,
         contributing_views=list(measurement.contributing_views),
+        identity_status=(
+            "confirmed_recovered" if observation_origin == "offline_refinement" else "confirmed_observed"
+        ),
     )
 
 
@@ -1080,6 +1083,8 @@ def refusion_frozen_snapshot(
                         observation_origin="base",
                         view_observations={},
                         contributing_views=[],
+                        identity_status="unresolved",
+                        quarantine_reason="predicted_without_observation",
                     )
                 )
                 continue
@@ -1543,6 +1548,7 @@ def refuse_f1(
                 observation_origin="offline_refinement",
                 view_observations={item.view_id: {"view_id": item.view_id, "observation_origin": "offline_refinement"}},
                 contributing_views=[item.view_id],
+                identity_status="confirmed_recovered",
             )
         )
     return samples

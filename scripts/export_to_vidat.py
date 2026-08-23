@@ -15,20 +15,26 @@ os.environ.setdefault("PICKLEBALL_DATABASE_PATH", str(PROJECT_ROOT / "backend" /
 
 from app.database import get_session_factory, init_db  # noqa: E402
 from app.services.vidat_annotation_service import (  # noqa: E402
-    VidatPackageError, create_annotation_package, publish_annotation_package,
+    VidatPackageError, create_annotation_package, package_display_name, publish_annotation_package,
 )
 
 
 def export_to_vidat(capture_take_id: str, *, copy_video: bool = False,
-                    publish_dir: str | None = None, **_legacy_options: object) -> str:
+                    publish_dir: str | None = None, name: str | None = None,
+                    owner: str | None = None, note: str | None = None,
+                    **_legacy_options: object) -> str:
     init_db()
     with get_session_factory()() as db:
-        package = create_annotation_package(db, capture_take_id, copy_video=copy_video)
+        package = create_annotation_package(
+            db, capture_take_id, copy_video=copy_video, name=name, owner=owner, note=note
+        )
         db.commit()
         db.refresh(package)
         manifest = json.loads(package.manifest_json)
         result = {
             "package_id": package.id, "version": package.version,
+            "name": package_display_name(package), "owner": package.owner,
+            "note": package.note, "provenance": package.provenance or "generated",
             "annotation": str(Path(package.package_dir) / "annotation.json"),
             "video": str(Path(package.package_dir) / manifest["video"]["file"]),
         }
@@ -43,9 +49,19 @@ def main() -> int:
     parser.add_argument("capture_take_id")
     parser.add_argument("--copy-video", action="store_true", help="显式复制视频（默认使用软链接）")
     parser.add_argument("--publish-dir", help="可选的 Vidat dist 目录")
+    parser.add_argument("--name", help="标注包名称")
+    parser.add_argument("--owner", help="负责人或分工人")
+    parser.add_argument("--note", help="标注包备注")
     args = parser.parse_args()
     try:
-        export_to_vidat(args.capture_take_id, copy_video=args.copy_video, publish_dir=args.publish_dir)
+        export_to_vidat(
+            args.capture_take_id,
+            copy_video=args.copy_video,
+            publish_dir=args.publish_dir,
+            name=args.name,
+            owner=args.owner,
+            note=args.note,
+        )
     except VidatPackageError as exc:
         parser.error(str(exc))
     return 0

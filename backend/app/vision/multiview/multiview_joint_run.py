@@ -39,6 +39,75 @@ class CancellationToken(Protocol):
 ProgressCallback = Callable[[int, int], None]
 
 
+def interpolate_short_confirmed_identity_gaps(
+    samples: list[FusedSample],
+    *,
+    max_missing_ticks: int = 2,
+) -> list[FusedSample]:
+    """Bridge tiny gaps bounded by the same confirmed global identity.
+
+    The generated court samples are explicitly interpolated and contain no
+    view/bbox provenance, so they cannot be mistaken for detector evidence.
+    """
+    if max_missing_ticks <= 0 or not samples:
+        return sorted(samples, key=lambda item: (item.take_timestamp_ms, item.global_player_id))
+
+    timeline = sorted({(item.reference_frame_index, item.take_timestamp_ms) for item in samples})
+    timeline_index = {frame_index: index for index, (frame_index, _timestamp) in enumerate(timeline)}
+    by_player: dict[str, list[FusedSample]] = {}
+    for sample in samples:
+        by_player.setdefault(sample.global_player_id, []).append(sample)
+
+    accepted = {"confirmed_observed", "confirmed_recovered"}
+    output: list[FusedSample] = list(samples)
+    for player_samples in by_player.values():
+        ordered = sorted(player_samples, key=lambda item: item.reference_frame_index)
+        for left, right in zip(ordered, ordered[1:]):
+            left_index = timeline_index.get(left.reference_frame_index)
+            right_index = timeline_index.get(right.reference_frame_index)
+            if left_index is None or right_index is None:
+                continue
+            missing = right_index - left_index - 1
+            if missing <= 0 or missing > max_missing_ticks:
+                continue
+            if left.identity_status not in accepted or right.identity_status not in accepted:
+                continue
+            if left.identity_epoch != right.identity_epoch:
+                continue
+            # Canonical court length is 44 ft. Never bridge an apparent net crossing.
+            if (left.y_ft < 22.0) != (right.y_ft < 22.0):
+                continue
+            for offset in range(1, missing + 1):
+                frame_index, timestamp_ms = timeline[left_index + offset]
+                ratio = offset / (missing + 1)
+                output.append(
+                    FusedSample(
+                        global_player_id=left.global_player_id,
+                        take_timestamp_ms=timestamp_ms,
+                        reference_frame_index=frame_index,
+                        x_ft=left.x_ft + (right.x_ft - left.x_ft) * ratio,
+                        y_ft=left.y_ft + (right.y_ft - left.y_ft) * ratio,
+                        fusion_status="interpolated",
+                        metric_eligible=True,
+                        observation_origin="interpolated",
+                        view_observations={},
+                        contributing_views=[],
+                        authoritative_joint_eligible=(
+                            left.authoritative_joint_eligible and right.authoritative_joint_eligible
+                        ),
+                        identity_status="interpolated",
+                        identity_epoch=left.identity_epoch,
+                        binding_provenance={
+                            "interpolation": {
+                                "left_reference_frame_index": left.reference_frame_index,
+                                "right_reference_frame_index": right.reference_frame_index,
+                            }
+                        },
+                    )
+                )
+    return sorted(output, key=lambda item: (item.take_timestamp_ms, item.global_player_id))
+
+
 class _LegacyCommittedResult:
     """轻量 legacy runtime 的已 commit 结果包装（无两阶段能力时回退旧 step）。"""
 
@@ -63,6 +132,8 @@ class MultiViewJointRunOutput:
     # player display diagnostics（只读 observability；构建失败不影响核心结果）
     display_diagnostics_payload: dict[str, object] | None = None
     display_diagnostics_error: str | None = None
+    # canonical-tick 球路阶段输出；由 executor 在最终 compose 前发布。
+    ball_analysis: Any | None = None
 
 
 class MultiViewJointRun:
@@ -92,6 +163,7 @@ class MultiViewJointRun:
         execution_mode: str = "single_view_fallback",
         authoritative_joint_eligible: bool = False,
         debug_trace_enabled: bool = False,
+        ball_processor: Any | None = None,
     ) -> None:
         self.run_id = run_id
         self.capture_take_id = capture_take_id
@@ -129,6 +201,7 @@ class MultiViewJointRun:
         self.execution_mode = execution_mode
         self.authoritative_joint_eligible = authoritative_joint_eligible
         self.debug_trace_enabled = bool(debug_trace_enabled)
+        self.ball_processor = ball_processor
         self._debug_ticks: list[dict[str, object]] = []
         self._recovery_evidence: list[dict[str, object]] = []
         self.counter: dict[str, int] = {}
@@ -206,6 +279,10 @@ class MultiViewJointRun:
                 reference_frame_index=ref_idx,
                 reference_timestamp_seconds=timestamp_s,
             )
+            if self.ball_processor is not None:
+                # 球 detector 消费同一份 canonical bundle；球侧异常由 processor 自身降级，
+                # 不得打断 player joint 的主链。
+                self.ball_processor.process_tick(tick_id=tick_number, bundle=bundle)
             tick_authoritative = self._tick_is_authoritative(bundle)
             take_ms = bundle.take_timestamp_ms
             f0_tick_metadata[tick_number] = {
@@ -597,6 +674,17 @@ class MultiViewJointRun:
                         )
                 # 逐 tick 轨迹样本(每个 canonical tick 一个真实观测样本)
                 if metric_eligible_tick:
+                    identity_updates = [update for update in updates if update.global_id == gid]
+                    recovered = any(
+                        update.observation.detection_origin == "guided_roi"
+                        for update in identity_updates
+                    )
+                    ambiguous = any(update.tentative for update in identity_updates)
+                    identity_status = (
+                        "ambiguous"
+                        if ambiguous
+                        else "confirmed_recovered" if recovered else "confirmed_observed"
+                    )
                     view_observations = {
                         view_id: self._view_detail(
                             view_id=view_id,
@@ -621,7 +709,7 @@ class MultiViewJointRun:
                             x_ft=x,
                             y_ft=y,
                             fusion_status="dual_observed" if len(views) >= 2 else "single_view_fallback",
-                            metric_eligible=True,  # 真实观测(非 predicted),可进指标
+                            metric_eligible=not ambiguous,
                             observation_origin=(
                                 "guided_roi"
                                 if any(
@@ -633,6 +721,22 @@ class MultiViewJointRun:
                             view_observations=view_observations,
                             contributing_views=list(views),
                             authoritative_joint_eligible=tick_authoritative,
+                            identity_status=identity_status,
+                            identity_epoch=max(
+                                (update.observation.local_identity_epoch for update in identity_updates),
+                                default=0,
+                            ),
+                            binding_provenance={
+                                update.view_id: {
+                                    "view_player_id": update.observation.view_player_id,
+                                    "source_track_id": update.observation.track_id,
+                                    "local_identity_epoch": update.observation.local_identity_epoch,
+                                    "detection_origin": update.observation.detection_origin,
+                                    "tentative": update.tentative,
+                                }
+                                for update in identity_updates
+                            },
+                            quarantine_reason="tentative_association" if ambiguous else None,
                         )
                     )
 
@@ -749,7 +853,7 @@ class MultiViewJointRun:
                 progress_callback(tick_number + 1, total_ticks)
 
         # ---- 结束:逐 tick 样本已累积,排序后写 v2 ----
-        samples.sort(key=lambda s: (s.take_timestamp_ms, s.global_player_id))
+        samples = interpolate_short_confirmed_identity_gaps(samples)
         trajectory = write_fused_v2(
             run_id=self.run_id,
             capture_take_id=self.capture_take_id,
@@ -757,6 +861,22 @@ class MultiViewJointRun:
             samples=samples,
             authoritative_run=self.execution_mode == "joint_authoritative",
         )
+        per_view_appearance: dict[str, dict[str, Any]] = {}
+        per_view_roi_recovery: dict[str, dict[str, Any]] = {}
+        for view_id, runtime in self.runtimes.items():
+            session = getattr(runtime, "tracking_session", None)
+            snapshot = getattr(session, "snapshot", None)
+            if callable(snapshot):
+                session_outputs = snapshot()
+                per_view_appearance[view_id] = dict(
+                    getattr(session_outputs, "appearance_summary", {}) or {}
+                )
+                per_view_roi_recovery[view_id] = dict(
+                    getattr(session_outputs, "roi_recovery_summary", {}) or {}
+                )
+            else:
+                per_view_appearance[view_id] = {}
+                per_view_roi_recovery[view_id] = {}
         diagnostics = {
             "run_id": self.run_id,
             "schema_version": trajectory["schema_version"],
@@ -782,7 +902,12 @@ class MultiViewJointRun:
             "frame_status_counts": dict(self.clock.status_counts),
             "p1_online_recovery_config": self.recovery_config.snapshot(),
             "recovery_funnel": dict(self.recovery_funnel),
+            "roi_recovery": {"per_view": per_view_roi_recovery},
             "association_counters": dict(getattr(self.associator, "diagnostics", {})),
+            "appearance": {
+                "association": self.associator.appearance_diagnostics(),
+                "per_view": per_view_appearance,
+            },
             # fix-multiview-reacquire-after-fusion-pollution：joint 侧 estimator/reanchor 计数
             # （D2 innovation guard 拒绝、D3 reanchor 执行），与 association_counters 分层。
             "joint_counters": dict(self.counter),
@@ -904,6 +1029,9 @@ class MultiViewJointRun:
             self.counter["player_display_diagnostics_failed"] = (
                 self.counter.get("player_display_diagnostics_failed", 0) + 1
             )
+        ball_analysis = None
+        if self.ball_processor is not None:
+            ball_analysis = self.ball_processor.finish()
         return MultiViewJointRunOutput(
             trajectory=trajectory,
             normalized=NormalizedFusedTrajectory(
@@ -923,6 +1051,7 @@ class MultiViewJointRun:
             recovery_evidence=list(self._recovery_evidence),
             display_diagnostics_payload=display_diagnostics_payload,
             display_diagnostics_error=display_diagnostics_error,
+            ball_analysis=ball_analysis,
         )
 
     # ---- 内部 ---------------------------------------------------------------
@@ -1421,6 +1550,7 @@ class MultiViewJointRun:
                     recovery_episode_id=getattr(result, "recovery_episode_by_track", {}).get(track_id),
                     bbox=list(pos.bbox),
                     image_footpoint=tuple(pos.image_footpoint),
+                    appearance_descriptor=getattr(result, "appearance_by_track", {}).get(track_id),
                     intrinsic_quality=view_intrinsic_quality(
                         IntrinsicFeatures(
                             detector_confidence=pos.confidence or 0.0,

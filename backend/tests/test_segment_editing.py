@@ -103,10 +103,42 @@ assert r1.effective_start_ms == 2000 and r1.effective_end_ms == 5000
 ok("effective 属性")
 
 # PATCH 边界修正
-seg = edit_svc.patch_segment(db, r1, corrected_start_ms=2500, corrected_end_ms=4800, expected_version=0)
+from app.models.timeline_event import SessionTimelineEvent  # noqa: E402
+timeline_before = [(event.id, event.timestamp_ms, event.event_type) for event in db.query(SessionTimelineEvent).all()]
+seg = edit_svc.patch_segment(
+    db,
+    r1,
+    corrected_start_ms=2500,
+    corrected_end_ms=4800,
+    expected_version=0,
+    take_duration_ms=6000,
+)
 assert seg.edit_version == 1 and seg.corrected_start_ms == 2500 and seg.effective_start_ms == 2500
 db.commit()
 ok("PATCH 边界 + edit_version")
+
+# 无效边界在 flush 前拒绝，不改变版本、边界和关键事件
+for invalid_start, invalid_end, expected_message in (
+    (4900, 4800, "必须大于"),
+    (2500, 6500, "超出录制时长"),
+    (3000, 3400, "不能小于"),
+):
+    try:
+        edit_svc.patch_segment(
+            db,
+            r1,
+            corrected_start_ms=invalid_start,
+            corrected_end_ms=invalid_end,
+            expected_version=1,
+            take_duration_ms=6000,
+        )
+        fail(f"应拒绝无效边界: {invalid_start}→{invalid_end}")
+    except ValueError as e:
+        assert expected_message in str(e)
+assert r1.edit_version == 1 and r1.corrected_start_ms == 2500 and r1.corrected_end_ms == 4800
+timeline_after = [(event.id, event.timestamp_ms, event.event_type) for event in db.query(SessionTimelineEvent).all()]
+assert timeline_after == timeline_before
+ok("拒绝无效边界且关键事件不变")
 
 # 409 乐观锁
 try:

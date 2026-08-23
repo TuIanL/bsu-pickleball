@@ -1,13 +1,18 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { NavigateFn } from "../../app/navigationTypes";
 import type { LibraryItemRef, LibraryItemViewModel, LibraryAnalysisJobView } from "../../services/libraryAdapter";
+import type { AnalysisPipelineResult } from "../../types/report";
 import { resolveLibraryItemByRef } from "../../services/libraryAdapter";
+import { getAnalysisRuntimeSnapshot, subscribeAnalysisRuntime, unwatchAnalysisJob, watchAnalysisJob } from "../../services/analysisRuntimeStore";
 import { SourceVideoContent } from "./SourceVideoContent";
 import { computeLibraryViewCapabilities, resolveViewCapability, type LibraryView } from "./viewCapabilities";
 import { VisionPage } from "../../pages/VisionPage";
-import { libraryAnalysisEntryPoints, libraryAnalysisPathFor } from "../../services/libraryAnalysisRouting";
+import { libraryAnalysisEntryPoints, libraryAnalysisPathFor, libraryItemOverviewPath } from "../../services/libraryAnalysisRouting";
+import { buildAnalysisProgressPath } from "../../app/navigationContext";
 import { deleteAnalysisJob, cancelAnalysisJob } from "../../services/analysisClient";
+import { loadAnalysisResultManifest } from "../../services/analysisResultManifestCache";
+import { analysisJobFromSearch, buildLibraryWorkspacePath, resolveSelectedAnalysisJob } from "../../services/libraryAnalysisVersion";
 
 const BallTrajectoryView = lazy(() =>
   import("../../pages/BallTrajectoryPage").then((m) => ({ default: m.BallTrajectoryPage })),
@@ -50,7 +55,9 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
   const [loading, setLoading] = useState(true);
   const [reloadToken, setReloadToken] = useState(0);
 
-  const ref: LibraryItemRef = { kind, sourceId };
+  const ref: LibraryItemRef = useMemo(() => ({ kind, sourceId }), [kind, sourceId]);
+  const currentSearch = window.location.search;
+  const requestedAnalysisJobId = analysisJobFromSearch(currentSearch);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,11 +80,85 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
     };
   }, [kind, sourceId, reloadToken]);
 
+  // 实时进度：素材存在 active job 时登记定向轮询 + 订阅快照；terminal → 定向重投影
+  const itemRef = useRef<LibraryItemViewModel | null>(null);
+  useEffect(() => {
+    itemRef.current = item;
+  }, [item]);
+
+  useEffect(() => {
+    if (!item?.activeAnalysisJobId) return;
+    watchAnalysisJob(item.activeAnalysisJobId);
+  }, [item?.activeAnalysisJobId]);
+
+  useEffect(() => {
+    return subscribeAnalysisRuntime(() => {
+      const current = itemRef.current;
+      const jobId = current?.activeAnalysisJobId;
+      if (!jobId) return;
+      const snap = getAnalysisRuntimeSnapshot(jobId);
+      if (!snap) return;
+      const terminal = !["uploaded", "queued", "processing"].includes(snap.status);
+      if (terminal) {
+        unwatchAnalysisJob(jobId, true);
+        const itemRef2 = itemRef.current;
+        if (itemRef2) {
+          void resolveLibraryItemByRef(itemRef2.ref)
+            .then((fresh) => {
+              if (fresh) setItem(fresh);
+            })
+            .catch(() => undefined);
+        }
+      }
+      setItem((prev) =>
+        prev ? { ...prev, analysisProgress: snap.progress, analysisStage: snap.stage } : prev,
+      );
+    });
+  }, []);
+
   // D14：无成功分析时，结果类 view 落到 overview + 待分析提示（stable fallback，不空白）
+  const selection = useMemo(
+    () => (item ? resolveSelectedAnalysisJob(item, requestedAnalysisJobId) : null),
+    [item, requestedAnalysisJobId],
+  );
+  const selectedJobId = selection?.selectedJobId;
+  const selectedJob = selection?.selectedJob;
+  const [manifestState, setManifestState] = useState<{
+    jobId?: string;
+    status: "idle" | "loading" | "loaded" | "error";
+    result: AnalysisPipelineResult | null;
+  }>({ status: "idle", result: null });
+
+  useEffect(() => {
+    if (!selectedJobId || selectedJob?.status !== "completed" || selection?.invalidRequestedJob) {
+      return;
+    }
+    let alive = true;
+    loadAnalysisResultManifest(selectedJobId)
+      .then((result) => {
+        if (alive) setManifestState({ jobId: selectedJobId, status: "loaded", result });
+      })
+      .catch(() => {
+        if (alive) setManifestState({ jobId: selectedJobId, status: "error", result: null });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedJobId, selectedJob?.status, selection?.invalidRequestedJob]);
+
   const hasAnalysis = item?.primaryAnalysisJobId != null;
   // P1C：view capability 门控 —— 非法 view（该 source 不支持）→ replace 到 overview；
   //       合法但缺产物 → 停在原 view 显示缺产物提示；可达 → 正常渲染。
-  const caps = useMemo(() => (item ? computeLibraryViewCapabilities(item) : null), [item]);
+  const selectedManifest = manifestState.jobId === selectedJobId ? manifestState.result : null;
+  const selectedManifestStatus = manifestState.jobId === selectedJobId ? manifestState.status : "loading";
+  const caps = useMemo(
+    () => (item ? computeLibraryViewCapabilities(item, {
+      job: selectedJob,
+      manifest: selectedManifest,
+      manifestState: selectedManifestStatus,
+    }) : null),
+    [item, selectedJob, selectedManifest, selectedManifestStatus],
+  );
   const resolution = !item || view === "overview" ? "available" : caps ? resolveViewCapability(item, view, caps) : "loading";
   const effectiveView: LibraryView = resolution === "invalid" ? "overview" : view;
   const missingReason = caps?.reasons?.[view];
@@ -85,14 +166,24 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
   // 非法 view：修正 URL 回到 overview，避免 URL/UI 二次不一致
   useEffect(() => {
     if (item && view !== "overview" && resolution === "invalid") {
-      onNavigate(`/library/${ref.kind}/${encodeURIComponent(ref.sourceId)}?view=overview`, { replace: true });
+      onNavigate(buildLibraryWorkspacePath(ref, { view: "overview", search: currentSearch }), { replace: true });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item, resolution, view, ref.kind, ref.sourceId]);
+  }, [item, resolution, view, ref, currentSearch, onNavigate]);
+
+  // Fail closed: invalid/cross-material/internal/deleted IDs are never used to load artifacts.
+  useEffect(() => {
+    if (item && selection?.invalidRequestedJob) {
+      onNavigate(buildLibraryWorkspacePath(ref, { analysisJobId: null, search: currentSearch }), { replace: true });
+    }
+  }, [item, selection?.invalidRequestedJob, ref, currentSearch, onNavigate]);
 
   const goView = (v: LibraryView) => {
     // D3：view 切换用 replace（同一素材对象内）
-    onNavigate(`/library/${ref.kind}/${encodeURIComponent(ref.sourceId)}?view=${v}`, { replace: true });
+    onNavigate(buildLibraryWorkspacePath(ref, {
+      view: v,
+      analysisJobId: selection?.explicit ? selectedJobId : undefined,
+      search: currentSearch,
+    }), { replace: true });
   };
 
   const title = item?.title ?? (ref.kind === "upload" ? "上传视频" : ref.kind === "recording" ? "录制" : "双摄录制");
@@ -131,6 +222,20 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
             {item.cameraSetup ? ` · ${item.cameraSetup === "dual" ? "双摄" : "单摄"}` : ""}
             {item.startedAt ? ` · ${new Date(item.startedAt).toLocaleString("zh-CN", { hour12: false })}` : ""}
           </p>
+          {selection?.explicit && selectedJobId !== item.primaryResultAnalysisJobId ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-bold text-[var(--capture-status-processing,#8a570e)]">
+              <span>正在查看历史分析版本</span>
+              {item.primaryResultAnalysisJobId ? (
+                <button
+                  className="rounded-full border border-current px-3 py-1"
+                  onClick={() => onNavigate(buildLibraryWorkspacePath(ref, { view, analysisJobId: null, search: currentSearch }), { replace: true })}
+                  type="button"
+                >
+                  查看最新版本
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {/* Tab 栏 */}
@@ -160,13 +265,16 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
       {/* 内容区：每个 view 都用 `effectiveView === xxx && ...` 两段式守卫，
           避免「非当前 view 也走 else 渲染空态」的三目 bug。 */}
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+        {view !== "overview" && resolution === "loading" && (
+          <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在核对该分析版本的可用产物…</div>
+        )}
         {view !== "overview" && resolution === "missing" && (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
             <p className="text-sm font-bold text-[var(--capture-text-secondary,#64736c)]">本次分析未生成该数据</p>
             <p className="text-xs text-[var(--capture-text-muted,#8f9d96)]">{missingReason ?? "请返回概览查看素材状态，或检查分析产物。"}</p>
           </div>
         )}
-        {!(view !== "overview" && resolution === "missing") && (
+        {!(view !== "overview" && (resolution === "missing" || resolution === "loading")) && (
           <>
         {effectiveView === "overview" && (
           <OverviewView
@@ -174,6 +282,17 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
             hasAnalysis={hasAnalysis}
             onNavigate={onNavigate}
             onRefresh={() => setReloadToken((t) => t + 1)}
+            selectedJobId={selectedJobId}
+            explicitSelection={Boolean(selection?.explicit)}
+            onSelectJob={(job) => onNavigate(buildLibraryWorkspacePath(ref, {
+              view: job.status === "completed" ? "analysis" : "technical",
+              analysisJobId: job.id,
+              search: currentSearch,
+            }), { replace: true })}
+            onSelectedDeleted={() => {
+              onNavigate(buildLibraryWorkspacePath(ref, { analysisJobId: null, search: currentSearch }), { replace: true });
+              setReloadToken((t) => t + 1);
+            }}
           />
         )}
 
@@ -192,17 +311,17 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
         )}
 
         {effectiveView === "analysis" && (
-          item.primaryAnalysisJobId ? (
-            <VisionPage jobId={item.primaryAnalysisJobId} onNavigate={onNavigate} recentJob={null} embedded />
+          selectedJobId ? (
+            <VisionPage key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} recentJob={null} embedded onSelectView={goView} />
           ) : (
             <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">暂无可用分析结果</div>
           )
         )}
 
         {effectiveView === "trajectory" && (
-          item.primaryAnalysisJobId ? (
+          selectedJobId ? (
             <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载球路视图…</div>}>
-              <BallTrajectoryView key={item.primaryAnalysisJobId} jobId={item.primaryAnalysisJobId} onNavigate={onNavigate} embedded />
+              <BallTrajectoryView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} embedded onSelectView={goView} />
             </Suspense>
           ) : (
             <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">暂无可用球路</div>
@@ -210,9 +329,9 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
         )}
 
         {effectiveView === "report" && (
-          item.primaryAnalysisJobId ? (
+          selectedJobId ? (
             <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载报告…</div>}>
-              <ReportContentView jobId={item.primaryAnalysisJobId} onNavigate={onNavigate} backPath="/library" />
+              <ReportContentView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} backPath={buildLibraryWorkspacePath(ref, { view: "overview", analysisJobId: selection?.explicit ? selectedJobId : undefined, search: currentSearch })} />
             </Suspense>
           ) : (
             <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">暂无可用报告</div>
@@ -230,14 +349,14 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
         )}
 
         {effectiveView === "technical" && (
-          item.primaryAnalysisJobId ? (
-            item.sourceType === "sync_recording" ? (
+          selectedJobId ? (
+            selectedJob?.analysisKind === "multiview" ? (
               <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载技术详情…</div>}>
-                <MultiviewObservabilityView jobId={item.primaryAnalysisJobId} onNavigate={onNavigate} embedded />
+                <MultiviewObservabilityView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} embedded onSelectView={goView} />
               </Suspense>
             ) : (
               <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载技术详情…</div>}>
-                <AnalysisDetailsView jobId={item.primaryAnalysisJobId} onNavigate={onNavigate} embedded />
+                <AnalysisDetailsView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} embedded onSelectView={goView} />
               </Suspense>
             )
           ) : (
@@ -251,11 +370,15 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
   );
 }
 
-function OverviewView({ item, hasAnalysis, onNavigate, onRefresh }: {
+function OverviewView({ item, hasAnalysis, onNavigate, onRefresh, selectedJobId, explicitSelection, onSelectJob, onSelectedDeleted }: {
   item: LibraryItemViewModel;
   hasAnalysis: boolean;
   onNavigate: NavigateFn;
   onRefresh: () => void;
+  selectedJobId?: string;
+  explicitSelection: boolean;
+  onSelectJob: (job: LibraryAnalysisJobView) => void;
+  onSelectedDeleted: () => void;
 }) {
   const entryPoints = libraryAnalysisEntryPoints(item);
   const startPath = libraryAnalysisPathFor(item);
@@ -272,7 +395,12 @@ function OverviewView({ item, hasAnalysis, onNavigate, onRefresh }: {
     setNotice(null);
     try {
       await deleteAnalysisJob(job.id);
-      onRefresh();
+      if (job.id === selectedJobId) {
+        setNotice("当前历史版本已删除，已切换到最新可用版本");
+        onSelectedDeleted();
+      } else {
+        onRefresh();
+      }
     } catch {
       setNotice("删除分析任务失败，请检查后端服务后重试");
     } finally {
@@ -343,28 +471,58 @@ function OverviewView({ item, hasAnalysis, onNavigate, onRefresh }: {
                 return (
                   <li
                     key={job.id}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-[var(--capture-border-default,#d9e3dd)] px-2.5 py-1.5"
+                    className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${job.id === selectedJobId && explicitSelection ? "border-[var(--capture-brand-primary,#23985b)] bg-[var(--capture-surface-soft,#f7faf8)]" : "border-[var(--capture-border-default,#d9e3dd)]"}`}
                   >
                     <div className="min-w-0">
                       <p className="truncate text-xs font-bold text-[var(--capture-text-primary,#182b24)]">
                         {analysisJobKindLabel(job)}
                       </p>
                       <p className="text-[11px] text-[var(--capture-text-muted,#8f9d96)]">
-                        {analysisJobStatusLabel(job.status)}
+                        {active
+                          ? `正在分析${typeof job.progress === "number" ? ` · ${Math.round(job.progress)}%` : ""}${job.stageLabel ? ` · ${job.stageLabel}` : ""}`
+                          : analysisJobStatusLabel(job.status)}
                       </p>
+                      <p className="mt-0.5 text-[10px] text-[var(--capture-text-muted,#8f9d96)]">
+                        {formatAnalysisJobMeta(job)}
+                      </p>
+                      {job.id === selectedJobId && explicitSelection ? (
+                        <span className="mt-1 inline-block rounded-full bg-[var(--capture-brand-primary,#23985b)] px-2 py-0.5 text-[10px] font-bold text-white">当前版本</span>
+                      ) : null}
                     </div>
-                    <button
-                      className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-bold transition disabled:opacity-50 ${
-                        active
-                          ? "bg-[var(--capture-status-processing-soft,#fff3dc)] text-[var(--capture-status-processing,#8a570e)] hover:bg-[#FFEAC0]"
-                          : "bg-[var(--capture-status-failed-soft,#fde8e7)] text-[var(--capture-status-failed,#b42318)] hover:bg-[#FBD3D1]"
-                      }`}
-                      onClick={() => (active ? handleCancelJob(job) : handleDeleteJob(job))}
-                      disabled={busyJobId !== null}
-                      type="button"
-                    >
-                      {active ? "取消" : "删除"}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {active ? (
+                        <button
+                          className="rounded-md bg-[var(--capture-surface-soft,#f7faf8)] px-2 py-1 text-[11px] font-bold text-[var(--capture-brand-primary,#23985b)] transition hover:bg-[#E4F2E9] disabled:opacity-50"
+                          disabled={busyJobId !== null}
+                          onClick={() => onNavigate(buildAnalysisProgressPath(job.id, libraryItemOverviewPath(item)))}
+                          type="button"
+                        >
+                          查看进度
+                        </button>
+                      ) : null}
+                      {!active ? (
+                        <button
+                          className="rounded-md bg-[var(--capture-surface-soft,#f7faf8)] px-2 py-1 text-[11px] font-bold text-[var(--capture-brand-primary,#23985b)] transition hover:bg-[#E4F2E9] disabled:opacity-50"
+                          disabled={busyJobId !== null}
+                          onClick={() => onSelectJob(job)}
+                          type="button"
+                        >
+                          {job.status === "completed" ? "查看结果" : "查看详情"}
+                        </button>
+                      ) : null}
+                      <button
+                        className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-bold transition disabled:opacity-50 ${
+                          active
+                            ? "bg-[var(--capture-status-processing-soft,#fff3dc)] text-[var(--capture-status-processing,#8a570e)] hover:bg-[#FFEAC0]"
+                            : "bg-[var(--capture-status-failed-soft,#fde8e7)] text-[var(--capture-status-failed,#b42318)] hover:bg-[#FBD3D1]"
+                        }`}
+                        onClick={() => (active ? handleCancelJob(job) : handleDeleteJob(job))}
+                        disabled={busyJobId !== null}
+                        type="button"
+                      >
+                        {active ? "取消" : "删除"}
+                      </button>
+                    </div>
                   </li>
                 );
               })}
@@ -410,6 +568,19 @@ function analysisJobStatusLabel(status: LibraryAnalysisJobView["status"]): strin
     default:
       return status;
   }
+}
+
+function formatAnalysisJobMeta(job: LibraryAnalysisJobView): string {
+  const parts: string[] = [];
+  const created = new Date(job.createdAt);
+  if (!Number.isNaN(created.getTime())) parts.push(created.toLocaleString("zh-CN", { hour12: false }));
+  if (job.executionMode) parts.push(job.executionMode === "joint_tracking_v2" ? "联合跟踪" : "后融合");
+  if (job.clipStartMs != null || job.clipEndMs != null) {
+    const start = Math.max(0, (job.clipStartMs ?? 0) / 1000).toFixed(1);
+    const end = job.clipEndMs == null ? "末尾" : `${Math.max(0, job.clipEndMs / 1000).toFixed(1)}s`;
+    parts.push(`${start}s–${end}`);
+  }
+  return parts.join(" · ");
 }
 
 function statusText(item: LibraryItemViewModel): string {

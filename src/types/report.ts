@@ -806,6 +806,8 @@ export interface AnalysisJobSummary {
     | "fusion_ready"
     | "fusing"
     | "composing"
+    | "joint_ready"
+    | "joint_tracking"
     | "completed";
   /** 融合 Run 标识（执行融合前持久化） */
   fusionRunId?: string | null;
@@ -819,7 +821,7 @@ export interface AnalysisJobSummary {
   /** 双摄任务参考机位 */
   referenceViewId?: string | null;
   /** 双摄任务各机位子进度 */
-  viewRuns?: Record<string, { status: string; stage: string; progress: number }>;
+  viewRuns?: Record<string, { status: string; stage: string; progress: number }> | null;
 }
 
 export type AnalysisDeleteStatus = "deleted" | "blocked" | "not_found" | "failed";
@@ -1038,6 +1040,10 @@ export interface FusedPlayerOverlayEntity {
   donor_quality?: number | null;
   /** cross_view_projected 必须携带 donor view */
   donor_view?: string | null;
+  donor_global_player_id?: string | null;
+  target_player_slot?: string | null;
+  geometry_residual_ft?: number | null;
+  bbox_memory_owner_global_id?: string | null;
   uncertainty_ft?: number | null;
   bbox_source?: FusedPlayerBBoxSource | null;
   provenance?: "offline_refinement" | null;
@@ -1068,6 +1074,60 @@ export interface FusedPlayerOverlayArtifact {
   processed_frame_count: number;
   source: { width: number; height: number };
   frames: FusedPlayerOverlayFrame[];
+}
+
+/** four-player-identification-quality.v1（四人身份稳定性与外观诊断） */
+export interface PlayerAppearanceQualitySummary {
+  descriptor_attempts: number;
+  descriptor_available: number;
+  mean_quality?: number | null;
+  template_updates: number;
+  template_freezes: number;
+  template_age_ticks?: number | null;
+  decision_contributions: number;
+  decision_supports: number;
+  decision_conflicts: number;
+  effective_weight: number;
+  fallback_reason?: string | null;
+}
+
+export interface PlayerIdentificationQualitySummary {
+  player_id: string;
+  detection_ticks: number;
+  canonical_ticks: number;
+  detection_coverage: number;
+  canonical_coverage: number;
+  longest_gap_seconds: number;
+  source_track_history: Record<string, number[]>;
+  source_track_count: number;
+  reconnect_count: number;
+  identity_switch_count: number;
+  duplicate_binding_count: number;
+  cross_side_count: number;
+  ambiguous_count: number;
+  quarantined_count: number;
+  accepted_count: number;
+  appearance: PlayerAppearanceQualitySummary;
+}
+
+export interface FourPlayerIdentificationQuality {
+  schema_version: "four-player-identification-quality.v1";
+  job_id: string;
+  baseline_job_id?: string | null;
+  status: "available" | "unavailable" | "failed";
+  detail: string;
+  algorithm_version: string;
+  config_signature?: string | null;
+  attempted_ticks?: number;
+  duration_seconds?: number;
+  confirmed_roster_count?: number;
+  players: Record<string, PlayerIdentificationQualitySummary>;
+  funnel?: Record<string, number>;
+  camera_profiles?: Record<string, Record<string, unknown>>;
+  hard_invariants?: Record<string, boolean>;
+  absolute_gates?: Record<string, boolean>;
+  verdict: "pass" | "fail" | "unavailable";
+  failure_reasons?: string[];
 }
 
 /** player-display-diagnostics.v1（joint 模式逐球员逐 stage 显示漏斗） */
@@ -1231,6 +1291,7 @@ export interface ReconstructedBallTrajectorySample {
   court_xy?: [number, number] | number[] | null;
   estimated_height_ft?: number | null;
   source: ReconstructedSampleSource;
+  validity?: "valid" | "invalid" | string;
   confidence?: number | null;
   height_source?: string | null;
   height_confidence?: number | null;
@@ -1364,6 +1425,15 @@ export interface ReconstructedBallTrajectoryArtifact {
     geometry_quality?: number;
   } | null;
   overall_status?: "FULL_ESTIMATED_3D" | "PARTIAL_3D" | "LANDING_ONLY" | "UNAVAILABLE";
+  quality_summary?: {
+    stereo_coverage?: number;
+    reprojection_error_px?: number;
+    prediction_ratio?: number;
+    measurement_count?: number;
+    average_speed_validity?: string;
+  };
+  diagnostics?: Record<string, unknown>;
+  pipeline_status?: string;
 }
 
 export interface MultiviewBallTrajectoryMetrics {
@@ -1388,6 +1458,11 @@ export interface MultiviewStereoMeasurement {
   geometry_quality: number;
   confidence: number;
   source: string;
+  sync_error_ms?: number;
+  stereo_time_delta_ms?: number;
+  canonical_tick?: number | null;
+  cam1_source_frame_index?: number | null;
+  cam2_source_frame_index?: number | null;
 }
 
 export interface MultiviewBallStereoEvidenceArtifact {
@@ -1395,6 +1470,9 @@ export interface MultiviewBallStereoEvidenceArtifact {
   take_id?: string;
   measurements: MultiviewStereoMeasurement[];
   pairings?: unknown[];
+  diagnostics?: Record<string, unknown>;
+  source_context?: Record<string, unknown>;
+  content_sha256?: string;
 }
 
 export interface ServeEventCandidate {
@@ -1575,6 +1653,10 @@ export interface AnalysisPipelineResult {
     reconstructed_ball_trajectory_url?: string;
     reconstructed_ball_trajectory_status?: string;
     reconstructed_ball_trajectory_detail?: string;
+    multiview_ball_stereo_evidence_json_path?: string;
+    multiview_ball_stereo_evidence_url?: string;
+    multiview_ball_stereo_evidence_status?: string;
+    multiview_ball_stereo_evidence_detail?: string;
     analysis_overlay_video_path?: string;
     analysis_overlay_video_url?: string;
     analysis_overlay_video_status?: string;
@@ -1594,6 +1676,10 @@ export interface AnalysisPipelineResult {
     fused_player_overlay_url?: string;
     fused_player_overlay_status?: string;
     fused_player_overlay_detail?: string;
+    four_player_identification_quality_json_path?: string;
+    four_player_identification_quality_url?: string;
+    four_player_identification_quality_status?: string;
+    four_player_identification_quality_detail?: string;
     tracking_overlay_status?: string;
     tracking_overlay_detail?: string;
     pose_overlay_status?: string;

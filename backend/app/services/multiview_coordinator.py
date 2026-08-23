@@ -23,13 +23,21 @@ from app.schemas.analysis import (
     AnalysisDeleteResult,
     AnalysisJobCreate,
     AnalysisJobSummary,
+    AnalysisStage,
     SourceJobRef,
     ViewRunSummary,
 )
 from app.services.calibration_service import CalibrationService
 from app.services.capture_storage_service import sync_calibration_path
 from app.services.dual_camera_sync import summarize_frame_timing_sidecar
-from app.services.job_orchestration import JobStore
+from app.services.job_orchestration import (
+    JobStore,
+    compute_progress_from_stages,
+    current_stage_from_stages,
+    merge_stage_progress,
+    stage_details_for,
+)
+from app.services.analysis_progress import resolve_progress_mode
 from app.services.multiview_acceptance import (
     repair_capture_track_video_indices,
     timing_sidecar_path,
@@ -66,6 +74,35 @@ class MultiviewPreflightError(ValueError):
         self.issues = list(dict.fromkeys(issues))
         self.diagnostics = diagnostics or {}
         super().__init__("MultiView preflight failed: " + "; ".join(self.issues))
+
+
+def _view_stage_status(run: ViewRunSummary | None) -> str:
+    if run is None or run.status in {"queued", "pending", "missing"}:
+        return "pending"
+    if run.status in {"succeeded", "completed"}:
+        return "done"
+    if run.status in {"failed", "canceled"}:
+        return run.status
+    return "active"
+
+
+def _view_stage_event(
+    stage_id: str,
+    label: str,
+    status: str,
+    run: ViewRunSummary | None,
+) -> AnalysisStage:
+    _label, detail = stage_details_for("late_fusion_v1", stage_id)
+    progress = run.progress if run is not None else 0
+    if status in {"done", "skipped"}:
+        progress = 100
+    return AnalysisStage(
+        id=stage_id,
+        label=label or _label,
+        status=status,
+        detail=detail if run is None else f"{detail} · {run.stage}",
+        progress=progress,
+    )
 
 
 def _check_capture_take_dir(capture_take_id: str) -> str | None:
@@ -643,6 +680,20 @@ class MultiViewAnalysisCoordinator:
         `_advance_parent` 只在 child 终态时刷新 `viewRuns`；运行期间前端轮询 Parent 时
         通过本方法拿到 child 的实时进度，避免一直显示"排队 10%"。
         """
+        if parent.executionMode == "joint_tracking_v2":
+            # joint 模式没有 dedicated child；进度由 JointExecutor 写入 Parent
+            # 内部 ViewRun。不能用空的 sourceJobs 覆盖这份实时快照。
+            if parent.viewRuns:
+                return dict(parent.viewRuns)
+            return {
+                str(item.get("cameraSlot")): ViewRunSummary(
+                    status="queued",
+                    stage="multiview-input-check",
+                    progress=0,
+                )
+                for item in parent.jointViewInputs
+                if item.get("cameraSlot")
+            }
         runs: dict[str, ViewRunSummary] = {}
         for ref in parent.sourceJobs:
             child = self.store.get(ref.jobId)
@@ -652,6 +703,61 @@ class MultiViewAnalysisCoordinator:
                 progress=child.progress if child else 0,
             )
         return runs
+
+    def live_parent_snapshot(
+        self,
+        parent: AnalysisJobSummary,
+        view_runs: dict[str, ViewRunSummary] | None = None,
+    ) -> AnalysisJobSummary:
+        """把 late-fusion child 实时状态投影到 Parent 顶层阶段（只读）。"""
+        runs = view_runs or self.live_view_runs(parent)
+        if parent.executionMode == "joint_tracking_v2":
+            return parent.model_copy(update={"viewRuns": runs or None})
+
+        mode = resolve_progress_mode(parent.analysisKind, parent.executionMode)
+        stages = merge_stage_progress(
+            parent.stages,
+            AnalysisStage(
+                id="multiview-input-check",
+                label="素材与同步检查",
+                status="done",
+                detail="双视频 / 双标定 / 同步信息检查通过",
+                progress=100,
+            ),
+            mode=mode,
+        )
+        cam1 = runs.get("cam_1")
+        cam2 = runs.get("cam_2")
+        cam1_status = _view_stage_status(cam1)
+        cam2_status = _view_stage_status(cam2)
+        # child 实际并行运行，但顶层图按 A → B 顺序展示；A 未开始而 B 已运行
+        # 时仍以 A 作为当前聚合节点，完整并行信息由 viewRuns 提供。
+        if cam1_status == "pending" and cam2_status == "active":
+            cam1_status = "active"
+        stages = merge_stage_progress(
+            stages,
+            _view_stage_event("multiview-view-a", "A 机位视觉分析", cam1_status, cam1),
+            mode=mode,
+        )
+        stages = merge_stage_progress(
+            stages,
+            _view_stage_event("multiview-view-b", "B 机位视觉分析", cam2_status, cam2),
+            mode=mode,
+        )
+        progress = compute_progress_from_stages(
+            stages,
+            mode=mode,
+            previous_progress=parent.progress,
+            view_progress=runs,
+        )
+        return parent.model_copy(
+            update={
+                "stages": stages,
+                "stage": current_stage_from_stages(stages, fallback="multiview-input-check"),
+                "progress": progress,
+                "viewRuns": runs,
+            }
+        )
 
     def _advance_parent(self, parent: AnalysisJobSummary) -> AnalysisJobSummary | None:
         """根据 child 终态推进 Parent 的 orchestrationStatus（幂等）。"""

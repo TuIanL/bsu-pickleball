@@ -25,13 +25,23 @@
 
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.vision.multiview.association import min_cost_matching
+from app.vision.multiview.camera_color_profile import (
+    CameraColorProfile,
+    calibrated_descriptor_distance,
+    estimate_camera_color_profile,
+)
 from app.vision.multiview.court_frame import CourtOrientation, local_to_canonical
 from app.vision.multiview.global_state import GlobalPlayerRegistry, ViewBinding
 from app.vision.multiview.quality import pair_consistency
+from app.vision.player_tracking_engine.player_appearance import (
+    AppearanceTemplateGallery,
+    PlayerAppearanceDescriptor,
+)
 
 
 @dataclass
@@ -67,6 +77,7 @@ class JointObservation:
     lock_state: str | None = None
     bbox: list[float] | None = None
     image_footpoint: tuple[float, float] | None = None
+    appearance_descriptor: PlayerAppearanceDescriptor | None = None
 
 
 @dataclass
@@ -134,6 +145,9 @@ class GlobalPlayerAssociator:
         reanchor_frames: int = 3,
         reanchor_max_step_ft: float = 3.0,
         reanchor_ambiguity_margin_ft: float = 2.0,
+        appearance_cost_weight_ft: float = 0.8,
+        appearance_ambiguity_margin: float = 0.08,
+        appearance_mode: str = "enabled",
     ) -> None:
         self.registry = registry
         self.max_association_distance_ft = max_association_distance_ft
@@ -149,6 +163,11 @@ class GlobalPlayerAssociator:
         self.reanchor_frames = max(1, int(reanchor_frames))
         self.reanchor_max_step_ft = reanchor_max_step_ft
         self.reanchor_ambiguity_margin_ft = reanchor_ambiguity_margin_ft
+        self.appearance_cost_weight_ft = max(0.0, appearance_cost_weight_ft)
+        self.appearance_ambiguity_margin = max(0.0, appearance_ambiguity_margin)
+        if appearance_mode not in {"disabled", "shadow", "enabled"}:
+            raise ValueError(f"unsupported appearance mode: {appearance_mode}")
+        self.appearance_mode = appearance_mode
         self.diagnostics: dict[str, int] = {}
         # 只读决策可观测：最近一次 process_tick 的 per-observation 决策记录
         self.last_tick_decisions: list[AssociationDecision] = []
@@ -162,6 +181,9 @@ class GlobalPlayerAssociator:
         self.mapping: dict[tuple[str, str, int], str] = {}
         # mapping_key -> challenger_gid -> 连续强证据帧数（PendingReassociation）
         self._pending_reassoc: dict[tuple[str, str, int], dict[str, int]] = {}
+        self._appearance_galleries: dict[str, dict[str, AppearanceTemplateGallery]] = defaultdict(dict)
+        self._appearance_pairs: dict[tuple[str, str], deque[tuple[PlayerAppearanceDescriptor, PlayerAppearanceDescriptor]]] = defaultdict(lambda: deque(maxlen=48))
+        self._camera_color_profiles: dict[tuple[str, str], CameraColorProfile] = {}
 
     @staticmethod
     def observation_key(obs: JointObservation) -> str:
@@ -218,6 +240,86 @@ class GlobalPlayerAssociator:
             unc = pred[2] if len(pred) >= 3 else 1.0
         return min(self.max_reacquire_gate_ft, self.base_gate_ft + self.uncertainty_scale * unc)
 
+    def _appearance_distance(self, obs: JointObservation, gid: str) -> float | None:
+        descriptor = obs.appearance_descriptor
+        if descriptor is None or descriptor.status != "available":
+            return None
+        by_view = self._appearance_galleries.get(gid, {})
+        local_gallery = by_view.get(obs.view_id)
+        if local_gallery is not None:
+            distance = local_gallery.distance_to(descriptor)
+            if distance is not None:
+                return distance
+        calibrated: list[float] = []
+        for source_view, gallery in by_view.items():
+            if source_view == obs.view_id:
+                continue
+            distance = calibrated_descriptor_distance(
+                gallery.descriptor(),
+                descriptor,
+                self._camera_color_profiles.get((source_view, obs.view_id)),
+            )
+            if distance is not None:
+                calibrated.append(distance)
+        return min(calibrated) if calibrated else None
+
+    def _update_appearance_models(self, updates: list[AssociationUpdate]) -> None:
+        confirmed = [
+            update for update in updates
+            if not update.tentative
+            and update.observation.appearance_descriptor is not None
+            and update.observation.appearance_descriptor.status == "available"
+        ]
+        grouped: dict[str, dict[str, PlayerAppearanceDescriptor]] = defaultdict(dict)
+        for update in confirmed:
+            descriptor = update.observation.appearance_descriptor
+            assert descriptor is not None
+            gallery = self._appearance_galleries[update.global_id].setdefault(
+                update.view_id, AppearanceTemplateGallery()
+            )
+            gallery.update(descriptor, confirmed_observed=True)
+            grouped[update.global_id][update.view_id] = descriptor
+        for descriptors_by_view in grouped.values():
+            views = sorted(descriptors_by_view)
+            for source_view in views:
+                for target_view in views:
+                    if source_view == target_view:
+                        continue
+                    key = (source_view, target_view)
+                    self._appearance_pairs[key].append(
+                        (descriptors_by_view[source_view], descriptors_by_view[target_view])
+                    )
+                    self._camera_color_profiles[key] = estimate_camera_color_profile(
+                        source_view=source_view,
+                        target_view=target_view,
+                        paired_descriptors=list(self._appearance_pairs[key]),
+                    )
+
+    def appearance_diagnostics(self) -> dict[str, object]:
+        return {
+            "profiles": {
+                f"{source}->{target}": profile.diagnostics()
+                for (source, target), profile in self._camera_color_profiles.items()
+            },
+            "mode": self.appearance_mode,
+            "galleries": {
+                gid: {
+                    view: {
+                        "template_updates": gallery.accepted_updates,
+                        "template_freezes": gallery.frozen_updates,
+                        "template_age_ticks": gallery.template_age,
+                    }
+                    for view, gallery in by_view.items()
+                }
+                for gid, by_view in self._appearance_galleries.items()
+            },
+            "decision_contributions": self.diagnostics.get("appearance_cost_contributed", 0),
+            "decision_supports": self.diagnostics.get("appearance_supports", 0),
+            "decision_conflicts": self.diagnostics.get("appearance_conflicts", 0),
+            "unavailable_count": self.diagnostics.get("appearance_unavailable", 0),
+            "fallback_count": self.diagnostics.get("appearance_non_discriminative", 0),
+        }
+
     def process_tick(
         self,
         observations: list[JointObservation],
@@ -240,6 +342,15 @@ class GlobalPlayerAssociator:
         for obs in observations:
             identity_key = self.observation_key(obs)
             for old_key in list(self.mapping):
+                # 兼容早期运行/恢复状态中可能残留的二元 mapping key。
+                # 当前 joint_tracking_v2 使用 (view, local_identity, epoch)，
+                # 但一个坏 key 不应让整条双摄任务在首个有效帧直接失败。
+                if not isinstance(old_key, tuple) or len(old_key) < 3:
+                    self.mapping.pop(old_key, None)
+                    self.diagnostics["malformed_mapping_key"] = (
+                        self.diagnostics.get("malformed_mapping_key", 0) + 1
+                    )
+                    continue
                 if old_key[0] == obs.view_id and old_key[1] == identity_key and old_key[2] != obs.local_identity_epoch:
                     self.mapping.pop(old_key, None)
             if obs.canonical_x_ft is None:
@@ -312,12 +423,14 @@ class GlobalPlayerAssociator:
                 continue
             ranking: dict[str, dict[str, float]] = {}
             feasibility: dict[str, dict[str, float]] = {}
+            appearance_by_key: dict[str, dict[str, float]] = {}
             observations_by_key: dict[str, JointObservation] = {}
             for obs in view_obs:
                 key = f"{self.observation_key(obs)}@{obs.local_identity_epoch}"
                 observations_by_key[key] = obs
                 ranking[key] = {}
                 feasibility[key] = {}
+                appearance_distances: dict[str, float] = {}
                 for gid in pred_globals:
                     px, py = predictions[gid][0], predictions[gid][1]
                     geometry = _dist((obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0), (px, py))
@@ -328,7 +441,24 @@ class GlobalPlayerAssociator:
                         cost += self.local_identity_switch_penalty
                     if obs.expected_global_player_id and obs.expected_global_player_id != gid:
                         cost += self.guidance_global_mismatch_penalty
+                    appearance_distance = self._appearance_distance(obs, gid)
+                    if appearance_distance is not None:
+                        appearance_distances[gid] = appearance_distance
                     ranking[key][gid] = cost
+                appearance_by_key[key] = appearance_distances
+                if len(appearance_distances) >= 2:
+                    ordered = sorted(appearance_distances.values())
+                    if ordered[1] - ordered[0] >= self.appearance_ambiguity_margin:
+                        self.diagnostics["appearance_shadow_observations"] = self.diagnostics.get("appearance_shadow_observations", 0) + 1
+                        if self.appearance_mode != "enabled":
+                            continue
+                        for gid, distance in appearance_distances.items():
+                            ranking[key][gid] += self.appearance_cost_weight_ft * distance
+                        self.diagnostics["appearance_cost_contributed"] = self.diagnostics.get("appearance_cost_contributed", 0) + 1
+                    else:
+                        self.diagnostics["appearance_non_discriminative"] = self.diagnostics.get("appearance_non_discriminative", 0) + 1
+                elif obs.appearance_descriptor is not None:
+                    self.diagnostics["appearance_unavailable"] = self.diagnostics.get("appearance_unavailable", 0) + 1
             obs_keys = [f"{self.observation_key(o)}@{o.local_identity_epoch}" for o in view_obs]
             pairs = min_cost_matching(
                 obs_keys,
@@ -339,6 +469,11 @@ class GlobalPlayerAssociator:
             )
             for key, gid in pairs:
                 obs = observations_by_key[key]
+                appearance_distances = appearance_by_key.get(key, {})
+                if len(appearance_distances) >= 2:
+                    appearance_best = min(appearance_distances, key=appearance_distances.get)
+                    diagnostic = "appearance_supports" if appearance_best == gid else "appearance_conflicts"
+                    self.diagnostics[diagnostic] = self.diagnostics.get(diagnostic, 0) + 1
                 incumbent = self.mapping.get(self.mapping_key(obs))
                 if incumbent is not None and incumbent != gid:
                     # PendingReassociation（D6）：challenger 需连续强证据（margin + 连续一致）
@@ -558,6 +693,8 @@ class GlobalPlayerAssociator:
                             )
                         )
         self.registry.expire_candidates(tick)
+
+        self._update_appearance_models(updates)
 
         return updates
 

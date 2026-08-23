@@ -162,6 +162,10 @@ class Detection(BaseModel):
     # 原始 detector 只负责返回框，tracking session 在接收结果时绑定当前解码帧。
     # 保持可选以兼容直接调用 detector 的历史代码和已有测试/产物。
     frame_index: int | None = Field(default=None, ge=0)
+    # Detector authority/provenance. Projected or predicted display entities are
+    # intentionally not representable as Detection and therefore cannot create tracks.
+    origin: Literal["base", "roi_recovery"] = "base"
+    projection_reliability: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("bbox")
     @classmethod

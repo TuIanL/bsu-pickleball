@@ -12,12 +12,13 @@ from pathlib import Path
 from secrets import token_urlsafe
 from uuid import uuid4
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.capture_take import CaptureTake, CaptureTakeStatus
 from app.models.capture_track import CaptureTrack, TrackRole
+from app.models.live_coding_state import LiveCodingState
 from app.models.media_fragment import MediaFragment
 from app.models.track_finalization import FinalizationStatus, TrackFinalization
 from app.models.vidat_annotation import VidatAnnotationPackage, VidatImportAudit, VidatImportPreview
@@ -42,6 +43,39 @@ EVENT_LABELS = {
 
 class VidatPackageError(ValueError):
     pass
+
+
+def package_display_name(package: VidatAnnotationPackage) -> str:
+    return package.name or f"第 {package.version} 版"
+
+
+def _package_metadata(name: str | None, owner: str | None, note: str | None) -> tuple[str | None, str | None, str | None]:
+    def clean(value: str | None, limit: int) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > limit:
+            raise VidatPackageError(f"标注包元数据超过 {limit} 个字符")
+        return value
+
+    return clean(name, 160), clean(owner, 120), clean(note, 2048)
+
+
+def _next_package_version(db: Session, capture_take_id: str) -> int:
+    # SQLite 没有真正的 SELECT FOR UPDATE；对 take 做一次无语义变化的写操作，
+    # 让同一数据库连接串行化版本分配，再由唯一约束作为最后一道保护。
+    db.execute(
+        text("UPDATE capture_takes SET updated_at = updated_at WHERE id = :take_id"),
+        {"take_id": capture_take_id},
+    )
+    return (
+        db.query(func.max(VidatAnnotationPackage.version))
+        .filter(VidatAnnotationPackage.capture_take_id == capture_take_id)
+        .scalar()
+        or 0
+    ) + 1
 
 
 def _metadata(action: dict, index: int) -> dict:
@@ -282,33 +316,42 @@ def parse_vidat_annotation(
     return operations
 
 
+def _diff_operations(old_operations: list[dict], operations: list[dict]) -> list[dict]:
+    old_by_id = {tuple(item["event_ids"]): item for item in old_operations if item["event_ids"]}
+    changes: list[dict] = []
+    for operation in operations:
+        old = old_by_id.pop(tuple(operation["event_ids"]), None) if operation["event_ids"] else None
+        if old is None:
+            changes.append({"kind": "added", "after": operation})
+            continue
+        current_keys = {key: operation[key] for key in ("event_type", "start_ms", "end_ms", "payload")}
+        old_keys = {key: old[key] for key in ("event_type", "start_ms", "end_ms", "payload")}
+        if current_keys == old_keys:
+            continue
+        winner_changed = old["payload"].get("winner") != operation["payload"].get("winner")
+        score_changed = old["event_type"] == "score_correction" and old["payload"] != operation["payload"]
+        if old["event_type"] != operation["event_type"]:
+            kind = "category_changed"
+        elif winner_changed:
+            kind = "winner_changed"
+        elif score_changed:
+            kind = "score_anchor_changed"
+        elif (old["start_ms"], old["end_ms"]) != (operation["start_ms"], operation["end_ms"]):
+            kind = "moved"
+        else:
+            kind = "changed"
+        changes.append({"kind": kind, "before": old, "after": operation, "winner_changed": winner_changed})
+    changes.extend({"kind": "removed", "before": operation} for operation in old_by_id.values())
+    return changes
+
+
 def create_import_preview(db: Session, package: VidatAnnotationPackage, annotation: dict) -> VidatImportPreview:
+    if package.deleted_at is not None:
+        raise VidatPackageError("已删除的标注包不能创建导入预览")
     operations = parse_vidat_annotation(package, annotation)
     # 旧包可能正是因为历史层级错误才需要 Vidat 修复；它只用于差异基线。
     old_operations = parse_vidat_annotation(package, json.loads(package.annotation_json), validate_hierarchy=False)
-    old_by_id = {tuple(item["event_ids"]): item for item in old_operations if item["event_ids"]}
-    changes = []
-    for operation in operations:
-        old = old_by_id.pop(tuple(operation["event_ids"]), None)
-        if old is None:
-            changes.append({"kind": "added", "after": operation})
-        elif {key: operation[key] for key in ("event_type", "start_ms", "end_ms", "payload")} != {
-            key: old[key] for key in ("event_type", "start_ms", "end_ms", "payload")
-        }:
-            winner_changed = old["payload"].get("winner") != operation["payload"].get("winner")
-            score_changed = old["event_type"] == "score_correction" and old["payload"] != operation["payload"]
-            if old["event_type"] != operation["event_type"]:
-                kind = "category_changed"
-            elif winner_changed:
-                kind = "winner_changed"
-            elif score_changed:
-                kind = "score_anchor_changed"
-            elif (old["start_ms"], old["end_ms"]) != (operation["start_ms"], operation["end_ms"]):
-                kind = "moved"
-            else:
-                kind = "changed"
-            changes.append({"kind": kind, "before": old, "after": operation, "winner_changed": winner_changed})
-    changes.extend({"kind": "removed", "before": operation} for operation in old_by_id.values())
+    changes = _diff_operations(old_operations, operations)
     canonical = _canonical_json(annotation)
     coding_actions = _coding_actions(operations)
     from app.models.live_coding_state import LiveCodingState
@@ -364,9 +407,146 @@ def create_import_preview(db: Session, package: VidatAnnotationPackage, annotati
     return preview
 
 
+def _package_summary(db: Session, package: VidatAnnotationPackage) -> dict:
+    annotation = json.loads(package.annotation_json)
+    operations = parse_vidat_annotation(package, annotation, validate_hierarchy=False)
+    coding_actions = _coding_actions(operations)
+    live_state = db.get(LiveCodingState, package.capture_take_id)
+    score_summary = _score_summary(coding_actions, getattr(live_state, "scoring_ruleset_version", None))
+    final = score_summary["final"]
+    return {
+        "id": package.id,
+        "capture_take_id": package.capture_take_id,
+        "version": package.version,
+        "name": package_display_name(package),
+        "owner": package.owner,
+        "note": package.note,
+        "provenance": package.provenance or "generated",
+        "source_package_id": package.source_package_id,
+        "created_at": package.created_at.isoformat() if package.created_at else None,
+        "imported_at": package.imported_at.isoformat() if package.imported_at else None,
+        "deleted_at": package.deleted_at.isoformat() if package.deleted_at else None,
+        "event_count": len(operations),
+        "coding_action_count": len(coding_actions),
+        "final_score": {"score_a": final["score_a"], "score_b": final["score_b"]},
+        "final_winner": final.get("match_winner"),
+    }
+
+
+def compare_annotation_packages(db: Session, first: VidatAnnotationPackage, second: VidatAnnotationPackage) -> dict:
+    if first.id == second.id:
+        raise VidatPackageError("不能比较同一个标注包版本")
+    if first.capture_take_id != second.capture_take_id:
+        raise VidatPackageError("只能比较同一 CaptureTake 下的标注包版本")
+    first_operations = parse_vidat_annotation(
+        first, json.loads(first.annotation_json), validate_hierarchy=False
+    )
+    second_operations = parse_vidat_annotation(
+        second, json.loads(second.annotation_json), validate_hierarchy=False
+    )
+    return {
+        "capture_take_id": first.capture_take_id,
+        "before": _package_summary(db, first),
+        "after": _package_summary(db, second),
+        "changes": _diff_operations(first_operations, second_operations),
+    }
+
+
+def update_annotation_package(
+    package: VidatAnnotationPackage,
+    *,
+    name: str | None = None,
+    owner: str | None = None,
+    note: str | None = None,
+    update_name: bool = False,
+    update_owner: bool = False,
+    update_note: bool = False,
+) -> VidatAnnotationPackage:
+    if package.deleted_at is not None:
+        raise VidatPackageError("已删除的标注包不能编辑元数据")
+    name, owner, note = _package_metadata(name, owner, note)
+    if update_name:
+        package.name = name
+    if update_owner:
+        package.owner = owner
+    if update_note:
+        package.note = note
+    return package
+
+
+def _vidat_dist_root() -> Path:
+    configured = os.getenv("PICKLEBALL_VIDAT_DIST")
+    if configured:
+        return Path(configured).expanduser()
+    vidat_dir = Path(
+        os.getenv(
+            "PICKLEBALL_VIDAT_DIR",
+            str(Path.home() / "Documents/大学/竞赛/大创/匹克球/摄像头录制/tennistest"),
+        )
+    ).expanduser()
+    return vidat_dir / "dist"
+
+
+def _clear_published_package(package_id: str, dist_root: Path | None = None) -> None:
+    root = (dist_root or _vidat_dist_root()).expanduser().resolve()
+    if not root.is_dir():
+        return
+    for directory, suffix in (("video", ".mp4"), ("annotation", ".json"), ("config", ".json")):
+        target = root / directory / f"{package_id}{suffix}"
+        if target.exists() or target.is_symlink():
+            target.unlink()
+
+
+def logical_delete_annotation_package(db: Session, package: VidatAnnotationPackage) -> VidatAnnotationPackage:
+    if package.deleted_at is not None:
+        return package
+    live_state = db.get(LiveCodingState, package.capture_take_id)
+    if live_state and live_state.active_vidat_package_id == package.id:
+        raise VidatPackageError("当前 Vidat 投影正在使用该版本，请先切换到其他版本")
+    package.deleted_at = datetime.now(UTC)
+    _clear_published_package(package.id)
+    db.flush()
+    return package
+
+
+def purge_annotation_package(db: Session, package: VidatAnnotationPackage) -> None:
+    audits = db.query(VidatImportAudit).filter(
+        (VidatImportAudit.package_id == package.id) | (VidatImportAudit.result_package_id == package.id)
+    ).count()
+    previews = db.query(VidatImportPreview).filter(VidatImportPreview.package_id == package.id).count()
+    live_state = db.get(LiveCodingState, package.capture_take_id)
+    children = db.query(VidatAnnotationPackage).filter(
+        VidatAnnotationPackage.source_package_id == package.id,
+        VidatAnnotationPackage.deleted_at.is_(None),
+    ).count()
+    if audits:
+        raise VidatPackageError("该版本存在导入审计引用，不能永久清理")
+    if previews:
+        raise VidatPackageError("该版本存在导入预览引用，不能永久清理")
+    if live_state and live_state.active_vidat_package_id == package.id:
+        raise VidatPackageError("该版本是当前 Vidat 投影，不能永久清理")
+    if children:
+        raise VidatPackageError("该版本仍有未删除的派生版本，不能永久清理")
+    data_root = get_settings().resolve_path(get_settings().data_dir).resolve()
+    package_dir = Path(package.package_dir).expanduser().resolve()
+    try:
+        package_dir.relative_to(data_root)
+    except ValueError as exc:
+        raise VidatPackageError("标注包目录不在受控数据目录内，拒绝清理") from exc
+    _clear_published_package(package.id)
+    if package_dir.exists():
+        if not package_dir.is_dir():
+            raise VidatPackageError("标注包目录不是目录，拒绝清理")
+        shutil.rmtree(package_dir)
+    db.delete(package)
+    db.flush()
+
+
 def confirm_import_preview(
     db: Session, package: VidatAnnotationPackage, token: str, annotation: dict | None = None
 ) -> VidatImportAudit:
+    if package.deleted_at is not None:
+        raise VidatPackageError("已删除的标注包不能导入")
     preview = (
         db.query(VidatImportPreview)
         .filter(
@@ -382,22 +562,38 @@ def confirm_import_preview(
     if hashlib.sha256(submitted.encode()).hexdigest() != preview.content_hash:
         raise VidatPackageError("确认内容与预览不一致，请重新生成预览")
     snapshot = json.loads(preview.preview_json)
-    audit = VidatImportAudit(
-        id=f"via_{uuid4().hex[:12]}",
-        package_id=package.id,
-        preview_id=preview.id,
-        content_hash=preview.content_hash,
-        operations_json=json.dumps(snapshot["operations"], ensure_ascii=False),
-    )
-    db.add(audit)
-    db.flush()
-    _apply_import_plan(db, package, audit, snapshot)
-    preview.consumed = True
-    package.annotation_json = preview.annotation_json
-    package.normalized_snapshot_json = json.dumps(snapshot, ensure_ascii=False)
-    package.imported_at = now
-    db.flush()
-    return audit
+    result_package: VidatAnnotationPackage | None = None
+    try:
+        result_package = _create_derived_package(
+            db,
+            package,
+            annotation=json.loads(preview.annotation_json),
+            name=None,
+            owner=package.owner,
+            note=package.note,
+        )
+        result_package.normalized_snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+        result_package.imported_at = now
+        audit = VidatImportAudit(
+            id=f"via_{uuid4().hex[:12]}",
+            package_id=package.id,
+            result_package_id=result_package.id,
+            preview_id=preview.id,
+            content_hash=preview.content_hash,
+            operations_json=json.dumps(snapshot["operations"], ensure_ascii=False),
+        )
+        db.add(audit)
+        db.flush()
+        _apply_import_plan(db, result_package, audit, snapshot)
+        preview.consumed = True
+        db.flush()
+        return audit
+    except Exception:
+        if result_package is not None:
+            package_dir = Path(result_package.package_dir)
+            if package_dir.exists():
+                shutil.rmtree(package_dir)
+        raise
 
 
 def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: VidatImportAudit, plan: dict) -> None:
@@ -412,16 +608,20 @@ def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: Vida
     take = db.get(CaptureTake, package.capture_take_id)
     if take is None:
         raise VidatPackageError("CaptureTake 不存在")
-    # 只替换该包上一次导入的投影，其他人工/算法数据保留。
-    db.query(CaptureCodingAction).filter(CaptureCodingAction.annotation_package_id == package.id).delete(
-        synchronize_session=False
-    )
-    db.query(SessionTimelineEvent).filter(SessionTimelineEvent.annotation_package_id == package.id).delete(
-        synchronize_session=False
-    )
-    db.query(CaptureSegment).filter(CaptureSegment.annotation_package_id == package.id).delete(
-        synchronize_session=False
-    )
+    # 只替换当前 take 的 Vidat 投影，其他人工/算法数据保留。导入改为派生包后，
+    # 不能再按单一 package_id 清理，否则历史包的投影会与新包叠加。
+    db.query(CaptureCodingAction).filter(
+        CaptureCodingAction.capture_take_id == take.id,
+        CaptureCodingAction.annotation_package_id.is_not(None),
+    ).delete(synchronize_session=False)
+    db.query(SessionTimelineEvent).filter(
+        SessionTimelineEvent.capture_take_id == take.id,
+        SessionTimelineEvent.annotation_package_id.is_not(None),
+    ).delete(synchronize_session=False)
+    db.query(CaptureSegment).filter(
+        CaptureSegment.capture_take_id == take.id,
+        CaptureSegment.annotation_package_id.is_not(None),
+    ).delete(synchronize_session=False)
 
     base_revision = take.revision
     for offset, item in enumerate(plan["coding_actions"]):
@@ -527,6 +727,12 @@ def _apply_import_plan(db: Session, package: VidatAnnotationPackage, audit: Vida
                     vidat_import_audit_id=audit.id,
                 )
             )
+    db.flush()
+    live_state = db.get(LiveCodingState, take.id)
+    if live_state is None:
+        live_state = LiveCodingState(capture_take_id=take.id)
+        db.add(live_state)
+    live_state.active_vidat_package_id = package.id
     db.flush()
     for operation, segment in segment_rows:
         if segment.segment_type == SegmentType.game:
@@ -834,7 +1040,113 @@ def _event_actions(db: Session, take_id: str, fps: float) -> list[dict]:
     return actions
 
 
-def create_annotation_package(db: Session, capture_take_id: str, *, copy_video: bool = False) -> VidatAnnotationPackage:
+def _create_derived_package(
+    db: Session,
+    source_package: VidatAnnotationPackage,
+    *,
+    annotation: dict,
+    name: str | None,
+    owner: str | None,
+    note: str | None,
+) -> VidatAnnotationPackage:
+    if source_package.deleted_at is not None:
+        raise VidatPackageError("已删除的标注包不能作为派生来源")
+    take = db.get(CaptureTake, source_package.capture_take_id)
+    if take is None:
+        raise VidatPackageError("CaptureTake 不存在")
+    source_manifest = json.loads(source_package.manifest_json)
+    source_dir = Path(source_package.package_dir).resolve()
+    source_video = source_dir / source_manifest["video"]["file"]
+    if not source_video.is_file():
+        raise VidatPackageError("源标注包的视频文件不可用")
+    name, owner, note = _package_metadata(name, owner, note)
+    version = _next_package_version(db, take.id)
+    package_id = f"vap_{uuid4().hex[:12]}"
+    root = get_settings().resolve_path(get_settings().data_dir) / "vidat-annotations" / take.id
+    package_dir = root / f"v{version:03d}-{package_id[-6:]}"
+    created_at = datetime.now(UTC)
+    try:
+        package_dir.mkdir(parents=True, exist_ok=False)
+        video_name = Path(source_manifest["video"]["file"]).name
+        video_path = package_dir / video_name
+        # 派生包指向真实视频，而不是指向来源包目录中的中间 symlink；这样来源
+        # 包被逻辑删除/清理后，仍不会悄悄破坏派生包的内容基线。
+        os.symlink(source_video.resolve(), video_path)
+        copied_annotation = json.loads(json.dumps(annotation, ensure_ascii=False))
+        annotation_video = copied_annotation.setdefault("annotation", {}).setdefault("video", {})
+        annotation_video["src"] = f"video/{video_name}"
+        copied_annotation["pickleball_manifest"] = {
+            **(copied_annotation.get("pickleball_manifest") or {}),
+            "schema_version": VIDAT_SCHEMA_VERSION,
+            "package_id": package_id,
+            "capture_take_id": take.id,
+            "video_fingerprint": source_manifest["video"].get("fingerprint"),
+        }
+        manifest = json.loads(json.dumps(source_manifest, ensure_ascii=False))
+        manifest.update(
+            {
+                "package_id": package_id,
+                "capture_take_id": take.id,
+                "version": version,
+                "created_at": created_at.isoformat(),
+                "timeline_revision": take.revision,
+            }
+        )
+        manifest["video"]["file"] = video_name
+        (package_dir / "annotation.json").write_text(
+            json.dumps(copied_annotation, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (package_dir / "config.json").write_text(json.dumps(vidat_config(), ensure_ascii=False, indent=2), encoding="utf-8")
+        (package_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        package = VidatAnnotationPackage(
+            id=package_id,
+            capture_take_id=take.id,
+            version=version,
+            package_dir=str(package_dir),
+            manifest_json=json.dumps(manifest, ensure_ascii=False),
+            annotation_json=json.dumps(copied_annotation, ensure_ascii=False),
+            name=name,
+            owner=owner,
+            note=note,
+            source_package_id=source_package.id,
+            provenance="derived",
+        )
+        db.add(package)
+        db.flush()
+        return package
+    except Exception:
+        if package_dir.exists():
+            shutil.rmtree(package_dir)
+        raise
+
+
+def derive_annotation_package(
+    db: Session,
+    source_package: VidatAnnotationPackage,
+    *,
+    name: str | None = None,
+    owner: str | None = None,
+    note: str | None = None,
+) -> VidatAnnotationPackage:
+    return _create_derived_package(
+        db,
+        source_package,
+        annotation=json.loads(source_package.annotation_json),
+        name=name,
+        owner=owner,
+        note=note,
+    )
+
+
+def create_annotation_package(
+    db: Session,
+    capture_take_id: str,
+    *,
+    copy_video: bool = False,
+    name: str | None = None,
+    owner: str | None = None,
+    note: str | None = None,
+) -> VidatAnnotationPackage:
     take = db.get(CaptureTake, capture_take_id)
     if take is None:
         raise VidatPackageError("CaptureTake 不存在")
@@ -845,12 +1157,8 @@ def create_annotation_package(db: Session, capture_take_id: str, *, copy_video: 
     video = resolve_primary_video(db, take)
     info = _probe_video(video)
     root = get_settings().resolve_path(get_settings().data_dir) / "vidat-annotations" / take.id
-    version = (
-        db.query(func.max(VidatAnnotationPackage.version))
-        .filter(VidatAnnotationPackage.capture_take_id == take.id)
-        .scalar()
-        or 0
-    ) + 1
+    name, owner, note = _package_metadata(name, owner, note)
+    version = _next_package_version(db, take.id)
     package_id = f"vap_{uuid4().hex[:12]}"
     package_dir = root / f"v{version:03d}-{package_id[-6:]}"
     package_dir.mkdir(parents=True, exist_ok=False)
@@ -858,7 +1166,7 @@ def create_annotation_package(db: Session, capture_take_id: str, *, copy_video: 
     if copy_video:
         shutil.copy2(video, video_path)
     else:
-        os.symlink(video, video_path)
+        os.symlink(video.resolve(), video_path)
     actions = _event_actions(db, take.id, info["fps"])
     frames = max(1, round(info["duration"] * info["fps"]))
     actions = [action for action in actions if action["start"] < info["duration"]]
@@ -926,6 +1234,10 @@ def create_annotation_package(db: Session, capture_take_id: str, *, copy_video: 
         package_dir=str(package_dir),
         manifest_json=json.dumps(manifest, ensure_ascii=False),
         annotation_json=json.dumps(annotation, ensure_ascii=False),
+        name=name,
+        owner=owner,
+        note=note,
+        provenance="generated",
     )
     db.add(package)
     return package

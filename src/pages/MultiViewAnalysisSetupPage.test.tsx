@@ -255,4 +255,30 @@ describe("MultiViewAnalysisSetupPage", () => {
     expect(request.executionMode).toBe("joint_tracking_v2");
     expect(request.debugTraceEnabled).toBe(true);
   });
+
+  it("navigates to Analysis Progress preserving the library return after creating the parent job", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}&return=${encodeURIComponent("/library/sync_recording/sync-1?view=overview")}`,
+    );
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+    mocks.createMultiviewAnalysisJob.mockResolvedValue({ id: "job-parent" });
+    const onNavigate = vi.fn();
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={onNavigate} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
+
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));
+    const [path, options] = onNavigate.mock.calls[0];
+    expect(path).toContain("/analysis/job-parent");
+    expect(path).toContain(encodeURIComponent("/library/sync_recording/sync-1?view=overview"));
+    expect(options).toEqual({ replace: true });
+  });
 });

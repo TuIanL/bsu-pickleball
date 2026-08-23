@@ -77,7 +77,7 @@ def _view_observations(
     frame_stride: int = 2,
     confidence: float = 0.18,
 ) -> tuple[list[dict], list[float]]:
-    """对一段视频跑球检测跟踪，返回 {t_ms, u, v, paired:false} 观测与采样时刻。"""
+    """对一段视频跑球检测跟踪，返回真实 source frame 对应的毫秒观测。"""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"cannot open video: {video_path}")
@@ -90,12 +90,13 @@ def _view_observations(
     observations: list[dict] = []
     times: list[float] = []
     idx = start_idx
-    frame_num = 0
     while idx <= end_idx:
         ok, frame = cap.read()
         if not ok:
             break
-        if frame_num % frame_stride == 0:
+        # cap.read() 每次只推进一帧；stride 只决定哪些真实帧进入 detector，
+        # 不能同时把逻辑 idx 按 stride 增长，否则 index/timestamp 会漂移。
+        if (idx - start_idx) % max(1, frame_stride) == 0:
             t_ms = idx / fps * 1000.0
             sample = tracker.update(
                 frame=frame, frame_index=int(idx), timestamp_sec=t_ms / 1000.0,
@@ -104,33 +105,49 @@ def _view_observations(
             if sample.image_xy is not None and sample.accepted:
                 observations.append({"t_ms": t_ms, "u": float(sample.image_xy[0]), "v": float(sample.image_xy[1]), "paired": False})
                 times.append(t_ms)
-        idx += frame_stride
-        frame_num += frame_stride
+        idx += 1
     cap.release()
     return observations, times
 
 
 def _group_into_segments(obs_cam1: list[dict], times_cam1: list[float],
                          obs_cam2: list[dict], times_cam2: list[float],
-                         gap_ms: float = 400.0) -> list[tuple[list[dict], list[dict]]]:
+                         gap_ms: float = 400.0,
+                         max_pairing_error_ms: float = 40.0) -> list[tuple[list[dict], list[dict]]]:
     """把双路观测按时间聚成若干段（用 cam1 时间轴上 > gap 的间断切分）。"""
     pa = sorted(zip(times_cam1, obs_cam1), key=lambda x: x[0])
     segments: list[tuple[list[dict], list[dict]]] = []
     current_a: list[dict] = []
     current_b: list[dict] = []
     last: float | None = None
+    used_cam2: set[int] = set()
     for t, o in pa:
         if last is not None and (t - last) > gap_ms and current_a:
             segments.append((current_a, current_b))
             current_a, current_b = [], []
         current_a.append(o)
         # cam2 在同一时间窗 ±tolerance 内的观测加入
-        near = [b for (bt, b) in zip(times_cam2, obs_cam2) if abs(bt - t) <= 200.0]
-        current_b.extend(near)
+        candidates = [
+            (index, bt, b)
+            for index, (bt, b) in enumerate(zip(times_cam2, obs_cam2))
+            if index not in used_cam2 and abs(bt - t) <= max_pairing_error_ms
+        ]
+        if candidates:
+            index, _bt, best = min(candidates, key=lambda item: abs(item[1] - t))
+            used_cam2.add(index)
+            current_b.append(best)
         last = t
     if current_a:
         segments.append((current_a, current_b))
     return segments
+
+
+def _video_size(video_path: str) -> tuple[int, int]:
+    cap = cv2.VideoCapture(video_path)
+    try:
+        return int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    finally:
+        cap.release()
 
 
 def _write_artifacts_to_job(doc: dict, evidence: dict, job_id: str) -> dict:
@@ -191,14 +208,16 @@ def run_real_data(
     corner_canon1, corner_img1 = _corners(c1, ori1)
     corner_canon2, corner_img2 = _corners(c2, ori2)
 
+    cam1_width, cam1_height = _video_size(cam1.video_path)
+    cam2_width, cam2_height = _video_size(cam2.video_path)
     cam1_proj = decompose_virtual_camera(
         view_id="cam_1", inverse_homography=inv1,
-        image_width=1920, image_height=1080,
+        image_width=cam1_width, image_height=cam1_height,
         orientation=ori1, corner_canonical=corner_canon1, corner_image=corner_img1,
     )
     cam2_proj = decompose_virtual_camera(
         view_id="cam_2", inverse_homography=inv2,
-        image_width=1920, image_height=1080,
+        image_width=cam2_width, image_height=cam2_height,
         orientation=ori2, corner_canonical=corner_canon2, corner_image=corner_img2,
     )
     if not cam1_proj.available or not cam2_proj.available:
@@ -230,27 +249,41 @@ def run_real_data(
     # 组装观测 + 测量证据
     measurements: list[BallStereoMeasurement] = []
     segment_obs_list = []  # (cam_index, t_ms, u, v, projection)
+    used_cam2: set[int] = set()
+    max_time_gate_ms = 40.0
     for o in obs1:
-        near = [b for (bt, b) in zip(t2, obs2) if abs(bt - o["t_ms"]) <= 200.0]
-        if near:
-            b = min(near, key=lambda x: abs(o["t_ms"] - x["t_ms"]))
+        candidates = [
+            (index, b)
+            for index, (bt, b) in enumerate(zip(t2, obs2))
+            if index not in used_cam2 and abs(bt - o["t_ms"]) <= max_time_gate_ms
+        ]
+        if candidates:
+            best_index, b = min(candidates, key=lambda item: abs(o["t_ms"] - item[1]["t_ms"]))
+            used_cam2.add(best_index)
             m = measure_stereo(
                 projection_cam1=cam1_proj.projection, projection_cam2=cam2_proj.projection,
                 image_xy1=(o["u"], o["v"]), image_xy2=(b["u"], b["v"]),
                 cam1_timestamp_ms=o["t_ms"], cam2_timestamp_ms=b["t_ms"],
                 take_timestamp_ms=o["t_ms"], sync_error_ms=abs(o["t_ms"] - b["t_ms"]),
+                max_time_delta_ms=max_time_gate_ms,
             )
+            if not m.depth_valid:
+                # 错误深度只进入诊断，不进入权威 stereo evidence；保留两路单视角观测供
+                # 段级重建判断是否可以降级为 PARTIAL_3D。
+                segment_obs_list.append(Observation(o["t_ms"] / 1000.0, 0, o["u"], o["v"], cam1_proj.projection, paired=False))
+                segment_obs_list.append(Observation(b["t_ms"] / 1000.0, 1, b["u"], b["v"], cam2_proj.projection, paired=False))
+                continue
             measurements.append(m)
-            segment_obs_list.append(Observation(o["t_ms"], 0, o["u"], o["v"], cam1_proj.projection, paired=True))
-            segment_obs_list.append(Observation(b["t_ms"], 1, b["u"], b["v"], cam2_proj.projection, paired=True))
+            segment_obs_list.append(Observation(o["t_ms"] / 1000.0, 0, o["u"], o["v"], cam1_proj.projection, paired=True))
+            segment_obs_list.append(Observation(b["t_ms"] / 1000.0, 1, b["u"], b["v"], cam2_proj.projection, paired=True))
         else:
-            segment_obs_list.append(Observation(o["t_ms"], 0, o["u"], o["v"], cam1_proj.projection, paired=False))
+            segment_obs_list.append(Observation(o["t_ms"] / 1000.0, 0, o["u"], o["v"], cam1_proj.projection, paired=False))
     for b in obs2:
-        if not any(abs(bt - b["t_ms"]) <= 200.0 for bt in t1):
-            segment_obs_list.append(Observation(b["t_ms"], 1, b["u"], b["v"], cam2_proj.projection, paired=False))
+        if not any(abs(bt - b["t_ms"]) <= max_time_gate_ms for bt in t1):
+            segment_obs_list.append(Observation(b["t_ms"] / 1000.0, 1, b["u"], b["v"], cam2_proj.projection, paired=False))
 
     # 段重建（smoke：全部观测作为一条段）
-    duration = max((window_start_s - window_start_s), 1.0)
+    duration = max((window_end_s - window_start_s), 1.0)
     if segment_obs_list:
         all_t = [o.t_sec for o in segment_obs_list]
         duration = max(max(all_t) - min(all_t), 0.3)

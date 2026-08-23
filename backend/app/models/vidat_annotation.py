@@ -23,6 +23,12 @@ class VidatAnnotationPackage(Base):
     annotation_json: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     imported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    source_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    provenance: Mapped[str | None] = mapped_column(String(16), nullable=True, default="generated")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     __table_args__ = (UniqueConstraint("capture_take_id", "version", name="uq_vidat_package_take_version"),)
@@ -50,6 +56,9 @@ class VidatImportAudit(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     package_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("vidat_annotation_packages.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    result_package_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("vidat_annotation_packages.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     preview_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("vidat_import_previews.id", ondelete="RESTRICT"), nullable=False

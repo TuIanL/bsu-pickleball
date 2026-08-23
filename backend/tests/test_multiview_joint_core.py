@@ -42,7 +42,10 @@ from app.vision.multiview.joint_artifact import (
 )
 from app.vision.multiview.joint_types import JointViewInput
 from app.vision.multiview.joint_view_runtime import JointViewRuntime
-from app.vision.multiview.multiview_joint_run import MultiViewJointRun
+from app.vision.multiview.multiview_joint_run import (
+    MultiViewJointRun,
+    interpolate_short_confirmed_identity_gaps,
+)
 from app.vision.multiview.sync import MultiViewSyncCalibration
 from app.vision.player_tracking_engine.view_tracking_session import (
     build_view_tracking_config,
@@ -681,3 +684,90 @@ def test_joint_parent_restart_rebuildable_and_compose():
     assert result.status == "completed"
     labels = {t.track_id for t in result.tracks}
     assert "global_player_1" in labels and "global_player_2" in labels  # GlobalPlayer 标签
+
+
+def test_short_confirmed_identity_gap_is_explicitly_interpolated():
+    timeline = [
+        FusedSample(
+            global_player_id="global_player_2",
+            take_timestamp_ms=float(frame * 10),
+            reference_frame_index=frame,
+            x_ft=2.0,
+            y_ft=10.0,
+            fusion_status="dual_observed",
+            metric_eligible=True,
+        )
+        for frame in (0, 1, 2, 3)
+    ]
+    player = [
+        FusedSample(
+            global_player_id="global_player_1",
+            take_timestamp_ms=0.0,
+            reference_frame_index=0,
+            x_ft=4.0,
+            y_ft=8.0,
+            fusion_status="dual_observed",
+            metric_eligible=True,
+            identity_epoch=3,
+        ),
+        FusedSample(
+            global_player_id="global_player_1",
+            take_timestamp_ms=30.0,
+            reference_frame_index=3,
+            x_ft=7.0,
+            y_ft=11.0,
+            fusion_status="single_view_fallback",
+            metric_eligible=True,
+            identity_epoch=3,
+        ),
+    ]
+
+    result = interpolate_short_confirmed_identity_gaps(timeline + player)
+    inserted = [
+        sample
+        for sample in result
+        if sample.global_player_id == "global_player_1" and sample.identity_status == "interpolated"
+    ]
+
+    assert [sample.reference_frame_index for sample in inserted] == [1, 2]
+    assert [(sample.x_ft, sample.y_ft) for sample in inserted] == [(5.0, 9.0), (6.0, 10.0)]
+    assert all(sample.view_observations == {} for sample in inserted)
+    assert all(sample.binding_provenance["interpolation"] for sample in inserted)
+
+
+def test_short_gap_interpolation_rejects_epoch_net_and_long_gap():
+    def sample(frame: int, *, y: float, epoch: int = 0) -> FusedSample:
+        return FusedSample(
+            global_player_id="global_player_1",
+            take_timestamp_ms=float(frame * 10),
+            reference_frame_index=frame,
+            x_ft=4.0,
+            y_ft=y,
+            fusion_status="dual_observed",
+            metric_eligible=True,
+            identity_epoch=epoch,
+        )
+
+    filler = [
+        FusedSample(
+            global_player_id="global_player_2",
+            take_timestamp_ms=float(frame * 10),
+            reference_frame_index=frame,
+            x_ft=2.0,
+            y_ft=10.0,
+            fusion_status="dual_observed",
+            metric_eligible=True,
+        )
+        for frame in range(5)
+    ]
+    cases = (
+        [sample(0, y=10.0, epoch=0), sample(2, y=10.0, epoch=1)],
+        [sample(0, y=10.0), sample(2, y=30.0)],
+        [sample(0, y=10.0), sample(4, y=10.0)],
+    )
+    for case in cases:
+        result = interpolate_short_confirmed_identity_gaps(filler + case)
+        assert not any(
+            item.global_player_id == "global_player_1" and item.identity_status == "interpolated"
+            for item in result
+        )

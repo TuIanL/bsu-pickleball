@@ -118,6 +118,16 @@ def _ensure_capture_storage_columns(engine: Engine) -> None:
 def _ensure_vidat_provenance_columns(engine: Engine) -> None:
     inspector = inspect(engine)
     additions = {
+        "vidat_annotation_packages": {
+            "name": "VARCHAR(160)",
+            "owner": "VARCHAR(120)",
+            "note": "VARCHAR(2048)",
+            "source_package_id": "VARCHAR(64)",
+            "provenance": "VARCHAR(16) DEFAULT 'generated'",
+            "deleted_at": "DATETIME",
+        },
+        "vidat_import_audits": {"result_package_id": "VARCHAR(64)"},
+        "live_coding_states": {"active_vidat_package_id": "VARCHAR(64)"},
         "capture_coding_actions": {
             "source": "VARCHAR(32) NOT NULL DEFAULT 'manual'",
             "annotation_package_id": "VARCHAR(64)",

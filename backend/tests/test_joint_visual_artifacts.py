@@ -215,6 +215,7 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
     assert result.artifacts.roster_url == "/api/analysis/jobs/job-p/artifacts/roster"
     assert result.artifacts.roster_status == "available"
     assert result.artifacts.structured_visualization_data_path is not None
+    assert result.artifacts.four_player_identification_quality_url == "/api/analysis/jobs/job-p/artifacts/four-player-identification-quality"
     # 公开轨迹身份为 canonical Player_N（非 global_player_）
     assert {t.track_id for t in result.tracks} == {"Player_1"}
     assert result.observed_player_count == 1
@@ -228,6 +229,9 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
     assert roster_json["players"][0]["bindings"]["cam_2"]["view_player_id"] == "Player_3"
     # heatmaps URL 已生成（可用与否取决于点数）
     assert result.artifacts.heatmaps_url == "/api/analysis/jobs/job-p/artifacts/position-heatmaps"
+    structured = storage.read_json(storage.structured_visualization_data_path("job-p"))
+    assert structured["identity_quality"]["players"]["Player_1"]["accepted_count"] == 1
+    assert structured["identity_quality"]["players"]["Player_1"]["sufficiency"] == "sufficient"
     # 聚合 stage：A/B 均 done（joint 完成，不再误报 failed）
     stage_ids = {s.id: s.status for s in result.stages}
     assert stage_ids["multiview-view-a"] == "done"

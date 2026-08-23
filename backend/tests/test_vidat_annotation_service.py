@@ -12,9 +12,10 @@ from app.models.capture_take import CaptureMode, CaptureTake, CaptureTakeStatus,
 from app.models.capture_track import CaptureTrack, CaptureTrackSlot, TrackRole
 from app.models.field_session import CaptureMode as FieldCaptureMode
 from app.models.field_session import FieldSession, MatchFormat
+from app.models.live_coding_state import LiveCodingState
 from app.models.media_fragment import MediaFragment
 from app.models.timeline_event import SessionTimelineEvent, TimelineEventSource, TimelineEventType
-from app.models.vidat_annotation import VidatAnnotationPackage
+from app.models.vidat_annotation import VidatAnnotationPackage, VidatImportAudit
 from app.services import vidat_annotation_service as service
 
 
@@ -191,6 +192,15 @@ def test_package_api_creates_and_lists_versions(db, tmp_path, monkeypatch):
     packages = list_packages(take.id, db)
     assert created.capture_take_id == take.id
     assert [package.id for package in packages] == [created.id]
+    assert created.name == "第 1 版"
+    assert created.provenance == "generated"
+    stored = db.get(VidatAnnotationPackage, created.id)
+    stored.name = None
+    stored.provenance = None
+    db.flush()
+    compatible = list_packages(take.id, db)[0]
+    assert compatible.name == "第 1 版"
+    assert compatible.provenance == "generated"
 
 
 def test_import_preview_detects_rally_winner_change(db, tmp_path, monkeypatch):
@@ -303,7 +313,91 @@ def test_confirm_checks_content_hash_and_writes_provenance(db, tmp_path, monkeyp
         service.confirm_import_preview(db, package, preview.token, changed)
     audit = service.confirm_import_preview(db, package, preview.token, annotation)
     db.flush()
-    assert db.query(CaptureCodingAction).filter_by(annotation_package_id=package.id).count() == 2
-    assert db.query(CaptureSegment).filter_by(annotation_package_id=package.id).one().vidat_import_audit_id == audit.id
+    result = db.get(VidatAnnotationPackage, audit.result_package_id)
+    assert result is not None
+    assert result.id != package.id
+    assert result.provenance == "derived"
+    assert db.query(CaptureCodingAction).filter_by(annotation_package_id=result.id).count() == 2
+    assert db.query(CaptureSegment).filter_by(annotation_package_id=result.id).one().vidat_import_audit_id == audit.id
+    assert db.get(VidatImportAudit, audit.id).result_package_id == result.id
+    assert package.annotation_json != result.annotation_json
+    assert db.get(LiveCodingState, package.capture_take_id).active_vidat_package_id == result.id
     with pytest.raises(service.VidatPackageError, match="已使用"):
         service.confirm_import_preview(db, package, preview.token, annotation)
+
+
+def test_derive_package_rewrites_identity_and_keeps_source(db, tmp_path, monkeypatch):
+    source = _package(db, tmp_path, monkeypatch)
+    source_annotation = source.annotation_json
+    derived = service.derive_annotation_package(db, source, name="交给小王", owner="小王", note="复核胜者")
+    db.flush()
+    annotation = service.json.loads(derived.annotation_json)
+    manifest = service.json.loads(derived.manifest_json)
+    assert derived.version == source.version + 1
+    assert derived.name == "交给小王"
+    assert derived.owner == "小王"
+    assert derived.source_package_id == source.id
+    assert annotation["pickleball_manifest"]["package_id"] == derived.id
+    assert manifest["package_id"] == derived.id
+    assert manifest["version"] == derived.version
+    assert source.annotation_json == source_annotation
+    assert service.parse_vidat_annotation(derived, annotation) == service.parse_vidat_annotation(source, service.json.loads(source_annotation))
+
+
+def test_compare_packages_returns_event_level_changes(db, tmp_path, monkeypatch):
+    source = _package(db, tmp_path, monkeypatch)
+    changed = service.json.loads(source.annotation_json)
+    changed["annotation"]["actionAnnotationList"] = [_action("rally_start", 0, 5, {"winner": "A"})]
+    derived = service.derive_annotation_package(db, source)
+    changed["pickleball_manifest"]["package_id"] = derived.id
+    derived.annotation_json = service.json.dumps(changed)
+    db.flush()
+    comparison = service.compare_annotation_packages(db, source, derived)
+    assert comparison["before"]["version"] == source.version
+    assert comparison["after"]["version"] == derived.version
+    assert comparison["changes"]
+    assert comparison["changes"][0]["kind"] == "added"
+
+
+def test_compare_packages_rejects_cross_take(db, tmp_path, monkeypatch):
+    source = _package(db, tmp_path, monkeypatch)
+    other = VidatAnnotationPackage(
+        id="vap_other_take",
+        capture_take_id="ct_other",
+        version=1,
+        package_dir=source.package_dir,
+        manifest_json=source.manifest_json,
+        annotation_json=source.annotation_json,
+    )
+    with pytest.raises(service.VidatPackageError, match="同一 CaptureTake"):
+        service.compare_annotation_packages(db, source, other)
+
+
+def test_logical_delete_hides_package_but_purge_protects_audit(db, tmp_path, monkeypatch):
+    package = _package(db, tmp_path, monkeypatch)
+    service.create_import_preview(db, package, service.json.loads(package.annotation_json))
+    service.logical_delete_annotation_package(db, package)
+    db.flush()
+    assert package.deleted_at is not None
+    assert service.package_display_name(package).startswith("第 ")
+    with pytest.raises(service.VidatPackageError, match="预览"):
+        service.purge_annotation_package(db, package)
+
+
+def test_failed_import_cleans_result_directory_and_allows_transaction_rollback(db, tmp_path, monkeypatch):
+    package = _package(db, tmp_path, monkeypatch)
+    db.commit()
+    annotation = service.json.loads(package.annotation_json)
+    preview = service.create_import_preview(db, package, annotation)
+    db.commit()
+    before = {row.id for row in db.query(VidatAnnotationPackage).all()}
+
+    def fail_apply(*_args, **_kwargs):
+        raise service.VidatPackageError("模拟投影失败")
+
+    monkeypatch.setattr(service, "_apply_import_plan", fail_apply)
+    with pytest.raises(service.VidatPackageError, match="模拟投影失败"):
+        service.confirm_import_preview(db, package, preview.token, annotation)
+    db.rollback()
+    assert {row.id for row in db.query(VidatAnnotationPackage).all()} == before
+    assert db.get(type(preview), preview.id).consumed is False

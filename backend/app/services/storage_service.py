@@ -289,6 +289,9 @@ class StorageService:
         # player-display-diagnostics.v1（joint 模式逐球员逐 stage 显示漏斗）
         return self._job_artifact_root(job_id) / "player_display_diagnostics.json"
 
+    def four_player_identification_quality_json_path(self, job_id: str) -> Path:
+        return self._job_artifact_root(job_id) / "four_player_identification_quality.json"
+
     def bootstrap_display_backfill_json_path(self, job_id: str) -> Path:
         # bootstrap_display_backfill.v1（joint 启动阶段展示回填，display-only 旁路产物）
         return self._job_artifact_root(job_id) / "bootstrap_display_backfill.json"

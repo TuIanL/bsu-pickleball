@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Upload } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
-import type { LibraryItemViewModel, LibraryItemKind } from "../services/libraryAdapter";
-import { buildLibraryItems } from "../services/libraryAdapter";
+import type { LibraryItemViewModel, LibraryItemKind, LibraryItemRef } from "../services/libraryAdapter";
+import { buildLibraryItems, resolveLibraryItemByRef } from "../services/libraryAdapter";
+import { getAnalysisRuntimeSnapshot, subscribeAnalysisRuntime, unwatchAnalysisJob, watchAnalysisJob } from "../services/analysisRuntimeStore";
 import { mergeSyncRecording, deleteRecording, deleteSyncRecording, getVideoStreamUrl } from "../services/analysisClient";
 import { libraryAnalysisPathFor } from "../services/libraryAnalysisRouting";
 import { LibraryCard } from "../components/library/LibraryCard";
@@ -13,6 +14,8 @@ interface LibraryPageProps {
   onNavigate: NavigateFn;
 }
 
+const ACTIVE_STATUSES = ["uploaded", "queued", "processing"];
+
 export function LibraryPage({ onNavigate }: LibraryPageProps) {
   const [items, setItems] = useState<LibraryItemViewModel[]>([]);
   const [status, setStatus] = useState<StatusFilter>("all");
@@ -20,13 +23,44 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // 已 watch 的 active job ids（避免重复登记）
+  const watchedRef = useRef<Set<string>>(new Set());
+  const itemsRef = useRef<LibraryItemViewModel[]>([]);
+  itemsRef.current = items;
+
+  const syncWatches = (list: LibraryItemViewModel[]) => {
+    for (const item of list) {
+      if (item.activeAnalysisJobId && !watchedRef.current.has(item.activeAnalysisJobId)) {
+        watchedRef.current.add(item.activeAnalysisJobId);
+        watchAnalysisJob(item.activeAnalysisJobId);
+      }
+    }
+  };
+
+  // terminal 后定向重投影单个素材（不重跑全库 buildLibraryItems）
+  const reconcileItem = async (ref: LibraryItemRef) => {
+    const fresh = await resolveLibraryItemByRef(ref);
+    if (!fresh) return;
+    if (fresh.activeAnalysisJobId && !watchedRef.current.has(fresh.activeAnalysisJobId)) {
+      watchedRef.current.add(fresh.activeAnalysisJobId);
+      watchAnalysisJob(fresh.activeAnalysisJobId);
+    }
+    setItems((prev) =>
+      prev.map((item) =>
+        item.ref.kind === ref.kind && item.ref.sourceId === ref.sourceId ? fresh : item,
+      ),
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 重新请求时重置加载态
     setLoading(true);
     buildLibraryItems()
       .then((result) => {
-        if (!cancelled) setItems(result);
+        if (cancelled) return;
+        setItems(result);
+        syncWatches(result);
       })
       .catch(() => {
         if (!cancelled) setItems([]);
@@ -39,6 +73,32 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
     };
   }, []);
 
+  // 订阅运行时快照：实时 patch 进度；terminal → 停止轮询 + 定向 reconciliation
+  useEffect(() => {
+    return subscribeAnalysisRuntime(() => {
+      const current = itemsRef.current;
+      const next: LibraryItemViewModel[] = [];
+      for (const item of current) {
+        if (!item.activeAnalysisJobId) {
+          next.push(item);
+          continue;
+        }
+        const snap = getAnalysisRuntimeSnapshot(item.activeAnalysisJobId);
+        if (!snap) {
+          next.push(item);
+          continue;
+        }
+        if (!ACTIVE_STATUSES.includes(snap.status)) {
+          unwatchAnalysisJob(item.activeAnalysisJobId, true);
+          watchedRef.current.delete(item.activeAnalysisJobId);
+          void reconcileItem(item.ref);
+        }
+        next.push({ ...item, analysisProgress: snap.progress, analysisStage: snap.stage });
+      }
+      setItems(next);
+    });
+  }, []);
+
   // D6：requiredAction=merge 时触发合并；合并后刷新库
   const handleMerge = async (item: LibraryItemViewModel) => {
     if (item.ref.kind !== "sync_recording") return;
@@ -49,6 +109,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
     }
     const result = await buildLibraryItems();
     setItems(result);
+    syncWatches(result);
   };
 
   // 查看原视频（open stream 在新窗口）
@@ -85,6 +146,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
     }
     const result = await buildLibraryItems();
     setItems(result);
+    syncWatches(result);
   };
 
   const filtered = useMemo(() => {

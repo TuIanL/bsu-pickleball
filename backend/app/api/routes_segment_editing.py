@@ -29,6 +29,7 @@ def patch_segment(
     if seg is None:
         raise HTTPException(404, "Segment 不存在")
     try:
+        take = get_capture_take(db, seg.capture_take_id)
         seg = segment_edit_service.patch_segment(
             db,
             seg,
@@ -37,6 +38,7 @@ def patch_segment(
             corrected_end_ms=corrected_end_ms,
             is_highlight=is_highlight,
             expected_version=expected_version,
+            take_duration_ms=take.duration_ms if take is not None else None,
         )
         db.commit()
     except ValueError as e:

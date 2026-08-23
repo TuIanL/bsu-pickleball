@@ -139,6 +139,7 @@ class Settings(BaseModel):
     player_lock_bootstrap_court_margin_ft: float = 12.0  # bootstrap 期间球场外扩（英尺）
     player_lock_lost_reconnect_court_margin_ft: float = 20.0  # lost 重连球场外扩（英尺）
     player_lock_enable_appearance_score: bool = False  # 是否启用人脸/外观特征重连评分
+    four_player_appearance_mode: str = "shadow"  # disabled | shadow | enabled
 
     # ---- 重复重叠 track 抑制（同一目标被跟踪器分身时的去重）----
     player_duplicate_track_iou_threshold: float = 0.6  # 判定同一目标所需的最小 bbox 重叠度
@@ -457,6 +458,7 @@ def get_settings() -> Settings:
         ),
         player_lock_enable_appearance_score=os.getenv("PICKLEBALL_PLAYER_LOCK_ENABLE_APPEARANCE_SCORE", "false").lower()
         in {"1", "true", "yes"},
+        four_player_appearance_mode=os.getenv("PICKLEBALL_FOUR_PLAYER_APPEARANCE_MODE", "shadow").lower(),
         player_duplicate_track_iou_threshold=_clamp_float(
             os.getenv("PICKLEBALL_PLAYER_DUPLICATE_TRACK_IOU_THRESHOLD", "0.6"), 0.0, 1.0
         ),

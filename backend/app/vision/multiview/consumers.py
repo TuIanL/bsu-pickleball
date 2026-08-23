@@ -14,6 +14,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+ACCEPTED_IDENTITY_STATUSES = {"confirmed_observed", "confirmed_recovered", "interpolated"}
+
 
 @dataclass(frozen=True)
 class FusedTrackPoint:
@@ -46,6 +48,8 @@ def metric_eligibility_policy(
     if fusion_status == "predicted":
         # 预测点：visualization yes，movement/heatmap 默认 no。
         return False
+    if fusion_status == "interpolated":
+        return metric_eligible_flag
     return False  # unavailable
 
 
@@ -68,6 +72,9 @@ def movement_points(
             continue
         status = str(sample.get("fusion_status", "unavailable"))
         eligible = bool(sample.get("metric_eligible", False))
+        identity_status = str(sample.get("identity_status", "confirmed_observed"))
+        if identity_status not in ACCEPTED_IDENTITY_STATUSES:
+            continue
         if not policy(status, metric_eligible_flag=eligible):
             continue
         points.append(

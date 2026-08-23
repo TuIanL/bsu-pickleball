@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { ArrowRight, LineChart } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
 import { taskListPathForJob, withTaskListContext, taskContextForJob } from "../app/navigationContext";
+import type { LibraryView } from "../components/library/viewCapabilities";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -15,27 +16,31 @@ import { formatPercent, formatSeconds } from "../services/analysisDiagnostics";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { isActiveAnalysisJob, analysisStatusMeta, cameraAngleLabel, analysisModeLabel, formatDateTime, errorToNotice, formatPlayerId } from "../utils/analysisHelpers";
 
-export function AnalysisDetailsPage({ jobId, onNavigate, embedded }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean }) {
+export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean; onSelectView?: (view: LibraryView) => void }) {
   const { error, job, report, result } = useAnalysisResultReport(jobId);
 
+  const embeddedFallback = (message: string) =>
+    embedded ? <div className="grid min-h-[50vh] place-items-center px-6 text-center text-sm text-[var(--capture-text-muted,#8f9d96)]">{message}</div> : null;
+
   if (job === undefined || report === undefined) {
-    return <StatusState title="正在加载分析详情" body="正在读取任务元数据、报告和算法结果。" onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
+    return embeddedFallback("正在加载分析详情…") ?? <StatusState title="正在加载分析详情" body="正在读取任务元数据、报告和算法结果。" onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
   }
 
   if (error) {
-    return <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
+    return embeddedFallback(error.body) ?? <StatusState title={error.title} body={error.body} notice={error} onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
   }
 
   if (!job) {
-    return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能已经被删除。`} onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
+    return embeddedFallback(`任务 ${jobId} 不存在。`) ?? <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能已经被删除。`} onNavigate={onNavigate} backPath={taskListPathForJob(job)} />;
   }
 
   if (isActiveAnalysisJob(job)) {
-    return <AnalysisJobPage jobId={jobId} onNavigate={onNavigate} />;
+    // embedded 下不把完整 AnalysisJobPage 塞进工作区；由概览「查看进度」承载
+    return embeddedFallback("该分析仍在执行中，请返回概览查看进度。") ?? <AnalysisJobPage jobId={jobId} onNavigate={onNavigate} />;
   }
 
   if (job.status === "failed") {
-    return (
+    return embeddedFallback("分析失败，未生成详情。") ?? (
       <StatusState
         title="分析任务失败"
         body={job.publicErrorMessage ?? job.errorMessage ?? "该任务没有生成可用分析详情，请返回任务管理或重新上传。"}
@@ -55,7 +60,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded }: { jobId: st
   }
 
   if (job.status === "canceled") {
-    return (
+    return embeddedFallback("分析已取消，未生成详情。") ?? (
       <StatusState
         title="分析任务已取消"
         body="该任务没有生成分析详情。可以返回任务管理删除记录，或重新上传创建新任务。"
@@ -114,7 +119,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded }: { jobId: st
               <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
                 {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
               </p>
-              <button className="mt-5 green-button w-full" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/vision`))} type="button">
+              <button className="mt-5 green-button w-full" onClick={() => (embedded && onSelectView ? onSelectView("analysis") : onNavigate(contextualPath(`/analysis/${job.id}/vision`)))} type="button">
                 打开视频分析
                 <ArrowRight size={16} aria-hidden="true" />
               </button>

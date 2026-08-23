@@ -18,6 +18,18 @@ from app.vision.player_tracking_engine.player_lock_types import (
     PlayerLockUpdate,
     PlayerSlot,
 )
+from app.vision.player_tracking_engine.player_appearance import (
+    AppearanceTemplateGallery,
+    PlayerAppearanceDescriptor,
+)
+
+
+# Bootstrap may legitimately see a player a few feet beyond a sideline, but the
+# historical 12 ft all-axis margin also admitted staff beside the court.  Keep
+# the generous baseline (longitudinal) allowance while making lateral
+# membership selective enough to reject persistent off-court people.
+BOOTSTRAP_MAX_LATERAL_MARGIN_FT = 4.0
+BOOTSTRAP_ASSIGNMENT_MAX_STALE_SECONDS = 0.25
 
 
 def _distance(a: list[float], b: list[float]) -> float:
@@ -52,6 +64,7 @@ class PlayerLockManager:
         self._track_to_slot: dict[int, str] = {}
         self._frame_width: int | None = None
         self._frame_height: int | None = None
+        self._reconnect_evidence: dict[tuple[str, int], int] = {}
 
         for idx in range(self.config.target_player_count):
             identity_id = f"Player_{idx + 1}"
@@ -65,6 +78,7 @@ class PlayerLockManager:
         frame=None,
         frame_width: int | None = None,
         frame_height: int | None = None,
+        appearance_by_track: dict[int, PlayerAppearanceDescriptor] | None = None,
     ) -> PlayerLockUpdate:
         # 记录画面尺寸（用于 bootstrap 中心优先排序；缺失时退化为按置信度排序）
         self._frame_width = frame_width
@@ -77,8 +91,9 @@ class PlayerLockManager:
                 except AttributeError:
                     pass
 
+        appearance_by_track = appearance_by_track or {}
         if not self._bootstrap_complete and frame_index < self.config.bootstrap_max_frames:
-            self._run_bootstrap(frame_index, positions)
+            self._run_bootstrap(frame_index, positions, appearance_by_track)
 
         if frame_index >= self.config.bootstrap_max_frames and not self._bootstrap_complete:
             self._finalize_bootstrap(frame_index)
@@ -102,7 +117,13 @@ class PlayerLockManager:
                     and matched.track_id not in locked_track_ids
                     and (owner is None or owner == slot.identity_id)
                 ):
-                    self._update_slot_from_position(slot, matched, frame_index)
+                    self._update_slot_from_position(
+                        slot,
+                        matched,
+                        frame_index,
+                        appearance_by_track.get(matched.track_id),
+                        allow_template_update=True,
+                    )
                     locked_track_ids.add(matched.track_id)
                     self._track_to_slot[matched.track_id] = slot.identity_id
                     track_hints[matched.track_id] = slot.identity_id
@@ -118,6 +139,7 @@ class PlayerLockManager:
             recovery_slots,
             positions,
             locked_track_ids,
+            appearance_by_track,
         )
         for slot, candidate, score in recovery_assignments:
             previous_state = slot.state
@@ -132,7 +154,14 @@ class PlayerLockManager:
             reconnect_candidates.add(candidate.track_id)
             self._track_to_slot[candidate.track_id] = slot.identity_id
             track_hints[candidate.track_id] = slot.identity_id
-            self._update_slot_from_position(slot, candidate, frame_index)
+            self._update_slot_from_position(
+                slot,
+                candidate,
+                frame_index,
+                appearance_by_track.get(candidate.track_id),
+                allow_template_update=False,
+            )
+            slot.identity_epoch += 1
             if swap_reason:
                 diagnostics.append(
                     PlayerIdentityDiagnostic(
@@ -277,7 +306,12 @@ class PlayerLockManager:
         confidence: float,
         observed_frames: int,
     ) -> None:
-        if side and not self._side_has_capacity(side):
+        already_occupies_side = (
+            side is not None
+            and slot.assignment_side == side
+            and slot.state in {"tentative", "locked", "lost", "fallback_tentative"}
+        )
+        if side and not already_occupies_side and not self._side_has_capacity(side):
             self._track_to_slot.pop(track_id, None)
             return
         slot.current_track_id = track_id
@@ -292,7 +326,7 @@ class PlayerLockManager:
         slot.confidence_ema = 0.7 * slot.confidence_ema + 0.3 * confidence
         slot.observed_frames = observed_frames
         self._track_to_slot[track_id] = slot.identity_id
-        if slot.state in ("searching", "fallback_tentative"):
+        if slot.state in ("searching", "tentative", "fallback_tentative"):
             slot.state = "tentative"
             if slot.observed_frames >= self.config.lock_min_hits:
                 slot.state = "locked"
@@ -312,22 +346,35 @@ class PlayerLockManager:
 
     # ---------- bootstrap ----------
 
-    def _run_bootstrap(self, frame_index: int, positions: Sequence[PlayerFramePosition]) -> None:
+    def _run_bootstrap(
+        self,
+        frame_index: int,
+        positions: Sequence[PlayerFramePosition],
+        appearance_by_track: dict[int, PlayerAppearanceDescriptor],
+    ) -> None:
         if frame_index < self.config.bootstrap_min_frames:
-            self._collect_bootstrap_observations(frame_index, positions)
+            self._collect_bootstrap_observations(frame_index, positions, appearance_by_track)
             return
-        self._collect_bootstrap_observations(frame_index, positions)
+        self._collect_bootstrap_observations(frame_index, positions, appearance_by_track)
         self._try_early_lock(frame_index)
 
-    def _collect_bootstrap_observations(self, frame_index: int, positions: Sequence[PlayerFramePosition]) -> None:
+    def _collect_bootstrap_observations(
+        self,
+        frame_index: int,
+        positions: Sequence[PlayerFramePosition],
+        appearance_by_track: dict[int, PlayerAppearanceDescriptor],
+    ) -> None:
         for pos in positions:
             # fix-multiview-cam1-bootstrap-4player D1：bootstrap 收集用"纵向可判"
             # 门槛（stage="bootstrap"），x 出界（outside_tracking_area）不拒绝。
             if not self._is_identity_candidate(pos, stage="bootstrap"):
                 continue
-            if not self._is_in_court_neighborhood(pos.court_position, self.config.bootstrap_court_margin_ft):
+            if not self._is_in_bootstrap_neighborhood(
+                pos.court_position, self.config.bootstrap_court_margin_ft
+            ):
                 continue
             tl = self._bootstrap_tracklets.setdefault(pos.track_id, _BootstrapTracklet())
+            tl.appearance_template.update(appearance_by_track.get(pos.track_id), confirmed_observed=True)
             tl.frame_indices.append(frame_index)
             tl.confidences.append(pos.confidence)
             if pos.court_position is not None:
@@ -350,7 +397,7 @@ class PlayerLockManager:
             for slot in self.slots.values():
                 assigned.update(slot.track_id_history)
             half_length = self.court.length_ft / 2.0
-            for track_id, tl in self._bootstrap_candidate_entries():
+            for track_id, tl in self._bootstrap_candidate_entries(frame_index=frame_index):
                 if track_id in assigned:
                     continue
                 slot = self._first_searching_slot()
@@ -383,7 +430,9 @@ class PlayerLockManager:
             )
         self._bootstrap_complete = True
 
-    def _bootstrap_candidate_entries(self) -> list[tuple[int, _BootstrapTracklet]]:
+    def _bootstrap_candidate_entries(
+        self, *, frame_index: int | None = None
+    ) -> list[tuple[int, _BootstrapTracklet]]:
         # 已通过门控/置信度过滤的候选排序。
         # fix-multiview-player-identity D3：近端大尺寸候选（画面近端、bbox 大、清晰）
         # 优先于"距画面中心最近"，避免近端球员因 bbox 中心偏离画面中心而被远端候选抢占。
@@ -403,6 +452,13 @@ class PlayerLockManager:
                 continue
             if tl.mean_confidence() < self.config.searching_conf:
                 continue
+            if frame_index is not None:
+                max_stale_frames = max(
+                    1,
+                    int(round(float(self.config.fps) * BOOTSTRAP_ASSIGNMENT_MAX_STALE_SECONDS)),
+                )
+                if not tl.frame_indices or frame_index - max(tl.frame_indices) > max_stale_frames:
+                    continue
             entries.append((track_id, tl))
         entries.sort(
             key=lambda item: (
@@ -415,11 +471,37 @@ class PlayerLockManager:
         return entries
 
     def _assign_bootstrap_candidates(self, frame_index: int) -> None:
+        # A late stable tracklet is first admitted as ``tentative`` when it has
+        # only ``min_observed_frames`` samples.  Refresh that same incumbent on
+        # later bootstrap ticks so it can accumulate to ``lock_min_hits``.
+        # Previously it was immediately excluded by ``track_id_history`` and
+        # stayed tentative forever, which prevented a late real P2 from
+        # replacing an intentionally empty slot.
+        for slot in self.slots.values():
+            if slot.state != "tentative" or slot.current_track_id is None:
+                continue
+            track_id = int(slot.current_track_id)
+            tl = self._bootstrap_tracklets.get(track_id)
+            if tl is None:
+                continue
+            quadrant = self._infer_quadrant(tl)
+            if quadrant is not None and quadrant != self._slot_home_quadrant(slot):
+                continue
+            self._assign_candidate_to_slot(
+                slot=slot,
+                track_id=track_id,
+                side=self._side_from_quadrant(quadrant),
+                quadrant=quadrant,
+                frame_index=frame_index,
+                confidence=tl.mean_confidence(),
+                observed_frames=len(tl.frame_indices),
+            )
+
         # 第一遍：象限匹配优先——每个象限取"中心最近"的候选锁定到对应槽位。
         assigned: set[int] = set()
         for slot in self.slots.values():
             assigned.update(slot.track_id_history)
-        for track_id, tl in self._bootstrap_candidate_entries():
+        for track_id, tl in self._bootstrap_candidate_entries(frame_index=frame_index):
             if track_id in assigned:
                 continue
             quadrant = self._infer_quadrant(tl)
@@ -436,9 +518,10 @@ class PlayerLockManager:
                 observed_frames=len(tl.frame_indices),
             )
             if slot.current_track_id == track_id:
+                slot.appearance_template = tl.appearance_template
                 assigned.add(track_id)
         # 第二遍：象限未知（中心线附近）的候选填任意 searching 槽，避免没家。
-        for track_id, tl in self._bootstrap_candidate_entries():
+        for track_id, tl in self._bootstrap_candidate_entries(frame_index=frame_index):
             if track_id in assigned:
                 continue
             if self._infer_quadrant(tl) is not None:
@@ -456,6 +539,7 @@ class PlayerLockManager:
                 observed_frames=len(tl.frame_indices),
             )
             if slot.current_track_id == track_id:
+                slot.appearance_template = tl.appearance_template
                 assigned.add(track_id)
 
     def _infer_quadrant(self, tl: _BootstrapTracklet) -> str | None:
@@ -560,6 +644,28 @@ class PlayerLockManager:
             -margin_ft <= x <= self.court.width_ft + margin_ft and -margin_ft <= y <= self.court.length_ft + margin_ft
         )
 
+    def _is_in_bootstrap_neighborhood(
+        self, court_position: list[float], longitudinal_margin_ft: float
+    ) -> bool:
+        """Use an axis-aware court gate while identities are still untrusted.
+
+        Baseline depth is perspective-sensitive and players often stand well
+        beyond it, so the configured bootstrap margin remains valid for ``y``.
+        Sideline membership is much less ambiguous: candidates more than four
+        feet outside ``x=[0, court_width]`` are spectators/staff and must not
+        occupy one of the four irreversible bootstrap slots.
+        """
+        x, y = float(court_position[0]), float(court_position[1])
+        lateral_margin = min(
+            max(0.0, float(longitudinal_margin_ft)),
+            BOOTSTRAP_MAX_LATERAL_MARGIN_FT,
+        )
+        longitudinal_margin = max(0.0, float(longitudinal_margin_ft))
+        return (
+            -lateral_margin <= x <= self.court.width_ft + lateral_margin
+            and -longitudinal_margin <= y <= self.court.length_ft + longitudinal_margin
+        )
+
     def _classify_candidate(self, court_position: list[float], slot_state: str) -> str:
         if self.court.is_in_court_bounds(court_position[0], court_position[1]):
             return "inside_court"
@@ -620,6 +726,7 @@ class PlayerLockManager:
         slots: Sequence[PlayerSlot],
         positions: Sequence[PlayerFramePosition],
         occupied_track_ids: set[int],
+        appearance_by_track: dict[int, PlayerAppearanceDescriptor],
     ) -> list[tuple[PlayerSlot, PlayerFramePosition, float]]:
         """Greedily make a deterministic one-to-one reconnect assignment.
 
@@ -647,6 +754,10 @@ class PlayerLockManager:
                 if self._candidate_side_conflicts(slot, position):
                     continue
                 score = self._compute_reconnect_score(slot, position)
+                if self.config.enable_appearance_score:
+                    distance = slot.appearance_template.distance_to(appearance_by_track.get(position.track_id))
+                    if distance is not None:
+                        score += self.config.appearance_score_weight * (1.0 - distance)
                 if score < self.config.reconnect_threshold:
                     continue
                 pairs.append((score, slot.identity_id, position.track_id, slot, position))
@@ -656,15 +767,31 @@ class PlayerLockManager:
             seen_track_ids.clear()
 
         pairs.sort(key=lambda item: (-item[0], item[1], item[2]))
+        scores_by_slot: dict[str, list[float]] = {}
+        for score, identity_id, _track_id, _slot, _position in pairs:
+            scores_by_slot.setdefault(identity_id, []).append(score)
         assigned_slots: set[str] = set()
         assigned_tracks = set(occupied_track_ids)
         assignments: list[tuple[PlayerSlot, PlayerFramePosition, float]] = []
+        active_evidence_keys: set[tuple[str, int]] = set()
         for score, _identity_id, _track_id, slot, position in pairs:
             if slot.identity_id in assigned_slots or position.track_id in assigned_tracks:
                 continue
+            competing = scores_by_slot.get(slot.identity_id, [])
+            if len(competing) > 1 and competing[0] - competing[1] < self.config.reconnect_ambiguity_margin:
+                continue
+            evidence_key = (slot.identity_id, position.track_id)
+            active_evidence_keys.add(evidence_key)
+            evidence_count = self._reconnect_evidence.get(evidence_key, 0) + 1
+            self._reconnect_evidence[evidence_key] = evidence_count
             assigned_slots.add(slot.identity_id)
             assigned_tracks.add(position.track_id)
+            if evidence_count < max(1, self.config.reconnect_confirmation_frames):
+                continue
             assignments.append((slot, position, score))
+        self._reconnect_evidence = {
+            key: count for key, count in self._reconnect_evidence.items() if key in active_evidence_keys
+        }
         return assignments
 
     def _conf_threshold_for_state(self, state: str) -> float:
@@ -680,7 +807,15 @@ class PlayerLockManager:
 
     # ---------- slot management ----------
 
-    def _update_slot_from_position(self, slot: PlayerSlot, pos: PlayerFramePosition, frame_index: int) -> None:
+    def _update_slot_from_position(
+        self,
+        slot: PlayerSlot,
+        pos: PlayerFramePosition,
+        frame_index: int,
+        appearance: PlayerAppearanceDescriptor | None = None,
+        *,
+        allow_template_update: bool = True,
+    ) -> None:
         prev_pos = slot.last_confirmed_position_m
         previous_seen_frame = slot.last_seen_frame
         slot.current_track_id = pos.track_id
@@ -703,6 +838,10 @@ class PlayerLockManager:
         slot.confidence_ema = 0.7 * slot.confidence_ema + 0.3 * pos.confidence
         slot.observed_frames += 1
         slot.lost_frames = 0
+        slot.appearance_template.update(
+            appearance,
+            confirmed_observed=allow_template_update and slot.state == "locked",
+        )
         if slot.state == "lost":
             slot.state = "locked"
             self._record_initial_lock(slot.identity_id, pos.track_id, frame_index)
@@ -1011,6 +1150,7 @@ class _BootstrapTracklet:
     bbox_centers: list[tuple[float, float]] = field(default_factory=list)
     # fix-multiview-player-identity D3：bbox 面积记录（近端大尺寸优先排序用）
     bbox_areas: list[float] = field(default_factory=list)
+    appearance_template: AppearanceTemplateGallery = field(default_factory=AppearanceTemplateGallery)
 
     def mean_confidence(self) -> float:
         return sum(self.confidences) / len(self.confidences) if self.confidences else 0.0

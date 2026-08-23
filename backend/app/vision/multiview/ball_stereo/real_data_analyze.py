@@ -53,10 +53,10 @@ def _projection(calib_path: str, orientation: str, view_id: str):
     return result, anchor
 
 
-def _triangulate_row(p1, p2, o1, used2, obs2, t2) -> dict | None:
-    best, besti, bd = None, None, 1e9
+def _triangulate_row(p1, p2, o1, used2, obs2, t2, max_time_gate_ms: float = 40.0) -> dict | None:
+    best, besti, best_o2, best_tt, bd = None, None, None, None, 1e9
     for j, (o2, tt) in enumerate(zip(obs2, t2)):
-        if abs(tt - o1["t_ms"]) > 200.0 or used2[j]:
+        if abs(tt - o1["t_ms"]) > max_time_gate_ms or used2[j]:
             continue
         try:
             xyz = triangulate_linear(p1.projection, p2.projection, (o1["u"], o1["v"]), (o2["u"], o2["v"]))
@@ -70,13 +70,13 @@ def _triangulate_row(p1, p2, o1, used2, obs2, t2) -> dict | None:
         d2 = np.hypot(h2[0] / h2[2] - o2["u"], h2[1] / h2[2] - o2["v"])
         if d1 + d2 < bd:
             bd = d1 + d2
-            best, besti = (xyz, d1 + d2), j
+            best, besti, best_o2, best_tt = (xyz, d1 + d2), j, o2, tt
     if best is None:
         return None
     used2[besti] = True
     xyz, reproj = best
-    return {"t1_ms": o1["t_ms"], "t2_ms": tt, "u1": o1["u"], "v1": o1["v"],
-            "u2": o2["u"], "v2": o2["v"], "x": float(xyz[0]), "y": float(xyz[1]),
+    return {"t1_ms": o1["t_ms"], "t2_ms": best_tt, "u1": o1["u"], "v1": o1["v"],
+            "u2": best_o2["u"], "v2": best_o2["v"], "x": float(xyz[0]), "y": float(xyz[1]),
             "z": float(xyz[2]), "reproj": float(reproj)}
 
 
@@ -96,7 +96,7 @@ def main() -> None:
     used2 = [False] * len(obs2)
     rows = []
     for o1 in obs1:
-        r = _triangulate_row(p1, p2, o1, used2, obs2, t2)
+        r = _triangulate_row(p1, p2, o1, used2, obs2, t2, max_time_gate_ms=40.0)
         if r is not None:
             rows.append(r)
     rows.sort(key=lambda r: r["t1_ms"])
@@ -142,8 +142,8 @@ def main() -> None:
         pts.sort(key=lambda r: r["t1_ms"])
         obs = []
         for r in pts:
-            obs.append(Observation(r["t1_ms"], 0, r["u1"], r["v1"], p1.projection, paired=True))
-            obs.append(Observation(r["t2_ms"], 1, r["u2"], r["v2"], p2.projection, paired=True))
+            obs.append(Observation(r["t1_ms"] / 1000.0, 0, r["u1"], r["v1"], p1.projection, paired=True))
+            obs.append(Observation(r["t2_ms"] / 1000.0, 1, r["u2"], r["v2"], p2.projection, paired=True))
         t0, t1s = pts[0]["t1_ms"], pts[-1]["t1_ms"]
         span = max(t1s - t0, 1.0) / 1000.0
 

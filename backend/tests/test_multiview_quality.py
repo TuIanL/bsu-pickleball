@@ -61,6 +61,13 @@ def test_intrinsic_interpolated_downweighted():
     assert interpolated < real * 0.5
 
 
+def test_metric_policy_accepts_only_explicitly_eligible_interpolation():
+    from app.vision.multiview.consumers import metric_eligibility_policy
+
+    assert metric_eligibility_policy("interpolated", metric_eligible_flag=True)
+    assert not metric_eligibility_policy("interpolated", metric_eligible_flag=False)
+
+
 def test_intrinsic_tracking_lost_low():
     detected = view_intrinsic_quality(IntrinsicFeatures(detector_confidence=0.8, tracking_status="detected"))
     lost = view_intrinsic_quality(IntrinsicFeatures(detector_confidence=0.8, tracking_status="lost"))

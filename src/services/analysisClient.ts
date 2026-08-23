@@ -12,11 +12,13 @@ import type {
   BounceEventsArtifact,
   CalibrationPoint,
   ManualCalibrationResponse,
+  MultiviewBallStereoEvidenceArtifact,
   PoseOverlayArtifact,
   ReconstructedBallTrajectoryArtifact,
   ServeEventsArtifact,
   TrackingOverlayArtifact,
   FusedPlayerOverlayArtifact,
+  FourPlayerIdentificationQuality,
   StructuredVisualizationData,
   VisualizationManifest,
   VideoUploadResponse,
@@ -59,6 +61,38 @@ export interface VidatPackage {
   package_dir: string;
   manifest: { video?: { file?: string; fps?: number; duration?: number }; [key: string]: unknown };
   imported_at: string | null;
+  name: string;
+  owner: string | null;
+  note: string | null;
+  provenance: "generated" | "derived" | string;
+  source_package_id: string | null;
+  created_at: string | null;
+  deleted_at: string | null;
+  is_active: boolean;
+}
+
+export interface VidatPackageMetadataInput {
+  name?: string | null;
+  owner?: string | null;
+  note?: string | null;
+}
+
+export interface VidatPackageComparison {
+  capture_take_id: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  changes: Array<{ kind: string; before?: unknown; after?: unknown; winner_changed?: boolean }>;
+}
+
+export interface VidatServiceStatus {
+  url: string;
+  status: "running" | "stopped" | "uncontrolled" | "unknown" | string;
+  running: boolean;
+  controlled: boolean;
+  started?: boolean;
+  stopped?: boolean;
+  pid?: number | null;
+  started_at?: string | number | null;
 }
 
 export interface VidatImportPreview {
@@ -148,6 +182,7 @@ function normalizeAnalysisJobSummary(job: AnalysisJobSummary): AnalysisJobSummar
       recording_session_id: job.metadata.recording_session_id ?? recordingSessionId,
       camera_slot: job.metadata.camera_slot ?? cameraSlot,
     },
+    viewRuns: job.viewRuns && Object.keys(job.viewRuns).length > 0 ? job.viewRuns : undefined,
   };
 }
 
@@ -931,6 +966,14 @@ export async function getFusedPlayerOverlay(
   return path ? requestJson<FusedPlayerOverlayArtifact>(path) : null;
 }
 
+export async function getFourPlayerIdentificationQuality(
+  jobId: string,
+): Promise<FourPlayerIdentificationQuality> {
+  return requestJson<FourPlayerIdentificationQuality>(
+    `/api/analysis/jobs/${jobId}/artifacts/four-player-identification-quality`,
+  );
+}
+
 export async function getPlayerDisplayDiagnostics(
   jobId: string,
   playerId: string,
@@ -971,6 +1014,13 @@ export async function getReconstructedBallTrajectory(
 ): Promise<ReconstructedBallTrajectoryArtifact | null> {
   const path = result.artifacts.reconstructed_ball_trajectory_url;
   return path ? requestJson<ReconstructedBallTrajectoryArtifact>(path) : null;
+}
+
+export async function getMultiviewBallStereoEvidence(
+  result: AnalysisPipelineResult,
+): Promise<MultiviewBallStereoEvidenceArtifact | null> {
+  const path = result.artifacts.multiview_ball_stereo_evidence_url;
+  return path ? requestJson<MultiviewBallStereoEvidenceArtifact>(path) : null;
 }
 
 export function getAnalysisOverlayVideoUrl(result: AnalysisPipelineResult): string | undefined {
@@ -1409,16 +1459,59 @@ export function listVidatPackages(captureTakeId: string): Promise<VidatPackage[]
   return requestJson(`/api/vidat/capture-takes/${captureTakeId}/packages`);
 }
 
-export function createVidatPackage(captureTakeId: string): Promise<VidatPackage> {
-  return requestJson(`/api/vidat/capture-takes/${captureTakeId}/packages`, { method: "POST" });
+export function createVidatPackage(
+  captureTakeId: string,
+  metadata: VidatPackageMetadataInput = {},
+): Promise<VidatPackage> {
+  return requestJson(`/api/vidat/capture-takes/${captureTakeId}/packages`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata),
+  });
+}
+
+export function deriveVidatPackage(
+  packageId: string,
+  metadata: VidatPackageMetadataInput = {},
+): Promise<VidatPackage> {
+  return requestJson(`/api/vidat/packages/${packageId}/versions`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata),
+  });
+}
+
+export function updateVidatPackage(
+  packageId: string,
+  metadata: VidatPackageMetadataInput,
+): Promise<VidatPackage> {
+  return requestJson(`/api/vidat/packages/${packageId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata),
+  });
+}
+
+export function deleteVidatPackage(packageId: string): Promise<VidatPackage> {
+  return requestJson(`/api/vidat/packages/${packageId}`, { method: "DELETE" });
+}
+
+export function purgeVidatPackage(packageId: string): Promise<{ package_id: string; purged: boolean }> {
+  return requestJson(`/api/vidat/packages/${packageId}/purge`, { method: "POST" });
+}
+
+export function compareVidatPackages(firstPackageId: string, secondPackageId: string): Promise<VidatPackageComparison> {
+  return requestJson(`/api/vidat/packages/${firstPackageId}/compare/${secondPackageId}`);
 }
 
 export function openVidatPackage(packageId: string): Promise<{ url: string; package_id: string }> {
   return requestJson(`/api/vidat/packages/${packageId}/open`, { method: "POST" });
 }
 
-export function startVidatService(): Promise<{ url: string; started: boolean }> {
+export function startVidatService(): Promise<VidatServiceStatus> {
   return requestJson("/api/vidat/service/start", { method: "POST" });
+}
+
+export function getVidatServiceStatus(): Promise<VidatServiceStatus> {
+  return requestJson("/api/vidat/service/status");
+}
+
+export function stopVidatService(): Promise<VidatServiceStatus> {
+  return requestJson("/api/vidat/service/stop", { method: "POST" });
 }
 
 export function previewVidatImport(packageId: string, annotation: unknown): Promise<VidatImportPreview> {
@@ -1427,7 +1520,17 @@ export function previewVidatImport(packageId: string, annotation: unknown): Prom
   });
 }
 
-export function confirmVidatImport(packageId: string, confirmationToken: string, annotation: unknown): Promise<{ audit_id: string }> {
+export function confirmVidatImport(
+  packageId: string,
+  confirmationToken: string,
+  annotation: unknown,
+): Promise<{
+  audit_id: string;
+  source_package_id: string;
+  result_package_id: string;
+  active_vidat_package_id: string;
+  operations: unknown[];
+}> {
   return requestJson(`/api/vidat/packages/${packageId}/import-confirmations`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirmation_token: confirmationToken, annotation }),

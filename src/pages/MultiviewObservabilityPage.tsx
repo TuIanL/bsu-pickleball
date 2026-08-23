@@ -3,11 +3,12 @@ import type { ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, Film, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
+import type { LibraryView } from "../components/library/viewCapabilities";
 import { PageFrame } from "../components/PageFrame";
 import { StatusState } from "../components/StatusState";
-import { getAnalysisJob, getMultiviewDebugVideoUrl, getMultiviewObservability, getMultiviewRecoveryEpisodes } from "../services/analysisClient";
+import { getAnalysisJob, getFourPlayerIdentificationQuality, getMultiviewDebugVideoUrl, getMultiviewObservability, getMultiviewRecoveryEpisodes } from "../services/analysisClient";
 import { isAnalysisApiError } from "../services/analysisClient";
-import type { AnalysisJobSummary } from "../types/report";
+import type { AnalysisJobSummary, FourPlayerIdentificationQuality } from "../types/report";
 import type {
   DebugObservabilityData,
   FusionObservabilityData,
@@ -249,21 +250,74 @@ function PlayerDisplayDiagnosticsPanel({ jobId, debugAvailable, onSeek }: { jobI
   );
 }
 
-export function MultiviewObservabilityPage({ jobId, onNavigate, embedded }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean }) {
+function FourPlayerIdentificationPanel({ quality }: { quality: FourPlayerIdentificationQuality }) {
+  const available = quality.status === "available";
+  const passed = available && quality.verdict === "pass";
+  const section: ObservabilitySection = {
+    availability: available ? (passed ? "available" : "partial") : "unavailable",
+    status: available ? (passed ? "达标" : "未达标") : "未生成",
+    reason_code: quality.failure_reasons?.join(", ") || quality.detail || undefined,
+  };
+  const players = ["Player_1", "Player_2", "Player_3", "Player_4"]
+    .map((playerId) => quality.players[playerId])
+    .filter(Boolean);
+  const cameraProfiles = Object.entries(quality.camera_profiles ?? {});
+  return (
+    <Panel title="四人身份识别质量" eyebrow="FOUR-PLAYER IDENTITY" section={section} testId="four-player-identification-panel">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {players.map((player) => {
+          const appearance = player.appearance;
+          const appearanceRate = appearance.descriptor_attempts > 0
+            ? appearance.descriptor_available / appearance.descriptor_attempts
+            : null;
+          return <article className="rounded-2xl border border-[#DDE9D6] bg-[#FBFDF9] p-4" key={player.player_id}>
+            <div className="flex items-center justify-between gap-3"><strong className="text-[#14241B]">{player.player_id.replace("Player_", "P")}</strong><span className="text-xs font-bold text-slate-500">覆盖 {Math.round(player.canonical_coverage * 100)}%</span></div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+              <MetricRow label="最长丢失" value={`${player.longest_gap_seconds.toFixed(2)} s`} />
+              <MetricRow label="轨迹碎片" value={player.source_track_count} />
+              <MetricRow label="重连" value={player.reconnect_count} />
+              <MetricRow label="歧义 / 隔离" value={`${player.ambiguous_count} / ${player.quarantined_count}`} />
+            </div>
+            <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-[#168A34]">衣着外观诊断</summary><div className="mt-2 grid gap-2">
+              <MetricRow label="特征可用率" value={appearanceRate == null ? "无采样" : `${Math.round(appearanceRate * 100)}%`} />
+              <MetricRow label="模板更新 / 冻结" value={`${appearance.template_updates} / ${appearance.template_freezes}`} />
+              <MetricRow label="参与身份决策" value={appearance.decision_contributions} />
+              <MetricRow label="支持 / 冲突" value={`${appearance.decision_supports} / ${appearance.decision_conflicts}`} />
+              <MetricRow label="降级原因" value={appearance.fallback_reason} />
+            </div></details>
+          </article>;
+        })}
+      </div>
+      {!players.length ? <p className="rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F7FBF5] p-5 text-sm text-slate-600">{quality.detail || "该历史任务未生成逐球员质量诊断。"}</p> : null}
+      <DetailsBlock label="查看算法与跨机位颜色校准">
+        <MetricRow label="算法版本" value={quality.algorithm_version} />
+        <MetricRow label="确认球员" value={quality.confirmed_roster_count == null ? null : `${quality.confirmed_roster_count} / 4`} />
+        <MetricRow label="配置签名" value={quality.config_signature} />
+        <MetricRow label="颜色校准 profile" value={Object.keys(quality.camera_profiles ?? {}).length || "未形成（自动降级）"} />
+        {cameraProfiles.map(([profileId, profile]) => <MetricRow key={profileId} label={`${profileId} confidence`} value={typeof profile.confidence === "number" ? `${Math.round(profile.confidence * 100)}%${profile.available === false ? "（未启用）" : ""}` : "不可用"} />)}
+      </DetailsBlock>
+    </Panel>
+  );
+}
+
+export function MultiviewObservabilityPage({ jobId, onNavigate, embedded, onSelectView }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean; onSelectView?: (view: LibraryView) => void }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
   const [summary, setSummary] = useState<MultiviewObservabilitySummary | null | undefined>(undefined);
+  const [identityQuality, setIdentityQuality] = useState<FourPlayerIdentificationQuality | undefined>(undefined);
   const [error, setError] = useState<unknown>(null);
   const [selectedSeek, setSelectedSeek] = useState<number | null>(null);
-  useEffect(() => { let alive = true; Promise.all([getAnalysisJob(jobId), getMultiviewObservability(jobId)]).then(([nextJob, nextSummary]) => { if (!alive) return; setJob(nextJob); setSummary(nextSummary); }).catch((reason) => { if (alive) setError(reason); }); return () => { alive = false; }; }, [jobId]);
+  useEffect(() => { let alive = true; Promise.all([getAnalysisJob(jobId), getMultiviewObservability(jobId), getFourPlayerIdentificationQuality(jobId)]).then(([nextJob, nextSummary, nextQuality]) => { if (!alive) return; setJob(nextJob); setSummary(nextSummary); setIdentityQuality(nextQuality); }).catch((reason) => { if (alive) setError(reason); }); return () => { alive = false; }; }, [jobId]);
   const scrollToStage = useCallback((stage: PipelineStageId) => {
     document.getElementById(`panel-${stage}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
-  if (error) return <StatusState title="读取双摄协同详情失败" body={isAnalysisApiError(error) ? error.message : "无法读取后端 observability summary。"} onNavigate={onNavigate} backPath="/analysis/tasks" />;
-  if (job === undefined || summary === undefined) return <StatusState title="正在读取双摄协同详情" body="正在加载后端发布的同步、融合、恢复与精修状态。" onNavigate={onNavigate} backPath="/analysis/tasks" />;
+  const embeddedFallback = (message: string) =>
+    embedded ? <div className="grid min-h-[50vh] place-items-center px-6 text-center text-sm text-[var(--capture-text-muted,#8f9d96)]">{message}</div> : null;
+  if (error) return embeddedFallback(isAnalysisApiError(error) ? error.message : "读取双摄协同详情失败。") ?? <StatusState title="读取双摄协同详情失败" body={isAnalysisApiError(error) ? error.message : "无法读取后端 observability summary。"} onNavigate={onNavigate} backPath="/analysis/tasks" />;
+  if (job === undefined || summary === undefined || identityQuality === undefined) return embeddedFallback("正在读取双摄协同详情…") ?? <StatusState title="正在读取双摄协同详情" body="正在加载后端发布的同步、融合、恢复、四人识别与精修状态。" onNavigate={onNavigate} backPath="/analysis/tasks" />;
   const returnPath = taskListPathForJob(job);
-  if (!job) return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在。`} onNavigate={onNavigate} backPath={returnPath} />;
-  if (!summary) return <StatusState title="该任务不适用双摄协同详情" body="当前任务不是 multiview 分析，可返回任务页查看通用结果。" onNavigate={onNavigate} backPath={returnPath} />;
+  if (!job) return embeddedFallback(`任务 ${jobId} 不存在。`) ?? <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在。`} onNavigate={onNavigate} backPath={returnPath} />;
+  if (!summary) return embeddedFallback("该任务不适用双摄协同详情。") ?? <StatusState title="该任务不适用双摄协同详情" body="当前任务不是 multiview 分析，可返回任务页查看通用结果。" onNavigate={onNavigate} backPath={returnPath} />;
   const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
   const debugAvailable = summary.sections.debug.availability === "available" && Boolean(summary.sections.debug.data?.video_available);
-  return <PageFrame>{!embedded && <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><button className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-[#168A34]" onClick={() => onNavigate(returnPath)} type="button"><ArrowLeft size={16} aria-hidden="true" />返回任务管理</button><button className="quiet-button px-3 py-2 text-sm" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}`))} type="button">返回任务详情</button></div>}<JointRunStatusHeader summary={summary} /><div className="mt-6"><L1OverviewBar summary={summary} onStageClick={scrollToStage} /></div><div className="mt-6 grid gap-6 xl:grid-cols-2"><SyncAuthorityPanel section={summary.sections.sync} /><FusionQualityPanel section={summary.sections.fusion} /><RecoveryPanel jobId={jobId} section={summary.sections.recovery} canSeek={debugAvailable} onSeek={(episode) => setSelectedSeek(episode.debug_video_seek_ms ?? null)} /><RefinementSafetyPanel section={summary.sections.refinement} /><DebugReplayPanel jobId={jobId} section={summary.sections.debug} selectedSeek={selectedSeek} /><PlayerDisplayDiagnosticsPanel jobId={jobId} debugAvailable={debugAvailable} onSeek={(ms) => setSelectedSeek(ms)} /><section className="sport-card p-5 sm:p-6"><details><summary className="flex cursor-pointer items-center gap-2 text-sm font-bold text-[#14241B]"><SlidersHorizontal size={16} aria-hidden="true" />技术运行详情</summary><div className="mt-4 grid gap-2 text-sm"><MetricRow label="任务 ID" value={summary.job_id} /><MetricRow label="run ID" value={summary.run_id} /><MetricRow label="请求模式" value={summary.requested_mode} /><MetricRow label="有效模式" value={summary.effective_mode} /><MetricRow label="DEBUG" value={summary.sections.debug.status} /></div></details></section></div></PageFrame>;
+  return <PageFrame>{!embedded && <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><button className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-[#168A34]" onClick={() => onNavigate(returnPath)} type="button"><ArrowLeft size={16} aria-hidden="true" />返回任务管理</button><button className="quiet-button px-3 py-2 text-sm" onClick={() => onNavigate(contextualPath(`/analysis/${job.id}`))} type="button">返回任务详情</button></div>}<JointRunStatusHeader summary={summary} /><div className="mt-6"><L1OverviewBar summary={summary} onStageClick={scrollToStage} /></div><div className="mt-6 grid gap-6 xl:grid-cols-2"><FourPlayerIdentificationPanel quality={identityQuality} /><SyncAuthorityPanel section={summary.sections.sync} /><FusionQualityPanel section={summary.sections.fusion} /><RecoveryPanel jobId={jobId} section={summary.sections.recovery} canSeek={debugAvailable} onSeek={(episode) => setSelectedSeek(episode.debug_video_seek_ms ?? null)} /><RefinementSafetyPanel section={summary.sections.refinement} /><DebugReplayPanel jobId={jobId} section={summary.sections.debug} selectedSeek={selectedSeek} /><PlayerDisplayDiagnosticsPanel jobId={jobId} debugAvailable={debugAvailable} onSeek={(ms) => setSelectedSeek(ms)} /><section className="sport-card p-5 sm:p-6"><details><summary className="flex cursor-pointer items-center gap-2 text-sm font-bold text-[#14241B]"><SlidersHorizontal size={16} aria-hidden="true" />技术运行详情</summary><div className="mt-4 grid gap-2 text-sm"><MetricRow label="任务 ID" value={summary.job_id} /><MetricRow label="run ID" value={summary.run_id} /><MetricRow label="请求模式" value={summary.requested_mode} /><MetricRow label="有效模式" value={summary.effective_mode} /><MetricRow label="DEBUG" value={summary.sections.debug.status} /></div></details></section></div></PageFrame>;
 }

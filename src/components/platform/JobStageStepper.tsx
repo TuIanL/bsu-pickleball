@@ -1,6 +1,7 @@
 import {
   Activity,
   Bone,
+  Camera,
   Clock,
   Crosshair,
   FileText,
@@ -8,6 +9,7 @@ import {
   Film,
   Footprints,
   Frame,
+  GitMerge,
   Ruler,
   Scan,
   Upload,
@@ -18,7 +20,7 @@ import type { AnalysisStage } from "../../types/report";
 /**
  * 任务分析阶段"胶囊式横向 stepper"。
  *
- * 将 12 个分析阶段压缩为一行可横向滑动的胶囊节点（图标 + 短标签 + 连接线），
+ * 将 API 返回的当前模式阶段压缩为一行可横向滑动的胶囊节点（图标 + 短标签 + 连接线），
  * 已完成=绿、当前=橙呼吸、失败=红、跳过=灰、待办=浅灰；容器自动把
  * active（无则 failed）节点滚动到可视区，默认聚焦当前运行阶段。
  *
@@ -218,4 +220,12 @@ const STAGE_ICONS: Record<string, ReactNode> = {
   metrics: <Activity size={13} aria-hidden="true" />,
   visualization: <Film size={13} aria-hidden="true" />,
   report: <FileText size={13} aria-hidden="true" />,
+  "multiview-input-check": <Ruler size={13} aria-hidden="true" />,
+  "multiview-view-a": <Camera size={13} aria-hidden="true" />,
+  "multiview-view-b": <Camera size={13} aria-hidden="true" />,
+  "multiview-fusion": <GitMerge size={13} aria-hidden="true" />,
+  "multiview-joint": <Activity size={13} aria-hidden="true" />,
+  "multiview-metrics": <Activity size={13} aria-hidden="true" />,
+  "multiview-visualization": <Film size={13} aria-hidden="true" />,
+  "multiview-report": <FileText size={13} aria-hidden="true" />,
 };

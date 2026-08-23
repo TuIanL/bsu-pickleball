@@ -28,7 +28,13 @@ export function SegmentManagerPage({
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [activeVideoIndex, setActiveVideoIndex] = useState(0);
   const [loadError, setLoadError] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(0);
+  const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
+  const [playbackMode, setPlaybackMode] = useState<"idle" | "segment">("idle");
+  const [boundarySavingId, setBoundarySavingId] = useState<string | null>(null);
   const playerRef = useRef<SegmentVideoPlayerHandle>(null);
+  const labelClickTimerRef = useRef<number | null>(null);
 
   // 可播放视频源来自 take.video_ids（按机位顺序），单摄即单选项、双摄可切换机位。
   // 不使用 source_session_id（采集会话 ID ≠ video_id，流地址会 404）。
@@ -69,28 +75,105 @@ export function SegmentManagerPage({
     void loadData();
   }, [loadData]);
 
+  useEffect(() => () => {
+    if (labelClickTimerRef.current !== null) window.clearTimeout(labelClickTimerRef.current);
+  }, []);
+
   const filteredSegments = useMemo(() => {
     const active = segments.filter(s => s.edit_status !== "superseded");
     return filter === "all" ? active : active.filter(s => s.segment_type === filter);
   }, [segments, filter]);
 
+  const playableSegments = useMemo(
+    () => segments
+      .filter((segment) => segment.edit_status !== "superseded")
+      .sort((a, b) => {
+        const aEnd = a.effective_end_ms ?? a.end_ms ?? Number.POSITIVE_INFINITY;
+        const bEnd = b.effective_end_ms ?? b.end_ms ?? Number.POSITIVE_INFINITY;
+        return (aEnd - (a.effective_start_ms ?? a.start_ms)) - (bEnd - (b.effective_start_ms ?? b.start_ms));
+      }),
+    [segments],
+  );
+
+  const findSegmentAtTime = useCallback((ms: number) => {
+    return playableSegments.find((segment) => {
+      const start = segment.effective_start_ms ?? segment.start_ms;
+      const end = segment.effective_end_ms ?? segment.end_ms ?? durationMs;
+      return end > start && ms >= start && ms <= end;
+    });
+  }, [durationMs, playableSegments]);
+
   const timelineTotalMs = useMemo(() => {
     const max = segments.reduce((m, s) => Math.max(m, s.effective_end_ms ?? s.end_ms ?? 0), 0);
-    return Math.max(max, 60000);
-  }, [segments]);
+    return Math.max(max, durationMs, take?.duration_ms ?? 0, 60000);
+  }, [durationMs, segments, take?.duration_ms]);
+
+  const invalidSegments = useMemo(
+    () => segments.filter((segment) => {
+      if (segment.edit_status === "superseded") return false;
+      const start = segment.effective_start_ms ?? segment.start_ms;
+      const end = segment.effective_end_ms ?? segment.end_ms;
+      return start < 0 || (end != null && (end <= start || end - start < 500));
+    }),
+    [segments],
+  );
 
   const handleSegmentClick = (seg: CaptureSegmentSummary) => {
-    playerRef.current?.seekToTakeTime(seg.effective_start_ms ?? seg.start_ms);
+    const start = seg.effective_start_ms ?? seg.start_ms;
+    const end = seg.effective_end_ms ?? seg.end_ms ?? Math.max(durationMs, start + 500);
+    if (end <= start) return;
+    setActiveSegmentId(seg.id);
+    setCurrentTimeMs(start);
+    setPlaybackMode("segment");
+    playerRef.current?.playSegment(start, end);
   };
 
-  const handleSegmentDoubleClick = (seg: CaptureSegmentSummary) => {
-    const end = seg.effective_end_ms ?? seg.end_ms;
-    if (end) playerRef.current?.playSegment(seg.effective_start_ms ?? seg.start_ms, end);
+  const handleLabelClick = (event: React.MouseEvent, seg: CaptureSegmentSummary) => {
+    event.stopPropagation();
+    if (labelClickTimerRef.current !== null) window.clearTimeout(labelClickTimerRef.current);
+    // Keep single-click playback compatible with double-click label editing.
+    labelClickTimerRef.current = window.setTimeout(() => {
+      labelClickTimerRef.current = null;
+      handleSegmentClick(seg);
+    }, 250);
+  };
+
+  const handleLabelDoubleClick = (event: React.MouseEvent, seg: CaptureSegmentSummary) => {
+    event.stopPropagation();
+    if (labelClickTimerRef.current !== null) {
+      window.clearTimeout(labelClickTimerRef.current);
+      labelClickTimerRef.current = null;
+    }
+    setEditingLabel(seg.id);
   };
 
   const handleTimelineSeek = (ms: number) => {
+    setCurrentTimeMs(ms);
+    setActiveSegmentId(findSegmentAtTime(ms)?.id ?? null);
+    setPlaybackMode("idle");
     playerRef.current?.seekToTakeTime(ms);
   };
+
+  const handleTimelineSegmentClick = (segmentId: string, startMs: number) => {
+    setActiveSegmentId(segmentId);
+    setCurrentTimeMs(startMs);
+    setPlaybackMode("idle");
+    playerRef.current?.seekToTakeTime(startMs);
+  };
+
+  const handleTimeUpdate = useCallback((ms: number) => {
+    setCurrentTimeMs(ms);
+    const active = findSegmentAtTime(ms);
+    if (active) setActiveSegmentId(active.id);
+  }, [findSegmentAtTime]);
+
+  const handleDurationReady = useCallback((ms: number) => {
+    setDurationMs(Math.max(0, ms));
+  }, []);
+
+  const handleSegmentPlaybackEnd = useCallback(() => {
+    setPlaybackMode("idle");
+  }, []);
 
   const handleSaveLabel = async (seg: CaptureSegmentSummary, label: string) => {
     setSaveStatus("saving");
@@ -104,6 +187,31 @@ export function SegmentManagerPage({
     }
     setEditingLabel(null);
   };
+
+  const handleBoundaryChange = useCallback(async (
+    segId: string,
+    startMs: number,
+    endMs: number,
+    expectedVersion: number,
+  ) => {
+    setBoundarySavingId(segId);
+    setSaveStatus("saving");
+    try {
+      const updated = await patchSegment(segId, {
+        corrected_start_ms: startMs,
+        corrected_end_ms: endMs,
+        expected_version: expectedVersion,
+      });
+      setSegments((current) => current.map((segment) => segment.id === segId ? updated : segment));
+      setSaveStatus("saved");
+      window.setTimeout(() => setSaveStatus("idle"), 1500);
+    } catch {
+      setSaveStatus("error");
+      await loadData();
+    } finally {
+      setBoundarySavingId(null);
+    }
+  }, [loadData]);
 
   const handleSplit = async (seg: CaptureSegmentSummary) => {
     const ms = seg.effective_start_ms ?? seg.start_ms + 3000;
@@ -175,7 +283,7 @@ export function SegmentManagerPage({
   if (!take) return <div className="p-8 text-slate-400">加载中...</div>;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4" data-playback-mode={playbackMode}>
       {/* Header */}
       <div className="flex items-center gap-4">
         {!embedded && (
@@ -210,7 +318,9 @@ export function SegmentManagerPage({
             fps={take.capture_mode === "dual" ? 30 : 30}
             trackOptions={trackOptions}
             onTrackChange={(i) => setActiveVideoIndex(i)}
-            onTimeUpdate={() => { /* timeline sync */ }}
+            onTimeUpdate={handleTimeUpdate}
+            onDurationReady={handleDurationReady}
+            onSegmentPlaybackEnd={handleSegmentPlaybackEnd}
           />
         ) : (
           <div className="grid aspect-video place-items-center rounded-2xl border border-[#DDE9D6] bg-slate-50 text-sm text-[#98A2B3]">
@@ -236,10 +346,13 @@ export function SegmentManagerPage({
             <div
               key={seg.id}
               className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer text-sm border mb-1 transition ${
-                selectedIds.has(seg.id) ? "border-[#22C55E] bg-[#F0FDF4]" : "border-transparent hover:bg-slate-50"
+                activeSegmentId === seg.id
+                  ? "border-[#2F80ED] bg-[#EFF6FF] ring-1 ring-[#2F80ED]/30"
+                  : selectedIds.has(seg.id)
+                    ? "border-[#22C55E] bg-[#F0FDF4]"
+                    : "border-transparent hover:bg-slate-50"
               }`}
               onClick={() => handleSegmentClick(seg)}
-              onDoubleClick={() => handleSegmentDoubleClick(seg)}
             >
               <input
                 type="checkbox"
@@ -260,7 +373,9 @@ export function SegmentManagerPage({
               ) : (
                 <span
                   className="flex-1 font-medium text-[#14241B] text-xs truncate"
-                  onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(seg.id); }}
+                  title="单击播放；双击编辑标签"
+                  onClick={(e) => handleLabelClick(e, seg)}
+                  onDoubleClick={(e) => handleLabelDoubleClick(e, seg)}
                 >
                   {seg.label}
                 </span>
@@ -293,22 +408,23 @@ export function SegmentManagerPage({
         </div>
       </div>
 
+      {invalidSegments.length > 0 && (
+        <div className="rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-xs text-[#B91C1C]">
+          检测到 {invalidSegments.length} 个片段边界异常（结束时间必须晚于起始时间且时长不少于 0.5 秒），已禁止继续拖拽保存。请先修正或重新生成片段。
+        </div>
+      )}
+
       {/* Timeline */}
       <EditableSegmentTimeline
         segments={segments}
         events={events}
         totalDurationMs={timelineTotalMs}
-        currentTimeMs={0}
+        currentTimeMs={currentTimeMs}
+        activeSegmentId={activeSegmentId}
+        savingSegmentId={boundarySavingId}
         onSeek={handleTimelineSeek}
-        onBoundaryChange={async (segId, startMs, endMs) => {
-          setSaveStatus("saving");
-          try {
-            await patchSegment(segId, { corrected_start_ms: startMs, corrected_end_ms: endMs });
-            setSaveStatus("saved");
-            setTimeout(() => setSaveStatus("idle"), 1500);
-            await loadData();
-          } catch { setSaveStatus("error"); }
-        }}
+        onSegmentClick={handleTimelineSegmentClick}
+        onBoundaryChange={handleBoundaryChange}
       />
     </div>
   );

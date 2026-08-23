@@ -43,9 +43,16 @@ def patch_segment(
     corrected_end_ms: int | None = None,
     is_highlight: bool | None = None,
     expected_version: int | None = None,
+    take_duration_ms: int | None = None,
 ) -> CaptureSegment:
     if expected_version is not None and segment.edit_version != expected_version:
         raise ValueError(f"edit_version 冲突: 期望 {expected_version}，当前 {segment.edit_version}")
+
+    boundary_changed = corrected_start_ms is not None or corrected_end_ms is not None
+    if boundary_changed:
+        candidate_start = corrected_start_ms if corrected_start_ms is not None else _eff_start(segment)
+        candidate_end = corrected_end_ms if corrected_end_ms is not None else _eff_end(segment)
+        _validate_candidate_bounds(candidate_start, candidate_end, take_duration_ms)
 
     changed = False
     if label is not None:
@@ -307,14 +314,18 @@ def _create_op(
 
 
 def validate_bounds_in_take(seg: CaptureSegment, take_duration_ms: int) -> None:
-    start = _eff_start(seg)
-    end = _eff_end(seg)
+    _validate_candidate_bounds(_eff_start(seg), _eff_end(seg), take_duration_ms)
+
+
+def _validate_candidate_bounds(start: int, end: int | None, take_duration_ms: int | None) -> None:
     if start < 0:
         raise ValueError("effective_start_ms 不能小于 0")
     if end is not None:
         if end <= start:
             raise ValueError("effective_end_ms 必须大于 effective_start_ms")
-        if end > take_duration_ms:
+        if end - start < _MIN_RALLY_MS:
+            raise ValueError(f"片段时长不能小于 {_MIN_RALLY_MS}ms")
+        if take_duration_ms is not None and take_duration_ms >= 0 and end > take_duration_ms:
             raise ValueError(f"effective_end_ms {end} 超出录制时长 {take_duration_ms}")
 
 

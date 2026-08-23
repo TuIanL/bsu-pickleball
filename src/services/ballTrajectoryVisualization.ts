@@ -4,6 +4,7 @@ import type {
   BounceEventsArtifact,
   PlayerRosterEntry,
   ReconstructedBallTrajectoryArtifact,
+  ReconstructedBallTrajectorySample,
   ReconstructedBallTrajectorySegment,
   ShotOwnershipStatus,
 } from "../types/report";
@@ -295,23 +296,38 @@ function buildReconstructedTrajectory(
   segment: ReconstructedBallTrajectorySegment,
   sequence: number,
 ): EstimatedBallTrajectory {
-  const points: EstimatedTrajectoryPoint[] = segment.samples.flatMap((sample) => {
-    const x = finiteNumber(sample.court_xy?.[0]);
-    const y = finiteNumber(sample.court_xy?.[1]);
-    const timestamp = finiteNumber(sample.timestamp_sec);
-    const frameIndex = finiteNumber(sample.frame_index);
+  const points: EstimatedTrajectoryPoint[] = segment.samples.flatMap((sample, sampleIndex) => {
+    const raw = sample as ReconstructedBallTrajectorySample & {
+      x_ft?: number;
+      y_ft?: number;
+      z_ft?: number;
+      t_sec?: number;
+    };
+    if (raw.validity === "invalid") return [];
+    const x = finiteNumber(raw.court_xy?.[0] ?? raw.x_ft);
+    const y = finiteNumber(raw.court_xy?.[1] ?? raw.y_ft);
+    const timestamp = finiteNumber(raw.timestamp_sec ?? raw.t_sec);
+    const frameIndex = finiteNumber(raw.frame_index ?? sampleIndex);
     if (x === null || y === null || timestamp === null || frameIndex === null) return [];
-    const interpolated = sample.source === "interpolated" || sample.source === "model_predicted";
+    const source = raw.source === "model_predicted"
+      ? "model_predicted"
+      : raw.source === "interpolated"
+        ? "interpolated"
+        : raw.source === "anchor"
+          ? "anchor"
+          : "detected";
+    const estimatedHeight = finiteNumber(raw.estimated_height_ft ?? raw.z_ft);
+    const interpolated = source === "interpolated" || source === "model_predicted";
     return [{
       frameIndex,
       timestampSeconds: timestamp,
       courtXFt: x,
       courtYFt: y,
-      estimatedHeightFt: finiteNumber(sample.estimated_height_ft),
-      confidence: finiteNumber(sample.confidence),
+      estimatedHeightFt: estimatedHeight,
+      confidence: finiteNumber(raw.confidence),
       interpolated,
-      heightSource: sample.height_source ?? null,
-      source: sample.source,
+      heightSource: raw.height_source ?? null,
+      source,
     }];
   });
   if (points.length === 0) {
@@ -504,7 +520,7 @@ export function filterTrajectories(
 export function buildReconstructedBallTrajectoryVisualization(
   artifact?: ReconstructedBallTrajectoryArtifact | null,
 ): BallTrajectoryVisualizationData {
-  if (!artifact || artifact.status !== "available" || artifact.segments.length === 0) {
+  if (!artifact || !["available", "partial"].includes(artifact.status) || artifact.segments.length === 0) {
     return { trajectories: [], bounces: [], discardedPointCount: 0, shots: [], playerRoster: [] };
   }
   const segments = artifact.segments.filter(isDisplayableSegment);
@@ -518,4 +534,3 @@ export function buildReconstructedBallTrajectoryVisualization(
     playerRoster: artifact.player_roster ?? [],
   };
 }
-

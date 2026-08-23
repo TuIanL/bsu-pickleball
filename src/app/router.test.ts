@@ -181,4 +181,47 @@ describe("parseLocation", () => {
       seekToMs: 184201,
     });
   });
+
+  // ── analysis 系列路由 return → 导航段覆盖（Library / capture origin 高亮）──
+
+  it("overrides navigationSection to library for a library return on analysis routes", () => {
+    expect(parseLocation("/analysis/job-1", "?return=%2Flibrary%2Fsync_recording%2Fsync-1%3Fview%3Doverview")).toMatchObject({
+      name: "analysis-job",
+      jobId: "job-1",
+      navigationSection: "library",
+    });
+    expect(parseLocation("/analysis/job-1/vision", "?return=%2Flibrary%2Frecording%2Frec-1%3Fview%3Doverview")).toMatchObject({
+      name: "vision",
+      jobId: "job-1",
+      navigationSection: "library",
+    });
+  });
+
+  it("overrides navigationSection to capture for a capture return", () => {
+    expect(parseLocation("/analysis/job-1", "?return=%2Fcapture%2Ffs-1")).toMatchObject({
+      name: "analysis-job",
+      jobId: "job-1",
+      navigationSection: "capture",
+    });
+  });
+
+  it("keeps the original navigationSection when return is absent or invalid", () => {
+    expect(parseLocation("/analysis/job-1", "")).toMatchObject({
+      name: "analysis-job",
+      jobId: "job-1",
+      navigationSection: "analysis",
+    });
+    expect(parseLocation("/analysis/job-1", "?return=https%3A%2F%2Fevil.invalid%2Fx")).toMatchObject({
+      name: "analysis-job",
+      jobId: "job-1",
+      navigationSection: "analysis",
+    });
+  });
+
+  it("does not override navigationSection on non-analysis routes", () => {
+    expect(parseLocation("/library/upload/vid-1", "?return=%2Flibrary%2Fupload%2Fvid-1")).toMatchObject({
+      name: "library-item",
+      navigationSection: "library",
+    });
+  });
 });

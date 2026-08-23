@@ -22,7 +22,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobSummary, build_match_context
-from app.schemas.pipeline import AnalysisPipelineResult
+from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
 from app.services.multiview_result_composer import MultiViewResultComposer, build_fallback_fused_artifact
 from app.services.storage_service import StorageService
 from app.vision.multiview.artifact import (
@@ -189,6 +189,46 @@ class MultiViewAnalysisExecutor:
             raise RuntimeError(f"reference view {reference_view_id} child not found for parent {parent.id}")
         if len(children) < 2:
             raise RuntimeError(f"parent {parent.id} requires at least two source children")
+        self.store.update(parent.id, orchestrationStatus="fusing")
+
+        def emit_stage(stage_id: str, label: str, status: str, detail: str, progress: int) -> None:
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            progress_callback(
+                PipelineStageResult(
+                    id=stage_id,
+                    label=label,
+                    status=status,
+                    detail=detail,
+                    started_at=now,
+                    finished_at=now,
+                    progress=progress,
+                    public_message=detail,
+                )
+            )
+
+        emit_stage(
+            "multiview-input-check",
+            "素材与同步检查",
+            "done",
+            "双视频 / 双标定 / 同步信息检查通过",
+            100,
+        )
+        for view_id, stage_id, label in (
+            ("cam_1", "multiview-view-a", "A 机位视觉分析"),
+            ("cam_2", "multiview-view-b", "B 机位视觉分析"),
+        ):
+            child = children.get(view_id, (None, None))[1]
+            child_status = child.canonicalStatus if child is not None else "missing"
+            stage_status = "done" if child_status == "succeeded" else "failed"
+            emit_stage(
+                stage_id,
+                label,
+                stage_status,
+                f"{label}{'完成' if stage_status == 'done' else '未完成'}",
+                100 if stage_status == "done" else 0,
+            )
 
         secondary_view_id = next(vid for vid in children if vid != reference_view_id)
         reference_ref, reference_child = children[reference_view_id]
@@ -245,6 +285,13 @@ class MultiViewAnalysisExecutor:
         fusion_performed = False
 
         if eligibility.ready and authority_ready:
+            emit_stage(
+                "multiview-fusion",
+                "多视角球员轨迹融合",
+                "active",
+                "正在融合两路机位轨迹证据",
+                5,
+            )
             # 幂等复用：fusionRunId 已存在且 fused artifact 完整 → reuse
             existing = load_fused_artifact(run_dir / FUSED_TRAJECTORY_FILENAME) if parent.fusionRunId else None
             if (
@@ -275,6 +322,14 @@ class MultiViewAnalysisExecutor:
                     # 观测缺失/不可读 → 退化为 reference 单视角（job-level fallback 不变式）
                     logger.warning("融合执行失败，降级为单视角: %s", exc)
                     fused_artifact = None
+
+        emit_stage(
+            "multiview-fusion",
+            "多视角球员轨迹融合",
+            "done" if fusion_performed else "skipped",
+            "多视角球员轨迹融合完成" if fusion_performed else "未执行融合（单视角降级）",
+            100,
+        )
 
         if fused_artifact is None:
             # job-level fallback：用 reference view 单视角观测（不假装融合）
@@ -311,6 +366,14 @@ class MultiViewAnalysisExecutor:
 
         composer = MultiViewResultComposer(storage)
         reference_child = children[reference_view_id][1]
+        self.store.update(parent.id, orchestrationStatus="composing")
+        emit_stage(
+            "multiview-metrics",
+            "运动指标重算",
+            "active",
+            "正在基于双摄轨迹重算运动指标",
+            10,
+        )
         result = composer.build_pipeline_result(
             job=parent,
             fused_artifact=fused_artifact,
@@ -320,6 +383,9 @@ class MultiViewAnalysisExecutor:
             fusion_performed=fusion_performed,
             message=message,
         )
+        emit_stage("multiview-metrics", "运动指标重算", "done", "运动指标重算完成", 100)
+        emit_stage("multiview-visualization", "可视化输出", "done", "双摄结果可视化产物已生成", 100)
+        emit_stage("multiview-report", "报告生成", "active", "正在生成 Parent 报告", 10)
         # 持久化 Parent 的 AnalysisPipelineResult（单摄 pipeline 内部 _write_result 落盘，
         # 但 MultiView 走 executor 直接返回 → 必须在此显式落盘）。否则后端重启后
         # /result 读不到，前端拿不到 video_id 等产物 URL，视频与叠加层全部不可用。

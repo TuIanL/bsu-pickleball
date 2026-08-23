@@ -28,7 +28,6 @@ from app.schemas.analysis import (
     AnalysisJobSummary,
     AnalysisReport,
     AnalysisStage,
-    AnalysisStageId,
     AnalysisUploadMetadata,
 )
 from app.schemas.pipeline import AnalysisPipelineResult
@@ -104,7 +103,17 @@ def _on_worker_terminal(job: AnalysisJobSummary) -> None:
     if coordinator is not None:
         coordinator.on_job_terminal(job)
     if job.analysisKind == "multiview" and job.canonicalStatus == "succeeded":
-        _JOB_STORE.update(job.id, orchestrationStatus="completed")
+        from app.schemas.analysis import ViewRunSummary
+
+        view_ids = list((job.viewRuns or {}).keys()) or ["cam_1", "cam_2"]
+        _JOB_STORE.update(
+            job.id,
+            orchestrationStatus="completed",
+            viewRuns={
+                view_id: ViewRunSummary(status="succeeded", stage=job.stage, progress=100)
+                for view_id in view_ids
+            },
+        )
 
 
 # 全局 Worker 运行时单例
@@ -155,39 +164,6 @@ def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
     if was_started:
         start_analysis_worker()
 
-
-
-# 阶段顺序表（本模块用到的顺序，与 job_orchestration 里的一致）
-ORDERED_STAGES: list[AnalysisStageId] = [
-    "upload",
-    "queue",
-    "calibration",
-    "video-read",
-    "frame-sampling",
-    "detection",
-    "pose",
-    "tracking",
-    "projection",
-    "metrics",
-    "visualization",
-    "report",
-]
-
-# 每个阶段的中文标签 + 说明（与 job_orchestration 类似，但 detection/pose 文案偏向"预留"）
-STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
-    "upload": ("视频上传", "保存视频和基础比赛信息"),
-    "queue": ("任务排队", "等待视觉分析任务执行"),
-    "calibration": ("场地标定", "读取或跳过四角手工标定"),
-    "video-read": ("读取视频", "读取上传视频元数据和帧流"),
-    "frame-sampling": ("抽帧采样", "按时间轴抽取关键帧"),
-    "detection": ("目标检测", "预留 YOLO11 检测球员和场地元素"),
-    "pose": ("人体姿态", "预留 RTMPose26 识别人体关键点"),
-    "tracking": ("轨迹跟踪", "关联球员移动轨迹"),
-    "projection": ("脚点投影", "映射画面坐标到匹克球场"),
-    "metrics": ("运动指标", "计算移动距离、速度、厨房区停留和热力图"),
-    "visualization": ("可视化输出", "生成可供前端展示的结果引用"),
-    "report": ("报告生成", "生成报告 JSON 并交给前端展示"),
-}
 
 
 def create_mock_job(metadata: AnalysisUploadMetadata) -> AnalysisJobSummary:
@@ -410,8 +386,9 @@ def get_mock_job(job_id: str) -> AnalysisJobSummary | None:
     # 双摄 Parent 运行中：viewRuns 惰性刷新为 child 实时进度（不落盘，避免写放大）
     if job.analysisKind == "multiview" and job.canonicalStatus not in {"succeeded", "failed", "canceled"}:
         live = _get_coordinator().live_view_runs(job)
-        if live != job.viewRuns:
-            job = job.model_copy(update={"viewRuns": live})
+        projected = _get_coordinator().live_parent_snapshot(job, live)
+        if projected != job:
+            job = projected
     # multiview Parent 缺 videoId（历史任务或 result 未落盘时）→ 从 reference child 虚拟解析，
     # 保证前端始终能确定视频源（防止"后端重启后视频无法播放"复发）。
     if job.analysisKind == "multiview" and not job.videoId:

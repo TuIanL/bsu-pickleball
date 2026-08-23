@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from uuid import uuid4
 
 from app.core.config import get_settings
-from app.schemas.analysis import AnalysisJobSummary, build_match_context
+from app.schemas.analysis import AnalysisJobSummary, ViewRunSummary, build_match_context
 from app.schemas.pipeline import PipelineStageResult
 from app.services.analysis_executor_dispatch import _resolve_analysis_dir
 from app.services.analysis_window import resolve_analysis_window
@@ -33,7 +33,7 @@ from app.services.video_service import VideoService
 from app.vision.court_view import compute_expanded_detection_roi
 from app.vision.multiview.analysis_clock import CanonicalAnalysisClock
 from app.vision.multiview.association_global import GlobalPlayerAssociator
-from app.vision.multiview.court_frame import CourtOrientation
+from app.vision.multiview.court_frame import CourtOrientation, local_to_canonical
 from app.vision.multiview.court_frame import load_canonical_court_frame
 from app.vision.multiview.global_state import GlobalPlayerRegistry
 from app.vision.multiview.guidance import (
@@ -231,6 +231,97 @@ def _deserialize_joint_view_input(payload: Mapping[str, object]) -> JointViewInp
         video_id=str(payload.get("video_id") or payload.get("videoId") or ""),
         calibration_id=str(payload.get("calibration_id") or payload.get("calibrationId") or ""),
         court_orientation=payload.get("court_orientation") or payload.get("courtOrientation"),
+    )
+
+
+def _build_ball_virtual_projection(calibration, view_input: JointViewInput, frame_size: tuple[int, int]):
+    """从已有四角标定构造球侧近似虚拟相机；失败返回 None。"""
+    if calibration is None or calibration.inverse_homography is None or len(calibration.keypoints) < 4:
+        return None
+    from app.vision.multiview.ball_stereo.virtual_camera import decompose_virtual_camera
+
+    orientation = CourtOrientation(view_input.court_orientation or "identity")
+    canonical_corners: list[list[float]] = []
+    image_corners: list[list[float]] = []
+    for keypoint in calibration.keypoints:
+        x, y = local_to_canonical(float(keypoint.court.x), float(keypoint.court.y), orientation)
+        canonical_corners.append([x, y])
+        image_corners.append([float(keypoint.image.x), float(keypoint.image.y)])
+    result = decompose_virtual_camera(
+        view_id=view_input.camera_slot,
+        inverse_homography=calibration.inverse_homography.values,
+        image_width=int(frame_size[0]),
+        image_height=int(frame_size[1]),
+        orientation=orientation,
+        corner_canonical=canonical_corners,
+        corner_image=image_corners,
+    )
+    return result if result.available else None
+
+
+def _build_canonical_ball_processor(
+    *,
+    parent: AnalysisJobSummary,
+    settings,
+    view_inputs: list[JointViewInput],
+    runtimes: Mapping[str, JointViewRuntime],
+    calibrations: Mapping[str, object],
+):
+    """构造共享 canonical tick 的球 detector/tracker；模型或几何不可用时返回降级处理器。"""
+    from app.vision.multiview.ball_stereo.canonical_runner import CanonicalBallStereoProcessor
+
+    take_id = parent.metadata.capture_take_id or ""
+    reference_view_id = parent.referenceViewId or view_inputs[0].camera_slot
+    secondary_view_id = next(item.camera_slot for item in view_inputs if item.camera_slot != reference_view_id)
+    if not settings.ball_model_path:
+        return CanonicalBallStereoProcessor.unavailable(
+            job_id=parent.id, take_id=take_id, reason="未配置球检测模型（PICKLEBALL_BALL_MODEL_PATH）"
+        )
+
+    projections: dict[str, object] = {}
+    for item in view_inputs:
+        virtual = _build_ball_virtual_projection(
+            calibrations.get(item.camera_slot), item, runtimes[item.camera_slot].frame_size
+        )
+        if virtual is not None:
+            projections[item.camera_slot] = virtual.projection
+    if reference_view_id not in projections or secondary_view_id not in projections:
+        return CanonicalBallStereoProcessor.unavailable(
+            job_id=parent.id,
+            take_id=take_id,
+            reason="双摄球路虚拟相机不可用（需要两路有效标定与图像尺寸）",
+        )
+
+    from app.vision.detectors.ball_adapter import YoloBallDetectorAdapter
+    from app.vision.pickleball_game_analysis.ball_tracker import BallTracker, BallTrackerConfig
+
+    # 同一模型 adapter 可被两个 tracker 复用；每个 view 仍保留独立 tracker 状态。
+    detector = YoloBallDetectorAdapter(
+        model_path=str(settings.ball_model_path),
+        confidence_threshold=0.18,
+        device=getattr(settings, "detector_device", None),
+    )
+    detectors = {item.camera_slot: detector for item in view_inputs}
+    trackers = {
+        item.camera_slot: BallTracker(detector=detector, config=BallTrackerConfig())
+        for item in view_inputs
+    }
+    configured_stage_timeout = float(getattr(settings, "job_stage_timeout_seconds", 0) or 0)
+    # 球分析与 player joint 共用 canonical tick；给球侧预留独立预算，超时后只关闭
+    # 球处理器，避免把球模型异常升级成 Parent 整体失败。
+    ball_budget = configured_stage_timeout * 0.5 if configured_stage_timeout > 0 else None
+    return CanonicalBallStereoProcessor(
+        job_id=parent.id,
+        take_id=take_id,
+        reference_view_id=reference_view_id,
+        secondary_view_id=secondary_view_id,
+        detectors=detectors,
+        trackers=trackers,
+        projections=projections,
+        runtimes=runtimes,
+        frame_stride=parent.frameStride,
+        max_time_gate_ms=min(40.0, max(1.0, 1000.0 / max(float(parent.sourceFps or 30.0), 1.0))),
+        max_duration_seconds=ball_budget,
     )
 
 
@@ -488,8 +579,19 @@ class MultiViewJointExecutor:
                 expected_player_count=match_ctx.expected_player_count,
                 reference_view_id=reference_view_id,
             )
-            associator = GlobalPlayerAssociator(registry, max_association_distance_ft=3.0)
+            associator = GlobalPlayerAssociator(
+                registry,
+                max_association_distance_ft=3.0,
+                appearance_mode=getattr(settings, "four_player_appearance_mode", "shadow"),
+            )
             gen = GuidanceGenerator(CrossViewGuidancePolicy())
+            ball_processor = _build_canonical_ball_processor(
+                parent=parent,
+                settings=settings,
+                view_inputs=view_inputs,
+                runtimes=runtimes,
+                calibrations=calibrations,
+            )
             run = MultiViewJointRun(
                 run_id=run_id, capture_take_id=capture_take_id, reference_view_id=reference_view_id,
                 clock=clock, runtimes=runtimes, registry=registry, associator=associator,
@@ -508,6 +610,7 @@ class MultiViewJointExecutor:
                 execution_mode=resolution.execution_mode,
                 authoritative_joint_eligible=resolution.authoritative_joint_eligible,
                 debug_trace_enabled=bool(getattr(parent, "debugTraceEnabled", False)),
+                ball_processor=ball_processor,
             )
 
             # 5) 长任务执行(每 tick cancellation + 进度)
@@ -515,12 +618,27 @@ class MultiViewJointExecutor:
                 if progress_callback is None:
                     return
                 now = datetime.now(UTC).isoformat()
+                progress = min(95, max(5, int(done / max(1, total) * 95)))
+                # joint 模式没有 dedicated child；把同一 canonical tick 进度投影到
+                # Parent 内部的 A/B ViewRun，避免 API 长时间返回空对象或 queued 10%。
+                self.store.update(
+                    parent.id,
+                    orchestrationStatus="joint_tracking",
+                    viewRuns={
+                        view_id: ViewRunSummary(
+                            status="running",
+                            stage="multiview-joint",
+                            progress=progress,
+                        )
+                        for view_id in runtimes
+                    },
+                )
                 progress_callback(
                     PipelineStageResult(
                         id="multiview-joint", label="双摄协同跟踪", status="active",
                         detail=f"已处理 {done}/{total} 个 canonical tick",
                         started_at=now, finished_at=now,
-                        progress=min(95, max(5, int(done / max(1, total) * 95))),
+                        progress=progress,
                         public_message=f"双摄协同跟踪 {done}/{total}",
                     )
                 )
@@ -534,7 +652,60 @@ class MultiViewJointExecutor:
                 analysis_window=window_metadata,
                 cancellation_token=token, progress_callback=on_progress,
             )
+            # joint tick 已结束；从这一刻起单独公开球路阶段，保证状态机不会把
+            # future stage 点亮在 multiview-joint 仍 active 时。
+            now = datetime.now(UTC)
+            if progress_callback is not None:
+                progress_callback(
+                    PipelineStageResult(
+                        id="multiview-joint",
+                        label="双摄协同跟踪",
+                        status="done",
+                        detail="双摄协同跟踪完成，已生成共享 canonical 球候选输入",
+                        started_at=now,
+                        finished_at=now,
+                        progress=100,
+                        public_message="双摄协同跟踪完成",
+                    )
+                )
+            self.store.update(parent.id, orchestrationStatus="joint_ball_analysis")
+            ball_output = getattr(out, "ball_analysis", None)
+            ball_status = str(getattr(ball_output, "status", "unavailable"))
+            ball_detail = str(getattr(ball_output, "detail", "双摄球路分析不可用"))
+            pipeline_ball_status = {
+                "succeeded": "done",
+                "degraded": "partial",
+                "unavailable": "unavailable",
+                "failed": "failed",
+            }.get(ball_status, "unavailable")
+            if progress_callback is not None:
+                progress_callback(
+                    PipelineStageResult(
+                        id="multiview-ball-analysis",
+                        label="双摄球路分析",
+                        status="active",
+                        detail="正在整理 canonical 球路与立体证据",
+                        started_at=now,
+                        finished_at=now,
+                        progress=10,
+                        public_message="正在整理双摄球路",
+                    )
+                )
+                progress_callback(
+                    PipelineStageResult(
+                        id="multiview-ball-analysis",
+                        label="双摄球路分析",
+                        status=pipeline_ball_status,
+                        detail=ball_detail,
+                        started_at=now,
+                        finished_at=now,
+                        progress=100,
+                        public_message=ball_detail,
+                    )
+                )
             out.diagnostics.update(evidence_summary_from_artifact(out.trajectory))
+            if ball_output is not None:
+                out.diagnostics["ball_analysis"] = getattr(ball_output, "diagnostics", {})
             out.diagnostics["timing_provenance"] = {
                 slot: provider.metadata() for slot, provider in timing_providers.items()
             }
@@ -743,13 +914,10 @@ class MultiViewJointExecutor:
                     "双摄协同分析完成(joint_tracking_v2)。"
                     if out.diagnostics.get("effective_mode") == "multiview_fused"
                     else "双摄分析完成，但副摄证据不可用或覆盖不足，结果按降级模式展示。"
-                ), refinement=refinement,
+                ), refinement=refinement, ball_analysis=getattr(out, "ball_analysis", None),
             )
             result = storage.publicize_pipeline_result(result)
             storage.write_json(storage.output_json_path(parent.id), result.model_dump(mode="json"))
-
-            # Joint 模式球 3D 后置阶段（非阻塞）：产出 evidence v1 + v3（若有球模型）
-            _run_joint_ball_post_stage(parent, storage, videos, view_inputs)
 
             # Debug Replay is rendered only after the authoritative result and
             # refinement artifacts are published. Rendering consumes persisted

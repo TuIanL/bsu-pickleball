@@ -60,6 +60,10 @@ class FusedPlayerOverlayPlayer(BaseModel):
     donor_quality: float | None = Field(default=None, ge=0, le=1)
     # cross_view_projected 必须携带 donor view
     donor_view: str | None = None
+    donor_global_player_id: str | None = None
+    target_player_slot: str | None = None
+    geometry_residual_ft: float | None = Field(default=None, ge=0)
+    bbox_memory_owner_global_id: str | None = None
     # 数值 uncertainty（英尺）；V1 无 covariance 时保持 None
     uncertainty_ft: float | None = Field(default=None, ge=0)
     bbox_source: BBoxSource | None = None

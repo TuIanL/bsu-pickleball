@@ -173,10 +173,11 @@ describe("buildLibraryItems", () => {
     expect(oneCam.cam_2).toBeUndefined();
   });
 
-  it("recording 素材按 recordingSessionId 归属取 primary", async () => {
+  it("recording 素材按 recordingSessionId 归属：running 任务为 active，不占 primaryResult", async () => {
     const recJob = job({
       id: "r-job", analysisKind: "single_view", recordingSessionId: "rec-1",
       metadata: meta({ recording_session_id: "rec-1" }), status: "processing", progress: 62,
+      stages: [{ id: "tracking", label: "轨迹跟踪", status: "active", detail: "" }],
     });
     listAnalysisJobs.mockResolvedValue([recJob]);
     const items = await buildLibraryItems({
@@ -184,8 +185,37 @@ describe("buildLibraryItems", () => {
       jobs: [recJob],
     });
     const item = items.find((i) => i.ref.kind === "recording")!;
-    expect(item.primaryAnalysisJobId).toBe("r-job");
+    // active 与 primaryResult 分离：running 任务只进 activeAnalysisJobId，不成为结果
+    expect(item.activeAnalysisJobId).toBe("r-job");
+    expect(item.primaryResultAnalysisJobId).toBeUndefined();
+    expect(item.primaryAnalysisJobId).toBeUndefined();
     expect(item.analysisState).toBe("running");
+    expect(item.analysisProgress).toBe(62);
+    expect(item.analysisStage).toBe("轨迹跟踪");
+  });
+
+  it("再次分析期间 primaryResult 保持旧 completed 结果，不被 active 顶掉", async () => {
+    const oldResult = job({
+      id: "job-A", analysisKind: "single_view", recordingSessionId: "rec-1",
+      updatedAt: "2026-08-20T10:00:00Z",
+      metadata: meta({ recording_session_id: "rec-1", matchTitle: "旧比赛" }), status: "completed",
+    });
+    const newActive = job({
+      id: "job-B", analysisKind: "single_view", recordingSessionId: "rec-1",
+      updatedAt: "2026-08-20T11:00:00Z",
+      metadata: meta({ recording_session_id: "rec-1" }), status: "processing", progress: 46,
+    });
+    listAnalysisJobs.mockResolvedValue([oldResult, newActive]);
+    const items = await buildLibraryItems({
+      videos: [], recordings: [recording({ session_id: "rec-1" })], syncRecordings: [],
+      jobs: [oldResult, newActive],
+    });
+    const item = items.find((i) => i.ref.kind === "recording")!;
+    expect(item.primaryResultAnalysisJobId).toBe("job-A"); // 旧 completed 结果仍为结果
+    expect(item.primaryAnalysisJobId).toBe("job-A");
+    expect(item.activeAnalysisJobId).toBe("job-B"); // 新 running 只驱动进度
+    expect(item.analysisState).toBe("running");
+    expect(item.analysisProgress).toBe(46);
   });
 
   it("删除 AnalysisJob 契约：adapter 仅编排删除，不把 Job 生命周期当作 Library 资产生命周期", async () => {

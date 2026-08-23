@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Activity, Camera } from "lucide-react";
 import type { SyncRecordingSession } from "../types/report";
 import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
-import { taskListPath, withTaskListContext } from "../app/navigationContext";
+import { buildAnalysisProgressPath, taskListPath } from "../app/navigationContext";
 import type { CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { CourtCornerCalibrator } from "../components/platform/CourtCornerCalibrator";
 import { PageFrame } from "../components/PageFrame";
@@ -125,7 +125,10 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
         cameraSlot: camSlot,
       });
 
-      onNavigate(withTaskListContext(`/analysis/${job.id}`, taskContext));
+      // 统一生命周期：创建成功后进入 Analysis Progress（replace，Back 不回已提交的 Setup）。
+      // Library origin 用上游 return；采集入口无 return 时以当前录制会话 materialize capture return。
+      const effectiveReturn = returnParam ?? `/capture/${encodeURIComponent(sessionId)}`;
+      onNavigate(buildAnalysisProgressPath(job.id, effectiveReturn, undefined), { replace: true });
     } catch (err) {
       setSubmitError({
         title: "分析任务创建失败",

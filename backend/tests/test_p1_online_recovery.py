@@ -454,6 +454,27 @@ def test_wrong_roi_person_is_rejected_before_tracker_and_lock_reject_stays_out_o
     assert rejected.accepted is False
     assert rejected.reject_reason == "residual_too_large"
 
+    low_confidence = guided_candidate_pre_gate(
+        Detection(bbox=[10, 10, 30, 80], confidence=0.05),
+        homography=IDENTITY_H,
+        predicted_local=(20.0, 80.0),
+        max_residual_ft=1.0,
+        frame_width=640,
+        frame_height=480,
+        min_confidence=0.15,
+    )
+    assert low_confidence.reject_reason == "confidence_too_low"
+
+    spectator_shape = guided_candidate_pre_gate(
+        Detection(bbox=[10, 10, 110, 50], confidence=0.9),
+        homography=IDENTITY_H,
+        predicted_local=(60.0, 50.0),
+        max_residual_ft=1.0,
+        frame_width=640,
+        frame_height=480,
+    )
+    assert spectator_shape.reject_reason == "implausible_bbox_aspect"
+
     result = ViewFrameResult(
         frame_index=0,
         timestamp=0.0,

@@ -6,9 +6,14 @@ interface EditableSegmentTimelineProps {
   events: SessionTimelineEvent[];
   totalDurationMs: number;
   currentTimeMs: number;
+  activeSegmentId?: string | null;
+  savingSegmentId?: string | null;
   onSeek: (ms: number) => void;
-  onBoundaryChange: (segmentId: string, startMs: number, endMs: number) => void;
+  onSegmentClick?: (segmentId: string, startMs: number) => void;
+  onBoundaryChange: (segmentId: string, startMs: number, endMs: number, expectedVersion: number) => void | Promise<void>;
 }
+
+const MIN_SEGMENT_DURATION_MS = 500;
 
 const TRACKS = [
   { key: "set", label: "盘", color: "#F97316" } as const,
@@ -17,12 +22,31 @@ const TRACKS = [
 ];
 
 export function EditableSegmentTimeline({
-  segments, events, totalDurationMs, currentTimeMs, onSeek, onBoundaryChange,
+  segments,
+  events,
+  totalDurationMs,
+  currentTimeMs,
+  activeSegmentId = null,
+  savingSegmentId = null,
+  onSeek,
+  onSegmentClick,
+  onBoundaryChange,
 }: EditableSegmentTimelineProps) {
-  const scale = (ms: number) => `${(ms / totalDurationMs) * 100}%`;
+  const scale = (ms: number) => `${(Math.max(0, Math.min(ms, totalDurationMs)) / totalDurationMs) * 100}%`;
   const timelineRef = useRef<HTMLDivElement>(null);
-  const [dragging, setDragging] = useState<{ segId: string; handle: "left" | "right" } | null>(null);
-  const dragStartRef = useRef<{ mouseX: number; segStart: number; segEnd: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const [dragging, setDragging] = useState<{
+    segId: string;
+    handle: "left" | "right";
+    segStart: number;
+    segEnd: number;
+    draftStart: number;
+    draftEnd: number;
+    expectedVersion: number;
+  } | null>(null);
+  const [playheadDragging, setPlayheadDragging] = useState(false);
+  const dragStartRef = useRef<{ pointerId: number; pointerX: number; segStart: number; segEnd: number } | null>(null);
+  const playheadPointerIdRef = useRef<number | null>(null);
 
   const segmentsByType: Record<string, CaptureSegmentSummary[]> = {};
   for (const seg of segments) {
@@ -30,37 +54,98 @@ export function EditableSegmentTimeline({
     (segmentsByType[seg.segment_type] ??= []).push(seg);
   }
 
-  const handleMouseDown = useCallback((e: React.MouseEvent, seg: CaptureSegmentSummary, handle: "left" | "right") => {
+  const handlePointerDown = useCallback((e: React.PointerEvent, seg: CaptureSegmentSummary, handle: "left" | "right") => {
     e.stopPropagation();
     e.preventDefault();
+    if (savingSegmentId || seg.edit_status === "superseded" || seg.status === "open") return;
     const start = seg.effective_start_ms ?? seg.start_ms;
     const end = seg.effective_end_ms ?? seg.end_ms;
-    if (end == null) return;
-    setDragging({ segId: seg.id, handle });
-    dragStartRef.current = { mouseX: e.clientX, segStart: start, segEnd: end };
-  }, []);
+    if (end == null || end <= start) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragging({
+      segId: seg.id,
+      handle,
+      segStart: start,
+      segEnd: end,
+      draftStart: start,
+      draftEnd: end,
+      expectedVersion: seg.edit_version,
+    });
+    dragStartRef.current = { pointerId: e.pointerId, pointerX: e.clientX, segStart: start, segEnd: end };
+  }, [savingSegmentId]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragging || !dragStartRef.current) return;
+  const seekFromPointer = useCallback((clientX: number) => {
     const timeline = timelineRef.current;
     if (!timeline) return;
     const rect = timeline.getBoundingClientRect();
-    const dx = e.clientX - dragStartRef.current.mouseX;
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    onSeek(Math.round((x / rect.width) * totalDurationMs));
+  }, [onSeek, totalDurationMs]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (playheadPointerIdRef.current === e.pointerId) {
+      seekFromPointer(e.clientX);
+    }
+    if (!dragging || !dragStartRef.current || e.pointerId !== dragStartRef.current.pointerId) return;
+    const timeline = timelineRef.current;
+    if (!timeline) return;
+    const rect = timeline.getBoundingClientRect();
+    const dx = e.clientX - dragStartRef.current.pointerX;
     const dMs = (dx / rect.width) * totalDurationMs;
+    let draftStart = dragging.segStart;
+    let draftEnd = dragging.segEnd;
 
     if (dragging.handle === "left") {
-      onBoundaryChange(dragging.segId, Math.max(0, Math.round(dragStartRef.current.segStart + dMs)), dragStartRef.current.segEnd);
+      draftStart = Math.max(0, Math.min(dragging.segEnd - MIN_SEGMENT_DURATION_MS, Math.round(dragging.segStart + dMs)));
     } else {
-      onBoundaryChange(dragging.segId, dragStartRef.current.segStart, Math.min(totalDurationMs, Math.round(dragStartRef.current.segEnd + dMs)));
+      draftEnd = Math.min(totalDurationMs, Math.max(dragging.segStart + MIN_SEGMENT_DURATION_MS, Math.round(dragging.segEnd + dMs)));
     }
-  }, [dragging, totalDurationMs, onBoundaryChange]);
+    setDragging((current) => current ? { ...current, draftStart, draftEnd } : current);
+  }, [dragging, seekFromPointer, totalDurationMs]);
 
-  const handleMouseUp = useCallback(() => {
-    setDragging(null);
-    dragStartRef.current = null;
-  }, []);
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (playheadPointerIdRef.current === e.pointerId) {
+      suppressClickRef.current = true;
+      playheadPointerIdRef.current = null;
+      setPlayheadDragging(false);
+    }
+    if (dragging && dragStartRef.current && e.pointerId === dragStartRef.current.pointerId) {
+      suppressClickRef.current = true;
+      if (dragging.draftStart !== dragging.segStart || dragging.draftEnd !== dragging.segEnd) {
+        void onBoundaryChange(dragging.segId, dragging.draftStart, dragging.draftEnd, dragging.expectedVersion);
+      }
+      setDragging(null);
+      dragStartRef.current = null;
+    }
+  }, [dragging, onBoundaryChange]);
+
+  const handlePointerCancel = useCallback((e: React.PointerEvent) => {
+    if (playheadPointerIdRef.current === e.pointerId) {
+      suppressClickRef.current = true;
+      playheadPointerIdRef.current = null;
+      setPlayheadDragging(false);
+    }
+    if (dragging && dragStartRef.current && e.pointerId === dragStartRef.current.pointerId) {
+      // A cancelled boundary gesture must not persist the in-progress draft.
+      suppressClickRef.current = true;
+      setDragging(null);
+      dragStartRef.current = null;
+    }
+  }, [dragging]);
+
+  const handlePlayheadPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    playheadPointerIdRef.current = e.pointerId;
+    setPlayheadDragging(true);
+    seekFromPointer(e.clientX);
+  }, [seekFromPointer]);
 
   const handleTimelineClick = useCallback((e: React.MouseEvent) => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
     const timeline = timelineRef.current;
     if (!timeline) return;
     const rect = timeline.getBoundingClientRect();
@@ -79,9 +164,9 @@ export function EditableSegmentTimeline({
         ref={timelineRef}
         className="relative select-none"
         style={{ height: TRACKS.length * 28 + 20 }}
-        onMouseMove={dragging ? handleMouseMove : undefined}
-        onMouseUp={dragging ? handleMouseUp : undefined}
-        onMouseLeave={dragging ? handleMouseUp : undefined}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onClick={handleTimelineClick}
       >
         {TRACKS.map((track, ti) => {
@@ -92,33 +177,44 @@ export function EditableSegmentTimeline({
               <span className="text-xs font-bold w-6 text-right shrink-0" style={{ color: track.color }}>{track.label}</span>
               <div className="relative flex-1 h-6 bg-slate-100 rounded-md overflow-hidden">
                 {items.map(seg => {
-                  const s = seg.effective_start_ms ?? seg.start_ms;
-                  const e = seg.effective_end_ms ?? seg.end_ms ?? totalDurationMs;
+                  const draft = dragging?.segId === seg.id ? dragging : null;
+                  const s = draft?.draftStart ?? seg.effective_start_ms ?? seg.start_ms;
+                  const e = draft?.draftEnd ?? seg.effective_end_ms ?? seg.end_ms ?? totalDurationMs;
                   const isSuperseded = seg.edit_status === "superseded";
                   const isOpen = seg.status === "open";
+                  const isActive = activeSegmentId === seg.id;
+                  const isSaving = savingSegmentId === seg.id;
                   return (
                     <div
                       key={seg.id}
-                      className={`absolute top-0 h-full rounded-md border transition-opacity ${isSuperseded ? "opacity-30 border-dashed" : isOpen ? "opacity-100 animate-pulse" : "opacity-80"}`}
+                      className={`absolute top-0 h-full rounded-md border transition-opacity ${isActive ? "ring-2 ring-offset-1 ring-[#14241B] z-10" : ""} ${isSuperseded ? "opacity-30 border-dashed" : isOpen ? "opacity-100 animate-pulse" : isSaving ? "opacity-50" : "opacity-80"}`}
                       style={{
                         left: scale(s),
-                        width: `calc(${scale(e)} - ${scale(s)})`,
+                        width: `calc(${scale(Math.max(s, e))} - ${scale(s)})`,
                         backgroundColor: `${track.color}20`,
                         borderColor: track.color,
                         borderWidth: 1.5,
-                        cursor: isSuperseded ? "default" : "pointer",
+                        cursor: isSuperseded || isSaving ? "default" : "pointer",
                       }}
                       title={`${seg.label}: ${(s / 1000).toFixed(1)}s → ${(e / 1000).toFixed(1)}s`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (suppressClickRef.current) {
+                          suppressClickRef.current = false;
+                          return;
+                        }
+                        if (!isSuperseded) onSegmentClick?.(seg.id, s);
+                      }}
                     >
                       {!isSuperseded && !isOpen && (
                         <>
                           <div
                             className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-black/20 z-10"
-                            onMouseDown={(ev) => handleMouseDown(ev, seg, "left")}
+                            onPointerDown={(ev) => handlePointerDown(ev, seg, "left")}
                           />
                           <div
                             className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-black/20 z-10"
-                            onMouseDown={(ev) => handleMouseDown(ev, seg, "right")}
+                            onPointerDown={(ev) => handlePointerDown(ev, seg, "right")}
                           />
                         </>
                       )}
@@ -149,7 +245,13 @@ export function EditableSegmentTimeline({
 
         {/* Playhead */}
         <div className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none" style={{ left: scale(currentTimeMs) }}>
-          <div className="absolute -top-1 -left-1.5 w-3 h-3 rounded-full bg-red-500" />
+          <button
+            type="button"
+            aria-label="拖拽视频播放头"
+            title="拖拽调整视频播放位置"
+            className={`absolute -top-1 -left-1.5 h-3 w-3 rounded-full bg-red-500 pointer-events-auto ${playheadDragging ? "ring-2 ring-red-200" : "cursor-ew-resize"}`}
+            onPointerDown={handlePlayheadPointerDown}
+          />
         </div>
       </div>
 

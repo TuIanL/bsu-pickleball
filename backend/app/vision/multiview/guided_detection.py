@@ -44,6 +44,10 @@ def guided_candidate_pre_gate(
     max_residual_ft: float,
     frame_width: int,
     frame_height: int,
+    min_confidence: float = 0.0,
+    min_aspect_ratio: float = 1.05,
+    max_aspect_ratio: float = 8.0,
+    court_margin_ft: float = 2.0,
 ) -> GuidedCandidate:
     """对单个 guided detection 做 pre-gate(在 tracker 之前)。
 
@@ -53,11 +57,16 @@ def guided_candidate_pre_gate(
     joint recovery passes ``predicted_local`` explicitly.
     """
     x1, y1, x2, y2 = (float(v) for v in detection.bbox)
+    if float(detection.confidence or 0.0) < min_confidence:
+        return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "confidence_too_low", (0.0, 0.0))
     # bbox / image sanity
     if x2 <= x1 or y2 <= y1:
         return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "invalid_bbox", (0.0, 0.0))
     if x1 < -50 or y1 < -50 or x2 > frame_width + 50 or y2 > frame_height + 50:
         return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "bbox_out_of_frame", (0.0, 0.0))
+    aspect_ratio = (y2 - y1) / max(x2 - x1, 1e-6)
+    if aspect_ratio < min_aspect_ratio or aspect_ratio > max_aspect_ratio:
+        return GuidedCandidate(detection, (0.0, 0.0), (0.0, 0.0), float("inf"), False, "implausible_bbox_aspect", (0.0, 0.0))
     foot = ((x1 + x2) / 2.0, y2)  # 底边中点临时脚点
     try:
         cx, cy = image_to_court(foot, homography)
@@ -66,6 +75,15 @@ def guided_candidate_pre_gate(
     expected = predicted_local if predicted_local is not None else predicted_canonical
     if expected is None:
         return GuidedCandidate(detection, foot, (cx, cy), float("inf"), False, "missing_prediction", (cx, cy))
+    expected_is_physical_court = (
+        -court_margin_ft <= expected[0] <= 20.0 + court_margin_ft
+        and -court_margin_ft <= expected[1] <= 44.0 + court_margin_ft
+    )
+    if expected_is_physical_court and not (
+        -court_margin_ft <= cx <= 20.0 + court_margin_ft
+        and -court_margin_ft <= cy <= 44.0 + court_margin_ft
+    ):
+        return GuidedCandidate(detection, foot, (cx, cy), float("inf"), False, "outside_court", (cx, cy))
     residual = _dist((cx, cy), expected)
     accepted = residual <= max_residual_ft
     return GuidedCandidate(

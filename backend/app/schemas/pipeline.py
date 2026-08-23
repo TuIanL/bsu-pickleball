@@ -65,6 +65,9 @@ class AnalysisArtifacts(BaseModel):
     bounce_events_url: str | None = None
     reconstructed_ball_trajectory_json_path: str | None = None
     reconstructed_ball_trajectory_url: str | None = None
+    # multiview_ball_stereo_evidence.v1（joint 模式不可变双摄球证据）
+    multiview_ball_stereo_evidence_json_path: str | None = None
+    multiview_ball_stereo_evidence_url: str | None = None
     analysis_overlay_video_path: str | None = None
     analysis_overlay_video_url: str | None = None
     heatmaps_manifest_json_path: str | None = None
@@ -111,6 +114,10 @@ class AnalysisArtifacts(BaseModel):
     player_display_diagnostics_url: str | None = None
     player_display_diagnostics_status: str | None = None
     player_display_diagnostics_detail: str | None = None
+    four_player_identification_quality_json_path: str | None = None
+    four_player_identification_quality_url: str | None = None
+    four_player_identification_quality_status: str | None = None
+    four_player_identification_quality_detail: str | None = None
     court_view_roi_json_path: str | None = None
     court_view_roi_url: str | None = None
     source_video_url: str | None = None
@@ -133,6 +140,8 @@ class AnalysisArtifacts(BaseModel):
     bounce_events_detail: str | None = None
     reconstructed_ball_trajectory_status: str | None = None
     reconstructed_ball_trajectory_detail: str | None = None
+    multiview_ball_stereo_evidence_status: str | None = None
+    multiview_ball_stereo_evidence_detail: str | None = None
     analysis_overlay_video_status: str | None = None
     analysis_overlay_video_detail: str | None = None
     position_visualizations_status: str | None = None

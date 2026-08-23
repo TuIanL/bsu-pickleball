@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -140,5 +140,52 @@ describe("SegmentManagerPage 数据加载独立兜底", () => {
     expect(screen.queryByText("片段数据加载失败，请重试")).toBeNull();
     const video = document.querySelector("video");
     await waitFor(() => expect(video?.getAttribute("src")).toBe("/api/videos/video-a/stream"));
+  });
+});
+
+describe("SegmentManagerPage 片段回放与交互同步", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getVideoStreamUrl.mockImplementation((id?: string) => (id ? `/api/videos/${id}/stream` : ""));
+    mocks.getCaptureTake.mockResolvedValue(makeTake({ video_ids: ["video-a"], duration_ms: 10000 }));
+    mocks.listSegments.mockResolvedValue([
+      {
+        id: "rally-1", segment_type: "rally", ordinal: 1, label: "第1分", start_ms: 1000, end_ms: 5000,
+        effective_start_ms: 1000, effective_end_ms: 5000, edit_version: 2, edit_status: "active", status: "closed",
+        source: "algorithm", is_highlight: false,
+      },
+    ]);
+    mocks.listTimelineEvents.mockResolvedValue([{ id: "event-1", event_type: "rally_start", timestamp_ms: 1200 }]);
+  });
+
+  it("点击片段开始播放并同步高亮，选择框不触发播放", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
+
+    const label = await screen.findByTitle("单击播放；双击编辑标签");
+    const row = label.parentElement!;
+    fireEvent.click(row);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(row.className).toContain("border-[#2F80ED]");
+    expect(document.querySelector('[data-playback-mode="segment"]')).toBeTruthy();
+
+    play.mockClear();
+    fireEvent.click(row.querySelector("input")!);
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("双击标签只进入编辑，不启动片段播放", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
+
+    const label = await screen.findByTitle("单击播放；双击编辑标签");
+    fireEvent.doubleClick(label);
+    expect(screen.getByDisplayValue("第1分")).toBeTruthy();
+    expect(play).not.toHaveBeenCalled();
   });
 });

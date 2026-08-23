@@ -41,6 +41,10 @@ class FusedSample:
     authoritative_joint_eligible: bool = False
     # 可选秒级时间戳（2026-08-13 起 writer 必写；历史产物缺失时由 reader 回退 take_timestamp_ms/1000）
     timestamp_seconds: float | None = None
+    identity_status: str = "confirmed_observed"
+    identity_epoch: int = 0
+    binding_provenance: dict[str, object] = field(default_factory=dict)
+    quarantine_reason: str | None = None
 
 
 @dataclass
@@ -95,6 +99,10 @@ def write_fused_v2(
                 "view_observations": s.view_observations,
                 "contributing_views": s.contributing_views,
                 "authoritative_joint_eligible": s.authoritative_joint_eligible,
+                "identity_status": s.identity_status,
+                "identity_epoch": s.identity_epoch,
+                "binding_provenance": s.binding_provenance,
+                "quarantine_reason": s.quarantine_reason,
             }
             for s in samples
         ],
@@ -137,6 +145,10 @@ def _normalize_v1_sample(raw: dict) -> FusedSample:
         view_observations={},
         contributing_views=list(raw.get("contributing_views", [])),
         timestamp_seconds=_optional_float(raw.get("timestamp_seconds")),
+        identity_status=str(raw.get("identity_status", "confirmed_observed")),
+        identity_epoch=int(raw.get("identity_epoch", 0) or 0),
+        binding_provenance=dict(raw.get("binding_provenance", {})),
+        quarantine_reason=(str(raw["quarantine_reason"]) if raw.get("quarantine_reason") else None),
     )
 
 
@@ -156,6 +168,10 @@ def _normalize_v2_sample(raw: dict) -> FusedSample:
         contributing_views=list(raw.get("contributing_views", [])),
         authoritative_joint_eligible=bool(raw.get("authoritative_joint_eligible", False)),
         timestamp_seconds=_optional_float(raw.get("timestamp_seconds")),
+        identity_status=str(raw.get("identity_status", "confirmed_observed")),
+        identity_epoch=int(raw.get("identity_epoch", 0) or 0),
+        binding_provenance=dict(raw.get("binding_provenance", {})),
+        quarantine_reason=(str(raw["quarantine_reason"]) if raw.get("quarantine_reason") else None),
     )
 
 

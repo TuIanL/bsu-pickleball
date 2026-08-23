@@ -5,6 +5,7 @@ import {
   createMultiviewAnalysisJob,
   deleteRecordingAnalysis,
   getAnalysisReport,
+  getMultiviewBallStereoEvidence,
   getSyncAnchorExportUrl,
   getSyncAnchorStatus,
   listAnalysisJobs,
@@ -53,6 +54,28 @@ describe("analysis job compatibility", () => {
     expect(job.cameraSlot).toBe("cam_2");
     expect(job.metadata.recording_session_id).toBe("rec-legacy");
     expect(job.metadata.camera_slot).toBe("cam_2");
+  });
+
+  it("reads Parent-owned multiview stereo evidence through the scoped artifact URL", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        schema_version: "multiview_ball_stereo_evidence.v1",
+        measurements: [],
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+
+    const result = {
+      artifacts: {
+        multiview_ball_stereo_evidence_url: "/api/analysis/jobs/job-parent/artifacts/multiview-ball-stereo-evidence",
+      },
+    } as never;
+    await expect(getMultiviewBallStereoEvidence(result)).resolves.toMatchObject({
+      schema_version: "multiview_ball_stereo_evidence.v1",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/analysis/jobs/job-parent/artifacts/multiview-ball-stereo-evidence"),
+      expect.any(Object),
+    );
   });
 
   it("does not turn a real API failure into a local demo job", async () => {

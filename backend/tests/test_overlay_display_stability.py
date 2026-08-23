@@ -346,6 +346,20 @@ def test_freshness_contract() -> None:
     assert result is None
 
 
+def test_bbox_memory_never_crosses_global_player_owner() -> None:
+    from app.vision.multiview.fused_overlay_builder import OverlayBuilderConfig, TargetViewBBoxMemory
+
+    memory = TargetViewBBoxMemory(OverlayBuilderConfig())
+    memory.update(
+        global_player_id="global_player_1", view_id="cam_1",
+        bbox=(10.0, 20.0, 50.0, 100.0), quality=0.9, observed_ms=1000.0,
+    )
+    assert memory.reanchor(
+        global_player_id="global_player_2", view_id="cam_1",
+        new_footpoint=(200.0, 300.0), now_ms=1100.0,
+    ) is None
+
+
 # ---- 8. 集成测试：builder 端到端稳定输出 + synthetic 不回喂（tasks 6.3）-----
 
 

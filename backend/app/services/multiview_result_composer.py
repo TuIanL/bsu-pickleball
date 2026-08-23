@@ -14,7 +14,10 @@ fallback 时同样经 Composer 重新生成 Parent 结果（内容可继承，�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import math
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +25,7 @@ from pathlib import Path
 from app.schemas.analysis import AnalysisJobSummary, build_match_context
 from app.schemas.metrics import MetricStatus, PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, PipelineStageResult
+from app.services.analysis_progress import resolve_progress_mode, stage_definitions
 from app.schemas.tracking import ImagePoint, ProjectedCourtPoint2D, ProjectedTrackPoint
 from app.services.storage_service import StorageService
 from app.vision.multiview.artifact import FUSED_DIAGNOSTICS_FILENAME, FUSED_TRAJECTORY_FILENAME
@@ -33,18 +37,80 @@ from app.vision.pickleball_performance_engine.metric_inputs import standard_cour
 from app.vision.pickleball_performance_engine.speed_metrics import speed_summaries
 from app.vision.pickleball_performance_engine.trajectory_metrics import total_distances
 from app.vision.pickleball_performance_engine.zone_metrics import kitchen_dwell
+from app.vision.player_tracking_engine.four_player_quality import build_quality_from_joint_artifacts
 
 logger = logging.getLogger(__name__)
 
-# 聚合阶段（双摄 Parent 对外展示的六阶段，不铺 24 行单摄阶段）
-MULTIVIEW_AGGREGATE_STAGES: tuple[tuple[str, str], ...] = (
-    ("multiview-input-check", "素材与同步检查"),
-    ("multiview-view-a", "A 机位视觉分析"),
-    ("multiview-view-b", "B 机位视觉分析"),
-    ("multiview-fusion", "多视角球员轨迹融合"),
-    ("multiview-metrics", "运动指标重算"),
-    ("multiview-report", "报告生成"),
-)
+
+def _validate_ball_artifact_payloads(
+    v3: dict[str, object] | None,
+    evidence: dict[str, object] | None,
+) -> str | None:
+    """在 Parent 发布边界校验球产物的 schema、单位和质量字段。"""
+    if evidence is not None:
+        if evidence.get("schema_version") != "multiview_ball_stereo_evidence.v1":
+            return "stereo evidence schema 版本不匹配"
+        measurements = evidence.get("measurements")
+        if not isinstance(measurements, list):
+            return "stereo evidence measurements 必须是数组"
+        for index, measurement in enumerate(measurements):
+            if not isinstance(measurement, dict):
+                return f"stereo evidence measurement[{index}] 不是对象"
+            for field in ("take_timestamp_ms", "cam1_timestamp_ms", "cam2_timestamp_ms", "sync_error_ms"):
+                value = measurement.get(field)
+                if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    return f"stereo evidence {field} 必须是毫秒数值"
+            if float(measurement.get("sync_error_ms", 0.0)) < 0:
+                return "stereo evidence sync_error_ms 不能为负"
+
+    if v3 is None:
+        return None
+    if v3.get("schema_version") != "reconstructed_ball_trajectory.v3":
+        return "reconstructed ball trajectory schema 版本不匹配"
+    overall = str(v3.get("overall_status", "UNAVAILABLE"))
+    if overall not in {"FULL_ESTIMATED_3D", "PARTIAL_3D", "LANDING_ONLY", "UNAVAILABLE"}:
+        return f"reconstructed ball trajectory overall status 非法：{overall}"
+    coordinate_semantics = v3.get("coordinate_semantics")
+    if not isinstance(coordinate_semantics, dict) or coordinate_semantics.get("xy") != "canonical_court_ft":
+        return "reconstructed ball trajectory 缺少 canonical_court_ft 坐标声明"
+    if coordinate_semantics.get("z") != "estimated_multiview_height_ft":
+        return "reconstructed ball trajectory 缺少 estimated_multiview_height_ft 高度声明"
+    segments = v3.get("segments")
+    if not isinstance(segments, list):
+        return "reconstructed ball trajectory segments 必须是数组"
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            return f"trajectory segment[{index}] 不是对象"
+        quality = segment.get("quality")
+        if isinstance(quality, dict):
+            for field in ("observation_coverage", "predicted_ratio", "overall"):
+                value = quality.get(field)
+                if value is not None and (
+                    not isinstance(value, (int, float)) or not math.isfinite(float(value)) or not 0 <= float(value) <= 1
+                ):
+                    return f"trajectory segment[{index}] quality.{field} 超出 0..1"
+            rmse = quality.get("image_fit_rmse_px")
+            if rmse is not None and (not isinstance(rmse, (int, float)) or (math.isfinite(float(rmse)) and float(rmse) < 0)):
+                return f"trajectory segment[{index}] quality.image_fit_rmse_px 非法"
+        metrics = segment.get("metrics")
+        if isinstance(metrics, dict):
+            speed = metrics.get("average_speed_kmh")
+            if speed is not None and (
+                not isinstance(speed, (int, float)) or not math.isfinite(float(speed)) or float(speed) < 0
+            ):
+                return f"trajectory segment[{index}] average_speed_kmh 必须是非负 km/h"
+        samples = segment.get("samples")
+        if not isinstance(samples, list):
+            return f"trajectory segment[{index}] samples 必须是数组"
+        for sample_index, sample in enumerate(samples):
+            if not isinstance(sample, dict):
+                return f"trajectory segment[{index}] sample[{sample_index}] 不是对象"
+            timestamp = sample.get("timestamp_sec", sample.get("t_sec"))
+            if timestamp is not None and (
+                not isinstance(timestamp, (int, float)) or not math.isfinite(float(timestamp)) or float(timestamp) < 0
+            ):
+                return f"trajectory segment[{index}] sample[{sample_index}] 时间必须是非负秒数"
+    return None
 
 # 从 reference view 继承到 Parent 命名空间的产物契约：
 #   artifacts 路径字段名 → (storage 访问器名, artifact 路由名, url 字段名, status 字段名 | None, 是否复制文件)
@@ -79,7 +145,7 @@ _INHERITED_ARTIFACT_SPECS: dict[str, tuple[str, str, str, str | None, bool]] = {
         True,
     ),
     # 多视角球立体证据（不可变原始证据，joint 模式球 3D 链的输入证据）
-    "multiview_ball_stereo_evidence_path": (
+    "multiview_ball_stereo_evidence_json_path": (
         "multiview_ball_stereo_evidence_path",
         "multiview-ball-stereo-evidence",
         "multiview_ball_stereo_evidence_url",
@@ -163,13 +229,19 @@ def _build_aggregate_stages(
     view_b_status: str,
     fusion_performed: bool,
     composed: bool,
+    execution_mode: str = "late_fusion_v1",
+    include_legacy_joint_view_stages: bool = False,
+    ball_analysis_status: str = "succeeded",
+    ball_analysis_detail: str | None = None,
 ) -> list[PipelineStageResult]:
-    """构建六聚合阶段（素材检查 → A/B → 融合 → 指标 → 报告）。"""
+    """按执行模式构建与任务状态机相同的双摄聚合阶段。"""
     now = datetime.now(UTC).isoformat()
+    mode = resolve_progress_mode("multiview", execution_mode)
     stages: list[PipelineStageResult] = []
-    for index, (stage_id, label) in enumerate(MULTIVIEW_AGGREGATE_STAGES):
-        status = "done" if index <= len(MULTIVIEW_AGGREGATE_STAGES) - 1 else "pending"
-        detail = label
+    for definition in stage_definitions(mode):
+        stage_id, label = definition.id, definition.label
+        status = "done" if composed else "pending"
+        detail = definition.detail
         progress = 100
         if stage_id == "multiview-input-check":
             status, progress = "done", 100
@@ -183,9 +255,31 @@ def _build_aggregate_stages(
         elif stage_id == "multiview-fusion":
             status = "done" if fusion_performed else "skipped"
             detail = "多视角球员轨迹融合" if fusion_performed else "未执行融合（单视角降级）"
+        elif stage_id == "multiview-joint":
+            status = "done" if composed else "pending"
+            detail = "双摄协同跟踪完成" if composed else "双摄协同跟踪"
+        elif stage_id == "multiview-ball-analysis":
+            if not composed:
+                status, progress = "pending", 0
+                detail = "双摄球路分析"
+            elif ball_analysis_status in {"succeeded", "available", "completed"}:
+                status, progress = "done", 100
+                detail = ball_analysis_detail or "双摄球路分析完成"
+            elif ball_analysis_status in {"degraded", "partial", "landing_only"}:
+                status, progress = "partial", 100
+                detail = ball_analysis_detail or "双摄球路分析部分可用"
+            elif ball_analysis_status in {"failed", "unavailable"}:
+                status, progress = "unavailable", 100
+                detail = ball_analysis_detail or "双摄球路分析不可用"
+            else:
+                status, progress = "unavailable", 100
+                detail = ball_analysis_detail or f"双摄球路分析状态：{ball_analysis_status}"
         elif stage_id == "multiview-metrics":
             status = "done" if composed else "pending"
             detail = "基于 fused 轨迹重算运动指标"
+        elif stage_id == "multiview-visualization":
+            status = "done" if composed else "pending"
+            detail = "生成双摄结果可视化产物"
         elif stage_id == "multiview-report":
             status = "done" if composed else "pending"
             detail = "生成 Parent 报告"
@@ -200,6 +294,33 @@ def _build_aggregate_stages(
                 progress=progress,
                 public_message=detail,
             )
+        )
+    if include_legacy_joint_view_stages and mode == "joint_tracking_v2":
+        # 旧的 result.json 消费方仍会读取 A/B 聚合节点；任务状态 API 会在
+        # analysis_stages_from_pipeline 中按新 joint 图过滤掉它们。
+        stages.extend(
+            [
+                PipelineStageResult(
+                    id="multiview-view-a",
+                    label="A 机位视觉分析",
+                    status="done",
+                    detail="A 机位视觉分析完成",
+                    started_at=now,
+                    finished_at=now,
+                    progress=100,
+                    public_message="A 机位视觉分析完成",
+                ),
+                PipelineStageResult(
+                    id="multiview-view-b",
+                    label="B 机位视觉分析",
+                    status="done",
+                    detail="B 机位视觉分析完成",
+                    started_at=now,
+                    finished_at=now,
+                    progress=100,
+                    public_message="B 机位视觉分析完成",
+                ),
+            ]
         )
     return stages
 
@@ -229,7 +350,11 @@ class MultiViewResultComposer:
         for sample in fused_artifact.get("samples", []):
             if not isinstance(sample, dict):
                 continue
-            if eligible_only and not sample.get("metric_eligible"):
+            identity_status = str(sample.get("identity_status", "confirmed_observed"))
+            if eligible_only and (
+                not sample.get("metric_eligible")
+                or identity_status not in {"confirmed_observed", "confirmed_recovered", "interpolated"}
+            ):
                 continue
             x = sample.get("x_ft")
             y = sample.get("y_ft")
@@ -460,6 +585,8 @@ class MultiViewResultComposer:
             view_b_status=view_b.status if view_b else "pending",
             fusion_performed=fusion_performed,
             composed=True,
+            execution_mode=job.executionMode,
+            include_legacy_joint_view_stages=True,
         )
         return AnalysisPipelineResult(
             job_id=job.id,
@@ -565,6 +692,11 @@ class MultiViewResultComposer:
         )
         for key, value in viz_fields.items():
             setattr(artifacts, key, value)
+        self._augment_visualization_identity_quality(
+            job_id=job.id,
+            samples=list(fused_artifact.get("samples") or []),
+            roster_map=roster_map or {},
+        )
 
         # 2b) global-player-roster.v1（诊断 / 映射 contract，非用户展示 identity）
         if roster_entries is not None:
@@ -610,6 +742,12 @@ class MultiViewResultComposer:
             artifacts=artifacts,
         )
 
+        self._publish_four_player_identification_quality(
+            job=job,
+            joint_output=joint_output,
+            artifacts=artifacts,
+        )
+
         # 3) 无法真实生成的产物显式 unavailable（不静默缺失）
         artifacts.pose_overlay_status = "unavailable"
         artifacts.pose_overlay_detail = JOINT_POSE_UNAVAILABLE
@@ -617,6 +755,88 @@ class MultiViewResultComposer:
         artifacts.player_render_trajectory_detail = JOINT_RENDER_TRAJECTORY_UNAVAILABLE
         artifacts.detections_status = "unavailable"
         artifacts.detections_detail = JOINT_DETECTIONS_UNAVAILABLE
+
+    def _publish_joint_ball_artifacts(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        ball_analysis: object | None,
+        artifacts: AnalysisArtifacts,
+    ) -> tuple[str, str]:
+        """发布 Parent-owned v3/evidence，并返回球路阶段状态与 detail。"""
+        if ball_analysis is None:
+            detail = "joint 运行未生成 canonical 球路阶段结果"
+            artifacts.reconstructed_ball_trajectory_status = "unavailable"
+            artifacts.reconstructed_ball_trajectory_detail = detail
+            artifacts.multiview_ball_stereo_evidence_status = "unavailable"
+            artifacts.multiview_ball_stereo_evidence_detail = detail
+            return "unavailable", detail
+
+        v3 = getattr(ball_analysis, "v3_trajectory", None)
+        evidence = getattr(ball_analysis, "stereo_evidence", None)
+        output_status = str(getattr(ball_analysis, "status", "unavailable"))
+        output_detail = str(getattr(ball_analysis, "detail", "双摄球路分析不可用"))
+        if not isinstance(v3, dict):
+            v3 = None
+        if not isinstance(evidence, dict):
+            evidence = None
+
+        v3_path = self.storage.reconstructed_ball_trajectory_json_path(job.id)
+        evidence_path = self.storage.multiview_ball_stereo_evidence_path(job.id)
+
+        validation_error = _validate_ball_artifact_payloads(v3, evidence)
+        if validation_error is not None:
+            detail = f"双摄球产物校验失败：{validation_error}"
+            artifacts.reconstructed_ball_trajectory_status = "failed"
+            artifacts.reconstructed_ball_trajectory_detail = detail
+            artifacts.multiview_ball_stereo_evidence_status = "failed"
+            artifacts.multiview_ball_stereo_evidence_detail = detail
+            return "failed", detail
+
+        def write_immutable(path: Path, payload: dict[str, object]) -> None:
+            # hash 对未包含 hash 字段的 canonical JSON 计算，便于技术详情核验。
+            body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            enriched = dict(payload)
+            enriched["content_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            self.storage.write_json_atomic(path, enriched)
+
+        if evidence is not None and evidence.get("schema_version") == "multiview_ball_stereo_evidence.v1":
+            write_immutable(evidence_path, evidence)
+            artifacts.multiview_ball_stereo_evidence_json_path = str(evidence_path)
+            artifacts.multiview_ball_stereo_evidence_url = (
+                f"/api/analysis/jobs/{job.id}/artifacts/multiview-ball-stereo-evidence"
+            )
+            measurements = evidence.get("measurements")
+            evidence_status = "available" if isinstance(measurements, list) and measurements else "unavailable"
+            artifacts.multiview_ball_stereo_evidence_status = evidence_status
+            artifacts.multiview_ball_stereo_evidence_detail = (
+                f"已发布 {len(measurements or [])} 条 canonical 双摄球证据"
+                if evidence_status == "available" else "未形成有效双摄球测量，保留诊断证据"
+            )
+        else:
+            artifacts.multiview_ball_stereo_evidence_status = "failed"
+            artifacts.multiview_ball_stereo_evidence_detail = "stereo evidence 缺失或 schema 版本不匹配"
+
+        if v3 is not None and v3.get("schema_version") == "reconstructed_ball_trajectory.v3":
+            write_immutable(v3_path, v3)
+            artifacts.reconstructed_ball_trajectory_json_path = str(v3_path)
+            artifacts.reconstructed_ball_trajectory_url = (
+                f"/api/analysis/jobs/{job.id}/artifacts/reconstructed-ball-trajectory"
+            )
+            overall = str(v3.get("overall_status", "UNAVAILABLE"))
+            v3_status = {
+                "FULL_ESTIMATED_3D": "succeeded",
+                "PARTIAL_3D": "degraded",
+                "LANDING_ONLY": "degraded",
+                "UNAVAILABLE": "unavailable",
+            }.get(overall, "unavailable")
+            artifacts.reconstructed_ball_trajectory_status = v3_status
+            artifacts.reconstructed_ball_trajectory_detail = output_detail
+            return v3_status, output_detail
+
+        artifacts.reconstructed_ball_trajectory_status = "failed" if output_status == "failed" else "unavailable"
+        artifacts.reconstructed_ball_trajectory_detail = output_detail
+        return artifacts.reconstructed_ball_trajectory_status, output_detail
 
     def _publish_joint_fused_player_overlay(
         self,
@@ -746,6 +966,106 @@ class MultiViewResultComposer:
             artifacts.player_display_diagnostics_status = "failed"
             artifacts.player_display_diagnostics_detail = f"player display diagnostics 发布失败：{exc}"
 
+    def _publish_four_player_identification_quality(
+        self,
+        *,
+        job: AnalysisJobSummary,
+        joint_output,
+        artifacts: AnalysisArtifacts,
+    ) -> None:
+        try:
+            roster_path = self.storage.roster_manifest_json_path(job.id)
+            diagnostics_path = self.storage.player_display_diagnostics_json_path(job.id)
+            if not roster_path.exists():
+                raise ValueError("roster artifact unavailable")
+            quality = build_quality_from_joint_artifacts(
+                job_id=job.id,
+                trajectory=joint_output.trajectory,
+                roster=self.storage.read_json(roster_path),
+                display_diagnostics=(
+                    self.storage.read_json(diagnostics_path) if diagnostics_path.exists() else None
+                ),
+                runtime_diagnostics=getattr(joint_output, "diagnostics", None),
+                algorithm_version="motion-aware-v1+clothing-hsv-lab.v1",
+            )
+            path = self.storage.four_player_identification_quality_json_path(job.id)
+            self.storage.write_json_atomic(path, quality.model_dump(mode="json"))
+            artifacts.four_player_identification_quality_json_path = str(path)
+            artifacts.four_player_identification_quality_url = (
+                f"/api/analysis/jobs/{job.id}/artifacts/four-player-identification-quality"
+            )
+            artifacts.four_player_identification_quality_status = quality.status
+            artifacts.four_player_identification_quality_detail = (
+                "四人识别质量通过"
+                if quality.verdict == "pass"
+                else f"四人识别质量未通过：{', '.join(quality.failure_reasons)}"
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not abort the core result
+            artifacts.four_player_identification_quality_status = "failed"
+            artifacts.four_player_identification_quality_detail = f"四人识别质量产物生成失败：{exc}"
+
+    def _augment_visualization_identity_quality(
+        self,
+        *,
+        job_id: str,
+        samples: list[object],
+        roster_map: dict[str, str],
+    ) -> None:
+        """Add accepted/quarantine sufficiency facts without changing visualization math."""
+        path = self.storage.structured_visualization_data_path(job_id)
+        if not path.exists():
+            return
+        accepted_statuses = {"confirmed_observed", "confirmed_recovered", "interpolated"}
+        attempted_ticks = len({
+            int(sample.get("reference_frame_index", 0))
+            for sample in samples if isinstance(sample, dict)
+        })
+        per_player: dict[str, dict[str, object]] = {}
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            player_id = roster_map.get(str(sample.get("global_player_id") or ""))
+            if not player_id:
+                continue
+            summary = per_player.setdefault(player_id, {
+                "accepted_count": 0,
+                "quarantined_count": 0,
+                "accepted_ticks": set(),
+                "quarantine_reason_summary": {},
+            })
+            identity_status = str(sample.get("identity_status", "confirmed_observed"))
+            accepted = bool(sample.get("metric_eligible")) and identity_status in accepted_statuses
+            if accepted:
+                summary["accepted_count"] = int(summary["accepted_count"]) + 1
+                cast_ticks = summary["accepted_ticks"]
+                if isinstance(cast_ticks, set):
+                    cast_ticks.add(int(sample.get("reference_frame_index", 0)))
+            else:
+                summary["quarantined_count"] = int(summary["quarantined_count"]) + 1
+                reason = str(sample.get("quarantine_reason") or identity_status or "untrusted_identity")
+                reasons = summary["quarantine_reason_summary"]
+                if isinstance(reasons, dict):
+                    reasons[reason] = int(reasons.get(reason, 0)) + 1
+        serialized: dict[str, dict[str, object]] = {}
+        for player_id, summary in sorted(per_player.items()):
+            accepted_ticks = summary.pop("accepted_ticks")
+            accepted_tick_count = len(accepted_ticks) if isinstance(accepted_ticks, set) else 0
+            coverage = accepted_tick_count / attempted_ticks if attempted_ticks else 0.0
+            serialized[player_id] = {
+                **summary,
+                "attempted_ticks": attempted_ticks,
+                "accepted_tick_count": accepted_tick_count,
+                "coverage": coverage,
+                "sufficiency": "sufficient" if coverage >= 0.70 else "insufficient",
+            }
+        payload = self.storage.read_json(path)
+        payload["identity_quality"] = {
+            "schema_version": "visualization-identity-quality.v1",
+            "accepted_identity_statuses": sorted(accepted_statuses),
+            "players": serialized,
+        }
+        self.storage.write_json_atomic(path, payload)
+
     def compose_joint_result(
         self,
         *,
@@ -754,6 +1074,7 @@ class MultiViewResultComposer:
         reference_view_id: str,
         message: str,
         refinement: dict[str, object] | None = None,
+        ball_analysis: object | None = None,
     ) -> AnalysisPipelineResult:
         """joint_tracking_v2 的 Parent 结果组装：从 Parent-owned JointRun 获取，GlobalPlayer 标签。
 
@@ -777,6 +1098,10 @@ class MultiViewResultComposer:
                     "fusion_status": s.fusion_status,
                     "metric_eligible": s.metric_eligible,
                     "observation_origin": s.observation_origin,
+                    "identity_status": s.identity_status,
+                    "identity_epoch": s.identity_epoch,
+                    "binding_provenance": s.binding_provenance,
+                    "quarantine_reason": s.quarantine_reason,
                 }
                 for s in joint_output.normalized.samples
             ],
@@ -804,6 +1129,11 @@ class MultiViewResultComposer:
             artifacts=artifacts,
             roster_map=roster_map,
             roster_entries=roster_entries,
+        )
+        ball_status, ball_detail = self._publish_joint_ball_artifacts(
+            job=job,
+            ball_analysis=ball_analysis,
+            artifacts=artifacts,
         )
         self.publish_fused_artifacts(
             job.id,
@@ -837,6 +1167,10 @@ class MultiViewResultComposer:
             view_b_status="succeeded",
             fusion_performed=True,
             composed=True,
+            execution_mode=job.executionMode,
+            include_legacy_joint_view_stages=True,
+            ball_analysis_status=ball_status,
+            ball_analysis_detail=ball_detail,
         )
         return AnalysisPipelineResult(
             job_id=job.id,

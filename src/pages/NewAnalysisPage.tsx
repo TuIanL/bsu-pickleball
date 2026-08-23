@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Camera, Upload } from "lucide-react";
-import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
-import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
+import type { NavigateFn } from "../app/navigationTypes";
+import { buildAnalysisProgressPath, taskContextFromLocation, taskListPath } from "../app/navigationContext";
 import type { AnalysisUploadMetadata } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
@@ -31,8 +31,6 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   const [searchParams] = useState(() => new URLSearchParams(window.location.search));
   const returnTaskContext = taskContextFromLocation();
   const returnParam = new URLSearchParams(window.location.search).get("return");
-  // 从 Library 进入时优先回到来源工作区；否则回任务列表（既有行为）
-  const goReturn = () => onNavigate((returnParam ?? taskListPath(returnTaskContext)) as NavigatePath);
   const videoIdParam = searchParams.get("videoId");
   const sourceFpsParam = Number(searchParams.get("fps") ?? NaN);
 
@@ -140,7 +138,17 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         enablePoseInference,
       });
       rememberAnalysisJob(job);
-      goReturn();
+      // 统一生命周期：创建成功后进入 Analysis Progress（replace，Back 不回已提交的 Setup）。
+      // 有上游 `return` 则原样转发；fresh upload 无 return 时以稳定 videoId materialize Library return。
+      const materializedReturn = returnParam
+        ? returnParam
+        : videoId
+          ? `/library/upload/${encodeURIComponent(videoId)}?view=overview`
+          : null;
+      onNavigate(
+        buildAnalysisProgressPath(job.id, materializedReturn, materializedReturn ? undefined : returnTaskContext),
+        { replace: true },
+      );
     } catch (error) {
       setError(
         errorToNotice(

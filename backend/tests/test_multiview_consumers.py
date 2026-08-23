@@ -78,3 +78,14 @@ def test_select_trajectory_source_prefers_fused():
     assert select_trajectory_source(True, True) == "fused"
     assert select_trajectory_source(True, False) == "fused"
     assert select_trajectory_source(False, True) == "single_view"
+
+
+def test_movement_points_quarantines_untrusted_identity_statuses():
+    accepted = _sample("dual_observed", 5.0, 8.0)
+    accepted["identity_status"] = "confirmed_recovered"
+    cross_side = _sample("dual_observed", 15.0, 35.0)
+    cross_side["identity_status"] = "cross_side"
+    ambiguous = _sample("dual_observed", 10.0, 20.0)
+    ambiguous["identity_status"] = "ambiguous"
+    points = movement_points({"samples": [accepted, cross_side, ambiguous]})
+    assert [(point.x_ft, point.y_ft) for point in points] == [(5.0, 8.0)]

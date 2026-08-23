@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisJobSummary, PlayerDisplayDiagnosticsResponse } from "../types/report";
+import type { AnalysisJobSummary, FourPlayerIdentificationQuality, PlayerDisplayDiagnosticsResponse } from "../types/report";
 import type { MultiviewObservabilitySummary, RecoveryEpisodePage } from "../types/multiviewObservability";
 import { MultiviewObservabilityPage } from "./MultiviewObservabilityPage";
 import * as analysisClient from "../services/analysisClient";
@@ -8,6 +8,7 @@ import * as analysisClient from "../services/analysisClient";
 vi.mock("../services/analysisClient", () => ({
   getAnalysisJob: vi.fn(),
   getMultiviewObservability: vi.fn(),
+  getFourPlayerIdentificationQuality: vi.fn(),
   getMultiviewRecoveryEpisodes: vi.fn(),
   getMultiviewDebugVideoUrl: vi.fn((jobId: string) => `/api/analysis/jobs/${jobId}/multiview/debug-video`),
   getPlayerDisplayDiagnostics: vi.fn(),
@@ -66,6 +67,7 @@ function makeSummary(overrides: Partial<MultiviewObservabilitySummary> = {}): Mu
 function renderPage(summary: MultiviewObservabilitySummary | null, job = makeJob(), recoveryPage?: RecoveryEpisodePage, diagResponse?: PlayerDisplayDiagnosticsResponse) {
   vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
   vi.mocked(analysisClient.getMultiviewObservability).mockResolvedValue(summary);
+  vi.mocked(analysisClient.getFourPlayerIdentificationQuality).mockResolvedValue(makeIdentityQuality());
   if (recoveryPage) {
     vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).mockResolvedValue(recoveryPage);
   } else if (!vi.mocked(analysisClient.getMultiviewRecoveryEpisodes).getMockImplementation()) {
@@ -87,6 +89,28 @@ function renderPage(summary: MultiviewObservabilitySummary | null, job = makeJob
   return render(<MultiviewObservabilityPage jobId={job.id} onNavigate={vi.fn()} />);
 }
 
+function makeIdentityQuality(): FourPlayerIdentificationQuality {
+  const players = Object.fromEntries([1, 2, 3, 4].map((index) => [`Player_${index}`, {
+    player_id: `Player_${index}`,
+    detection_ticks: 90,
+    canonical_ticks: 95,
+    detection_coverage: .9,
+    canonical_coverage: .95,
+    longest_gap_seconds: .5,
+    source_track_history: { cam_1: [index], cam_2: [index + 10] },
+    source_track_count: 2,
+    reconnect_count: index === 2 ? 1 : 0,
+    identity_switch_count: 0,
+    duplicate_binding_count: 0,
+    cross_side_count: 0,
+    ambiguous_count: 0,
+    quarantined_count: 0,
+    accepted_count: 95,
+    appearance: { descriptor_attempts: 100, descriptor_available: 80, mean_quality: .8, template_updates: 5, template_freezes: 1, decision_contributions: 3, decision_supports: 3, decision_conflicts: 0, effective_weight: .2 },
+  }]));
+  return { schema_version: "four-player-identification-quality.v1", job_id: "job-observe-ui", status: "available", detail: "", algorithm_version: "motion-aware-v1+clothing-hsv-lab.v1", confirmed_roster_count: 4, players, verdict: "pass", failure_reasons: [] };
+}
+
 describe("MultiviewObservabilityPage", () => {
   afterEach(() => {
     cleanup();
@@ -105,6 +129,36 @@ describe("MultiviewObservabilityPage", () => {
     expect(screen.getByText(/本任务未开启/)).toBeTruthy();
     expect(analysisClient.getMultiviewDebugVideoUrl).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("joint_debug_trace.v1.json");
+  });
+
+  it("shows per-player continuity and clothing appearance diagnostics", async () => {
+    renderPage(makeSummary());
+    const panel = await screen.findByTestId("four-player-identification-panel");
+    expect(within(panel).getByText("四人身份识别质量")).toBeTruthy();
+    expect(within(panel).getByText("P2")).toBeTruthy();
+    expect(within(panel).getAllByText("覆盖 95%").length).toBe(4);
+    fireEvent.click(within(panel).getAllByText("衣着外观诊断")[1]);
+    expect(within(panel).getAllByText("80%").length).toBe(4);
+    expect(within(panel).getAllByText("3 / 0").length).toBe(4);
+  });
+
+  it("shows a structured unavailable state for historical jobs without quality artifact", async () => {
+    const job = makeJob();
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
+    vi.mocked(analysisClient.getMultiviewObservability).mockResolvedValue(makeSummary());
+    vi.mocked(analysisClient.getFourPlayerIdentificationQuality).mockResolvedValue({
+      schema_version: "four-player-identification-quality.v1",
+      job_id: job.id,
+      status: "unavailable",
+      detail: "该历史任务未生成四人识别质量产物",
+      algorithm_version: "unknown",
+      players: {},
+      verdict: "unavailable",
+    });
+    render(<MultiviewObservabilityPage jobId={job.id} onNavigate={vi.fn()} />);
+    const panel = await screen.findByTestId("four-player-identification-panel");
+    expect(within(panel).getByText("不可用")).toBeTruthy();
+    expect(within(panel).getAllByText("该历史任务未生成四人识别质量产物").length).toBeGreaterThanOrEqual(1);
   });
 
   it("keeps degraded joint and partial historical data visible", async () => {

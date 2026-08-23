@@ -704,6 +704,9 @@ class FusedPlayerOverlayBuilder:
             overlay_confidence=round(donor_quality, 4),
             donor_quality=round(donor_quality, 4),
             donor_view=donor_view,
+            donor_global_player_id=gid,
+            target_player_slot=player_id,
+            bbox_memory_owner_global_id=gid if bbox is not None else None,
             bbox_source=bbox_source,
         )
 
@@ -788,6 +791,9 @@ class FusedPlayerOverlayBuilder:
             overlay_confidence=round(float(donor_quality or 0.0), 4),
             donor_quality=round(float(donor_quality or 0.0), 4),
             donor_view=donor_view,
+            donor_global_player_id=gid,
+            target_player_slot=player_id,
+            bbox_memory_owner_global_id=gid if bbox is not None else None,
             bbox_source=bbox_source,  # type: ignore[arg-type]
             display_state=plan.state,
             bbox_stale=stale,

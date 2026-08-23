@@ -49,6 +49,7 @@ class Reconstructed3DSample:
     y_ft: float
     z_ft: float
     source: str = "derived"
+    validity: str = "valid"
 
 
 @dataclass
@@ -79,11 +80,12 @@ def _b_spline_basis(t: float, knots: np.ndarray, degree: int, i: int) -> float:
 
 
 def _clamped_knots(n_controls: int, degree: int) -> np.ndarray:
-    n_knots = n_controls + degree + 1
+    if n_controls <= degree:
+        raise ValueError("cubic spline requires more control points than degree")
     repetitions = degree + 1
-    inner_count = n_controls - degree + 1
-    knots = [0.0] * repetitions + list(np.linspace(0.0, 1.0, inner_count)) + [1.0] * repetitions
-    return np.asarray(sorted(knots[:n_knots]), dtype=float)
+    inner_count = max(0, n_controls - degree - 1)
+    inner = list(np.linspace(0.0, 1.0, inner_count + 2)[1:-1])
+    return np.asarray([0.0] * repetitions + inner + [1.0] * repetitions, dtype=float)
 
 
 class CubicSpline3D:
@@ -95,6 +97,10 @@ class CubicSpline3D:
         self.knots = _clamped_knots(len(self.control), degree)
 
     def evaluate(self, t: float) -> np.ndarray:
+        if t <= 0.0:
+            return self.control[0].copy()
+        if t >= 1.0:
+            return self.control[-1].copy()
         basis = np.array([_b_spline_basis(t, self.knots, self.degree, i) for i in range(len(self.control))])
         return basis @ self.control
 
@@ -286,6 +292,11 @@ def reconstruct_segment(
         status = FULL_ESTIMATED_3D if coverage >= 0.5 else PARTIAL_3D
     else:
         status = LANDING_ONLY if landing_xy is not None else UNAVAILABLE
+
+    if status == UNAVAILABLE:
+        # 保留诊断采样但显式标记无效，消费者不得把失败拟合串成一条可见球路。
+        for sample in samples:
+            sample.validity = "invalid"
 
     return Reconstructed3DSegment(
         segment_id=segment_id, status=status, samples=samples,

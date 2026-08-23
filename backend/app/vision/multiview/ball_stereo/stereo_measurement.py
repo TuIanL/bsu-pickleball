@@ -38,6 +38,12 @@ class BallStereoMeasurement:
     confidence: float
     source: str = "dual_view_estimated"
     stereo_time_delta_ms: float = 0.0
+    ray_angle_deg: float = 0.0
+    depth_valid: bool = True
+    coordinate_units: str = "canonical_court_ft"
+    canonical_tick: int | None = None
+    cam1_source_frame_index: int | None = None
+    cam2_source_frame_index: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +62,12 @@ class BallStereoMeasurement:
             "confidence": self.confidence,
             "source": self.source,
             "stereo_time_delta_ms": self.stereo_time_delta_ms,
+            "ray_angle_deg": self.ray_angle_deg,
+            "depth_valid": self.depth_valid,
+            "coordinate_units": self.coordinate_units,
+            "canonical_tick": self.canonical_tick,
+            "cam1_source_frame_index": self.cam1_source_frame_index,
+            "cam2_source_frame_index": self.cam2_source_frame_index,
         }
 
     @classmethod
@@ -80,6 +92,12 @@ class BallStereoMeasurement:
             confidence=float(payload["confidence"]),
             source=str(payload.get("source", "dual_view_estimated")),
             stereo_time_delta_ms=float(payload.get("stereo_time_delta_ms", 0.0)),
+            ray_angle_deg=float(payload.get("ray_angle_deg", 0.0)),
+            depth_valid=bool(payload.get("depth_valid", True)),
+            coordinate_units=str(payload.get("coordinate_units", "canonical_court_ft")),
+            canonical_tick=(int(payload["canonical_tick"]) if payload.get("canonical_tick") is not None else None),
+            cam1_source_frame_index=(int(payload["cam1_source_frame_index"]) if payload.get("cam1_source_frame_index") is not None else None),
+            cam2_source_frame_index=(int(payload["cam2_source_frame_index"]) if payload.get("cam2_source_frame_index") is not None else None),
         )
 
 
@@ -138,6 +156,27 @@ def compute_geometry_quality(
     return round(min(1.0, 0.7 * q_reproj + 0.3 * q_time), 4)
 
 
+def _ray_angle_deg(
+    projection_cam1: np.ndarray,
+    projection_cam2: np.ndarray,
+    image_xy1: Sequence[float],
+    image_xy2: Sequence[float],
+    xyz: np.ndarray,
+) -> float:
+    """由两个 3x4 投影矩阵估算交会射线夹角，用于质量分级。"""
+    centers: list[np.ndarray] = []
+    for projection in (projection_cam1, projection_cam2):
+        m = np.asarray(projection[:, :3], dtype=float)
+        p4 = np.asarray(projection[:, 3], dtype=float)
+        center = -np.linalg.pinv(m) @ p4
+        centers.append(center)
+    # 投影矩阵的伪逆方向可能与观测朝向相反，取从相机中心指向估计点的方向。
+    directions = [xyz - center for center in centers]
+    directions = [direction / max(np.linalg.norm(direction), 1e-12) for direction in directions]
+    cosine = float(np.clip(np.dot(directions[0], directions[1]), -1.0, 1.0))
+    return math.degrees(math.acos(cosine))
+
+
 def measure_stereo(
     *,
     projection_cam1: np.ndarray,
@@ -155,9 +194,18 @@ def measure_stereo(
     时间上，若两摄曝光差超过 max_time_delta_ms 则说明"同时观测"假设较弱，
     直接置 geometry_quality 下降（见 compute_geometry_quality）；三角测量仍基于各自真实图像点。
     """
-    xyz = triangulate_linear(projection_cam1, projection_cam2, image_xy1, image_xy2)
-    u1, v1 = project_xyz(projection_cam1, xyz)
-    u2, v2 = project_xyz(projection_cam2, xyz)
+    p1 = np.asarray(projection_cam1, dtype=float)
+    p2 = np.asarray(projection_cam2, dtype=float)
+    if p1.shape != (3, 4) or p2.shape != (3, 4) or not np.isfinite(p1).all() or not np.isfinite(p2).all():
+        raise ValueError("projection matrices must be finite 3x4 arrays")
+    xyz = triangulate_linear(p1, p2, image_xy1, image_xy2)
+    if not np.isfinite(xyz).all():
+        raise ValueError("triangulated point is not finite")
+    depth_values = [float((projection @ np.r_[xyz, 1.0])[2]) for projection in (p1, p2)]
+    depth_valid = all(math.isfinite(depth) and depth > 1e-6 for depth in depth_values)
+    depth_valid = depth_valid and -0.5 <= float(xyz[2]) <= 50.0
+    u1, v1 = project_xyz(p1, xyz)
+    u2, v2 = project_xyz(p2, xyz)
     reproj1 = math.hypot(u1 - float(image_xy1[0]), v1 - float(image_xy1[1]))
     reproj2 = math.hypot(u2 - float(image_xy2[0]), v2 - float(image_xy2[1]))
 
@@ -166,7 +214,13 @@ def measure_stereo(
 
     take = take_timestamp_ms if take_timestamp_ms is not None else (cam1_timestamp_ms + cam2_timestamp_ms) / 2.0
     delta = abs(cam1_timestamp_ms - cam2_timestamp_ms)
-    quality = compute_geometry_quality(reproj1, reproj2, epipolar, delta, max_delta_ms=max_time_delta_ms)
+    ray_angle_deg = _ray_angle_deg(p1, p2, image_xy1, image_xy2, xyz)
+    angle_quality = max(0.0, min(1.0, (ray_angle_deg - 0.5) / 4.5))
+    quality = round(
+        min(1.0, compute_geometry_quality(reproj1, reproj2, epipolar, delta, max_delta_ms=max_time_delta_ms) * (0.7 + 0.3 * angle_quality))
+        * (1.0 if depth_valid else 0.0),
+        4,
+    )
     # 近似置信度：几何质量与回投加权
     confidence = round(0.5 + 0.5 * quality, 4)
 
@@ -186,4 +240,7 @@ def measure_stereo(
         geometry_quality=quality,
         confidence=confidence,
         stereo_time_delta_ms=delta,
+        ray_angle_deg=round(ray_angle_deg, 3),
+        depth_valid=depth_valid,
+        coordinate_units="canonical_court_ft",
     )

@@ -21,6 +21,23 @@ export interface TaskListContext {
   cameraSlot?: TaskCameraSlot;
 }
 
+/**
+ * transient analysis flow 的导航来源（只读视图，由 `return` 参数推导，非独立可变状态）。
+ * - `library`：从 LibraryItem 发起，return 指向 `/library/:kind/:sourceId`。
+ * - `task-console`：无 Library return，回退到工程任务控制台语义。
+ * - `capture`：从采集控制台发起，return 指向 `/capture/:session`。
+ */
+export type AnalysisFlowOrigin =
+  | {
+      kind: "library";
+      itemKind: "upload" | "recording" | "sync_recording";
+      sourceId: string;
+      /** 完整 `/library/...` 返回路径 */
+      returnPath: string;
+    }
+  | { kind: "task-console"; taskContext: TaskListContext }
+  | { kind: "capture"; returnPath: string };
+
 export interface NavigateOptions {
   replace?: boolean;
 }

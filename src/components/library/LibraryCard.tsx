@@ -163,12 +163,25 @@ export function LibraryCard({
               <line x1="50" y1="3" x2="50" y2="57" stroke="#475569" strokeWidth="0.6" />
             </svg>
           )}
-          {item.analysisState === "running" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/45 text-white">
-              <span className="text-xs font-bold">正在分析中</span>
+          {(item.analysisState === "running" || item.analysisState === "queued") && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/45 px-3 text-center text-white">
+              <span className="text-xs font-bold">
+                {item.analysisState === "queued" ? "排队中" : "正在分析"}
+                {typeof item.analysisProgress === "number" ? ` · ${Math.round(item.analysisProgress)}%` : ""}
+              </span>
               <div className="h-1 w-24 overflow-hidden rounded-full bg-white/30">
-                <div className="h-full w-2/3 rounded-full bg-[var(--capture-brand-primary,#23985b)]" />
+                {typeof item.analysisProgress === "number" ? (
+                  <div
+                    className="h-full rounded-full bg-[var(--capture-brand-primary,#23985b)]"
+                    style={{ width: `${Math.max(0, Math.min(100, item.analysisProgress))}%` }}
+                  />
+                ) : (
+                  <div className="h-full w-1/2 animate-pulse rounded-full bg-[var(--capture-brand-primary,#23985b)]" />
+                )}
               </div>
+              {item.analysisStage ? (
+                <span className="max-w-[92%] truncate text-[10px] text-white/80">{item.analysisStage}</span>
+              ) : null}
             </div>
           )}
           <span className={`absolute left-2 top-2 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold ${toneClass[badge.tone]}`}>

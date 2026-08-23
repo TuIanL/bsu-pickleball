@@ -444,6 +444,7 @@ def read_analysis_artifact(
         "roster",  # global-player-roster.v1（诊断 / 映射 contract）
         "fused-player-overlay",  # multiview-fused-player-overlay.v1（joint 模式正式球员叠加层）
         "player-display-diagnostics",  # player-display-diagnostics.v1（逐球员逐 stage 显示漏斗）
+        "four-player-identification-quality",
         "pose-overlay",  # 姿态骨架叠加
         "player-trajectories",  # 球员轨迹
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
@@ -508,6 +509,8 @@ def read_analysis_artifact(
         path = _STORAGE.fused_player_overlay_json_path(job_id)
     elif artifact_name == "player-display-diagnostics":
         path = _STORAGE.player_display_diagnostics_json_path(job_id)
+    elif artifact_name == "four-player-identification-quality":
+        path = _STORAGE.four_player_identification_quality_json_path(job_id)
     elif artifact_name == "pose-overlay":
         path = _STORAGE.pose_overlay_json_path(job_id)
     elif artifact_name == "player-trajectories":
@@ -540,6 +543,18 @@ def read_analysis_artifact(
 
     # 文件不存在就报错
     if not path.exists():
+        if artifact_name == "four-player-identification-quality":
+            return JSONResponse(
+                {
+                    "schema_version": "four-player-identification-quality.v1",
+                    "job_id": job_id,
+                    "status": "unavailable",
+                    "detail": "该历史任务未生成四人识别质量产物",
+                    "algorithm_version": "unknown",
+                    "players": {},
+                    "verdict": "unavailable",
+                }
+            )
         raise HTTPException(status_code=404, detail="Analysis artifact not found")
 
     # 按产物类型决定返回方式：

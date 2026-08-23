@@ -1,0 +1,32 @@
+{
+  "schema_version": "four-player-appearance-ablation.v1",
+  "job_id": "job-36ce8da485",
+  "input_signature": "fdad9fe1fcc40de663405748bc186bbb617701556ed3f6ff66464d7240f7382c",
+  "config_signature": "3581477e9aa3bd527410544cb7e5df50b5a148306ee9f0fd1f12807ac751f1fa",
+  "evaluation": "shadow-counterfactual",
+  "disabled": {
+    "effective_weight": 0.0,
+    "decision_contributions": 0,
+    "p2_coverage": 0.9258210645526613,
+    "p2_longest_gap_seconds": 1.5,
+    "identity_switch_count": 0,
+    "duplicate_binding_count": 0,
+    "cross_side_count": 0
+  },
+  "enabled": {
+    "requested_feature": "clothing-hsv-lab.v1",
+    "effective_weight": 0.0,
+    "decision_contributions": 0,
+    "decision_supports_shadow": 12071,
+    "decision_conflicts_shadow": 305,
+    "non_discriminative_fallback_count": 10031,
+    "p2_coverage": 0.9258210645526613,
+    "p2_longest_gap_seconds": 1.5,
+    "identity_switch_count": 0,
+    "duplicate_binding_count": 0,
+    "cross_side_count": 0
+  },
+  "verdict": "no_gain_non_regression",
+  "default_decision_mode": "shadow",
+  "reason": "The enabled path dynamically reduces appearance weight to zero for non-discriminative clothing samples, making its effective decisions identical to disabled while preserving all hard invariants."
+}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Activity, ArrowLeft, ArrowRight, Bug, Camera, CheckCircle2, Link2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
 import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
-import { taskListPath, withTaskListContext } from "../app/navigationContext";
+import { buildAnalysisProgressPath, buildSyncCalibrationPath, taskListPath, withTaskListContext } from "../app/navigationContext";
 import { CourtCornerCalibrator, type CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { PageFrame } from "../components/PageFrame";
 import {
@@ -243,7 +243,12 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         },
         clipStartMs: clipEnabled ? Math.max(0, Math.round(clipStartSec * 1000)) : undefined,
         clipEndMs: clipEnabled ? Math.max(1, Math.round(clipEndSec * 1000)) : undefined,
-        executionMode: debugReplayEnabled ? "joint_tracking_v2" : "late_fusion_v1",
+        // 快速验证窗口沿用正式 joint 的默认采样密度（60 FPS source / stride 2），
+        // 保证高速球的双摄观测不因验证模式额外降采样。
+        frameStride: clipEnabled ? 2 : undefined,
+        // 双摄协同分析的正式展示链路统一走 canonical joint；Debug Replay 只是
+        // 在同一条链路上额外保留四联诊断回放，不再决定是否启用球路分析。
+        executionMode: "joint_tracking_v2",
         debugTraceEnabled: debugReplayEnabled,
         referenceViewId: "cam_1",
         views: [
@@ -255,8 +260,11 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
           endB: cam1AtEndA ? "cam_2_physical_end" : "cam_1_physical_end",
         },
       });
-      // 只导航到 Parent（用户永不直接进入 child）
-      onNavigate(withTaskListContext(`/analysis/${parent.id}`, taskContext));
+      // 只导航到 Parent（用户永不直接进入 child）。
+      // 统一生命周期：创建成功后进入 Analysis Progress（replace，Back 不回已提交的 Setup）。
+      // Library origin 用上游 return；采集入口无 return 时以同步会话 materialize capture return。
+      const effectiveReturn = returnParam ?? `/capture/${encodeURIComponent(session.session_id)}`;
+      onNavigate(buildAnalysisProgressPath(parent.id, effectiveReturn, undefined), { replace: true });
     } catch (err) {
       const message = isAnalysisApiError(err)
         ? err.backendDetail ?? err.message
@@ -428,7 +436,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                 <Bug className="mt-0.5 shrink-0 text-[#168A34]" size={17} aria-hidden="true" />
                 <span>
                   <span className="block text-sm font-bold text-[#14241B]">生成 Debug Replay</span>
-                  <span className="mt-1 block text-xs leading-5 text-slate-500">创建 joint_tracking_v2 任务并保留四联诊断回放；会增加分析耗时和存储占用。</span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-500">在 joint_tracking_v2 双摄链路上额外保留四联诊断回放；会增加分析耗时和存储占用。</span>
                 </span>
               </span>
             </label>
@@ -447,7 +455,15 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                       : syncAnchorStatus?.reason_codes.join("；") || "当前录制还没有可复用的人工确认。"}
                   </div>
                 </div>
-                <button className="quiet-button mt-3 px-3 py-2 text-xs" onClick={() => onNavigate(`/sync-calibration?take=${encodeURIComponent(captureTakeId)}&return=${encodeURIComponent(`/capture/takes/${captureTakeId}/analyze`)}`)} type="button">
+                <button className="quiet-button mt-3 px-3 py-2 text-xs" onClick={() => {
+                  // 嵌套 return：把完整上层 URL（含 session + 外层 library return）传给 SyncCalibration，
+                  // 完成/取消后原样回到本设置页，链条不丢。
+                  const outerParams = new URLSearchParams();
+                  if (routeSessionId) outerParams.set("session", routeSessionId);
+                  if (returnParam) outerParams.set("return", returnParam);
+                  const outerUrl = `/capture/takes/${encodeURIComponent(captureTakeId)}/analyze${outerParams.size ? `?${outerParams.toString()}` : ""}`;
+                  onNavigate(buildSyncCalibrationPath(captureTakeId, outerUrl));
+                }} type="button">
                   <Link2 size={15} />
                   {syncAnchorStatus?.state === "draft" ? "继续标注" : syncAnchorStatus?.state === "invalidated" ? "重新标注" : "开始标注"}
                 </button>

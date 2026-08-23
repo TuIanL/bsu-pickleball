@@ -16,6 +16,7 @@ from app.vision.multiview.ball_stereo.segment_reconstruction import (
     Reconstructed3DSegment,
 )
 from app.vision.multiview.ball_stereo.stereo_measurement import BallStereoMeasurement
+from app.services.multiview_result_composer import _validate_ball_artifact_payloads
 
 
 def _meas() -> BallStereoMeasurement:
@@ -77,3 +78,26 @@ def test_v3_overall_status_landing_only():
         segments=[seg], landing=landing, metrics_by_segment={}, duration_by_segment={"seg1": 1.0},
     )
     assert doc["overall_status"] == LANDING_ONLY
+
+
+def test_parent_publish_validation_rejects_unit_or_quality_drift():
+    valid = {
+        "schema_version": "reconstructed_ball_trajectory.v3",
+        "overall_status": "PARTIAL_3D",
+        "coordinate_semantics": {
+            "xy": "canonical_court_ft",
+            "z": "estimated_multiview_height_ft",
+        },
+        "segments": [{
+            "quality": {"observation_coverage": 0.5, "predicted_ratio": 0.2, "overall": 0.7},
+            "metrics": {"average_speed_kmh": 12.0},
+            "samples": [{"timestamp_sec": 0.1}],
+        }],
+    }
+    assert _validate_ball_artifact_payloads(valid, None) is None
+
+    invalid_speed = {**valid, "segments": [{**valid["segments"][0], "metrics": {"average_speed_kmh": -1}}]}
+    assert "average_speed_kmh" in (_validate_ball_artifact_payloads(invalid_speed, None) or "")
+
+    invalid_units = {**valid, "coordinate_semantics": {"xy": "pixels", "z": "meters"}}
+    assert "坐标声明" in (_validate_ball_artifact_payloads(invalid_units, None) or "")

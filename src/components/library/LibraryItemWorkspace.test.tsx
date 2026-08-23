@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { LibraryItemViewModel } from "../../services/libraryAdapter";
 import { LibraryItemWorkspace } from "./LibraryItemWorkspace";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  window.history.replaceState({}, "", "/");
+  clearAnalysisResultManifestCache();
+  vi.clearAllMocks();
+});
 
 vi.mock("../../services/libraryAdapter", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/libraryAdapter")>();
@@ -13,10 +18,19 @@ vi.mock("../../services/libraryAdapter", async (importOriginal) => {
 vi.mock("../../services/analysisClient", () => ({
   deleteAnalysisJob: vi.fn().mockResolvedValue({ job_id: "job-1", status: "deleted" }),
   cancelAnalysisJob: vi.fn().mockResolvedValue({ id: "job-1", status: "processing" }),
+  getAnalysisResult: vi.fn().mockResolvedValue(null),
 }));
+
+vi.mock("../../pages/VisionPage", () => ({ VisionPage: ({ jobId }: { jobId: string }) => <div>vision:{jobId}</div> }));
+vi.mock("../../pages/BallTrajectoryPage", () => ({ BallTrajectoryPage: ({ jobId }: { jobId: string }) => <div>trajectory:{jobId}</div> }));
+vi.mock("../report/ReportContent", () => ({ ReportContent: ({ jobId }: { jobId: string }) => <div>report:{jobId}</div> }));
+vi.mock("../../pages/MultiviewObservabilityPage", () => ({ MultiviewObservabilityPage: ({ jobId }: { jobId: string }) => <div>multiview-technical:{jobId}</div> }));
+vi.mock("../../pages/AnalysisDetailsPage", () => ({ AnalysisDetailsPage: ({ jobId }: { jobId: string }) => <div>single-technical:{jobId}</div> }));
 
 import { resolveLibraryItemByRef } from "../../services/libraryAdapter";
 import { deleteAnalysisJob } from "../../services/analysisClient";
+import { getAnalysisResult } from "../../services/analysisClient";
+import { clearAnalysisResultManifestCache } from "../../services/analysisResultManifestCache";
 
 function item(partial: Partial<LibraryItemViewModel>): LibraryItemViewModel {
   return {
@@ -103,5 +117,131 @@ describe("LibraryItemWorkspace 分析入口", () => {
     fireEvent.click(screen.getAllByText("删除")[0]);
     expect(deleteAnalysisJob).toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  it("历史 completed/failed 任务分别精确进入结果与技术详情", async () => {
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=overview&t=4");
+    const target = item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "new",
+      primaryResultAnalysisJobId: "new",
+      analysisJobs: [
+        { id: "new", status: "completed", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" },
+        { id: "old", status: "completed", analysisKind: "single_view", executionMode: "late_fusion_v1", createdAt: "2026-08-02T00:00:00Z", clipStartMs: 0, clipEndMs: 60_000 },
+        { id: "bad", status: "failed", analysisKind: "multiview", createdAt: "2026-08-01T00:00:00Z" },
+      ],
+    });
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
+    const onNavigate = vi.fn();
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
+
+    const resultButtons = await screen.findAllByRole("button", { name: "查看结果" });
+    fireEvent.click(resultButtons[1]);
+    expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/view=analysis.*analysisJob=old|analysisJob=old.*view=analysis/), { replace: true });
+    expect(onNavigate.mock.calls.at(-1)?.[0]).toContain("t=4");
+
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/view=technical.*analysisJob=bad|analysisJob=bad.*view=technical/), { replace: true });
+  });
+
+  it("显式历史版本显示选中态与查看最新版本入口", async () => {
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=overview&analysisJob=old");
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "new",
+      primaryResultAnalysisJobId: "new",
+      analysisJobs: [
+        { id: "new", status: "completed", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" },
+        { id: "old", status: "completed", analysisKind: "multiview", createdAt: "2026-08-02T00:00:00Z" },
+      ],
+    }));
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    expect(await screen.findByText("当前版本")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看最新版本" })).toBeTruthy();
+  });
+
+  it("伪造跨素材 analysisJob 不请求产物并 replace 清理参数", async () => {
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=analysis&analysisJob=foreign&t=7&foo=bar");
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "new",
+      primaryResultAnalysisJobId: "new",
+      analysisJobs: [{ id: "new", status: "completed", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" }],
+    }));
+    const onNavigate = vi.fn();
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalled());
+    expect(getAnalysisResult).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("view=analysis&t=7&foo=bar"), { replace: true });
+    expect(onNavigate.mock.calls.flat().join(" ")).not.toContain("analysisJob=foreign");
+  });
+
+  it("四个结果 Content 与 Tab 跳转始终绑定同一个显式历史 Job", async () => {
+    const target = item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "new",
+      primaryResultAnalysisJobId: "new",
+      analysisJobs: [
+        { id: "new", status: "completed", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" },
+        { id: "old", status: "completed", analysisKind: "single_view", createdAt: "2026-08-02T00:00:00Z" },
+      ],
+    });
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
+    vi.mocked(getAnalysisResult).mockResolvedValue({
+      job_id: "old",
+      metrics: {},
+      artifacts: { ball_trajectory_url: "/old/ball.json" },
+    } as never);
+    const onNavigate = vi.fn();
+
+    for (const [selectedView, expected] of [
+      ["analysis", "vision:old"],
+      ["trajectory", "trajectory:old"],
+      ["report", "report:old"],
+      ["technical", "single-technical:old"],
+    ] as const) {
+      window.history.replaceState({}, "", `/library/sync_recording/sync-1?view=${selectedView}&analysisJob=old&t=9`);
+      const rendered = render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view={selectedView} onNavigate={onNavigate} />);
+      expect(await screen.findByText(expected)).toBeTruthy();
+      rendered.unmount();
+    }
+
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=analysis&analysisJob=old&t=9");
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
+    await screen.findByText("vision:old");
+    fireEvent.click(screen.getByRole("button", { name: "球路" }));
+    expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/analysisJob=old/), { replace: true });
+    expect(onNavigate.mock.calls.at(-1)?.[0]).toContain("t=9");
+  });
+
+  it("删除当前 selected Job 后 replace 清理版本参数并定向刷新", async () => {
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=overview&analysisJob=old&t=3");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "new",
+      primaryResultAnalysisJobId: "new",
+      analysisJobs: [
+        { id: "new", status: "completed", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" },
+        { id: "old", status: "completed", analysisKind: "multiview", createdAt: "2026-08-02T00:00:00Z" },
+      ],
+    }));
+    const onNavigate = vi.fn();
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
+    await screen.findByText("当前版本");
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]);
+    await waitFor(() => expect(deleteAnalysisJob).toHaveBeenCalledWith("old"));
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("view=overview&t=3"), { replace: true });
+    expect(onNavigate.mock.calls.flat().join(" ")).not.toContain("analysisJob=old");
   });
 });

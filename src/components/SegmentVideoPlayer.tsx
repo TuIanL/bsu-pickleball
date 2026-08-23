@@ -20,12 +20,23 @@ interface SegmentVideoPlayerProps {
   onTrackChange?: (index: number) => void;
   onTimeUpdate?: (takeTimeMs: number) => void;
   onDurationReady?: (durationMs: number) => void;
+  onSegmentPlaybackEnd?: () => void;
   syncQuality?: string;
 }
 
 export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVideoPlayerProps>(
   function SegmentVideoPlayer(
-    { videoUrl, fps = 30, trackLabel, trackOptions, onTrackChange, onTimeUpdate, onDurationReady, syncQuality },
+    {
+      videoUrl,
+      fps = 30,
+      trackLabel,
+      trackOptions,
+      onTrackChange,
+      onTimeUpdate,
+      onDurationReady,
+      onSegmentPlaybackEnd,
+      syncQuality,
+    },
     ref,
   ) {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -33,6 +44,19 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const segmentLoopRef = useRef<{ start: number; end: number } | null>(null);
+
+    const seekVideo = useCallback((ms: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const wasPlayingSegment = segmentLoopRef.current !== null;
+      segmentLoopRef.current = null;
+      const maxSeconds = duration > 0 ? duration / 1000 : Number.POSITIVE_INFINITY;
+      const nextMs = Math.max(0, Math.min(ms, maxSeconds * 1000));
+      video.currentTime = nextMs / 1000;
+      setCurrentTime(nextMs);
+      onTimeUpdate?.(nextMs);
+      if (wasPlayingSegment) onSegmentPlaybackEnd?.();
+    }, [duration, onSegmentPlaybackEnd, onTimeUpdate]);
 
     useEffect(() => {
       const video = videoRef.current;
@@ -42,40 +66,52 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
         setDuration(video.duration * 1000);
         onDurationReady?.(video.duration * 1000);
       };
+      const finishSegmentPlayback = () => {
+        const loop = segmentLoopRef.current;
+        if (!loop) return false;
+        const endSeconds = loop.end;
+        if (video.currentTime < endSeconds - 0.03) return false;
+
+        // Keep the final frame inside the requested range before pausing.
+        if (video.currentTime > endSeconds) video.currentTime = endSeconds;
+        segmentLoopRef.current = null;
+        video.pause();
+        setPlaying(false);
+        onSegmentPlaybackEnd?.();
+        return true;
+      };
+
       const onTime = () => {
         const ms = video.currentTime * 1000;
         setCurrentTime(ms);
         onTimeUpdate?.(ms);
-        // Segment loop mode
-        const loop = segmentLoopRef.current;
-        if (loop && ms >= loop.end) {
-          video.pause();
-          segmentLoopRef.current = null;
-          setPlaying(false);
-        }
+        finishSegmentPlayback();
       };
       const onPlay = () => setPlaying(true);
       const onPause = () => setPlaying(false);
+      const onEnded = () => {
+        if (!finishSegmentPlayback()) onSegmentPlaybackEnd?.();
+        setPlaying(false);
+      };
 
       video.addEventListener("loadedmetadata", onLoaded);
       video.addEventListener("timeupdate", onTime);
       video.addEventListener("play", onPlay);
       video.addEventListener("pause", onPause);
+      video.addEventListener("ended", onEnded);
 
       return () => {
         video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("timeupdate", onTime);
         video.removeEventListener("play", onPlay);
         video.removeEventListener("pause", onPause);
+        video.removeEventListener("ended", onEnded);
       };
-    }, [videoUrl, onTimeUpdate, onDurationReady]);
+    }, [videoUrl, onTimeUpdate, onDurationReady, onSegmentPlaybackEnd]);
 
     useImperativeHandle(ref, () => ({
       seekToTakeTime(ms: number) {
-        const video = videoRef.current;
-        if (video && duration > 0) {
-          video.currentTime = Math.max(0, Math.min(ms / 1000, duration / 1000));
-        }
+        seekVideo(ms);
       },
       play() {
         videoRef.current?.play();
@@ -86,9 +122,12 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
       playSegment(startMs: number, endMs: number) {
         const video = videoRef.current;
         if (!video) return;
-        segmentLoopRef.current = { start: startMs / 1000, end: endMs / 1000 };
-        video.currentTime = startMs / 1000;
-        video.play();
+        const maxSeconds = duration > 0 ? duration / 1000 : Number.POSITIVE_INFINITY;
+        const startSeconds = Math.min(maxSeconds, Math.max(0, startMs / 1000));
+        const endSeconds = Math.min(maxSeconds, Math.max(startSeconds, endMs / 1000));
+        segmentLoopRef.current = { start: startSeconds, end: endSeconds };
+        video.currentTime = startSeconds;
+        void video.play();
       },
       stepForward() {
         const video = videoRef.current;
@@ -98,7 +137,7 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
         const video = videoRef.current;
         if (video) video.currentTime -= 1 / fps;
       },
-    }), [fps, duration]);
+    }), [fps, duration, seekVideo]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
@@ -126,6 +165,10 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
       return `${m}:${String(sec).padStart(2, "0")}`;
     };
 
+    const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      seekVideo(Number(e.target.value));
+    };
+
     return (
       <div className="rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-video,#24302b)] overflow-hidden" onKeyDown={handleKeyDown} tabIndex={0}>
         <video
@@ -135,6 +178,20 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
           controls={false}
           preload="auto"
         />
+        <div className="bg-[#1a1a2e] px-3 pt-2">
+          <input
+            type="range"
+            min={0}
+            max={Math.max(duration, 1)}
+            step={1}
+            value={Math.min(currentTime, duration || 1)}
+            disabled={duration <= 0}
+            onChange={handleProgressChange}
+            aria-label="视频播放进度"
+            title="拖拽调整视频播放位置"
+            className="block h-1.5 w-full cursor-pointer accent-[#22C55E] disabled:cursor-not-allowed disabled:opacity-40"
+          />
+        </div>
         <div className="flex items-center justify-between px-3 py-2 bg-[#1a1a2e] text-white text-xs">
           <div className="flex items-center gap-2">
             <button

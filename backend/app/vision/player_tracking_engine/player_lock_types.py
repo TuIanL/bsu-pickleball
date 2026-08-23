@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.schemas.tracking import PlayerIdentityDiagnostic
+from app.vision.player_tracking_engine.player_appearance import AppearanceTemplateGallery
 
 
 @dataclass
@@ -40,6 +41,9 @@ class PlayerLockConfig:
     bootstrap_court_margin_ft: float = 12.0
     lost_reconnect_court_margin_ft: float = 20.0
     enable_appearance_score: bool = False
+    reconnect_confirmation_frames: int = 1
+    reconnect_ambiguity_margin: float = 0.08
+    appearance_score_weight: float = 0.12
     # fix-multiview-player-identity D3：bootstrap 阶段"近端大尺寸高清晰"候选
     # 放宽判定阈值（bbox 面积 / 画面面积 比例）。
     near_large_bbox_ratio: float = 0.05
@@ -63,6 +67,8 @@ class PlayerSlot:
     home_quadrant: str | None = None
     confidence_ema: float = 0.0
     appearance_descriptor: list[float] | None = None
+    appearance_template: AppearanceTemplateGallery = field(default_factory=AppearanceTemplateGallery)
+    identity_epoch: int = 0
 
     lost_frames: int = 0
     locked_since_frame: int | None = None

@@ -45,6 +45,7 @@ AnalysisOrchestrationStatus = Literal[
     "completed",
     "joint_ready",  # joint_tracking_v2:preflight 通过,可直接 claim 执行
     "joint_tracking",  # joint_tracking_v2:正在双摄同步 tracking
+    "joint_ball_analysis",  # joint_tracking_v2:基于共享 canonical tick 完成球路分析
 ]
 # 流水线阶段 id（稳定集合，外加 str 兼容未来扩展）
 AnalysisStageId = (

@@ -512,29 +512,29 @@ def test_is_court_side_decidable():
     assert is_court_side_decidable([5.0], court) is False  # 长度不足
 
 
-def test_bootstrap_accepts_x_out_of_bounds_candidate():
-    """x 超 tracking bounds 但纵向可判的第 4 人候选被 bootstrap 收集（D1）。"""
+def test_bootstrap_accepts_small_lateral_out_of_bounds_candidate():
+    """轻微超出边线但纵向可判的第 4 人仍可被 bootstrap 收集。"""
     manager = PlayerLockManager(_doubles_config())
-    # 构造 4 名球员：3 个正常 + 1 个远端右（court x=31.3 超 tracking 上界 24，y=12.4 可判）
+    # 构造 4 名球员：3 个正常 + 1 个右侧轻微超界（x=22.5）。
     candidates = [
         (101, 6.8, 45.3, [642, 445, 820, 787]),   # 近端左 far_left
         (102, 14.9, 47.6, [1224, 492, 1348, 905]),  # 近端右 far_right
         (103, 4.5, 9.8, [788, 87, 870, 208]),     # 远端中 near_left
-        (104, 31.3, 12.4, [1520, 104, 1579, 227]),  # 远端右 x 超界 → near_right
+        (104, 22.5, 12.4, [1210, 104, 1270, 227]),  # 远端右轻微超界 → near_right
     ]
     for frame in range(10):
         manager.update(
             frame,
             positions=[
-                pos(tid, frame, x, y, bbox=b, is_inside_tracking_area=(x <= 24))
+                    pos(tid, frame, x, y, bbox=b, is_inside_tracking_area=(x <= 20))
                 for tid, x, y, b in candidates
             ],
             frame_width=1920,
             frame_height=1080,
         )
-    # 4 个候选全部被收集（含 x 超界的 track 104）
+    # 4 个候选全部被收集（含轻微 x 超界的 track 104）
     assert 104 in manager._bootstrap_tracklets
-    # 4 槽位全部锁定：x 超界候选经纵向可判接纳 + 图像位置松弛映射锁到 Player_2
+    # 4 槽位全部锁定，轻微超界候选锁到 Player_2。
     locked = {slot.identity_id: slot.current_track_id for slot in manager.slots.values() if slot.state == "locked"}
     assert locked == {
         "Player_1": 103,  # near_left
@@ -618,17 +618,24 @@ def test_infer_quadrant_court_projection_priority():
 # ---------- fix-multiview-cam1-bootstrap-4player D5：slot_unfilled ----------
 
 
-def test_bootstrap_all_four_slots_locked_no_unfilled_event():
-    """4 名球员（含 x 超界候选）→ bootstrap 结束后 4 槽位全锁定，无 slot_unfilled。"""
-    manager = PlayerLockManager(_doubles_config())
-    candidates = [
-        (701, 6.8, 45.3, [642, 445, 820, 787]),
-        (702, 14.9, 47.6, [1224, 492, 1348, 905]),
-        (703, 4.5, 9.8, [788, 87, 870, 208]),
-        (704, 31.3, 12.4, [1520, 104, 1579, 227]),
-    ]
+def test_bootstrap_rejects_lateral_spectator_and_locks_late_real_player():
+    """场外侧边人员不得抢占 P2；稍后出现的真实 P2 应填充该槽位。"""
+    manager = PlayerLockManager(_doubles_config(bootstrap_min_frames=12))
     last_update = None
     for frame in range(20):  # 超过 bootstrap_max_frames=20 触发 finalize
+        candidates = [
+            (701, 6.8, 45.3, [642, 445, 820, 787]),
+            (702, 14.9, 47.6, [1224, 492, 1348, 905]),
+            (703, 4.5, 9.8, [788, 87, 870, 208]),
+            # 镜头右侧工作人员：连续出现但横向远离球场。
+            (704, 31.3, 12.4, [1520, 104, 1579, 227]),
+        ]
+        if frame < 4:
+            # 启动初期的短暂残缺框：到首次分配时已经过期。
+            candidates.append((706, 20.0, -4.0, [1169, 15, 1213, 132]))
+        if frame >= 4:
+            # 真实 P2 在 bootstrap window 内稍后稳定出现。
+            candidates.append((705, 15.2, 8.8, [1074, 68, 1132, 203]))
         last_update = manager.update(
             frame,
             positions=[pos(tid, frame, x, y, bbox=b, is_inside_tracking_area=(x <= 24)) for tid, x, y, b in candidates],
@@ -637,6 +644,9 @@ def test_bootstrap_all_four_slots_locked_no_unfilled_event():
         )
     locked = {slot.identity_id: slot.current_track_id for slot in manager.slots.values() if slot.state == "locked"}
     assert len(locked) == 4
+    assert manager.slots["Player_2"].current_track_id == 705
+    assert 704 not in {slot.current_track_id for slot in manager.slots.values()}
+    assert 706 not in {slot.current_track_id for slot in manager.slots.values()}
     assert not any(d.event == "slot_unfilled" for d in last_update.diagnostics)
 
 

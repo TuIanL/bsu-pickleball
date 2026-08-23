@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryItemViewModel } from "../../services/libraryAdapter";
+import type { AnalysisPipelineResult } from "../../types/report";
 import {
   computeLibraryViewCapabilities,
   isInvalidViewForItem,
@@ -66,5 +67,39 @@ describe("LibraryViewCapabilities", () => {
   it("segments 无 take 时不可用；有 take 时可用", () => {
     expect(computeLibraryViewCapabilities(item({ fieldSessionId: undefined, captureTakeId: undefined })).segments).toBe("unavailable");
     expect(computeLibraryViewCapabilities(item({ fieldSessionId: "fs-1", captureTakeId: "take-1" })).segments).toBe("available");
+  });
+
+  it("selected completed Job 按自己的 manifest 门控球路，不借用 primary 产物", () => {
+    const selected = { id: "old", status: "completed", createdAt: "2026-08-01", analysisKind: "multiview" } as const;
+    const manifest = { job_id: "old", metrics: {}, artifacts: {} } as unknown as AnalysisPipelineResult;
+    const caps = computeLibraryViewCapabilities(item({}), { job: selected, manifest, manifestState: "loaded" });
+    expect(caps.analysis).toBe("available");
+    expect(caps.report).toBe("available");
+    expect(caps.trajectory).toBe("unavailable");
+    expect(caps.reasons?.trajectory).toContain("未生成可用球路");
+  });
+
+  it("selected failed/canceled Job 只开放任务级技术诊断", () => {
+    for (const status of ["failed", "canceled"] as const) {
+      const caps = computeLibraryViewCapabilities(item({}), {
+        job: { id: status, status, createdAt: "2026-08-01", analysisKind: "single_view" },
+        manifest: null,
+        manifestState: "idle",
+      });
+      expect(caps.analysis).toBe("unavailable");
+      expect(caps.report).toBe("unavailable");
+      expect(caps.technical).toBe("available");
+    }
+  });
+
+  it("selected manifest 加载中呈 loading，加载完成后按 Job 独立恢复", () => {
+    const job = { id: "old", status: "completed", createdAt: "2026-08-01", analysisKind: "single_view" } as const;
+    expect(computeLibraryViewCapabilities(item({}), { job, manifest: null, manifestState: "loading" }).analysis).toBe("loading");
+    const manifest = {
+      job_id: "old",
+      metrics: {},
+      artifacts: { ball_trajectory_url: "/old/ball.json" },
+    } as unknown as AnalysisPipelineResult;
+    expect(computeLibraryViewCapabilities(item({}), { job, manifest, manifestState: "loaded" }).trajectory).toBe("available");
   });
 });

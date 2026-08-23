@@ -233,6 +233,10 @@ def test_non_empty_guidance_runs_joint_path_but_default_path_stays_legacy():
     )
     assert result.guided_detection_invoked is True
     assert result.guided_candidate_count == 1
+    assert result.roi_recovery_summary["attempts"] == 1
+    assert result.roi_recovery_summary["hits"] == 1
+    assert result.roi_recovery_summary["latency_ms"] >= 0.0
+    assert session.snapshot().roi_recovery_summary == result.roi_recovery_summary
     assert detector.region_calls == [[(250.0, 100.0, 340.0, 320.0)]]
 
     # A fresh legacy session with guidance omitted never calls detect_regions.
@@ -245,6 +249,7 @@ def test_non_empty_guidance_runs_joint_path_but_default_path_stays_legacy():
     )
     legacy_result = legacy.step(object(), frame_index=0, timestamp=0.0)
     assert legacy_result.guided_detection_invoked is False
+    assert legacy_result.roi_recovery_summary["attempts"] == 0
     assert legacy_detector.region_calls == []
 
 

@@ -1,0 +1,40 @@
+{
+  "schema_version": "four-player-identification-acceptance-fixture.v1",
+  "recording_session_id": "sync_20260720_122645_317228",
+  "capture_take_id": "ct_6949bef776a5",
+  "reference_view": "cam_1",
+  "camera_id": "174",
+  "source_size": {"width": 1920, "height": 1080},
+  "canonical_slots": {
+    "Player_1": {"side": "far", "image_rank": "left", "upper_color": "black", "lower_color": "black"},
+    "Player_2": {"side": "far", "image_rank": "right", "upper_color": "black", "lower_color": "black"},
+    "Player_3": {"side": "near", "image_rank": "left", "upper_color": "white", "lower_color": "blue"},
+    "Player_4": {"side": "near", "image_rank": "right", "upper_color": "black", "lower_color": "white"}
+  },
+  "appearance_discriminability": {
+    "overall": "partial",
+    "notes": "P1/P2 上下装均以黑色为主，外观必须自动降权；P3/P4 可由上下装组合区分。"
+  },
+  "frames": [
+    {
+      "timestamp_seconds": 2.0,
+      "expectation": "all_four_detector_backed",
+      "players": {
+        "Player_1": {"bbox": [790, 88, 907, 226], "upper_region": [802, 116, 895, 164], "lower_region": [802, 164, 895, 212], "occluded": false, "clipped": false},
+        "Player_2": {"bbox": [1025, 72, 1148, 211], "upper_region": [1037, 100, 1136, 149], "lower_region": [1037, 149, 1136, 198], "occluded": false, "clipped": false},
+        "Player_3": {"bbox": [770, 326, 913, 710], "upper_region": [784, 403, 899, 537], "lower_region": [784, 537, 899, 672], "occluded": false, "clipped": false},
+        "Player_4": {"bbox": [1212, 392, 1368, 731], "upper_region": [1228, 460, 1352, 579], "lower_region": [1228, 579, 1352, 697], "occluded": false, "clipped": false}
+      }
+    },
+    {
+      "timestamp_seconds": 4.0,
+      "expectation": "Player_2_must_not_use_Player_1_bbox_owner",
+      "players": {
+        "Player_1": {"bbox": [805, 88, 925, 223], "upper_region": [817, 115, 913, 162], "lower_region": [817, 162, 913, 209], "occluded": false, "clipped": false},
+        "Player_2": {"bbox": [1000, 78, 1098, 207], "upper_region": [1010, 104, 1088, 149], "lower_region": [1010, 149, 1088, 194], "occluded": false, "clipped": false},
+        "Player_3": {"bbox": [742, 190, 857, 431], "upper_region": [754, 238, 845, 322], "lower_region": [754, 322, 845, 407], "occluded": false, "clipped": false},
+        "Player_4": {"bbox": [1103, 203, 1204, 422], "upper_region": [1113, 247, 1194, 324], "lower_region": [1113, 324, 1194, 400], "occluded": false, "clipped": false}
+      }
+    }
+  ]
+}

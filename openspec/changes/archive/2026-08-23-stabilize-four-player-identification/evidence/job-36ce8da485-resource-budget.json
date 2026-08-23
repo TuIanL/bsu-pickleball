@@ -1,0 +1,33 @@
+{
+  "schema_version": "four-player-identification-resource-budget.v1",
+  "job_id": "job-36ce8da485",
+  "processed_ticks": 1815,
+  "job_wall_time_ms": 2089037,
+  "appearance": {
+    "attempts": 27926,
+    "available": 27266,
+    "availability_rate": 0.9763661104347203,
+    "latency_ms": 30513.450432685203,
+    "wall_time_ratio": 0.014606468976227618,
+    "failure_reasons": {
+      "bbox_too_small": 262,
+      "blurred": 3,
+      "insufficient_valid_pixels": 395
+    }
+  },
+  "roi_recovery": {
+    "recovery_opportunities": 1560,
+    "invocations": 127,
+    "invocation_rate": 0.08141025641025641,
+    "candidates": 112,
+    "pre_gate_accepted": 107,
+    "guided_successes": 33,
+    "base_recoveries": 101,
+    "latency_persistence": "implemented_after_job",
+    "note": "The completed artifact predates per-view ROI latency persistence. ViewTrackingSession already measured latency; the joint artifact now persists it under roi_recovery.per_view and regression coverage verifies the contract."
+  },
+  "default_tracker_algorithm": "motion",
+  "appearance_decision_default": "shadow",
+  "verdict": "acceptable",
+  "reason": "Appearance consumed 1.46% of end-to-end wall time; guided ROI was invoked for 8.14% of recovery opportunities. Motion-aware tracking remains default while non-discriminative appearance stays non-decisional."
+}

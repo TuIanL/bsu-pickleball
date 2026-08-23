@@ -2,6 +2,10 @@
 
 > 本变更的 spec 聚焦新增能力 `player-report-evidence`。对既有能力 `pb-vision-style-report` / `interactive-performance-report` / `report-detail-pages` 的修改只会改变其"数据来源与可信度契约"，不新增视觉能力，故体现在本 spec 的共享受限要求中，不再重复单列；`multiview-global-player-roster` 仅被只读引用。
 
+## Purpose
+
+定义 Player Report 的证据来源、主体身份、指标可追溯性与 fail-closed 展示契约，确保报告只展示有权威依据的球员分析结果，并兼容演示数据与历史产物。
+
 ## Requirements
 
 ### Requirement: Player Report 主体仅限 canonical player

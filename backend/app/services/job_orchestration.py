@@ -36,6 +36,18 @@ from app.schemas.analysis import (
     build_match_context,
 )
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
+from app.services.analysis_progress import (
+    ProgressMode,
+    StageTransitionError,
+    aggregate_progress,
+    build_stage_snapshot,
+    merge_stage_event,
+    normalize_stage_snapshot,
+    resolve_progress_mode,
+    stage_definition,
+    stage_definitions,
+    stage_ids,
+)
 from app.services.storage_service import StorageService
 from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
 
@@ -46,7 +58,7 @@ TERMINAL_CANONICAL_STATUSES: set[AnalysisCanonicalStatus] = {"succeeded", "faile
 # 仍"活跃"的兼容状态：上传中 / 排队中 / 处理中
 ACTIVE_COMPAT_STATUSES: set[AnalysisJobStatus] = {"uploaded", "queued", "processing"}
 # 允许重试的阶段：视频读取 / 报告 / 可视化
-RETRYABLE_STAGE_IDS = {"video-read", "report", "visualization"}
+RETRYABLE_STAGE_IDS = {"video-read", "report", "visualization", "multiview-ball-analysis"}
 
 # 阶段顺序（与 STABLE_ANALYSIS_STAGE_IDS 保持一致）
 ORDERED_STAGES: list[AnalysisStageId] = list(STABLE_ANALYSIS_STAGE_IDS)
@@ -65,6 +77,7 @@ STAGE_DETAILS: dict[AnalysisStageId, tuple[str, str]] = {
     "metrics": ("运动指标", "计算移动距离、速度、厨房区停留和热力图"),
     "visualization": ("可视化输出", "生成可供前端展示的结果引用"),
     "report": ("报告生成", "生成报告 JSON 并交给前端展示"),
+    "multiview-ball-analysis": ("双摄球路分析", "基于共享同步帧生成球路与立体证据"),
 }
 
 
@@ -96,38 +109,22 @@ def display_to_canonical_status(status: AnalysisJobStatus) -> AnalysisCanonicalS
     }[status]
 
 
-def build_stages(active_stage: AnalysisStageId = "report", failed: bool = False) -> list[AnalysisStage]:
-    # 构造一组阶段：active_stage 之前的全 done，active_stage 本身为 active/failed，之后的 pending。
-    if active_stage not in ORDERED_STAGES:
-        active_stage = "queue"
+def build_stages(
+    active_stage: AnalysisStageId = "report",
+    failed: bool = False,
+    *,
+    mode: ProgressMode = "single_view",
+) -> list[AnalysisStage]:
+    """构造当前执行模式的完整顶层阶段快照。"""
+    return build_stage_snapshot(mode, str(active_stage), failed=failed)
 
-    active_index = ORDERED_STAGES.index(active_stage)
-    stages: list[AnalysisStage] = []
 
-    for index, stage_id in enumerate(ORDERED_STAGES):
-        label, detail = STAGE_DETAILS[stage_id]
-        status: AnalysisStageStatus = "pending"
-        progress = 0
-
-        if index < active_index or (active_stage == "report" and not failed):
-            status = "done"
-            progress = 100
-        elif index == active_index:
-            status = "failed" if failed else "active"
-            progress = 100 if failed else 10
-
-        stages.append(
-            AnalysisStage(
-                id=stage_id,
-                label=label,
-                status=status,
-                detail=detail,
-                progress=progress,
-                publicMessage=detail,
-            )
-        )
-
-    return stages
+def stage_details_for(mode: ProgressMode, stage_id: str) -> tuple[str, str]:
+    try:
+        definition = stage_definition(mode, stage_id)
+        return definition.label, definition.detail
+    except StageTransitionError:
+        return STAGE_DETAILS.get(stage_id, (stage_id, ""))
 
 
 def normalize_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
@@ -140,6 +137,22 @@ def normalize_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
     payload["canonicalStatus"] = canonical
     payload["status"] = display
     payload["displayStatus"] = display
+    mode = resolve_progress_mode(payload.get("analysisKind"), payload.get("executionMode"))
+    normalized_stages = normalize_stage_snapshot(job.stages, mode)
+    if canonical == "succeeded":
+        normalized_stages = [
+            stage.model_copy(update={"status": "done", "progress": 100})
+            for stage in normalized_stages
+        ]
+    payload["stages"] = normalized_stages
+    declared_stage = str(payload.get("stage") or "")
+    if canonical == "succeeded" or declared_stage not in stage_ids(mode):
+        payload["stage"] = current_stage_from_stages(
+            normalized_stages,
+            fallback=stage_ids(mode)[-1] if canonical == "succeeded" else stage_ids(mode)[0],
+        )
+    if payload.get("analysisKind") != "multiview" or not payload.get("viewRuns"):
+        payload["viewRuns"] = None
     # 兼容字段：排队时间、错误信息相互补齐
     if payload.get("queuedAt") is None and canonical == "queued":
         payload["queuedAt"] = job.createdAt
@@ -183,14 +196,21 @@ def stage_from_pipeline(stage: PipelineStageResult) -> AnalysisStage:
     )
 
 
-def compute_progress_from_stages(stages: list[AnalysisStage]) -> int:
-    # 根据各阶段状态估算总进度（0~99）：完成的算 1，进行中的按自身进度算。
-    if not stages:
-        return 0
-    total = len(stages)
-    complete_credit = sum(1 for stage in stages if stage.status in {"done", "skipped"})
-    active_credit = sum((stage.progress / 100) for stage in stages if stage.status == "active")
-    return min(99, int(((complete_credit + active_credit) / total) * 100))
+def compute_progress_from_stages(
+    stages: list[AnalysisStage],
+    *,
+    mode: ProgressMode = "single_view",
+    previous_progress: int = 0,
+    view_progress: dict[str, object] | None = None,
+    terminal_status: str | None = None,
+) -> int:
+    return aggregate_progress(
+        stages,
+        mode,
+        previous_progress=previous_progress,
+        view_progress=view_progress,
+        terminal_status=terminal_status,
+    )
 
 
 def current_stage_from_stages(stages: list[AnalysisStage], fallback: str = "queue") -> str:
@@ -215,63 +235,18 @@ def first_failed_stage(stages: list[AnalysisStage]) -> str:
     return "queue"
 
 
-def merge_stage_progress(stages: list[AnalysisStage], stage: AnalysisStage) -> list[AnalysisStage]:
-    # 把"新来的一个阶段"合并进已有阶段列表：更新同 id 的阶段，
-    # 并做一致性修正（active 阶段开始时记录时间；结束阶段补 endedAt/进度；
-    # 出现新 active 时把旧的 active 收尾为 done 等）。
-    existing: dict[str, AnalysisStage] = {item.id: item for item in stages}
-    prior = existing.get(stage.id)
-    now = utc_now()
-
-    payload = stage.model_dump()
-    if stage.status == "active" and not payload.get("startedAt"):
-        payload["startedAt"] = prior.startedAt if prior else now
-    if stage.status in {"done", "skipped", "failed", "canceled"}:
-        payload["startedAt"] = payload.get("startedAt") or (prior.startedAt if prior else now)
-        payload["endedAt"] = payload.get("endedAt") or now
-        payload["progress"] = payload.get("progress") or 100
-        payload["durationMs"] = payload.get("durationMs") or _duration_ms(
-            payload.get("startedAt"), payload.get("endedAt")
-        )
-    payload["publicMessage"] = payload.get("publicMessage") or payload.get("detail")
-    existing[stage.id] = AnalysisStage.model_validate(payload)
-
-    if stage.status in {"done", "skipped", "failed", "canceled"} and stage.id in ORDERED_STAGES:
-        # 结束一个阶段时，把排在它前面、还卡在 active 的阶段补成 done
-        stage_index = ORDERED_STAGES.index(stage.id)
-        for prior_stage_id in ORDERED_STAGES[:stage_index]:
-            prior_stage = existing.get(prior_stage_id)
-            if prior_stage and prior_stage.status == "active":
-                prior_payload = prior_stage.model_dump()
-                prior_payload.update(
-                    {
-                        "status": "done",
-                        "endedAt": now,
-                        "durationMs": prior_stage.durationMs or _duration_ms(prior_stage.startedAt, now),
-                        "progress": 100,
-                    }
-                )
-                existing[prior_stage_id] = AnalysisStage.model_validate(prior_payload)
-
-    if stage.status == "active":
-        # 新 active 出现时，把其它仍是 active 的旧阶段收尾为 done
-        for item in list(existing.values()):
-            if item.id != stage.id and item.status == "active":
-                item_payload = item.model_dump()
-                item_payload.update(
-                    {
-                        "status": "done",
-                        "endedAt": now,
-                        "durationMs": item.durationMs or _duration_ms(item.startedAt, now),
-                        "progress": 100,
-                    }
-                )
-                existing[item.id] = AnalysisStage.model_validate(item_payload)
-
-    # 保持 ORDERED_STAGES 的顺序，最后再追加 ORDERED_STAGES 之外的额外阶段
-    ordered_ids = [stage_id for stage_id in ORDERED_STAGES if stage_id in existing]
-    extra_ids = [stage_id for stage_id in existing if stage_id not in ORDERED_STAGES]
-    return [existing[stage_id] for stage_id in ordered_ids + extra_ids]
+def merge_stage_progress(
+    stages: list[AnalysisStage],
+    stage: AnalysisStage,
+    *,
+    mode: ProgressMode = "single_view",
+) -> list[AnalysisStage]:
+    """合并阶段事件；未知阶段只记日志，不污染对外顶层阶段图。"""
+    try:
+        return merge_stage_event(stages, stage, mode)
+    except StageTransitionError as exc:
+        logger.warning("Ignoring invalid %s stage event %s: %s", mode, stage.id, exc)
+        return normalize_stage_snapshot(stages, mode)
 
 
 def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
@@ -334,12 +309,17 @@ class JobStore:
         report_id = report_id or f"PV-{job_id.upper()}"
         mode = "real" if payload.calibrationId else "limited" if payload.videoId else "demo"
         settings = get_settings()
+        progress_mode = resolve_progress_mode(
+            payload.analysisKind,
+            payload.multiview.executionMode if payload.multiview else None,
+        )
+        initial_stage = "queue" if progress_mode == "single_view" else stage_ids(progress_mode)[0]
         job = AnalysisJobSummary(
             id=job_id,
             status="queued",
             canonicalStatus="queued",
             displayStatus="queued",
-            stage="queue",
+            stage=initial_stage,
             progress=10,
             createdAt=now,
             updatedAt=now,
@@ -350,7 +330,7 @@ class JobStore:
             frameStride=payload.frameStride,
             sourceFps=payload.sourceFps or payload.metadata.sourceFps,
             metadata=payload.metadata,
-            stages=build_stages("queue"),
+            stages=build_stages(initial_stage, mode=progress_mode),
             reportId=report_id,
             videoId=payload.videoId,
             calibrationId=payload.calibrationId,
@@ -370,6 +350,7 @@ class JobStore:
             clipStartMs=payload.clipStartMs,
             clipEndMs=payload.clipEndMs,
             analysisKind=payload.analysisKind,
+            executionMode=payload.multiview.executionMode if payload.multiview else "late_fusion_v1",
             orchestrationStatus="waiting_sources" if payload.analysisKind == "multiview" else "none",
             debugTraceEnabled=bool(payload.multiview.debugTraceEnabled) if payload.multiview else False,
         )
@@ -480,13 +461,16 @@ class JobStore:
     def _claim(self, job: AnalysisJobSummary, worker_id: str) -> AnalysisJobSummary:
         # 内部：把任务从 queued 置为 running（processing），并标记阶段开始。
         now = utc_now()
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        claim_stage_id = "video-read" if mode == "single_view" else stage_ids(mode)[0]
+        claim_label, claim_detail = stage_details_for(mode, claim_stage_id)
         payload = job.model_dump()
         payload.update(
             {
                 "canonicalStatus": "running",
                 "status": "processing",
                 "displayStatus": "processing",
-                "stage": "video-read",
+                "stage": claim_stage_id,
                 "progress": max(job.progress, 12),
                 "startedAt": now,
                 "updatedAt": now,
@@ -495,12 +479,13 @@ class JobStore:
                 "stages": merge_stage_progress(
                     job.stages,
                     AnalysisStage(
-                        id="video-read",
-                        label=STAGE_DETAILS["video-read"][0],
+                        id=claim_stage_id,
+                        label=claim_label,
                         status="active",
-                        detail="正在读取上传视频元数据和帧流",
+                        detail=claim_detail,
                         progress=10,
                     ),
+                    mode=mode,
                 ),
             }
         )
@@ -517,16 +502,19 @@ class JobStore:
             now = utc_now()
             if job.canonicalStatus == "queued":
                 # 还在排队就直接置为已取消
+                mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+                label, _detail = stage_details_for(mode, job.stage)
                 canceled_stages = merge_stage_progress(
                     job.stages,
                     AnalysisStage(
                         id=job.stage,
-                        label=STAGE_DETAILS.get(job.stage, (job.stage, ""))[0],
+                        label=label,
                         status="canceled",
                         detail="任务已在排队阶段取消",
                         progress=100,
                         errorCode=ANALYSIS_ERROR_CODES["job_canceled"],
                     ),
+                    mode=mode,
                 )
                 updated = self._terminal_job(
                     job,
@@ -545,13 +533,20 @@ class JobStore:
 
     def mark_stage(self, job: AnalysisJobSummary, stage: AnalysisStage) -> AnalysisJobSummary:
         # 更新任务的某个阶段进度；若该阶段失败，则把整个任务置为失败。
-        stages = merge_stage_progress(job.stages, stage)
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        stages = merge_stage_progress(job.stages, stage, mode=mode)
+        progress = compute_progress_from_stages(
+            stages,
+            mode=mode,
+            previous_progress=job.progress,
+            view_progress=job.viewRuns,
+        )
         updates: dict[str, object] = {
             "canonicalStatus": "running",
             "status": "processing",
             "displayStatus": "processing",
             "stage": current_stage_from_stages(stages, fallback=stage.id),
-            "progress": compute_progress_from_stages(stages),
+            "progress": progress,
             "stages": stages,
         }
         if stage.status == "failed":
@@ -572,14 +567,17 @@ class JobStore:
 
     def mark_succeeded(self, job: AnalysisJobSummary, stages: list[AnalysisStage]) -> AnalysisJobSummary:
         # 标记任务成功：补上 report 阶段为 done，整体置为 succeeded。
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        report_id = stage_ids(mode)[-1]
+        report_label, report_detail = stage_details_for(mode, report_id)
         report_stage = AnalysisStage(
-            id="report",
-            label=STAGE_DETAILS["report"][0],
+            id=report_id,
+            label=report_label,
             status="done",
-            detail="已生成前端报告 JSON",
+            detail="已生成前端报告 JSON" if report_id == "report" else report_detail,
             progress=100,
         )
-        merged = merge_stage_progress(stages, report_stage)
+        merged = merge_stage_progress(stages, report_stage, mode=mode)
         return self._terminal_job(job, "succeeded", stages=merged, progress=100)
 
     def mark_failed(
@@ -592,6 +590,7 @@ class JobStore:
         internal_message: str | None = None,
     ) -> AnalysisJobSummary:
         # 标记任务失败。
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
         return self._terminal_job(
             job,
             "failed",
@@ -600,20 +599,26 @@ class JobStore:
             message=message,
             internal_message=internal_message,
             stage=first_failed_stage(stages),
-            progress=compute_progress_from_stages(stages),
+            progress=compute_progress_from_stages(
+                stages,
+                mode=mode,
+                previous_progress=job.progress,
+            ),
         )
 
     def mark_canceled(self, job: AnalysisJobSummary, *, message: str = "任务已取消") -> AnalysisJobSummary:
         # 标记任务已取消。
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        label, _detail = stage_details_for(mode, job.stage)
         canceled_stage = AnalysisStage(
             id=job.stage,
-            label=STAGE_DETAILS.get(job.stage, (job.stage, ""))[0],
+            label=label,
             status="canceled",
             detail=message,
             progress=100,
             errorCode=ANALYSIS_ERROR_CODES["job_canceled"],
         )
-        stages = merge_stage_progress(job.stages, canceled_stage)
+        stages = merge_stage_progress(job.stages, canceled_stage, mode=mode)
         return self._terminal_job(
             job,
             "canceled",
@@ -659,7 +664,7 @@ class JobStore:
                 "displayStatus": display,
                 "stage": stage or current_stage_from_stages(stages, fallback=job.stage),
                 "progress": 100
-                if progress is None and canonical_status in {"succeeded", "canceled"}
+                if progress is None and canonical_status == "succeeded"
                 else progress
                 if progress is not None
                 else job.progress,
@@ -840,9 +845,11 @@ class AnalysisWorkerRuntime:
                     if latest.stage not in RETRYABLE_STAGE_IDS or retry_attempts >= self.settings.job_max_retries:
                         raise
                     retry_attempts += 1
+                    retry_mode = resolve_progress_mode(latest.analysisKind, latest.executionMode)
+                    retry_label, _detail = stage_details_for(retry_mode, latest.stage)
                     retry_stage = AnalysisStage(
                         id=latest.stage,
-                        label=STAGE_DETAILS.get(latest.stage, (latest.stage, ""))[0],
+                        label=retry_label,
                         status="active",
                         detail="阶段执行失败，正在按策略重试",
                         progress=latest.progress,
@@ -853,7 +860,8 @@ class AnalysisWorkerRuntime:
             if token.is_cancel_requested():
                 self._cleanup_tmp(job.id)
                 return self._notify_terminal(self.store.mark_canceled(latest))
-            stages = analysis_stages_from_pipeline(result)
+            progress_mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+            stages = analysis_stages_from_pipeline(result, mode=progress_mode)
             if result.status == "completed":
                 latest = self.store.mark_succeeded(latest, stages)
                 self._notify_terminal(latest)
@@ -866,9 +874,11 @@ class AnalysisWorkerRuntime:
             return self._notify_terminal(self.store.mark_canceled(latest))
         except StageTimeoutError as exc:
             logger.warning("Analysis job %s timed out at stage %s", job.id, latest.stage)
+            mode = resolve_progress_mode(latest.analysisKind, latest.executionMode)
+            timeout_label, _detail = stage_details_for(mode, latest.stage)
             timed_out_stage = AnalysisStage(
                 id=latest.stage,
-                label=STAGE_DETAILS.get(latest.stage, (latest.stage, ""))[0],
+                label=timeout_label,
                 status="failed",
                 detail="分析阶段超时",
                 progress=100,
@@ -877,7 +887,7 @@ class AnalysisWorkerRuntime:
                 internalMessage=str(exc),
                 retryCount=retry_attempts,
             )
-            stages = merge_stage_progress(latest.stages, timed_out_stage)
+            stages = merge_stage_progress(latest.stages, timed_out_stage, mode=mode)
             self._cleanup_tmp(job.id)
             return self._notify_terminal(
                 self.store.mark_failed(
@@ -890,9 +900,11 @@ class AnalysisWorkerRuntime:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Analysis job %s failed in worker", job.id)
+            mode = resolve_progress_mode(latest.analysisKind, latest.executionMode)
+            failed_label, _detail = stage_details_for(mode, latest.stage)
             failed_stage = AnalysisStage(
                 id=latest.stage,
-                label=STAGE_DETAILS.get(latest.stage, (latest.stage, ""))[0],
+                label=failed_label,
                 status="failed",
                 detail="分析任务执行失败",
                 progress=100,
@@ -901,7 +913,7 @@ class AnalysisWorkerRuntime:
                 internalMessage=str(exc),
                 retryCount=retry_attempts,
             )
-            stages = merge_stage_progress(latest.stages, failed_stage)
+            stages = merge_stage_progress(latest.stages, failed_stage, mode=mode)
             self._cleanup_tmp(job.id)
             return self._notify_terminal(
                 self.store.mark_failed(
@@ -945,32 +957,49 @@ class AnalysisWorkerRuntime:
             self.store.storage.delete_path_tree(tmp_path)
 
 
-def analysis_stages_from_pipeline(result: AnalysisPipelineResult) -> list[AnalysisStage]:
-    # 把流水线结果里的阶段，转换成对外展示的阶段列表（补上 upload/queue 两个前置阶段）。
-    stages: list[AnalysisStage] = [
-        AnalysisStage(id="upload", label="视频上传", status="done", detail="上传视频已保存", progress=100),
-        AnalysisStage(id="queue", label="任务排队", status="done", detail="任务已进入后端分析流程", progress=100),
-    ]
-    seen_ids = {"upload", "queue"}
-    for stage in result.stages:
-        if stage.id in seen_ids:
-            continue
-        seen_ids.add(stage.id)
-        stages.append(stage_from_pipeline(stage))
-
-    if "frame-sampling" not in seen_ids:
-        insert_at = min(4, len(stages))
-        stages.insert(
-            insert_at,
+def analysis_stages_from_pipeline(
+    result: AnalysisPipelineResult,
+    *,
+    mode: ProgressMode = "single_view",
+) -> list[AnalysisStage]:
+    """把 pipeline/Composer 结果投影为当前模式的完整顶层阶段图。"""
+    first_stage = stage_ids(mode)[0]
+    bootstrap_stage = "video-read" if mode == "single_view" else first_stage
+    stages = build_stage_snapshot(mode, bootstrap_stage)
+    # 结果已经是终态快照时，前置素材检查视为完成；运行中的结果仍由回调更新。
+    if mode != "single_view":
+        stages = merge_stage_progress(
+            stages,
             AnalysisStage(
-                id="frame-sampling",
-                label="抽帧采样",
-                status="done" if result.video_id else "skipped",
-                detail="已按配置帧间隔读取视频帧" if result.video_id else "未提供视频，跳过真实抽帧",
+                id=first_stage,
+                label=stage_definition(mode, first_stage).label,
+                status="done",
+                detail=stage_definition(mode, first_stage).detail,
                 progress=100,
             ),
+            mode=mode,
         )
-    return stages
+    for pipeline_stage in result.stages:
+        stage_id = pipeline_stage.id
+        if stage_id not in stage_ids(mode):
+            continue
+        stages = merge_stage_progress(stages, stage_from_pipeline(pipeline_stage), mode=mode)
+
+    if mode == "single_view" and "frame-sampling" in stage_ids(mode):
+        frame_stage = next((stage for stage in stages if stage.id == "frame-sampling"), None)
+        if frame_stage is not None and frame_stage.status == "pending":
+            stages = merge_stage_progress(
+                stages,
+                AnalysisStage(
+                    id="frame-sampling",
+                    label="抽帧采样",
+                    status="done" if result.video_id else "skipped",
+                    detail="已按配置帧间隔读取视频帧" if result.video_id else "未提供视频，跳过真实抽帧",
+                    progress=100,
+                ),
+                mode=mode,
+            )
+    return normalize_stage_snapshot(stages, mode)
 
 
 def _duration_ms(started: str | None, ended: str | None) -> int | None:

@@ -206,6 +206,23 @@ def test_roster_active_no_new_global_after_cap():
     assert len(reg.players) <= 2  # 硬断言：不创建 G3
 
 
+def test_legacy_mapping_key_is_ignored_without_aborting_tick():
+    reg = _seed_roster(1)
+    assoc = GlobalPlayerAssociator(reg)
+    # 早期运行状态可能残留二元 key；joint_tracking_v2 的当前 key 是三元组。
+    assoc.mapping[("cam_1", "A")] = "global_player_1"  # type: ignore[index]
+
+    updates = assoc.process_tick(
+        [_obs("cam_1", 5.0, 8.0, pid="A", tid=1)],
+        0.0,
+        {"cam_1": IDENTITY},
+        tick=0,
+    )
+
+    assert {update.global_id for update in updates} == {"global_player_1"}
+    assert assoc.diagnostics["malformed_mapping_key"] == 1
+
+
 def test_reassociation_requires_n_frames_strong_evidence():
     reg = _seed_roster(2)  # G1 (5,8), G2 (15,8)
     assoc = GlobalPlayerAssociator(reg, max_association_distance_ft=3.0, switch_margin=0.15, reassociation_frames=5)

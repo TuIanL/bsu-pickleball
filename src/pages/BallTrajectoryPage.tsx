@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowLeft, CircleDot, Loader2, Route, SlidersHorizontal } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
+import type { LibraryView } from "../components/library/viewCapabilities";
 import { PageFrame } from "../components/PageFrame";
 import { BallTrajectoryScene } from "../components/platform/BallTrajectoryScene";
 import {
@@ -31,6 +32,8 @@ interface BallTrajectoryPageProps {
   onNavigate: NavigateFn;
   /** embedded：嵌入 Library Workspace 时隐藏页面级头部外壳（返回按钮/标题） */
   embedded?: boolean;
+  /** embedded 下结果切换留在同一 Library Item（如「返回视觉分析」→ analysis view） */
+  onSelectView?: (view: LibraryView) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -67,7 +70,7 @@ function ownershipBadge(status: string): { label: string; className: string } | 
   }
 }
 
-export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajectoryPageProps) {
+export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }: BallTrajectoryPageProps) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [v3Artifact, setV3Artifact] = useState<ReconstructedBallTrajectoryArtifact | null>(null);
   const [job, setJob] = useState<AnalysisJobSummary | null>(null);
@@ -92,9 +95,22 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajecto
         if (!result) throw new Error("该任务尚未生成可读取的分析结果");
 
         const trajectoryArtifact = await getReconstructedBallTrajectory(result);
-        const isV3 = trajectoryArtifact?.reconstruction_mode === "multiview_estimated_3d";
-        setV3Artifact(isV3 ? trajectoryArtifact : null);
-        let nextData = buildReconstructedBallTrajectoryVisualization(trajectoryArtifact);
+        const pipelineStatus = result.artifacts.reconstructed_ball_trajectory_status;
+        const pipelineDetail = result.artifacts.reconstructed_ball_trajectory_detail;
+        const isV3 = trajectoryArtifact?.reconstruction_mode === "multiview_estimated_3d" || Boolean(pipelineStatus);
+        const v3WithStatus = trajectoryArtifact ?? (pipelineStatus ? {
+          schema_version: "reconstructed_ball_trajectory.v3",
+          job_id: jobId,
+          status: pipelineStatus === "succeeded" ? "available" : pipelineStatus === "degraded" ? "partial" : "unavailable",
+          detail: pipelineDetail ?? "双摄球路分析尚未生成可用轨迹",
+          reconstruction_mode: "multiview_estimated_3d" as const,
+          events: [],
+          segments: [],
+          overall_status: "UNAVAILABLE" as const,
+          pipeline_status: pipelineStatus,
+        } : null);
+        setV3Artifact(isV3 ? v3WithStatus : null);
+        let nextData = buildReconstructedBallTrajectoryVisualization(v3WithStatus);
         // v3（多视角估算 3D）：即使可视化尚空，也按整体状态展示 v3 面板 + 明确降级，
         // 不伪造 2.5D；非 v3 且无轨迹时才降级到原始轨迹模式。
         if (!isV3 && nextData.trajectories.length === 0) {
@@ -175,6 +191,9 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajecto
   const visionPath = withTaskListContext(`/analysis/${jobId}/vision`, taskContextForJob(job));
 
   if (loadState === "loading") {
+    if (embedded) {
+      return <div className="grid min-h-[50vh] place-items-center text-sm text-[var(--capture-text-muted,#8f9d96)]">正在构建球路…</div>;
+    }
     return (
       <PageFrame>
         <div className="grid min-h-[62vh] place-items-center text-center">
@@ -190,6 +209,23 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajecto
 
   if (loadState === "failed" || loadState === "empty") {
     const failed = loadState === "failed";
+    if (embedded) {
+      return (
+        <div className="mx-auto grid min-h-[50vh] max-w-xl place-items-center px-6 text-center">
+          <div>
+            <h1 className="text-xl font-bold text-[#182230]">{failed ? "球路读取失败" : "暂无可用球路"}</h1>
+            <p className="mt-3 text-sm leading-6 text-[#667085]">
+              {failed ? errorMessage : "当前任务没有足够的有效球场坐标形成连续轨迹。"}
+            </p>
+            {onSelectView ? (
+              <button className="quiet-button mt-6 px-4 py-2.5" onClick={() => onSelectView("analysis")} type="button">
+                返回视觉分析
+              </button>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
     return (
       <PageFrame>
         <div className="mx-auto grid min-h-[62vh] max-w-xl place-items-center text-center">
@@ -227,9 +263,11 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajecto
               {v3Artifact.overall_status ?? "UNAVAILABLE"}
             </span>
           </div>
-          {v3Artifact.overall_status === "UNAVAILABLE" ? (
+          {v3Artifact.pipeline_status === "running" || v3Artifact.pipeline_status === "queued" ? (
+            <p className="mt-2 text-xs leading-5 text-[#667085]">双摄球路分析正在进行，完成后会自动提供三维球路和质量指标。</p>
+          ) : v3Artifact.overall_status === "UNAVAILABLE" ? (
             <p className="mt-2 text-xs leading-5 text-[#667085]">
-              双摄三维证据不足以重建可信 3D 球路，系统未伪造球路。落点/球速按各自可用性单独给出（如有）。
+              {v3Artifact.detail ?? "双摄三维证据不足以重建可信 3D 球路，系统未伪造球路。"}
             </p>
           ) : (
             <div className="mt-2 grid gap-2 text-xs text-[#344054] sm:grid-cols-3">
@@ -302,6 +340,14 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded }: BallTrajecto
                 <AlertCircle className="mx-auto text-[#D92D20]" size={26} aria-hidden="true" />
                 <h2 className="mt-4 text-lg font-bold text-[#182230]">3D 渲染不可用</h2>
                 <p className="mt-2 max-w-md text-sm leading-6 text-[#667085]">{webGlError}</p>
+              </div>
+            </div>
+          ) : v3Artifact?.overall_status === "UNAVAILABLE" ? (
+            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#FECACA] bg-[#FFF7F7] p-8 text-center">
+              <div>
+                <AlertCircle className="mx-auto text-[#D92D20]" size={24} aria-hidden="true" />
+                <h2 className="mt-4 text-lg font-bold text-[#182230]">双摄球路暂不可用</h2>
+                <p className="mt-2 max-w-md text-sm leading-6 text-[#667085]">{v3Artifact.detail}</p>
               </div>
             </div>
           ) : filteredTrajectories.length ? (

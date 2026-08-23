@@ -48,6 +48,7 @@ class LiveCodingState(Base):
     current_set_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 当前盘区间ID
     current_game_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 当前局区间ID
     current_rally_segment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 当前回合区间ID
+    active_vidat_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from math import hypot
+from time import perf_counter
 from typing import Any
 
 from app.schemas.analysis import MatchAnalysisContext, build_match_context, build_player_group_profile
@@ -46,6 +47,11 @@ from app.vision.player_tracking_engine.multi_object_tracker import (
     DuplicateTrackSuppressor,
     MultiObjectTracker,
     TrackingUpdate,
+)
+from app.vision.player_tracking_engine.player_appearance import (
+    ClothingAppearanceExtractor,
+    PlayerAppearanceDescriptor,
+    PlayerAppearanceExtractor,
 )
 from app.vision.player_tracking_engine.player_identity import PlayerIdentityConfig, PlayerIdentityManager
 from app.vision.player_tracking_engine.player_lock_manager import InitialLockAssignment, PlayerLockManager
@@ -156,6 +162,9 @@ class ViewFrameResult:
     guided_pre_gate_accepted_count: int = 0
     guided_detection_invoked: bool = False
     guided_reject_reason_counts: dict[str, int] = field(default_factory=dict)
+    appearance_summary: dict[str, Any] = field(default_factory=dict)
+    appearance_by_track: dict[int, PlayerAppearanceDescriptor] = field(default_factory=dict)
+    roi_recovery_summary: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -203,6 +212,8 @@ class ViewTrackingSessionOutputs:
     full_frame_fallback_count: int
     selector_mode: str
     selector_fallback_reason: str | None
+    appearance_summary: dict[str, Any] = field(default_factory=dict)
+    roi_recovery_summary: dict[str, Any] = field(default_factory=dict)
 
 
 def build_view_tracking_config(
@@ -278,7 +289,10 @@ def build_view_tracking_config(
         player_lock_max_reconnect_distance_ft=settings.player_lock_max_reconnect_distance_ft,
         player_lock_bootstrap_court_margin_ft=settings.player_lock_bootstrap_court_margin_ft,
         player_lock_lost_reconnect_court_margin_ft=settings.player_lock_lost_reconnect_court_margin_ft,
-        player_lock_enable_appearance_score=settings.player_lock_enable_appearance_score,
+        player_lock_enable_appearance_score=(
+            settings.player_lock_enable_appearance_score
+            or getattr(settings, "four_player_appearance_mode", "shadow") == "enabled"
+        ),
         player_duplicate_track_iou_threshold=settings.player_duplicate_track_iou_threshold,
         player_duplicate_track_sustain_frames=settings.player_duplicate_track_sustain_frames,
         position_smoother_max_gap_frames=position_smoother_max_gap_frames,
@@ -303,6 +317,7 @@ class ViewTrackingSession:
         primary_player_selector: PrimaryPlayerSelector,
         player_lock_manager: PlayerLockManager,
         identity_manager: PlayerIdentityManager,
+        appearance_extractor: PlayerAppearanceExtractor | None = None,
     ) -> None:
         self.detector = detector
         self.homography = homography
@@ -317,6 +332,7 @@ class ViewTrackingSession:
         self.primary_player_selector = primary_player_selector
         self.player_lock_manager = player_lock_manager
         self.identity_manager = identity_manager
+        self.appearance_extractor = appearance_extractor
 
         # 累积产物
         self._raw_detections: list[Detection] = []
@@ -340,6 +356,16 @@ class ViewTrackingSession:
         self._render_identity_diagnostic_cursor = 0
         self._prev_player_centroids: dict[str, tuple[float, float]] = {}
         self._last_guided_reject_reason_counts: dict[str, int] = {}
+        self._appearance_attempts = 0
+        self._appearance_available = 0
+        self._appearance_low_quality = 0
+        self._appearance_latency_ms = 0.0
+        self._appearance_reasons: dict[str, int] = {}
+        self._guided_attempts = 0
+        self._guided_hits = 0
+        self._guided_candidates = 0
+        self._guided_latency_ms = 0.0
+        self._guided_reject_reasons: dict[str, int] = {}
 
     # ---- 主接口 -------------------------------------------------------------
 
@@ -446,7 +472,13 @@ class ViewTrackingSession:
                         guided_reject_reason_counts[reason] = guided_reject_reason_counts.get(reason, 0) + 1
         prepared.committed = True
         # 3) 跟踪 + 重复抑制
-        tracker_update = self._tracker_update_with_assignments(detections)
+        appearance_descriptors = self._extract_appearance_descriptors(frame, detections)
+        tracker_update = self._tracker_update_with_assignments(detections, appearance_descriptors)
+        appearance_by_track = {
+            track_id: appearance_descriptors[detection_index]
+            for detection_index, track_id in tracker_update.detection_to_track.items()
+            if detection_index in appearance_descriptors
+        }
         tracks = tracker_update.tracks
         tracks = self.duplicate_suppressor.filter(tracks)
         surviving_track_ids = {track.track_id for track in tracks}
@@ -508,6 +540,7 @@ class ViewTrackingSession:
             frame=frame,
             frame_width=self.config.frame_width,
             frame_height=self.config.frame_height,
+            appearance_by_track=appearance_by_track,
         )
         self.lock_diagnostics.extend(lock_update.diagnostics)
         # fix-joint-bootstrap-visual-gap：同步首次 lock 映射（manager 内部已保证仅记录一次）
@@ -717,6 +750,13 @@ class ViewTrackingSession:
             guided_pre_gate_accepted_count=len(guided_by_detection),
             guided_detection_invoked=guided_detection_invoked,
             guided_reject_reason_counts=guided_reject_reason_counts,
+            appearance_summary=self._appearance_summary(),
+            appearance_by_track={
+                int(track_id): descriptor
+                for track_id, descriptor in appearance_by_track.items()
+                if int(track_id) in surviving_track_ids
+            },
+            roi_recovery_summary=self._roi_recovery_summary(),
         )
 
     # ---- 结束阶段窄接口 -----------------------------------------------------
@@ -739,6 +779,8 @@ class ViewTrackingSession:
             full_frame_fallback_count=self.full_frame_fallback_count,
             selector_mode=self.primary_player_selector.last_selection_mode,
             selector_fallback_reason=self.primary_player_selector.last_fallback_reason,
+            appearance_summary=self._appearance_summary(),
+            roi_recovery_summary=self._roi_recovery_summary(),
         )
 
     def build_player_trajectory_artifact(
@@ -815,6 +857,7 @@ class ViewTrackingSession:
         """
         from app.vision.multiview.guided_detection import guided_candidate_pre_gate
 
+        started = perf_counter()
         accepted: list[Any] = []
         invoked = False
         candidate_count = 0
@@ -829,6 +872,7 @@ class ViewTrackingSession:
                 )
                 continue
             try:
+                self._guided_attempts += 1
                 candidates = self.detector.detect_regions(frame, [roi])
             except Exception:
                 reason = "detector_error"
@@ -838,6 +882,7 @@ class ViewTrackingSession:
                 continue
             invoked = True
             candidate_count += len(candidates)
+            self._guided_candidates += len(candidates)
             for d in candidates:
                 gated = guided_candidate_pre_gate(
                     d,
@@ -846,8 +891,10 @@ class ViewTrackingSession:
                     max_residual_ft=3.0,
                     frame_width=self.config.frame_width,
                     frame_height=self.config.frame_height,
+                    min_confidence=0.15,
                 )
                 if gated.accepted:
+                    gated.detection = gated.detection.model_copy(update={"origin": "roi_recovery"})
                     gated.guidance_id = getattr(g, "guidance_id", None)
                     gated.expected_global_player_id = (
                         getattr(g, "expected_global_player_id", None)
@@ -857,16 +904,83 @@ class ViewTrackingSession:
                     gated.donor_quality = float(getattr(g, "donor_quality", 0.0) or 0.0)
                     gated.recovery_episode_id = getattr(g, "recovery_episode_id", None)
                     accepted.append(gated)
+                    self._guided_hits += 1
                 else:
                     reason = gated.reject_reason or "pre_gate_rejected"
                     self._last_guided_reject_reason_counts[reason] = (
                         self._last_guided_reject_reason_counts.get(reason, 0) + 1
                     )
+        self._guided_latency_ms += (perf_counter() - started) * 1000.0
+        for reason, count in self._last_guided_reject_reason_counts.items():
+            self._guided_reject_reasons[reason] = self._guided_reject_reasons.get(reason, 0) + count
         return accepted, invoked, candidate_count
 
-    def _tracker_update_with_assignments(self, detections: list[Detection]) -> TrackingUpdate:
+    def _roi_recovery_summary(self) -> dict[str, Any]:
+        return {
+            "attempts": self._guided_attempts,
+            "hits": self._guided_hits,
+            "candidates": self._guided_candidates,
+            "latency_ms": self._guided_latency_ms,
+            "reject_reason_counts": dict(sorted(self._guided_reject_reasons.items())),
+        }
+
+    def _extract_appearance_descriptors(
+        self,
+        frame: object,
+        detections: list[Detection],
+    ) -> dict[int, PlayerAppearanceDescriptor]:
+        if self.appearance_extractor is None:
+            return {}
+        descriptors: dict[int, PlayerAppearanceDescriptor] = {}
+        started = perf_counter()
+        for index, detection in enumerate(detections):
+            self._appearance_attempts += 1
+            descriptor = self.appearance_extractor.extract(
+                frame,
+                detection.bbox,
+                provenance=detection.origin,
+            )
+            descriptors[index] = descriptor
+            if descriptor.status == "available":
+                self._appearance_available += 1
+            else:
+                self._appearance_low_quality += 1
+                for reason in descriptor.quality.reasons:
+                    self._appearance_reasons[reason] = self._appearance_reasons.get(reason, 0) + 1
+        self._appearance_latency_ms += (perf_counter() - started) * 1000.0
+        return descriptors
+
+    def _appearance_summary(self) -> dict[str, Any]:
+        return {
+            "extractor_version": getattr(self.appearance_extractor, "version", None),
+            "attempts": self._appearance_attempts,
+            "available": self._appearance_available,
+            "low_quality_or_unavailable": self._appearance_low_quality,
+            "availability_rate": (
+                self._appearance_available / self._appearance_attempts
+                if self._appearance_attempts
+                else 0.0
+            ),
+            "latency_ms": self._appearance_latency_ms,
+            "reason_counts": dict(sorted(self._appearance_reasons.items())),
+            "decision_enabled": bool(getattr(self.tracker, "appearance_enabled", False)),
+            "tracker_config_signature": getattr(self.tracker, "config_signature", None),
+            "tracker_shadow": (
+                self.tracker.shadow_summary()
+                if isinstance(self.tracker, MultiObjectTracker)
+                else {"enabled": False}
+            ),
+        }
+
+    def _tracker_update_with_assignments(
+        self,
+        detections: list[Detection],
+        appearance_descriptors: dict[int, PlayerAppearanceDescriptor] | None = None,
+    ) -> TrackingUpdate:
         update_with_assignments = getattr(self.tracker, "update_with_assignments", None)
         if callable(update_with_assignments):
+            if isinstance(self.tracker, MultiObjectTracker):
+                return update_with_assignments(detections, appearance_descriptors)
             return update_with_assignments(detections)
         return TrackingUpdate(
             tracks=self.tracker.update(detections),
@@ -983,7 +1097,11 @@ def build_view_tracking_session(
         near_side_quota=config.match_context.near_side_quota,
         far_side_quota=config.match_context.far_side_quota,
     )
-    resolved_tracker = tracker or MultiObjectTracker(max_lost=config.identity_lost_buffer_frames)
+    resolved_tracker = tracker or MultiObjectTracker(
+        max_lost=config.identity_lost_buffer_frames,
+        appearance_enabled=config.player_lock_enable_appearance_score,
+        shadow_legacy=True,
+    )
     duplicate_suppressor = DuplicateTrackSuppressor(
         iou_threshold=config.player_duplicate_track_iou_threshold,
         sustain_frames=config.player_duplicate_track_sustain_frames,
@@ -1031,6 +1149,8 @@ def build_view_tracking_session(
             bootstrap_court_margin_ft=config.player_lock_bootstrap_court_margin_ft,
             lost_reconnect_court_margin_ft=config.player_lock_lost_reconnect_court_margin_ft,
             enable_appearance_score=config.player_lock_enable_appearance_score,
+            reconnect_confirmation_frames=3,
+            reconnect_ambiguity_margin=0.08,
         )
     )
     position_smoother = CourtPositionSmoother(
@@ -1052,4 +1172,5 @@ def build_view_tracking_session(
         primary_player_selector=primary_player_selector,
         player_lock_manager=player_lock_manager,
         identity_manager=identity_manager,
+        appearance_extractor=ClothingAppearanceExtractor(),
     )

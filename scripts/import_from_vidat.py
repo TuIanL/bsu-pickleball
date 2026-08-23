@@ -14,6 +14,7 @@ os.environ.setdefault("PICKLEBALL_DATA_DIR", str(PROJECT_ROOT / "backend" / "dat
 os.environ.setdefault("PICKLEBALL_DATABASE_PATH", str(PROJECT_ROOT / "backend" / "data" / "app.sqlite3"))
 
 from app.database import get_session_factory, init_db  # noqa: E402
+from app.models.live_coding_state import LiveCodingState  # noqa: E402
 from app.models.vidat_annotation import VidatAnnotationPackage  # noqa: E402
 from app.services.vidat_annotation_service import (  # noqa: E402
     VidatPackageError, confirm_import_preview, create_import_preview,
@@ -48,8 +49,14 @@ def main() -> int:
             else:
                 audit = confirm_import_preview(db, package, args.confirmation_token, annotation)
                 db.commit()
-                output = {"audit_id": audit.id, "package_id": package.id,
-                          "operations": json.loads(audit.operations_json)}
+                active = db.get(LiveCodingState, package.capture_take_id)
+                output = {
+                    "audit_id": audit.id,
+                    "source_package_id": audit.package_id,
+                    "result_package_id": audit.result_package_id,
+                    "active_vidat_package_id": active.active_vidat_package_id if active else None,
+                    "operations": json.loads(audit.operations_json),
+                }
         except VidatPackageError as exc:
             db.rollback()
             parser.error(str(exc))

@@ -3,6 +3,19 @@ import { parseTaskListContext } from "./navigationContext";
 
 export const supportedReportTypes: ReportType[] = ["performance", "movement", "diagnosis"];
 
+/** analysis 系列路由（transient 流程），按 `return` 推导导航段高亮 */
+const ANALYSIS_NAV_ROUTES = new Set<RouteState["name"]>([
+  "analysis-job",
+  "analysis-details",
+  "vision",
+  "ball-trajectory",
+  "multiview-observability",
+  "report",
+  "recording-analyze",
+  "multiview-setup",
+  "sync-calibration",
+]);
+
 type RouteMeta = {
   shellMode: AppShellMode;
   navigationSection: NavigationSection | null;
@@ -240,7 +253,21 @@ export function parsePath(pathname: string): RouteState {
 }
 
 export function parseLocation(pathname: string, search: string): RouteState {
-  const route = parsePath(pathname);
+  let route = parsePath(pathname);
+
+  // P0 6：analysis 系列路由按 `return` 覆盖导航段——Library origin 高亮「比赛库」，
+  // capture origin 高亮「现场采集」；非法 return 安全忽略。
+  const searchParams = new URLSearchParams(search);
+  const rawReturn = searchParams.get("return");
+  if (rawReturn && ANALYSIS_NAV_ROUTES.has(route.name)) {
+    const section =
+      rawReturn.startsWith("/library/") ? "library"
+      : rawReturn.startsWith("/capture/") ? "capture"
+      : null;
+    if (section && section !== route.navigationSection) {
+      route = { ...route, navigationSection: section } as RouteState;
+    }
+  }
 
   if (route.name === "sync-calibration") {
     const params = new URLSearchParams(search);
