@@ -64,6 +64,7 @@ class BallCandidateDebug:
     jump_distance: float | None
     passed_physics_gate: bool
     rejection_reason: str | None
+    score_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

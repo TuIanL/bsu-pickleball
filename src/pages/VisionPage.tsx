@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, Layers, LineChart, Route, Timer } from "lucide-react";
 import type { NavigateFn, AppPath, NavigatePath, ReportType } from "../app/navigationTypes";
-import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, FusedPlayerOverlayArtifact, StructuredVisualizationData } from "../types/report";
+import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, FusedPlayerOverlayArtifact, StructuredVisualizationData, ReconstructedBallTrajectoryArtifact } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { RailMeta } from "../components/RailMeta";
@@ -9,7 +9,6 @@ import { StatusState } from "../components/StatusState";
 import { VideoAnalysisCard } from "../components/platform/VideoAnalysisCard";
 import { MetricCard } from "../components/platform/MetricCard";
 import { SkillRatings } from "../components/platform/SkillRatings";
-import { PlayerScoringPanel } from "../components/platform/PlayerScoringPanel";
 import { RecommendedDrills } from "../components/RecommendedDrills";
 import { ProgressChart } from "../components/platform/ProgressChart";
 import StructuredHeatmap from "../components/platform/StructuredHeatmap";
@@ -18,9 +17,9 @@ import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap"
 import { supportedReportTypes } from "../app/router";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import type { LibraryView } from "../components/library/viewCapabilities";
-import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots } from "../services/analysisClient";
+import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots, getReconstructedBallTrajectory } from "../services/analysisClient";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
-import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles, buildPlayerRoster } from "../utils/analysisHelpers";
+import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles } from "../utils/analysisHelpers";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
@@ -29,6 +28,8 @@ function useVisualAnalysisReport(jobId?: string) {
     error: DiagnosticNotice | null;
     ballTrajectory: BallTrajectoryArtifact | null;
     ballTrajectoryLoadState: OverlayLoadState;
+    reconstructedBallTrajectory: ReconstructedBallTrajectoryArtifact | null;
+    reconstructedBallTrajectoryLoadState: OverlayLoadState;
     bounceEvents: BounceEventsArtifact | null;
     bounceEventsLoadState: OverlayLoadState;
     job: AnalysisJobSummary | null;
@@ -64,6 +65,8 @@ function useVisualAnalysisReport(jobId?: string) {
         poseOverlayLoadState: OverlayLoadState;
         ballTrajectory: BallTrajectoryArtifact | null;
         ballTrajectoryLoadState: OverlayLoadState;
+        reconstructedBallTrajectory: ReconstructedBallTrajectoryArtifact | null;
+        reconstructedBallTrajectoryLoadState: OverlayLoadState;
         bounceEvents: BounceEventsArtifact | null;
         bounceEventsLoadState: OverlayLoadState;
         serveEvents: ServeEventsArtifact | null;
@@ -96,6 +99,7 @@ function useVisualAnalysisReport(jobId?: string) {
         const shouldLoadPose = Boolean(pipelineResult?.artifacts.pose_overlay_url);
         const shouldLoadServeEvents = Boolean(pipelineResult?.artifacts.serve_events_url);
         const shouldLoadBallTrajectory = Boolean(pipelineResult?.artifacts.cleaned_ball_trajectory_url ?? pipelineResult?.artifacts.ball_trajectory_url);
+        const shouldLoadReconstructedBallTrajectory = Boolean(pipelineResult?.artifacts.reconstructed_ball_trajectory_url);
         const shouldLoadBounceEvents = Boolean(pipelineResult?.artifacts.bounce_events_url);
         const shouldLoadHeatmaps = Boolean(pipelineResult?.artifacts.heatmaps_url);
         const shouldLoadScatter = Boolean(pipelineResult?.artifacts.scatter_plots_url);
@@ -108,6 +112,8 @@ function useVisualAnalysisReport(jobId?: string) {
           error: null,
           ballTrajectory: null,
           ballTrajectoryLoadState: shouldLoadBallTrajectory ? "loading" : "unavailable",
+          reconstructedBallTrajectory: null,
+          reconstructedBallTrajectoryLoadState: shouldLoadReconstructedBallTrajectory ? "loading" : "unavailable",
           bounceEvents: null,
           bounceEventsLoadState: shouldLoadBounceEvents ? "loading" : "unavailable",
           heatmapsManifest: null,
@@ -174,6 +180,22 @@ function useVisualAnalysisReport(jobId?: string) {
               setOverlayState({
                 ballTrajectory: null,
                 ballTrajectoryLoadState: "failed",
+              });
+            });
+        }
+
+        if (pipelineResult && shouldLoadReconstructedBallTrajectory) {
+          getReconstructedBallTrajectory(pipelineResult)
+            .then((artifact) => {
+              setOverlayState({
+                reconstructedBallTrajectory: artifact,
+                reconstructedBallTrajectoryLoadState: artifact ? "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                reconstructedBallTrajectory: null,
+                reconstructedBallTrajectoryLoadState: "failed",
               });
             });
         }
@@ -263,6 +285,8 @@ function useVisualAnalysisReport(jobId?: string) {
             error: errorToNotice("读取分析结果失败", "无法读取该任务生成的报告或算法结果，请检查后端服务和任务产物。", error),
             ballTrajectory: null,
             ballTrajectoryLoadState: "unavailable",
+            reconstructedBallTrajectory: null,
+            reconstructedBallTrajectoryLoadState: "unavailable",
             bounceEvents: null,
             bounceEventsLoadState: "unavailable",
             heatmapsManifest: null,
@@ -299,6 +323,8 @@ function useVisualAnalysisReport(jobId?: string) {
       error: null,
       ballTrajectory: null,
       ballTrajectoryLoadState: "idle" as OverlayLoadState,
+      reconstructedBallTrajectory: null,
+      reconstructedBallTrajectoryLoadState: "idle" as OverlayLoadState,
       bounceEvents: null,
       bounceEventsLoadState: "idle" as OverlayLoadState,
       heatmapsManifest: null,
@@ -326,6 +352,8 @@ function useVisualAnalysisReport(jobId?: string) {
       error: null,
       ballTrajectory: undefined,
       ballTrajectoryLoadState: "idle" as OverlayLoadState,
+      reconstructedBallTrajectory: undefined,
+      reconstructedBallTrajectoryLoadState: "idle" as OverlayLoadState,
       bounceEvents: undefined,
       bounceEventsLoadState: "idle" as OverlayLoadState,
       heatmapsManifest: undefined,
@@ -352,6 +380,8 @@ function useVisualAnalysisReport(jobId?: string) {
     error: loadedResult.error,
     ballTrajectory: loadedResult.ballTrajectory,
     ballTrajectoryLoadState: loadedResult.ballTrajectoryLoadState,
+    reconstructedBallTrajectory: loadedResult.reconstructedBallTrajectory,
+    reconstructedBallTrajectoryLoadState: loadedResult.reconstructedBallTrajectoryLoadState,
     bounceEvents: loadedResult.bounceEvents,
     bounceEventsLoadState: loadedResult.bounceEventsLoadState,
     heatmapsManifest: loadedResult.heatmapsManifest,
@@ -379,6 +409,8 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     error,
     ballTrajectory,
     ballTrajectoryLoadState,
+    reconstructedBallTrajectory,
+    reconstructedBallTrajectoryLoadState,
     bounceEvents,
     bounceEventsLoadState,
     heatmapsManifest,
@@ -529,41 +561,15 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
           </section>
         )}
 
-        {job?.analysisKind === "multiview" && result && (
-          <section className="mb-5 flex flex-col gap-3 rounded-xl border border-[#DDE5E0] bg-[#F8FAF9] p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <Route className="mt-0.5 shrink-0 text-[#168A34]" size={18} aria-hidden="true" />
-              <div>
-                <h2 className="text-sm font-bold text-[#182230]">双摄球路分析</h2>
-                <p className="mt-1 text-xs leading-5 text-[#667085]">
-                  {result.artifacts.reconstructed_ball_trajectory_detail ?? "球路状态由 Parent 分析结果统一发布。"}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-[#344054]">
-                {result.artifacts.reconstructed_ball_trajectory_status ?? "unavailable"}
-              </span>
-              <button
-                className="quiet-button inline-flex min-h-9 items-center gap-2 px-3 py-2 text-xs"
-                onClick={() => (embedded && onSelectView ? onSelectView("trajectory") : onNavigate(contextualPath(`/analysis/${jobId}/trajectory`)))}
-                type="button"
-              >
-                查看球路
-                <ChevronRight size={14} aria-hidden="true" />
-              </button>
-            </div>
-          </section>
-        )}
-
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
           <div className="grid gap-5">
             <VideoAnalysisCard
               labels={analysis.videoOverlayLabels}
               ballTrajectory={ballTrajectory ?? null}
               ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
-              ballTrajectoryLoadState={ballTrajectoryLoadState}
+              ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
               ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
+              reconstructedBallTrajectory={reconstructedBallTrajectory ?? null}
               bounceEvents={bounceEvents ?? null}
               bounceEventsDetail={result?.artifacts.bounce_events_detail}
               bounceEventsLoadState={bounceEventsLoadState}
@@ -630,11 +636,6 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
           />
         </section>
 
-        <section className="mt-6">
-          <PlayerScoringPanel
-            roster={buildPlayerRoster(result?.tracks, result?.match_context?.expected_player_count)}
-          />
-        </section>
       </PageFrame>
     );
   }
@@ -686,8 +687,9 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
             labels={analysis.videoOverlayLabels}
             ballTrajectory={ballTrajectory ?? null}
             ballTrajectoryDetail={result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail}
-            ballTrajectoryLoadState={ballTrajectoryLoadState}
+            ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
             ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
+            reconstructedBallTrajectory={reconstructedBallTrajectory ?? null}
             bounceEvents={bounceEvents ?? null}
             bounceEventsDetail={result?.artifacts.bounce_events_detail}
             bounceEventsLoadState={bounceEventsLoadState}

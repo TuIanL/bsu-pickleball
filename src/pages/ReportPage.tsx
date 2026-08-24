@@ -6,6 +6,7 @@ import type {
   AppPath,
   ReportType,
   AnalysisJobSummary,
+  ReconstructedBallTrajectoryArtifact,
 } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
@@ -14,7 +15,8 @@ import { StatusState } from "../components/StatusState";
 import { MetricCard } from "../components/platform/MetricCard";
 import { ReportVisualization } from "../components/platform/ReportVisualization";
 import { supportedReportTypes } from "../app/router";
-import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport } from "../services/analysisClient";
+import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getReconstructedBallTrajectory } from "../services/analysisClient";
+import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { PerformanceInsightsPanel } from "../components/platform/PerformanceInsightsPanel";
 import { formatDateTime, toneStyles, errorToNotice } from "../utils/analysisHelpers";
 import PbVisionReportLayout from "../components/pb-vizion/PbVisionReportLayout";
@@ -25,6 +27,7 @@ function useJobReport(jobId?: string) {
     job: AnalysisJobSummary | null;
     jobId: string;
     report: AnalysisReport | null;
+    trajectoryArtifact: ReconstructedBallTrajectoryArtifact | null;
   } | null>(null);
 
   useEffect(() => {
@@ -36,7 +39,15 @@ function useJobReport(jobId?: string) {
 
     const load = async () => {
       try {
-        const [nextJob, nextReport] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId)]);
+        const [nextJob, nextReport, rawResult] = await Promise.all([
+          getAnalysisJob(jobId),
+          getAnalysisReport(jobId),
+          getAnalysisResult(jobId),
+        ]);
+        const pipelineResult = isPipelineResult(rawResult) ? rawResult : null;
+        const trajectoryArtifact = pipelineResult
+          ? await getReconstructedBallTrajectory(pipelineResult).catch(() => null)
+          : null;
 
         if (alive) {
           setLoadedReport({
@@ -44,6 +55,7 @@ function useJobReport(jobId?: string) {
             job: nextJob,
             jobId,
             report: nextReport,
+            trajectoryArtifact,
           });
         }
       } catch (error) {
@@ -53,6 +65,7 @@ function useJobReport(jobId?: string) {
             job: null,
             jobId,
             report: null,
+            trajectoryArtifact: null,
           });
         }
       }
@@ -66,7 +79,7 @@ function useJobReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { error: null, job: null, report: demoReport };
+    return { error: null, job: null, report: demoReport, trajectoryArtifact: null };
   }
 
   if (loadedReport?.jobId !== jobId) {
@@ -74,6 +87,7 @@ function useJobReport(jobId?: string) {
       error: null,
       job: undefined,
       report: undefined,
+      trajectoryArtifact: undefined,
     };
   }
 
@@ -81,6 +95,7 @@ function useJobReport(jobId?: string) {
     error: loadedReport.error,
     job: loadedReport.job,
     report: loadedReport.report,
+    trajectoryArtifact: loadedReport.trajectoryArtifact,
   };
 }
 
@@ -111,7 +126,7 @@ export function ReportPage({
   onNavigate: NavigateFn;
   reportType: ReportType;
 }) {
-  const { error, job, report } = useJobReport(jobId);
+  const { error, job, report, trajectoryArtifact } = useJobReport(jobId);
   const searchParams = useCurrentSearchParams();
   const taskReturnPath = taskListPathForJob(job);
 
@@ -191,7 +206,7 @@ export function ReportPage({
 
   // —— 默认：渲染 PB Vision 风格（新布局）
   if (!useLegacyLayout) {
-    return <PbVisionReportLayout report={analysis} />;
+    return <PbVisionReportLayout report={analysis} trajectoryArtifact={trajectoryArtifact ?? null} />;
   }
 
   // —— legacy=true：渲染旧布局（深绿风格）

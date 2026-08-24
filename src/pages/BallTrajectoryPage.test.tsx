@@ -99,6 +99,43 @@ describe("BallTrajectoryPage 空态返回导航", () => {
     expect(await screen.findByText("双摄球路暂不可用")).toBeTruthy();
     expect(screen.getAllByText("双摄标定不足，未生成可信球路").length).toBeGreaterThanOrEqual(1);
   });
+
+  it("v4 三维不可用但 display degraded 时仍展示估算球路，且不展示诊断文案", async () => {
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(makeJob());
+    vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue(makeResult());
+    vi.mocked(analysisClient.getReconstructedBallTrajectory).mockResolvedValue({
+      schema_version: "reconstructed_ball_trajectory.v4",
+      job_id: "job-trajectory",
+      status: "partial",
+      detail: "三维不足，已生成估算球路",
+      reconstruction_mode: "hybrid_segmented",
+      overall_status: "UNAVAILABLE",
+      display_trajectory_status: "degraded",
+      events: [],
+      segments: [{
+        segment_id: "flight-1",
+        reconstruction_mode: "single_view_event_anchored_2_5d",
+        status: "available",
+        display_level: "medium",
+        metric_validity: "visualization_only",
+        anchors: [],
+        samples: [
+          { frame_index: 1, timestamp_sec: 1, court_xy: [8, 10], estimated_height_ft: 3, source: "detected" },
+          { frame_index: 2, timestamp_sec: 1.1, court_xy: [9, 12], estimated_height_ft: 4, source: "interpolated" },
+          { frame_index: 3, timestamp_sec: 1.2, court_xy: [10, 14], estimated_height_ft: 0, source: "anchor" },
+        ],
+      }],
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("ball-scene")).toBeTruthy();
+    expect(screen.queryByText(/估算 2.5D/)).toBeNull();
+    expect(screen.queryByText(/环境离群/)).toBeNull();
+    expect(screen.queryByText(/可能界外落点/)).toBeNull();
+    expect(screen.queryByText("混合分段估算球路")).toBeNull();
+    expect(screen.queryByText("双摄球路暂不可用")).toBeNull();
+  });
 });
 
 describe("BallTrajectoryPage embedded 模式", () => {

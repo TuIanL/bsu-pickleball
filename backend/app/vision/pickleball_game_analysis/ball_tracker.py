@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from math import hypot
 from typing import Any
 
@@ -32,6 +32,9 @@ class BallTrackerConfig:
     """
 
     confidence: float = 0.18
+    effective_fps: float = 30.0
+    frame_stride: int = 1
+    max_observation_gap_sec: float = 0.12
     trajectory_length: int = 30
     max_jump_pixels: float = 220.0
     prediction_gate_pixels: float = 260.0
@@ -73,6 +76,42 @@ class BallTrackerConfig:
     lost_confidence_weight: float = 300.0
     lost_distance_weight: float = 3.0
     lost_gate_multiplier: float = 1.5
+    scale_consistency_weight: float = 35.0
+    direction_consistency_weight: float = 70.0
+    speed_consistency_weight: float = 55.0
+    short_gap_consistency_weight: float = 45.0
+    max_scale_change_ratio: float = 3.5
+
+
+@dataclass(frozen=True)
+class CandidateFilterDecision:
+    """基础视觉过滤对一个 detector 候选作出的可审计决定。"""
+
+    candidate_id: str
+    image_xy: Point2D
+    accepted: bool
+    reason: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CandidateFilterResult:
+    """一次 detector 输出对应的共享过滤集合与逐候选理由。"""
+
+    candidates: tuple[BallCandidate, ...]
+    decisions: tuple[CandidateFilterDecision, ...]
+
+
+@dataclass(frozen=True)
+class BallTrackerSnapshot:
+    """stereo 关联可读取但不能反向修改的 pre-tick 连续性快照。"""
+
+    track_state: str
+    predicted_position: Point2D | None
+    continuity_score: float
+    recent_velocity_px_per_sec: Point2D | None
+    recent_area_ratio: float | None
+    missing_duration_sec: float
 
 
 class BallTracker:
@@ -96,6 +135,11 @@ class BallTracker:
         self.track_state: BallTrackState = BallTrackState.SEARCHING
         self._lock_hits: int = 0
         self._cached_frame_height: float = 0.0
+        self._observation_history: deque[tuple[float, Point2D, float | None]] = deque(
+            maxlen=self.config.trajectory_length
+        )
+        self._current_timestamp_sec: float = 0.0
+        self._last_filter_decisions: tuple[CandidateFilterDecision, ...] = ()
 
     def update(
         self,
@@ -134,7 +178,11 @@ class BallTracker:
         单摄路径 `update()` 仍只调用一次 detector 后委托到这里，因此本方法为 behavior-preserving。
         """
         self._cached_frame_height = float(frame_shape[0]) if frame_shape else 0.0
-        candidates, extract_reasons = self._extract_candidates(view_candidates, frame_shape, roi_corners)
+        self._current_timestamp_sec = float(timestamp_sec)
+        filter_result = self.filter_candidates(view_candidates, frame_shape, roi_corners)
+        self._last_filter_decisions = filter_result.decisions
+        candidates = list(filter_result.candidates)
+        extract_reasons = [decision.reason for decision in filter_result.decisions if not decision.accepted]
         self._update_stationary_blacklist(candidates)
 
         predicted_pos = self._predict_next_position() if self.trajectory else None
@@ -282,7 +330,7 @@ class BallTracker:
             )
 
         # Accepted! Record valid point and update track state
-        self._append_valid_point(point)
+        self._append_valid_point(point, timestamp_sec, selected.area_ratio)
         self._update_track_state(True)
         return self._build_sample(
             frame_index=frame_index,
@@ -311,42 +359,101 @@ class BallTracker:
         self.track_state = BallTrackState.SEARCHING
         self._stationary_blacklist.clear()
         self._stationary_blacklist_positions.clear()
+        self._observation_history.clear()
+        self._last_filter_decisions = ()
+
+    def pre_tick_snapshot(self, timestamp_sec: float) -> BallTrackerSnapshot:
+        """返回只读预测快照；调用不推进 tracker 状态或缺失计数。"""
+        predicted = self._predict_next_position() if self.trajectory else None
+        velocity: Point2D | None = None
+        if len(self._observation_history) >= 2:
+            t0, p0, _ = self._observation_history[-2]
+            t1, p1, _ = self._observation_history[-1]
+            dt = max(t1 - t0, 1e-6)
+            velocity = ((p1[0] - p0[0]) / dt, (p1[1] - p0[1]) / dt)
+        last_timestamp = self._observation_history[-1][0] if self._observation_history else float(timestamp_sec)
+        missing_duration = max(0.0, float(timestamp_sec) - last_timestamp)
+        state_score = {
+            BallTrackState.LOCKED: 1.0,
+            BallTrackState.TENTATIVE: 0.72,
+            BallTrackState.LOST: 0.42,
+            BallTrackState.SEARCHING: 0.2,
+        }[self.track_state]
+        gap_factor = max(0.0, 1.0 - missing_duration / max(self.config.max_observation_gap_sec, 1e-6))
+        recent_areas = [area for _, _, area in self._observation_history if area is not None]
+        return BallTrackerSnapshot(
+            track_state=self.track_state.value,
+            predicted_position=predicted,
+            continuity_score=round(state_score * gap_factor, 4),
+            recent_velocity_px_per_sec=velocity,
+            recent_area_ratio=recent_areas[-1] if recent_areas else None,
+            missing_duration_sec=round(missing_duration, 6),
+        )
 
     # ── candidate extraction ──────────────────────────────────────
 
-    def _extract_candidates(
+    def filter_candidates(
         self,
         candidates: Sequence[BallCandidate],
         frame_shape: Sequence[int],
-        roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
-    ) -> tuple[list[BallCandidate], list[str]]:
+        roi_corners: tuple[tuple[int, int], tuple[int, int]] | None = None,
+    ) -> CandidateFilterResult:
+        """对 detector 的单次输出执行无推理、确定性的基础视觉过滤。
+
+        canonical 双摄链会把这里返回的同一个候选集合同时交给 tracker 与
+        stereo associator，避免后者重新消费未经 ROI/尺度/静态门过滤的原始框。
+        """
         filtered: list[BallCandidate] = []
-        reject_reasons: list[str] = []
+        decisions: list[CandidateFilterDecision] = []
         frame_area = max(1.0, float(frame_shape[0] * frame_shape[1]))
 
-        for candidate in candidates:
+        for index, candidate in enumerate(candidates):
+            candidate_id = f"candidate_{index + 1}"
             width = candidate.width
             height = candidate.height
             area_ratio = candidate.area_ratio
             aspect_ratio = candidate.aspect_ratio
+            reason = "accepted"
             if width is not None and height is not None:
                 if width <= 0 or height <= 0:
-                    reject_reasons.append("invalid_box")
-                    continue
-                area_ratio = area_ratio if area_ratio is not None else (float(width) * float(height)) / frame_area
-                aspect_ratio = (
-                    aspect_ratio
-                    if aspect_ratio is not None
-                    else max(float(width) / float(height), float(height) / float(width))
+                    reason = "invalid_box"
+                else:
+                    area_ratio = area_ratio if area_ratio is not None else (float(width) * float(height)) / frame_area
+                    aspect_ratio = (
+                        aspect_ratio
+                        if aspect_ratio is not None
+                        else max(float(width) / float(height), float(height) / float(width))
+                    )
+            if reason == "accepted" and area_ratio is not None and area_ratio > self.config.max_box_area_ratio:
+                reason = "box_too_large"
+            if reason == "accepted" and aspect_ratio is not None and aspect_ratio > self.config.max_aspect_ratio:
+                reason = "aspect_ratio"
+            if reason == "accepted" and not self._point_in_roi(candidate.image_xy, roi_corners):
+                reason = "outside_roi"
+            if reason == "accepted":
+                blacklist_reason = self._stationary_blacklist_reject_reason(candidate.image_xy)
+                if blacklist_reason is not None:
+                    reason = blacklist_reason
+
+            diagnostics = {
+                "width_px": float(width) if width is not None else None,
+                "height_px": float(height) if height is not None else None,
+                "area_ratio": float(area_ratio) if area_ratio is not None else None,
+                "aspect_ratio": float(aspect_ratio) if aspect_ratio is not None else None,
+                "roi_configured": roi_corners is not None,
+                "stationary_blacklisted": self._is_blacklisted(candidate.image_xy),
+            }
+            accepted = reason == "accepted"
+            decisions.append(
+                CandidateFilterDecision(
+                    candidate_id=candidate_id,
+                    image_xy=candidate.image_xy,
+                    accepted=accepted,
+                    reason=reason,
+                    diagnostics=diagnostics,
                 )
-            if area_ratio is not None and area_ratio > self.config.max_box_area_ratio:
-                reject_reasons.append("box_too_large")
-                continue
-            if aspect_ratio is not None and aspect_ratio > self.config.max_aspect_ratio:
-                reject_reasons.append("aspect_ratio")
-                continue
-            if not self._point_in_roi(candidate.image_xy, roi_corners):
-                reject_reasons.append("outside_roi")
+            )
+            if not accepted:
                 continue
             filtered.append(
                 BallCandidate(
@@ -357,10 +464,22 @@ class BallTracker:
                     height=height,
                     area_ratio=area_ratio,
                     aspect_ratio=aspect_ratio,
-                    diagnostics=dict(candidate.diagnostics),
+                    diagnostics={
+                        **dict(candidate.diagnostics),
+                        "basic_filter": {"candidate_id": candidate_id, **diagnostics},
+                    },
                 )
             )
-        return filtered, reject_reasons
+        return CandidateFilterResult(tuple(filtered), tuple(decisions))
+
+    def _extract_candidates(
+        self,
+        candidates: Sequence[BallCandidate],
+        frame_shape: Sequence[int],
+        roi_corners: tuple[tuple[int, int], tuple[int, int]] | None,
+    ) -> tuple[list[BallCandidate], list[str]]:
+        result = self.filter_candidates(candidates, frame_shape, roi_corners)
+        return list(result.candidates), [decision.reason for decision in result.decisions if not decision.accepted]
 
     # ── candidate selection ───────────────────────────────────────
 
@@ -386,7 +505,7 @@ class BallTracker:
         return max(candidates, key=lambda c: self._score_candidate(c, predicted)), "accepted", ""
 
     def _score_candidate(self, candidate: BallCandidate, predicted: Point2D) -> float:
-        distance = self._distance(candidate.image_xy, predicted)
+        components = self._candidate_quality_components(candidate, predicted)
         size_penalty = float(candidate.area_ratio or 0.0) * 4000.0
 
         if self.track_state == BallTrackState.LOCKED:
@@ -402,7 +521,58 @@ class BallTracker:
             conf_w = self.config.searching_confidence_weight
             dist_w = self.config.searching_distance_weight
 
-        return candidate.confidence * conf_w - distance * dist_w - size_penalty
+        return (
+            candidate.confidence * conf_w
+            - components["prediction_distance_px"] * dist_w
+            - size_penalty
+            + components["scale_consistency"] * self.config.scale_consistency_weight
+            + components["direction_consistency"] * self.config.direction_consistency_weight
+            + components["speed_consistency"] * self.config.speed_consistency_weight
+            + components["short_gap_consistency"] * self.config.short_gap_consistency_weight
+        )
+
+    def _candidate_quality_components(self, candidate: BallCandidate, predicted: Point2D) -> dict[str, float]:
+        """计算只依赖历史快照的多帧尺度、方向、速度与短缺口一致性。"""
+        distance = self._distance(candidate.image_xy, predicted)
+        scale_consistency = 0.5
+        previous_areas = [area for _, _, area in self._observation_history if area is not None and area > 0]
+        if candidate.area_ratio is not None and candidate.area_ratio > 0 and previous_areas:
+            reference = float(np.median(np.asarray(previous_areas[-5:], dtype=np.float64)))
+            ratio = max(candidate.area_ratio, reference) / max(min(candidate.area_ratio, reference), 1e-9)
+            scale_consistency = max(0.0, 1.0 - (ratio - 1.0) / max(self.config.max_scale_change_ratio - 1.0, 1e-6))
+
+        direction_consistency = 0.5
+        speed_consistency = 0.5
+        if len(self._observation_history) >= 2:
+            t0, p0, _ = self._observation_history[-2]
+            t1, p1, _ = self._observation_history[-1]
+            history_dt = max(t1 - t0, 1e-6)
+            candidate_dt = max(self._current_timestamp_sec - t1, 1e-6)
+            vx = (p1[0] - p0[0]) / history_dt
+            vy = (p1[1] - p0[1]) / history_dt
+            cx = (candidate.image_x - p1[0]) / candidate_dt
+            cy = (candidate.image_y - p1[1]) / candidate_dt
+            speed_history = hypot(vx, vy)
+            speed_candidate = hypot(cx, cy)
+            denom = max(speed_history * speed_candidate, 1e-6)
+            cosine = max(-1.0, min(1.0, (vx * cx + vy * cy) / denom)) if denom > 1e-6 else 0.0
+            direction_consistency = (cosine + 1.0) / 2.0
+            speed_consistency = min(speed_history, speed_candidate) / max(speed_history, speed_candidate, 1e-6)
+
+        expected_step = 1.0 / max(self.config.effective_fps, 1e-6)
+        elapsed = (
+            max(0.0, self._current_timestamp_sec - self._observation_history[-1][0])
+            if self._observation_history
+            else expected_step
+        )
+        short_gap_consistency = 1.0 if elapsed <= max(self.config.max_observation_gap_sec, expected_step * 1.75) else 0.0
+        return {
+            "prediction_distance_px": round(distance, 4),
+            "scale_consistency": round(scale_consistency, 4),
+            "direction_consistency": round(direction_consistency, 4),
+            "speed_consistency": round(speed_consistency, 4),
+            "short_gap_consistency": round(short_gap_consistency, 4),
+        }
 
     # ── prediction ────────────────────────────────────────────────
 
@@ -501,8 +671,9 @@ class BallTracker:
         if self.missing_frames > max_allowed:
             self.last_valid_position = None
 
-    def _append_valid_point(self, point: Point2D) -> None:
+    def _append_valid_point(self, point: Point2D, timestamp_sec: float, area_ratio: float | None) -> None:
         self.trajectory.append(point)
+        self._observation_history.append((float(timestamp_sec), point, area_ratio))
         self.last_valid_position = point
         self.missing_frames = 0
 
@@ -661,6 +832,7 @@ class BallTracker:
                     jump_distance=jump_dist,
                     passed_physics_gate=passed_gate,
                     rejection_reason=rejection_reason,
+                    score_components=self._candidate_quality_components(c, predicted),
                 )
             )
         if selected is not None and result:
@@ -712,6 +884,20 @@ class BallTracker:
         diagnostic_kwargs: dict[str, Any] = {"court_projection": ""}
         debug = self._build_debug_dict(predicted_pos, candidate_debugs, accepted_candidate_id, overall_decision)
         diagnostic_kwargs.update(debug)
+        diagnostic_kwargs["candidate_filter"] = [asdict(decision) for decision in self._last_filter_decisions]
+        is_predicted_gap = (
+            not accepted
+            and predicted_pos is not None
+            and self._observation_history
+            and timestamp_sec - self._observation_history[-1][0] <= self.config.max_observation_gap_sec
+        )
+        diagnostic_kwargs["metric_eligibility"] = {
+            "bounce": not is_predicted_gap,
+            "landing": not is_predicted_gap,
+            "speed": not is_predicted_gap,
+            "peak_height": not is_predicted_gap,
+            "reason": "predicted_short_gap" if is_predicted_gap else None,
+        }
         return BallFrameSample(
             frame_index=frame_index,
             timestamp_sec=timestamp_sec,
@@ -726,5 +912,6 @@ class BallTracker:
             track_state=self.track_state.value,
             predicted_position=predicted_pos,
             overall_decision=overall_decision,
+            source="predicted" if is_predicted_gap else "detector",
             diagnostics=diagnostic_kwargs,
         )

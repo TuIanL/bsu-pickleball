@@ -1,0 +1,27 @@
+{
+  "source_job_id": "job-96a28d6ff0",
+  "source_fps": 60.0,
+  "frame_stride": 2,
+  "description": "A compact immutable slice from the historical cleaned trajectory around a real direction change.",
+  "samples": [
+    {"frame_index": 126, "timestamp_sec": 2.1, "image_xy": [877.1579284667969, 175.6209963285006], "court_xy": [7.425104262923065, 2.7257833500409765], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 128, "timestamp_sec": 2.1333333333333333, "image_xy": [859.8849182128906, 173.91622748741736], "court_xy": [6.676289925023471, 2.546047067837601], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 130, "timestamp_sec": 2.1666666666666665, "image_xy": [842.6119079589844, 172.21145864633414], "court_xy": [5.927475587123876, 2.3663107856342256], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 132, "timestamp_sec": 2.2, "image_xy": [825.3388977050781, 170.50668980525091], "court_xy": [5.178661249224282, 2.18657450343085], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 134, "timestamp_sec": 2.2333333333333334, "image_xy": [808.0658874511719, 168.80192096416766], "court_xy": [4.429846911324687, 2.006838221227474], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 136, "timestamp_sec": 2.2666666666666666, "image_xy": [790.7928771972656, 167.09715212308444], "court_xy": [3.681032573425094, 1.8271019390240986], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 138, "timestamp_sec": 2.3, "image_xy": [773.5198669433594, 165.3923832820012], "court_xy": [2.9322182355254984, 1.647365656820723], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 140, "timestamp_sec": 2.3333333333333335, "image_xy": [756.2468566894531, 163.68761444091797], "court_xy": [2.183403897625904, 1.4676293746173474], "confidence": 0.8534430861473083, "interpolated": false, "source": "detector"},
+    {"frame_index": 142, "timestamp_sec": 2.3666666666666667, "image_xy": [748.2746887207031, 184.78243255615234], "court_xy": [2.3253556429865405, 5.1512974063975925], "confidence": 0.8634163737297058, "interpolated": false, "source": "detector"},
+    {"frame_index": 144, "timestamp_sec": 2.4, "image_xy": [741.1661987304688, 208.89078521728516], "court_xy": [2.5438410751783906, 8.863211443295103], "confidence": 0.8649930953979492, "interpolated": false, "source": "detector"},
+    {"frame_index": 146, "timestamp_sec": 2.433333333333333, "image_xy": [734.3384094238281, 233.12723541259766], "court_xy": [2.749245209475941, 12.160275332810638], "confidence": 0.7907722592353821, "interpolated": false, "source": "detector"},
+    {"frame_index": 148, "timestamp_sec": 2.466666666666667, "image_xy": [739.2104899088541, 235.8822275797526], "court_xy": [2.9668906279365617, 12.480870065754198], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 150, "timestamp_sec": 2.5, "image_xy": [744.0825703938802, 238.63721974690756], "court_xy": [3.184536046397182, 12.801464798697756], "confidence": null, "interpolated": true, "source": "interpolated"},
+    {"frame_index": 152, "timestamp_sec": 2.533333333333333, "image_xy": [748.9546508789062, 241.3922119140625], "court_xy": [3.4021814648578026, 13.122059531641316], "confidence": 0.22724732756614685, "interpolated": false, "source": "detector"},
+    {"frame_index": 154, "timestamp_sec": 2.566666666666667, "image_xy": [744.3324584960938, 249.39685821533203], "court_xy": [3.370894543180787, 14.103629688194363], "confidence": 0.5751233100891113, "interpolated": false, "source": "detector"},
+    {"frame_index": 156, "timestamp_sec": 2.6, "image_xy": [756.3415222167969, 231.6782989501953], "court_xy": [3.5051383236353595, 11.870626571340159], "confidence": 0.8459917306900024, "interpolated": false, "source": "detector"},
+    {"frame_index": 158, "timestamp_sec": 2.6333333333333333, "image_xy": [766.6991577148438, 217.5579605102539], "court_xy": [3.64990412033918, 9.942304214393399], "confidence": 0.8631701469421387, "interpolated": false, "source": "detector"},
+    {"frame_index": 160, "timestamp_sec": 2.6666666666666665, "image_xy": [778.8711242675781, 203.33627319335938], "court_xy": [3.873463026925334, 7.843895335777655], "confidence": 0.8457441329956055, "interpolated": false, "source": "detector"},
+    {"frame_index": 162, "timestamp_sec": 2.7, "image_xy": [789.443359375, 192.64149475097656], "court_xy": [4.109229148913809, 6.1489036477942385], "confidence": 0.8255665302276611, "interpolated": false, "source": "detector"}
+  ]
+}

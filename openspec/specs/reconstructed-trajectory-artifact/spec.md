@@ -137,19 +137,18 @@
 - **AND** 前端 SHALL NOT 伪造 `hitter_player_id` 或 `shot_id`
 
 ### Requirement: 产物新增 v3 多视角估算三维语义
-系统 SHALL 在既有 `reconstructed_ball_trajectory.v2`（2.5D）之上新增 `reconstructed_ball_trajectory.v3`，用于多视角估算三维球路；v1/v2 保留以兼容旧任务与单摄。
+系统 SHALL 通过统一 `reconstructed_ball_trajectory` 概念保存多视角 3D、稀疏双摄锚定 2.5D 与单摄事件锚定 2.5D 段；v1/v2/v3 历史产物 SHALL 保持只读兼容，新产物 SHALL 按段声明 reconstruction mode，而非要求整个任务只有一种模式。
 
-#### Scenario: v3 顶层语义
-- **WHEN** 系统输出 v3 产物
-- **THEN** 顶层 SHALL 声明 `schema_version = reconstructed_ball_trajectory.v3`
-- **AND** `reconstruction_mode` SHALL 为 `multiview_estimated_3d`
-- **AND** `coordinate_semantics` SHALL 包含 `xy = canonical_court_ft`、`z = estimated_multiview_height_ft` 与 `validity = approximate_multiview`
+#### Scenario: 新混合产物顶层语义
+- **WHEN** 新任务输出混合重建产物
+- **THEN** 顶层 SHALL 声明 schema version、3D overall status 与 `display_trajectory_status`
+- **AND** 每段 SHALL 声明 `stereo_estimated_3d`、`stereo_anchored_2_5d`、`single_view_event_anchored_2_5d`、`single_view_visual_arc` 或 `unavailable`
+- **AND** coordinate semantics SHALL 明确区分 approximate multiview 与 visualization-only 估算
 
-#### Scenario: v3 与 v1/v2 兼容语义
-- **WHEN** 系统决定某 job 输出球轨迹的 schema 版本
-- **THEN** 历史任务或单摄任务 SHALL 输出 v1/v2（2.5D），且不予回写或覆盖历史文件
-- **AND** 新合格双摄任务 SHALL 在同一语义 slug（`reconstructed_ball_trajectory.json`）输出 v3（`multiview_estimated_3d`）
-- **AND** 系统 SHALL NOT 新增 `legacy_2_5d_baseline` 平行产物（产品已不以假 2.5D 为默认回退）
+#### Scenario: 历史产物兼容
+- **WHEN** 系统读取历史 v1/v2/v3 任务
+- **THEN** SHALL 继续通过统一 slug 解析其原有字段
+- **AND** MUST NOT 回写或覆盖历史不可变 artifact
 
 ### Requirement: 指标级 validity 分级
 系统 SHALL 在产物中为每个指标声明独立的有效性，占用的可信度不同。
@@ -167,19 +166,32 @@
 - **AND** 二者 SHALL 用于 speed eligibility 与前端渲染判断
 
 ### Requirement: 前端按版本降级读取
-系统 SHALL 使前端沿用统一 `reconstructed-ball-trajectory` 概念读取 v1/v2/v3，并按 schema_version 降级，避免维护两条平行正式球路 artifact。
+系统 SHALL 使前端通过统一 `reconstructed-ball-trajectory` slug 读取历史与新产物，并按 schema version、segment reconstruction mode 与 metric eligibility 呈现；专项指标不可用 SHALL NOT 自动隐藏合格的估算展示段。
 
-#### Scenario: 统一 slug 分版本降级
-- **WHEN** 前端请求重建球路产物
-- **THEN** 前端 SHALL 通过统一 `reconstructed-ball-trajectory` slug 读取
-- **AND** 依据 `schema_version` 区分 v3（多视角估算 3D）与 v1/v2（2.5D）
-- **AND** 无 v3 时专项能力（多视角 3D / 落点权威 / 平均球速）SHALL 显示明确不可用状态，而非静默失败
+#### Scenario: v3 三维不可用但 2.5D 段存在
+- **WHEN** 产物 3D overall status 为 `UNAVAILABLE` 且 `display_trajectory_status` 可用
+- **THEN** 前端 SHALL 展示合格 2.5D 段并标记“估算球路/仅用于可视化”
+- **AND** 平均球速、真实最高点和权威落点 SHALL 显示不可用
+
+#### Scenario: 没有任何可显示段
+- **WHEN** 三维与 2.5D 段均未通过各自最低门槛
+- **THEN** 前端 SHALL 展示可解释空态与关键拒绝诊断
+- **AND** SHALL NOT 生成伪造曲线
 
 ### Requirement: 分层可用状态写入产物
-系统 SHALL 在产物中记录整体可用状态，供前端呈现分级降级，而非仅存在/缺失两态。
+系统 SHALL 同时记录 3D overall status、`display_trajectory_status`、段级 display level 与指标级 validity，供前端分别控制球路和测量指标。
 
-#### Scenario: 状态枚举
-- **WHEN** 写入产物整体状态
-- **THEN** 状态 SHALL 为 `FULL_ESTIMATED_3D`、`PARTIAL_3D`、`LANDING_ONLY` 或 `UNAVAILABLE` 之一
-- **AND** 该状态 SHALL 与段级/落点/球速有效性一致
+#### Scenario: 状态组合
+- **WHEN** 写入混合产物
+- **THEN** 3D overall status SHALL 为 `FULL_ESTIMATED_3D`、`PARTIAL_3D`、`LANDING_ONLY` 或 `UNAVAILABLE`
+- **AND** `display_trajectory_status` SHALL 为 `available`、`degraded` 或 `unavailable`
+- **AND** 每个速度、高度和落点指标 SHALL 自带 validity/reason
+
+### Requirement: 混合轨迹 provenance 与端点分类
+每个 segment 和 sample SHALL 保存来源视角、detected/interpolated/predicted/stereo-anchor provenance、质量、时间范围与端点语义；场外端点 SHALL 保存相对于标准球场和比赛环境的分类。
+
+#### Scenario: 保存可能真实界外的 bounce
+- **WHEN** bounce 位于边线外但未被判为环境离群点
+- **THEN** endpoint SHALL 保存 `court_location = outside_line`、`outcome_classification = legal_out_candidate`、证据置信度和标定不确定度
+- **AND** MUST NOT 将 `legal_out_candidate` 解释为自动比赛判罚
 

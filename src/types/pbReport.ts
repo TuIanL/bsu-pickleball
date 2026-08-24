@@ -125,10 +125,12 @@ export interface PbServeReturnDepth {
 
 // ── PbReportContext 数据结构 ────────────────────────────────
 import type { AnalysisReport } from "./report";
+import type { ReconstructedBallTrajectoryArtifact } from "./report";
 
 export interface PbReportContextValue {
   // --- 原始数据 ---
   report: AnalysisReport;
+  trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null;
 
   // --- 用户交互状态 ---
   selectedPlayerId: string;

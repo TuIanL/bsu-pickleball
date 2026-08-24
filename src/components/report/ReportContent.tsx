@@ -7,11 +7,12 @@
 // 可被 Workspace 报告 view 与独立报告路由共同复用。
 // =============================================================
 import { useEffect, useState } from "react";
-import type { AnalysisReport, AnalysisJobSummary, NavigateFn } from "../../types/report";
+import type { AnalysisReport, AnalysisJobSummary, NavigateFn, ReconstructedBallTrajectoryArtifact } from "../../types/report";
 import type { NavigatePath } from "../../app/navigationTypes";
 import type { DiagnosticNotice } from "../../services/analysisDiagnostics";
 import { StatusState } from "../StatusState";
-import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport } from "../../services/analysisClient";
+import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getReconstructedBallTrajectory } from "../../services/analysisClient";
+import { isPipelineResult } from "../../services/pipelineReportAdapter";
 import { formatDateTime, errorToNotice } from "../../utils/analysisHelpers";
 import PbReportContent from "../pb-vizion/PbReportContent";
 
@@ -21,6 +22,7 @@ function useJobReport(jobId?: string) {
     job: AnalysisJobSummary | null;
     jobId: string;
     report: AnalysisReport | null;
+    trajectoryArtifact: ReconstructedBallTrajectoryArtifact | null;
   } | null>(null);
 
   useEffect(() => {
@@ -28,9 +30,17 @@ function useJobReport(jobId?: string) {
     let alive = true;
     const load = async () => {
       try {
-        const [nextJob, nextReport] = await Promise.all([getAnalysisJob(jobId), getAnalysisReport(jobId)]);
+        const [nextJob, nextReport, rawResult] = await Promise.all([
+          getAnalysisJob(jobId),
+          getAnalysisReport(jobId),
+          getAnalysisResult(jobId),
+        ]);
+        const pipelineResult = isPipelineResult(rawResult) ? rawResult : null;
+        const trajectoryArtifact = pipelineResult
+          ? await getReconstructedBallTrajectory(pipelineResult).catch(() => null)
+          : null;
         if (alive) {
-          setLoadedReport({ error: null, job: nextJob, jobId, report: nextReport });
+          setLoadedReport({ error: null, job: nextJob, jobId, report: nextReport, trajectoryArtifact });
         }
       } catch (error) {
         if (alive) {
@@ -39,6 +49,7 @@ function useJobReport(jobId?: string) {
             job: null,
             jobId,
             report: null,
+            trajectoryArtifact: null,
           });
         }
       }
@@ -49,9 +60,9 @@ function useJobReport(jobId?: string) {
     };
   }, [jobId]);
 
-  if (!jobId) return { error: null, job: null, report: demoReport };
-  if (loadedReport?.jobId !== jobId) return { error: null, job: undefined, report: undefined };
-  return { error: loadedReport.error, job: loadedReport.job, report: loadedReport.report };
+  if (!jobId) return { error: null, job: null, report: demoReport, trajectoryArtifact: null };
+  if (loadedReport?.jobId !== jobId) return { error: null, job: undefined, report: undefined, trajectoryArtifact: undefined };
+  return { error: loadedReport.error, job: loadedReport.job, report: loadedReport.report, trajectoryArtifact: loadedReport.trajectoryArtifact };
 }
 
 export function ReportContent({
@@ -63,7 +74,7 @@ export function ReportContent({
   onNavigate: NavigateFn;
   backPath?: NavigatePath;
 }) {
-  const { error, job, report } = useJobReport(jobId);
+  const { error, job, report, trajectoryArtifact } = useJobReport(jobId);
 
   if (jobId && (job === undefined || report === undefined)) {
     return <StatusState title="正在加载分析报告" body="正在读取该任务生成的轻量报告数据。" onNavigate={onNavigate} backPath={backPath} />;
@@ -126,5 +137,5 @@ export function ReportContent({
   }
 
   const analysis = (report ?? demoReport) as AnalysisReport;
-  return <PbReportContent report={analysis} />;
+  return <PbReportContent report={analysis} trajectoryArtifact={trajectoryArtifact ?? null} />;
 }

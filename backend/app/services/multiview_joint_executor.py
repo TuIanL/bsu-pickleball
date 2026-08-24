@@ -303,7 +303,13 @@ def _build_canonical_ball_processor(
     )
     detectors = {item.camera_slot: detector for item in view_inputs}
     trackers = {
-        item.camera_slot: BallTracker(detector=detector, config=BallTrackerConfig())
+        item.camera_slot: BallTracker(
+            detector=detector,
+            config=BallTrackerConfig(
+                effective_fps=max(float(parent.sourceFps or 30.0), 1.0) / max(1, int(parent.frameStride or 1)),
+                frame_stride=max(1, int(parent.frameStride or 1)),
+            ),
+        )
         for item in view_inputs
     }
     configured_stage_timeout = float(getattr(settings, "job_stage_timeout_seconds", 0) or 0)
@@ -320,8 +326,10 @@ def _build_canonical_ball_processor(
         projections=projections,
         runtimes=runtimes,
         frame_stride=parent.frameStride,
+        source_fps=float(parent.sourceFps or 30.0),
         max_time_gate_ms=min(40.0, max(1.0, 1000.0 / max(float(parent.sourceFps or 30.0), 1.0))),
         max_duration_seconds=ball_budget,
+        hybrid_enabled=bool(getattr(settings, "enable_hybrid_ball_trajectory", True)),
     )
 
 

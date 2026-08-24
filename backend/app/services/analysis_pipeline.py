@@ -1375,6 +1375,7 @@ class AnalysisPipeline:
                     serve_events=serve_events,
                     homography=homography,
                     fps=fps,
+                    frame_stride=frame_stride,
                     config=reconstruction_config,
                     player_context=player_context,
                 )
@@ -1795,6 +1796,8 @@ class AnalysisPipeline:
                 BallTracker(
                     detector=self.ball_detector,
                     config=BallTrackerConfig(
+                        effective_fps=fps / max(1, stride),
+                        frame_stride=max(1, stride),
                         stationary_blacklist_frames=ball_stationary_blacklist_frames,
                     ),
                     court_adapter=BallCourtAdapter(),

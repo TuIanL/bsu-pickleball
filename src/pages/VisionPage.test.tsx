@@ -25,7 +25,6 @@ vi.mock("../services/analysisClient", () => ({
 
 // 重型展示组件在本次测试中不关心，渲染为空避免额外依赖
 vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: () => <div /> }));
-vi.mock("../components/platform/PlayerScoringPanel", () => ({ PlayerScoringPanel: () => <div /> }));
 vi.mock("../components/platform/MetricCard", () => ({ MetricCard: () => <div /> }));
 vi.mock("../components/platform/SkillRatings", () => ({ SkillRatings: () => <div /> }));
 vi.mock("../components/RecommendedDrills", () => ({ RecommendedDrills: () => <div /> }));
@@ -84,6 +83,8 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
       expect.stringContaining("/analysis/job-vision/multiview"),
     );
     expect(screen.getByRole("button", { name: "查看球路" })).toBeTruthy();
+    expect(screen.queryByText("双摄球路分析")).toBeNull();
+    expect(screen.queryByText("六维雷达评分")).toBeNull();
   });
 
   it("非双摄协同任务不展示入口", async () => {

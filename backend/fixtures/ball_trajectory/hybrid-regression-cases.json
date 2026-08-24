@@ -1,0 +1,73 @@
+{
+  "schema_version": "hybrid_ball_regression.v1",
+  "source_capture": {
+    "recording_id": "sync_20260720_122645_317228",
+    "analysis_window_sec": [0.0, 60.0],
+    "source_fps": 60.0,
+    "frame_stride": 2,
+    "historical_v3": {
+      "overall_status": "UNAVAILABLE",
+      "segment_count": 1,
+      "reprojection_error_px": 90.872,
+      "stereo_coverage": 0.963,
+      "prediction_ratio": 0.037,
+      "event_count": 0
+    },
+    "historical_event_anchored_2_5d": {
+      "segment_count": 20,
+      "event_count": 12,
+      "metric_validity": "visualization_only"
+    },
+    "expected_hybrid": {
+      "overall_status": "UNAVAILABLE",
+      "display_trajectory_status": "degraded",
+      "minimum_displayable_segments": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "real_out_bounce",
+      "kind": "endpoint",
+      "court_xy": [22.0, 42.0],
+      "evidence": {"continuity_score": 0.92, "endpoint_time_consistent": true, "static_pattern": false, "reprojection_error_px": 8.0, "cross_view_supported": true, "calibration_uncertainty_ft": 0.5},
+      "expected": "legal_out_candidate"
+    },
+    {
+      "id": "calibration_margin",
+      "kind": "endpoint",
+      "court_xy": [28.8, 46.0],
+      "evidence": {"continuity_score": 0.72, "endpoint_time_consistent": true, "static_pattern": false, "reprojection_error_px": 28.0, "cross_view_supported": false, "calibration_uncertainty_ft": 1.5},
+      "expected": "calibration_uncertain"
+    },
+    {
+      "id": "spectator_sign_static",
+      "kind": "endpoint",
+      "court_xy": [40.0, 70.0],
+      "evidence": {"continuity_score": 0.08, "endpoint_time_consistent": false, "static_pattern": true, "reprojection_error_px": 120.0, "cross_view_supported": false, "calibration_uncertainty_ft": 0.5},
+      "expected": "environment_outlier"
+    },
+    {
+      "id": "short_occlusion",
+      "kind": "provenance_sequence",
+      "timestamps_sec": [4.0, 4.033333, 4.066667, 4.1, 4.133333],
+      "provenance": ["detected", "detected", "predicted", "predicted", "detected"],
+      "expected_max_gap_sec": 0.1
+    },
+    {
+      "id": "stride_1",
+      "kind": "stride",
+      "source_fps": 60.0,
+      "frame_stride": 1,
+      "frame_indices": [120, 121, 122, 123],
+      "expected_continuous": true
+    },
+    {
+      "id": "stride_2",
+      "kind": "stride",
+      "source_fps": 60.0,
+      "frame_stride": 2,
+      "frame_indices": [120, 122, 124, 126],
+      "expected_continuous": true
+    }
+  ]
+}

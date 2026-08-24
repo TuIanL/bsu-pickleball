@@ -37,9 +37,11 @@ async function loadJobSources(report: AnalysisReport): Promise<PlayerReportEvide
         getReconstructedBallTrajectory(raw),
         getServeEvents(raw),
       ]);
-      if (rec && rec.status === "available") {
+      if (rec && !["unavailable", "failed", "skipped", "no_candidates"].includes(rec.status)) {
         const viz = buildReconstructedBallTrajectoryVisualization(rec);
-        sources.trajectories = viz.trajectories;
+        if (viz.trajectories.length > 0) {
+          sources.trajectories = viz.trajectories;
+        }
         if (viz.playerRoster.length) {
           sources.roster = Object.fromEntries(viz.playerRoster.map((r) => [r.player_id, r.player_id]));
         }

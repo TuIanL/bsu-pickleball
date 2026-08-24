@@ -1283,12 +1283,13 @@ export interface BounceEventsArtifact {
 
 // ---- 事件切分重建球轨迹（第三套产物，前端按段直接渲染） ----
 
-export type ReconstructedSampleSource = "detected" | "interpolated" | "model_predicted" | "anchor";
+export type ReconstructedSampleSource = "detected" | "interpolated" | "predicted" | "model_predicted" | "anchor";
 
 export interface ReconstructedBallTrajectorySample {
   frame_index: number;
   timestamp_sec: number;
   court_xy?: [number, number] | number[] | null;
+  image_xy?: [number, number] | number[] | null;
   estimated_height_ft?: number | null;
   source: ReconstructedSampleSource;
   validity?: "valid" | "invalid" | string;
@@ -1298,6 +1299,36 @@ export interface ReconstructedBallTrajectorySample {
   height_uncertainty_ft?: number | null;
   gap_length_frames?: number | null;
   reprojection_error_px?: number | null;
+  source_view_id?: string | null;
+  source_view_ids?: string[];
+  provenance?: "detected" | "interpolated" | "predicted" | "stereo_anchor_constrained" | "single_view_visual_fit" | string;
+}
+
+export type BallEndpointOutcome = "in_court" | "legal_out_candidate" | "calibration_uncertain" | "environment_outlier" | string;
+
+export interface ReconstructedTrajectoryEndpoint {
+  position?: "start" | "end";
+  event_id?: string | null;
+  event_type?: "hit" | "bounce" | "loss" | "serve_reset" | "end_of_stream" | "unknown" | string;
+  timestamp_sec?: number | null;
+  confidence?: number | null;
+  court_xy?: [number, number] | number[] | null;
+  court_location?: "inside_court" | "outside_line" | "unknown" | string;
+  outcome_classification?: BallEndpointOutcome;
+  calibration_uncertainty_ft?: number | null;
+  automatic_adjudication?: boolean;
+  non_adjudication_notice?: string | null;
+  rejection_reasons?: string[];
+}
+
+export interface ReconstructedImagePathSample {
+  frame_index: number;
+  timestamp_sec: number;
+  image_xy?: [number, number] | number[] | null;
+  source?: ReconstructedSampleSource | string;
+  provenance?: string;
+  confidence?: number | null;
+  validity?: string;
 }
 
 export interface ReconstructedTrajectoryAnchor {
@@ -1324,6 +1355,7 @@ export interface ReconstructedTrajectoryQuality {
   height_confidence?: number;
   overall?: number;
   display_level?: "high" | "medium" | "low" | "none";
+  metric_validity?: "approximate_multiview" | "visualization_only" | "unavailable" | string;
 }
 
 export type ShotOwnershipStatus = "confirmed" | "ambiguous" | "unassigned" | "not_applicable";
@@ -1334,12 +1366,18 @@ export type ReconstructedBallTrajectoryMode =
   | "single_anchor_warp"
   | "image_only"
   | "local_visual_arc"
-  | "multiview_estimated_3d";
+  | "multiview_estimated_3d"
+  | "stereo_estimated_3d"
+  | "stereo_anchored_2_5d"
+  | "single_view_event_anchored_2_5d"
+  | "single_view_visual_arc"
+  | "unavailable"
+  | "hybrid_segmented";
 
 export interface ReconstructedBallTrajectorySegment {
   segment_id: string;
   reconstruction_mode: ReconstructedBallTrajectoryMode;
-  status: "reconstructed" | "insufficient_spatial_anchors" | "FULL_ESTIMATED_3D" | "PARTIAL_3D" | "LANDING_ONLY" | "UNAVAILABLE";
+  status: "available" | "unavailable" | "reconstructed" | "insufficient_spatial_anchors" | "FULL_ESTIMATED_3D" | "PARTIAL_3D" | "LANDING_ONLY" | "UNAVAILABLE";
   start_event_id?: string | null;
   end_event_id?: string | null;
   start_event_type?: string | null;
@@ -1361,6 +1399,20 @@ export interface ReconstructedBallTrajectorySegment {
   stereo_coverage?: number;
   prediction_ratio?: number;
   metrics?: MultiviewBallTrajectoryMetrics;
+  display_level?: "high" | "medium" | "low" | "none";
+  metric_validity?: "approximate_multiview" | "visualization_only" | "unavailable" | string;
+  metric_eligibility?: {
+    speed?: boolean;
+    peak_height?: boolean;
+    authoritative_landing?: boolean;
+    reason?: string | null;
+  };
+  primary_view_id?: string | null;
+  secondary_view_id?: string | null;
+  primary_view_reason?: string | null;
+  image_paths_by_view?: Record<string, ReconstructedImagePathSample[]>;
+  start_endpoint?: ReconstructedTrajectoryEndpoint | null;
+  end_endpoint?: ReconstructedTrajectoryEndpoint | null;
 }
 
 export interface ReconstructedBallTrajectoryAttribution {
@@ -1425,6 +1477,7 @@ export interface ReconstructedBallTrajectoryArtifact {
     geometry_quality?: number;
   } | null;
   overall_status?: "FULL_ESTIMATED_3D" | "PARTIAL_3D" | "LANDING_ONLY" | "UNAVAILABLE";
+  display_trajectory_status?: "available" | "degraded" | "unavailable";
   quality_summary?: {
     stereo_coverage?: number;
     reprojection_error_px?: number;

@@ -18,7 +18,7 @@
 - **THEN** 页面 SHALL 展示估算弧线
 - **AND** SHALL 隐藏无资格的真实高度、三维球速和权威落点指标
 
-### Requirement: Vision 页面提供双摄球分析入口与已验证的像素轨迹叠加
+### Requirement: Vision 页面提供双摄球分析入口但不伪造像素叠加
 Vision 页面 SHALL 展示双摄球分析状态、球路入口和质量摘要；视频叠加 SHALL 使用当前机位自身的 image-space 观测/拟合或经过验证的 world-to-pixel 投影，MUST NOT 把球场世界坐标直接当作视频像素坐标。
 
 #### Scenario: 播放当前飞行段
@@ -50,4 +50,3 @@ Vision 页面 SHALL 展示双摄球分析状态、球路入口和质量摘要；
 - **WHEN** endpoint 被分类为 `environment_outlier`
 - **THEN** 正式报告 SHALL 不把该点作为球路端点
 - **AND** 调试详情 SHALL 提供其拒绝理由和原始证据
-

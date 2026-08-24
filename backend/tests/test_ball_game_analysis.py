@@ -158,6 +158,36 @@ def test_ball_tracker_filters_candidates_roi_jumps_and_rebuilds_after_missing():
     assert steady.accepted is True
 
 
+def test_shared_candidate_filter_reports_structured_roi_size_aspect_and_blacklist_rejections():
+    tracker = BallTracker(
+        StubBallDetector([]),
+        BallTrackerConfig(max_box_area_ratio=0.01, max_aspect_ratio=2.0),
+    )
+    grid = tracker.config.stationary_blacklist_grid_px
+    tracker._stationary_blacklist_positions.add((int(40 / grid) * grid, int(40 / grid) * grid))
+    result = tracker.filter_candidates(
+        [
+            BallCandidate(50, 50, 0.8, width=5, height=5),
+            BallCandidate(50, 50, 0.8, width=40, height=40),
+            BallCandidate(50, 50, 0.8, width=12, height=2),
+            BallCandidate(90, 90, 0.8, width=5, height=5),
+            BallCandidate(40, 40, 0.8, width=5, height=5),
+        ],
+        frame_shape=frame().shape,
+        roi_corners=((30, 30), (70, 70)),
+    )
+
+    assert [candidate.image_xy for candidate in result.candidates] == [(50.0, 50.0)]
+    assert [decision.reason for decision in result.decisions] == [
+        "accepted",
+        "box_too_large",
+        "aspect_ratio",
+        "outside_roi",
+        "stationary_blacklisted",
+    ]
+    assert all("area_ratio" in decision.diagnostics for decision in result.decisions)
+
+
 def test_ball_tracker_rejects_stationary_logo_like_candidates():
     detector = StubBallDetector([[BallCandidate(48, 52, 0.9, width=7, height=7)] for _ in range(8)])
     tracker = BallTracker(

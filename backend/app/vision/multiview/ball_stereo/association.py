@@ -30,6 +30,9 @@ class AssociatedPair:
     score: float
     passes_hard_gate: bool = False
     rejection_reason: str | None = None
+    quality_label: str = "rejected"
+    anchor_eligible: bool = False
+    quality_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -40,6 +43,8 @@ class AssociationWeights:
     epipolar_weight: float = 1.0
     continuity_weight: float = 0.8
     confidence_weight: float = 0.3
+    scale_weight: float = 0.2
+    direction_weight: float = 0.25
 
 
 _ASSOCIATION_DEFAULTS = AssociationWeights()
@@ -78,6 +83,8 @@ def rank_pair(
     epipolar_px: float,
     continuity: float,  # 来自本地 tracker pre-tick snapshot 的连续性（0..1）
     previous_path_continuity: float,  # 上一帧 3D 路径连续性（0..1）
+    scale_consistency: float = 0.5,
+    direction_consistency: float = 0.5,
     weights: AssociationWeights = _ASSOCIATION_DEFAULTS,
 ) -> float:
     """对一对候选打分（分数越高越好）。几何残差越低、连续性与置信度越高分越高。"""
@@ -88,6 +95,8 @@ def rank_pair(
         + weights.epipolar_weight * q_geometry
         + weights.continuity_weight * (0.5 * continuity + 0.5 * previous_path_continuity)
         + weights.confidence_weight * max(cam1_confidence, cam2_confidence)
+        + weights.scale_weight * scale_consistency
+        + weights.direction_weight * direction_consistency
     )
     return round(score, 4)
 
@@ -108,6 +117,12 @@ def associate_views(
     cam1_continuity: float = 0.0,
     cam2_continuity: float = 0.0,
     previous_path_continuity: float = 0.0,
+    cam1_scale_consistency: float = 0.5,
+    cam2_scale_consistency: float = 0.5,
+    cam1_direction_consistency: float = 0.5,
+    cam2_direction_consistency: float = 0.5,
+    previous_xyz: tuple[float, float, float] | None = None,
+    max_trusted_reprojection_px: float = 24.0,
     weights: AssociationWeights = _ASSOCIATION_DEFAULTS,
 ) -> list[AssociatedPair]:
     """跨视角关联：先硬门，再排序。返回按 score 降序的通过硬门的配对。
@@ -143,7 +158,9 @@ def associate_views(
                     court_margin_ft=court_margin_ft,
                 )
             if reason is not None:
-                results.append(AssociatedPair(cand1, cand2, 0.0, passes_hard_gate=False, rejection_reason=reason))
+                results.append(
+                    AssociatedPair(cand1, cand2, 0.0, passes_hard_gate=False, rejection_reason=reason)
+                )
                 continue
 
             # 排序（几何帮助挑选）
@@ -156,16 +173,53 @@ def associate_views(
                 max_time_delta_ms=max_time_gate_ms,
             )
             continuity = max(cam1_continuity, cam2_continuity)
+            path_continuity = previous_path_continuity
+            if previous_xyz is not None:
+                distance_ft = math.sqrt(sum((float(xyz[i]) - previous_xyz[i]) ** 2 for i in range(3)))
+                path_continuity = max(path_continuity, max(0.0, 1.0 - distance_ft / 12.0))
+            scale_consistency = 0.5 * (cam1_scale_consistency + cam2_scale_consistency)
+            direction_consistency = 0.5 * (cam1_direction_consistency + cam2_direction_consistency)
             score = rank_pair(
                 cam1_confidence=cand1[2], cam2_confidence=cand2[2],
                 measurement_reproj_cam1_px=measurement.reprojection_error_cam1_px,
                 measurement_reproj_cam2_px=measurement.reprojection_error_cam2_px,
                 epipolar_px=measurement.epipolar_residual_px,
                 continuity=continuity,
-                previous_path_continuity=previous_path_continuity,
+                previous_path_continuity=path_continuity,
+                scale_consistency=scale_consistency,
+                direction_consistency=direction_consistency,
                 weights=weights,
             )
-            results.append(AssociatedPair(cand1, cand2, score, passes_hard_gate=True, rejection_reason=None))
+            max_residual = max(
+                measurement.reprojection_error_cam1_px,
+                measurement.reprojection_error_cam2_px,
+                measurement.epipolar_residual_px,
+            )
+            anchor_eligible = (
+                max_residual <= max_trusted_reprojection_px
+                and measurement.geometry_quality >= 0.4
+                and measurement.depth_valid
+            )
+            components = {
+                "reprojection_error_px": round(max_residual, 4),
+                "geometry_quality": round(measurement.geometry_quality, 4),
+                "tracker_continuity": round(continuity, 4),
+                "previous_path_continuity": round(path_continuity, 4),
+                "scale_consistency": round(scale_consistency, 4),
+                "direction_consistency": round(direction_consistency, 4),
+            }
+            results.append(
+                AssociatedPair(
+                    cand1,
+                    cand2,
+                    score,
+                    passes_hard_gate=True,
+                    rejection_reason=None,
+                    quality_label="trusted_anchor" if anchor_eligible else "low_quality_audit_only",
+                    anchor_eligible=anchor_eligible,
+                    quality_components=components,
+                )
+            )
 
     passed = [r for r in results if r.passes_hard_gate]
     passed.sort(key=lambda r: r.score, reverse=True)

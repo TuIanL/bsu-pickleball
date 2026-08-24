@@ -25,7 +25,7 @@
 - **THEN** 系统 SHALL 将该段交给 2.5D 重建
 - **AND** MUST NOT 因该段不合格而阻止其他段或整场估算球路发布
 
-### Requirement: 高度由双摄约束或显式视觉估算产生
+### Requirement: 高度由双摄约束而非先验弧线
 系统 SHALL 区分双摄约束高度和仅用于可视化的先验弧线；双摄合格段的 `estimated_z(t)` SHALL 由两个视角约束，双摄不合格段可以输出显式标记的 2.5D 估算高度，但 MUST NOT 冒充三维测量。
 
 #### Scenario: 双摄合格段
@@ -51,4 +51,3 @@
 - **WHEN** 3D 状态为 `UNAVAILABLE` 且至少一个 2.5D 段通过可视化质量门
 - **THEN** `display_trajectory_status` SHALL 为 `available` 或 `degraded`
 - **AND** 前端 SHALL 能显示这些明确标注的估算段
-

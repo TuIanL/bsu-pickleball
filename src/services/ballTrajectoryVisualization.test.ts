@@ -190,6 +190,49 @@ describe("buildReconstructedBallTrajectoryVisualization", () => {
     expect(result.shots).toEqual([]);
     expect(result.playerRoster).toEqual([]);
   });
+
+  it("renders v4 visualization-only segments when 3D is unavailable and excludes environment outliers", () => {
+    const visible = reconstructedSegment({
+      segment_id: "flight-v4-visible",
+      reconstruction_mode: "single_view_visual_arc",
+      status: "available",
+      display_level: "low",
+      metric_validity: "visualization_only",
+      metric_eligibility: { speed: false, peak_height: false, authoritative_landing: false, reason: "visualization_only_estimate" },
+      primary_view_id: "cam_a",
+      end_endpoint: {
+        event_type: "bounce",
+        timestamp_sec: 0.12,
+        court_xy: [22.5, 43],
+        court_location: "outside_line",
+        outcome_classification: "legal_out_candidate",
+        automatic_adjudication: false,
+        non_adjudication_notice: "可能界外落点，非自动判罚",
+      },
+    });
+    const outlier = reconstructedSegment({
+      segment_id: "flight-v4-outlier",
+      reconstruction_mode: "single_view_visual_arc",
+      status: "available",
+      display_level: "low",
+      end_endpoint: { event_type: "bounce", court_xy: [50, 70], outcome_classification: "environment_outlier" },
+    });
+    const v4: ReconstructedBallTrajectoryArtifact = {
+      ...reconstructedArtifact([visible, outlier]),
+      schema_version: "reconstructed_ball_trajectory.v4",
+      reconstruction_mode: "hybrid_segmented",
+      overall_status: "UNAVAILABLE",
+      display_trajectory_status: "degraded",
+      status: "partial",
+    };
+
+    const result = buildReconstructedBallTrajectoryVisualization(v4);
+    expect(result.trajectories.map((trajectory) => trajectory.id)).toEqual(["flight-v4-visible"]);
+    expect(result.trajectories[0].metricValidity).toBe("visualization_only");
+    expect(result.trajectories[0].metricEligibility?.speed).toBe(false);
+    expect(result.trajectories[0].endpointOutcome).toBe("legal_out_candidate");
+    expect(result.trajectories[0].points.at(-1)?.courtXFt).toBe(10);
+  });
 });
 
 function trajectoryWithOwnership(

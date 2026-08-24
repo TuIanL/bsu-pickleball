@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from app.vision.multiview.ball_stereo.stereo_measurement import BallStereoMeasurement
+
 try:
     from scipy.optimize import least_squares
     _HAS_SCIPY = True
@@ -40,6 +42,9 @@ class Observation:
     v: float
     projection: np.ndarray  # 3x4，该摄像机虚拟相机 P
     paired: bool  # 该时刻是否有另一个视角的观测
+    segment_id: str | None = None
+    source_view_id: str | None = None
+    quality_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -194,6 +199,7 @@ def reconstruct_segment(
     w_zneg: float = 1.0,
     w_plaus: float = 0.1,
     min_observations: int = 2,
+    stereo_measurements: list[BallStereoMeasurement] | None = None,
 ) -> Reconstructed3DSegment:
     """对一段观测拟合估算 3D 曲线，返回采样与质量诊断。
 
@@ -250,6 +256,22 @@ def reconstruct_segment(
             init[i] = [base_x, base_y, hgt]
         else:
             init[i] = [10.0, 22.0, 4.0 * math.sin(math.pi * tn) + 1.0]
+
+    # 合格逐 tick 三角测量只作为稀疏初始化/锚点证据，不直接成为最终曲线。
+    trusted = sorted(
+        [measurement for measurement in stereo_measurements or [] if measurement.high_quality_anchor],
+        key=lambda measurement: measurement.take_timestamp_ms,
+    )
+    if trusted:
+        measurement_times = np.asarray([measurement.take_timestamp_ms / 1000.0 for measurement in trusted])
+        measurement_times = (measurement_times - t_norm_min) / t_span
+        measurement_times = np.clip(measurement_times, 0.0, 1.0)
+        for axis, attr in enumerate(("estimated_x_ft", "estimated_y_ft", "estimated_z_ft")):
+            values = np.asarray([float(getattr(measurement, attr)) for measurement in trusted])
+            if len(values) == 1:
+                init[:, axis] = 0.65 * init[:, axis] + 0.35 * values[0]
+            else:
+                init[:, axis] = 0.35 * init[:, axis] + 0.65 * np.interp(t_grid, measurement_times, values)
 
     params0 = init.reshape(-1)
 

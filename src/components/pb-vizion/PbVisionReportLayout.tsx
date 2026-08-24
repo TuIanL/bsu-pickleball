@@ -6,7 +6,7 @@
 // 7.1 在主内容区按顺序串联所有子模块（后续在 7.1 任务中填实）
 // =============================================================
 import { Suspense, type ReactNode } from "react";
-import type { AnalysisReport } from "../../types/report";
+import type { AnalysisReport, ReconstructedBallTrajectoryArtifact } from "../../types/report";
 import { PbReportProvider, usePbReport } from "../../contexts/PbReportContext";
 import PbPlayerDrawer, { PbDrawerExpander } from "./PbPlayerDrawer";
 
@@ -69,7 +69,7 @@ const PbLegalThirds = lazy(() =>
 );
 
 // 主内容区域（读取 drawerOpen 决定 padding）
-function MainContentInner() {
+function MainContentInner({ trajectoryArtifact }: { trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null }) {
   const { drawerOpen } = usePbReport();
   const pl = drawerOpen ? "pl-[260px]" : "pl-0";
 
@@ -120,17 +120,18 @@ function MainContentInner() {
 // 外层根：挂 .pb-vision-theme + Provider
 export default function PbVisionReportLayout(props: {
   report: AnalysisReport;
+  trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null;
 }) {
-  const { report } = props;
+  const { report, trajectoryArtifact } = props;
   return (
-    <PbReportProvider report={report}>
+    <PbReportProvider report={report} trajectoryArtifact={trajectoryArtifact}>
       <div
         className="pb-vision-theme min-h-screen w-full"
         style={{ background: "var(--pb-page-bg, #f0f4f2)" }}
       >
         <PbPlayerDrawer />
         <PbDrawerExpander />
-        <MainContentInner />
+        <MainContentInner trajectoryArtifact={trajectoryArtifact} />
       </div>
     </PbReportProvider>
   );

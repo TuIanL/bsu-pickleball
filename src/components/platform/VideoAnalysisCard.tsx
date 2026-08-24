@@ -9,6 +9,7 @@ import type {
   PipelineTrackPoint,
   PlayerMarker,
   PoseOverlayArtifact,
+  ReconstructedBallTrajectoryArtifact,
   ServeEventsArtifact,
   TimelineMarker,
   TrackingOverlayArtifact,
@@ -29,6 +30,7 @@ const MAX_VISIBLE_BOUNCE_MARKERS = 3;
 const BALL_TRAIL_SECONDS = 1.2;
 const BALL_PATH_GAP_SECONDS = 0.7;
 const MAX_BALL_PATH_POINTS = 84;
+const HYBRID_SEGMENT_RETENTION_SECONDS = 0.8;
 
 interface VideoAnalysisCardProps {
   compact?: boolean;
@@ -37,6 +39,8 @@ interface VideoAnalysisCardProps {
   ballTrajectoryDetail?: string;
   ballTrajectoryLoadState?: OverlayLoadState;
   ballTrajectoryStatus?: string;
+  reconstructedBallTrajectory?: ReconstructedBallTrajectoryArtifact | null;
+  trajectoryViewId?: string;
   bounceEvents?: BounceEventsArtifact | null;
   bounceEventsDetail?: string;
   bounceEventsLoadState?: OverlayLoadState;
@@ -95,6 +99,8 @@ export function VideoAnalysisCard({
   ballTrajectoryDetail,
   ballTrajectoryLoadState = "idle",
   ballTrajectoryStatus,
+  reconstructedBallTrajectory,
+  trajectoryViewId,
   bounceEvents,
   bounceEventsDetail,
   bounceEventsLoadState = "idle",
@@ -133,6 +139,8 @@ export function VideoAnalysisCard({
           ballTrajectoryDetail={ballTrajectoryDetail}
           ballTrajectoryLoadState={ballTrajectoryLoadState}
           ballTrajectoryStatus={ballTrajectoryStatus}
+          reconstructedBallTrajectory={reconstructedBallTrajectory}
+          trajectoryViewId={trajectoryViewId}
           bounceEvents={bounceEvents}
           bounceEventsDetail={bounceEventsDetail}
           bounceEventsLoadState={bounceEventsLoadState}
@@ -330,6 +338,8 @@ function RealVideoOverlay({
   ballTrajectoryDetail,
   ballTrajectoryLoadState = "idle",
   ballTrajectoryStatus,
+  reconstructedBallTrajectory,
+  trajectoryViewId,
   bounceEvents,
   bounceEventsDetail,
   bounceEventsLoadState = "idle",
@@ -360,6 +370,8 @@ function RealVideoOverlay({
   ballTrajectoryDetail?: string;
   ballTrajectoryLoadState?: OverlayLoadState;
   ballTrajectoryStatus?: string;
+  reconstructedBallTrajectory?: ReconstructedBallTrajectoryArtifact | null;
+  trajectoryViewId?: string;
   bounceEvents?: BounceEventsArtifact | null;
   bounceEventsDetail?: string;
   bounceEventsLoadState?: OverlayLoadState;
@@ -430,7 +442,18 @@ function RealVideoOverlay({
     : (detectionRenderFrame?.detections.length ?? 0);
   const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
   const poseInGap = poseRenderFrame?.inGap ?? false;
-  const ballPathSegments = useMemo(() => resolveBallPathSegments(ballTrajectory, currentTime), [ballTrajectory, currentTime]);
+  const hybridBallPathSegments = useMemo(
+    () => resolveHybridBallPathSegments(reconstructedBallTrajectory, currentTime, trajectoryViewId),
+    [currentTime, reconstructedBallTrajectory, trajectoryViewId],
+  );
+  const ballPathSegments = useMemo(
+    () => hybridBallPathSegments.length
+      ? hybridBallPathSegments
+      : reconstructedBallTrajectory
+        ? []
+        : resolveBallPathSegments(ballTrajectory, currentTime),
+    [ballTrajectory, currentTime, hybridBallPathSegments, reconstructedBallTrajectory],
+  );
   const ballSamples = useMemo(() => ballPathSegments.flat(), [ballPathSegments]);
   const allBounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
   const visibleBounceMarkers = useMemo(
@@ -442,19 +465,26 @@ function RealVideoOverlay({
     ? Boolean(fusedPlayerOverlay?.frames.length)
     : Boolean(trackingOverlay?.frames.length);
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
-  const ballAvailable = hasUsableBallSamples(ballTrajectory);
+  const ballAvailable = hasUsableHybridBallSamples(reconstructedBallTrajectory, trajectoryViewId) || hasUsableBallSamples(ballTrajectory);
   const bounceAvailable = Boolean(allBounceMarkers.length);
   const trackingStatusLabel = useFusedOverlay
     ? resolveLayerStatus(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.status ?? fusedPlayerOverlayStatus)
     : resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
   const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
-  const ballStatusLabel = resolveLayerStatus(ballTrajectoryLoadState, ballTrajectory?.status ?? ballTrajectoryStatus);
+  const ballStatusLabel = resolveLayerStatus(
+    ballTrajectoryLoadState,
+    reconstructedBallTrajectory?.display_trajectory_status ?? ballTrajectory?.status ?? ballTrajectoryStatus,
+  );
   const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   const trackingDetail = useFusedOverlay
     ? layerDetail(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
     : layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
-  const ballDetail = layerDetail(ballTrajectoryLoadState, ballTrajectory?.detail ?? ballTrajectoryDetail, "球轨迹 layer");
+  const ballDetail = layerDetail(
+    ballTrajectoryLoadState,
+    reconstructedBallTrajectory?.detail ?? ballTrajectory?.detail ?? ballTrajectoryDetail,
+    "球轨迹 layer",
+  );
   const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
   const serveDetail = layerDetail(serveEventsLoadState, serveEvents?.detail ?? serveEventsDetail, "发球候选 marker");
   const serveStatus = resolveLayerStatus(serveEventsLoadState, serveEvents?.status ?? serveEventsStatus);
@@ -783,15 +813,20 @@ function RealVideoOverlay({
           const previous = segment[index];
           const [x1, y1] = previous.image_xy;
           const [x2, y2] = sample.image_xy;
-          const isEstimated = previous.interpolated || sample.interpolated;
+          const provenance = sample.provenance ?? sample.source;
+          const previousProvenance = previous.provenance ?? previous.source;
+          const isPredicted = [provenance, previousProvenance].some((value) => value === "predicted" || value === "model_predicted");
+          const isInterpolated = !isPredicted && (
+            previous.interpolated || sample.interpolated || provenance === "interpolated" || previousProvenance === "interpolated"
+          );
           const confidence = Math.min(previous.confidence ?? 1, sample.confidence ?? 1);
           return (
             <line
               data-testid="video-ball-segment"
               key={`${segmentIndex}-${sample.frame_index}-${sample.timestamp_sec}`}
-              opacity={isEstimated ? 0.42 : Math.max(0.45, confidence)}
+              opacity={isPredicted ? 0.34 : isInterpolated ? 0.58 : Math.max(0.5, confidence)}
               stroke="#D9FF3F"
-              strokeDasharray={isEstimated ? "7 7" : undefined}
+              strokeDasharray={isPredicted ? "7 7" : isInterpolated ? "12 5" : undefined}
               strokeLinecap="round"
               strokeWidth={Math.max(2, source.width * 0.0018)}
               x1={x1}
@@ -817,6 +852,22 @@ function RealVideoOverlay({
               />
             </g>
           );
+        }) : null}
+
+        {showBallPath ? ballPathSegments.flatMap((segment, segmentIndex) => {
+          const last = segment.at(-1);
+          if (!last?.endpointType) return [];
+          const [x, y] = last.image_xy;
+          if (last.endpointType === "bounce") {
+            return [<g data-testid="video-ball-endpoint-bounce" key={`endpoint-${segmentIndex}`}>
+              <circle cx={x} cy={y} fill="rgba(249,115,22,0.18)" r={Math.max(7, source.width * 0.005)} stroke="#F97316" strokeWidth={Math.max(2, source.width * 0.0014)} />
+            </g>];
+          }
+          if (last.endpointType === "hit" || last.endpointType === "serve_reset") {
+            const radius = Math.max(7, source.width * 0.005);
+            return [<polygon data-testid="video-ball-endpoint-hit" key={`endpoint-${segmentIndex}`} fill="#8B5CF6" opacity="0.92" points={`${x},${y-radius} ${x+radius},${y} ${x},${y+radius} ${x-radius},${y}`} />];
+          }
+          return [<circle data-testid="video-ball-endpoint-unknown" key={`endpoint-${segmentIndex}`} cx={x} cy={y} fill="#D9FF3F" opacity="0.24" r={Math.max(5, source.width * 0.004)} />];
         }) : null}
 
         {showBounces && visibleBounceMarkers.map((event) => {
@@ -1165,7 +1216,13 @@ function statusCopy(status: string, detail: string): string {
   return detail;
 }
 
-type ImageBallSample = BallTrajectoryArtifact["samples"][number] & { image_xy: [number, number] };
+type ImageBallSample = BallTrajectoryArtifact["samples"][number] & {
+  image_xy: [number, number];
+  provenance?: string;
+  endpointType?: string;
+  endpointOutcome?: string;
+  endpointNotice?: string;
+};
 
 function hasImagePoint(sample: BallTrajectoryArtifact["samples"][number]): sample is ImageBallSample {
   return Array.isArray(sample.image_xy)
@@ -1178,6 +1235,74 @@ function hasImagePoint(sample: BallTrajectoryArtifact["samples"][number]): sampl
 
 function hasUsableBallSamples(ballTrajectory: BallTrajectoryArtifact | null | undefined): boolean {
   return (ballTrajectory?.samples ?? []).some(hasImagePoint);
+}
+
+function finiteImagePoint(value: unknown): value is [number, number] {
+  return Array.isArray(value)
+    && value.length >= 2
+    && Number.isFinite(value[0])
+    && Number.isFinite(value[1]);
+}
+
+export function hasUsableHybridBallSamples(
+  artifact: ReconstructedBallTrajectoryArtifact | null | undefined,
+  viewId?: string,
+): boolean {
+  return (artifact?.segments ?? []).some((segment) => {
+    if (segment.status === "unavailable" || segment.reconstruction_mode === "unavailable") return false;
+    if (segment.end_endpoint?.outcome_classification === "environment_outlier") return false;
+    const selectedView = viewId ?? segment.primary_view_id ?? undefined;
+    if (!selectedView) return false;
+    return (segment.image_paths_by_view?.[selectedView] ?? []).some((sample) => finiteImagePoint(sample.image_xy));
+  });
+}
+
+/**
+ * v4 视频叠加适配器：仅消费当前机位的 image-space path，不从 court XY 伪造像素投影。
+ */
+export function resolveHybridBallPathSegments(
+  artifact: ReconstructedBallTrajectoryArtifact | null | undefined,
+  currentTime: number,
+  viewId?: string,
+): ImageBallSample[][] {
+  if (!artifact || artifact.display_trajectory_status === "unavailable") return [];
+  const output: ImageBallSample[][] = [];
+  for (const segment of artifact.segments ?? []) {
+    if (segment.status === "unavailable" || segment.reconstruction_mode === "unavailable") continue;
+    if (segment.end_endpoint?.outcome_classification === "environment_outlier") continue;
+    const selectedView = viewId ?? segment.primary_view_id ?? undefined;
+    if (!selectedView) continue;
+    const path = (segment.image_paths_by_view?.[selectedView] ?? [])
+      .filter((sample) => finiteImagePoint(sample.image_xy) && Number.isFinite(sample.timestamp_sec))
+      .sort((left, right) => left.timestamp_sec - right.timestamp_sec);
+    if (!path.length) continue;
+    const start = path[0].timestamp_sec;
+    const end = path[path.length - 1].timestamp_sec;
+    if (currentTime < start || currentTime > end + HYBRID_SEGMENT_RETENTION_SECONDS) continue;
+    const retained = currentTime > end;
+    const cutoff = retained ? start : currentTime - BALL_TRAIL_SECONDS;
+    const visible = path
+      .filter((sample) => sample.timestamp_sec >= cutoff && sample.timestamp_sec <= currentTime)
+      .map((sample) => ({
+        frame_index: sample.frame_index,
+        timestamp_sec: sample.timestamp_sec,
+        image_xy: sample.image_xy as [number, number],
+        confidence: sample.confidence ?? null,
+        accepted: true,
+        interpolated: sample.provenance === "interpolated" || sample.source === "interpolated",
+        source: sample.source,
+        provenance: sample.provenance,
+      } as ImageBallSample));
+    if (!visible.length) continue;
+    if (currentTime >= end - 1e-3) {
+      const last = visible[visible.length - 1];
+      last.endpointType = segment.end_endpoint?.event_type ?? "unknown";
+      last.endpointOutcome = segment.end_endpoint?.outcome_classification;
+      last.endpointNotice = segment.end_endpoint?.non_adjudication_notice ?? undefined;
+    }
+    output.push(sampleBallPathEvenly(visible, MAX_BALL_PATH_POINTS));
+  }
+  return output;
 }
 
 function sampleBallPathEvenly(samples: ImageBallSample[], maxPoints: number): ImageBallSample[] {

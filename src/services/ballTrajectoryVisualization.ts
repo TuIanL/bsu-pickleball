@@ -34,6 +34,9 @@ export interface TrajectoryAnchorMarker {
   courtYFt: number;
   frameIndex: number;
   confidence: number;
+  timestampSeconds?: number | null;
+  outcomeClassification?: string | null;
+  notice?: string | null;
 }
 
 export interface TrajectoryQualitySummary {
@@ -59,6 +62,17 @@ export interface EstimatedBallTrajectory {
   anchors?: TrajectoryAnchorMarker[];
   quality?: TrajectoryQualitySummary;
   reconstructionMode?: string;
+  metricValidity?: string | null;
+  metricEligibility?: {
+    speed: boolean;
+    peakHeight: boolean;
+    authoritativeLanding: boolean;
+    reason: string | null;
+  };
+  primaryViewId?: string | null;
+  primaryViewReason?: string | null;
+  endpointOutcome?: string | null;
+  endpointNotice?: string | null;
   shotId: string | null;
   hitterPlayerId: string | null;
   hitterRenderSlot: string | null;
@@ -286,9 +300,13 @@ export function buildBallTrajectoryVisualization(
 
 function isDisplayableSegment(segment: ReconstructedBallTrajectorySegment): boolean {
   if (segment.status === "insufficient_spatial_anchors") return false;
-  if (segment.reconstruction_mode === "image_only") return false;
-  // 默认视图只显示较高可信（high/medium）；low 仅调试模式、none 不生成
-  if (segment.quality?.display_level === "none" || segment.quality?.display_level === "low") return false;
+  if (segment.reconstruction_mode === "image_only" || segment.reconstruction_mode === "unavailable") return false;
+  if (segment.status === "unavailable" || segment.status === "UNAVAILABLE") return false;
+  const displayLevel = segment.display_level ?? segment.quality?.display_level;
+  if (displayLevel === "none") return false;
+  if (displayLevel === "low" && segment.reconstruction_mode !== "single_view_visual_arc") return false;
+  // 环境离群证据仅保留给 diagnostics，不进入正式曲线。
+  if (segment.end_endpoint?.outcome_classification === "environment_outlier") return false;
   return segment.samples.some((sample) => finiteNumber(sample.court_xy?.[0]) !== null && finiteNumber(sample.court_xy?.[1]) !== null);
 }
 
@@ -309,7 +327,7 @@ function buildReconstructedTrajectory(
     const timestamp = finiteNumber(raw.timestamp_sec ?? raw.t_sec);
     const frameIndex = finiteNumber(raw.frame_index ?? sampleIndex);
     if (x === null || y === null || timestamp === null || frameIndex === null) return [];
-    const source = raw.source === "model_predicted"
+    const source = raw.source === "model_predicted" || raw.source === "predicted" || raw.provenance === "predicted"
       ? "model_predicted"
       : raw.source === "interpolated"
         ? "interpolated"
@@ -357,6 +375,26 @@ function buildReconstructedTrajectory(
       confidence: anchor.confidence ?? 0,
     }];
   });
+  for (const endpoint of [segment.start_endpoint, segment.end_endpoint]) {
+    const x = finiteNumber(endpoint?.court_xy?.[0]);
+    const y = finiteNumber(endpoint?.court_xy?.[1]);
+    if (x === null || y === null || !endpoint) continue;
+    const anchorType = endpoint.event_type === "bounce"
+      ? "bounce"
+      : endpoint.event_type === "hit" || endpoint.event_type === "serve_reset"
+        ? "contact"
+        : "loss";
+    anchors.push({
+      anchorType,
+      courtXFt: x,
+      courtYFt: y,
+      frameIndex: 0,
+      confidence: endpoint.confidence ?? 0,
+      timestampSeconds: endpoint.timestamp_sec ?? null,
+      outcomeClassification: endpoint.outcome_classification ?? null,
+      notice: endpoint.non_adjudication_notice ?? null,
+    });
+  }
 
   return {
     id: segment.segment_id,
@@ -379,6 +417,17 @@ function buildReconstructedTrajectory(
       observationCoverage: finiteNumber(quality?.observation_coverage),
     },
     reconstructionMode: segment.reconstruction_mode,
+    metricValidity: segment.metric_validity ?? segment.quality?.metric_validity ?? null,
+    metricEligibility: {
+      speed: segment.metric_eligibility?.speed === true,
+      peakHeight: segment.metric_eligibility?.peak_height === true,
+      authoritativeLanding: segment.metric_eligibility?.authoritative_landing === true,
+      reason: segment.metric_eligibility?.reason ?? null,
+    },
+    primaryViewId: segment.primary_view_id ?? null,
+    primaryViewReason: segment.primary_view_reason ?? null,
+    endpointOutcome: segment.end_endpoint?.outcome_classification ?? null,
+    endpointNotice: segment.end_endpoint?.non_adjudication_notice ?? null,
     shotId: segment.shot_id ?? null,
     hitterPlayerId: segment.hitter_player_id ?? null,
     hitterRenderSlot: segment.hitter_render_slot ?? null,
@@ -403,6 +452,11 @@ function emptyReconstructedTrajectory(segment: ReconstructedBallTrajectorySegmen
     points: [],
     anchors: [],
     reconstructionMode: segment.reconstruction_mode,
+    metricValidity: segment.metric_validity ?? null,
+    primaryViewId: segment.primary_view_id ?? null,
+    primaryViewReason: segment.primary_view_reason ?? null,
+    endpointOutcome: segment.end_endpoint?.outcome_classification ?? null,
+    endpointNotice: segment.end_endpoint?.non_adjudication_notice ?? null,
     shotId: segment.shot_id ?? null,
     hitterPlayerId: segment.hitter_player_id ?? null,
     hitterRenderSlot: segment.hitter_render_slot ?? null,
@@ -426,6 +480,21 @@ function buildReconstructedBounceMarkers(segments: ReconstructedBallTrajectorySe
         courtYFt: y,
         confidence: anchor.confidence ?? 0,
       });
+    }
+    const endpoint = segment.end_endpoint;
+    if (endpoint?.event_type === "bounce" && endpoint.outcome_classification !== "environment_outlier") {
+      const x = finiteNumber(endpoint.court_xy?.[0]);
+      const y = finiteNumber(endpoint.court_xy?.[1]);
+      const timestampSeconds = finiteNumber(endpoint.timestamp_sec);
+      if (x !== null && y !== null && timestampSeconds !== null) {
+        markers.push({
+          id: endpoint.event_id ?? `${segment.segment_id}-bounce`,
+          timestampSeconds,
+          courtXFt: x,
+          courtYFt: y,
+          confidence: endpoint.confidence ?? 0,
+        });
+      }
     }
   }
   return markers;
@@ -520,7 +589,11 @@ export function filterTrajectories(
 export function buildReconstructedBallTrajectoryVisualization(
   artifact?: ReconstructedBallTrajectoryArtifact | null,
 ): BallTrajectoryVisualizationData {
-  if (!artifact || !["available", "partial"].includes(artifact.status) || artifact.segments.length === 0) {
+  const schemaMajor = Number(artifact?.schema_version.match(/\.v(\d+)$/)?.[1] ?? 0);
+  const displayAvailable = schemaMajor >= 4
+    ? artifact?.display_trajectory_status !== "unavailable"
+    : artifact ? ["available", "partial"].includes(artifact.status) : false;
+  if (!artifact || !displayAvailable || artifact.segments.length === 0) {
     return { trajectories: [], bounces: [], discardedPointCount: 0, shots: [], playerRoster: [] };
   }
   const segments = artifact.segments.filter(isDisplayableSegment);

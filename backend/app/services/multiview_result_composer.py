@@ -41,6 +41,26 @@ from app.vision.player_tracking_engine.four_player_quality import build_quality_
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_RECONSTRUCTED_TRAJECTORY_SCHEMAS = {
+    "reconstructed_ball_trajectory.v1",
+    "reconstructed_ball_trajectory.v2",
+    "reconstructed_ball_trajectory.v3",
+    "reconstructed_ball_trajectory.v4",
+}
+
+
+def _write_immutable_ball_artifact(storage: StorageService, path: Path, payload: dict[str, object]) -> None:
+    """同 job 产物只允许幂等重写；不同内容必须由新 job/version 发布。"""
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    enriched = dict(payload)
+    enriched["content_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing.get("content_sha256") == enriched["content_sha256"]:
+            return
+        raise RuntimeError(f"拒绝覆盖已完成任务的不可变球产物：{path}")
+    storage.write_json_atomic(path, enriched)
+
 
 def _validate_ball_artifact_payloads(
     v3: dict[str, object] | None,
@@ -65,7 +85,8 @@ def _validate_ball_artifact_payloads(
 
     if v3 is None:
         return None
-    if v3.get("schema_version") != "reconstructed_ball_trajectory.v3":
+    schema_version = str(v3.get("schema_version", ""))
+    if schema_version not in {"reconstructed_ball_trajectory.v3", "reconstructed_ball_trajectory.v4"}:
         return "reconstructed ball trajectory schema 版本不匹配"
     overall = str(v3.get("overall_status", "UNAVAILABLE"))
     if overall not in {"FULL_ESTIMATED_3D", "PARTIAL_3D", "LANDING_ONLY", "UNAVAILABLE"}:
@@ -73,14 +94,29 @@ def _validate_ball_artifact_payloads(
     coordinate_semantics = v3.get("coordinate_semantics")
     if not isinstance(coordinate_semantics, dict) or coordinate_semantics.get("xy") != "canonical_court_ft":
         return "reconstructed ball trajectory 缺少 canonical_court_ft 坐标声明"
-    if coordinate_semantics.get("z") != "estimated_multiview_height_ft":
-        return "reconstructed ball trajectory 缺少 estimated_multiview_height_ft 高度声明"
+    expected_z = {
+        "reconstructed_ball_trajectory.v3": "estimated_multiview_height_ft",
+        "reconstructed_ball_trajectory.v4": "estimated_multiview_or_visualization_only_height_ft",
+    }[schema_version]
+    if coordinate_semantics.get("z") != expected_z:
+        return f"reconstructed ball trajectory 缺少 {expected_z} 高度声明"
+    if schema_version == "reconstructed_ball_trajectory.v4":
+        if v3.get("display_trajectory_status") not in {"available", "degraded", "unavailable"}:
+            return "reconstructed ball trajectory display_trajectory_status 非法"
     segments = v3.get("segments")
     if not isinstance(segments, list):
         return "reconstructed ball trajectory segments 必须是数组"
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict):
             return f"trajectory segment[{index}] 不是对象"
+        if schema_version == "reconstructed_ball_trajectory.v4" and segment.get("reconstruction_mode") not in {
+            "stereo_estimated_3d",
+            "stereo_anchored_2_5d",
+            "single_view_event_anchored_2_5d",
+            "single_view_visual_arc",
+            "unavailable",
+        }:
+            return f"trajectory segment[{index}] reconstruction_mode 非法"
         quality = segment.get("quality")
         if isinstance(quality, dict):
             for field in ("observation_coverage", "predicted_ratio", "overall"):
@@ -793,15 +829,8 @@ class MultiViewResultComposer:
             artifacts.multiview_ball_stereo_evidence_detail = detail
             return "failed", detail
 
-        def write_immutable(path: Path, payload: dict[str, object]) -> None:
-            # hash 对未包含 hash 字段的 canonical JSON 计算，便于技术详情核验。
-            body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            enriched = dict(payload)
-            enriched["content_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
-            self.storage.write_json_atomic(path, enriched)
-
         if evidence is not None and evidence.get("schema_version") == "multiview_ball_stereo_evidence.v1":
-            write_immutable(evidence_path, evidence)
+            _write_immutable_ball_artifact(self.storage, evidence_path, evidence)
             artifacts.multiview_ball_stereo_evidence_json_path = str(evidence_path)
             artifacts.multiview_ball_stereo_evidence_url = (
                 f"/api/analysis/jobs/{job.id}/artifacts/multiview-ball-stereo-evidence"
@@ -817,8 +846,11 @@ class MultiViewResultComposer:
             artifacts.multiview_ball_stereo_evidence_status = "failed"
             artifacts.multiview_ball_stereo_evidence_detail = "stereo evidence 缺失或 schema 版本不匹配"
 
-        if v3 is not None and v3.get("schema_version") == "reconstructed_ball_trajectory.v3":
-            write_immutable(v3_path, v3)
+        if v3 is not None and v3.get("schema_version") in {
+            "reconstructed_ball_trajectory.v3",
+            "reconstructed_ball_trajectory.v4",
+        }:
+            _write_immutable_ball_artifact(self.storage, v3_path, v3)
             artifacts.reconstructed_ball_trajectory_json_path = str(v3_path)
             artifacts.reconstructed_ball_trajectory_url = (
                 f"/api/analysis/jobs/{job.id}/artifacts/reconstructed-ball-trajectory"
@@ -830,6 +862,8 @@ class MultiViewResultComposer:
                 "LANDING_ONLY": "degraded",
                 "UNAVAILABLE": "unavailable",
             }.get(overall, "unavailable")
+            if v3_status == "unavailable" and v3.get("display_trajectory_status") in {"available", "degraded"}:
+                v3_status = "degraded"
             artifacts.reconstructed_ball_trajectory_status = v3_status
             artifacts.reconstructed_ball_trajectory_detail = output_detail
             return v3_status, output_detail

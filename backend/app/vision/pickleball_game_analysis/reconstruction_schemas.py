@@ -58,6 +58,16 @@ class ReconstructionMode(StrEnum):
     LOCAL_VISUAL_ARC = "local_visual_arc"
 
 
+class HybridReconstructionMode(StrEnum):
+    """统一混合球路产物的段级重建模式。"""
+
+    STEREO_ESTIMATED_3D = "stereo_estimated_3d"
+    STEREO_ANCHORED_2_5D = "stereo_anchored_2_5d"
+    SINGLE_VIEW_EVENT_ANCHORED_2_5D = "single_view_event_anchored_2_5d"
+    SINGLE_VIEW_VISUAL_ARC = "single_view_visual_arc"
+    UNAVAILABLE = "unavailable"
+
+
 class SampleSource(StrEnum):
     """重建样本的来源分类。"""
 

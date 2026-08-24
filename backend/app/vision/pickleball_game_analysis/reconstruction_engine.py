@@ -126,6 +126,7 @@ def reconstruct_ball_trajectory(
     serve_events: list[Any] | None = None,
     homography: list[list[float]] | None = None,
     fps: float = 30.0,
+    frame_stride: int = 1,
     config: ReconstructionConfig | None = None,
     court: PickleballCourtGeometry | None = None,
     player_context: PlayerAttributionContext | None = None,
@@ -155,7 +156,7 @@ def reconstruct_ball_trajectory(
     try:
         # 1) 击球候选检测（纯球侧，不读取 bounce_events，不变量 I7）
         detector = BallContactEventDetector()
-        candidates = detector.detect(cleaned_points, fps=fps)
+        candidates = detector.detect(cleaned_points, fps=fps, frame_stride=frame_stride)
 
         # 2) prefilter：弹地抑制唯一权威（非对称时间窗口，I8）
         resolver = BallEventResolver()

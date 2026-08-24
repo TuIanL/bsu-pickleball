@@ -44,6 +44,9 @@ class BallStereoMeasurement:
     canonical_tick: int | None = None
     cam1_source_frame_index: int | None = None
     cam2_source_frame_index: int | None = None
+    segment_id: str | None = None
+    high_quality_anchor: bool = False
+    quality_components: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +71,9 @@ class BallStereoMeasurement:
             "canonical_tick": self.canonical_tick,
             "cam1_source_frame_index": self.cam1_source_frame_index,
             "cam2_source_frame_index": self.cam2_source_frame_index,
+            "segment_id": self.segment_id,
+            "high_quality_anchor": self.high_quality_anchor,
+            "quality_components": dict(self.quality_components),
         }
 
     @classmethod
@@ -98,6 +104,9 @@ class BallStereoMeasurement:
             canonical_tick=(int(payload["canonical_tick"]) if payload.get("canonical_tick") is not None else None),
             cam1_source_frame_index=(int(payload["cam1_source_frame_index"]) if payload.get("cam1_source_frame_index") is not None else None),
             cam2_source_frame_index=(int(payload["cam2_source_frame_index"]) if payload.get("cam2_source_frame_index") is not None else None),
+            segment_id=str(payload["segment_id"]) if payload.get("segment_id") is not None else None,
+            high_quality_anchor=bool(payload.get("high_quality_anchor", False)),
+            quality_components={str(key): float(value) for key, value in dict(payload.get("quality_components") or {}).items()},
         )
 
 

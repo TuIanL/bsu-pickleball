@@ -144,6 +144,30 @@ def test_association_hard_gate_rejects_absurd():
     assert pairs == []  # 时间门拒绝
 
 
+def test_high_residual_pair_is_retained_for_audit_but_not_anchor_eligible():
+    p1 = _cam(1200.0, 1920, 1080, 12.0, 42.0, 750.0)
+    p2 = _cam(1150.0, 1920, 1080, -14.0, 38.0, 800.0)
+    u1, v1 = _proj(p1, (10.0, 22.0, 3.0))
+    u2, v2 = _proj(p2, (10.0, 22.0, 3.0))
+    pairs = associate_views(
+        cam1_candidates=[(u1, v1, 0.8)],
+        cam2_candidates=[(u2 + 1.0, v2, 0.8)],
+        projection_cam1=p1,
+        projection_cam2=p2,
+        cam1_timestamp_ms=100.0,
+        cam2_timestamp_ms=103.0,
+        cam1_continuity=0.9,
+        cam2_continuity=0.8,
+        previous_path_continuity=0.7,
+        max_trusted_reprojection_px=0.05,
+    )
+    assert pairs
+    assert pairs[0].quality_label == "low_quality_audit_only"
+    assert not pairs[0].anchor_eligible
+    assert pairs[0].quality_components["tracker_continuity"] == 0.9
+    assert pairs[0].quality_components["previous_path_continuity"] == 0.7
+
+
 def test_landing_dual_and_single_and_none():
     # image→court 单应（identity 简单对角映射便于断言）
     Hg = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]])

@@ -82,6 +82,7 @@ class Settings(BaseModel):
     enable_ball_detection: bool = True  # 是否启用球检测
     enable_bounce_detection: bool = True  # 是否启用弹跳检测
     enable_ball_reconstruction: bool = True  # 是否启用事件切分球轨迹重建（第三套产物）
+    enable_hybrid_ball_trajectory: bool = True  # v4 分段混合球路；false 回滚只读/发布历史 v3
     ball_reconstruction_contact_height_m: float = 1.10  # 击球接触高度先验（米）
     ball_analysis_strict: bool = False  # 球分析严格模式：true 时球分析异常导致 pipeline failed
     ball_stationary_blacklist_frames: int = 60  # 球静止候选加入黑名单的累计帧阈值
@@ -335,6 +336,8 @@ def get_settings() -> Settings:
         enable_ball_detection=os.getenv("PICKLEBALL_ENABLE_BALL_DETECTION", "true").lower() in {"1", "true", "yes"},
         enable_bounce_detection=os.getenv("PICKLEBALL_ENABLE_BOUNCE_DETECTION", "true").lower() in {"1", "true", "yes"},
         enable_ball_reconstruction=os.getenv("PICKLEBALL_ENABLE_BALL_RECONSTRUCTION", "true").lower()
+        in {"1", "true", "yes"},
+        enable_hybrid_ball_trajectory=os.getenv("PICKLEBALL_ENABLE_HYBRID_BALL_TRAJECTORY", "true").lower()
         in {"1", "true", "yes"},
         ball_reconstruction_contact_height_m=float(
             os.getenv("PICKLEBALL_BALL_RECONSTRUCTION_CONTACT_HEIGHT_M", "1.10")

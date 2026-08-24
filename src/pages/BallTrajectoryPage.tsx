@@ -97,8 +97,8 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
         const trajectoryArtifact = await getReconstructedBallTrajectory(result);
         const pipelineStatus = result.artifacts.reconstructed_ball_trajectory_status;
         const pipelineDetail = result.artifacts.reconstructed_ball_trajectory_detail;
-        const isV3 = trajectoryArtifact?.reconstruction_mode === "multiview_estimated_3d" || Boolean(pipelineStatus);
-        const v3WithStatus = trajectoryArtifact ?? (pipelineStatus ? {
+        const hasUnifiedArtifact = Boolean(trajectoryArtifact) || Boolean(pipelineStatus);
+        const unifiedWithStatus = trajectoryArtifact ?? (pipelineStatus ? {
           schema_version: "reconstructed_ball_trajectory.v3",
           job_id: jobId,
           status: pipelineStatus === "succeeded" ? "available" : pipelineStatus === "degraded" ? "partial" : "unavailable",
@@ -107,13 +107,14 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
           events: [],
           segments: [],
           overall_status: "UNAVAILABLE" as const,
+          display_trajectory_status: "unavailable" as const,
           pipeline_status: pipelineStatus,
         } : null);
-        setV3Artifact(isV3 ? v3WithStatus : null);
-        let nextData = buildReconstructedBallTrajectoryVisualization(v3WithStatus);
-        // v3（多视角估算 3D）：即使可视化尚空，也按整体状态展示 v3 面板 + 明确降级，
-        // 不伪造 2.5D；非 v3 且无轨迹时才降级到原始轨迹模式。
-        if (!isV3 && nextData.trajectories.length === 0) {
+        setV3Artifact(hasUnifiedArtifact ? unifiedWithStatus : null);
+        let nextData = buildReconstructedBallTrajectoryVisualization(unifiedWithStatus);
+        // 历史 v1/v2 或尚未发布统一产物的任务仍可读旧像素轨迹；
+        // v4 则只由 display_trajectory_status 控制展示，3D UNAVAILABLE 不再阻断 2.5D。
+        if (!hasUnifiedArtifact && nextData.trajectories.length === 0) {
           const legacyArtifact = await getBallTrajectory(result);
           nextData = buildBallTrajectoryVisualization(legacyArtifact);
         }
@@ -121,7 +122,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
         setJob(nextJob);
         setData(nextData);
         setSelectedShotId(nextData.shots[0]?.shotId ?? nextData.trajectories[0]?.id ?? null);
-        setLoadState(isV3 ? "available" : nextData.trajectories.length ? "available" : "empty");
+        setLoadState(nextData.trajectories.length || hasUnifiedArtifact ? "available" : "empty");
       } catch (error) {
         if (!alive) return;
         setErrorMessage(error instanceof Error ? error.message : "无法读取球轨迹数据");
@@ -255,53 +256,6 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
 
   return (
     <PageFrame>
-      {v3Artifact ? (
-        <section className="mb-5 rounded-xl border border-[#16B364]/20 bg-[#EAF8F0]/50 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-bold text-[#182230]">多视角估算 3D 球路</h3>
-            <span className="rounded bg-[#168A34] px-2 py-0.5 text-[10px] font-bold text-white">
-              {v3Artifact.overall_status ?? "UNAVAILABLE"}
-            </span>
-          </div>
-          {v3Artifact.pipeline_status === "running" || v3Artifact.pipeline_status === "queued" ? (
-            <p className="mt-2 text-xs leading-5 text-[#667085]">双摄球路分析正在进行，完成后会自动提供三维球路和质量指标。</p>
-          ) : v3Artifact.overall_status === "UNAVAILABLE" ? (
-            <p className="mt-2 text-xs leading-5 text-[#667085]">
-              {v3Artifact.detail ?? "双摄三维证据不足以重建可信 3D 球路，系统未伪造球路。"}
-            </p>
-          ) : (
-            <div className="mt-2 grid gap-2 text-xs text-[#344054] sm:grid-cols-3">
-              <div>
-                <span className="text-[#98A2B3]">落点</span>
-                <div className="font-semibold">
-                  {v3Artifact.landing_point?.landing_x_ft != null && v3Artifact.landing_point?.landing_y_ft != null
-                    ? `(${v3Artifact.landing_point.landing_x_ft.toFixed(1)}, ${v3Artifact.landing_point.landing_y_ft.toFixed(1)}) ft`
-                    : "—"}
-                </div>
-                <div className="text-[#98A2B3]">{v3Artifact.landing_point?.landing_source ?? "—"}</div>
-              </div>
-              <div>
-                <span className="text-[#98A2B3]">段数</span>
-                <div className="font-semibold">{v3Artifact.segments?.length ?? 0}</div>
-                <div className="text-[#98A2B3]">
-                  {v3Artifact.segments?.[0]?.stereo_coverage != null
-                    ? `覆盖率 ${(v3Artifact.segments[0].stereo_coverage * 100).toFixed(0)}%`
-                    : "—"}
-                </div>
-              </div>
-              <div>
-                <span className="text-[#98A2B3]">平均球速</span>
-                <div className="font-semibold">
-                  {v3Artifact.segments?.[0]?.metrics?.average_speed_kmh != null
-                    ? `${v3Artifact.segments[0].metrics.average_speed_kmh.toFixed(0)} km/h`
-                    : "—"}
-                </div>
-                <div className="text-[#98A2B3]">{v3Artifact.segments?.[0]?.metrics?.average_speed_validity ?? "—"}</div>
-              </div>
-            </div>
-          )}
-        </section>
-      ) : null}
       {!embedded && (
         <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
@@ -342,7 +296,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 <p className="mt-2 max-w-md text-sm leading-6 text-[#667085]">{webGlError}</p>
               </div>
             </div>
-          ) : v3Artifact?.overall_status === "UNAVAILABLE" ? (
+          ) : v3Artifact?.display_trajectory_status === "unavailable" ? (
             <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#FECACA] bg-[#FFF7F7] p-8 text-center">
               <div>
                 <AlertCircle className="mx-auto text-[#D92D20]" size={24} aria-hidden="true" />
@@ -433,8 +387,6 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
               <Legend color="#25B86A" label="近端到远端" />
               <Legend color="#F04438" label="远端到近端" />
               <Legend color="#A7B0AA" label="推算点（虚线）" dash />
-              <Legend color="#F97316" label="弹地点（圆环）" ring />
-              <Legend color="#8B5CF6" label="击球点（菱形）" diamond />
             </div>
           </section>
 

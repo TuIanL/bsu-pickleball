@@ -14,7 +14,7 @@
 - **THEN** SHALL 继续通过统一 slug 解析其原有字段
 - **AND** MUST NOT 回写或覆盖历史不可变 artifact
 
-### Requirement: 前端按版本和段模式降级读取
+### Requirement: 前端按版本降级读取
 系统 SHALL 使前端通过统一 `reconstructed-ball-trajectory` slug 读取历史与新产物，并按 schema version、segment reconstruction mode 与 metric eligibility 呈现；专项指标不可用 SHALL NOT 自动隐藏合格的估算展示段。
 
 #### Scenario: v3 三维不可用但 2.5D 段存在
@@ -45,4 +45,3 @@
 - **WHEN** bounce 位于边线外但未被判为环境离群点
 - **THEN** endpoint SHALL 保存 `court_location = outside_line`、`outcome_classification = legal_out_candidate`、证据置信度和标定不确定度
 - **AND** MUST NOT 将 `legal_out_candidate` 解释为自动比赛判罚
-

@@ -287,18 +287,22 @@ class EventAnchoredTrajectoryReconstructor:
         """单锚点：锚点端严格对齐，另一端用 pseudo path 相对位移。"""
         a0 = np.asarray(anchor.court_xy, dtype=np.float64)
         out = np.full((len(pseudo), 2), np.nan)
-        ref = None
-        for i in range(len(pseudo)):
-            if np.isfinite(pseudo[i]).all():
-                ref = pseudo[i]
-                break
-        if ref is None:
+        finite_indices = [i for i in range(len(pseudo)) if np.isfinite(pseudo[i]).all()]
+        if not finite_indices:
             return out
-        offset = a0 - ref
+        # 以与事件帧最近的真实采样作为锚定端。旧实现无论锚点在起点还是
+        # 终点都取第一个 finite 点，导致 unknown→bounce 的落地点错位。
+        anchor_index = min(
+            finite_indices,
+            key=lambda i: (abs(int(points[i].frame_index) - int(anchor.frame_index)), i),
+        )
+        offset = a0 - pseudo[anchor_index]
         lat = self._moving_average(pseudo + offset, self.config.lateral_smooth_window)
         for i in range(len(pseudo)):
             if np.isfinite(lat[i]).all():
                 out[i] = lat[i]
+        # 平滑不得移动权威锚点。
+        out[anchor_index] = a0
         return out
 
     def _local_visual_arc(self, pseudo, start, end):
@@ -353,6 +357,7 @@ class EventAnchoredTrajectoryReconstructor:
         samples: list[ReconstructedSample] = []
         n = len(points)
         # 段端是否有未知高度
+        start_unknown = z0 is None
         end_unknown = z1 is None
 
         # 弧线峰值：基于时长与平面距离的估算
@@ -417,6 +422,9 @@ class EventAnchoredTrajectoryReconstructor:
             elif end_unknown and p > 0.6:
                 # 未知端渐隐
                 height_conf = max(0.0, 1.0 - (p - 0.6) / 0.4)
+            elif start_unknown and p < 0.4:
+                # 仅终点有锚点时，未知起点从透明逐渐进入可信区间。
+                height_conf = max(0.0, p / 0.4)
             if start is not None and point.frame_index == start.frame_index:
                 height_src = height_sources[0]
             if end is not None and point.frame_index == end.frame_index:

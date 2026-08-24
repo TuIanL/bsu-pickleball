@@ -19,6 +19,7 @@ from app.vision.multiview.ball_stereo.segment_reconstruction import (
     UNAVAILABLE,
     Reconstructed3DSegment,
     Reconstructed3DSample,
+    Observation,
 )
 from app.vision.multiview.ball_stereo.stereo_measurement import BallStereoMeasurement
 
@@ -28,6 +29,7 @@ def build_stereo_evidence_v1(
     take_id: str,
     measurements: Sequence[BallStereoMeasurement],
     pairings: Iterable[dict],
+    observations: Sequence[Observation] | None = None,
     diagnostics: dict | None = None,
     source_context: dict | None = None,
 ) -> dict:
@@ -37,6 +39,18 @@ def build_stereo_evidence_v1(
         "take_id": take_id,
         "measurements": [m.to_dict() for m in measurements],
         "pairings": list(pairings),
+        "observations": [
+            {
+                "timestamp_sec": observation.t_sec,
+                "camera_index": observation.cam_index,
+                "image_xy": [observation.u, observation.v],
+                "paired": observation.paired,
+                "segment_id": observation.segment_id,
+                "source_view_id": observation.source_view_id,
+                "quality_components": dict(observation.quality_components),
+            }
+            for observation in observations or []
+        ],
         "diagnostics": dict(diagnostics or {}),
         "source_context": dict(source_context or {}),
     }

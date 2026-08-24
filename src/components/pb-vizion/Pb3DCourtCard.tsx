@@ -1,6 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { usePbReport } from "../../contexts/PbReportContext";
-import type { EstimatedBallTrajectory } from "../../services/ballTrajectoryVisualization";
+import {
+  buildReconstructedBallTrajectoryVisualization,
+  type EstimatedBallTrajectory,
+} from "../../services/ballTrajectoryVisualization";
 import { BallTrajectoryScene } from "../platform/BallTrajectoryScene";
 import PbEvidenceUnavailable from "./PbEvidenceUnavailable";
 import { resolveCanonicalPlayerId } from "../../evidence/playerIdentity";
@@ -47,7 +50,7 @@ function computeStageFilter(
 }
 
 export default function Pb3DCourtCard() {
-  const { evidence, selectedPlayerId, stageFilter, qualityThreshold } = usePbReport();
+  const { evidence, trajectoryArtifact, selectedPlayerId, stageFilter, qualityThreshold } = usePbReport();
 
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
   const [webGlError, setWebGlError] = useState<string | null>(null);
@@ -72,11 +75,19 @@ export default function Pb3DCourtCard() {
     return computeStageFilter(stageFilter, exploration, playerCanonical);
   }, [stageFilter, evidence, playerCanonical]);
 
-  const trajectories = useMemo<EstimatedBallTrajectory[]>(() => {
-    const ev = evidence?.trajectories;
-    if (!ev || ev.status !== "available") return [];
+  const reconstructedData = useMemo(
+    () => buildReconstructedBallTrajectoryVisualization(trajectoryArtifact),
+    [trajectoryArtifact],
+  );
 
-    return ev.value
+  const trajectories = useMemo<EstimatedBallTrajectory[]>(() => {
+    const source = trajectoryArtifact
+      ? reconstructedData.trajectories
+      : evidence?.trajectories?.status === "available"
+        ? evidence.trajectories.value
+        : [];
+
+    return source
       .filter((t) => {
         if (
           t.averageConfidence != null &&
@@ -98,14 +109,30 @@ export default function Pb3DCourtCard() {
         return true;
       })
       .map((t) => ({ ...t, hitterPlayerId: playerCanonical }));
-  }, [evidence, playerCanonical, qualityThreshold, stageFilter, stageState]);
+  }, [evidence, playerCanonical, qualityThreshold, reconstructedData.trajectories, stageFilter, stageState, trajectoryArtifact]);
 
-  const hasEvidence = evidence?.trajectories?.status === "available";
-  const stageUnusable = stageFilter !== "all" && stageState.mode === "unknown";
+  const hasEvidence = trajectoryArtifact
+    ? reconstructedData.trajectories.length > 0
+    : evidence?.trajectories?.status === "available";
+  // 真实 reconstructed artifact 本身已经是可展示段集合；缺少 rally 拍序时保留球路，
+  // 避免报告页默认“第三拍”把整个共享 3D 视图误判为空态。存在拍序时仍按原筛选逻辑过滤。
+  const stageUnusable = !trajectoryArtifact && stageFilter !== "all" && stageState.mode === "unknown";
   const noTrajectoryPoints = hasEvidence && trajectories.length === 0;
+  const trajectoryCount = trajectoryArtifact
+    ? reconstructedData.trajectories.length
+    : evidence?.trajectories?.status === "available"
+      ? evidence.trajectories.value.length
+      : 0;
 
   return (
     <div className="pb-card p-3 sm:p-4">
+      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--pb-text-muted,#98a2b3)]">球路报告</p>
+          <h2 className="mt-1 text-lg font-black text-[var(--pb-text-primary,#182230)]">分段球路报告</h2>
+        </div>
+        <span className="rounded-full bg-[#EAF8F0] px-2.5 py-1 text-xs font-bold text-[#168A34]">{trajectoryCount} 段</span>
+      </div>
       <div className="pb-3d-view-btns relative overflow-hidden rounded-2xl bg-gray-50 aspect-[16/10]">
         {webGlError ? (
           <div className="absolute inset-0 flex items-center justify-center p-6 text-center">

@@ -32,7 +32,12 @@ class ContactDetectorConfig:
     direction_change_deg: float = 35.0
     speed_change_ratio: float = 1.8
     fit_residual_px: float = 18.0
-    min_event_gap_frames: int = 10  # refractory period（帧）
+    # 时间是权威连续性语义；帧字段仅保留旧调用兼容与诊断。
+    effective_fps: float = 30.0
+    frame_stride: int = 1
+    max_context_gap_sec: float = 0.12
+    min_event_gap_sec: float = 10.0 / 30.0
+    min_event_gap_frames: int = 10
 
 
 @dataclass
@@ -58,6 +63,7 @@ class BallContactEventDetector:
         self,
         points: list[TrajectoryPoint],
         fps: float = 30.0,
+        frame_stride: int | None = None,
     ) -> list[HitCandidate]:
         """对整条清洗轨迹扫描，返回击球候选列表（按帧序）。
 
@@ -68,6 +74,10 @@ class BallContactEventDetector:
             return []
 
         ctx = self.config.context_points
+        source_fps = fps if fps > 0 else self.config.effective_fps
+        stride = max(1, int(frame_stride or self.config.frame_stride))
+        expected_step_sec = stride / max(source_fps, 1e-6)
+        max_context_gap_sec = max(self.config.max_context_gap_sec, expected_step_sec * 1.75)
         candidates: list[HitCandidate] = []
         for pos, index in enumerate(valid):
             # 前后各需足够连续有效观测
@@ -80,9 +90,11 @@ class BallContactEventDetector:
             after_pts = [points[i] for i in after_indices]
             point = points[index]
 
-            # 长缺失后首次重新锁定 → 不作为击球
-            prev_valid_index = before_indices[-1]
-            if point.frame_index - points[prev_valid_index].frame_index > 1:
+            # 前后上下文必须在真实时间上连续。合法抽帧（例如 60 FPS、stride=2）
+            # 的 frame index 差为 2，但 timestamp 仍是正常的一个处理时间步。
+            context = [*before_pts, point, *after_pts]
+            gaps = [right.timestamp_sec - left.timestamp_sec for left, right in zip(context[:-1], context[1:], strict=False)]
+            if any(gap <= 0 or gap > max_context_gap_sec for gap in gaps):
                 continue
 
             v_in = self._mean_velocity(before_pts)
@@ -118,6 +130,9 @@ class BallContactEventDetector:
                             "speed_ratio": round(speed_ratio, 2),
                             "residual_before_px": round(residual_before, 2),
                             "residual_after_px": round(residual_after, 2),
+                            "max_context_gap_sec": round(max(gaps, default=0.0), 6),
+                            "effective_fps": round(source_fps / stride, 6),
+                            "frame_stride": stride,
                         },
                     )
                 )
@@ -137,6 +152,9 @@ class BallContactEventDetector:
                         "speed_ratio": round(speed_ratio, 2),
                         "residual_before_px": round(residual_before, 2),
                         "residual_after_px": round(residual_after, 2),
+                        "max_context_gap_sec": round(max(gaps, default=0.0), 6),
+                        "effective_fps": round(source_fps / stride, 6),
+                        "frame_stride": stride,
                     },
                 )
             )
@@ -145,10 +163,13 @@ class BallContactEventDetector:
         confirmed = [c for c in candidates if c.status == "hit_candidate"]
         confirmed.sort(key=lambda c: c.confidence, reverse=True)
         selected: list[HitCandidate] = []
+        min_event_gap_sec = (
+            self.config.min_event_gap_sec
+            if self.config.min_event_gap_sec > 0
+            else self.config.min_event_gap_frames / max(source_fps, 1e-6)
+        )
         for candidate in confirmed:
-            if any(
-                abs(candidate.frame_index - kept.frame_index) < self.config.min_event_gap_frames for kept in selected
-            ):
+            if any(abs(candidate.timestamp_sec - kept.timestamp_sec) < min_event_gap_sec for kept in selected):
                 continue
             selected.append(candidate)
         selected.sort(key=lambda c: c.frame_index)
@@ -168,7 +189,7 @@ class BallContactEventDetector:
 
     @staticmethod
     def _mean_velocity(points: list[TrajectoryPoint]) -> tuple[float, float] | None:
-        """窗口内平均逐帧位移向量（像素/帧）。"""
+        """窗口内平均速度向量（像素/秒），不依赖 source frame stride。"""
         if len(points) < 2:
             return None
         total = [0.0, 0.0]
@@ -176,7 +197,9 @@ class BallContactEventDetector:
         for left, right in zip(points[:-1], points[1:], strict=False):
             if left.image_xy is None or right.image_xy is None:
                 continue
-            gap = max(1, right.frame_index - left.frame_index)
+            gap = right.timestamp_sec - left.timestamp_sec
+            if gap <= 0:
+                continue
             total[0] += (right.image_xy[0] - left.image_xy[0]) / gap
             total[1] += (right.image_xy[1] - left.image_xy[1]) / gap
             count += 1

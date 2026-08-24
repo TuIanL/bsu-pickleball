@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from app.vision.courtvision_calibration_engine.homography import compute_homography
@@ -125,6 +128,46 @@ class TestBallContactEventDetector:
         # 不变量 I7：Detector 不读取 bounce_events，弹地抑制只由 Resolver.prefilter 执行
         assert any(c.status == "confirmed_hit" for c in candidates)
 
+    @pytest.mark.parametrize(("stride", "frame_step"), [(1, 1), (2, 2)])
+    def test_direction_reversal_uses_timestamp_for_stride(self, stride, frame_step):
+        detector = BallContactEventDetector(ContactDetectorConfig(context_points=3, frame_stride=stride))
+        points = []
+        for tick in range(30):
+            frame = tick * frame_step
+            x = 100 + tick * 4 if tick <= 15 else 160 - (tick - 15) * 4
+            points.append(
+                TrajectoryPoint(
+                    frame_index=frame,
+                    timestamp_sec=frame / 60.0 if stride == 2 else frame / 30.0,
+                    image_xy=(float(x), 200.0),
+                    court_xy=None,
+                    confidence=0.9,
+                    source="detector",
+                )
+            )
+        candidates = detector.detect(points, fps=60.0 if stride == 2 else 30.0, frame_stride=stride)
+        assert any(candidate.status == "confirmed_hit" for candidate in candidates)
+
+    def test_historical_stride_two_fixture_produces_hit_candidate(self):
+        fixture_path = (
+            Path(__file__).parents[1]
+            / "fixtures"
+            / "ball_trajectory"
+            / "job-96a28d6ff0-stride2-contact.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        points = [TrajectoryPoint(**sample) for sample in fixture["samples"]]
+        detector = BallContactEventDetector(
+            ContactDetectorConfig(context_points=3, frame_stride=fixture["frame_stride"])
+        )
+        candidates = detector.detect(
+            points,
+            fps=fixture["source_fps"],
+            frame_stride=fixture["frame_stride"],
+        )
+        assert any(candidate.status == "confirmed_hit" for candidate in candidates)
+        assert all(candidate.diagnostics["frame_stride"] == 2 for candidate in candidates)
+
 
 class TestBallEventResolver:
     def test_high_confidence_bounce_suppresses_hit(self):
@@ -190,6 +233,23 @@ class TestBallFlightSegmenter:
         # 重新捕获点不并入丢失前段
         assert segments[0].end_index == 29
 
+    def test_serve_reset_and_end_of_stream_are_explicit_boundaries(self):
+        segmenter = BallFlightSegmenter(ReconstructionConfig(min_points_per_segment=3))
+        points = [_point(i, 100 + i * 2, 200) for i in range(12)]
+        serve = TrajectoryEvent(
+            "serve-5",
+            TrajectoryEventType.SERVE_RESET,
+            5,
+            5 / 30.0,
+            confidence=0.9,
+        )
+        segments = segmenter.segment(points, [serve])
+        assert len(segments) == 2
+        assert segments[0].end_event_type == TrajectoryEventType.SERVE_RESET
+        assert segments[0].boundary_reason == "serve_reset"
+        assert segments[1].start_event_type == TrajectoryEventType.SERVE_RESET
+        assert segments[1].boundary_reason == "end_of_stream"
+
 
 # ---------------------------------------------------------------------------
 # 8.1 事件锚定 2.5D 重建（含锚点降级与高度边界）
@@ -228,6 +288,41 @@ class TestEventAnchoredTrajectoryReconstructor:
         assert reconstructed.status == "insufficient_spatial_anchors"
         # image_only 不伪造高度
         assert all(sample.estimated_height_ft is None for sample in reconstructed.samples)
+
+    def test_start_single_anchor_aligns_first_sample_and_fades_unknown_end(self):
+        reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig())
+        hit = TrajectoryEvent(
+            "hit-0",
+            TrajectoryEventType.HIT,
+            0,
+            0.0,
+            image_xy=(120.0, 178.0),
+            court_xy=(4.0, 5.0),
+            confidence=0.8,
+        )
+        segment, points, events_by_id = self._segment_with_events([hit])
+        reconstructed = reconstructor.reconstruct(segment, points, events_by_id, HOMOGRAPHY)
+        assert reconstructed.reconstruction_mode == ReconstructionMode.SINGLE_ANCHOR_WARP.value
+        assert reconstructed.samples[0].court_xy == pytest.approx((4.0, 5.0))
+        assert reconstructed.samples[-1].height_confidence == 0.0
+
+    def test_end_single_anchor_aligns_last_sample_and_fades_unknown_start(self):
+        reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig())
+        bounce = TrajectoryEvent(
+            "bounce-29",
+            TrajectoryEventType.BOUNCE,
+            29,
+            29 / 30.0,
+            image_xy=(207.0, 175.6),
+            court_xy=(15.0, 39.0),
+            confidence=0.9,
+        )
+        segment, points, events_by_id = self._segment_with_events([bounce])
+        reconstructed = reconstructor.reconstruct(segment, points, events_by_id, HOMOGRAPHY)
+        assert reconstructed.reconstruction_mode == ReconstructionMode.SINGLE_ANCHOR_WARP.value
+        assert reconstructed.samples[-1].court_xy == pytest.approx((15.0, 39.0))
+        assert reconstructed.samples[-1].estimated_height_ft == 0.0
+        assert reconstructed.samples[0].height_confidence == 0.0
 
     def test_anchor_distance_too_small_local_visual_arc(self):
         reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig(minimum_anchor_distance_ft=5.0))

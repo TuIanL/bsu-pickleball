@@ -15,6 +15,7 @@ import {
 import type {
   AnalysisReport,
   PerformanceSubject,
+  ReconstructedBallTrajectoryArtifact,
 } from "../types/report";
 import type {
   PbReportContextValue,
@@ -45,9 +46,10 @@ function getAllPlayerSubjects(
 // ============== Provider ==============
 export function PbReportProvider(props: {
   report: AnalysisReport;
+  trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null;
   children: ReactNode;
 }) {
-  const { report, children } = props;
+  const { report, trajectoryArtifact, children } = props;
 
   const players = useMemo(() => getAllPlayerSubjects(report), [report]);
 
@@ -77,6 +79,7 @@ export function PbReportProvider(props: {
 
   const value: PbReportContextValue = {
     report,
+    trajectoryArtifact,
     selectedPlayerId: effectivePlayerId,
     setSelectedPlayerId,
     stageFilter,

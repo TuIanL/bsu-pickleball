@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Columns3, Expand, Focus, Rows3 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { EstimatedBallTrajectory } from "../../services/ballTrajectoryVisualization";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import type { EstimatedBallTrajectory, EstimatedTrajectoryPoint } from "../../services/ballTrajectoryVisualization";
 
-type CameraView = "oblique" | "top" | "side" | "end";
+export type CameraView = "oblique" | "top" | "sideline" | "baseline" | "obliqueBaseline";
 
 interface BallTrajectorySceneProps {
   trajectories: EstimatedBallTrajectory[];
@@ -13,17 +17,28 @@ interface BallTrajectorySceneProps {
   onWebGlError: (message: string) => void;
 }
 
-const VIEW_CONFIG: Record<CameraView, { position: [number, number, number]; label: string; icon: typeof Box }> = {
-  oblique: { position: [30, 28, 36], label: "斜视", icon: Box },
-  top: { position: [0.01, 55, 0.01], label: "俯视", icon: Rows3 },
-  side: { position: [40, 12, 0], label: "侧视", icon: Columns3 },
-  end: { position: [0, 14, 44], label: "端线", icon: Focus },
+interface ViewConfig {
+  position: [number, number, number];
+  label: string;
+  icon: LucideIcon;
+  zoom: number;
+}
+
+export const VIEW_CONFIG: Record<CameraView, ViewConfig> = {
+  oblique: { position: [30, 28, 36], label: "45°", icon: Box, zoom: 1 },
+  top: { position: [0.01, 55, 0.01], label: "俯视", icon: Rows3, zoom: 1 },
+  sideline: { position: [40, 12, 0], label: "边线", icon: Columns3, zoom: 1.05 },
+  baseline: { position: [0, 14, 44], label: "底线", icon: Focus, zoom: 1.08 },
+  obliqueBaseline: { position: [-30, 26, 38], label: "45°底线", icon: Box, zoom: 1.02 },
 };
 
 const DIRECTION_COLORS = {
   "near-to-far": "#25B86A",
   "far-to-near": "#F04438",
 } as const;
+
+const MAX_RENDER_GAP_SECONDS = 0.55;
+const VIEWPORT_BACKGROUND = "#F5F8F6";
 
 function courtVector(xFt: number, heightFt: number, yFt: number): THREE.Vector3 {
   return new THREE.Vector3(xFt - 10, heightFt, yFt - 22);
@@ -40,33 +55,28 @@ function buildCourt(): THREE.Group {
 
   const surface = new THREE.Mesh(
     new THREE.PlaneGeometry(20, 44),
-    new THREE.MeshStandardMaterial({ color: "#E4E9E5", roughness: 0.9, metalness: 0 }),
+    new THREE.MeshStandardMaterial({ color: "#E5EBE7", roughness: 0.92, metalness: 0 }),
   );
   surface.rotation.x = -Math.PI / 2;
   surface.receiveShadow = true;
   group.add(surface);
 
-  const apron = new THREE.Mesh(
-    new THREE.PlaneGeometry(28, 54),
-    new THREE.MeshStandardMaterial({ color: "#F4F6F4", roughness: 1 }),
-  );
-  apron.rotation.x = -Math.PI / 2;
-  apron.position.y = -0.04;
-  group.add(apron);
-
-  const boundaryMaterial = new THREE.LineBasicMaterial({ color: "#5E6762" });
-  const innerMaterial = new THREE.LineBasicMaterial({ color: "#8C9690" });
+  const boundaryMaterial = new THREE.LineBasicMaterial({ color: "#59645E" });
+  const innerMaterial = new THREE.LineBasicMaterial({ color: "#8A958E" });
   addCourtLine(group, [[-10, -22], [10, -22], [10, 22], [-10, 22], [-10, -22]], boundaryMaterial);
   addCourtLine(group, [[-10, -7], [10, -7]], innerMaterial);
   addCourtLine(group, [[-10, 7], [10, 7]], innerMaterial);
   addCourtLine(group, [[0, -22], [0, -7]], innerMaterial);
   addCourtLine(group, [[0, 7], [0, 22]], innerMaterial);
 
-  const kitchenMaterial = new THREE.MeshStandardMaterial({ color: "#D6DDD8", transparent: true, opacity: 0.65 });
-  const kitchen = new THREE.Mesh(new THREE.PlaneGeometry(20, 14), kitchenMaterial);
-  kitchen.rotation.x = -Math.PI / 2;
-  kitchen.position.y = 0.012;
-  group.add(kitchen);
+  const kitchenMaterial = new THREE.MeshStandardMaterial({ color: "#D3DCD6", transparent: true, opacity: 0.62 });
+  const kitchenNear = new THREE.Mesh(new THREE.PlaneGeometry(20, 7), kitchenMaterial);
+  kitchenNear.rotation.x = -Math.PI / 2;
+  kitchenNear.position.set(0, 0.012, -10.5);
+  group.add(kitchenNear);
+  const kitchenFar = kitchenNear.clone();
+  kitchenFar.position.z = 10.5;
+  group.add(kitchenFar);
 
   const net = new THREE.Mesh(
     new THREE.BoxGeometry(20.6, 2.85, 0.09),
@@ -93,112 +103,216 @@ function buildCourt(): THREE.Group {
   return group;
 }
 
-interface SolidDashedRun {
+export interface SolidDashedRun {
   points: THREE.Vector3[];
-  dashed: boolean;
+  style: "detected" | "interpolated" | "predicted";
 }
 
-function splitSolidDashed(trajectory: EstimatedBallTrajectory): SolidDashedRun[] {
+function pointStyle(point: EstimatedTrajectoryPoint): SolidDashedRun["style"] {
+  return point.source === "model_predicted"
+    ? "predicted"
+    : point.source === "interpolated"
+      ? "interpolated"
+      : "detected";
+}
+
+function isRenderablePoint(point: EstimatedTrajectoryPoint): boolean {
+  return Number.isFinite(point.courtXFt) && Number.isFinite(point.courtYFt) && point.estimatedHeightFt !== null;
+}
+
+function isGap(previous: EstimatedTrajectoryPoint | null, current: EstimatedTrajectoryPoint): boolean {
+  return previous !== null && current.timestampSeconds - previous.timestampSeconds > MAX_RENDER_GAP_SECONDS;
+}
+
+export function getLastRenderablePoint(trajectory: EstimatedBallTrajectory): EstimatedTrajectoryPoint | null {
+  return [...trajectory.points].reverse().find(isRenderablePoint) ?? null;
+}
+
+/**
+ * 将 source 样式切换做成重叠 run，避免 source 切换处生成孤立单点短线。
+ * 无效高度和长时间缺失会清空当前 run，保证不跨真实丢失边界连线。
+ */
+export function splitTrajectoryRuns(trajectory: EstimatedBallTrajectory): SolidDashedRun[] {
   const runs: SolidDashedRun[] = [];
   let current: THREE.Vector3[] = [];
-  let currentDashed: boolean | null = null;
+  let currentStyle: SolidDashedRun["style"] | null = null;
+  let previous: EstimatedTrajectoryPoint | null = null;
+
+  const flush = () => {
+    if (current.length >= 2 && currentStyle) runs.push({ points: current, style: currentStyle });
+    current = [];
+    currentStyle = null;
+  };
+
   for (const point of trajectory.points) {
-    // 未知高度点不渲染（不伪造地面位置），避免制造假落点
-    if (point.estimatedHeightFt === null) continue;
-    const vec = courtVector(point.courtXFt, point.estimatedHeightFt + 0.08, point.courtYFt);
-    const dashed = point.interpolated;
-    if (currentDashed !== null && dashed !== currentDashed && current.length >= 2) {
-      runs.push({ points: current, dashed: currentDashed });
-      current = [];
+    if (!isRenderablePoint(point)) {
+      flush();
+      previous = null;
+      continue;
     }
-    current.push(vec);
-    currentDashed = dashed;
+    if (isGap(previous, point)) {
+      flush();
+      previous = null;
+    }
+
+    const vec = courtVector(point.courtXFt, point.estimatedHeightFt as number + 0.08, point.courtYFt);
+    const style = pointStyle(point);
+    if (currentStyle === null) {
+      current = [vec];
+      currentStyle = style;
+    } else if (style !== currentStyle) {
+      const boundary = current[current.length - 1];
+      if (current.length >= 2) runs.push({ points: current, style: currentStyle });
+      current = boundary ? [boundary, vec] : [vec];
+      currentStyle = style;
+    } else {
+      current.push(vec);
+    }
+    previous = point;
   }
-  if (current.length >= 2) runs.push({ points: current, dashed: currentDashed ?? false });
+  flush();
   return runs;
+}
+
+/** 只按真实无效/长丢失边界拆分，source 切换保持几何连续。 */
+export function splitContinuousTrajectoryPaths(trajectory: EstimatedBallTrajectory): THREE.Vector3[][] {
+  const paths: THREE.Vector3[][] = [];
+  let current: THREE.Vector3[] = [];
+  let previous: EstimatedTrajectoryPoint | null = null;
+
+  const flush = () => {
+    if (current.length >= 2) paths.push(current);
+    current = [];
+  };
+
+  for (const point of trajectory.points) {
+    if (!isRenderablePoint(point)) {
+      flush();
+      previous = null;
+      continue;
+    }
+    if (isGap(previous, point)) {
+      flush();
+      previous = null;
+    }
+    current.push(courtVector(point.courtXFt, point.estimatedHeightFt as number + 0.08, point.courtYFt));
+    previous = point;
+  }
+  flush();
+  return paths;
+}
+
+interface TrajectoryRenderObjects {
+  objects: THREE.Object3D[];
+  selectableLines: THREE.Object3D[];
+  lineMaterials: LineMaterial[];
+}
+
+function createTrajectoryLine(
+  points: THREE.Vector3[],
+  color: string,
+  opacity: number,
+  selected: boolean,
+  style: SolidDashedRun["style"],
+): { line: Line2; material: LineMaterial } {
+  const geometry = new LineGeometry();
+  geometry.setPositions(points.flatMap((point) => [point.x, point.y, point.z]));
+  const material = new LineMaterial({
+    color,
+    dashed: style !== "detected",
+    dashSize: style === "predicted" ? 0.5 : 0.72,
+    gapSize: style === "predicted" ? 0.36 : 0.18,
+    linewidth: selected ? 3.6 : 2.5,
+    opacity,
+    transparent: true,
+    depthTest: false,
+  });
+  material.resolution.set(1, 1);
+  const line = new Line2(geometry, material);
+  line.computeLineDistances();
+  return { line, material };
 }
 
 function addTrajectories(
   scene: THREE.Scene,
   trajectories: EstimatedBallTrajectory[],
   selectedShotId: string | null,
-): THREE.Line[] {
-  const selectableLines: THREE.Line[] = [];
+): TrajectoryRenderObjects {
+  const objects: THREE.Object3D[] = [];
+  const selectableLines: THREE.Object3D[] = [];
+  const lineMaterials: LineMaterial[] = [];
+
   for (const trajectory of trajectories) {
     const selected = trajectory.shotId !== null && trajectory.shotId === selectedShotId;
-    const color = selected ? "#111827" : DIRECTION_COLORS[trajectory.direction];
-    const opacity = selected ? 1 : trajectory.highConfidence ? 0.9 : 0.34;
+    const color = DIRECTION_COLORS[trajectory.direction];
+    const opacity = selected ? 1 : trajectory.highConfidence ? 0.94 : 0.46;
 
-    // 每个飞行段 = 独立 line strip；段内按 source 拆实线 / 虚线，绝不跨事件边界共用样条
-    for (const run of splitSolidDashed(trajectory)) {
-      const geometry = new THREE.BufferGeometry().setFromPoints(run.points);
-      let line: THREE.Line;
-      if (run.dashed) {
-        const material = new THREE.LineDashedMaterial({
-          color,
+    // 基线只在真实缺失处断开；覆盖线表达 source，不会把切换点拆成单点线段。
+    for (const path of splitContinuousTrajectoryPaths(trajectory)) {
+      const base = createTrajectoryLine(path, color, opacity * 0.84, selected, "detected");
+      base.line.userData.shotId = trajectory.shotId;
+      base.line.userData.trajectoryId = trajectory.id;
+      base.line.renderOrder = selected ? 3 : 2;
+      scene.add(base.line);
+      objects.push(base.line);
+      selectableLines.push(base.line);
+      lineMaterials.push(base.material);
+    }
+
+    for (const run of splitTrajectoryRuns(trajectory)) {
+      if (run.style === "detected") continue;
+      const overlay = createTrajectoryLine(
+        run.points,
+        color,
+        opacity * (run.style === "predicted" ? 0.48 : 0.68),
+        selected,
+        run.style,
+      );
+      overlay.line.userData.shotId = trajectory.shotId;
+      overlay.line.userData.trajectoryId = trajectory.id;
+      overlay.line.renderOrder = selected ? 4 : 3;
+      scene.add(overlay.line);
+      objects.push(overlay.line);
+      selectableLines.push(overlay.line);
+      lineMaterials.push(overlay.material);
+    }
+
+    const lastPoint = getLastRenderablePoint(trajectory);
+    if (lastPoint) {
+      const terminal = new THREE.Mesh(
+        new THREE.SphereGeometry(selected ? 0.25 : 0.19, 14, 10),
+        new THREE.MeshStandardMaterial({
+          color: selected ? "#344054" : "#667085",
+          roughness: 0.7,
           transparent: true,
-          opacity: opacity * 0.82,
-          dashSize: 0.34,
-          gapSize: 0.22,
-        });
-        line = new THREE.Line(geometry, material);
-        line.computeLineDistances();
-      } else {
-        const material = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
-        line = new THREE.Line(geometry, material);
-      }
-      line.userData.shotId = trajectory.shotId;
-      line.userData.trajectoryId = trajectory.id;
-      line.renderOrder = selected ? 3 : 2;
-      scene.add(line);
-      selectableLines.push(line);
-    }
-
-    const renderedPoints = trajectory.points
-      .filter((point) => point.estimatedHeightFt !== null)
-      .map((point) => courtVector(point.courtXFt, point.estimatedHeightFt as number + 0.08, point.courtYFt));
-    const endpointMaterial = new THREE.MeshStandardMaterial({ color, transparent: opacity < 1, opacity });
-    for (const endpoint of [renderedPoints[0], renderedPoints[renderedPoints.length - 1]]) {
-      if (!endpoint) continue;
-      const marker = new THREE.Mesh(new THREE.SphereGeometry(selected ? 0.24 : 0.17, 14, 10), endpointMaterial);
-      marker.position.copy(endpoint);
-      marker.userData.shotId = trajectory.shotId;
-      marker.userData.trajectoryId = trajectory.id;
-      scene.add(marker);
-    }
-
-    // 事件锚点视觉语义：弹地橙色圆环、击球紫色菱形
-    for (const anchor of trajectory.anchors ?? []) {
-      const vec = courtVector(anchor.courtXFt, 0.08, anchor.courtYFt);
-      if (anchor.anchorType === "bounce") {
-        const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(0.22, 0.05, 8, 20),
-          new THREE.MeshStandardMaterial({ color: "#F97316", transparent: true, opacity: 0.95 }),
-        );
-        ring.position.copy(vec);
-        ring.rotation.x = Math.PI / 2;
-        scene.add(ring);
-      } else if (anchor.anchorType === "contact") {
-        const diamond = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.2),
-          new THREE.MeshStandardMaterial({ color: "#8B5CF6", transparent: true, opacity: 0.95 }),
-        );
-        diamond.position.copy(vec);
-        diamond.scale.y = 1.4;
-        scene.add(diamond);
-      }
+          opacity: selected ? 1 : 0.86,
+        }),
+      );
+      terminal.position.copy(courtVector(lastPoint.courtXFt, lastPoint.estimatedHeightFt as number + 0.08, lastPoint.courtYFt));
+      terminal.userData.shotId = trajectory.shotId;
+      terminal.userData.trajectoryId = trajectory.id;
+      terminal.renderOrder = 5;
+      scene.add(terminal);
+      objects.push(terminal);
     }
   }
-  return selectableLines;
+  return { objects, selectableLines, lineMaterials };
+}
+
+function disposeObject(object: THREE.Object3D) {
+  const disposable = object as THREE.Object3D & {
+    geometry?: THREE.BufferGeometry;
+    material?: THREE.Material | THREE.Material[];
+  };
+  disposable.geometry?.dispose();
+  const materials = disposable.material
+    ? Array.isArray(disposable.material) ? disposable.material : [disposable.material]
+    : [];
+  materials.forEach((material) => material.dispose());
 }
 
 function disposeScene(scene: THREE.Scene) {
-  scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh || object instanceof THREE.Line)) return;
-    object.geometry.dispose();
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    materials.forEach((material) => material.dispose());
-  });
+  scene.traverse((object) => disposeObject(object));
 }
 
 export function BallTrajectoryScene({
@@ -211,21 +325,55 @@ export function BallTrajectoryScene({
   const mountRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const trajectoryObjectsRef = useRef<THREE.Object3D[]>([]);
+  const selectableLinesRef = useRef<THREE.Object3D[]>([]);
+  const lineMaterialsRef = useRef<LineMaterial[]>([]);
+  const activeViewRef = useRef<CameraView>("oblique");
+  const onSelectShotRef = useRef(onSelectShot);
   const [activeView, setActiveView] = useState<CameraView>("oblique");
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    onSelectShotRef.current = onSelectShot;
+  }, [onSelectShot]);
 
   const applyView = useCallback((view: CameraView) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
     camera.position.set(...VIEW_CONFIG[view].position);
-    camera.zoom = view === "side" ? 1.05 : view === "end" ? 1.08 : 1;
+    camera.zoom = VIEW_CONFIG[view].zoom;
     camera.updateProjectionMatrix();
     controls.target.set(0, 1.2, 0);
     controls.update();
-    setActiveView(view);
   }, []);
 
+  const selectView = useCallback((view: CameraView) => {
+    activeViewRef.current = view;
+    setActiveView(view);
+    applyView(view);
+  }, [applyView]);
+
+  const updateTrajectoryObjects = useCallback(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    trajectoryObjectsRef.current.forEach((object) => {
+      scene.remove(object);
+      disposeObject(object);
+    });
+    const rendered = addTrajectories(scene, trajectories, selectedShotId);
+    trajectoryObjectsRef.current = rendered.objects;
+    selectableLinesRef.current = rendered.selectableLines;
+    lineMaterialsRef.current = rendered.lineMaterials;
+  }, [selectedShotId, trajectories]);
+
+  useEffect(() => {
+    updateTrajectoryObjects();
+  }, [updateTrajectoryObjects]);
+
+  // Three.js 初始化只执行一次；轨迹、选中态和视角分别由独立 effect 更新。
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
@@ -239,14 +387,16 @@ export function BallTrajectoryScene({
     }
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setClearColor("#F8FAF9", 1);
+    renderer.setClearColor(VIEWPORT_BACKGROUND, 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.dataset.trajectoryCanvas = "true";
     renderer.domElement.setAttribute("aria-label", "交互式球路球场");
     mount.replaceChildren(renderer.domElement);
+    rendererRef.current = renderer;
 
     const scene = new THREE.Scene();
+    sceneRef.current = scene;
     scene.add(buildCourt());
     scene.add(new THREE.HemisphereLight("#FFFFFF", "#D7DED9", 2.1));
     const keyLight = new THREE.DirectionalLight("#FFFFFF", 2.3);
@@ -264,8 +414,12 @@ export function BallTrajectoryScene({
     controls.maxZoom = 2.8;
     controls.maxPolarAngle = Math.PI / 2.02;
     controls.target.set(0, 1.2, 0);
+    applyView(activeViewRef.current);
 
-    const selectableLines = addTrajectories(scene, trajectories, selectedShotId);
+    const initialRendered = addTrajectories(scene, trajectories, selectedShotId);
+    trajectoryObjectsRef.current = initialRendered.objects;
+    selectableLinesRef.current = initialRendered.selectableLines;
+    lineMaterialsRef.current = initialRendered.lineMaterials;
 
     const resize = () => {
       const width = Math.max(1, mount.clientWidth);
@@ -278,11 +432,11 @@ export function BallTrajectoryScene({
       camera.bottom = -frustumHeight / 2;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, true);
+      lineMaterialsRef.current.forEach((material) => material.resolution.set(width, height));
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mount);
     resize();
-    applyView(activeView);
 
     const raycaster = new THREE.Raycaster();
     raycaster.params.Line.threshold = 0.42;
@@ -292,12 +446,11 @@ export function BallTrajectoryScene({
       pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
       pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObjects(selectableLines, false)[0];
-      // 点击任意飞行段 → 选中整个 Shot（无 shotId 的孤立段按自身选中）
+      const hit = raycaster.intersectObjects(selectableLinesRef.current, false)[0];
       const shotId = hit?.object.userData.shotId;
       const trajectoryId = hit?.object.userData.trajectoryId;
-      if (typeof shotId === "string") onSelectShot(shotId);
-      else if (typeof trajectoryId === "string") onSelectShot(trajectoryId);
+      if (typeof shotId === "string") onSelectShotRef.current(shotId);
+      else if (typeof trajectoryId === "string") onSelectShotRef.current(trajectoryId);
     };
     renderer.domElement.addEventListener("click", handleClick);
 
@@ -325,10 +478,19 @@ export function BallTrajectoryScene({
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
+      trajectoryObjectsRef.current = [];
+      selectableLinesRef.current = [];
+      lineMaterialsRef.current = [];
+      sceneRef.current = null;
+      rendererRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
     };
-  }, [activeView, applyView, onSelectShot, onWebGlError, selectedShotId, trajectories]);
+  }, [applyView, onWebGlError]);
+
+  useEffect(() => {
+    applyView(activeView);
+  }, [activeView, applyView]);
 
   useEffect(() => {
     const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === containerRef.current);
@@ -345,7 +507,7 @@ export function BallTrajectoryScene({
 
   return (
     <div
-      className="relative min-h-[430px] overflow-hidden rounded-lg border border-[#DDE5E0] bg-[#F8FAF9] sm:min-h-[560px] lg:h-[calc(100vh-230px)] lg:min-h-[620px]"
+      className="relative min-h-[430px] overflow-hidden rounded-lg bg-[#F5F8F6] sm:min-h-[560px] lg:h-[calc(100vh-230px)] lg:min-h-[620px]"
       ref={containerRef}
       data-testid="ball-trajectory-scene"
     >
@@ -359,8 +521,9 @@ export function BallTrajectoryScene({
               aria-label={`${config.label}视角`}
               aria-pressed={activeView === view}
               className={`grid size-10 place-items-center rounded-md border transition ${activeView === view ? "border-[#25B86A] bg-[#EAF8F0] text-[#168A34]" : "border-transparent text-[#667085] hover:bg-[#F2F4F3]"}`}
+              data-active={activeView === view ? "true" : "false"}
               key={view}
-              onClick={() => applyView(view)}
+              onClick={() => selectView(view)}
               title={`${config.label}视角`}
               type="button"
             >

@@ -7,7 +7,7 @@
 //   可被 Workspace 报告 view 直接挂载，也可被 standalone shell 嵌套。
 // =============================================================
 import { Suspense, lazy, type ReactNode } from "react";
-import type { AnalysisReport } from "../../types/report";
+import type { AnalysisReport, ReconstructedBallTrajectoryArtifact } from "../../types/report";
 import { PbReportProvider, usePbReport } from "../../contexts/PbReportContext";
 
 function AsyncPlaceholder({ title }: { title: string }): ReactNode {
@@ -80,9 +80,9 @@ const PbLegalThirds = lazy(() =>
   }))
 );
 
-export default function PbReportContent({ report }: { report: AnalysisReport }) {
+export default function PbReportContent({ report, trajectoryArtifact }: { report: AnalysisReport; trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null }) {
   return (
-    <PbReportProvider report={report}>
+    <PbReportProvider report={report} trajectoryArtifact={trajectoryArtifact}>
       <div className="pb-vision-theme min-h-full w-full" style={{ background: "var(--pb-page-bg, #f0f4f2)" }}>
         <div className="mx-auto flex max-w-[1400px] flex-col gap-6 px-6 py-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
