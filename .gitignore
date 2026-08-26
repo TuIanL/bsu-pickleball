@@ -42,5 +42,9 @@ models/*
 
 # IDE and Python caches
 .idea/
+.vscode/
 __pycache__/
 *.pyc
+
+# Local Codex configuration (keep tracked Codex skills visible)
+.codex/config.toml
