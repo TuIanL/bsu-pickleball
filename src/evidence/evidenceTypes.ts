@@ -8,13 +8,19 @@ import type { EstimatedBallTrajectory } from "../services/ballTrajectoryVisualiz
 import type {
   AnalysisReport,
   HeatmapPlayerGrid,
+  PlayerZoneStats,
   ProjectedFinding,
   ProjectedRecommendation,
+  StructuredVisualizationData,
   TrainingRecommendation,
 } from "../types/report";
+import type {
+  MetricSnapshotArtifact,
+  ShotRallyEventsArtifact,
+} from "../types/shotRallyEvents";
 
 /** EvidenceValue 状态 */
-export type EvidenceState = "available" | "unavailable" | "not_applicable" | "failed";
+export type EvidenceState = "available" | "insufficient_evidence" | "unavailable" | "not_applicable" | "failed";
 
 /** 指标来源（用于 invariant #5 可追溯） */
 export interface EvidenceRef {
@@ -25,17 +31,29 @@ export interface EvidenceRef {
     | "reconstructed_trajectory"
     | "heatmap"
     | "performance_insight"
-    | "roster";
+    | "roster"
+    | "canonical_events"
+    | "metric_snapshot"
+    | "structured_visualization";
   artifactId?: string;
   eventId?: string;
   field?: string;
+  playerId?: string;
 }
 
 /** 强类型指标值：available 带 value+provenance，否则带 reason */
 export type EvidenceValue<T> =
-  | { status: "available"; value: T; provenance: EvidenceRef[]; confidence?: number }
   | {
-      status: "unavailable" | "not_applicable" | "failed";
+      status: "available";
+      value: T;
+      provenance: EvidenceRef[];
+      confidence?: number;
+      numerator?: number | null;
+      denominator?: number | null;
+      sampleCount?: number;
+    }
+  | {
+      status: "insufficient_evidence" | "unavailable" | "not_applicable" | "failed";
       value: null;
       reason: string;
       provenance?: EvidenceRef[];
@@ -48,7 +66,13 @@ export interface ShotEvidence {
   ordinalInRally: number | null;
   playerId: string | null;
   type: string;
-  qualityScore: number;
+  stage?: string | null;
+  startMs?: number;
+  endMs?: number;
+  ownershipStatus?: string;
+  qualityScore: number | null;
+  result?: string | null;
+  errorType?: string | null;
   provenance: EvidenceRef[];
 }
 
@@ -60,8 +84,12 @@ export interface PlayerReportEvidenceSources {
   report: AnalysisReport;
   roster?: RosterMapping | null;
   serveEvents?: ServeEventsSource | null;
+  canonicalEvents?: ShotRallyEventsArtifact | null;
+  metricSnapshot?: MetricSnapshotArtifact | null;
   trajectories?: EstimatedBallTrajectory[] | null; // 已由真实 artifact 组装好的轨迹（IO 层负责）
-  visualization?: unknown; // StructuredVisualizationData，待接入
+  visualization?: StructuredVisualizationData | null;
+  visualizationState?: "available" | "unavailable" | "failed" | "loading";
+  visualizationReason?: string | null;
 }
 
 /** roster 映射的最小形态（可由 global-player-roster.v1 提取，或 report 内嵌） */
@@ -103,6 +131,8 @@ export interface PlayerReportEvidence {
   courtCoverage: {
     distanceFt: EvidenceValue<number>;
     heatmap: EvidenceValue<HeatmapPlayerGrid>;
+    /** 当前 canonical player 的真实区域统计；唯一来源为 structured visualization artifact。 */
+    zoneStats: EvidenceValue<PlayerZoneStats>;
   };
   serveReturn: {
     serveCount: EvidenceValue<number>;

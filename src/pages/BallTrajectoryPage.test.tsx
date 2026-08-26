@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary, AnalysisPipelineResult } from "../types/report";
 import { BallTrajectoryPage } from "./BallTrajectoryPage";
@@ -8,6 +8,7 @@ vi.mock("../services/analysisClient", () => ({
   getAnalysisJob: vi.fn(),
   getAnalysisResult: vi.fn(),
   getBallTrajectory: vi.fn(),
+  getMetricCourtSceneRevision: vi.fn(),
   getReconstructedBallTrajectory: vi.fn(),
 }));
 
@@ -135,6 +136,69 @@ describe("BallTrajectoryPage 空态返回导航", () => {
     expect(screen.queryByText(/可能界外落点/)).toBeNull();
     expect(screen.queryByText("混合分段估算球路")).toBeNull();
     expect(screen.queryByText("双摄球路暂不可用")).toBeNull();
+  });
+
+  it("只读取任务绑定的 scene revision，不借用 CaptureTake 当前 revision", async () => {
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(makeJob({
+      sceneCalibrationMode: "approximate",
+      sceneCalibrationRevision: null,
+      metadata: {
+        ...makeJob().metadata,
+        capture_take_id: "take-1",
+      },
+    }));
+    vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue(makeResult());
+    vi.mocked(analysisClient.getReconstructedBallTrajectory).mockResolvedValue({
+      schema_version: "reconstructed_ball_trajectory.v4",
+      job_id: "job-trajectory",
+      status: "partial",
+      detail: "approximate",
+      reconstruction_mode: "hybrid_segmented",
+      overall_status: "PARTIAL_3D",
+      display_trajectory_status: "available",
+      coordinate_semantics: { validity: "visualization_only" },
+      events: [],
+      segments: [],
+    } as never);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(analysisClient.getMetricCourtSceneRevision).not.toHaveBeenCalled();
+    });
+    expect(analysisClient.getMetricCourtSceneRevision).not.toHaveBeenCalled();
+  });
+
+  it("metric 任务读取其精确 scene revision", async () => {
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(makeJob({
+      sceneCalibrationMode: "metric",
+      sceneCalibrationRevision: 2,
+      metadata: {
+        ...makeJob().metadata,
+        capture_take_id: "take-1",
+      },
+    }));
+    vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue(makeResult());
+    vi.mocked(analysisClient.getMetricCourtSceneRevision).mockResolvedValue({ revision: 2 } as never);
+    vi.mocked(analysisClient.getReconstructedBallTrajectory).mockResolvedValue({
+      schema_version: "reconstructed_ball_trajectory.v4",
+      job_id: "job-trajectory",
+      status: "succeeded",
+      detail: "metric",
+      reconstruction_mode: "hybrid_segmented",
+      overall_status: "FULL_ESTIMATED_3D",
+      display_trajectory_status: "available",
+      coordinate_semantics: { validity: "metric_multiview" },
+      events: [],
+      segments: [],
+    } as never);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(analysisClient.getMetricCourtSceneRevision).toHaveBeenCalledWith("take-1", 2);
+    });
+    expect(analysisClient.getMetricCourtSceneRevision).toHaveBeenCalledWith("take-1", 2);
   });
 });
 

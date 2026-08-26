@@ -59,7 +59,13 @@ def make_metadata(**overrides) -> AnalysisUploadMetadata:
     return AnalysisUploadMetadata(**fields)
 
 
-def make_multiview_payload(capture_take_id: str = "CT_001") -> AnalysisJobCreate:
+def make_multiview_payload(
+    capture_take_id: str = "CT_001",
+    *,
+    execution_mode: str = "late_fusion_v1",
+    scene_mode: str = "approximate",
+    scene_revision: int | None = None,
+) -> AnalysisJobCreate:
     return AnalysisJobCreate(
         metadata=make_metadata(capture_take_id=capture_take_id),
         analysisKind="multiview",
@@ -71,6 +77,9 @@ def make_multiview_payload(capture_take_id: str = "CT_001") -> AnalysisJobCreate
                     viewId="cam_2", videoId="v2", calibrationId="cal2", courtOrientation="rotate_180"
                 ),
             ],
+            executionMode=execution_mode,
+            sceneCalibrationMode=scene_mode,
+            sceneCalibrationRevision=scene_revision,
         ),
     )
 
@@ -191,6 +200,25 @@ def test_coordinator_parent_inherits_reference_child_video_id(monkeypatch, tmp_p
     assert parent.calibrationId == "cal1"
 
 
+def test_joint_parent_persists_scene_reference_on_parent_and_joint_inputs(monkeypatch, tmp_path):
+    mock_analysis, _ = _coordinator_with_patches(monkeypatch, tmp_path)
+    coord = mock_analysis._get_coordinator()
+
+    parent = coord.create_multiview_job(
+        make_multiview_payload(
+            execution_mode="joint_tracking_v2",
+            scene_mode="metric",
+            scene_revision=2,
+        )
+    )
+
+    assert parent.sceneCalibrationMode == "metric"
+    assert parent.sceneCalibrationRevision == 2
+    assert parent.sceneCalibrationStatus == "ready"
+    assert {item["sceneCalibrationRevision"] for item in parent.jointViewInputs} == {2}
+    assert {item["sceneCalibrationMode"] for item in parent.jointViewInputs} == {"metric"}
+
+
 def test_get_mock_job_resolves_parent_video_source_from_reference_child(monkeypatch, tmp_path):
     mock_analysis, _ = _coordinator_with_patches(monkeypatch, tmp_path)
     coord = mock_analysis._get_coordinator()
@@ -252,6 +280,24 @@ def test_coordinator_advances_to_fallback_and_failed(monkeypatch, tmp_path):
         mock_analysis._JOB_STORE.mark_failed(child, stages=child.stages, message="failed")
     mock_analysis._get_coordinator().reconcile_all()
     assert mock_analysis._JOB_STORE.get(parent2.id).canonicalStatus == "failed"
+
+    # 一路成功 + 一路 Worker 失联仍可确定性降级；双路失联则 Parent 也失联。
+    parent3 = coord.create_multiview_job(make_multiview_payload())
+    child_a = mock_analysis._JOB_STORE.get(parent3.sourceJobs[0].jobId)
+    child_b = mock_analysis._JOB_STORE.get(parent3.sourceJobs[1].jobId)
+    mock_analysis._JOB_STORE.mark_succeeded(child_a, stages=child_a.stages)
+    mock_analysis._JOB_STORE.mark_interrupted(child_b)
+    mock_analysis._get_coordinator().reconcile_all()
+    assert mock_analysis._JOB_STORE.get(parent3.id).orchestrationStatus == "fallback_ready"
+
+    parent4 = coord.create_multiview_job(make_multiview_payload())
+    for ref in parent4.sourceJobs:
+        child = mock_analysis._JOB_STORE.get(ref.jobId)
+        mock_analysis._JOB_STORE.mark_interrupted(child)
+    mock_analysis._get_coordinator().reconcile_all()
+    interrupted_parent = mock_analysis._JOB_STORE.get(parent4.id)
+    assert interrupted_parent.canonicalStatus == "interrupted"
+    assert interrupted_parent.interruptionCode == "worker_lost"
 
 
 # ---- Task 6.6: 取消/删除级联 -----------------------------------------------------
@@ -456,6 +502,35 @@ def test_preflight_all_ready(monkeypatch, tmp_path):
     result = preflight_multiview(make_multiview_payload())
     assert result.ok
     assert result.issues == []
+
+
+def test_preflight_reuses_existing_canonical_frame_for_display_only_retry(monkeypatch, tmp_path):
+    """普通重试不应把默认展示/输入朝向重新定义成 canonical conflict。"""
+    from app.services.multiview_coordinator import preflight_multiview
+    import app.services.multiview_coordinator as mc
+    from app.vision.multiview.court_frame import CanonicalCourtFrameDefinition, write_canonical_court_frame
+
+    take_dir = tmp_path / "take"
+    (take_dir / "timeline").mkdir(parents=True)
+    (take_dir / "timeline" / "sync_calibration.json").write_text("{}", encoding="utf-8")
+    write_canonical_court_frame(
+        take_dir,
+        CanonicalCourtFrameDefinition.create(
+            "CT_001",
+            "north_baseline",
+            "south_baseline",
+            orientation_by_view={"cam_1": "rotate_180", "cam_2": "identity"},
+        ),
+    )
+    monkeypatch.setattr(mc, "_check_capture_take_dir", lambda ctid: str(take_dir))
+    monkeypatch.setattr(video_service, "get_video", lambda vid: object())
+    from app.services.calibration_service import CalibrationService
+
+    monkeypatch.setattr(CalibrationService, "get_calibration", lambda self, cid: object())
+
+    result = preflight_multiview(make_multiview_payload())
+    assert result.ok
+    assert not any("canonical frame conflict" in issue for issue in result.issues)
 
 
 # ---- Task 9.3: select_trajectory_source -----------------------------------------

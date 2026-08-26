@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, MoreHorizontal, Play, Trash2, Video } from "lucide-react";
+import { FileText, MoreHorizontal, Pencil, Play, Trash2, Video } from "lucide-react";
 import type { NavigateFn } from "../../app/navigationTypes";
 import type { LibraryItemViewModel } from "../../services/libraryAdapter";
 import { LibraryCover } from "./LibraryCover";
@@ -74,6 +74,203 @@ function creditCardRoot(item: LibraryItemViewModel): { label: string; action?: (
   };
 }
 
+/** 把 ISO 时间转为 `<input type="date">` 需要的 yyyy-MM-dd（无效值回退空串）。 */
+function toDateInputValue(iso?: string): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 标题行内编辑（library-card-metadata-editing）
+ *
+ * 交互：hover 显示浅铅笔 + 轻底色（提示可编辑）→ 点击进入受控 `<input>`（品牌色 ring 编辑态）
+ * → 回车保存 / Esc 取消 / 失焦保存；空标题撤销；保存失败保留编辑态并轻量提示。
+ * 组件位于导航 button 之外，编辑绝不会触发详情导航。
+ */
+function InlineEditTitle({
+  value,
+  editable,
+  onSave,
+}: {
+  value: string;
+  editable: boolean;
+  onSave: (value: string) => void | Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 进入编辑时同步草稿并全选（便于直接重命名）
+  useEffect(() => {
+    if (!editing) return;
+    setDraft(value);
+    setFailed(false);
+    const raf = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [editing, value]);
+
+  const commit = async (next: string) => {
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === value) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    setFailed(false);
+    try {
+      await onSave(trimmed);
+      setEditing(false);
+    } catch {
+      setFailed(true); // 保留编辑态，等待用户重试
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editable) {
+    return <p className="truncate text-sm font-bold text-[var(--capture-text-primary,#182b24)]">{value}</p>;
+  }
+
+  if (editing) {
+    return (
+      <span className="block">
+        <input
+          ref={inputRef}
+          className="w-full rounded-md border border-[var(--capture-brand-primary,#23985b)] bg-white px-1.5 py-0.5 text-sm font-bold text-[var(--capture-text-primary,#182b24)] outline-none ring-2 ring-[var(--capture-brand-primary,#23985b)]/25 placeholder:text-[var(--capture-text-muted,#8f9d96)]"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => void commit(draft)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void commit(draft);
+            } else if (e.key === "Escape") {
+              setEditing(false);
+            }
+          }}
+          disabled={saving}
+          placeholder="输入标题"
+          aria-label="重命名标题"
+        />
+        {failed && <span className="mt-0.5 block text-[10px] text-[var(--capture-status-failed,#b42318)]">保存失败，请重试</span>}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      className="group/title -mx-1 flex w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition hover:bg-[var(--capture-brand-soft,#ddf1e5)]/70"
+      onClick={() => setEditing(true)}
+      type="button"
+      aria-label="重命名标题"
+    >
+      <span className="min-w-0 flex-1 truncate text-sm font-bold text-[var(--capture-text-primary,#182b24)]">
+        {value}
+      </span>
+      <Pencil size={12} aria-hidden="true" className="shrink-0 text-[var(--capture-text-muted,#8f9d96)] opacity-0 transition group-hover/title:opacity-100" />
+    </button>
+  );
+}
+
+/**
+ * 日期行内编辑（library-card-metadata-editing）
+ *
+ * 交互：hover 显示浅铅笔 + 轻底色 → 点击进入原生 `<input type="date">`（仅到日）→ 选择即保存；
+ * Esc 取消；保存失败保留编辑态并轻量提示。
+ */
+function InlineEditDate({
+  value,
+  editable,
+  onSave,
+}: {
+  value?: string;
+  editable: boolean;
+  onSave: (value: string) => void | Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    setFailed(false);
+    const raf = requestAnimationFrame(() => inputRef.current?.showPicker?.() ?? inputRef.current?.focus());
+    return () => cancelAnimationFrame(raf);
+  }, [editing]);
+
+  const commit = async (next: string) => {
+    if (!next || next === toDateInputValue(value)) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    setFailed(false);
+    try {
+      await onSave(next);
+      setEditing(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editable) {
+    return <span>{formatDate(value)}</span>;
+  }
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <input
+          ref={inputRef}
+          type="date"
+          className="rounded-md border border-[var(--capture-brand-primary,#23985b)] bg-white px-1.5 py-0.5 text-xs text-[var(--capture-text-primary,#182b24)] outline-none ring-2 ring-[var(--capture-brand-primary,#23985b)]/25"
+          defaultValue={toDateInputValue(value)}
+          onChange={(e) => void commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={(e) => {
+            if (e.target.value) void commit(e.target.value);
+            else setEditing(false);
+          }}
+          disabled={saving}
+          aria-label="修改比赛日期"
+        />
+        {failed && <span className="text-[10px] text-[var(--capture-status-failed,#b42318)]">保存失败</span>}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      className="group/date -mx-1 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition hover:bg-[var(--capture-brand-soft,#ddf1e5)]/70"
+      onClick={() => setEditing(true)}
+      type="button"
+      aria-label="修改比赛日期"
+    >
+      <span className="text-xs text-[var(--capture-text-secondary,#64736c)]">{formatDate(value)}</span>
+      <Pencil size={11} aria-hidden="true" className="shrink-0 text-[var(--capture-text-muted,#8f9d96)] opacity-0 transition group-hover/date:opacity-100" />
+    </button>
+  );
+}
+
 export function LibraryCard({
   item,
   onNavigate,
@@ -82,6 +279,8 @@ export function LibraryCard({
   onDelete,
   onOpenVideo,
   onOpenTechnical,
+  onUpdateTitle,
+  onUpdateDate,
 }: {
   item: LibraryItemViewModel;
   onNavigate: NavigateFn;
@@ -90,6 +289,8 @@ export function LibraryCard({
   onDelete?: (item: LibraryItemViewModel) => void;
   onOpenVideo?: (item: LibraryItemViewModel) => void;
   onOpenTechnical?: (item: LibraryItemViewModel) => void;
+  onUpdateTitle?: (item: LibraryItemViewModel, value: string) => void | Promise<unknown>;
+  onUpdateDate?: (item: LibraryItemViewModel, value: string) => void | Promise<unknown>;
 }) {
   const badge = stateBadge(item);
   const detailPath = `/library/${item.ref.kind}/${encodeURIComponent(item.ref.sourceId)}?view=overview` as const;
@@ -122,20 +323,28 @@ export function LibraryCard({
   // 已分析 → 「再次分析」；未分析 → 「开始分析」
   const analyzeLabel = item.analysisState === "succeeded" ? "再次分析" : "开始分析";
 
+  // 元数据可编辑性：upload（video 真源）或有 fieldSessionId 的 recording/sync（FieldSession 真源）；
+  // 无场次的 recording/sync 本期不暴露编辑（design Q2 决议 B）；回调未接通时同样不显示铅笔
+  const canEditMetadata =
+    (item.ref.kind === "upload" || Boolean(item.fieldSessionId)) && Boolean(onUpdateTitle) && Boolean(onUpdateDate);
+  const displayTitle = item.displayTitle ?? item.title;
+  const displayDate = item.displayDate ?? item.startedAt;
+
   return (
     <article className="group relative overflow-hidden rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-card,#ffffff)] shadow-sm transition hover:shadow-md">
-      {/* 点击区：缩略图 + 信息，作为单一可点击实体（不再包整卡 button，避免 nested button） */}
+      {/* 封面：单一导航 button（点击进详情）。信息区在下方独立，避免嵌套交互元素 */}
       <button
         className="block w-full text-left"
         onClick={() => onNavigate(detailPath)}
         type="button"
+        aria-label={`查看 ${displayTitle} 详情`}
       >
         {/* 视频缩略图区：有稳定图片端点用图；否则按来源分派渲染首帧封面（单画面 / 双摄左右拼接）；均带会话内缓存 */}
         <div className="relative aspect-video bg-gradient-to-br from-[#E7EEEB] to-[#DCE7E2]">
           {item.thumbnailUrl ? (
             <img
               src={item.thumbnailUrl}
-              alt={item.title}
+              alt={displayTitle}
               loading="lazy"
               className="absolute inset-0 h-full w-full object-cover"
             />
@@ -163,6 +372,12 @@ export function LibraryCard({
               <line x1="50" y1="3" x2="50" y2="57" stroke="#475569" strokeWidth="0.6" />
             </svg>
           )}
+          {/* poster 分支（双摄用 merged poster 单图）不经过 LibraryCover，需自行补「双摄」角标 */}
+          {item.thumbnailUrl && item.cameraSetup === "dual" && (
+            <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/45 px-2 py-0.5 text-[10px] font-bold text-white">
+              双摄
+            </span>
+          )}
           {(item.analysisState === "running" || item.analysisState === "queued") && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/45 px-3 text-center text-white">
               <span className="text-xs font-bold">
@@ -189,31 +404,31 @@ export function LibraryCard({
             {badge.text}
           </span>
         </div>
-
-        {/* 信息区 */}
-        <div className="space-y-1.5 p-3">
-          <p className="truncate text-sm font-bold text-[var(--capture-text-primary,#182b24)]">{item.title}</p>
-          <p className="text-xs text-[var(--capture-text-secondary,#64736c)]">
-            {formatDate(item.startedAt)}
-            {item.courtName ? ` · ${item.courtName}` : ""}
-          </p>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--capture-text-muted,#8f9d96)]">
-            <span className="inline-flex items-center gap-1 rounded border border-[var(--capture-border-default,#d9e3dd)] px-1.5 py-0.5">
-              {kind}
-            </span>
-            {extraTags.map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
-            {item.primaryAnalysisJobId && (
-              <span className="inline-flex items-center gap-1">
-                <Play size={10} aria-hidden="true" />
-                {item.analysisHistoryCount > 1 ? `${item.analysisHistoryCount} 次分析` : "查看分析"}
-              </span>
-            )}
-            {!item.primaryAnalysisJobId && needsMerge && <span className="text-[var(--capture-status-merge,#9a5300)]">待合并</span>}
-          </div>
-        </div>
       </button>
+
+      {/* 信息区：兄弟节点（不在导航 button 内），标题/日期可内联编辑 */}
+      <div className="space-y-1.5 p-3">
+        <InlineEditTitle value={displayTitle} editable={canEditMetadata} onSave={(v) => onUpdateTitle?.(item, v)} />
+        <p className="flex flex-wrap items-center gap-x-1 text-xs text-[var(--capture-text-secondary,#64736c)]">
+          <InlineEditDate value={displayDate} editable={canEditMetadata} onSave={(v) => onUpdateDate?.(item, v)} />
+          {item.courtName ? <span>{` · ${item.courtName}`}</span> : null}
+        </p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--capture-text-muted,#8f9d96)]">
+          <span className="inline-flex items-center gap-1 rounded border border-[var(--capture-border-default,#d9e3dd)] px-1.5 py-0.5">
+            {kind}
+          </span>
+          {extraTags.map((tag) => (
+            <span key={tag}>{tag}</span>
+          ))}
+          {item.primaryAnalysisJobId && (
+            <span className="inline-flex items-center gap-1">
+              <Play size={10} aria-hidden="true" />
+              {item.analysisHistoryCount > 1 ? `${item.analysisHistoryCount} 次分析` : "查看分析"}
+            </span>
+          )}
+          {!item.primaryAnalysisJobId && needsMerge && <span className="text-[var(--capture-status-merge,#9a5300)]">待合并</span>}
+        </div>
+      </div>
 
       {/* 生命周期动作（如待合并 → 合并视频）；独立于点击实体，避免 nested button */}
       {needsMerge && onMerge && (

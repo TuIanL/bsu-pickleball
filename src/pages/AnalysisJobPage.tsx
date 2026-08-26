@@ -10,15 +10,18 @@ import { JobStageStepper } from "../components/platform/JobStageStepper";
 import { StatusState } from "../components/StatusState";
 import { supportedReportTypes } from "../app/router";
 import { reportActions } from "../data/demoData";
-import { getAnalysisJob, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
+import { getAnalysisJob, getAnalysisResult, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
 import { errorToNotice, isCancelableAnalysisJob, cameraAngleLabel, formatDateTime, formatDurationMs, analysisStatusMeta, analysisModeLabel } from "../utils/analysisHelpers";
 import { resolveLibraryItemByRef, type LibraryItemViewModel } from "../services/libraryAdapter";
 import { computeLibraryViewCapabilities, type LibraryView } from "../components/library/viewCapabilities";
 import { libraryAnalysisPathFor } from "../services/libraryAnalysisRouting";
+import { isPipelineResult } from "../services/pipelineReportAdapter";
+import { getReportCapability, type ReportCapability } from "../services/reportCapability";
+import type { AnalysisPipelineResult } from "../types/report";
 
 const VIEW_LABELS: Record<string, string> = { cam_1: "A 机位", cam_2: "B 机位" };
 
-const TERMINAL_STATUSES = ["completed", "failed", "canceled"] as const;
+const TERMINAL_STATUSES = ["completed", "failed", "canceled", "interrupted"] as const;
 
 export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
@@ -27,6 +30,11 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   const [isCanceling, setIsCanceling] = useState(false);
   // library origin 完成/失败/取消时，定向解析素材以门控结果 CTA（轻量，不拉重产物）
   const [libraryItem, setLibraryItem] = useState<LibraryItemViewModel | null>(null);
+  const [reportManifest, setReportManifest] = useState<{
+    jobId?: string;
+    state: "idle" | "loading" | "loaded" | "error";
+    result: AnalysisPipelineResult | null;
+  }>({ state: "idle", result: null });
 
   const isMultiview = job?.analysisKind === "multiview";
   const isTerminal = Boolean(job && TERMINAL_STATUSES.includes(job.status as (typeof TERMINAL_STATUSES)[number]));
@@ -60,7 +68,6 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   // library origin terminal：定向解析素材，门控「查看球路/报告/技术详情」与「再次分析」
   useEffect(() => {
     if (!libraryOrigin || !job || !isTerminal) {
-      setLibraryItem(null);
       return;
     }
     let alive = true;
@@ -77,32 +84,80 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.id, job?.status, libraryOrigin?.returnPath]);
 
-  const caps = useMemo(() => (libraryItem ? computeLibraryViewCapabilities(libraryItem) : null), [libraryItem]);
+  const terminalLibraryItem = libraryOrigin && job && isTerminal ? libraryItem : null;
+  const completedJobId = job?.status === "completed" ? job.id : undefined;
+  useEffect(() => {
+    if (!completedJobId) return;
+    let alive = true;
+    getAnalysisResult(completedJobId)
+      .then((raw) => {
+        if (alive) setReportManifest({ jobId: completedJobId, state: "loaded", result: isPipelineResult(raw) ? raw : null });
+      })
+      .catch(() => {
+        if (alive) setReportManifest({ jobId: completedJobId, state: "error", result: null });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [completedJobId]);
+
+  const reportManifestState = reportManifest.jobId === completedJobId ? reportManifest.state : completedJobId ? "loading" : "idle";
+  const reportCapability = useMemo<ReportCapability>(
+    () => getReportCapability({ job, manifest: reportManifest.result, manifestState: reportManifestState }),
+    [job, reportManifest.result, reportManifestState],
+  );
+  const caps = useMemo(
+    () => (terminalLibraryItem ? computeLibraryViewCapabilities(terminalLibraryItem, {
+      job: job ?? undefined,
+      manifest: reportManifest.result,
+      manifestState: reportManifestState,
+    }) : null),
+    [terminalLibraryItem, job, reportManifest.result, reportManifestState],
+  );
 
   // library origin 完成 CTA：轻量 capability 门控，不加载重产物；未就绪时至少给出主 CTA
   const libraryResultCtas = useMemo(() => {
     if (!libraryOrigin) return [];
     const base = `/library/${libraryOrigin.itemKind}/${encodeURIComponent(libraryOrigin.sourceId)}`;
-    const candidates: { view: "analysis" | "trajectory" | "report" | "technical"; label: string; primary?: boolean; path: string }[] = [
+    const candidates: { view: "analysis" | "trajectory" | "report" | "technical"; label: string; primary?: boolean; path: string; disabled?: boolean; reason?: string }[] = [
       { view: "analysis", label: "查看分析结果", primary: true, path: `${base}?view=analysis&analysisJob=${encodeURIComponent(jobId)}` },
       { view: "trajectory", label: "查看球路", path: `${base}?view=trajectory&analysisJob=${encodeURIComponent(jobId)}` },
       { view: "report", label: "查看报告", path: `${base}?view=report&analysisJob=${encodeURIComponent(jobId)}` },
       { view: "technical", label: "技术详情", path: `${base}?view=technical&analysisJob=${encodeURIComponent(jobId)}` },
     ];
-    if (!libraryItem || !caps) return candidates.filter((c) => c.primary);
-    return candidates.filter((c) => c.primary || caps[c.view] === "available");
-  }, [libraryOrigin, libraryItem, caps, jobId]);
+    if (!terminalLibraryItem || !caps) return candidates.filter((c) => c.primary);
+    return candidates
+      .filter((c) => c.primary || c.view === "report" || caps[c.view] === "available")
+      .map((c) => c.view === "report" && reportCapability.state !== "available"
+        ? { ...c, disabled: true, reason: reportCapability.reason }
+        : c);
+  }, [libraryOrigin, terminalLibraryItem, caps, jobId, reportCapability]);
 
   const reanalyzePath = useMemo(
-    () => (libraryOrigin && libraryItem ? libraryAnalysisPathFor(libraryItem) : null),
-    [libraryOrigin, libraryItem],
+    () => (libraryOrigin && terminalLibraryItem ? libraryAnalysisPathFor(terminalLibraryItem) : null),
+    [libraryOrigin, terminalLibraryItem],
   );
 
   useEffect(() => {
     let alive = true;
     let timer: number | undefined;
+    let isLoading = false;
+
+    const scheduleLoad = (delay: number) => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void loadJob();
+      }, delay);
+    };
 
     const loadJob = async () => {
+      if (!alive || isLoading) {
+        return;
+      }
+      isLoading = true;
       try {
         const nextJob = await getAnalysisJob(jobId);
         if (!alive) {
@@ -114,24 +169,50 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
         rememberAnalysisJob(nextJob);
 
         if (nextJob && ["uploaded", "queued", "processing"].includes(nextJob.status)) {
-          timer = window.setTimeout(loadJob, 1600);
+          scheduleLoad(1600);
         }
       } catch (error) {
         if (!alive) {
           return;
         }
-        setJob(null);
-        setLoadError(errorToNotice("读取分析任务失败", "无法读取该任务的最新状态，请检查后端服务和任务 ID。", error));
+        // 熄屏/网络短断不代表任务失败。保留最近一次的任务快照，并持续重试；
+        // 唤醒时的 focus / visibilitychange 会触发一次立即对账。
+        setLoadError(errorToNotice("任务状态暂时不可用", "正在等待后端恢复连接，任务不会因此被取消。", error));
+        scheduleLoad(3000);
+      } finally {
+        isLoading = false;
       }
     };
 
-    loadJob();
+    const reloadOnResume = () => {
+      if (!alive || document.hidden) {
+        return;
+      }
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+      void loadJob();
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        reloadOnResume();
+      }
+    };
+
+    void loadJob();
+    window.addEventListener("focus", reloadOnResume);
+    window.addEventListener("online", reloadOnResume);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       alive = false;
-      if (timer) {
+      if (timer !== undefined) {
         window.clearTimeout(timer);
       }
+      window.removeEventListener("focus", reloadOnResume);
+      window.removeEventListener("online", reloadOnResume);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [jobId]);
 
@@ -139,7 +220,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     return <StatusState title="正在读取分析任务" body="正在连接后端或本地 mock 任务记录。" onNavigate={onNavigate} backPath={backPath} />;
   }
 
-  if (loadError) {
+  if (loadError && job === null) {
     return <StatusState title={loadError.title} body={loadError.body} notice={loadError} onNavigate={onNavigate} backPath={backPath} />;
   }
 
@@ -154,11 +235,13 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     failed: "分析失败",
     completed: "分析完成",
     canceled: "任务已取消",
+    interrupted: "任务失联",
   } satisfies Record<AnalysisJobSummary["status"], string>;
 
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const isCanceled = job.status === "canceled";
+  const isInterrupted = job.status === "interrupted";
   const canCancel = isCancelableAnalysisJob(job);
   const activeStage = job.stages.find((stage) => stage.status === "active");
   const failedStage = job.stages.find((stage) => stage.status === "failed");
@@ -226,14 +309,21 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
 
           <h1 className="mt-5 text-4xl font-black text-[#14241B] sm:text-5xl">{statusCopy[job.status]}</h1>
           <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
-            {job.metadata.matchTitle} · {job.metadata.fileName} · {job.metadata.venue} · 任务 ID：{job.id}
+            {libraryItem?.displayTitle ?? job.metadata.matchTitle} · {job.metadata.fileName} · {job.metadata.venue} · 任务 ID：{job.id}
           </p>
+
+          {loadError && !isTerminal ? (
+            <div className="mt-4">
+              <DiagnosticNoticeCard notice={loadError} tone="info" />
+            </div>
+          ) : null}
 
           {isTerminal ? (
             <TerminalSummary
               isCompleted={isCompleted}
               isFailed={isFailed}
               isCanceled={isCanceled}
+              isInterrupted={isInterrupted}
               job={job}
               completedStageCount={completedStageCount}
               totalDurationMs={totalDurationMs}
@@ -244,6 +334,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               backLabel={backLabel}
               isLibraryOrigin={isLibraryOrigin}
               libraryResultCtas={libraryResultCtas}
+              reportCapability={reportCapability}
               reanalyzePath={reanalyzePath}
               captureResultPath={captureResultPath}
             />
@@ -403,6 +494,24 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             />
           </div>
         ) : null}
+        {isInterrupted ? (
+          <div className="mt-4">
+            <DiagnosticNoticeCard
+              notice={{
+                title: "任务失联",
+                body: job.publicErrorMessage ?? "Worker 在规定时间内没有心跳，已保留最后进度；可以重新分析。",
+                detailItems: [
+                  ["最后阶段", currentStage?.label ?? job.stage],
+                  ["最后心跳", job.workerHeartbeatAt ? formatDateTime(job.workerHeartbeatAt) : undefined],
+                  ["失联时间", job.interruptedAt ? formatDateTime(job.interruptedAt) : undefined],
+                  ["中断原因", job.interruptionCode],
+                  ["任务 ID", job.id],
+                ],
+              }}
+              tone="info"
+            />
+          </div>
+        ) : null}
         {cancelNotice ? (
           <div className="mt-4">
             <DiagnosticNoticeCard notice={cancelNotice} tone={cancelNotice.title.includes("失败") ? "error" : "info"} />
@@ -417,6 +526,7 @@ function TerminalSummary({
   isCompleted,
   isFailed,
   isCanceled,
+  isInterrupted,
   job,
   completedStageCount,
   totalDurationMs,
@@ -427,12 +537,14 @@ function TerminalSummary({
   backLabel,
   isLibraryOrigin,
   libraryResultCtas,
+  reportCapability,
   reanalyzePath,
   captureResultPath,
 }: {
   isCompleted: boolean;
   isFailed: boolean;
   isCanceled: boolean;
+  isInterrupted: boolean;
   job: AnalysisJobSummary;
   completedStageCount: number;
   totalDurationMs: number;
@@ -442,7 +554,8 @@ function TerminalSummary({
   backPath: NavigatePath;
   backLabel: string;
   isLibraryOrigin: boolean;
-  libraryResultCtas: { label: string; primary?: boolean; path: string }[];
+  libraryResultCtas: { label: string; primary?: boolean; path: string; disabled?: boolean; reason?: string }[];
+  reportCapability: ReportCapability;
   reanalyzePath: NavigatePath | null;
   captureResultPath: string | null;
 }) {
@@ -455,7 +568,11 @@ function TerminalSummary({
               {`${completedStageCount}/${job.stages.length || 1} 阶段完成`}
               {totalDurationMs > 0 ? <span className="font-semibold text-slate-500"> · 总耗时 {formatDurationMs(totalDurationMs)}</span> : null}
             </p>
-            <p className="mt-1 text-sm leading-6 text-slate-600">报告已生成，可以查看视频分析或指标详情。</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              {reportCapability.state === "available"
+                ? "报告已生成，可以查看视频分析或指标详情。"
+                : `任务完成，但暂无有效报告数据：${reportCapability.reason}`}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             {isLibraryOrigin ? (
@@ -463,8 +580,10 @@ function TerminalSummary({
                 {libraryResultCtas.map((cta) => (
                   <button
                     className={cta.primary ? "green-button px-4 py-2.5" : "quiet-button px-4 py-2.5"}
+                    disabled={cta.disabled}
                     key={cta.label}
                     onClick={() => onNavigate(cta.path as NavigatePath, { replace: true })}
+                    title={cta.reason}
                     type="button"
                   >
                     {cta.label}
@@ -492,9 +611,10 @@ function TerminalSummary({
                 {reportActions.filter((action) => supportedReportTypes.includes(action.type)).map((action) => (
                   <button
                     className="quiet-button px-4 py-2.5"
-                    disabled={!isCompleted}
+                    disabled={!isCompleted || reportCapability.state !== "available"}
                     key={action.type}
                     onClick={() => onNavigate(contextualPath(`/analysis/${job.id}/reports/${action.type}`))}
+                    title={reportCapability.state === "available" ? undefined : reportCapability.reason}
                     type="button"
                   >
                     {action.title}
@@ -502,6 +622,25 @@ function TerminalSummary({
                 ))}
               </>
             )}
+          </div>
+        </div>
+      ) : isInterrupted ? (
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-bold text-[#A45A00]">任务失联 · 已保留最后进度</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              {job.publicErrorMessage ?? "Worker 在规定时间内没有心跳，可以重新分析。"}
+              {job.workerHeartbeatAt ? ` 最后心跳：${formatDateTime(job.workerHeartbeatAt)}。` : ""}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="green-button px-4 py-2.5" onClick={() => onNavigate(reanalyzePath ?? contextualPath("/analysis/new"))} type="button">
+              重新分析
+              <ArrowRight size={16} aria-hidden="true" />
+            </button>
+            <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(backPath)} type="button">
+              {backLabel}
+            </button>
           </div>
         </div>
       ) : (

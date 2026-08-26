@@ -4,7 +4,15 @@ import type { NavigateFn } from "../app/navigationTypes";
 import type { LibraryItemViewModel, LibraryItemKind, LibraryItemRef } from "../services/libraryAdapter";
 import { buildLibraryItems, resolveLibraryItemByRef } from "../services/libraryAdapter";
 import { getAnalysisRuntimeSnapshot, subscribeAnalysisRuntime, unwatchAnalysisJob, watchAnalysisJob } from "../services/analysisRuntimeStore";
-import { mergeSyncRecording, deleteRecording, deleteSyncRecording, getVideoStreamUrl } from "../services/analysisClient";
+import {
+  mergeSyncRecording,
+  deleteRecording,
+  deleteSyncRecording,
+  getVideoStreamUrl,
+  updateVideo,
+  updateRecording,
+  updateSyncRecording,
+} from "../services/analysisClient";
 import { libraryAnalysisPathFor } from "../services/libraryAnalysisRouting";
 import { LibraryCard } from "../components/library/LibraryCard";
 
@@ -26,7 +34,10 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
   // 已 watch 的 active job ids（避免重复登记）
   const watchedRef = useRef<Set<string>>(new Set());
   const itemsRef = useRef<LibraryItemViewModel[]>([]);
-  itemsRef.current = items;
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const syncWatches = (list: LibraryItemViewModel[]) => {
     for (const item of list) {
@@ -149,6 +160,30 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
     syncWatches(result);
   };
 
+  // 每素材独立真源：按素材类型写入各自 display_*，绝不写 FieldSession（避免同场次多卡联动）。
+  const handleUpdateTitle = async (item: LibraryItemViewModel, value: string) => {
+    if (item.ref.kind === "upload") {
+      await updateVideo(item.ref.sourceId, { display_title: value });
+    } else if (item.ref.kind === "recording") {
+      await updateRecording(item.ref.sourceId, { display_title:  value });
+    } else {
+      await updateSyncRecording(item.ref.sourceId, { display_title: value });
+    }
+    await reconcileItem(item.ref);
+  };
+
+  // 修改比赛日期（仅到日）：按素材类型写各自 display_date，绝不写 FieldSession.started_at。
+  const handleUpdateDate = async (item: LibraryItemViewModel, value: string) => {
+    if (item.ref.kind === "upload") {
+      await updateVideo(item.ref.sourceId, { display_date: value });
+    } else if (item.ref.kind === "recording") {
+      await updateRecording(item.ref.sourceId, { display_date:  value });
+    } else {
+      await updateSyncRecording(item.ref.sourceId, { display_date: value });
+    }
+    await reconcileItem(item.ref);
+  };
+
   const filtered = useMemo(() => {
     let list = items;
     if (kind !== "all") list = list.filter((it) => it.sourceType === kind);
@@ -160,11 +195,15 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter(
-        (it) => it.title.toLowerCase().includes(q) || (it.courtName ?? "").toLowerCase().includes(q),
+        (it) => (it.displayTitle ?? it.title).toLowerCase().includes(q) || (it.courtName ?? "").toLowerCase().includes(q),
       );
     }
-    // 最近比赛默认按时间倒序
-    return [...list].sort((a, b) => (Date.parse(b.startedAt ?? "") || 0) - (Date.parse(a.startedAt ?? "") || 0));
+    // 最近比赛默认按展示日期（用户可编辑的比赛日）倒序；缺省回退 startedAt（Q1 决议）
+    return [...list].sort((a, b) => {
+      const tA = Date.parse(a.displayDate ?? a.startedAt ?? "") || 0;
+      const tB = Date.parse(b.displayDate ?? b.startedAt ?? "") || 0;
+      return tB - tA;
+    });
   }, [items, kind, status, query]);
 
   const statusTabs: { key: StatusFilter; label: string }[] = [
@@ -270,6 +309,8 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
             onOpenVideo={handleOpenVideo}
             onOpenTechnical={handleOpenTechnical}
             onReanalyze={handleReanalyze}
+            onUpdateTitle={handleUpdateTitle}
+            onUpdateDate={handleUpdateDate}
           />
         )}
       </div>
@@ -308,6 +349,8 @@ function LibraryGrid({
   onOpenVideo,
   onOpenTechnical,
   onReanalyze,
+  onUpdateTitle,
+  onUpdateDate,
 }: {
   items: LibraryItemViewModel[];
   onNavigate: NavigateFn;
@@ -316,6 +359,8 @@ function LibraryGrid({
   onOpenVideo?: (item: LibraryItemViewModel) => void;
   onOpenTechnical?: (item: LibraryItemViewModel) => void;
   onReanalyze?: (item: LibraryItemViewModel) => void;
+  onUpdateTitle?: (item: LibraryItemViewModel, value: string) => void | Promise<unknown>;
+  onUpdateDate?: (item: LibraryItemViewModel, value: string) => void | Promise<unknown>;
 }) {
   const grouped = useMemo(() => {
     const groups = new Map<string, LibraryItemViewModel[]>();
@@ -345,6 +390,8 @@ function LibraryGrid({
           onOpenVideo={onOpenVideo}
           onOpenTechnical={onOpenTechnical}
           onReanalyze={onReanalyze}
+          onUpdateTitle={onUpdateTitle}
+          onUpdateDate={onUpdateDate}
         />
       ))}
     </div>

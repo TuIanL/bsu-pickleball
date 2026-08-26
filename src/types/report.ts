@@ -16,7 +16,8 @@ export type AnalysisJobStatus =
   | "processing"
   | "failed"
   | "completed"
-  | "canceled";
+  | "canceled"
+  | "interrupted";
 
 /** 规范化分析状态 */
 export type AnalysisCanonicalStatus =
@@ -24,7 +25,8 @@ export type AnalysisCanonicalStatus =
   | "running"
   | "succeeded"
   | "failed"
-  | "canceled";
+  | "canceled"
+  | "interrupted";
 
 /** 分析阶段 ID */
 export type AnalysisStageId =
@@ -272,6 +274,8 @@ export interface RecordingSession {
   storage_root?: string;
   session_dir?: string;
   storage_status?: string;
+  display_title?: string; // 用户自定义显示标题（Library 卡片优先采用）
+  display_date?: string; // 用户自定义比赛日期（Library 卡片优先采用）
 }
 
 // ── 双摄同步录制相关 ──
@@ -391,6 +395,8 @@ export interface SyncRecordingSession {
     fragment_count?: number;
     error?: string | null;
   }>>;
+  display_title?: string; // 用户自定义显示标题（Library 卡片优先采用）
+  display_date?: string; // 用户自定义比赛日期（Library 卡片优先采用）
 }
 
 export interface SyncStopResponse {
@@ -465,6 +471,15 @@ export interface FieldSessionCreate {
   camera_setup?: string;
   display_mode?: "standard" | "showcase";
   notes?: string;
+}
+
+/** Field Session 元数据更新请求（卡片内联编辑：改标题/比赛日期） */
+export interface FieldSessionUpdateRequest {
+  title?: string;
+  venue?: string;
+  court_name?: string;
+  notes?: string;
+  started_at?: string;
 }
 
 export interface ShowcaseCameraStatus {
@@ -763,6 +778,13 @@ export interface AnalysisJobSummary {
   cancelRequestedAt?: string;
   canceledAt?: string;
   workerId?: string;
+  workerPid?: number;
+  workerRunId?: string;
+  claimedAt?: string;
+  workerHeartbeatAt?: string;
+  lastProgressAt?: string;
+  interruptedAt?: string;
+  interruptionCode?: string;
   priority?: number;
   attempt?: number;
   inputSignature?: string;
@@ -820,7 +842,24 @@ export interface AnalysisJobSummary {
   }>;
   /** 双摄任务参考机位 */
   referenceViewId?: string | null;
+  /** 双摄任务只读展示输入清单；displayViewId 不属于创建/分析输入。 */
+  jointViewInputs?: Array<{
+    cameraSlot: string;
+    captureTrackId?: string | null;
+    cameraId?: string | null;
+    videoId?: string | null;
+    calibrationId?: string | null;
+    courtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
+    imageWidth?: number | null;
+    imageHeight?: number | null;
+    sourceTimestampOffsetMs?: number | null;
+    sourceTimestampRate?: number | null;
+    sourceTimestampMappingStatus?: "available" | "degraded" | "unavailable" | null;
+  }>;
   /** 双摄任务各机位子进度 */
+  sceneCalibrationRevision?: number | null;
+  sceneCalibrationMode?: "metric" | "approximate";
+  sceneCalibrationStatus?: "ready" | "degraded" | "invalidated" | "missing";
   viewRuns?: Record<string, { status: string; stage: string; progress: number }> | null;
 }
 
@@ -865,6 +904,8 @@ export interface VideoMetadata {
   uploaded_at: string;
   /** 视频来源：upload=用户上传（Library upload 素材），也可能是 recording 等录制注册视频 */
   source?: string;
+  display_title?: string; // 用户自定义显示标题（Library 卡片优先采用）
+  display_date?: string; // 用户自定义比赛日期（Library 卡片优先采用）
 }
 
 export interface VideoUploadResponse {
@@ -1053,6 +1094,8 @@ export interface FusedPlayerOverlayEntity {
   bbox_stale?: boolean;
   /** last real observed 距今毫秒（单一 freshness 权威） */
   bbox_age_ms?: number | null;
+  display_reason?: string | null;
+  projection_rejection_reason?: string | null;
   /** bootstrap_backfill 携带的 canonical court 坐标 [x, y]（英尺），供小地图消费；其余类型可为 null */
   canonical_court_position_ft?: [number, number] | number[] | null;
 }
@@ -1063,8 +1106,17 @@ export interface FusedPlayerOverlayFrame {
   players: FusedPlayerOverlayEntity[];
 }
 
+export interface FusedPlayerOverlayView {
+  view_id: string;
+  video_id?: string | null;
+  status: "available" | "no_detections" | "unavailable";
+  detail: string;
+  source: { width: number; height: number };
+  frames: FusedPlayerOverlayFrame[];
+}
+
 export interface FusedPlayerOverlayArtifact {
-  schema_version: "multiview-fused-player-overlay.v1";
+  schema_version: "multiview-fused-player-overlay.v1" | "multiview-fused-player-overlay.v2";
   job_id: string;
   video_id?: string;
   reference_view_id: string;
@@ -1074,6 +1126,9 @@ export interface FusedPlayerOverlayArtifact {
   processed_frame_count: number;
   source: { width: number; height: number };
   frames: FusedPlayerOverlayFrame[];
+  /** v2/兼容扩展：同一 canonical tick 的按视角 image-space 投影。 */
+  views?: Record<string, FusedPlayerOverlayView>;
+  diagnostics?: Record<string, unknown>;
 }
 
 /** four-player-identification-quality.v1（四人身份稳定性与外观诊断） */
@@ -1297,6 +1352,7 @@ export interface ReconstructedBallTrajectorySample {
   height_source?: string | null;
   height_confidence?: number | null;
   height_uncertainty_ft?: number | null;
+  height_validity?: "valid" | "unknown" | "unknown_open_end" | string;
   gap_length_frames?: number | null;
   reprojection_error_px?: number | null;
   source_view_id?: string | null;
@@ -1329,6 +1385,9 @@ export interface ReconstructedImagePathSample {
   provenance?: string;
   confidence?: number | null;
   validity?: string;
+  gap_length_seconds?: number | null;
+  gap_boundary_reason?: string | null;
+  display_break?: boolean;
 }
 
 export interface ReconstructedTrajectoryAnchor {
@@ -1356,6 +1415,7 @@ export interface ReconstructedTrajectoryQuality {
   overall?: number;
   display_level?: "high" | "medium" | "low" | "none";
   metric_validity?: "approximate_multiview" | "visualization_only" | "unavailable" | string;
+  display_eligible?: boolean;
 }
 
 export type ShotOwnershipStatus = "confirmed" | "ambiguous" | "unassigned" | "not_applicable";
@@ -1400,6 +1460,17 @@ export interface ReconstructedBallTrajectorySegment {
   prediction_ratio?: number;
   metrics?: MultiviewBallTrajectoryMetrics;
   display_level?: "high" | "medium" | "low" | "none";
+  display_eligible?: boolean;
+  quality_gate_summary?: {
+    schema_version?: string;
+    observed_count?: number;
+    observed_ratio?: number;
+    interpolated_count?: number;
+    predicted_count?: number;
+    predicted_ratio?: number;
+    stereo_coverage?: number;
+    display_eligible_reason?: string;
+  };
   metric_validity?: "approximate_multiview" | "visualization_only" | "unavailable" | string;
   metric_eligibility?: {
     speed?: boolean;
@@ -1411,8 +1482,16 @@ export interface ReconstructedBallTrajectorySegment {
   secondary_view_id?: string | null;
   primary_view_reason?: string | null;
   image_paths_by_view?: Record<string, ReconstructedImagePathSample[]>;
+  video_overlay?: {
+    render_view_id?: string | null;
+    available?: boolean;
+    path_source?: "native_target_view" | "reprojected_target_view" | "unavailable" | string;
+    reason?: string | null;
+  };
   start_endpoint?: ReconstructedTrajectoryEndpoint | null;
   end_endpoint?: ReconstructedTrajectoryEndpoint | null;
+  height_validity?: "valid" | "unknown" | "unknown_open_end" | string;
+  height_quality_reason?: string | null;
 }
 
 export interface ReconstructedBallTrajectoryAttribution {
@@ -1444,6 +1523,10 @@ export interface ReconstructedBallTrajectoryEvent {
   ownership_confidence?: number | null;
   ownership_source_event_id?: string | null;
   attribution?: ReconstructedBallTrajectoryAttribution | null;
+  height_ft?: number | null;
+  height_source?: string | null;
+  height_confidence?: number | null;
+  height_uncertainty_ft?: number | null;
 }
 
 export interface PlayerRosterEntry {
@@ -1458,11 +1541,21 @@ export interface ReconstructedBallTrajectoryArtifact {
   status: "available" | "no_candidates" | "partial" | "unavailable" | "skipped" | "failed";
   detail: string;
   reconstruction_mode: ReconstructedBallTrajectoryMode;
+  /** 任务视频的参考/渲染视角；segment.primary_view_id 仅用于重建质量。 */
+  reference_view_id?: string | null;
+  render_view_id?: string | null;
+  video_overlay_policy?: {
+    window_semantics?: "half_open" | string;
+    retention_policy?: "single_active_segment" | string;
+    path_coordinate_space?: "render_view_id" | string;
+  };
   coordinate_semantics?: {
     xy?: string;
     z?: string;
     metric_validity?: string;
     validity?: string;
+    scene_calibration_revision?: number | null;
+    height_uncertainty_ft?: number | null;
   };
   player_roster?: PlayerRosterEntry[];
   events: ReconstructedBallTrajectoryEvent[];
@@ -1516,6 +1609,11 @@ export interface MultiviewStereoMeasurement {
   canonical_tick?: number | null;
   cam1_source_frame_index?: number | null;
   cam2_source_frame_index?: number | null;
+  scene_calibration_revision?: number | null;
+  camera_model_source?: string;
+  metric_validity?: string;
+  height_uncertainty_ft?: number | null;
+  scene_quality?: Record<string, unknown>;
 }
 
 export interface MultiviewBallStereoEvidenceArtifact {
@@ -1729,6 +1827,18 @@ export interface AnalysisPipelineResult {
     fused_player_overlay_url?: string;
     fused_player_overlay_status?: string;
     fused_player_overlay_detail?: string;
+    shot_rally_events_json_path?: string;
+    shot_rally_events_url?: string;
+    shot_rally_events_status?: string;
+    shot_rally_events_detail?: string;
+    metric_snapshot_json_path?: string;
+    metric_snapshot_url?: string;
+    metric_snapshot_status?: string;
+    metric_snapshot_detail?: string;
+    normalized_metrics_json_path?: string;
+    normalized_metrics_url?: string;
+    normalized_metrics_status?: string;
+    normalized_metrics_detail?: string;
     four_player_identification_quality_json_path?: string;
     four_player_identification_quality_url?: string;
     four_player_identification_quality_status?: string;

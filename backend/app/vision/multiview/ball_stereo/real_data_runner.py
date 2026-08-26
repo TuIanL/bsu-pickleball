@@ -47,6 +47,7 @@ from app.vision.multiview.ball_stereo.segment_reconstruction import (
 )
 from app.vision.multiview.ball_stereo.stereo_measurement import BallStereoMeasurement, measure_stereo
 from app.vision.multiview.ball_stereo.virtual_camera import decompose_virtual_camera
+from app.vision.multiview.ball_stereo.net_assisted_camera import refine_virtual_camera_for_scene
 from app.vision.detectors.ball_adapter import YoloBallDetectorAdapter
 from app.vision.pickleball_game_analysis.ball_tracker import BallTracker, BallTrackerConfig
 
@@ -179,6 +180,7 @@ def run_real_data(
     job_id: str = "ball3d",
     dump_obs_path: str | None = None,
     write_evidence_to_job: bool = False,
+    scene_calibration: object | None = None,
 ) -> dict:
     settings = get_settings()
     assert settings.ball_model_path, "PICKLEBALL_BALL_MODEL_PATH 未配置"
@@ -225,6 +227,74 @@ def run_real_data(
                 "cam1_status": cam1_proj.status, "cam2_status": cam2_proj.status,
                 "reason": "virtual camera unavailable"}
 
+    if scene_calibration is not None:
+        cam1_proj = refine_virtual_camera_for_scene(
+            cam1_proj,
+            court_world=corner_canon1,
+            court_image=corner_img1,
+            scene_calibration=scene_calibration,
+            view_id="cam_1",
+            court_orientation=ori1,
+        )
+        cam2_proj = refine_virtual_camera_for_scene(
+            cam2_proj,
+            court_world=corner_canon2,
+            court_image=corner_img2,
+            scene_calibration=scene_calibration,
+            view_id="cam_2",
+            court_orientation=ori2,
+        )
+
+    projection_sources = [cam1_proj.source, cam2_proj.source]
+    metric_qualified = all(
+        camera.source == "net_refined_virtual"
+        and not camera.approximate
+        and bool(camera.disambiguation.get("metric_qualified", True))
+        for camera in (cam1_proj, cam2_proj)
+    )
+    metric_qualified = metric_qualified and (
+        scene_calibration is None or getattr(scene_calibration, "status", None) == "ready"
+    )
+    camera_model_source = (
+        "net_refined_virtual"
+        if all(source == "net_refined_virtual" for source in projection_sources)
+        else "homography_constrained_virtual"
+        if all(source == "homography_constrained_virtual" for source in projection_sources)
+        else "mixed_virtual"
+    )
+    metric_validity = "metric_multiview" if metric_qualified else "approximate_multiview"
+    height_uncertainties = [
+        float(camera.disambiguation["height_uncertainty_ft"])
+        for camera in (cam1_proj, cam2_proj)
+        if isinstance(camera.disambiguation.get("height_uncertainty_ft"), (int, float))
+        and math.isfinite(float(camera.disambiguation["height_uncertainty_ft"]))
+    ]
+    scene_quality = {
+        "scene_status": getattr(scene_calibration, "status", "missing") if scene_calibration is not None else "missing",
+        "effective_status": "ready" if metric_qualified else "degraded",
+        "camera_model_sources": projection_sources,
+        "camera_diagnostics": {
+            "cam_1": dict(cam1_proj.disambiguation),
+            "cam_2": dict(cam2_proj.disambiguation),
+        },
+        "metric_qualified": metric_qualified,
+        "rejection_reasons": sorted({
+            str(reason)
+            for camera in (cam1_proj, cam2_proj)
+            for reason in camera.disambiguation.get("quality_rejection_reasons", [])
+        }),
+    }
+    scene_revision = getattr(scene_calibration, "revision", None) if scene_calibration is not None else None
+    source_context = {
+        "job_id": job_id,
+        "clock": "RealDataRunner",
+        "scene_calibration_revision": scene_revision,
+        "camera_model_source": camera_model_source,
+        "metric_validity": metric_validity,
+        "height_uncertainty_ft": max(height_uncertainties) if height_uncertainties else None,
+        "scene_quality": scene_quality,
+    }
+
     print(f"[cam1] focal={cam1_proj.focal_ft:.1f} reproj={cam1_proj.reprojection_error_px:.2f}px")
     print(f"[cam2] focal={cam2_proj.focal_ft:.1f} reproj={cam2_proj.reprojection_error_px:.2f}px")
 
@@ -266,6 +336,11 @@ def run_real_data(
                 cam1_timestamp_ms=o["t_ms"], cam2_timestamp_ms=b["t_ms"],
                 take_timestamp_ms=o["t_ms"], sync_error_ms=abs(o["t_ms"] - b["t_ms"]),
                 max_time_delta_ms=max_time_gate_ms,
+                scene_calibration_revision=scene_revision,
+                camera_model_source=camera_model_source,
+                metric_validity=metric_validity,
+                height_uncertainty_ft=max(height_uncertainties) if height_uncertainties else None,
+                scene_quality=scene_quality,
             )
             if not m.depth_valid:
                 # 错误深度只进入诊断，不进入权威 stereo evidence；保留两路单视角观测供
@@ -300,8 +375,25 @@ def run_real_data(
         segments=[seg], landing=landing,
         metrics_by_segment={"seg_real_1": metrics} if metrics else {},
         duration_by_segment={"seg_real_1": duration},
+        scene_calibration_revision=scene_revision,
+        metric_validity=metric_validity,
+        height_uncertainty_ft=max(height_uncertainties) if height_uncertainties else None,
+        diagnostics={
+            "camera_model_source": camera_model_source,
+            "scene_quality": scene_quality,
+        },
     )
-    evidence = build_stereo_evidence_v1(take_id=take_id, measurements=measurements, pairings=[])
+    evidence = build_stereo_evidence_v1(
+        take_id=take_id,
+        measurements=measurements,
+        pairings=[],
+        diagnostics={
+            "camera_model_source": camera_model_source,
+            "metric_validity": metric_validity,
+            "scene_quality": scene_quality,
+        },
+        source_context=source_context,
+    )
 
     written = None
     if write_evidence_to_job:
@@ -314,6 +406,10 @@ def run_real_data(
         "cam2_focal_ft": cam2_proj.focal_ft,
         "cam1_reproj_px": cam1_proj.reprojection_error_px,
         "cam2_reproj_px": cam2_proj.reprojection_error_px,
+        "scene_calibration_revision": scene_revision,
+        "camera_model_source": camera_model_source,
+        "metric_validity": metric_validity,
+        "scene_quality": scene_quality,
         "ball_obs_cam1": len(obs1),
         "ball_obs_cam2": len(obs2),
         "stereo_measurements": len(measurements),

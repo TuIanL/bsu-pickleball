@@ -1,0 +1,105 @@
+{
+  "schema_version": "ball_quality_gate_hard_negatives.v1",
+  "frame_shape": [1080, 1920],
+  "roi_corners": [[0, 0], [1919, 0]],
+  "cases": [
+    {
+      "id": "sideline_equipment",
+      "kind": "static_equipment",
+      "candidate": {
+        "image_x": 1820.0,
+        "image_y": 740.0,
+        "confidence": 0.91,
+        "width": 38.0,
+        "height": 38.0
+      },
+      "point_in_roi": true,
+      "projected_xy": [24.5, 18.0],
+      "expected_reason": "outside_court_projection"
+    },
+    {
+      "id": "advertising_panel",
+      "kind": "advertising_area",
+      "candidate": {
+        "image_x": 104.0,
+        "image_y": 820.0,
+        "confidence": 0.87,
+        "width": 110.0,
+        "height": 80.0
+      },
+      "point_in_roi": true,
+      "projected_xy": null,
+      "expected_reason": "box_too_large"
+    },
+    {
+      "id": "net_post",
+      "kind": "net_post",
+      "candidate": {
+        "image_x": 955.0,
+        "image_y": 435.0,
+        "confidence": 0.82,
+        "width": 4.0,
+        "height": 40.0
+      },
+      "point_in_roi": true,
+      "projected_xy": [10.0, 16.0],
+      "expected_reason": "aspect_ratio"
+    },
+    {
+      "id": "behind_net_object",
+      "kind": "behind_net_object",
+      "candidate": {
+        "image_x": 970.0,
+        "image_y": 80.0,
+        "confidence": 0.74,
+        "width": 32.0,
+        "height": 31.0
+      },
+      "point_in_roi": true,
+      "projected_xy": [10.0, -4.0],
+      "expected_reason": "outside_court_projection"
+    },
+    {
+      "id": "out_of_detector_roi",
+      "kind": "background_object",
+      "candidate": {
+        "image_x": 1885.0,
+        "image_y": 1020.0,
+        "confidence": 0.79,
+        "width": 31.0,
+        "height": 30.0
+      },
+      "point_in_roi": false,
+      "projected_xy": null,
+      "expected_reason": "outside_roi"
+    },
+    {
+      "id": "short_occlusion",
+      "kind": "occlusion",
+      "timestamps_sec": [10.0, 10.033333, 10.166667],
+      "expected": "short_gap"
+    },
+    {
+      "id": "long_occlusion",
+      "kind": "occlusion",
+      "timestamps_sec": [20.0, 20.033333, 20.433333],
+      "expected": "long_gap"
+    },
+    {
+      "id": "high_speed_false_jump",
+      "kind": "high_speed_object",
+      "history": [[30.0, [400.0, 400.0]]],
+      "timestamp_sec": 30.033333,
+      "current_point": [900.0, 400.0],
+      "expected": "speed_jump"
+    },
+    {
+      "id": "high_speed_valid_ball",
+      "kind": "high_speed_ball",
+      "history": [[31.0, [400.0, 400.0]]],
+      "timestamp_sec": 31.033333,
+      "current_point": [680.0, 400.0],
+      "expected": "motion_consistent"
+    }
+  ]
+}

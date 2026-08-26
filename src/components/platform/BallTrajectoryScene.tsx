@@ -7,6 +7,7 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { EstimatedBallTrajectory, EstimatedTrajectoryPoint } from "../../services/ballTrajectoryVisualization";
+import type { MetricCourtSceneCalibration, ScenePoint3D } from "../../types/metricCourtScene";
 
 export type CameraView = "oblique" | "top" | "sideline" | "baseline" | "obliqueBaseline";
 
@@ -15,6 +16,8 @@ interface BallTrajectorySceneProps {
   selectedShotId: string | null;
   onSelectShot: (shotId: string | null) => void;
   onWebGlError: (message: string) => void;
+  sceneCalibration?: MetricCourtSceneCalibration | null;
+  metricValidity?: string | null;
 }
 
 interface ViewConfig {
@@ -49,7 +52,59 @@ function addCourtLine(group: THREE.Group, points: Array<[number, number]>, mater
   group.add(new THREE.Line(geometry, material));
 }
 
-function buildCourt(): THREE.Group {
+export function netProfilePoints(sceneCalibration?: MetricCourtSceneCalibration | null): ScenePoint3D[] {
+  const sampled = sceneCalibration?.net_profile.sampled_top_profile;
+  if (sampled && sampled.length >= 2) return sampled;
+  const controls = sceneCalibration?.net_profile.control_points;
+  if (controls && controls.length >= 2) return controls.map((point) => point.world);
+  return [
+    { x: 0, y: 22, z: 3 },
+    { x: 10, y: 22, z: 34 / 12 },
+    { x: 20, y: 22, z: 3 },
+  ];
+}
+
+function addProfileNet(group: THREE.Group, sceneCalibration?: MetricCourtSceneCalibration | null) {
+  const profile = netProfilePoints(sceneCalibration);
+  const positions: number[] = [];
+  const indices: number[] = [];
+  profile.forEach((point) => {
+    positions.push(point.x - 10, 0.04, point.y - 22);
+    positions.push(point.x - 10, point.z, point.y - 22);
+  });
+  for (let index = 0; index < profile.length - 1; index += 1) {
+    const base = index * 2;
+    indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  group.add(new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ color: "#7E8782", transparent: true, opacity: 0.34, roughness: 0.8, side: THREE.DoubleSide }),
+  ));
+
+  const topCurve = new THREE.CatmullRomCurve3(profile.map((point) => new THREE.Vector3(point.x - 10, point.z, point.y - 22)));
+  group.add(new THREE.Mesh(
+    new THREE.TubeGeometry(topCurve, Math.max(8, profile.length * 2), 0.07, 8, false),
+    new THREE.MeshStandardMaterial({ color: "#525B56", roughness: 0.8 }),
+  ));
+
+  const postPoints = sceneCalibration?.net_profile.post_world_points?.length === 2
+    ? sceneCalibration.net_profile.post_world_points
+    : [profile[0], profile[profile.length - 1]];
+  const postHeight = Math.max(...postPoints.map((point) => point.z));
+  const postGeometry = new THREE.CylinderGeometry(0.11, 0.11, postHeight + 0.2, 12);
+  const postMaterial = new THREE.MeshStandardMaterial({ color: "#555D59" });
+  for (const point of postPoints) {
+    const post = new THREE.Mesh(postGeometry, postMaterial);
+    post.position.set(point.x - 10, (postHeight + 0.2) / 2, point.y - 22);
+    group.add(post);
+  }
+}
+
+function buildCourt(sceneCalibration?: MetricCourtSceneCalibration | null): THREE.Group {
   const group = new THREE.Group();
   group.name = "court";
 
@@ -78,27 +133,7 @@ function buildCourt(): THREE.Group {
   kitchenFar.position.z = 10.5;
   group.add(kitchenFar);
 
-  const net = new THREE.Mesh(
-    new THREE.BoxGeometry(20.6, 2.85, 0.09),
-    new THREE.MeshStandardMaterial({ color: "#7E8782", transparent: true, opacity: 0.34, roughness: 0.8 }),
-  );
-  net.position.y = 1.425;
-  group.add(net);
-
-  const tape = new THREE.Mesh(
-    new THREE.BoxGeometry(20.8, 0.14, 0.18),
-    new THREE.MeshStandardMaterial({ color: "#525B56", roughness: 0.8 }),
-  );
-  tape.position.y = 2.88;
-  group.add(tape);
-
-  const postGeometry = new THREE.CylinderGeometry(0.11, 0.11, 3.2, 12);
-  const postMaterial = new THREE.MeshStandardMaterial({ color: "#555D59" });
-  for (const x of [-10.45, 10.45]) {
-    const post = new THREE.Mesh(postGeometry, postMaterial);
-    post.position.set(x, 1.6, 0);
-    group.add(post);
-  }
+  addProfileNet(group, sceneCalibration);
 
   return group;
 }
@@ -117,7 +152,13 @@ function pointStyle(point: EstimatedTrajectoryPoint): SolidDashedRun["style"] {
 }
 
 function isRenderablePoint(point: EstimatedTrajectoryPoint): boolean {
-  return Number.isFinite(point.courtXFt) && Number.isFinite(point.courtYFt) && point.estimatedHeightFt !== null;
+  return Number.isFinite(point.courtXFt)
+    && Number.isFinite(point.courtYFt)
+    && point.estimatedHeightFt !== null
+    && Number.isFinite(point.estimatedHeightFt)
+    && point.estimatedHeightFt >= 0
+    && point.heightValidity !== "invalid"
+    && !point.heightValidity?.startsWith("invalid_");
 }
 
 function isGap(previous: EstimatedTrajectoryPoint | null, current: EstimatedTrajectoryPoint): boolean {
@@ -145,6 +186,10 @@ export function splitTrajectoryRuns(trajectory: EstimatedBallTrajectory): SolidD
   };
 
   for (const point of trajectory.points) {
+    if (point.geometryBreakBefore) {
+      flush();
+      previous = null;
+    }
     if (!isRenderablePoint(point)) {
       flush();
       previous = null;
@@ -186,6 +231,10 @@ export function splitContinuousTrajectoryPaths(trajectory: EstimatedBallTrajecto
   };
 
   for (const point of trajectory.points) {
+    if (point.geometryBreakBefore) {
+      flush();
+      previous = null;
+    }
     if (!isRenderablePoint(point)) {
       flush();
       previous = null;
@@ -245,7 +294,10 @@ function addTrajectories(
   for (const trajectory of trajectories) {
     const selected = trajectory.shotId !== null && trajectory.shotId === selectedShotId;
     const color = DIRECTION_COLORS[trajectory.direction];
-    const opacity = selected ? 1 : trajectory.highConfidence ? 0.94 : 0.46;
+    const heightOpacity = trajectory.heightConfidence == null
+      ? 1
+      : 0.7 + 0.3 * Math.min(1, Math.max(0, trajectory.heightConfidence));
+    const opacity = (selected ? 1 : trajectory.highConfidence ? 0.94 : 0.46) * heightOpacity;
 
     // 基线只在真实缺失处断开；覆盖线表达 source，不会把切换点拆成单点线段。
     for (const path of splitContinuousTrajectoryPaths(trajectory)) {
@@ -320,6 +372,8 @@ export function BallTrajectoryScene({
   selectedShotId,
   onSelectShot,
   onWebGlError,
+  sceneCalibration = null,
+  metricValidity = null,
 }: BallTrajectorySceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
@@ -397,7 +451,7 @@ export function BallTrajectoryScene({
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
-    scene.add(buildCourt());
+    scene.add(buildCourt(sceneCalibration));
     scene.add(new THREE.HemisphereLight("#FFFFFF", "#D7DED9", 2.1));
     const keyLight = new THREE.DirectionalLight("#FFFFFF", 2.3);
     keyLight.position.set(12, 30, 18);
@@ -486,7 +540,7 @@ export function BallTrajectoryScene({
       cameraRef.current = null;
       controlsRef.current = null;
     };
-  }, [applyView, onWebGlError]);
+  }, [applyView, onWebGlError, sceneCalibration]);
 
   useEffect(() => {
     applyView(activeView);
@@ -512,6 +566,16 @@ export function BallTrajectoryScene({
       data-testid="ball-trajectory-scene"
     >
       <div className="absolute inset-0" ref={mountRef} />
+      {sceneCalibration ? (
+        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[#D6DED9] bg-white/90 px-3 py-2 text-xs text-[#416248] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
+          {sceneCalibration.status === "ready" ? "Metric 3D 场景" : "场景标定降级"} · revision {sceneCalibration.revision} · {sceneCalibration.net_profile.height_source === "measured" ? "现场实测网高" : "标准网高"}
+        </div>
+      ) : null}
+      {!sceneCalibration ? (
+        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[#F3D7A0] bg-[#FFFBEB]/95 px-3 py-2 text-xs text-[#9A6700] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
+          {metricValidity === "visualization_only" ? "仅可视化高度" : "approximate 3D fallback · 未发布现场场景标定"}
+        </div>
+      ) : null}
       <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 rounded-lg border border-[#D6DED9] bg-white/92 p-1.5 shadow-sm backdrop-blur-sm sm:right-4 sm:top-4">
         {(Object.keys(VIEW_CONFIG) as CameraView[]).map((view) => {
           const config = VIEW_CONFIG[view];

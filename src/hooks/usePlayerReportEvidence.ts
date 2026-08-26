@@ -14,14 +14,28 @@ import { resolveCanonicalPlayerId } from "../evidence/playerIdentity";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import {
   getAnalysisResult,
+  getStructuredVizData,
+  getMetricSnapshot,
   getReconstructedBallTrajectory,
+  getShotRallyEvents,
   getServeEvents,
+  isAnalysisApiError,
 } from "../services/analysisClient";
 import { buildReconstructedBallTrajectoryVisualization } from "../services/ballTrajectoryVisualization";
 
 /** 仅基于 report 的基线 sources（无后端抓取）。 */
 function baselineSources(report: AnalysisReport): PlayerReportEvidenceSources {
-  return { report, roster: null, serveEvents: null, trajectories: null };
+  return {
+    report,
+    roster: null,
+    serveEvents: null,
+    canonicalEvents: null,
+    metricSnapshot: null,
+    trajectories: null,
+    visualization: null,
+    visualizationState: report.source === "job" ? "loading" : "unavailable",
+    visualizationReason: report.source === "job" ? "正在读取结构化区域统计" : null,
+  };
 }
 
 /** 真实 job：按 jobId 抓取权威 artifacts，组装 richer sources。 */
@@ -30,13 +44,26 @@ async function loadJobSources(report: AnalysisReport): Promise<PlayerReportEvide
   const jobId = report.jobId;
   if (!jobId) return sources;
 
+  const structuredVisualization = getStructuredVizData(jobId)
+    .then((data) => ({ data, state: data ? "available" as const : "unavailable" as const, reason: data ? null : "本次任务未生成结构化区域统计" }))
+    .catch((error: unknown) => ({
+      data: null,
+      state: isAnalysisApiError(error) && error.status === 404 ? "unavailable" as const : "failed" as const,
+      reason: isAnalysisApiError(error) && error.status === 404
+        ? "该历史任务未生成结构化区域统计"
+        : "结构化区域统计读取失败",
+    }));
   try {
     const raw = await getAnalysisResult(jobId);
     if (isPipelineResult(raw)) {
-      const [rec, serve] = await Promise.all([
+      const [rec, serve, canonicalEvents, metricSnapshot] = await Promise.all([
         getReconstructedBallTrajectory(raw),
         getServeEvents(raw),
+        getShotRallyEvents(raw),
+        getMetricSnapshot(raw),
       ]);
+      sources.canonicalEvents = canonicalEvents;
+      sources.metricSnapshot = metricSnapshot;
       if (rec && !["unavailable", "failed", "skipped", "no_candidates"].includes(rec.status)) {
         const viz = buildReconstructedBallTrajectoryVisualization(rec);
         if (viz.trajectories.length > 0) {
@@ -61,6 +88,10 @@ async function loadJobSources(report: AnalysisReport): Promise<PlayerReportEvide
   } catch {
     // 抓取失败 → 保持缺省，纯转换输出 unavailable（不伪造）
   }
+  const visualization = await structuredVisualization;
+  sources.visualization = visualization.data;
+  sources.visualizationState = visualization.state;
+  sources.visualizationReason = visualization.reason;
   return sources;
 }
 

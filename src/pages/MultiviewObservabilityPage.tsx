@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, Film, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
-import type { LibraryView } from "../components/library/viewCapabilities";
 import { PageFrame } from "../components/PageFrame";
 import { StatusState } from "../components/StatusState";
 import { getAnalysisJob, getFourPlayerIdentificationQuality, getMultiviewDebugVideoUrl, getMultiviewObservability, getMultiviewRecoveryEpisodes } from "../services/analysisClient";
@@ -300,7 +299,7 @@ function FourPlayerIdentificationPanel({ quality }: { quality: FourPlayerIdentif
   );
 }
 
-export function MultiviewObservabilityPage({ jobId, onNavigate, embedded, onSelectView }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean; onSelectView?: (view: LibraryView) => void }) {
+export function MultiviewObservabilityPage({ jobId, onNavigate, embedded }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean }) {
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
   const [summary, setSummary] = useState<MultiviewObservabilitySummary | null | undefined>(undefined);
   const [identityQuality, setIdentityQuality] = useState<FourPlayerIdentificationQuality | undefined>(undefined);

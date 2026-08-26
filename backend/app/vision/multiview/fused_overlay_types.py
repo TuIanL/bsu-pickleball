@@ -25,6 +25,10 @@ from pydantic import BaseModel, Field, field_validator
 logger = logging.getLogger(__name__)
 
 FUSED_PLAYER_OVERLAY_SCHEMA = "multiview-fused-player-overlay.v1"
+FUSED_PLAYER_OVERLAY_SCHEMAS = {
+    "multiview-fused-player-overlay.v1",
+    "multiview-fused-player-overlay.v2",
+}
 
 # 五级展示证据类型（分支决策链的最终结果）+ bootstrap 展示回填（最低优先级兜底）
 EvidenceType = Literal[
@@ -78,6 +82,9 @@ class FusedPlayerOverlayPlayer(BaseModel):
     bbox_stale: bool = False
     # last real observed 距今毫秒（单一 freshness 权威；无历史为 None）
     bbox_age_ms: float | None = Field(default=None, ge=0)
+    # 展示层拒绝/降级原因（不改变 evidence provenance）
+    display_reason: str | None = None
+    projection_rejection_reason: str | None = None
 
     @field_validator("bbox")
     @classmethod
@@ -124,10 +131,25 @@ class FusedPlayerOverlayFrame(BaseModel):
     players: list[FusedPlayerOverlayPlayer] = Field(default_factory=list)
 
 
-class FusedPlayerOverlayArtifact(BaseModel):
-    """multiview-fused-player-overlay.v1 正式产物。"""
+class FusedPlayerOverlayView(BaseModel):
+    """同一 canonical tick 在某个视频视角中的 image-space 投影。"""
 
-    schema_version: Literal["multiview-fused-player-overlay.v1"] = FUSED_PLAYER_OVERLAY_SCHEMA
+    view_id: str
+    video_id: str | None = None
+    status: Literal["available", "no_detections", "unavailable"] = "unavailable"
+    detail: str = ""
+    source: dict[str, int] = Field(default_factory=dict)
+    frames: list[FusedPlayerOverlayFrame] = Field(default_factory=list)
+
+
+class FusedPlayerOverlayArtifact(BaseModel):
+    """multiview-fused-player-overlay.v1/v2 正式产物。
+
+    v1 的顶层 ``frames`` 永远表示 reference view，v2/扩展字段 ``views``
+    允许结果页在不重新分析的情况下切换到其它视频视角。
+    """
+
+    schema_version: Literal["multiview-fused-player-overlay.v1", "multiview-fused-player-overlay.v2"] = FUSED_PLAYER_OVERLAY_SCHEMA
     job_id: str
     video_id: str | None = None
     reference_view_id: str
@@ -137,14 +159,16 @@ class FusedPlayerOverlayArtifact(BaseModel):
     processed_frame_count: int = Field(default=0, ge=0)
     source: dict[str, int] = Field(default_factory=dict)  # {"width": W, "height": H}
     frames: list[FusedPlayerOverlayFrame] = Field(default_factory=list)
+    views: dict[str, FusedPlayerOverlayView] = Field(default_factory=dict)
+    diagnostics: dict[str, object] = Field(default_factory=dict)
 
 
 def validate_fused_player_overlay(payload: object) -> None:
     """校验契约 payload；不合法抛 ValueError。"""
     if not isinstance(payload, dict):
         raise ValueError("fused player overlay must be an object")
-    if payload.get("schema_version") != FUSED_PLAYER_OVERLAY_SCHEMA:
-        raise ValueError(f"expected {FUSED_PLAYER_OVERLAY_SCHEMA}")
+    if payload.get("schema_version") not in FUSED_PLAYER_OVERLAY_SCHEMAS:
+        raise ValueError("expected multiview-fused-player-overlay.v1 or .v2")
     if not payload.get("reference_view_id"):
         raise ValueError("fused player overlay missing reference_view_id")
     frames = payload.get("frames")
@@ -184,6 +208,19 @@ def validate_fused_player_overlay(payload: object) -> None:
                 raise ValueError(
                     f"overlay frame {index} player {player_id!r} invalid evidence_type {evidence_type!r}"
                 )
+    views = payload.get("views")
+    if views is not None:
+        if not isinstance(views, dict):
+            raise ValueError("fused player overlay views must be an object")
+        for view_id, view in views.items():
+            if not isinstance(view, dict):
+                raise ValueError(f"overlay view {view_id!r} must be an object")
+            if str(view.get("view_id", view_id)) != str(view_id):
+                raise ValueError(f"overlay view key mismatch for {view_id!r}")
+            try:
+                FusedPlayerOverlayView.model_validate(view)
+            except Exception as exc:  # noqa: BLE001 - normalize Pydantic detail to contract error
+                raise ValueError(f"overlay view {view_id!r} is invalid: {exc}") from exc
 
 
 def build_fused_player_overlay_payload(
@@ -195,6 +232,9 @@ def build_fused_player_overlay_payload(
     frames: list[FusedPlayerOverlayFrame],
     status: str = "available",
     detail: str = "",
+    diagnostics: dict[str, object] | None = None,
+    views: dict[str, FusedPlayerOverlayView | dict[str, object]] | None = None,
+    schema_version: str = FUSED_PLAYER_OVERLAY_SCHEMA,
 ) -> dict[str, object]:
     """构造可序列化的契约 payload（validator 校验通过后返回）。"""
     frame_count = 0
@@ -210,6 +250,7 @@ def build_fused_player_overlay_payload(
         "frame_count": frame_count,
         "processed_frame_count": len(frames),
         "source": dict(frame_size or {"width": 0, "height": 0}),
+        "diagnostics": dict(diagnostics or {}),
         "frames": [
             {
                 "frame_index": frame.frame_index,
@@ -219,6 +260,18 @@ def build_fused_player_overlay_payload(
             for frame in frames
         ],
     }
+    if schema_version not in FUSED_PLAYER_OVERLAY_SCHEMAS:
+        raise ValueError(f"unsupported fused overlay schema {schema_version!r}")
+    payload["schema_version"] = schema_version
+    if views:
+        payload["views"] = {
+            view_id: (
+                view.model_dump(mode="json")
+                if isinstance(view, FusedPlayerOverlayView)
+                else dict(view)
+            )
+            for view_id, view in views.items()
+        }
     validate_fused_player_overlay(payload)
     return payload
 

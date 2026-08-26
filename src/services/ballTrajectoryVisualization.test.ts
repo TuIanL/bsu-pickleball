@@ -10,6 +10,7 @@ import {
   buildBallTrajectoryVisualization,
   buildReconstructedBallTrajectoryVisualization,
   buildShots,
+  filterTrajectoriesByConfirmedPlayer,
   filterTrajectories,
   type EstimatedBallTrajectory,
 } from "./ballTrajectoryVisualization";
@@ -117,7 +118,7 @@ function reconstructedSegment(overrides: Partial<ReconstructedBallTrajectorySegm
       observation_coverage: 0.8,
     },
     samples: [
-      { frame_index: 0, timestamp_sec: 0, court_xy: [5, 10], estimated_height_ft: 3.6, source: "detected", confidence: 0.9 },
+      { frame_index: 0, timestamp_sec: 0, court_xy: [5, 10], estimated_height_ft: 3.6, source: "detected", confidence: 0.9, height_source: "global_contact_prior", height_confidence: 0.5, height_uncertainty_ft: 1.9, height_validity: "valid" },
       { frame_index: 1, timestamp_sec: 0.03, court_xy: [6, 12], estimated_height_ft: 4.2, source: "model_predicted", confidence: null },
       { frame_index: 2, timestamp_sec: 0.06, court_xy: [7, 15], estimated_height_ft: 4.0, source: "detected", confidence: 0.85 },
       { frame_index: 3, timestamp_sec: 0.09, court_xy: [8, 18], estimated_height_ft: 3.1, source: "interpolated", confidence: null },
@@ -158,7 +159,8 @@ describe("buildReconstructedBallTrajectoryVisualization", () => {
     expect(trajectory.points[0].interpolated).toBe(false);
     // 高度来自后端，不再以统一 4*peak*p*(1-p) 强制两端为零
     expect(trajectory.points[0].estimatedHeightFt).not.toBe(0);
-    expect(trajectory.points[0].heightSource).toBeNull();
+    expect(trajectory.points[0].heightSource).toBe("global_contact_prior");
+    expect(trajectory.points[0].heightConfidence).toBe(0.5);
     expect(trajectory.peakEstimatedHeightFt).toBe(4.2);
     expect(trajectory.highConfidence).toBe(true);
     expect(trajectory.quality?.netCrossingStatus).toBe("expected");
@@ -181,6 +183,18 @@ describe("buildReconstructedBallTrajectoryVisualization", () => {
 
     // 轨迹 ID 使用后端稳定 segment_id（不变量：不使用前端自生成序号）
     expect(result.trajectories.map((trajectory) => trajectory.id)).toEqual(["flight-1"]);
+  });
+
+  it("honors backend display eligibility for new low-quality segments", () => {
+    const hidden = reconstructedSegment({
+      segment_id: "flight-hidden",
+      reconstruction_mode: "single_view_visual_arc",
+      display_level: "low",
+      display_eligible: false,
+      quality_gate_summary: { display_eligible_reason: "insufficient_observed_coverage_or_low_display_level" },
+    });
+    const result = buildReconstructedBallTrajectoryVisualization(reconstructedArtifact([hidden]));
+    expect(result.trajectories).toEqual([]);
   });
 
   it("returns empty data when reconstruction is unavailable", () => {
@@ -232,6 +246,40 @@ describe("buildReconstructedBallTrajectoryVisualization", () => {
     expect(result.trajectories[0].metricEligibility?.speed).toBe(false);
     expect(result.trajectories[0].endpointOutcome).toBe("legal_out_candidate");
     expect(result.trajectories[0].points.at(-1)?.courtXFt).toBe(10);
+  });
+
+  it("drops negative samples and hides legacy invalid 3D segments", () => {
+    const valid2d = reconstructedSegment({
+      segment_id: "flight-safe-2d",
+      reconstruction_mode: "single_view_event_anchored_2_5d",
+      samples: [
+        { frame_index: 0, timestamp_sec: 0, court_xy: [5, 10], estimated_height_ft: 2, source: "detected", confidence: 0.8 },
+        { frame_index: 1, timestamp_sec: 0.1, court_xy: [6, 11], estimated_height_ft: -1, source: "detected", confidence: 0.8 },
+        { frame_index: 2, timestamp_sec: 0.2, court_xy: [7, 12], estimated_height_ft: 0, source: "anchor", confidence: 0.8 },
+      ],
+    });
+    const invalid3d = reconstructedSegment({
+      segment_id: "flight-invalid-3d",
+      reconstruction_mode: "stereo_estimated_3d",
+      samples: [{ frame_index: 0, timestamp_sec: 0, court_xy: [5, 10], estimated_height_ft: -7, source: "detected", confidence: 0.8 }],
+    });
+    const result = buildReconstructedBallTrajectoryVisualization(reconstructedArtifact([valid2d, invalid3d]));
+    expect(result.trajectories.map((trajectory) => trajectory.id)).toEqual(["flight-safe-2d"]);
+    expect(result.trajectories[0].points.map((point) => point.estimatedHeightFt)).toEqual([2, 0]);
+  });
+
+  it("preserves height provenance and confidence through the adapter", () => {
+    const segment = reconstructedSegment({
+      samples: [
+        { frame_index: 0, timestamp_sec: 0, court_xy: [5, 10], estimated_height_ft: 2, source: "anchor", confidence: 0.8, height_source: "stereo_event_estimate", height_confidence: 0.9, height_uncertainty_ft: 0.2, height_validity: "valid" },
+        { frame_index: 1, timestamp_sec: 0.1, court_xy: [6, 11], estimated_height_ft: 0, source: "anchor", confidence: 0.8, height_source: "bounce", height_confidence: 0.8, height_uncertainty_ft: 0.3, height_validity: "valid" },
+      ],
+    });
+    const trajectory = buildReconstructedBallTrajectoryVisualization(reconstructedArtifact([segment])).trajectories[0];
+    expect(trajectory.points[0].heightSource).toBe("stereo_event_estimate");
+    expect(trajectory.points[0].heightConfidence).toBe(0.9);
+    expect(trajectory.points[0].heightUncertaintyFt).toBe(0.2);
+    expect(trajectory.heightConfidence).toBe(0.8);
   });
 });
 
@@ -292,6 +340,38 @@ describe("Shot 级聚合与筛选（I5）", () => {
     });
     expect(filtered.every((trajectory) => trajectory.hitterPlayerId === "Player_3")).toBe(true);
     expect(filteredShots.map((shot) => shot.shotId)).toEqual(["shot-2"]);
+  });
+
+  it("报告页球员筛选按确认归属的 Shot 保留全部 segment", () => {
+    const trajectories = [
+      trajectoryWithOwnership("flight-p1-a", "shot-p1", "Player_1", "confirmed", 0.0),
+      trajectoryWithOwnership("flight-p1-b", "shot-p1", "Player_1", "confirmed", 0.5),
+      trajectoryWithOwnership("flight-p2", "shot-p2", "Player_2", "confirmed", 1.0),
+      trajectoryWithOwnership("flight-unknown", "shot-unknown", null, "unassigned", 1.5),
+      trajectoryWithOwnership("flight-ambiguous", "shot-ambiguous", "Player_1", "ambiguous", 2.0),
+      trajectoryWithOwnership("flight-orphan", null, "Player_1", "not_applicable", 2.5),
+    ];
+
+    const result = filterTrajectoriesByConfirmedPlayer(trajectories, "P1");
+
+    expect(result.trajectories.map((trajectory) => trajectory.id)).toEqual([
+      "flight-p1-a",
+      "flight-p1-b",
+    ]);
+    expect(result.shots.map((shot) => shot.shotId)).toEqual(["shot-p1"]);
+    expect(result.trajectories.every((trajectory) => trajectory.hitterPlayerId === "Player_1")).toBe(true);
+  });
+
+  it("Shot 内含未知或歧义 segment 时整条 Shot 不进入个人视图", () => {
+    const trajectories = [
+      trajectoryWithOwnership("flight-confirmed", "shot-mixed", "Player_1", "confirmed", 0.0),
+      trajectoryWithOwnership("flight-ambiguous", "shot-mixed", null, "ambiguous", 0.5),
+    ];
+
+    const result = filterTrajectoriesByConfirmedPlayer(trajectories, "Player_1");
+
+    expect(result.trajectories).toEqual([]);
+    expect(result.shots).toEqual([]);
   });
 
   it("未归属筛选包含击球者不明与无 Shot 上下文两类", () => {

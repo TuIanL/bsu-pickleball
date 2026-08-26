@@ -18,7 +18,9 @@ from app.vision.multiview.ball_stereo.segment_reconstruction import (
     LANDING_ONLY,
     PARTIAL_3D,
     Observation,
+    Reconstructed3DSample,
     reconstruct_segment,
+    validate_height_profile,
 )
 from app.vision.multiview.ball_stereo.stereo_measurement import triangulate_linear
 
@@ -107,6 +109,20 @@ def test_mainchain_partial_with_single_view():
     assert seg.status in (FULL_ESTIMATED_3D, PARTIAL_3D), seg.status
     assert seg.stereo_coverage < 1.0
     assert seg.stereo_coverage > 0.0
+
+
+@pytest.mark.parametrize(
+    ("samples", "bounce_end", "reason"),
+    [
+        ([Reconstructed3DSample(0.0, 1.0, 2.0, -0.1)], False, "below_ground"),
+        ([Reconstructed3DSample(0.0, 1.0, 2.0, 1.0), Reconstructed3DSample(1.0, 1.0, 2.0, 0.5)], True, "bounce_endpoint_not_grounded"),
+        ([Reconstructed3DSample(0.0, 1.0, 2.0, 0.0), Reconstructed3DSample(1.0, 1.0, 2.0, 20.0)], False, "abnormal_height_jump"),
+    ],
+)
+def test_height_profile_validator_rejects_unsafe_3d_profiles(samples, bounce_end, reason):
+    ok, actual_reason = validate_height_profile(samples, bounce_end=bounce_end)
+    assert not ok
+    assert actual_reason == reason
 
 
 def test_association_rescues_local_misdetection():

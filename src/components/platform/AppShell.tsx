@@ -37,7 +37,7 @@ export function AppShell({ shellMode, navigationSection, children, onNavigate }:
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-base font-black tracking-[0.02em]">
-                  拍动视析
+                  瞬境
                 </span>
                 <span className="block truncate text-xs text-slate-400">匹克球运动表现智能分析平台</span>
               </span>
@@ -65,8 +65,8 @@ export function AppShell({ shellMode, navigationSection, children, onNavigate }:
       {isLanding && (
         <footer className="border-t border-[#DDE9D6] px-4 py-8 text-sm text-slate-500 sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-[1480px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <span>拍动视析 · 北京体育大学体育工程学院创新训练项目</span>
-            <span className="text-xs text-slate-400">基于视觉捕捉与智能传感的运动表现分析平台</span>
+            <span>瞬境 · 北京体育大学体育工程学院创新训练项目</span>
+            <span className="text-xs text-slate-400">基于视觉捕捉的运动表现智能分析平台</span>
           </div>
         </footer>
       )}

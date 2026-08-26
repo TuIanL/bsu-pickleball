@@ -21,7 +21,11 @@ vi.mock("../../services/analysisClient", () => ({
   getAnalysisResult: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock("../../pages/VisionPage", () => ({ VisionPage: ({ jobId }: { jobId: string }) => <div>vision:{jobId}</div> }));
+vi.mock("../../pages/VisionPage", () => ({
+  VisionPage: ({ jobId, embedded }: { jobId: string; embedded?: boolean }) => (
+    <div data-testid="vision-view" data-embedded={embedded ? "true" : "false"}>vision:{jobId}</div>
+  ),
+}));
 vi.mock("../../pages/BallTrajectoryPage", () => ({ BallTrajectoryPage: ({ jobId }: { jobId: string }) => <div>trajectory:{jobId}</div> }));
 vi.mock("../report/ReportContent", () => ({ ReportContent: ({ jobId }: { jobId: string }) => <div>report:{jobId}</div> }));
 vi.mock("../../pages/MultiviewObservabilityPage", () => ({ MultiviewObservabilityPage: ({ jobId }: { jobId: string }) => <div>multiview-technical:{jobId}</div> }));
@@ -90,6 +94,19 @@ describe("LibraryItemWorkspace 分析入口", () => {
     expect(await screen.findByText("双摄协同分析")).toBeTruthy();
     expect(screen.getByText("A 机位分析")).toBeTruthy();
     expect(screen.getByText("B 机位分析")).toBeTruthy();
+  });
+
+  it("比赛库素材标题区不显示突出的评分校准入口", async () => {
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      fieldSessionId: "session-1",
+      captureTakeId: "take-1",
+    }));
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+
+    await screen.findByText("测试素材");
+    expect(screen.queryByRole("button", { name: "评分校准" })).toBeNull();
   });
 
   it("概览列出历史分析任务，并可删除已完成任务（保留视频）", async () => {
@@ -197,7 +214,9 @@ describe("LibraryItemWorkspace 分析入口", () => {
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
     vi.mocked(getAnalysisResult).mockResolvedValue({
       job_id: "old",
-      metrics: {},
+      status: "completed",
+      tracks: [{ track_id: "Player_1", court_point: { x: 10, y: 20 } }],
+      metrics: { distances: [], speeds: [], kitchen_dwell: [] },
       artifacts: { ball_trajectory_url: "/old/ball.json" },
     } as never);
     const onNavigate = vi.fn();
@@ -220,6 +239,49 @@ describe("LibraryItemWorkspace 分析入口", () => {
     fireEvent.click(screen.getByRole("button", { name: "球路" }));
     expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/analysisJob=old/), { replace: true });
     expect(onNavigate.mock.calls.at(-1)?.[0]).toContain("t=9");
+  });
+
+  it("刷新恢复 displayView，并在嵌入式 Tab 跳转中保留机位参数", async () => {
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=analysis&analysisJob=old&displayView=cam_2");
+    const target = item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "old",
+      primaryResultAnalysisJobId: "old",
+      analysisJobs: [{ id: "old", status: "completed", analysisKind: "multiview", createdAt: "2026-08-02T00:00:00Z" }],
+    });
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
+    const onNavigate = vi.fn();
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
+
+    expect((await screen.findByTestId("vision-view")).getAttribute("data-embedded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "球路" }));
+    expect(onNavigate).toHaveBeenLastCalledWith(expect.stringContaining("displayView=cam_2"), { replace: true });
+    expect(onNavigate.mock.calls.at(-1)?.[0]).toContain("analysisJob=old");
+  });
+
+  it("completed 但没有有效报告证据时报告 Tab 置灰，点击不会导航", async () => {
+    const target = item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      analysisState: "succeeded",
+      primaryAnalysisJobId: "empty",
+      primaryResultAnalysisJobId: "empty",
+      analysisJobs: [{ id: "empty", status: "completed", analysisKind: "single_view", createdAt: "2026-08-02T00:00:00Z" }],
+    });
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
+    vi.mocked(getAnalysisResult).mockResolvedValue({
+      job_id: "empty", status: "completed", tracks: [],
+      metrics: { distances: [], speeds: [], kitchen_dwell: [] }, artifacts: {},
+    } as never);
+    const onNavigate = vi.fn();
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
+
+    const reportTab = await screen.findByRole("button", { name: "报告" });
+    expect((reportTab as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(reportTab);
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 
   it("删除当前 selected Job 后 replace 清理版本参数并定向刷新", async () => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, within } from "@testing-library/react";
+import { useState } from "react";
 import { VideoAnalysisCard } from "./VideoAnalysisCard";
+import { resolvePlayerIdentityHue } from "../../utils/overlayPresentation";
 import type {
   BallTrajectoryArtifact,
   BounceEventsArtifact,
@@ -10,6 +12,7 @@ import type {
   TimelineMarker,
   TrackingOverlayArtifact,
   VideoOverlayLabel,
+  FusedPlayerOverlayArtifact,
 } from "../../types/report";
 
 const match: MatchSummary = {
@@ -83,6 +86,8 @@ describe("VideoAnalysisCard detection labels", () => {
     expect(container.textContent).toContain("P3");
     // 不应泄漏原始 track_id 数字作为标签
     expect(container.textContent).not.toMatch(/\bID\s*[12]\b/);
+    expect(container.querySelector(`rect[stroke='${resolvePlayerIdentityHue("Player_1")}']`)).toBeTruthy();
+    expect(container.querySelector(`rect[stroke='${resolvePlayerIdentityHue("Player_3")}']`)).toBeTruthy();
   });
 
   it("shows 'person' for detections without player_id (pre-lock frames)", () => {
@@ -189,9 +194,9 @@ describe("VideoAnalysisCard detection labels", () => {
     );
     const card = within(container);
 
-    expect(card.getByLabelText("隐藏球点").hasAttribute("disabled")).toBe(true);
-    expect(card.getByLabelText("隐藏球路").hasAttribute("disabled")).toBe(true);
-    expect(card.getByLabelText("隐藏弹跳候选").hasAttribute("disabled")).toBe(true);
+    expect(card.getByLabelText("球点不可用").hasAttribute("disabled")).toBe(true);
+    expect(card.getByLabelText("球路不可用").hasAttribute("disabled")).toBe(true);
+    expect(card.getByLabelText("弹跳候选不可用").hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -236,4 +241,139 @@ describe("VideoAnalysisCard court HUD collapse", () => {
     fireEvent.click(card.getByLabelText("收起球场地图"));
     expect(card.queryByTestId("court-minimap-hud")).toBeNull();
   });
+});
+
+describe("VideoAnalysisCard multiview display", () => {
+  function makeDualViewOverlay(): FusedPlayerOverlayArtifact {
+    const frame = (x: number, courtX: number) => ({
+      frame_index: 0,
+      timestamp_seconds: 0,
+      players: [{
+        player_id: "Player_1",
+        label: "P1",
+        bbox: [x, 100, x + 80, 300],
+        footpoint: [x + 40, 300],
+        evidence_type: "base_observed" as const,
+        source_confidence: 0.9,
+        overlay_confidence: 0.9,
+        canonical_court_position_ft: [courtX, 10],
+      }],
+    });
+    return {
+      schema_version: "multiview-fused-player-overlay.v2",
+      job_id: "job-dual",
+      reference_view_id: "cam_1",
+      status: "available",
+      detail: "",
+      frame_count: 1,
+      processed_frame_count: 1,
+      source: { width: 1920, height: 1080 },
+      frames: [frame(100, 4)],
+      views: {
+        cam_1: { view_id: "cam_1", status: "available", detail: "", source: { width: 1920, height: 1080 }, frames: [frame(100, 4)] },
+        cam_2: { view_id: "cam_2", status: "available", detail: "", source: { width: 1920, height: 1080 }, frames: [frame(900, 16)] },
+      },
+    };
+  }
+
+  it("switches Player overlay and minimap together to the selected view", () => {
+    function Harness() {
+      const [view, setView] = useState("cam_1");
+      return (
+        <VideoAnalysisCard
+          displayViewId={view}
+          displayViewOptions={[
+            { id: "cam_1", label: "A 机位", available: true },
+            { id: "cam_2", label: "B 机位", available: true },
+          ]}
+          fusedPlayerOverlay={makeDualViewOverlay()}
+          fusedPlayerOverlayLoadState="available"
+          labels={emptyLabels}
+          match={match}
+          onDisplayViewChange={setView}
+          players={emptyPlayers}
+          timeline={emptyTimeline}
+          videoSrc="/test.mp4"
+        />
+      );
+    }
+
+    const { container } = render(<Harness />);
+    const card = within(container);
+    expect(card.getByTestId("fused-player-Player_1").querySelector("rect")?.getAttribute("x")).toBe("100");
+    fireEvent.click(card.getByLabelText("展开球场地图"));
+    const aHudX = card.getByTestId("hud-player-1").querySelector("circle")?.getAttribute("cx");
+    fireEvent.click(card.getByRole("button", { name: "B 机位" }));
+    expect(card.getByTestId("fused-player-Player_1").querySelector("rect")?.getAttribute("x")).toBe("900");
+    const bHudX = card.getByTestId("hud-player-1").querySelector("circle")?.getAttribute("cx");
+    expect(aHudX).not.toBeNull();
+    expect(bHudX).not.toBe(aHudX);
+  });
+
+  it("keeps canonical Player identity through an A→B→A round trip", () => {
+    function Harness() {
+      const [view, setView] = useState("cam_1");
+      return (
+        <VideoAnalysisCard
+          displayViewId={view}
+          displayViewOptions={[
+            { id: "cam_1", label: "A 机位", available: true },
+            { id: "cam_2", label: "B 机位", available: true },
+          ]}
+          fusedPlayerOverlay={makeDualViewOverlay()}
+          fusedPlayerOverlayLoadState="available"
+          labels={emptyLabels}
+          match={match}
+          onDisplayViewChange={setView}
+          players={emptyPlayers}
+          timeline={emptyTimeline}
+          videoSrc="/test.mp4"
+        />
+      );
+    }
+
+    const { container } = render(<Harness />);
+    const card = within(container);
+    const player = () => card.getByTestId("fused-player-Player_1").querySelector("rect")?.getAttribute("x");
+
+    expect(player()).toBe("100");
+    fireEvent.click(card.getByRole("button", { name: "B 机位" }));
+    expect(player()).toBe("900");
+    fireEvent.click(card.getByRole("button", { name: "A 机位" }));
+    expect(player()).toBe("100");
+    expect(card.getByText("P1")).toBeTruthy();
+  });
+
+  it("keeps a missing target-view bbox hidden without borrowing another Player's box", () => {
+    const artifact = makeDualViewOverlay();
+    const targetView = artifact.views?.cam_2;
+    if (!targetView) {
+      throw new Error("Expected dual-view fixture to include cam_2");
+    }
+    const sourcePlayer = targetView.frames[0].players[0];
+    targetView.frames[0].players = [
+      { ...sourcePlayer, bbox: null, footpoint: null, evidence_type: "cross_view_projected" },
+      { ...sourcePlayer, player_id: "Player_2", label: "P2", bbox: [1200, 100, 1280, 300], footpoint: [1240, 300] },
+    ];
+
+    const { container } = render(
+      <VideoAnalysisCard
+        displayViewId="cam_2"
+        displayViewOptions={[{ id: "cam_2", label: "B 机位", available: true }]}
+        fusedPlayerOverlay={artifact}
+        fusedPlayerOverlayLoadState="available"
+        labels={emptyLabels}
+        match={match}
+        players={emptyPlayers}
+        timeline={emptyTimeline}
+        videoSrc="/test.mp4"
+      />,
+    );
+    const card = within(container);
+
+    expect(card.queryByTestId("fused-player-Player_1")).toBeNull();
+    expect(card.getByTestId("fused-player-Player_2")).toBeTruthy();
+    expect(card.getByText("P2")).toBeTruthy();
+  });
+
 });

@@ -18,7 +18,7 @@ import csv
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from math import hypot
 from pathlib import Path
@@ -84,6 +84,21 @@ from app.vision.pickleball_game_analysis.detection_writer import (
     build_raw_trajectory_payload,
 )
 from app.vision.pickleball_game_analysis.effective_time_windows import resolve_effective_windows
+from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
+    BallBoundaryAction,
+    BallSearchDecision,
+    BallSearchPolicy,
+    BallSemanticPolicyConfig,
+    MatchSemanticSnapshot,
+    SemanticAuthority,
+    SemanticPolicyMode,
+    SemanticTimelineProvider,
+    build_semantic_timeline_payload,
+    serve_candidate_semantic_snapshot,
+)
+from app.vision.pickleball_game_analysis.semantic_boundary_calibration import (
+    build_semantic_boundary_evaluation_payload,
+)
 from app.vision.pickleball_game_analysis.minimap_visualizer import MinimapVisualizer
 from app.vision.pickleball_game_analysis.overlay_video_writer import OverlayVideoWriter
 from app.vision.pickleball_game_analysis.player_attribution_context import build_player_attribution_context
@@ -93,7 +108,7 @@ from app.vision.pickleball_game_analysis.projection_debug_writer import Projecti
 from app.vision.pickleball_game_analysis.reconstruction_engine import reconstruct_ball_trajectory
 from app.vision.pickleball_game_analysis.reconstruction_schemas import ReconstructionConfig
 from app.vision.pickleball_game_analysis.schemas import BallFrameSample, BounceEvent, TrajectoryPoint
-from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner
+from app.vision.pickleball_game_analysis.trajectory_cleaner import TrajectoryCleaner, TrajectoryCleanerConfig
 from app.vision.pickleball_game_analysis.visualization_data_builder import PositionVisualizationDataBuilder
 from app.vision.pickleball_game_analysis.visualization_schemas import (
     VisualizationConfig,
@@ -185,6 +200,9 @@ class _BallRunOutput:
     bounce_events: list[BounceEvent] | None = None
     accepted_count: int = 0
     error: str | None = None
+    semantic_snapshots: list[MatchSemanticSnapshot] = field(default_factory=list)
+    semantic_decisions: list[BallSearchDecision] = field(default_factory=list)
+    semantic_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -214,6 +232,14 @@ class _BallArtifactFields:
     reconstructed_ball_trajectory_url: str | None = None
     reconstructed_ball_trajectory_status: str | None = None
     reconstructed_ball_trajectory_detail: str | None = None
+    ball_semantic_timeline_json_path: str | None = None
+    ball_semantic_timeline_url: str | None = None
+    ball_semantic_timeline_status: str | None = None
+    ball_semantic_timeline_detail: str | None = None
+    ball_semantic_boundary_eval_json_path: str | None = None
+    ball_semantic_boundary_eval_url: str | None = None
+    ball_semantic_boundary_eval_status: str | None = None
+    ball_semantic_boundary_eval_detail: str | None = None
 
 
 @dataclass
@@ -256,6 +282,21 @@ class _BallRunContext:
     detections: list[MultiTargetDetection] = field(default_factory=list)
     error: str | None = None
     disabled_reason: str | None = None
+    semantic_provider: SemanticTimelineProvider | None = None
+    semantic_policy: BallSearchPolicy | None = None
+    semantic_evidence: dict[str, Any] = field(default_factory=dict)
+    semantic_snapshots: list[MatchSemanticSnapshot] = field(default_factory=list)
+    semantic_decisions: list[BallSearchDecision] = field(default_factory=list)
+    semantic_raw_candidate_count: int = 0
+    semantic_suppressed_count: int = 0
+    semantic_fallback_count: int = 0
+    semantic_hard_gate_active: bool = False
+    semantic_boundary_events: list[dict[str, Any]] = field(default_factory=list)
+    semantic_formal_candidate_before_count: int = 0
+    semantic_formal_candidate_after_count: int = 0
+    semantic_warm_capture_count: int = 0
+    semantic_formal_publish_count: int = 0
+    semantic_segment_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -538,6 +579,7 @@ class AnalysisPipeline:
                     video_id=video_id,
                     calibration_id=calibration_id,
                     calibration_keypoints=calibration.keypoints,
+                    capture_take_id=capture_take_id,
                     frame_stride=frame_stride or self.frame_stride,
                     source_fps=source_fps,
                     court_view_match_threshold=court_view_match_threshold,
@@ -887,6 +929,7 @@ class AnalysisPipeline:
             progress_callback=progress_callback,
             homography=_reconstruction_homography,
             serve_events=_reconstruction_serve_events,
+            capture_take_id=capture_take_id,
             tracking_run_output=locals().get("run_output"),
             timing_provenance=_timing_provenance,
         )
@@ -931,6 +974,12 @@ class AnalysisPipeline:
         reconstructed_ball_trajectory_url = ball_fields.reconstructed_ball_trajectory_url
         reconstructed_ball_trajectory_status = ball_fields.reconstructed_ball_trajectory_status
         reconstructed_ball_trajectory_detail = ball_fields.reconstructed_ball_trajectory_detail
+        ball_semantic_timeline_json_path = ball_fields.ball_semantic_timeline_json_path
+        ball_semantic_timeline_url = ball_fields.ball_semantic_timeline_url
+        ball_semantic_timeline_status = ball_fields.ball_semantic_timeline_status
+        ball_semantic_timeline_detail = ball_fields.ball_semantic_timeline_detail
+        ball_semantic_boundary_eval_json_path = ball_fields.ball_semantic_boundary_eval_json_path
+        ball_semantic_boundary_eval_url = ball_fields.ball_semantic_boundary_eval_url
 
         # 计算运动指标（附加球分析摘要）
         _ball_metrics = self._build_ball_metrics_summary(ball_run_output)
@@ -1009,6 +1058,10 @@ class AnalysisPipeline:
                 bounce_events_url=bounce_events_url,
                 reconstructed_ball_trajectory_json_path=reconstructed_ball_trajectory_json_path,
                 reconstructed_ball_trajectory_url=reconstructed_ball_trajectory_url,
+                ball_semantic_timeline_json_path=ball_semantic_timeline_json_path,
+                ball_semantic_timeline_url=ball_semantic_timeline_url,
+                ball_semantic_boundary_eval_json_path=ball_semantic_boundary_eval_json_path,
+                ball_semantic_boundary_eval_url=ball_semantic_boundary_eval_url,
                 analysis_overlay_video_path=analysis_overlay_video_path,
                 analysis_overlay_video_url=analysis_overlay_video_url,
                 heatmaps_manifest_json_path=heatmaps_manifest_json_path,
@@ -1053,6 +1106,10 @@ class AnalysisPipeline:
                 bounce_events_detail=bounce_events_detail,
                 reconstructed_ball_trajectory_status=reconstructed_ball_trajectory_status,
                 reconstructed_ball_trajectory_detail=reconstructed_ball_trajectory_detail,
+                ball_semantic_timeline_status=ball_semantic_timeline_status,
+                ball_semantic_timeline_detail=ball_semantic_timeline_detail,
+                ball_semantic_boundary_eval_status=ball_fields.ball_semantic_boundary_eval_status,
+                ball_semantic_boundary_eval_detail=ball_fields.ball_semantic_boundary_eval_detail,
                 analysis_overlay_video_status=analysis_overlay_video_status,
                 analysis_overlay_video_detail=analysis_overlay_video_detail,
                 position_visualizations_status=position_visualizations_status,
@@ -1128,6 +1185,7 @@ class AnalysisPipeline:
         progress_callback: ProgressCallback | None = None,
         homography: list[list[float]] | None = None,
         serve_events: list[Any] | None = None,
+        capture_take_id: str | None = None,
         tracking_run_output: Any | None = None,
         timing_provenance: dict[str, object] | None = None,
     ) -> None:
@@ -1180,9 +1238,89 @@ class AnalysisPipeline:
             fields.bounce_events_detail = "球轨迹未生成"
             fields.reconstructed_ball_trajectory_status = "skipped"
             fields.reconstructed_ball_trajectory_detail = "球轨迹未生成"
+            fields.ball_semantic_timeline_status = "skipped"
+            fields.ball_semantic_timeline_detail = "球分析未运行，未生成语义搜索诊断"
+            fields.ball_semantic_boundary_eval_status = "skipped"
+            fields.ball_semantic_boundary_eval_detail = "球分析未运行，未生成语义边界评估"
             return
 
         run = ball_run_output
+
+        # ServeStartDetector 在单摄离线链路中属于后处理证据；把候选追加到
+        # semantic trace，供回放验证 PRE_SERVE/SERVE_ARMED 策略，不改变球事件。
+        serve_candidates = list(getattr(serve_events, "events", ()) or ())
+        if serve_candidates:
+            policy_mode = (
+                run.semantic_decisions[0].policy_mode
+                if run.semantic_decisions
+                else SemanticPolicyMode.SHADOW
+            )
+            serve_policy = BallSearchPolicy(BallSemanticPolicyConfig(mode=policy_mode))
+            for candidate in serve_candidates:
+                serve_snapshot = serve_candidate_semantic_snapshot(candidate, mode=policy_mode)
+                run.semantic_snapshots.append(serve_snapshot)
+                run.semantic_decisions.append(serve_policy.evaluate(serve_snapshot))
+
+        # 语义策略诊断是旁路 artifact：生成失败不得影响旧球轨迹和球员主链。
+        try:
+            semantic_payload = build_semantic_timeline_payload(
+                job_id=job_id,
+                take_id=capture_take_id,
+                snapshots=run.semantic_snapshots,
+                decisions=run.semantic_decisions,
+                diagnostics=run.semantic_diagnostics,
+                frame_stride=frame_stride,
+                timestamp_provenance=timing_provenance,
+            )
+            semantic_path = self.storage.ball_semantic_timeline_json_path(job_id)
+            self.storage.write_json(semantic_path, semantic_payload)
+            fields.ball_semantic_timeline_json_path = str(semantic_path)
+            fields.ball_semantic_timeline_url = f"/api/analysis/jobs/{job_id}/artifacts/ball-semantic-timeline"
+            fields.ball_semantic_timeline_status = "available"
+            fields.ball_semantic_timeline_detail = (
+                f"已记录 {len(run.semantic_snapshots)} 个语义 tick，"
+                f"{run.semantic_diagnostics.get('policy_mode', 'shadow')} 策略决策 {len(run.semantic_decisions)} 个，"
+                f"边界动作 {len(run.semantic_diagnostics.get('boundary_events', ())) } 个"
+            )
+        except Exception as exc:  # pragma: no cover - artifact failure must be non-fatal
+            logger.warning("Ball semantic timeline artifact failed: %s", exc)
+            fields.ball_semantic_timeline_status = "failed"
+            fields.ball_semantic_timeline_detail = f"语义搜索诊断写入失败：{exc}"
+
+        # 边界校准评估与时间线分开落盘，便于离线回放和版本间对比；它是旁路诊断，
+        # 即使写入失败也不能影响球轨迹主链。
+        boundary_eval_enabled = bool(run.semantic_diagnostics.get("boundary_eval_enabled", True))
+        if not boundary_eval_enabled:
+            fields.ball_semantic_boundary_eval_status = "skipped"
+            fields.ball_semantic_boundary_eval_detail = "语义边界评估未启用"
+        else:
+            try:
+                boundary_eval_payload = build_semantic_boundary_evaluation_payload(
+                    job_id=job_id,
+                    take_id=capture_take_id,
+                    snapshots=run.semantic_snapshots,
+                    decisions=run.semantic_decisions,
+                    evidence_ledger=run.semantic_diagnostics.get("evidence_ledger", ()),
+                    diagnostics=run.semantic_diagnostics,
+                    reference_boundaries=run.semantic_diagnostics.get("reference_boundaries"),
+                    frame_stride=frame_stride,
+                    timestamp_provenance=timing_provenance,
+                )
+                boundary_eval_path = self.storage.ball_semantic_boundary_eval_json_path(job_id)
+                self.storage.write_json(boundary_eval_path, boundary_eval_payload)
+                fields.ball_semantic_boundary_eval_json_path = str(boundary_eval_path)
+                fields.ball_semantic_boundary_eval_url = (
+                    f"/api/analysis/jobs/{job_id}/artifacts/ball-semantic-boundary-eval"
+                )
+                fields.ball_semantic_boundary_eval_status = "available"
+                fields.ball_semantic_boundary_eval_detail = (
+                    f"已评估 {len(run.semantic_snapshots)} 个语义 tick，"
+                    f"记录 {len(run.semantic_diagnostics.get('evidence_ledger', ())) } 条证据"
+                )
+            except Exception as exc:  # pragma: no cover - artifact failure must be non-fatal
+                logger.warning("Ball semantic boundary evaluation artifact failed: %s", exc)
+                fields.ball_semantic_boundary_eval_status = "failed"
+                fields.ball_semantic_boundary_eval_detail = f"语义边界评估写入失败：{exc}"
 
         # 确定球轨迹 stage 状态与说明（合并原 ball-detection 的信息）
         if run.status == "available":
@@ -1614,6 +1752,7 @@ class AnalysisPipeline:
         calibration_id: str | None,
         calibration_keypoints: list[CalibrationKeypoint] | None,
         frame_stride: int,
+        capture_take_id: str | None = None,
         source_fps: float | None = None,
         court_view_match_threshold: float | None = None,
         match_context: MatchAnalysisContext | None = None,
@@ -1790,6 +1929,55 @@ class AnalysisPipeline:
         )
         from app.vision.pickleball_game_analysis.ball_tracker import BallTrackerConfig
 
+        semantic_mode_raw = str(getattr(self.settings, "ball_semantic_policy_mode", "shadow") or "shadow").lower()
+        try:
+            semantic_mode = SemanticPolicyMode(semantic_mode_raw)
+        except ValueError:
+            semantic_mode = SemanticPolicyMode.SHADOW
+        semantic_config = BallSemanticPolicyConfig(
+            mode=semantic_mode,
+            enforce_authoritative_non_play=bool(
+                getattr(self.settings, "ball_semantic_enforce_authoritative_non_play", False)
+            ),
+            enforced_rollout_enabled=bool(
+                getattr(self.settings, "ball_semantic_enforced_rollout", False)
+            ),
+            rollout_id=str(getattr(self.settings, "ball_semantic_rollout_id", "default") or "default"),
+            semantic_timeline_enabled=bool(getattr(self.settings, "ball_semantic_timeline_enabled", True)),
+            serve_prepare_confidence=float(
+                getattr(self.settings, "ball_semantic_serve_prepare_confidence", 0.55)
+            ),
+            serve_armed_confidence=float(getattr(self.settings, "ball_semantic_serve_armed_confidence", 0.70)),
+            rally_end_min_evidence=int(getattr(self.settings, "ball_semantic_rally_end_min_evidence", 2)),
+            policy_version=str(
+                getattr(self.settings, "ball_semantic_policy_version", "semantic_boundary_policy.v1")
+            ),
+            min_confirm_ticks=int(getattr(self.settings, "ball_semantic_min_confirm_ticks", 2)),
+            grace_window_sec=float(getattr(self.settings, "ball_semantic_grace_window_seconds", 0.20)),
+            rescue_min_consecutive_ticks=int(
+                getattr(self.settings, "ball_semantic_rescue_min_consecutive_ticks", 2)
+            ),
+            rescue_min_motion_pixels=float(
+                getattr(self.settings, "ball_semantic_rescue_min_motion_pixels", 15.0)
+            ),
+            evidence_freshness_sec=float(
+                getattr(self.settings, "ball_semantic_evidence_freshness_seconds", 0.50)
+            ),
+            conflict_penalty=float(getattr(self.settings, "ball_semantic_conflict_penalty", 0.25)),
+            boundary_eval_enabled=bool(getattr(self.settings, "ball_semantic_boundary_eval_enabled", True)),
+        )
+        semantic_provider = (
+            SemanticTimelineProvider.from_capture_take(
+                capture_take_id,
+                clip_start_ms=clip_start_ms,
+                clip_end_ms=clip_end_ms,
+                video_duration_ms=video_duration_ms,
+                config=semantic_config,
+            )
+            if bool(getattr(self.settings, "enable_ball_semantic_policy", True))
+            and semantic_config.semantic_timeline_enabled
+            else None
+        )
         # 球检测（可选）：启用且适配器可用时逐帧运行，使用局部 context 封装状态
         ball_ctx = _BallRunContext(
             tracker=(
@@ -1810,6 +1998,8 @@ class AnalysisPipeline:
                 if self.ball_detector is None and self.ball_detection_enabled
                 else None
             ),
+            semantic_provider=semantic_provider,
+            semantic_policy=BallSearchPolicy(semantic_config) if semantic_provider is not None else None,
         )
 
         window_metadata = window.metadata()
@@ -2258,16 +2448,160 @@ class AnalysisPipeline:
         if context.tracker is None:
             return
         try:
-            ball_sample = context.tracker.update(
-                frame=frame,
-                frame_index=frame_index,
-                timestamp_sec=timestamp,
-                roi_corners=None,
-                homography=homography,
-                player_motion_pixels=player_motion_pixels,
+            # 只在这里调用一次 detector；随后把同一份候选交给策略和 tracker。
+            raw_candidates = list(
+                context.tracker.detector.detect(frame, conf=float(getattr(context.tracker.config, "confidence", 0.18)))
             )
+            pre_tick = context.tracker.pre_tick_snapshot(timestamp)
+            ball_motion_pixels: float | None = None
+            valid_ball_motion = False
+            if pre_tick.predicted_position is not None and raw_candidates:
+                nearest_distance = min(
+                    (
+                        (candidate.image_xy[0] - pre_tick.predicted_position[0]) ** 2
+                        + (candidate.image_xy[1] - pre_tick.predicted_position[1]) ** 2
+                    ) ** 0.5
+                    for candidate in raw_candidates
+                )
+                ball_motion_pixels = float(nearest_distance)
+                valid_ball_motion = pre_tick.continuity_score >= 0.72
+            context.semantic_raw_candidate_count += len(raw_candidates)
+            context.semantic_formal_candidate_before_count += len(raw_candidates)
+            snapshot = None
+            decision = None
+            if context.semantic_provider is not None and context.semantic_policy is not None:
+                snapshot = context.semantic_provider.snapshot(
+                    timestamp * 1000.0,
+                    evidence={
+                        **dict(context.semantic_evidence),
+                        "player_motion_pixels": player_motion_pixels,
+                        "raw_candidate_count": len(raw_candidates),
+                        "ball_motion_pixels": ball_motion_pixels,
+                        "valid_ball_motion": valid_ball_motion,
+                        "ball_continuity": pre_tick.continuity_score,
+                    },
+                )
+                decision = context.semantic_policy.evaluate(
+                    snapshot,
+                    raw_candidate_count=len(raw_candidates),
+                )
+                context.semantic_snapshots.append(snapshot)
+                context.semantic_decisions.append(decision)
+                if snapshot.semantic_fallback:
+                    context.semantic_fallback_count += 1
+
+            semantic_enforced_authority = bool(
+                decision is not None
+                and decision.policy_mode == SemanticPolicyMode.ENFORCED
+                and decision.rollout_enabled
+                and decision.authority in {SemanticAuthority.MANUAL, SemanticAuthority.CORRECTED}
+            )
+            boundary_result: dict[str, Any] = {}
+            if (
+                decision is not None
+                and semantic_enforced_authority
+                and decision.boundary_action != BallBoundaryAction.NONE
+            ):
+                boundary_result = context.tracker.apply_semantic_boundary(
+                    decision.boundary_action.value,
+                    decision.boundary_action_id,
+                    timestamp_sec=timestamp,
+                )
+                context.semantic_boundary_events.append(
+                    {
+                        "frame_index": frame_index,
+                        "timestamp_sec": timestamp,
+                        "action": decision.boundary_action.value,
+                        "action_id": decision.boundary_action_id,
+                        **boundary_result,
+                    }
+                )
+                if boundary_result.get("applied"):
+                    if decision.boundary_action in {
+                        BallBoundaryAction.WARM_REACQUIRE,
+                        BallBoundaryAction.SERVE_REACQUIRE,
+                    }:
+                        context.semantic_warm_capture_count += 1
+                    after_segment_id = (boundary_result.get("after") or {}).get("formal_segment_id")
+                    if after_segment_id and after_segment_id not in context.semantic_segment_ids:
+                        context.semantic_segment_ids.append(after_segment_id)
+
+            hard_gate = bool(
+                decision is not None
+                and decision.hard_gate_active
+                and not decision.tracker_update_allowed
+            )
+            if hard_gate:
+                context.semantic_suppressed_count += len(raw_candidates)
+                context.semantic_formal_candidate_after_count += 0
+                context.semantic_hard_gate_active = True
+                ball_sample = BallFrameSample(
+                    frame_index=frame_index,
+                    timestamp_sec=timestamp,
+                    image_xy=None,
+                    court_xy=None,
+                    confidence=None,
+                    visible=bool(raw_candidates),
+                    accepted=False,
+                    candidate_count=len(raw_candidates),
+                    reject_reason=decision.reason,
+                    source="semantic_policy",
+                    track_state=context.tracker.track_state.value,
+                    overall_decision=decision.action.value,
+                    publication_eligible=False,
+                    quality_status="diagnostic_only",
+                    diagnostics={
+                        "semantic_snapshot": snapshot.to_dict() if snapshot is not None else None,
+                        "semantic_decision": decision.to_dict(),
+                        "raw_candidate_count": len(raw_candidates),
+                        "boundary_result": boundary_result,
+                        "formal_candidate_count_before": len(raw_candidates),
+                        "formal_candidate_count_after": 0,
+                    },
+                )
+            else:
+                if context.semantic_hard_gate_active:
+                    if not boundary_result.get("applied"):
+                        context.tracker.clear()
+                    context.semantic_hard_gate_active = False
+                ball_sample = context.tracker.update_from_candidates(
+                    frame_index=frame_index,
+                    timestamp_sec=timestamp,
+                    view_candidates=raw_candidates,
+                    frame_shape=frame.shape,
+                    roi_corners=None,
+                    homography=homography,
+                    player_motion_pixels=player_motion_pixels,
+                )
+                if decision is not None:
+                    formal_publish = bool(decision.formal_publish_allowed)
+                    if not formal_publish:
+                        context.semantic_warm_capture_count += 1
+                        ball_sample = replace(
+                            ball_sample,
+                            source="semantic_warm",
+                            publication_eligible=False,
+                            quality_status="warm_diagnostic",
+                            overall_decision=decision.action.value,
+                        )
+                    elif ball_sample.accepted and ball_sample.publication_eligible:
+                        context.semantic_formal_publish_count += 1
+                    context.semantic_formal_candidate_after_count += (
+                        1 if formal_publish and ball_sample.accepted else 0
+                    )
+                    ball_sample = replace(
+                        ball_sample,
+                        diagnostics={
+                            **dict(ball_sample.diagnostics),
+                            "semantic_snapshot": snapshot.to_dict() if snapshot is not None else None,
+                            "semantic_decision": decision.to_dict(),
+                            "boundary_result": boundary_result,
+                            "formal_candidate_count_before": len(raw_candidates),
+                            "formal_candidate_count_after": 1 if formal_publish and ball_sample.accepted else 0,
+                        },
+                    )
             context.samples.append(ball_sample)
-            if ball_sample.image_xy is not None and ball_sample.accepted:
+            if ball_sample.image_xy is not None and ball_sample.accepted and ball_sample.publication_eligible:
                 context.detections.append(
                     MultiTargetDetection(
                         frame_index=frame_index,
@@ -2297,6 +2631,56 @@ class AnalysisPipeline:
         只做算法处理，不负责写文件。写文件由 _finalize_ball_analysis() 负责。
         当 ball context 无 tracker 或无样本时，返回对应的 unavailable/skipped 状态。
         """
+        semantic_diagnostics = {
+            **(
+                ball_ctx.semantic_provider.diagnostics_snapshot()
+                if ball_ctx.semantic_provider is not None
+                else {"enabled": False}
+            ),
+            "raw_candidate_count": ball_ctx.semantic_raw_candidate_count,
+            "suppressed_candidate_count": ball_ctx.semantic_suppressed_count,
+            "fallback_tick_count": ball_ctx.semantic_fallback_count,
+            "warm_capture_count": ball_ctx.semantic_warm_capture_count,
+            "formal_publish_count": ball_ctx.semantic_formal_publish_count,
+            "formal_candidate_count_before": ball_ctx.semantic_formal_candidate_before_count,
+            "formal_candidate_count_after": ball_ctx.semantic_formal_candidate_after_count,
+            "boundary_events": list(ball_ctx.semantic_boundary_events),
+            "segment_ids": list(ball_ctx.semantic_segment_ids),
+            "policy_mode": (
+                ball_ctx.semantic_policy.config.mode.value
+                if ball_ctx.semantic_policy is not None
+                else "disabled"
+            ),
+            "rollout_id": (
+                ball_ctx.semantic_policy.config.rollout_id
+                if ball_ctx.semantic_policy is not None
+                else None
+            ),
+            "rollout_enabled": (
+                bool(ball_ctx.semantic_policy.config.enforced_rollout_enabled)
+                if ball_ctx.semantic_policy is not None
+                else False
+            ),
+            "shadow_baseline": (
+                ball_ctx.semantic_policy is None
+                or ball_ctx.semantic_policy.config.mode == SemanticPolicyMode.SHADOW
+            ),
+            "policy_version": (
+                ball_ctx.semantic_policy.config.policy_version
+                if ball_ctx.semantic_policy is not None
+                else None
+            ),
+            "boundary_eval_enabled": (
+                bool(ball_ctx.semantic_policy.config.boundary_eval_enabled)
+                if ball_ctx.semantic_policy is not None
+                else False
+            ),
+            "evidence_ledger": (
+                ball_ctx.semantic_provider.diagnostics_snapshot().get("evidence_ledger", [])
+                if ball_ctx.semantic_provider is not None
+                else []
+            ),
+        }
         if ball_ctx.tracker is None and ball_ctx.samples:
             # 球检测中途异常，有部分 sample 但 tracker 已置 None
             accepted_count = sum(1 for s in ball_ctx.samples if s.accepted)
@@ -2309,6 +2693,9 @@ class AnalysisPipeline:
                 bounce_events=None,
                 accepted_count=accepted_count,
                 error=ball_ctx.error or "球检测运行时异常",
+                semantic_snapshots=ball_ctx.semantic_snapshots,
+                semantic_decisions=ball_ctx.semantic_decisions,
+                semantic_diagnostics=semantic_diagnostics,
             )
 
         if ball_ctx.tracker is None and not ball_ctx.samples:
@@ -2323,13 +2710,19 @@ class AnalysisPipeline:
                     bounce_events=None,
                     accepted_count=0,
                     error=ball_ctx.disabled_reason or self.ball_detection_unavailable_reason,
+                    semantic_snapshots=ball_ctx.semantic_snapshots,
+                    semantic_decisions=ball_ctx.semantic_decisions,
+                    semantic_diagnostics=semantic_diagnostics,
                 )
             return None
 
         # 正常路径：有 tracker 有 sample，执行后处理
         try:
             raw_points = [TrajectoryPoint.from_sample(sample) for sample in ball_ctx.samples]
-            cleaned_points = TrajectoryCleaner().clean(raw_points)
+            # 球路插值按真实秒数限幅，避免 frame_stride 较大时把长丢失误补成直线。
+            cleaned_points = TrajectoryCleaner(
+                TrajectoryCleanerConfig(max_interpolation_gap_seconds=0.20)
+            ).clean(raw_points)
             bounce_events: list[BounceEvent] = []
             if self.settings.enable_bounce_detection and cleaned_points:
                 bounce_detector = BounceDetector(config=BounceDetectorConfig(fps=fps))
@@ -2344,6 +2737,9 @@ class AnalysisPipeline:
                 bounce_events=bounce_events,
                 accepted_count=accepted_count,
                 error=None,
+                semantic_snapshots=ball_ctx.semantic_snapshots,
+                semantic_decisions=ball_ctx.semantic_decisions,
+                semantic_diagnostics=semantic_diagnostics,
             )
         except Exception as exc:
             logger.warning("Ball trajectory post-processing failed: %s", exc)
@@ -2356,6 +2752,9 @@ class AnalysisPipeline:
                 bounce_events=None,
                 accepted_count=sum(1 for sample in ball_ctx.samples if sample.accepted),
                 error=str(exc),
+                semantic_snapshots=ball_ctx.semantic_snapshots,
+                semantic_decisions=ball_ctx.semantic_decisions,
+                semantic_diagnostics=semantic_diagnostics,
             )
 
     @staticmethod

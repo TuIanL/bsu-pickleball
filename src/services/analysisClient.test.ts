@@ -5,12 +5,15 @@ import {
   createMultiviewAnalysisJob,
   deleteRecordingAnalysis,
   getAnalysisReport,
+  getStructuredVizData,
   getMultiviewBallStereoEvidence,
+  getShotRallyEvents,
   getSyncAnchorExportUrl,
   getSyncAnchorStatus,
   listAnalysisJobs,
   saveSyncAnchorDraft,
 } from "./analysisClient";
+import structuredVisualizationFixture from "../test/fixtures/structured-visualization.zone-stats.v1.json";
 
 describe("analysis job compatibility", () => {
   afterEach(() => {
@@ -78,6 +81,28 @@ describe("analysis job compatibility", () => {
     );
   });
 
+  it("reads the job-scoped structured visualization artifact without replacing it with demo data", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(structuredVisualizationFixture), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const data = await getStructuredVizData("job-zone-fixture");
+    expect(data?.zone_stats?.players[0]?.id).toBe("Player_1");
+    expect(data?.zone_stats?.players[0]?.zones).toHaveLength(3);
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/analysis/jobs/job-zone-fixture/visualization-data"),
+      expect.any(Object),
+    );
+  });
+
+  it("preserves a missing historical structured artifact for the evidence layer to classify", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
+    await expect(getStructuredVizData("job-old")).rejects.toMatchObject({ status: 404 });
+  });
+
   it("does not turn a real API failure into a local demo job", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("backend offline"));
 
@@ -117,6 +142,20 @@ describe("analysis job compatibility", () => {
     await expect(listAnalysisJobs()).rejects.toMatchObject({ name: "AnalysisApiError" });
     await expect(listAnalysisJobs({ useDemoFallback: true })).resolves.toEqual([demoJob]);
     await expect(getAnalysisReport(demoJob.id)).resolves.toMatchObject({ source: "job", jobId: demoJob.id });
+  });
+
+  it("treats a missing historical shot-rally artifact as unavailable", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
+    const result = { artifacts: { shot_rally_events_url: "/api/analysis/jobs/job-old/artifacts/shot-rally-events" } } as never;
+
+    await expect(getShotRallyEvents(result)).resolves.toBeNull();
+  });
+
+  it("surfaces malformed shot-rally artifact payloads to the independent card state", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{malformed", { status: 200, headers: { "content-type": "application/json" } }));
+    const result = { artifacts: { shot_rally_events_url: "/api/analysis/jobs/job-bad/artifacts/shot-rally-events" } } as never;
+
+    await expect(getShotRallyEvents(result)).rejects.toBeTruthy();
   });
 
   it("preserves HTTP errors instead of reading unrelated local jobs", async () => {

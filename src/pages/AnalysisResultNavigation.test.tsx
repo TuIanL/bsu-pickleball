@@ -13,6 +13,7 @@ vi.mock("../services/analysisClient", () => ({
   getAnalysisJob: mocks.getAnalysisJob,
   getAnalysisReport: mocks.getAnalysisReport,
   getAnalysisResult: mocks.getAnalysisResult,
+  getReconstructedBallTrajectory: vi.fn().mockResolvedValue(null),
   getVideoStreamUrl: vi.fn(),
 }));
 
@@ -46,5 +47,17 @@ describe("analysis result navigation context", () => {
     const button = await screen.findByRole("button", { name: "返回任务管理" });
     button.click();
     expect(onNavigate).toHaveBeenCalledWith("/analysis/tasks?source=sync_recording&session=sync-1");
+  });
+
+  it("direct report URL fails closed when the completed result has no valid evidence", async () => {
+    mocks.getAnalysisJob.mockResolvedValue({ id: "job-1", status: "completed", stages: [], metadata: {} });
+    mocks.getAnalysisReport.mockResolvedValue({ source: "job", reportDefinitions: [], reportActions: [] });
+    mocks.getAnalysisResult.mockResolvedValue({
+      job_id: "job-1", status: "completed", tracks: [],
+      metrics: { distances: [], speeds: [], kitchen_dwell: [] }, artifacts: {},
+    });
+
+    render(<ReportPage jobId="job-1" reportType="movement" onNavigate={vi.fn()} />);
+    expect(await screen.findByText("暂无有效报告数据")).toBeTruthy();
   });
 });

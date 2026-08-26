@@ -20,6 +20,7 @@ from app.vision.pickleball_game_analysis.event_anchored_trajectory_reconstructor
 from app.vision.pickleball_game_analysis.image_space_trajectory_fitter import ImageSpaceTrajectoryFitter
 from app.vision.pickleball_game_analysis.reconstruction_engine import reconstruct_ball_trajectory
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
+    HeightSource,
     ReconstructionConfig,
     ReconstructionMode,
     TrajectoryEvent,
@@ -323,6 +324,37 @@ class TestEventAnchoredTrajectoryReconstructor:
         assert reconstructed.samples[-1].court_xy == pytest.approx((15.0, 39.0))
         assert reconstructed.samples[-1].estimated_height_ft == 0.0
         assert reconstructed.samples[0].height_confidence == 0.0
+        assert reconstructed.samples[0].estimated_height_ft > reconstructed.samples[-1].estimated_height_ft
+        assert len({sample.estimated_height_ft for sample in reconstructed.samples}) > 2
+        assert reconstructed.samples[-1].height_source == HeightSource.BOUNCE.value
+
+    def test_hit_to_hit_uses_distinct_event_contact_heights(self):
+        reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig())
+        hit_a = TrajectoryEvent(
+            "hit-a", TrajectoryEventType.HIT, 0, 0.0, image_xy=(120.0, 178.0), court_xy=(4.0, 5.0),
+            confidence=0.8, height_ft=2.0, height_source=HeightSource.STEREO_EVENT_ESTIMATE.value,
+            height_confidence=0.9, height_uncertainty_ft=0.2,
+        )
+        hit_b = TrajectoryEvent(
+            "hit-b", TrajectoryEventType.HIT, 29, 29 / 30.0, image_xy=(207.0, 175.6), court_xy=(15.0, 39.0),
+            confidence=0.8, height_ft=5.0, height_source=HeightSource.PLAYER_CONTEXT_ESTIMATE.value,
+            height_confidence=0.6, height_uncertainty_ft=0.4,
+        )
+        segment, points, events_by_id = self._segment_with_events([hit_a, hit_b])
+        reconstructed = reconstructor.reconstruct(segment, points, events_by_id, HOMOGRAPHY)
+        assert reconstructed.samples[0].estimated_height_ft == pytest.approx(2.0, abs=0.01)
+        assert reconstructed.samples[-1].estimated_height_ft == pytest.approx(5.0, abs=0.01)
+        assert reconstructed.samples[0].height_source == HeightSource.STEREO_EVENT_ESTIMATE.value
+        assert reconstructed.samples[-1].height_source == HeightSource.PLAYER_CONTEXT_ESTIMATE.value
+
+    def test_contact_height_without_evidence_uses_same_bounded_global_prior(self):
+        reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig())
+        lower = TrajectoryEvent("hit-low", TrajectoryEventType.HIT, 0, 0.0, court_xy=(1.0, 1.0), confidence=0.8)
+        upper = TrajectoryEvent("hit-high", TrajectoryEventType.HIT, 29, 29 / 30.0, court_xy=(19.0, 43.0), confidence=0.8)
+        first = reconstructor._derive_anchor(None, start=True, event=lower, homography=None)
+        second = reconstructor._derive_anchor(None, start=False, event=upper, homography=None)
+        assert first.height_ft == second.height_ft == pytest.approx(1.10 * 3.28084, abs=0.01)
+        assert first.height_source == second.height_source == HeightSource.GLOBAL_CONTACT_PRIOR.value
 
     def test_anchor_distance_too_small_local_visual_arc(self):
         reconstructor = EventAnchoredTrajectoryReconstructor(ReconstructionConfig(minimum_anchor_distance_ft=5.0))

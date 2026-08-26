@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { usePbReport } from "../../contexts/PbReportContext";
 import {
+  buildShots,
   buildReconstructedBallTrajectoryVisualization,
+  filterTrajectoriesByConfirmedPlayer,
   type EstimatedBallTrajectory,
 } from "../../services/ballTrajectoryVisualization";
 import { BallTrajectoryScene } from "../platform/BallTrajectoryScene";
@@ -87,7 +89,9 @@ export default function Pb3DCourtCard() {
         ? evidence.trajectories.value
         : [];
 
-    return source
+    const playerScoped = filterTrajectoriesByConfirmedPlayer(source, playerCanonical);
+
+    return playerScoped.trajectories
       .filter((t) => {
         if (
           t.averageConfidence != null &&
@@ -95,21 +99,23 @@ export default function Pb3DCourtCard() {
         )
           return false;
 
-        // 阶段：仅当能按 shotId 关联到拍序时才应用；无法关联的轨迹保守保留
+        // 阶段：仅当能按 shotId 关联到拍序时才应用；无法关联时保留已确认的球员 Shot
         if (stageFilter !== "all") {
           if (stageState.mode !== "ids") return true;
-          if (t.shotId && !stageState.ids.has(t.shotId)) return false;
-        }
-
-        // 球员身份：保留归属该球员、或未归属（孤立）
-        if (playerCanonical) {
-          const hitter = resolveCanonicalPlayerId(t.hitterPlayerId, null);
-          if (hitter && hitter !== playerCanonical) return false;
+          if (!t.shotId || !stageState.ids.has(t.shotId)) return false;
         }
         return true;
-      })
-      .map((t) => ({ ...t, hitterPlayerId: playerCanonical }));
+      });
   }, [evidence, playerCanonical, qualityThreshold, reconstructedData.trajectories, stageFilter, stageState, trajectoryArtifact]);
+
+  const visibleShots = useMemo(() => buildShots(trajectories), [trajectories]);
+  const visibleShotIds = useMemo(
+    () => new Set(visibleShots.map((shot) => shot.shotId)),
+    [visibleShots],
+  );
+  const selectedShotForView = selectedShotId && visibleShotIds.has(selectedShotId)
+    ? selectedShotId
+    : null;
 
   const hasEvidence = trajectoryArtifact
     ? reconstructedData.trajectories.length > 0
@@ -118,11 +124,7 @@ export default function Pb3DCourtCard() {
   // 避免报告页默认“第三拍”把整个共享 3D 视图误判为空态。存在拍序时仍按原筛选逻辑过滤。
   const stageUnusable = !trajectoryArtifact && stageFilter !== "all" && stageState.mode === "unknown";
   const noTrajectoryPoints = hasEvidence && trajectories.length === 0;
-  const trajectoryCount = trajectoryArtifact
-    ? reconstructedData.trajectories.length
-    : evidence?.trajectories?.status === "available"
-      ? evidence.trajectories.value.length
-      : 0;
+  const trajectoryCount = trajectories.length;
 
   return (
     <div className="pb-card p-3 sm:p-4">
@@ -166,7 +168,7 @@ export default function Pb3DCourtCard() {
         ) : (
           <BallTrajectoryScene
             trajectories={trajectories}
-            selectedShotId={selectedShotId}
+            selectedShotId={selectedShotForView}
             onSelectShot={handleSelectShot}
             onWebGlError={handleWebGlError}
           />

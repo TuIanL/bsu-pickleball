@@ -69,7 +69,7 @@ const PbLegalThirds = lazy(() =>
 );
 
 // 主内容区域（读取 drawerOpen 决定 padding）
-function MainContentInner({ trajectoryArtifact }: { trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null }) {
+function MainContentInner() {
   const { drawerOpen } = usePbReport();
   const pl = drawerOpen ? "pl-[260px]" : "pl-0";
 
@@ -131,7 +131,7 @@ export default function PbVisionReportLayout(props: {
       >
         <PbPlayerDrawer />
         <PbDrawerExpander />
-        <MainContentInner trajectoryArtifact={trajectoryArtifact} />
+        <MainContentInner />
       </div>
     </PbReportProvider>
   );

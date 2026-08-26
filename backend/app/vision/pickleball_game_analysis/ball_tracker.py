@@ -11,6 +11,11 @@ from typing import Any
 import numpy as np
 
 from app.vision.pickleball_game_analysis.ball_detector_protocol import BallDetectorProtocol
+from app.vision.pickleball_game_analysis.ball_quality_gate import (
+    BallQualityGateConfig,
+    evaluate_candidate,
+    evaluate_motion,
+)
 from app.vision.pickleball_game_analysis.court_adapter import BallCourtAdapter
 from app.vision.pickleball_game_analysis.schemas import (
     BallCandidate,
@@ -82,6 +87,15 @@ class BallTrackerConfig:
     short_gap_consistency_weight: float = 45.0
     max_scale_change_ratio: float = 3.5
 
+    # Shared quality-gate snapshot. These values intentionally remain explicit
+    # here so single-view and canonical joint runs can be replayed consistently.
+    quality_gate_version: str = "ball_quality_gates.v1"
+    quality_min_confidence: float = 0.22
+    quality_max_speed_px_per_sec: float = 12000.0
+    quality_max_acceleration_px_per_sec2: float = 350000.0
+    quality_max_direction_change_degrees: float = 170.0
+    max_interpolation_gap_seconds: float = 0.20
+
 
 @dataclass(frozen=True)
 class CandidateFilterDecision:
@@ -140,6 +154,12 @@ class BallTracker:
         )
         self._current_timestamp_sec: float = 0.0
         self._last_filter_decisions: tuple[CandidateFilterDecision, ...] = ()
+        # 语义边界只管理 formal tracker 生命周期，不改变旧 update/update_from_candidates
+        # 的调用契约。action id 去重保证重复 tick/重试不会重复封存或 reset。
+        self._applied_semantic_boundary_ids: set[str] = set()
+        self._formal_segment_counter: int = 0
+        self._formal_segment_id: str | None = None
+        self._formal_segment_lifecycle: str = "none"
 
     def update(
         self,
@@ -179,7 +199,7 @@ class BallTracker:
         """
         self._cached_frame_height = float(frame_shape[0]) if frame_shape else 0.0
         self._current_timestamp_sec = float(timestamp_sec)
-        filter_result = self.filter_candidates(view_candidates, frame_shape, roi_corners)
+        filter_result = self.filter_candidates(view_candidates, frame_shape, roi_corners, homography)
         self._last_filter_decisions = filter_result.decisions
         candidates = list(filter_result.candidates)
         extract_reasons = [decision.reason for decision in filter_result.decisions if not decision.accepted]
@@ -198,17 +218,31 @@ class BallTracker:
             self._record_missing_detection()
             self._update_track_state(False)
             reason = select_reason or (extract_reasons[0] if extract_reasons else "no_candidates")
+            rejected_projection = next(
+                (
+                    decision.diagnostics.get("projected_court_xy")
+                    for decision in self._last_filter_decisions
+                    if decision.reason == "projected_outside_court"
+                    and isinstance(decision.diagnostics.get("projected_court_xy"), list)
+                ),
+                None,
+            )
+            rejected_court_xy = (
+                (float(rejected_projection[0]), float(rejected_projection[1]))
+                if rejected_projection is not None and len(rejected_projection) >= 2
+                else None
+            )
             return self._build_sample(
                 frame_index=frame_index,
                 timestamp_sec=timestamp_sec,
                 image_xy=None,
-                court_xy=None,
+                court_xy=rejected_court_xy,
                 confidence=None,
                 visible=bool(view_candidates),
                 accepted=False,
                 candidate_count=len(candidates),
                 reject_reason=reason,
-                in_bounds=None,
+                in_bounds=False if rejected_court_xy is not None else None,
                 predicted_pos=predicted_pos,
                 overall_decision=overall_decision,
                 candidate_debugs=candidate_debugs,
@@ -362,6 +396,83 @@ class BallTracker:
         self._observation_history.clear()
         self._last_filter_decisions = ()
 
+    def apply_semantic_boundary(
+        self,
+        action: str,
+        action_id: str | None,
+        *,
+        timestamp_sec: float | None = None,
+    ) -> dict[str, Any]:
+        """应用一次语义生命周期动作并返回可写入 frame diagnostics 的差异。
+
+        该入口不运行 detector，也不删除调用方保留的 raw candidate。它只清理
+        tracker 的预测/连续性状态或切换 formal segment 生命周期；重复 action id
+        幂等返回 ``applied=False``。
+        """
+
+        normalized_action = str(action or "none")
+        normalized_id = str(action_id) if action_id else None
+        before = self.semantic_lifecycle_snapshot()
+        if normalized_action in {"", "none"}:
+            return {
+                "applied": False,
+                "duplicate": False,
+                "action": "none",
+                "action_id": normalized_id,
+                "before": before,
+                "after": before,
+            }
+        if normalized_id is not None and normalized_id in self._applied_semantic_boundary_ids:
+            return {
+                "applied": False,
+                "duplicate": True,
+                "action": normalized_action,
+                "action_id": normalized_id,
+                "before": before,
+                "after": before,
+            }
+        if normalized_id is not None:
+            self._applied_semantic_boundary_ids.add(normalized_id)
+
+        if normalized_action in {"seal_formal_segment", "reset_tracker_for_next_rally"}:
+            # clear() 保持既有“新作业/新视频”语义，同时不会清理外部 semantic
+            # diagnostics 或 raw candidate history。
+            self.clear()
+            self._formal_segment_lifecycle = "sealed"
+            self._formal_segment_id = None
+        elif normalized_action in {"warm_reacquire", "serve_reacquire"}:
+            self._formal_segment_lifecycle = "warm"
+        elif normalized_action == "open_formal_segment":
+            # warm/reacquire 期间的候选不得带入新的正式段。
+            self.clear()
+            self._formal_segment_counter += 1
+            self._formal_segment_id = f"semantic-segment-{self._formal_segment_counter}"
+            self._formal_segment_lifecycle = "open"
+
+        after = self.semantic_lifecycle_snapshot()
+        if timestamp_sec is not None:
+            after["timestamp_sec"] = float(timestamp_sec)
+        return {
+            "applied": True,
+            "duplicate": False,
+            "action": normalized_action,
+            "action_id": normalized_id,
+            "before": before,
+            "after": after,
+        }
+
+    def semantic_lifecycle_snapshot(self) -> dict[str, Any]:
+        """返回 formal segment 生命周期的只读诊断快照。"""
+
+        return {
+            "track_state": self.track_state.value,
+            "formal_segment_id": self._formal_segment_id,
+            "formal_segment_lifecycle": self._formal_segment_lifecycle,
+            "missing_frames": int(self.missing_frames),
+            "trajectory_length": len(self.trajectory),
+            "last_valid_position": list(self.last_valid_position) if self.last_valid_position else None,
+        }
+
     def pre_tick_snapshot(self, timestamp_sec: float) -> BallTrackerSnapshot:
         """返回只读预测快照；调用不推进 tracker 状态或缺失计数。"""
         predicted = self._predict_next_position() if self.trajectory else None
@@ -397,6 +508,7 @@ class BallTracker:
         candidates: Sequence[BallCandidate],
         frame_shape: Sequence[int],
         roi_corners: tuple[tuple[int, int], tuple[int, int]] | None = None,
+        homography: Sequence[Sequence[float]] | None = None,
     ) -> CandidateFilterResult:
         """对 detector 的单次输出执行无推理、确定性的基础视觉过滤。
 
@@ -413,7 +525,23 @@ class BallTracker:
             height = candidate.height
             area_ratio = candidate.area_ratio
             aspect_ratio = candidate.aspect_ratio
-            reason = "accepted"
+            projection = self.court_adapter.project(candidate.image_xy, homography)
+            decision = evaluate_candidate(
+                candidate,
+                frame_shape=frame_shape,
+                roi_corners=roi_corners,
+                config=self._quality_gate_config(),
+                point_in_roi=self._point_in_roi(candidate.image_xy, roi_corners),
+                projected_xy=projection.court_xy,
+                projection_detail=projection.detail if homography is not None else None,
+                court_width_ft=self.court_adapter.court.width_ft,
+                court_length_ft=self.court_adapter.court.length_ft,
+            )
+            reason = decision.reason
+            if reason == "outside_court_projection":
+                # 保持 BallTracker 的历史 artifact reason code；质量门原始
+                # reason 仍在 diagnostics 中可追溯。
+                reason = "projected_outside_court"
             if width is not None and height is not None:
                 if width <= 0 or height <= 0:
                     reason = "invalid_box"
@@ -442,6 +570,10 @@ class BallTracker:
                 "aspect_ratio": float(aspect_ratio) if aspect_ratio is not None else None,
                 "roi_configured": roi_corners is not None,
                 "stationary_blacklisted": self._is_blacklisted(candidate.image_xy),
+                "projection_detail": projection.detail if homography is not None else "not_configured",
+                "projected_court_xy": list(projection.court_xy) if projection.court_xy is not None else None,
+                "quality_gate_version": self.config.quality_gate_version,
+                "quality_gate_reason": decision.reason,
             }
             accepted = reason == "accepted"
             decisions.append(
@@ -697,7 +829,33 @@ class BallTracker:
         predicted_distance = self._distance(point, self._predict_next_position())
         if predicted_distance > dynamic_gate:
             return "prediction_gate"
+        motion_history = [(timestamp, position) for timestamp, position, _ in self._observation_history]
+        motion_decision = evaluate_motion(
+            motion_history,
+            self._current_timestamp_sec,
+            point,
+            config=self._quality_gate_config(),
+        )
+        if not motion_decision.accepted and not (
+            motion_decision.reason == "direction_jump" and self.track_state != BallTrackState.LOCKED
+        ):
+            return motion_decision.reason
         return None
+
+    def _quality_gate_config(self) -> BallQualityGateConfig:
+        """把 tracker 的运行配置转换为共享质量门快照。"""
+
+        return BallQualityGateConfig(
+            schema_version=self.config.quality_gate_version,
+            min_confidence=self.config.quality_min_confidence,
+            max_box_area_ratio=self.config.max_box_area_ratio,
+            max_aspect_ratio=self.config.max_aspect_ratio,
+            court_margin_ft=self.config.court_bounds_margin_ft,
+            max_interpolation_gap_seconds=self.config.max_interpolation_gap_seconds,
+            max_speed_px_per_sec=self.config.quality_max_speed_px_per_sec,
+            max_acceleration_px_per_sec2=self.config.quality_max_acceleration_px_per_sec2,
+            max_direction_change_degrees=self.config.quality_max_direction_change_degrees,
+        )
 
     def _court_bounds_reject_reason(self, court_xy: Point2D | None) -> str | None:
         if court_xy is None:
@@ -885,6 +1043,7 @@ class BallTracker:
         debug = self._build_debug_dict(predicted_pos, candidate_debugs, accepted_candidate_id, overall_decision)
         diagnostic_kwargs.update(debug)
         diagnostic_kwargs["candidate_filter"] = [asdict(decision) for decision in self._last_filter_decisions]
+        diagnostic_kwargs["quality_gate_config"] = self._quality_gate_config().snapshot()
         is_predicted_gap = (
             not accepted
             and predicted_pos is not None
@@ -912,6 +1071,8 @@ class BallTracker:
             track_state=self.track_state.value,
             predicted_position=predicted_pos,
             overall_decision=overall_decision,
+            publication_eligible=bool(accepted and self.track_state == BallTrackState.LOCKED),
+            quality_status="accepted" if accepted else "rejected",
             source="predicted" if is_predicted_gap else "detector",
             diagnostics=diagnostic_kwargs,
         )

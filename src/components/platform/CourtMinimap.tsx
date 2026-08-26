@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import type { BallTrajectoryArtifact, BounceEventsArtifact, FusedPlayerOverlayFrame, PipelineTrackPoint } from "../../types/report";
+import type { BallTrajectoryArtifact, BounceEventsArtifact, FusedPlayerOverlayFrame, PipelineTrackPoint, ReconstructedBallTrajectoryArtifact } from "../../types/report";
 import { buildVideoOverlayHud, type HudPoint } from "../../services/videoOverlayHud";
+import { resolvePlayerIdentityHue } from "../../utils/overlayPresentation";
 
 const COURT_WIDTH_FT = 20;
 const COURT_LENGTH_FT = 44;
@@ -8,11 +9,11 @@ const TRACKING_BOUNDS = { xMin: -4, xMax: 24, yMin: -8, yMax: 52 };
 const VIEW_WIDTH = 180;
 const VIEW_HEIGHT = 330;
 const PADDING = 12;
-const PLAYER_COLORS = ["#38BDF8", "#FBBF24", "#F472B6", "#A78BFA"] as const;
-
+type CourtOrientation = "identity" | "rotate_180" | "mirror_x" | "mirror_y";
 interface CourtMinimapProps {
   tracks?: PipelineTrackPoint[];
   ballTrajectory?: BallTrajectoryArtifact | null;
+  reconstructedBallTrajectory?: ReconstructedBallTrajectoryArtifact | null;
   bounceEvents?: BounceEventsArtifact | null;
   currentTimeSec: number;
   trailSeconds?: number;
@@ -22,6 +23,8 @@ interface CourtMinimapProps {
   className?: string;
   /** joint 模式展示权威：fused overlay 逐帧实体，携带 bootstrap 回填真实观测，消除启动窗口小地图空白 */
   overlayFrames?: FusedPlayerOverlayFrame[];
+  /** 当前展示机位的观看方向；仅影响 SVG 显示，不改变 canonical 轨迹数据。 */
+  courtOrientation?: CourtOrientation | null;
 }
 
 interface PointMapper {
@@ -29,7 +32,22 @@ interface PointMapper {
   toSvg: (x: number, y: number) => [number, number] | null;
 }
 
-function createMapper(): PointMapper {
+function normalizeOrientation(orientation?: CourtOrientation | null): CourtOrientation {
+  return orientation === "rotate_180" || orientation === "mirror_x" || orientation === "mirror_y"
+    ? orientation
+    : "identity";
+}
+
+function transformCourtPoint(x: number, y: number, orientation: CourtOrientation): [number, number] {
+  switch (orientation) {
+    case "rotate_180": return [COURT_WIDTH_FT - x, COURT_LENGTH_FT - y];
+    case "mirror_x": return [COURT_WIDTH_FT - x, y];
+    case "mirror_y": return [x, COURT_LENGTH_FT - y];
+    default: return [x, y];
+  }
+}
+
+function createMapper(orientation: CourtOrientation): PointMapper {
   const spanX = TRACKING_BOUNDS.xMax - TRACKING_BOUNDS.xMin;
   const spanY = TRACKING_BOUNDS.yMax - TRACKING_BOUNDS.yMin;
   const scale = Math.min((VIEW_WIDTH - PADDING * 2) / spanX, (VIEW_HEIGHT - PADDING * 2) / spanY);
@@ -41,9 +59,10 @@ function createMapper(): PointMapper {
     toSvg: (x, y) => {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
       if (x < TRACKING_BOUNDS.xMin || x > TRACKING_BOUNDS.xMax || y < TRACKING_BOUNDS.yMin || y > TRACKING_BOUNDS.yMax) return null;
+      const [displayX, displayY] = transformCourtPoint(x, y, orientation);
       return [
-        offsetX + (x - TRACKING_BOUNDS.xMin) * scale,
-        offsetY + (y - TRACKING_BOUNDS.yMin) * scale,
+        offsetX + (displayX - TRACKING_BOUNDS.xMin) * scale,
+        offsetY + (displayY - TRACKING_BOUNDS.yMin) * scale,
       ];
     },
   };
@@ -70,6 +89,7 @@ function formatTime(seconds: number): string {
 export function CourtMinimap({
   tracks = [],
   ballTrajectory,
+  reconstructedBallTrajectory,
   bounceEvents,
   currentTimeSec,
   trailSeconds = 3,
@@ -78,11 +98,13 @@ export function CourtMinimap({
   showBounces = true,
   className = "",
   overlayFrames = [],
+  courtOrientation,
 }: CourtMinimapProps) {
-  const mapper = useMemo(() => createMapper(), []);
+  const normalizedOrientation = normalizeOrientation(courtOrientation);
+  const mapper = useMemo(() => createMapper(normalizedOrientation), [normalizedOrientation]);
   const hud = useMemo(
-    () => buildVideoOverlayHud(tracks, ballTrajectory, bounceEvents, currentTimeSec, { playerTrailSeconds: trailSeconds, overlayFrames }),
-    [ballTrajectory, bounceEvents, currentTimeSec, tracks, trailSeconds, overlayFrames],
+    () => buildVideoOverlayHud(tracks, ballTrajectory, bounceEvents, currentTimeSec, { playerTrailSeconds: trailSeconds, overlayFrames, reconstructedBallTrajectory }),
+    [ballTrajectory, bounceEvents, currentTimeSec, tracks, trailSeconds, overlayFrames, reconstructedBallTrajectory],
   );
 
   const courtPolygon = useMemo(() => [
@@ -141,11 +163,11 @@ export function CourtMinimap({
         {centreTop && centreBottom ? <line stroke="rgba(215,251,228,0.76)" strokeWidth="1" x1={centreTop[0]} x2={centreBottom[0]} y1={centreTop[1]} y2={centreBottom[1]} /> : null}
         {netStart && netEnd ? <line stroke="#F8FAFC" strokeWidth="2" x1={netStart[0]} x2={netEnd[0]} y1={netStart[1]} y2={netEnd[1]} /> : null}
 
-        {hud.players.map((player, playerIndex) => {
-          const color = PLAYER_COLORS[playerIndex % PLAYER_COLORS.length];
+        {hud.players.map((player) => {
+          const color = resolvePlayerIdentityHue(player.playerId);
           const latest = player.latest ? mappedPoint(mapper, player.latest) : null;
           return (
-            <g key={player.id} opacity={player.stale ? 0.45 : 1} style={{ color }}>
+            <g data-player-color={color} data-testid={`hud-player-${player.id}`} key={player.id} opacity={player.stale ? 0.45 : 1} style={{ color }}>
               {player.segments.map((segment, segmentIndex) => {
                 const points = segment.map((point) => mappedPoint(mapper, point)).filter((point): point is [number, number] => point !== null);
                 return points.length > 1 ? <polyline fill="none" key={segmentIndex} points={pointsAttribute(points)} stroke={color} strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" /> : null;

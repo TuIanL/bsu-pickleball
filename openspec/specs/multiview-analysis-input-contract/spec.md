@@ -223,3 +223,38 @@ P0 冻结契约(sync authority / orientation / Canonical Timeline / pairing tole
 - **THEN** preflight SHALL 返回 take_dir、期望 artifact 路径、缺失字段和修复建议
 - **AND** SHALL NOT 静默创建 authoritative joint task
 
+### Requirement: 展示机位不属于分析输入
+
+多视角 Parent 的 `referenceViewId`、`canonicalFrameId`、`courtOrientation`、sync authority 和 `jointViewInputs` SHALL 作为一次分析的任务级输入保持不变。用户展示选择 `displayViewId` SHALL 只存在于结果展示状态或 URL，不得进入 AnalysisJob 创建请求、input signature、config signature 或 preflight 的 canonical frame 定义。
+
+#### Scenario: 仅切换展示机位
+
+- **WHEN** 用户在已完成任务中把 `displayViewId` 从 `cam_1` 改为 `cam_2`
+- **THEN** 系统 SHALL 使用原 Parent 的 canonical frame 和 reference timeline
+- **AND** SHALL NOT 触发新的 MultiView preflight 或 canonical frame 写入
+
+#### Scenario: 同一任务重载展示状态
+
+- **WHEN** 页面从 URL 恢复 `displayViewId`
+- **THEN** 系统 SHALL 只校验该 view 是否属于已持久化的 `jointViewInputs`
+- **AND** SHALL NOT 根据展示选择重新推断 orientation 或物理端点
+
+### Requirement: MultiView 显式引用场景标定 revision
+
+双摄 Parent、`jointViewInputs` 和运行时 input bundle SHALL 显式保存适用的 `scene_calibration_revision`、`capture_take_id`、view ids 和 scene calibration status。场景标定 SHALL 与既有 sync authority、court orientation、Canonical Timeline 和 canonical frame 一起参与输入追溯。
+
+#### Scenario: metric 模式输入完整
+- **WHEN** 用户以 metric 3D 模式创建双摄分析
+- **THEN** preflight SHALL 验证引用的 scene calibration revision 属于当前 `capture_take_id`、覆盖两个 view 且状态为 `ready`
+- **AND** Parent 与 JointRun SHALL 持久化相同的 scene reference
+
+#### Scenario: 显式 approximate fallback
+- **WHEN** 当前采集任务缺少 ready scene revision但用户选择兼容 approximate 模式
+- **THEN** preflight SHALL 允许任务按已有近似 virtual camera 路径运行
+- **AND** SHALL 将 fallback mode、缺失原因和 scene status 写入 job config 与 diagnostics
+
+#### Scenario: 不同固定机位禁止静默复用
+- **WHEN** scene revision 的 camera/video/image-size provenance 与当前 input bundle 不匹配
+- **THEN** preflight SHALL 返回结构化 scene calibration mismatch
+- **AND** SHALL NOT 自动使用另一采集任务或另一 revision 的相机模型
+

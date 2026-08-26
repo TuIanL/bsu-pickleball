@@ -23,6 +23,8 @@ class VideoMetadata(BaseModel):
     path: str  # 视频在服务器磁盘上的存储路径
     uploaded_at: datetime  # 上传时间
     source: str = "upload"  # 来源标识（upload=用户上传，也可能是录制等）
+    display_title: str | None = None  # 用户自定义显示标题（Library 卡片优先采用；缺省回退 original_filename）
+    display_date: datetime | None = None  # 用户自定义比赛日期（Library 卡片优先采用；缺省回退 uploaded_at）
 
     @property
     def filename(self) -> str:
@@ -34,6 +36,13 @@ class VideoUploadResponse(BaseModel):
     """上传视频接口的响应：把整条视频元数据包在 video 字段里返回。"""
 
     video: VideoMetadata
+
+
+class VideoUpdateRequest(BaseModel):
+    """更新视频显示元数据的请求体（Library 卡片内联编辑）。"""
+
+    display_title: str | None = None
+    display_date: datetime | None = None
 
 
 class VideoCatalogResponse(BaseModel):

@@ -3,18 +3,29 @@ import { Activity, ArrowLeft, ArrowRight, Bug, Camera, CheckCircle2, Link2, Radi
 import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { buildAnalysisProgressPath, buildSyncCalibrationPath, taskListPath, withTaskListContext } from "../app/navigationContext";
 import { CourtCornerCalibrator, type CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
+import {
+  HOLDOUT_ORDER,
+  NetProfileCalibrator,
+  estimateNetProfileHeight,
+  type NetAnnotationDraft,
+} from "../components/platform/NetProfileCalibrator";
 import { PageFrame } from "../components/PageFrame";
 import {
   createMultiviewAnalysisJob,
   getCaptureTake,
+  getMetricCourtSceneDraft,
+  publishMetricCourtScene,
+  saveMetricCourtSceneDraft,
   getSyncAnchorStatus,
   getSyncRecording,
   getVideoStreamUrl,
   isAnalysisApiError,
+  validateMetricCourtScene,
   type MultiViewCreateViewPayload,
 } from "../services/analysisClient";
 import type { CaptureTakeSummary, SyncRecordingSession } from "../types/report";
 import type { SyncAnchorStatus } from "../types/syncAnchors";
+import type { MetricCourtSceneCalibration, NetProfileControlPoint, SceneImagePoint } from "../types/metricCourtScene";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -23,7 +34,7 @@ interface MultiViewAnalysisSetupPageProps {
   onNavigate: NavigateFn;
 }
 
-type SetupStep = 0 | 1 | 2 | 3; // 0 素材检查 · 1 A标定 · 2 B标定 · 3 确认
+type SetupStep = 0 | 1 | 2 | 3 | 4 | 5; // 素材 · A/B球场 · A/B球网 · 确认
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -45,11 +56,39 @@ function formatDate(iso?: string): string {
   }
 }
 
+function restoreNetDraft(scene: MetricCourtSceneCalibration, viewId: string): NetAnnotationDraft | null {
+  const view = scene.views.find((item) => item.view_id === viewId);
+  if (!view) return null;
+  const annotations = Object.fromEntries(
+    scene.net_profile.control_points.flatMap((control) => {
+      const point = control.image_by_view?.[viewId] ?? view.net_annotations[control.id];
+      return point ? [[control.id, point satisfies SceneImagePoint]] : [];
+    }),
+  );
+  const holdoutAnnotations = Object.fromEntries(
+    (scene.holdout_control_points ?? []).flatMap((control) => {
+      const point = control.image_by_view?.[viewId] ?? view.holdout_annotations?.[control.id];
+      return point ? [[control.id, point satisfies SceneImagePoint]] : [];
+    }),
+  );
+  if (Object.keys(annotations).length < 3) return null;
+  return {
+    profile: scene.net_profile,
+    annotations,
+    holdoutAnnotations: Object.keys(holdoutAnnotations).length >= HOLDOUT_ORDER.length ? holdoutAnnotations : undefined,
+    imageWidth: view.image_width ?? 1280,
+    imageHeight: view.image_height ?? 720,
+    frameIndex: view.frame_index ?? null,
+  };
+}
+
 const STEP_LABELS: Array<{ n: number; label: string }> = [
   { n: 1, label: "素材检查" },
-  { n: 2, label: "A 机位标定" },
-  { n: 3, label: "B 机位标定" },
-  { n: 4, label: "确认" },
+  { n: 2, label: "A 球场" },
+  { n: 3, label: "B 球场" },
+  { n: 4, label: "A 球网" },
+  { n: 5, label: "B 球网" },
+  { n: 6, label: "确认" },
 ];
 
 function StepBar({ step }: { step: SetupStep }) {
@@ -93,13 +132,16 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   const [calibrationB, setCalibrationB] = useState<string | null>(null);
   const [calibrationPointsA, setCalibrationPointsA] = useState<CalibrationPointDraft[]>([]);
   const [calibrationPointsB, setCalibrationPointsB] = useState<CalibrationPointDraft[]>([]);
+  const [netAnnotationA, setNetAnnotationA] = useState<NetAnnotationDraft | null>(null);
+  const [netAnnotationB, setNetAnnotationB] = useState<NetAnnotationDraft | null>(null);
   const [cam1AtEndA, setCam1AtEndA] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<{ title: string; body: string } | null>(null);
   // 分析窗口（take 公共时间轴，秒）；关闭 = 整场分析。双摄不物理裁剪，附加信息天然一致。
   const [clipEnabled, setClipEnabled] = useState(false);
   const [clipStartSec, setClipStartSec] = useState(0);
-  const [clipEndSec, setClipEndSec] = useState(60);
+  // 窗口默认结束点由录制时长决定；在录制时长加载前不伪造 60 秒默认值。
+  const [clipEndSec, setClipEndSec] = useState<number | null>(null);
   const [debugReplayEnabled, setDebugReplayEnabled] = useState(false);
   const [syncAnchorStatus, setSyncAnchorStatus] = useState<SyncAnchorStatus | null>(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
@@ -124,6 +166,15 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         const takeData = await getCaptureTake(captureTakeId);
         if (cancelled) return;
         setTake(takeData);
+        try {
+          const sceneDraft = await getMetricCourtSceneDraft(captureTakeId);
+          if (!cancelled && sceneDraft) {
+            setNetAnnotationA(restoreNetDraft(sceneDraft, "cam_1"));
+            setNetAnnotationB(restoreNetDraft(sceneDraft, "cam_2"));
+          }
+        } catch {
+          // Scene assets are optional for historical takes; the manual flow remains available.
+        }
         try {
           const status = await getSyncAnchorStatus(captureTakeId);
           if (!cancelled) setSyncAnchorStatus(status);
@@ -166,6 +217,16 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   const cameraIdB = session?.camera_slots?.cam_2?.camera_id ?? "cam_2";
   const videoSrcA = videoIdA ? (getVideoStreamUrl(videoIdA) ?? undefined) : undefined;
   const videoSrcB = videoIdB ? (getVideoStreamUrl(videoIdB) ?? undefined) : undefined;
+  const recordingDurationSec = session?.duration_sec != null
+    && Number.isFinite(session.duration_sec)
+    && session.duration_sec > 0
+    ? session.duration_sec
+    : null;
+  const selectedClipEndSec = clipEndSec ?? recordingDurationSec;
+  const clipWindowValid = !clipEnabled
+    || (selectedClipEndSec != null
+      && selectedClipEndSec > clipStartSec
+      && (recordingDurationSec == null || selectedClipEndSec <= recordingDurationSec));
 
   const takeCompleted = take?.status === "completed";
   const videosReady = Boolean(videoIdA && videoIdB);
@@ -207,6 +268,56 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
+  const persistSceneDraft = async (nextA: NetAnnotationDraft | null, nextB: NetAnnotationDraft | null) => {
+    const source = nextA ?? nextB;
+    if (!source) return;
+    const sceneControlPoints = source.profile.control_points.map((point) => ({
+      ...point,
+      image_by_view: Object.fromEntries([
+        nextA?.annotations[point.id] ? ["cam_1", nextA.annotations[point.id]] : [],
+        nextB?.annotations[point.id] ? ["cam_2", nextB.annotations[point.id]] : [],
+      ]),
+    }));
+    const holdoutControlPoints: NetProfileControlPoint[] = HOLDOUT_ORDER.map((control) => ({
+      id: control.id,
+      world: {
+        x: control.x,
+        y: source.profile.control_points[0]?.world.y ?? 22,
+        z: estimateNetProfileHeight(source.profile, control.x),
+      },
+      image_by_view: Object.fromEntries([
+        nextA?.holdoutAnnotations?.[control.id] ? ["cam_1", nextA.holdoutAnnotations[control.id]] : [],
+        nextB?.holdoutAnnotations?.[control.id] ? ["cam_2", nextB.holdoutAnnotations[control.id]] : [],
+      ]),
+      provenance: "manual_verified",
+      confirmed: true,
+    }));
+    const buildView = (viewId: "cam_1" | "cam_2", draft: NetAnnotationDraft | null, cameraId: string, videoId?: string | null, calibrationId?: string | null) => draft ? ({
+      view_id: viewId,
+      camera_id: cameraId,
+      video_id: videoId,
+      calibration_id: calibrationId,
+      image_width: draft.imageWidth,
+      image_height: draft.imageHeight,
+      frame_index: draft.frameIndex,
+      court_orientation: viewId === "cam_1" ? cam1Orientation : cam2Orientation,
+      net_annotations: draft.annotations,
+      holdout_annotations: draft.holdoutAnnotations ?? {},
+      quality: { status: "warning" as const, rejection_reasons: [] },
+      provenance: "manual" as const,
+    }) : null;
+    const views = [
+      buildView("cam_1", nextA, cameraIdA, videoIdA, calibrationA),
+      buildView("cam_2", nextB, cameraIdB, videoIdB, calibrationB),
+    ].filter((view): view is NonNullable<typeof view> => Boolean(view));
+    await saveMetricCourtSceneDraft(captureTakeId, {
+      net_profile: { ...source.profile, control_points: sceneControlPoints },
+      holdout_control_points: holdoutControlPoints,
+      views,
+      provenance: "manual_verified",
+    });
+  };
+
   const handleCalibrationComplete = (slot: "cam_1" | "cam_2") => {
     return (calibrationId: string, points: CalibrationPointDraft[]) => {
       if (slot === "cam_1") {
@@ -221,11 +332,94 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
     };
   };
 
+  const handleNetComplete = (slot: "cam_1" | "cam_2") => (draft: NetAnnotationDraft) => {
+    if (slot === "cam_1") {
+      setNetAnnotationA(draft);
+      void persistSceneDraft(draft, netAnnotationB).catch(() => undefined);
+      setStep(4);
+    } else {
+      setNetAnnotationB(draft);
+      void persistSceneDraft(netAnnotationA, draft).catch(() => undefined);
+      setStep(5);
+    }
+  };
+
   const handleStart = async () => {
-    if (!take || !session || !videoIdA || !videoIdB || !calibrationA || !calibrationB) return;
+    if (!take || !session || !videoIdA || !videoIdB || !calibrationA || !calibrationB || !netAnnotationA || !netAnnotationB) return;
+    if (!clipWindowValid) {
+      setSubmitError({
+        title: "分析窗口无效",
+        body: "请确认开始时间小于结束时间，且结束时间不超过录制时长。",
+      });
+      return;
+    }
     setIsSubmitting(true);
     setSubmitError(null);
     try {
+      const sceneControlPoints = netAnnotationA.profile.control_points.map((point) => ({
+        ...point,
+        image_by_view: {
+          cam_1: netAnnotationA.annotations[point.id] as SceneImagePoint,
+          cam_2: netAnnotationB.annotations[point.id] as SceneImagePoint,
+        },
+      }));
+      const holdoutControlPoints: NetProfileControlPoint[] = HOLDOUT_ORDER.map((control) => ({
+        id: control.id,
+        world: {
+          x: control.x,
+          y: netAnnotationA.profile.control_points[0]?.world.y ?? 22,
+          z: estimateNetProfileHeight(netAnnotationA.profile, control.x),
+        },
+        image_by_view: {
+          cam_1: netAnnotationA.holdoutAnnotations?.[control.id] as SceneImagePoint,
+          cam_2: netAnnotationB.holdoutAnnotations?.[control.id] as SceneImagePoint,
+        },
+        provenance: "manual_verified",
+        confirmed: true,
+      }));
+      const sceneDraft = await saveMetricCourtSceneDraft(captureTakeId, {
+        net_profile: {
+          ...netAnnotationA.profile,
+          control_points: sceneControlPoints,
+        },
+        holdout_control_points: holdoutControlPoints,
+        views: [
+          {
+            view_id: "cam_1",
+            camera_id: cameraIdA,
+            video_id: videoIdA,
+            calibration_id: calibrationA,
+            image_width: netAnnotationA.imageWidth,
+            image_height: netAnnotationA.imageHeight,
+            frame_index: netAnnotationA.frameIndex,
+            court_orientation: cam1Orientation,
+            net_annotations: netAnnotationA.annotations,
+            holdout_annotations: netAnnotationA.holdoutAnnotations ?? {},
+            quality: { status: "warning", rejection_reasons: [] },
+            provenance: "manual",
+          },
+          {
+            view_id: "cam_2",
+            camera_id: cameraIdB,
+            video_id: videoIdB,
+            calibration_id: calibrationB,
+            image_width: netAnnotationB.imageWidth,
+            image_height: netAnnotationB.imageHeight,
+            frame_index: netAnnotationB.frameIndex,
+            court_orientation: cam2Orientation,
+            net_annotations: netAnnotationB.annotations,
+            holdout_annotations: netAnnotationB.holdoutAnnotations ?? {},
+            quality: { status: "warning", rejection_reasons: [] },
+            provenance: "manual",
+          },
+        ],
+        provenance: "manual_verified",
+      });
+      const validation = await validateMetricCourtScene(captureTakeId);
+      if (validation.status !== "ready") {
+        throw new Error(`球网场景标定质量门未通过：${validation.rejection_reasons.join("、")}`);
+      }
+      const publishedScene = await publishMetricCourtScene(captureTakeId);
       const parent = await createMultiviewAnalysisJob({
         metadata: {
           fileName: `${session.court_name || "双摄录制"}_${take.id}.mp4`,
@@ -242,7 +436,9 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
           capture_take_id: take.id,
         },
         clipStartMs: clipEnabled ? Math.max(0, Math.round(clipStartSec * 1000)) : undefined,
-        clipEndMs: clipEnabled ? Math.max(1, Math.round(clipEndSec * 1000)) : undefined,
+        clipEndMs: clipEnabled && selectedClipEndSec != null
+          ? Math.max(1, Math.round(selectedClipEndSec * 1000))
+          : undefined,
         // 快速验证窗口沿用正式 joint 的默认采样密度（60 FPS source / stride 2），
         // 保证高速球的双摄观测不因验证模式额外降采样。
         frameStride: clipEnabled ? 2 : undefined,
@@ -250,15 +446,16 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         // 在同一条链路上额外保留四联诊断回放，不再决定是否启用球路分析。
         executionMode: "joint_tracking_v2",
         debugTraceEnabled: debugReplayEnabled,
+        sceneCalibrationMode: "metric",
+        sceneCalibrationRevision: publishedScene.revision,
+        sceneViewIds: sceneDraft.views.map((view) => view.view_id),
         referenceViewId: "cam_1",
         views: [
-          { viewId: "cam_1", cameraId: cameraIdA, videoId: videoIdA, calibrationId: calibrationA, courtOrientation: cam1Orientation },
-          { viewId: "cam_2", cameraId: cameraIdB, videoId: videoIdB, calibrationId: calibrationB, courtOrientation: cam2Orientation },
+          { viewId: "cam_1", cameraId: cameraIdA, videoId: videoIdA, calibrationId: calibrationA, courtOrientation: cam1Orientation, imageWidth: netAnnotationA.imageWidth, imageHeight: netAnnotationA.imageHeight },
+          { viewId: "cam_2", cameraId: cameraIdB, videoId: videoIdB, calibrationId: calibrationB, courtOrientation: cam2Orientation, imageWidth: netAnnotationB.imageWidth, imageHeight: netAnnotationB.imageHeight },
         ],
-        canonicalFrame: {
-          endA: cam1AtEndA ? "cam_1_physical_end" : "cam_2_physical_end",
-          endB: cam1AtEndA ? "cam_2_physical_end" : "cam_1_physical_end",
-        },
+        // canonical frame 是 take-scoped 物理定义。普通重试不再从展示/当前
+        // 选择重新拼接端点；后端会只读复用已有 ccf_* 定义。
       });
       // 只导航到 Parent（用户永不直接进入 child）。
       // 统一生命周期：创建成功后进入 Analysis Progress（replace，Back 不回已提交的 Setup）。
@@ -275,7 +472,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         title: "双摄分析启动失败",
         body: message,
       });
-      if (/sync|同步|preflight|朝向|双摄素材/i.test(message)) {
+      if (/sync|同步|preflight|朝向|双摄素材|场景标定|球网/i.test(message)) {
         setStep(0);
       }
     } finally {
@@ -404,20 +601,32 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                   <span className="text-slate-500">从</span>
                   <input
                     className="w-24 rounded-lg border border-[#D8E5D2] bg-white px-2 py-1.5 text-sm font-semibold text-[#14241B]"
-                    max={clipEndSec - 1}
+                    max={selectedClipEndSec != null ? Math.max(0, selectedClipEndSec - 1) : undefined}
                     min={0}
-                    onChange={(e) => setClipStartSec(Math.max(0, Number(e.target.value) || 0))}
+                    onChange={(e) => {
+                      const nextStart = Math.max(0, Number(e.target.value) || 0);
+                      const boundedStart = recordingDurationSec != null
+                        ? Math.min(nextStart, Math.max(0, recordingDurationSec - 1))
+                        : nextStart;
+                      setClipStartSec(boundedStart);
+                      if (selectedClipEndSec != null && selectedClipEndSec <= boundedStart) {
+                        setClipEndSec(Math.min(recordingDurationSec ?? Number.POSITIVE_INFINITY, boundedStart + 1));
+                      }
+                    }}
                     type="number"
                     value={clipStartSec}
                   />
                   <span className="text-slate-500">到</span>
                   <input
                     className="w-24 rounded-lg border border-[#D8E5D2] bg-white px-2 py-1.5 text-sm font-semibold text-[#14241B]"
-                    max={session.duration_sec ?? 3600}
+                    max={recordingDurationSec ?? undefined}
                     min={clipStartSec + 1}
-                    onChange={(e) => setClipEndSec(Math.max(clipStartSec + 1, Number(e.target.value) || clipStartSec + 1))}
+                    onChange={(e) => {
+                      const nextEnd = Math.max(clipStartSec + 1, Number(e.target.value) || clipStartSec + 1);
+                      setClipEndSec(recordingDurationSec != null ? Math.min(nextEnd, recordingDurationSec) : nextEnd);
+                    }}
                     type="number"
-                    value={clipEndSec}
+                    value={selectedClipEndSec ?? ""}
                   />
                   <span className="text-slate-500">秒（整场 {session.duration_sec != null ? Math.round(session.duration_sec) : "—"} 秒）</span>
                   <span className="text-xs text-slate-400">双摄自动对齐，无需手动切帧；附加信息保持一致</span>
@@ -539,8 +748,46 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
           </div>
         )}
 
-        {/* ── Step 3: 确认 ── */}
-        {step === 3 && (
+        {/* ── Step 3: A 机位球网 ── */}
+        {step === 3 && videoSrcA && videoIdA && (
+          <div className="rounded-3xl border border-[#DDE9D6] bg-white/70 p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <Camera size={16} className="text-[#168A34]" aria-hidden="true" />
+              <span className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">A 机位 · 球网高度标定</span>
+            </div>
+            <NetProfileCalibrator
+              videoSrc={videoSrcA}
+              viewId="cam_1"
+              courtOrientation={cam1Orientation}
+              initial={netAnnotationA}
+              isSubmitting={isSubmitting}
+              onComplete={handleNetComplete("cam_1")}
+              onCancel={() => setStep(2)}
+            />
+          </div>
+        )}
+
+        {/* ── Step 4: B 机位球网 ── */}
+        {step === 4 && videoSrcB && videoIdB && (
+          <div className="rounded-3xl border border-[#DDE9D6] bg-white/70 p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <Camera size={16} className="text-[#168A34]" aria-hidden="true" />
+              <span className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">B 机位 · 球网高度标定</span>
+            </div>
+            <NetProfileCalibrator
+              videoSrc={videoSrcB}
+              viewId="cam_2"
+              courtOrientation={cam2Orientation}
+              initial={netAnnotationB}
+              isSubmitting={isSubmitting}
+              onComplete={handleNetComplete("cam_2")}
+              onCancel={() => setStep(3)}
+            />
+          </div>
+        )}
+
+        {/* ── Step 5: 确认 ── */}
+        {step === 5 && (
           <div className="rounded-3xl border border-[#DDE9D6] bg-white/70 p-6">
             <div className="mb-4 flex items-center gap-2">
               <Radio size={16} className="text-[#168A34]" aria-hidden="true" />
@@ -550,6 +797,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
             <div className="mb-5 grid gap-x-8 gap-y-4 sm:grid-cols-3">
               <InfoRow label="A 机位标定" value={calibrationA ? "已就绪" : "未完成"} />
               <InfoRow label="B 机位标定" value={calibrationB ? "已就绪" : "未完成"} />
+              <InfoRow label="球网高度" value={netAnnotationA && netAnnotationB ? "两路已确认" : "未完成"} />
               <InfoRow label="录制时长" value={session.duration_sec != null ? `${Math.round(session.duration_sec)} 秒` : "—"} />
             </div>
 
@@ -603,7 +851,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
               </button>
               <button
                 className="green-button px-5 py-2 text-sm disabled:opacity-40"
-                disabled={!calibrationA || !calibrationB || isSubmitting}
+                disabled={!calibrationA || !calibrationB || !netAnnotationA || !netAnnotationB || !clipWindowValid || isSubmitting}
                 onClick={handleStart}
                 type="button"
               >

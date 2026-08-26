@@ -6,8 +6,16 @@ import * as analysisClient from "../services/analysisClient";
 
 vi.mock("../services/analysisClient", () => ({
   getAnalysisJob: vi.fn(),
+  getAnalysisResult: vi.fn().mockResolvedValue({
+    job_id: "job-test",
+    status: "completed",
+    tracks: [{ track_id: "Player_1", court_point: { x: 10, y: 20 } }],
+    metrics: { distances: [], speeds: [], kitchen_dwell: [] },
+    artifacts: {},
+  }),
   getFusedManifest: vi.fn().mockResolvedValue(null),
   getFusionDiagnostics: vi.fn().mockResolvedValue(null),
+  isAnalysisApiError: () => false,
   rememberAnalysisJob: vi.fn(),
   cancelAnalysisJob: vi.fn(),
 }));
@@ -64,6 +72,13 @@ function makeJob(overrides: Partial<AnalysisJobSummary> = {}): AnalysisJobSummar
 
 function renderPage(job: AnalysisJobSummary) {
   vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
+  vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue({
+    job_id: job.id,
+    status: "completed",
+    tracks: [{ track_id: "Player_1", court_point: { x: 10, y: 20 } }],
+    metrics: { distances: [], speeds: [], kitchen_dwell: [] },
+    artifacts: {},
+  } as never);
   return render(<AnalysisJobPage jobId={job.id} onNavigate={vi.fn()} />);
 }
 
@@ -141,6 +156,24 @@ describe("AnalysisJobPage 进度展示", () => {
     expect(screen.getByText(/等待视觉分析任务执行/)).toBeTruthy();
   });
 
+  it("熄屏或网络短断后保留任务快照，并在重新聚焦时立即对账", async () => {
+    const job = makeJob();
+    vi.mocked(analysisClient.getAnalysisJob)
+      .mockResolvedValueOnce(job)
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce({ ...job, progress: 35 });
+
+    render(<AnalysisJobPage jobId={job.id} onNavigate={vi.fn()} />);
+    expect(await screen.findByText("34%")).toBeTruthy();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 1650));
+    expect(await screen.findByText("任务状态暂时不可用")).toBeTruthy();
+    expect(screen.getByText("34%")).toBeTruthy();
+
+    window.dispatchEvent(new Event("focus"));
+    expect(await screen.findByText("35%")).toBeTruthy();
+  });
+
   it("completed 任务显示阶段完成摘要并把结果入口置顶", async () => {
     const job = makeJob({
       status: "completed",
@@ -158,6 +191,23 @@ describe("AnalysisJobPage 进度展示", () => {
     expect(screen.queryByTestId("job-stage-stepper")).toBeNull();
   });
 
+  it("任务完成但没有有效证据时报告按钮置灰且不可导航", async () => {
+    const job = makeJob({ status: "completed", stage: "report", progress: 100 });
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
+    vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue({
+      job_id: job.id, status: "completed", tracks: [],
+      metrics: { distances: [], speeds: [], kitchen_dwell: [] }, artifacts: {},
+    } as never);
+    const onNavigate = vi.fn();
+    render(<AnalysisJobPage jobId={job.id} onNavigate={onNavigate} />);
+
+    expect(await screen.findByText(/暂无有效报告数据/)).toBeTruthy();
+    const reportButton = screen.getByRole("button", { name: "本场表现报告" }) as HTMLButtonElement;
+    expect(reportButton.disabled).toBe(true);
+    fireEvent.click(reportButton);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
   it("failed 任务显示失败阶段摘要与重新上传入口", async () => {
     const job = makeJob({
       status: "failed",
@@ -172,6 +222,29 @@ describe("AnalysisJobPage 进度展示", () => {
     expect(await screen.findByText(/失败阶段：目标检测/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "重新上传" })).toBeTruthy();
     expect(screen.queryByTestId("job-stage-stepper")).toBeNull();
+  });
+
+  it("interrupted 任务显示失联诊断与重新分析入口，不进入结果页", async () => {
+    const job = makeJob({
+      status: "interrupted",
+      canonicalStatus: "interrupted",
+      stage: "tracking",
+      progress: 47,
+      workerHeartbeatAt: "2026-08-12T01:00:00.000Z",
+      interruptedAt: "2026-08-12T01:01:00.000Z",
+      interruptionCode: "worker_heartbeat_timeout",
+      publicErrorMessage: "Worker 在规定时间内没有心跳",
+    });
+    const onNavigate = vi.fn();
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
+    render(<AnalysisJobPage jobId={job.id} onNavigate={onNavigate} />);
+
+    expect(await screen.findByText("任务失联 · 已保留最后进度")).toBeTruthy();
+    expect(screen.getAllByText(/Worker 在规定时间内没有心跳/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/最后心跳/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByTestId("job-stage-stepper")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重新分析" }));
+    expect(onNavigate).toHaveBeenCalledWith("/analysis/new?taskSource=upload");
   });
 });
 

@@ -12,12 +12,13 @@ import { StatusState } from "../components/StatusState";
 import { AnalysisJobPage } from "./AnalysisJobPage";
 import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl } from "../services/analysisClient";
 import { buildCourtTrackSummaries, type CourtTrackSummary } from "../services/courtProjectionTracks";
+import { resolveLibraryItemByRef } from "../services/libraryAdapter";
 import { formatPercent, formatSeconds } from "../services/analysisDiagnostics";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { isActiveAnalysisJob, analysisStatusMeta, cameraAngleLabel, analysisModeLabel, formatDateTime, errorToNotice, formatPlayerId } from "../utils/analysisHelpers";
 
 export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView }: { jobId: string; onNavigate: NavigateFn; embedded?: boolean; onSelectView?: (view: LibraryView) => void }) {
-  const { error, job, report, result } = useAnalysisResultReport(jobId);
+  const { error, job, report, result, displayTitle } = useAnalysisResultReport(jobId);
 
   const embeddedFallback = (message: string) =>
     embedded ? <div className="grid min-h-[50vh] place-items-center px-6 text-center text-sm text-[var(--capture-text-muted,#8f9d96)]">{message}</div> : null;
@@ -108,7 +109,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView 
                 <LineChart size={16} aria-hidden="true" />
                 分析详情
               </p>
-              <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{job.metadata.matchTitle}</h1>
+              <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{displayTitle ?? job.metadata.matchTitle}</h1>
               <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
                 当前页面保留任务元数据、算法状态和标准匹克球场二维平面图。坐标转换和人员位移捕捉完成后，会在同一张 20 x 44 ft 球场上投影可视化。
               </p>
@@ -499,6 +500,7 @@ export function useAnalysisResultReport(jobId?: string) {
     report: AnalysisReport | null;
     result: AnalysisPipelineResult | null;
     videoSrc?: string;
+    displayTitle?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -516,6 +518,22 @@ export function useAnalysisResultReport(jobId?: string) {
         // 不再前端拼装近似报告（pipelineReportAdapter 已 deprecated）。
         const adaptedReport = nextReport ?? null;
 
+        // 用户自定义显示标题优先于 Job 提交时的 matchTitle，与 Library 卡片一致
+        let displayTitle: string | undefined;
+        const ref = nextJob?.metadata?.recording_session_id
+          ? { kind: "recording" as const, sourceId: nextJob.metadata.recording_session_id }
+          : nextJob?.videoId
+            ? { kind: "upload" as const, sourceId: nextJob.videoId }
+            : null;
+        if (ref) {
+          try {
+            const item = await resolveLibraryItemByRef(ref);
+            displayTitle = item?.displayTitle ?? undefined;
+          } catch {
+            displayTitle = undefined;
+          }
+        }
+
         if (alive) {
           setLoadedResult({
             error: null,
@@ -524,6 +542,7 @@ export function useAnalysisResultReport(jobId?: string) {
             report: adaptedReport,
             result: pipelineResult,
             videoSrc: getVideoStreamUrl(pipelineResult?.video_id ?? nextJob?.videoId),
+            displayTitle,
           });
         }
       } catch (error) {
@@ -547,7 +566,7 @@ export function useAnalysisResultReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { error: null, job: null, report: demoReport, result: null, videoSrc: undefined };
+    return { error: null, job: null, report: demoReport, result: null, videoSrc: undefined, displayTitle: undefined };
   }
 
   if (loadedResult?.jobId !== jobId) {
@@ -557,6 +576,7 @@ export function useAnalysisResultReport(jobId?: string) {
       report: undefined,
       result: undefined,
       videoSrc: undefined,
+      displayTitle: undefined,
     };
   }
 
@@ -566,5 +586,6 @@ export function useAnalysisResultReport(jobId?: string) {
     report: loadedResult.report,
     result: loadedResult.result,
     videoSrc: loadedResult.videoSrc,
+    displayTitle: loadedResult.displayTitle,
   };
 }

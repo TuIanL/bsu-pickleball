@@ -2867,6 +2867,34 @@ class SyncRecordingService:
         loaded = self._load(session_id)
         return self._repair_registered_video_metadata(loaded) if loaded else None
 
+    def update_display_metadata(
+        self,
+        session_id: str,
+        *,
+        display_title: str | None = None,
+        display_date: datetime | None = None,
+    ) -> SyncRecordingSession | None:
+        """更新双摄同步录制的用户自定义显示元数据（Library 卡片兜底真源）。
+
+        空值（空串 / None）视为撤销覆盖，回退到派生值；更新后写盘并同步内存缓存。
+        """
+        session = self.get_session(session_id)
+        if session is None:
+            return None
+        new_title = (display_title or "").strip() or None
+        new_date = display_date
+        if new_title == session.display_title and new_date == session.display_date:
+            return session
+        session = session.model_copy(
+            update={
+                "display_title": new_title,
+                "display_date": new_date,
+            }
+        )
+        SYNC_SESSIONS[session_id] = session
+        self._persist(session)
+        return session
+
     def list_sessions(
         self,
         status: str | None = None,

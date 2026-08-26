@@ -1,0 +1,72 @@
+{
+  "schema_version": "ball_semantic_boundary_real_validation.v1",
+  "validation_mode": "real_capture_replay",
+  "capture_date": "2026-07-20",
+  "capture_take_id": "ct_6949bef776a5",
+  "source_media": [
+    "174_merged.mp4",
+    "175_merged.mp4"
+  ],
+  "source_artifact": "analysis/job-71166f62f7/multiview_ball_stereo_evidence.json",
+  "reference_source": "timeline/events.json manual rally_start/rally_end",
+  "window_ms": [
+    10190,
+    32491
+  ],
+  "real_measurements": 2,
+  "real_player_samples": 2583,
+  "tick_count": 6,
+  "boundary_events": [
+    {
+      "kind": "start",
+      "timestamp_ms": 18357,
+      "status": "confirmed_start",
+      "action": "open_formal_segment",
+      "action_id": "semantic-boundary:te_c2eb9741a55b:RALLY_ACTIVE"
+    },
+    {
+      "kind": "end",
+      "timestamp_ms": 25957,
+      "status": "confirmed_end",
+      "action": "seal_formal_segment",
+      "action_id": "semantic-boundary:te_844dd2055605:NON_PLAY_CONFIRMED"
+    },
+    {
+      "kind": "start",
+      "timestamp_ms": 32491,
+      "status": "confirmed_start",
+      "action": "open_formal_segment",
+      "action_id": "semantic-boundary:te_865a59c1e3b9:RALLY_ACTIVE"
+    }
+  ],
+  "metrics": {
+    "tolerance_ms": 250,
+    "predicted_boundary_count": 3,
+    "reference_boundary_count": 3,
+    "true_positive_count": 3,
+    "false_positive_count": 0,
+    "false_negative_count": 0,
+    "boundary_precision": 1.0,
+    "boundary_recall": 1.0,
+    "confirmation_latency_ms": 0.0,
+    "latencies_ms": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "algorithmic_suppression_tick_count": 0,
+    "false_suppression_count": 0,
+    "cross_segment_contamination_count": 0,
+    "reference_status": "available"
+  },
+  "evidence_source_counts": {
+    "algorithmic": 2,
+    "authoritative": 7,
+    "observed": 15
+  },
+  "notes": [
+    "边界参考来自 2026-07-20 真实双摄 take 的人工时间线。",
+    "球证据来自同一 take 的既有双摄 stereo evidence 产物；未修改球体模型。",
+    "原始外挂盘视频在本次 OpenCV 随机 seek 复跑时发生读取超时，因此本摘要不宣称完成一次新的原始视频 detector 复跑。"
+  ]
+}

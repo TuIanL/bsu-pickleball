@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.vision.pickleball_game_analysis.bounce_detector import BounceDetectorConfig
+from app.vision.pickleball_game_analysis.ball_quality_gate import BallQualityGateConfig
 from app.vision.pickleball_game_analysis.schemas import (
     BallFrameSample,
     BounceEvent,
@@ -34,12 +35,21 @@ def build_raw_trajectory_payload(
     原始轨迹 = BallTracker 逐帧输出、未经清洗。字段含 schema 版本、作业 ID、
     状态、坐标系统说明，以及每个采样点。
     """
+    quality_gates = next(
+        (
+            sample.diagnostics.get("quality_gate_config")
+            for sample in samples
+            if isinstance(sample.diagnostics.get("quality_gate_config"), dict)
+        ),
+        BallQualityGateConfig().snapshot(),
+    )
     return {
         "schema_version": "ball_trajectory.v1",
         "job_id": job_id,
         "status": status,
         "detail": detail,
         "coordinate_system": coordinate_system_metadata(court_width, court_length),
+        "quality_gates": quality_gates,
         "samples": [sample_to_payload(sample) for sample in samples],
     }
 
@@ -60,16 +70,32 @@ def build_cleaned_trajectory_payload(
     与原始轨迹相比，多了 filtering 字段，记录清洗参数（去异常、插值、缺口上限等）。
     """
     config = config or TrajectoryCleanerConfig()
+    quality_gates = next(
+        (
+            sample.diagnostics.get("quality_gate_config")
+            for sample in samples
+            if isinstance(sample.diagnostics.get("quality_gate_config"), dict)
+        ),
+        BallQualityGateConfig(
+            max_interpolation_gap_seconds=(
+                config.max_interpolation_gap_seconds
+                if config.max_interpolation_gap_seconds is not None
+                else BallQualityGateConfig().max_interpolation_gap_seconds
+            )
+        ).snapshot(),
+    )
     return {
         "schema_version": "cleaned_ball_trajectory.v1",
         "job_id": job_id,
         "status": status,
         "detail": detail,
         "coordinate_system": coordinate_system_metadata(court_width, court_length),
+        "quality_gates": quality_gates,
         "filtering": {
             "outlier_removal": True,
             "interpolation": True,
             "max_interpolation_gap": config.max_interpolation_gap,
+            "max_interpolation_gap_seconds": config.max_interpolation_gap_seconds,
             "outlier_step_floor_px": config.outlier_step_floor_px,
         },
         "samples": [sample_to_payload(sample) for sample in samples],

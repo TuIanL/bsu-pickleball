@@ -1,6 +1,6 @@
 export const productCopy = {
-  brand: "拍动视析",
-  tagline: "基于视觉捕捉与 TENG-IMU 智能球拍的全维度分析平台",
+  brand: "瞬境",
+  tagline: "基于视觉捕捉的匹克球运动表现智能分析平台",
   reportTitle: "赛后运动表现报告",
   reportBadge: "视觉分析演示",
   sectionLabels: {

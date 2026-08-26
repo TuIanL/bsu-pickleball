@@ -4,7 +4,6 @@ import type { LibraryItemViewModel } from "../../services/libraryAdapter";
 import { LibraryCard } from "./LibraryCard";
 
 afterEach(() => cleanup());
-
 function item(partial: Partial<LibraryItemViewModel>): LibraryItemViewModel {
   return {
     ref: { kind: "upload", sourceId: "video-1" },
@@ -93,5 +92,93 @@ describe("LibraryCard 分析入口", () => {
     );
     openMenu();
     expect(screen.queryByText("开始分析")).toBeNull();
+  });
+});
+
+describe("LibraryCard 元数据内联编辑（library-card-metadata-editing）", () => {
+  it("标题编辑：点击铅笔进入 input，回车保存并触发 onUpdateTitle", () => {
+    const onUpdateTitle = vi.fn().mockResolvedValue(undefined);
+    const onUpdateDate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <LibraryCard
+        item={item({ ref: { kind: "upload", sourceId: "video-1" }, sourceType: "upload" })}
+        onNavigate={vi.fn()}
+        onUpdateTitle={onUpdateTitle}
+        onUpdateDate={onUpdateDate}
+      />,
+    );
+    const editBtn = screen.getByLabelText("重命名标题");
+    fireEvent.click(editBtn);
+    const input = screen.getByRole("textbox", { name: "重命名标题" });
+    fireEvent.change(input, { target: { value: "自定义名称" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onUpdateTitle).toHaveBeenCalledTimes(1);
+    expect(onUpdateTitle).toHaveBeenCalledWith(expect.objectContaining({ ref: { kind: "upload", sourceId: "video-1" } }), "自定义名称");
+  });
+
+  it("标题编辑 Esc 取消，不触发保存", () => {
+    const onUpdateTitle = vi.fn().mockResolvedValue(undefined);
+    render(
+      <LibraryCard
+        item={item({ ref: { kind: "upload", sourceId: "video-1" }, sourceType: "upload" })}
+        onNavigate={vi.fn()}
+        onUpdateTitle={onUpdateTitle}
+        onUpdateDate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("重命名标题"));
+    const input = screen.getByRole("textbox", { name: "重命名标题" });
+    fireEvent.change(input, { target: { value: "不保存" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onUpdateTitle).not.toHaveBeenCalled();
+  });
+
+  it("日期编辑：点击进入 date input，选择即保存并触发 onUpdateDate", () => {
+    const onUpdateDate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <LibraryCard
+        item={item({
+          ref: { kind: "upload", sourceId: "video-1" },
+          sourceType: "upload",
+          startedAt: "2026-08-20T09:00:00Z",
+        })}
+        onNavigate={vi.fn()}
+        onUpdateTitle={vi.fn().mockResolvedValue(undefined)}
+        onUpdateDate={onUpdateDate}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("修改比赛日期"));
+    const dateInput = screen.getByLabelText("修改比赛日期");
+    expect(dateInput).toHaveProperty("type", "date");
+    fireEvent.change(dateInput, { target: { value: "2026-08-15" } });
+    expect(onUpdateDate).toHaveBeenCalledTimes(1);
+    expect(onUpdateDate).toHaveBeenCalledWith(expect.anything(), "2026-08-15");
+  });
+
+  it("无编辑回调时不显示铅笔入口（upload 无 onUpdateTitle/onUpdateDate）", () => {
+    render(
+      <LibraryCard
+        item={item({ ref: { kind: "upload", sourceId: "video-1" }, sourceType: "upload" })}
+        onNavigate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText("重命名标题")).toBeNull();
+    expect(screen.queryByLabelText("修改比赛日期")).toBeNull();
+  });
+
+  it("无场次的 recording（无 fieldSessionId）不显示编辑入口（design Q2 决议 B）", () => {
+    render(
+      <LibraryCard
+        item={item({
+          ref: { kind: "recording", sourceId: "rec-1" },
+          sourceType: "recording",
+        })}
+        onNavigate={vi.fn()}
+        onUpdateTitle={vi.fn().mockResolvedValue(undefined)}
+        onUpdateDate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(screen.queryByLabelText("重命名标题")).toBeNull();
+    expect(screen.queryByLabelText("修改比赛日期")).toBeNull();
   });
 });

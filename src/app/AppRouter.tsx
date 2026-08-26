@@ -6,6 +6,7 @@ import { CaptureHomePage } from "../pages/CaptureHomePage";
 import { CaptureWizardPage } from "../pages/CaptureWizardPage";
 import CaptureConsolePage from "../pages/CaptureConsolePage";
 import { SegmentManagerPage } from "../pages/SegmentManagerPage";
+import { ScoringCalibrationWorkbenchPage } from "../pages/ScoringCalibrationWorkbenchPage";
 import { RecordingWorkspacePage } from "../pages/RecordingWorkspacePage";
 import { RecordingAnalyzePage } from "../pages/RecordingAnalyzePage";
 import { MultiViewAnalysisSetupPage } from "../pages/MultiViewAnalysisSetupPage";
@@ -47,6 +48,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <CaptureConsolePage sessionId={route.sessionId} onNavigate={onNavigate} />;
       case "segmentManager":
         return <SegmentManagerPage fieldSessionId={route.fieldSessionId} takeId={route.takeId} onNavigate={onNavigate} />;
+      case "scoringCalibration":
+        return <ScoringCalibrationWorkbenchPage fieldSessionId={route.fieldSessionId} takeId={route.takeId} onNavigate={onNavigate} />;
       case "tasks":
         return <AnalysisTasksPage onNavigate={onNavigate} recentJob={recentJob} taskSource={route.taskSource} taskSessionId={route.taskSessionId} />;
       case "new-analysis":

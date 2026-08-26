@@ -23,9 +23,9 @@ ReportType = Literal["movement", "diagnosis", "performance"]
 # 洞察语气：优势 / 风险 / 错误 / 训练
 InsightTone = Literal["advantage", "risk", "error", "training"]
 # 任务业务状态
-AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed", "canceled"]
+AnalysisJobStatus = Literal["uploaded", "queued", "processing", "failed", "completed", "canceled", "interrupted"]
 # 任务规范化状态（前端统一展示用）
-AnalysisCanonicalStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+AnalysisCanonicalStatus = Literal["queued", "running", "succeeded", "failed", "canceled", "interrupted"]
 # 分析模式：演示 / 真实 / 受限
 AnalysisMode = Literal["demo", "real", "limited"]
 # 任务类型：普通单视角 / 双摄多视角（Parent）
@@ -90,6 +90,8 @@ ANALYSIS_ERROR_CODES: dict[str, str] = {
     "stage_failed": "ANALYSIS_STAGE_FAILED",
     "job_canceled": "ANALYSIS_JOB_CANCELED",
     "stage_timeout": "ANALYSIS_STAGE_TIMEOUT",
+    "worker_heartbeat_timeout": "ANALYSIS_WORKER_HEARTBEAT_TIMEOUT",
+    "worker_lost": "ANALYSIS_WORKER_LOST",
     "internal_error": "ANALYSIS_INTERNAL_ERROR",
 }
 
@@ -152,6 +154,8 @@ class MultiViewViewPayload(BaseModel):
     calibrationId: str
     # None = 尚未声明（preflight 不通过，绝不猜测）。
     courtOrientation: Literal["identity", "rotate_180", "mirror_x", "mirror_y"] | None = None
+    imageWidth: int | None = Field(default=None, ge=1)
+    imageHeight: int | None = Field(default=None, ge=1)
 
 
 class CanonicalFramePayload(BaseModel):
@@ -171,6 +175,10 @@ class MultiViewCreateRequest(BaseModel):
     canonicalFrame: CanonicalFramePayload | None = None
     # Visual Acceptance Run 的诊断开关；开启即要求 authoritative joint gate。
     debugTraceEnabled: bool = False
+    # 场景标定引用按 CaptureTake 复用；approximate 是旧 Homography 路径的显式降级模式。
+    sceneCalibrationMode: Literal["metric", "approximate"] = "approximate"
+    sceneCalibrationRevision: int | None = Field(default=None, ge=1)
+    sceneViewIds: list[str] = Field(default_factory=list)
 
 
 class AnalysisJobCreate(BaseModel):
@@ -234,6 +242,13 @@ class AnalysisJobSummary(BaseModel):
     cancelRequestedAt: str | None = None
     canceledAt: str | None = None
     workerId: str | None = None
+    workerPid: int | None = None
+    workerRunId: str | None = None
+    claimedAt: str | None = None
+    workerHeartbeatAt: str | None = None
+    lastProgressAt: str | None = None
+    interruptedAt: str | None = None
+    interruptionCode: str | None = None
     priority: int = Field(default=0, ge=0, le=100)
     attempt: int = Field(default=0, ge=0)  # 当前尝试次数
     inputSignature: str | None = None  # 输入签名（用于幂等/去重）
@@ -283,6 +298,10 @@ class AnalysisJobSummary(BaseModel):
     canonicalFrameId: str | None = None
     # 录制级同步锚点 revision 的只读引用；不复制 anchors/calibration 内容。
     syncCalibrationRevision: int | None = Field(default=None, ge=0)
+    # CaptureTake-scoped metric scene reference; historical jobs may omit it.
+    sceneCalibrationRevision: int | None = Field(default=None, ge=1)
+    sceneCalibrationMode: Literal["metric", "approximate"] = "approximate"
+    sceneCalibrationStatus: Literal["ready", "degraded", "invalidated", "missing"] = "missing"
     # 双摄任务各机位子进度（cam_1 / cam_2）
     viewRuns: dict[str, ViewRunSummary] | None = None
 

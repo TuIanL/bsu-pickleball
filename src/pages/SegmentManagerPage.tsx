@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw } from "lucide-react";
+import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw, Tags } from "lucide-react";
 import type { CaptureSegmentSummary, CaptureTakeSummary, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn } from "../app/navigationTypes";
 import { getCaptureTake, listSegments, patchSegment, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl } from "../services/analysisClient";
@@ -304,6 +304,12 @@ export function SegmentManagerPage({
             onClick={handleCreateAnalysis}
           >
             <Play size={16} /> 创建分析 ({selectedIds.size})
+          </button>
+          <button
+            className="inline-flex items-center gap-2 rounded-lg border border-[#2F80ED] px-3 py-2 text-sm font-bold text-[#2F80ED] hover:bg-[#EFF6FF] transition"
+            onClick={() => onNavigate(`/capture/${fieldSessionId}/takes/${takeId}/scoring-calibration`)}
+          >
+            <Tags size={16} /> 评分校准
           </button>
         </div>
       </div>

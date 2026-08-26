@@ -17,6 +17,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from app.schemas.video import VideoMetadata
+from app.services.cover_poster import generate_poster
 from app.services.storage_service import StorageService
 
 # 允许上传的视频后缀白名单（不在里面的直接报错，避免乱传文件）
@@ -74,6 +75,8 @@ class VideoService:
             self.storage.video_metadata_path(video_id),
             metadata.model_dump(mode="json"),
         )
+        # 7) 预生成封面 poster（非阻断：失败仅告警，不影响上传）
+        generate_poster(destination)
         return metadata
 
     def register_recording(
@@ -102,6 +105,8 @@ class VideoService:
             self.storage.video_metadata_path(video_id),
             metadata.model_dump(mode="json"),
         )
+        # 预生成封面 poster（非阻断：失败仅告警，不影响录制登记）
+        generate_poster(Path(file_path))
         return video_id
 
     def get_video(self, video_id: str) -> VideoMetadata | None:
@@ -132,6 +137,42 @@ class VideoService:
                 return None
         except OSError:
             return None
+        return metadata
+
+    def update_video(
+        self,
+        video_id: str,
+        *,
+        display_title: str | None = None,
+        display_date: datetime | None = None,
+    ) -> VideoMetadata | None:
+        """更新视频的用户自定义显示元数据（Library 卡片内联编辑真源）。
+
+        - `display_title` / `display_date` 传空值（空串 / None）表示撤销覆盖，回退到派生值。
+        - 更新成功后同时写内存缓存与磁盘 JSON，保证重启后可找回。
+        """
+        metadata = self.get_video(video_id)
+        if metadata is None:
+            return None
+
+        # 空串/None 一律视为「撤销覆盖」→ 归一化为 None
+        new_title = (display_title or "").strip() or None
+        new_date = display_date
+
+        if new_title != metadata.display_title:
+            metadata.display_title = new_title
+        if new_date != metadata.display_date:
+            metadata.display_date = new_date
+
+        if new_title is None and new_date is None:
+            # 没有实际改动时直接返回当前元数据（不写盘）
+            return metadata
+
+        VIDEOS[video_id] = metadata
+        self.storage.write_json(
+            self.storage.video_metadata_path(video_id),
+            metadata.model_dump(mode="json"),
+        )
         return metadata
 
     def list_videos(self) -> list[VideoMetadata]:

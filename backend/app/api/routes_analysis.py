@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 # Literal：限定某个参数只能取固定的几个字符串值（这里用于限定 artifact 名称白名单）
 # Union：表示返回值"可能是多种类型之一"
@@ -61,6 +62,7 @@ from app.services.mock_analysis import (
     list_analysis_jobs,
 )
 from app.services.multiview_coordinator import MultiviewPreflightError
+from app.services.multiview_overlay_repair import repair_persisted_multiview_overlay
 from app.services.multiview_observability import (
     MultiviewObservabilityProjector,
     structured_error,
@@ -76,6 +78,22 @@ _MULTIVIEW_OBSERVABILITY = MultiviewObservabilityProjector(_STORAGE)
 
 def _multiview_error(status_code: int, code: str, message: str, job_id: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=structured_error(code, message, job_id=job_id))
+
+
+def _json_compatible(value):
+    """将历史产物里的非有限浮点数转换为 JSON 可传输的 null。
+
+    少数旧版球路产物会把未知的不确定度持久化为 ``Infinity``。Python
+    可以读回该值，但标准 JSON 响应不能把它发送给浏览器；未知不确定度
+    的正确表示是 null，不能影响其余可用球路样本的展示。
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_compatible(item) for item in value]
+    return value
 
 
 def _iter_file_range(path: Path, start: int, end: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
@@ -248,6 +266,9 @@ def read_analysis_result(job_id: str) -> AnalysisPipelineResult | AnalysisJobSum
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
 
+    if job.canonicalStatus == "interrupted":
+        return job
+
     _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
 
     result = get_pipeline_result(job_id)
@@ -265,6 +286,12 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
     返回面向用户展示的分析报告（指标、训练建议等更易读的内容），
     比原始的 result JSON 更适合直接展示。
     """
+    job = get_mock_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    if job.canonicalStatus == "interrupted":
+        raise HTTPException(status_code=409, detail="Analysis job is interrupted and has no completed report")
+
     report = get_mock_report(job_id)
 
     if report is None:
@@ -361,7 +388,7 @@ def read_player_display_diagnostics(
         return _multiview_error(
             404, "not_applicable", "Player display diagnostics are not applicable to this job.", job_id
         )
-    if not (player_id.startswith("Player_") and player_id[len("Player_"):].isdigit()):
+    if not (player_id.startswith("Player_") and player_id[len("Player_") :].isdigit()):
         return _multiview_error(422, "invalid_player_id", "player_id must be canonical Player_N.", job_id)
     payload_path = _STORAGE.player_display_diagnostics_json_path(job_id)
     if not payload_path.exists():
@@ -437,6 +464,8 @@ def read_analysis_artifact(
         "cleaned-ball-trajectory",  # 清洗后的球轨迹
         "bounce-events",  # 弹跳事件
         "reconstructed-ball-trajectory",  # 事件切分重建球轨迹
+        "ball-semantic-timeline",  # 比赛语义驱动球搜索策略诊断
+        "ball-semantic-boundary-eval",  # 语义回合边界校准评估
         "multiview-ball-stereo-evidence",  # 多视角球立体证据（不可变原始证据）
         "analysis-overlay-video",  # 分析叠加视频（mp4 文件）
         "position-heatmaps",  # 位置热力图清单
@@ -449,6 +478,9 @@ def read_analysis_artifact(
         "player-trajectories",  # 球员轨迹
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
         "performance-insights",  # performance-insights.v1（表现洞察事实层）
+        "shot-rally-events",  # shot-rally-events.v1（canonical Rally/Shot 事实层）
+        "metric-snapshot",  # metric-snapshot.v1（分母感知描述性指标）
+        "normalized-metrics",  # normalized-metric-snapshot.v1（规范化指标中间层）
         "fused-trajectory",  # 多视角融合球员轨迹（Parent 命名空间产物）
         "fusion-diagnostics",  # 多视角融合诊断（融合质量）
         "fused-manifest",  # 多视角产物清单（Parent 唯一产品出口）
@@ -495,6 +527,10 @@ def read_analysis_artifact(
         path = _STORAGE.bounce_events_json_path(job_id)
     elif artifact_name == "reconstructed-ball-trajectory":
         path = _STORAGE.reconstructed_ball_trajectory_json_path(job_id)
+    elif artifact_name == "ball-semantic-timeline":
+        path = _STORAGE.ball_semantic_timeline_json_path(job_id)
+    elif artifact_name == "ball-semantic-boundary-eval":
+        path = _STORAGE.ball_semantic_boundary_eval_json_path(job_id)
     elif artifact_name == "multiview-ball-stereo-evidence":
         path = _STORAGE.multiview_ball_stereo_evidence_path(job_id)
     elif artifact_name == "analysis-overlay-video":
@@ -519,6 +555,12 @@ def read_analysis_artifact(
         path = _STORAGE.player_render_trajectory_path(job_id)
     elif artifact_name == "performance-insights":
         path = _STORAGE.performance_insights_json_path(job_id)
+    elif artifact_name == "shot-rally-events":
+        path = _STORAGE.shot_rally_events_json_path(job_id)
+    elif artifact_name == "metric-snapshot":
+        path = _STORAGE.metric_snapshot_json_path(job_id)
+    elif artifact_name == "normalized-metrics":
+        path = _STORAGE.normalized_metrics_json_path(job_id)
     elif artifact_name == "fused-trajectory":
         path = _STORAGE.fused_trajectory_json_path(job_id)
     elif artifact_name == "fusion-diagnostics":
@@ -540,6 +582,20 @@ def read_analysis_artifact(
     else:
         # 上面没显式列出的（如 serve-debug-overlay）走这个兜底分支
         path = _STORAGE.serve_debug_overlay_video_path(job_id)
+
+    # 旧版 joint overlay 只有 reference view 的 v1 frames。已有 joint run
+    # 会持久化 F0/F1 + 标定几何，因此可在读取时安全升级为包含所有展示视角的 v2，
+    # 不重新运行 detector，也不改动轨迹、身份或指标产物。
+    if artifact_name == "fused-player-overlay" and path.exists() and job.analysisKind == "multiview":
+        try:
+            current_payload = _STORAGE.read_json(path)
+            if isinstance(current_payload, dict) and current_payload.get("schema_version") == "multiview-fused-player-overlay.v1":
+                repaired = repair_persisted_multiview_overlay(job, storage=_STORAGE)
+                if repaired is not None:
+                    return JSONResponse(repaired)
+        except (OSError, ValueError, TypeError):
+            # 修复是兼容性增强；若历史证据不完整，仍返回原始 v1 artifact。
+            pass
 
     # 文件不存在就报错
     if not path.exists():
@@ -565,7 +621,7 @@ def read_analysis_artifact(
     if artifact_name == "detections":
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="application/x-ndjson")
     # 3) 其余都是 JSON 文件 → 读取后以 JSON 形式返回
-    return JSONResponse(_STORAGE.read_json(path))
+    return JSONResponse(_json_compatible(_STORAGE.read_json(path)))
 
 
 @router.get("/jobs/{job_id}/artifacts/position-visualization-images/{kind}/{file_name}", response_model=None)

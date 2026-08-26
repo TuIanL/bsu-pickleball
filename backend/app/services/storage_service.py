@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -131,9 +132,24 @@ class StorageService:
         # 原子写 JSON：先写临时文件，再用 os.replace 整体替换，
         # 避免写到一半进程崩溃导致文件损坏（保证要么旧、要么新，不会半截）。
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(f".{path.name}.tmp")
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp_path, path)
+        # API 与 external analysis-worker 可能同时刷新同一个兼容快照。
+        # 临时文件名必须是每次写入唯一的；固定的 ``.name.tmp`` 会让一个
+        # 写入者替换/删除另一个写入者的临时文件，最终在 os.replace 处抛
+        # FileNotFoundError，并可能连带杀掉 Worker 的 heartbeat 线程。
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
         return path
 
     def read_json(self, path: Path) -> dict[str, Any]:
@@ -249,6 +265,14 @@ class StorageService:
         # 事件切分重建球轨迹 JSON（第三套数据）
         return self._job_artifact_root(job_id) / "reconstructed_ball_trajectory.json"
 
+    def ball_semantic_timeline_json_path(self, job_id: str) -> Path:
+        # 比赛语义驱动球搜索策略诊断（Shadow/Enforced 共用）
+        return self._job_artifact_root(job_id) / "ball_semantic_timeline.json"
+
+    def ball_semantic_boundary_eval_json_path(self, job_id: str) -> Path:
+        # 语义回合边界校准评估（证据账本、边界事件与指标）
+        return self._job_artifact_root(job_id) / "ball_semantic_boundary_eval.json"
+
     def multiview_ball_stereo_evidence_path(self, job_id: str) -> Path:
         # 多视角球立体证据 JSON（不可变原始证据，v1）
         return self._job_artifact_root(job_id) / "multiview_ball_stereo_evidence.json"
@@ -340,6 +364,18 @@ class StorageService:
         # performance-insights.v1（表现洞察事实层，post-pipeline 可独立再生成）
         return self._job_artifact_root(job_id) / "performance_insights.json"
 
+    def shot_rally_events_json_path(self, job_id: str) -> Path:
+        # shot-rally-events.v1（canonical Rally/Shot 事实层）
+        return self._job_artifact_root(job_id) / "shot_rally_events.json"
+
+    def metric_snapshot_json_path(self, job_id: str) -> Path:
+        # metric-snapshot.v1（分母感知描述性指标）
+        return self._job_artifact_root(job_id) / "metric_snapshot.json"
+
+    def normalized_metrics_json_path(self, job_id: str) -> Path:
+        # normalized-metric-snapshot.v1（规范化指标与评分资格中间层）
+        return self._job_artifact_root(job_id) / "normalized_metrics.json"
+
     def player_trajectory_csv_path(self, job_id: str) -> Path:
         # 球员轨迹 CSV（方便用 Excel 打开）
         return self._job_artifact_root(job_id) / "players_trajectory.csv"
@@ -387,6 +423,19 @@ class StorageService:
     def calibration_json_path(self, calibration_id: str) -> Path:
         # 标定结果 JSON
         return self.calibrations_dir / f"{calibration_id}.json"
+
+    def metric_court_scene_root(self, take_dir: str | Path) -> Path:
+        """CaptureTake-scoped scene calibration directory."""
+        return Path(take_dir) / "metadata" / "metric-court-scene"
+
+    def metric_court_scene_draft_path(self, take_dir: str | Path) -> Path:
+        return self.metric_court_scene_root(take_dir) / "draft.json"
+
+    def metric_court_scene_current_path(self, take_dir: str | Path) -> Path:
+        return self.metric_court_scene_root(take_dir) / "current.json"
+
+    def metric_court_scene_revision_path(self, take_dir: str | Path, revision: int) -> Path:
+        return self.metric_court_scene_root(take_dir) / "revisions" / f"revision-{revision}.json"
 
     def preview_image_path(self, calibration_id: str) -> Path:
         # 标定预览图（png）

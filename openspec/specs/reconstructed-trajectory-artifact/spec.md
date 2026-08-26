@@ -4,7 +4,7 @@
 定义第三套球轨迹重建产物的 JSON 契约、source 分类、坐标语义、存储路径、API slug 与前端接线，作为前端的权威数据来源（前端不再自行分段与估高）。v2 增加球员名单、击球事件归属与 Shot 级归属传播字段；`event_status`（是否为可信击球）与 `ownership_status`（能否确定击球者）严格分离。v1 产物保留不回写，前端兼容降级。
 ## Requirements
 ### Requirement: 重建产物 JSON 契约
-系统 SHALL 输出结构化重建产物 `reconstructed_ball_trajectory.json`，包含 schema 版本、重建模式、坐标语义、球员名单、事件列表与飞行段列表。schema 版本 SHALL 为 `reconstructed_ball_trajectory.v2`。
+系统 SHALL 输出结构化重建产物 `reconstructed_ball_trajectory.json`，包含 schema 版本、重建模式、坐标语义、球员名单、事件列表与飞行段列表。schema 版本 SHALL 为 `reconstructed_ball_trajectory.v2` 或兼容的后续版本；使用质量门的产物 SHALL 声明 `quality_gate_schema_version`。
 
 #### Scenario: 产物顶层结构
 - **WHEN** 系统输出重建产物
@@ -38,25 +38,41 @@
 - **AND** 前端 SHALL 以断开或虚线样式渲染
 
 ### Requirement: 高度字段语义
-系统 SHALL 对重建采样的高度字段声明估值语义，不声称真实三维测量。
+
+系统 SHALL 对重建采样的高度字段声明估值语义，不声称真实三维测量，并 SHALL 声明高度是否满足展示物理约束。
 
 #### Scenario: 高度为视觉估计
 - **WHEN** 系统输出 `estimated_height_ft`
-- **THEN** 该字段 SHALL 为基于事件边界与弧线先验的视觉估计
+- **THEN** 该字段 SHALL 为基于事件边界、可用证据与弧线先验的视觉估计
 - **AND** 配合 `height_source`、`height_confidence` 与 `height_uncertainty_ft` 使用
 - **AND** 文档 SHALL 标注 `metric_validity = visualization_only`
 
+#### Scenario: 高度有效性可审计
+- **WHEN** segment 或 sample 输出高度
+- **THEN** SHALL 包含或可推导 `height_validity`，至少区分 `valid`、`invalid_below_ground`、`non_finite` 和 `unknown_open_end`
+- **AND** segment SHALL 在高度约束失败时保存 `height_quality_reason`
+- **AND** 无效高度 MUST NOT 被用来声明可用 3D 或真实测量指标
+
 ### Requirement: 弹地与击球边界高度不变量
-系统 SHALL 对事件边界处的高度值施加物理不变量约束。
+
+系统 SHALL 对事件边界处及整段内部的高度值施加物理不变量约束。
 
 #### Scenario: 弹地点高度为零
 - **WHEN** 飞行段以 bounce 事件为端点锚点
 - **THEN** 端点采样高度 SHALL 为 0 英尺（硬锚点）
+- **AND** 段内其他采样高度 SHALL 不小于 0
 
-#### Scenario: 击球点高度受先验约束
+#### Scenario: 击球点高度受证据和先验约束
 - **WHEN** 飞行段以击球事件为端点锚点
-- **THEN** 端点采样高度 SHALL 落在可配置接触高度先验范围内
-- **AND** 超出范围时 SHALL 以先验值钳制并记录不确定度
+- **THEN** 端点采样高度 SHALL 落在可配置接触高度范围内
+- **AND** SHALL 记录实际来源、置信度和不确定度
+- **AND** 无更强证据时才允许使用全局先验
+
+#### Scenario: 负高度拟合不得发布
+- **WHEN** 任何 3D sample 或密集校验点高度小于 0 或不是有限值
+- **THEN** segment SHALL 标记为高度无效
+- **AND** MUST NOT 以可用 3D 轨迹发布
+- **AND** SHALL 保存降级或拒绝原因
 
 ### Requirement: 存储路径与 API slug
 系统 SHALL 提供重建产物的固定存储路径与 API 访问方式，v2 产物不覆盖 v1。
@@ -162,8 +178,9 @@
 
 #### Scenario: 段级覆盖率诊断
 - **WHEN** v3 含飞行段
-- **THEN** 每段 SHALL 声明 `stereo_coverage` 与 `prediction_ratio`
+- **THEN** 每段 SHALL 声明 `stereo_coverage`、`observed_ratio`、`interpolated_ratio` 与 `prediction_ratio`
 - **AND** 二者 SHALL 用于 speed eligibility 与前端渲染判断
+- **AND** 段级 `quality_gate_summary` SHALL 保存质量门版本、通过/拒绝原因、候选与 pair 诊断摘要以及 `display_eligible` 的判定依据
 
 ### Requirement: 前端按版本降级读取
 系统 SHALL 使前端通过统一 `reconstructed-ball-trajectory` slug 读取历史与新产物，并按 schema version、segment reconstruction mode 与 metric eligibility 呈现；专项指标不可用 SHALL NOT 自动隐藏合格的估算展示段。
@@ -179,19 +196,49 @@
 - **AND** SHALL NOT 生成伪造曲线
 
 ### Requirement: 分层可用状态写入产物
-系统 SHALL 同时记录 3D overall status、`display_trajectory_status`、段级 display level 与指标级 validity，供前端分别控制球路和测量指标。
+系统 SHALL 同时记录 3D overall status、`display_trajectory_status`、段级 display level 与指标级 validity，供前端分别控制球路和测量指标。每个 segment SHALL 额外记录质量门摘要、观测覆盖、插值/预测比例、断点/provenance 和 `display_eligible`；这些字段 SHALL 能解释该段为什么可展示、仅调试可见或不可用。
 
 #### Scenario: 状态组合
 - **WHEN** 写入混合产物
 - **THEN** 3D overall status SHALL 为 `FULL_ESTIMATED_3D`、`PARTIAL_3D`、`LANDING_ONLY` 或 `UNAVAILABLE`
 - **AND** `display_trajectory_status` SHALL 为 `available`、`degraded` 或 `unavailable`
 - **AND** 每个速度、高度和落点指标 SHALL 自带 validity/reason
+- **AND** 每个 segment SHALL 保存 `display_level`、`display_eligible` 和质量门摘要
+
+#### Scenario: 低质量段不具备默认展示资格
+
+- **WHEN** segment 的观测覆盖不足、插值/预测比例超限、双摄 pair 歧义或存在未跨越的长缺口
+- **THEN** segment SHALL 标记为 `display_eligible = false` 或仅调试级 `display_level`
+- **AND** `display_trajectory_status` SHALL 不得因该段单独存在而被提升为可用
+- **AND** artifact SHALL 保存对应的拒绝/降级 reason
 
 ### Requirement: 混合轨迹 provenance 与端点分类
-每个 segment 和 sample SHALL 保存来源视角、detected/interpolated/predicted/stereo-anchor provenance、质量、时间范围与端点语义；场外端点 SHALL 保存相对于标准球场和比赛环境的分类。
+
+每个 segment 和 sample SHALL 保存来源视角、detected/interpolated/predicted/stereo-anchor provenance、质量、实际时间戳、缺口时长、断点原因、`display_break`、时间范围与端点语义；场外端点 SHALL 保存相对于标准球场和比赛环境的分类；高度 SHALL 保存来源和有效性。
 
 #### Scenario: 保存可能真实界外的 bounce
 - **WHEN** bounce 位于边线外但未被判为环境离群点
 - **THEN** endpoint SHALL 保存 `court_location = outside_line`、`outcome_classification = legal_out_candidate`、证据置信度和标定不确定度
 - **AND** MUST NOT 将 `legal_out_candidate` 解释为自动比赛判罚
+
+#### Scenario: 保存高度降级原因
+- **WHEN** segment 因负高度、无高度证据或未知端而降级
+- **THEN** artifact SHALL 保存 `height_quality_reason`、`height_source` 或 `unknown_open_end` 语义
+- **AND** 前端、报告和诊断消费者 SHALL 能区分无效 3D 与合法的 visualization-only 2.5D
+
+### Requirement: 多视角展示路径按 view 可审计
+
+多视角重建产物用于视频展示的 image-space path SHALL 以 `view_id` 作为显式维度，并为每个 sample 保留 canonical timestamp、source frame index、source timestamp 和 provenance。缺少某 view 的 path SHALL 表示该 view 不具备该 sample 的视频展示资格，而不是允许前端猜测投影。
+
+#### Scenario: 读取目标 view path
+
+- **WHEN** 前端请求 `displayViewId=cam_2` 的球路展示
+- **THEN** artifact 读取 SHALL 返回 `cam_2` 对应的 image-space samples
+- **AND** samples SHALL 能与同一 canonical timestamp 的事件和 segment 对齐
+
+#### Scenario: 目标 view 缺少 sample
+
+- **WHEN**某 segment 只有 `cam_1` 的 image-space path
+- **THEN** `cam_2` 的展示资格 SHALL 为 unavailable 或 degraded
+- **AND** 前端 SHALL 不得使用 `cam_1` path 绘制在 `cam_2` 视频上
 

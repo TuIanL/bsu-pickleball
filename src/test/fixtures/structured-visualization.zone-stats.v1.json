@@ -1,0 +1,26 @@
+{
+  "court": { "court_width_ft": 20, "court_length_ft": 44 },
+  "scatter_plots": { "players": [], "ball": [], "bounces": [] },
+  "player_trajectories": [],
+  "zone_stats": {
+    "players": [
+      {
+        "id": "Player_1",
+        "label": "P1",
+        "color": "#22C55E",
+        "denominator_seconds": 18,
+        "tracked_seconds": 16,
+        "data_sufficiency": "sufficient",
+        "nvz_occupancy_rate": 0.38,
+        "kitchen_control_rate": 0.38,
+        "avg_distance_to_kitchen_line_m": 1.1,
+        "zones": [
+          { "zone": "kitchen", "label": "网前区", "seconds": 6, "occupancy": 0.38 },
+          { "zone": "transition", "label": "过渡区", "seconds": 7, "occupancy": 0.44 },
+          { "zone": "backcourt", "label": "后场区", "seconds": 3, "occupancy": 0.18 }
+        ],
+        "feedback": { "level": "moderate", "summary": "fixture：站位分布稳定" }
+      }
+    ]
+  }
+}

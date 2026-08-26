@@ -16,6 +16,7 @@ import app.models.capture_take  # noqa: F401, E402
 import app.models.capture_track  # noqa: F401, E402
 import app.models.field_session  # noqa: F401, E402
 import app.models.live_coding_state  # noqa: F401, E402
+import app.models.scoring_calibration_annotation  # noqa: F401, E402
 import app.models.timeline_event  # noqa: F401, E402
 import app.models.vidat_annotation  # noqa: F401, E402
 from app.database import Base  # noqa: E402

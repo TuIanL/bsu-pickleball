@@ -40,16 +40,22 @@
 - **THEN** 前端 SHALL 回退到顺序 ID 仅用于展示，不参与统计
 
 ### Requirement: 估算高度的可信表达
-系统 SHALL 以可信方式表达估算高度，低可信高度与推算点必须与实测区分。
+
+系统 SHALL 以可信方式表达估算高度，低可信高度、未知端和推算点必须与合格双摄高度区分。
 
 #### Scenario: 推算点样式区分
 - **WHEN** 重建样本 `source` 为 `interpolated` 或 `model_predicted`
 - **THEN** 场景 SHALL 以虚线或浅色样式绘制，与 `detected` 点可区分
 
 #### Scenario: 高度不可信提示
-- **WHEN** 样本高度置信度低于展示阈值
+- **WHEN** 样本高度置信度低于展示阈值或 `height_validity = unknown_open_end`
 - **THEN** 场景 SHALL 弱化该段高度信息
 - **AND** 说明该高度为视觉估计
+
+#### Scenario: 高度来源保留
+- **WHEN** adapter 将 artifact sample 转换为前端 view model
+- **THEN** SHALL 保留 `height_source`、`height_confidence`、`height_uncertainty_ft` 和高度有效性
+- **AND** 前端 MUST NOT 重新生成统一高度或统一抛物线覆盖 artifact 高度
 
 ### Requirement: 交互式标准球场渲染
 
@@ -76,18 +82,31 @@
 
 ### Requirement: 轨迹筛选与视觉编码
 
-系统 SHALL 允许用户在全部轨迹、较高可信度轨迹与球员球路之间筛选，并 SHALL 使用方向颜色、透明度、线宽和来源线型区分方向、低可信度、推算点和预测区间。可信度判定 SHALL 使用后端质量评分，而非前端平均置信度。球员筛选选项 SHALL 来自产物 `player_roster`，不得硬编码。默认视图 MUST NOT 使用事件点型区分击球或弹地。
+系统 SHALL 允许用户在全部轨迹、较高可信度轨迹与球员球路之间筛选，并 SHALL 使用方向颜色、透明度、线宽和来源线型区分方向、低可信度、推算点和预测区间。可信度判定 SHALL 使用后端质量评分和段级展示资格，而非前端平均置信度。球员筛选选项 SHALL 来自产物 `player_roster`，不得硬编码。默认视图 MUST NOT 使用事件点型区分击球或弹地，也 MUST NOT 绘制 `display_eligible = false` 的 segment。
 
 #### Scenario: 仅显示较高可信度轨迹
 
 - **WHEN** 用户启用高可信度筛选
-- **THEN** 场景仅显示后端质量评分达到规定阈值且推算比例未超过规定值的重建段
+- **THEN** 场景仅显示后端质量评分达到规定阈值、推算比例未超过规定值且 `display_eligible = true` 的重建段
 
 #### Scenario: 按球员筛选
 
-- **WHEN** 用户选择某球员（如 P3）
-- **THEN** 场景仅显示 `hitter_player_id == Player_3` 的 Shot 内所有 segment
-- **AND** 可见球路的 `hitter_player_id` SHALL 均为 `Player_3`
+- **WHEN** 用户在报告页选择某个 canonical 球员（如 `Player_3`）
+- **THEN** 场景 SHALL 仅显示 `hitter_player_id == Player_3` 且 `ownership_status == confirmed` 的 Shot
+- **AND** 该 Shot 关联的全部 segment SHALL 保留并传入场景，即使一个 Shot 包含多个 segment
+- **AND** 可见球路的原始 `hitter_player_id` SHALL 均为 `Player_3`，前端不得通过覆盖字段伪造归属
+
+#### Scenario: 未归属球路不进入球员视图
+
+- **WHEN** Shot 或 segment 的归属为 `ambiguous`、`unassigned`、缺少 `hitter_player_id`，或 `shot_id` 为空
+- **THEN** 该球路 SHALL 不进入任何指定球员的个人筛选结果
+- **AND** 该数据 SHALL 保留给全部轨迹或未归属视图使用，并 SHALL 不计入指定球员统计
+
+#### Scenario: 报告页切换球员
+
+- **WHEN** 用户从 `Player_1` 切换到 `Player_2`
+- **THEN** `BallTrajectoryScene` SHALL 在下一次渲染中只接收 `Player_2` 的筛选结果
+- **AND** SHALL NOT 保留上一名球员的可见轨迹或当前选中的不可见 Shot
 
 #### Scenario: 单打双打自适应
 
@@ -109,8 +128,14 @@
 
 #### Scenario: 低可信段仅调试显示
 
-- **WHEN** 重建段质量评分低于默认展示阈值或为 `image_only` 模式
+- **WHEN** 重建段质量评分低于默认展示阈值、`display_eligible = false` 或为 `image_only` 模式
 - **THEN** 场景 SHALL NOT 在默认球场视图显示该段，除非用户开启调试/原始检测模式
+
+#### Scenario: 断点和来源不被前端重新连接
+
+- **WHEN** artifact 标记两个样本区间之间存在长缺口、lost/reset 边界或 `display_break = true`
+- **THEN** 前端 SHALL 保持几何断开
+- **AND** MUST NOT 为了视觉连续性自行插值、平滑或跨段连线
 
 ### Requirement: 完备的运行状态
 
@@ -179,21 +204,32 @@
 - **AND** 选中状态 SHALL 通过共享 `shotId` 判定
 
 ### Requirement: Shot 级列表与统计
-系统 SHALL 按 Shot 聚合列表与统计，列表项展示击球者、飞行段数与时长，统计按 `shot_id` 去重。
+
+系统 SHALL 按 Shot 聚合列表与统计，列表项展示击球者、飞行段数与时长，统计按 `shot_id` 去重。所有列表和统计 SHALL 基于当前球员、阶段、质量和数量限制后的可见结果计算，不得使用筛选前的整场轨迹数量。
 
 #### Scenario: Shot 列表项
+
 - **WHEN** 右侧列表渲染
-- **THEN** 列表项 SHALL 按 Shot 展示（如"球路 7 · P2 · 2 个飞行段 · 3.8 秒"）
+- **THEN** 列表项 SHALL 按 Shot 展示（如“球路 7 · P2 · 2 个飞行段 · 3.8 秒”）
 - **AND** MUST NOT 按 flight segment 逐条列示同一 Shot
 
 #### Scenario: 统计按 Shot 去重
+
 - **WHEN** 页面统计球路总数与球员击球数
 - **THEN** 总数 SHALL 按 `shot_id` 去重计数（含 unassigned，不含 `shotId = null`）
-- **AND** 球员击球数 SHALL 按 `hitter_player_id` 匹配的 Shot 去重计数
+- **AND** 球员击球数 SHALL 按 `hitter_player_id` 匹配且已确认的 Shot 去重计数
+- **AND** 统计 SHALL 不包含未归属、击球者不明或另一球员的 Shot
 
 #### Scenario: 筛选顺序
+
 - **WHEN** 用户同时启用球员筛选、可信度筛选与数量限制
 - **THEN** 筛选顺序 SHALL 为：球员归属筛选 → 可信度筛选 → 最近 N 条限制
+
+#### Scenario: 无匹配球路
+
+- **WHEN** 当前球员和其他筛选条件组合后没有可展示的 Shot
+- **THEN** 页面 SHALL 显示明确的“当前筛选下没有可显示的球路”空态
+- **AND** SHALL NOT 回退显示整场球路
 
 ### Requirement: 未归属双语义分组
 系统 SHALL 在"未归属"筛选下区分"击球者不明"与"无 Shot 上下文"两类，避免误解。
@@ -330,4 +366,85 @@ Vision 页面 SHALL 通过现有横向视图导航或紧凑操作入口提供球
 - **WHEN** endpoint 被分类为 `environment_outlier`
 - **THEN** 正式报告 SHALL 不把该点作为球路端点或轨迹 segment 展示
 - **AND** 技术详情或 artifact 查询 SHALL 仍能提供其拒绝理由和原始证据
+
+### Requirement: 地面以下高度安全渲染
+
+球场视图 SHALL 把地面 `y = 0` 作为高度安全边界，任何负值、非有限值或 artifact 标记为无效的高度不得生成正式 Three.js 轨迹几何。
+
+#### Scenario: 负高度样本
+- **WHEN** 前端收到 `estimated_height_ft < 0`
+- **THEN** 该 sample SHALL 被过滤或使对应 3D run 断开
+- **AND** 页面 MUST NOT 把它裁剪成地面点后继续伪装为有效 3D
+
+#### Scenario: 无效 3D 段存在 2.5D 降级
+- **WHEN** 某 3D segment 高度无效但同段存在合格的 visualization-only 2.5D 结果
+- **THEN** 页面 SHALL 展示 2.5D 降级结果
+- **AND** SHALL 保留 3D 失败原因供技术详情查询
+
+#### Scenario: 无有效高度
+- **WHEN** 轨迹没有任何有限且非负的高度样本
+- **THEN** 该段 SHALL 不生成场景线条
+- **AND** 页面 SHALL 保留既有的无可用球路或降级状态语义，不得静默显示平面线
+
+### Requirement: 相邻球路片段唯一渲染
+
+前端球路 compositor 在每个播放时刻 SHALL 以 `render_view_id`、时间窗口和稳定 `segment_id` 过滤并去重，默认只渲染一个 active segment 的视频尾迹。已结束 segment 的 retention 只有在不存在已开始的后继 segment 时才允许生效；不得因固定 retention 窗口同时绘制两条相邻轨迹。
+
+#### Scenario: 33 秒相邻片段切换
+- **WHEN** `flight-42` 在 33.166 秒结束且 `flight-43` 从 33.166 秒开始
+- **THEN** 33.166 秒及之后的活动轨迹 SHALL 只包含 `flight-43`
+- **AND** SHALL NOT 因 `flight-42` 的 retention 与 `flight-43` 同时产生两条视频轨迹
+
+#### Scenario: 不同 primary view 不产生双坐标叠加
+- **WHEN** 相邻 segment 的 `primary_view_id` 分别为 `cam_2` 和 `cam_1`
+- **THEN** compositor SHALL 先统一到任务 `render_view_id`
+- **AND** 若某段无法统一， SHALL 跳过该段的视频 path并保留可查询的 skip reason
+
+#### Scenario: 重复 segment 输入
+- **WHEN** adapter 因重试、插值或旧 artifact 返回相同 `segment_id` 的重复记录
+- **THEN** compositor SHALL 只保留一份确定性 geometry
+- **AND** 不得通过重复记录叠加线宽、透明度或端点
+
+#### Scenario: 时间边界回放稳定
+- **WHEN** 播放器在 segment start/end 边界前后往返拖动
+- **THEN** 同一时刻 SHALL 得到相同的 active segment 集合和同一 `render_view_id`
+- **AND** 不得出现边界前后两条路径短暂同时闪现
+
+### Requirement: 场景标定驱动的高度可信表达
+
+系统 SHALL 以可信方式表达 metric、approximate 和 visualization-only 高度；低可信高度、未知端和推算点必须与合格双摄高度区分。前端 SHALL 消费 artifact 中的 `metric_validity`、scene calibration status、height confidence 和 uncertainty，不得自行把不同来源合并成一个精确高度。
+
+#### Scenario: metric 高度
+- **WHEN** 重建样本来自 ready scene revision 且 `metric_validity = metric_multiview`
+- **THEN** 场景 SHALL 保留其高度来源、置信度和不确定度
+- **AND** 可以按产品阈值使用 metric 3D 轨迹和高度指标
+
+#### Scenario: approximate 或 visualization-only 高度
+- **WHEN** 样本来自 approximate scene、单摄弧线、`interpolated` 或 `model_predicted`
+- **THEN** 场景 SHALL 使用虚线、浅色、透明度或标签与 metric 高度区分
+- **AND** SHALL 说明该高度为近似或仅用于可视化
+
+#### Scenario: 高度来源保留
+- **WHEN** adapter 将 artifact sample 转换为前端 view model
+- **THEN** SHALL 保留 `height_source`、`height_confidence`、`height_uncertainty_ft`、`height_validity`、`metric_validity` 和 scene calibration reference
+- **AND** 前端 MUST NOT 重新生成统一高度或统一抛物线覆盖 artifact 高度
+
+### Requirement: 场景 profile 驱动的可变高度球网渲染
+
+系统 SHALL 提供统一的标准匹克球 3D/2.5D 球场交互渲染。场景 SHALL 包含发球线、非截击区、由 scene calibration profile 生成的球网和可读轨迹，并提供 PB Vision 风格的五个固定视角：45°、俯视、边线、底线和 45°底线。场景 SHALL 支持平移、缩放和旋转；视角切换不得重新创建整套 renderer 和轨迹几何。
+
+#### Scenario: 渲染可变高度球网
+- **WHEN** 任务 artifact 包含有效 net profile
+- **THEN** 场景 SHALL 按 profile 渲染两侧 91.44 cm、中心 86.36 cm 或现场 measured height
+- **AND** 球网、网柱与球路 SHALL 使用同一个 Canonical Court Frame
+
+#### Scenario: 缺少场景 profile
+- **WHEN** 任务没有可用 scene calibration profile
+- **THEN** 场景 SHALL 使用明确标记的兼容网模型或展示降级状态
+- **AND** SHALL NOT 将固定高度网模型描述为现场实测几何
+
+#### Scenario: 固定视角与自由交互
+- **WHEN** 用户打开视角工具栏或拖动、滚轮缩放、触摸操作球场
+- **THEN** 工具栏 SHALL 保留五个固定视角，场景 SHALL 支持平移、缩放和旋转
+- **AND** 操作不得改变 artifact 数据或生成新的轨迹段
 

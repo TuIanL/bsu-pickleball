@@ -38,6 +38,11 @@ import type {
 } from "../types/report";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 import type {
+  MetricSnapshotArtifact,
+  ShotRallyEventsArtifact,
+} from "../types/shotRallyEvents";
+import type { NormalizedMetricArtifact } from "../types/metricNormalization";
+import type {
   MultiviewObservabilitySummary,
   RecoveryEpisodePage,
   RecoveryOutcome,
@@ -48,6 +53,20 @@ import type {
   SyncAnchorDraftResponse,
   SyncAnchorStatus,
 } from "../types/syncAnchors";
+import type {
+  AnnotationPackageCreateRequest,
+  AnnotationPackageRevisionRequest,
+  AnnotationUpdateRequest,
+  AnnotationUpsertRequest,
+  CandidateDecisionRequest,
+  ScoringCalibrationPackage,
+} from "../types/scoringCalibrationAnnotation";
+import type {
+  MetricCourtSceneCalibration,
+  MetricCourtSceneDraftRequest,
+  MetricCourtSceneRevisionSummary,
+  MetricCourtSceneValidationResponse,
+} from "../types/metricCourtScene";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
@@ -574,6 +593,39 @@ export async function listVideosCatalog(): Promise<VideoMetadata[]> {
   return response.videos ?? [];
 }
 
+/** 更新 upload 素材的用户自定义显示标题/日期（Library 卡片内联编辑真源；空值撤销覆盖）。 */
+export async function updateVideo(
+  videoId: string,
+  request: { display_title?: string; display_date?: string },
+): Promise<VideoMetadata> {
+  return requestJson<VideoMetadata>(`/api/videos/${videoId}`, {
+    body: JSON.stringify(request),
+    method: "PATCH",
+  });
+}
+
+/** 更新单摄录制素材的显示元数据（per-asset 真源，卡片内联编辑写此接口；空值撤销覆盖）。 */
+export async function updateRecording(
+  sessionId: string,
+  request: { display_title?: string; display_date?: string },
+): Promise<RecordingSession> {
+  return requestJson<RecordingSession>(`/api/recordings/${sessionId}`, {
+    body: JSON.stringify(request),
+    method: "PATCH",
+  });
+}
+
+/** 更新双摄素材的显示元数据（per-asset 真源，卡片内联编辑写此接口；空值撤销覆盖）。 */
+export async function updateSyncRecording(
+  sessionId: string,
+  request: { display_title?: string; display_date?: string },
+): Promise<SyncRecordingSession> {
+  return requestJson<SyncRecordingSession>(`/api/sync-recordings/${sessionId}`, {
+    body: JSON.stringify(request),
+    method: "PATCH",
+  });
+}
+
 export async function createManualCalibration(
   videoId: string,
   points: Record<"top_left" | "top_right" | "bottom_right" | "bottom_left", CalibrationPoint>
@@ -689,6 +741,8 @@ export interface MultiViewCreateViewPayload {
   videoId: string;
   calibrationId: string;
   courtOrientation: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 export interface MultiviewAnalysisJobRequest {
@@ -699,6 +753,9 @@ export interface MultiviewAnalysisJobRequest {
   executionMode?: "late_fusion_v1" | "joint_tracking_v2";
   /** Opt-in canonical diagnostic replay; requires joint_tracking_v2. */
   debugTraceEnabled?: boolean;
+  sceneCalibrationMode?: "metric" | "approximate";
+  sceneCalibrationRevision?: number;
+  sceneViewIds?: string[];
   canonicalFrame?: { endA: string; endB: string };
   /** 分析窗口（take 公共时间轴 ms；缺省整场）。secondary 由后端经 sync 换算到自身时间轴。 */
   clipStartMs?: number;
@@ -722,6 +779,9 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
         views: request.views,
         executionMode: request.executionMode ?? "late_fusion_v1",
         debugTraceEnabled: request.debugTraceEnabled ?? false,
+        sceneCalibrationMode: request.sceneCalibrationMode ?? "approximate",
+        sceneCalibrationRevision: request.sceneCalibrationRevision,
+        sceneViewIds: request.sceneViewIds,
         canonicalFrame: request.canonicalFrame,
       },
     }),
@@ -905,6 +965,10 @@ export function getVideoStreamUrl(videoId?: string): string | undefined {
   return videoId ? toApiUrl(`/api/videos/${videoId}/stream`) : undefined;
 }
 
+export function getVideoPosterUrl(videoId?: string): string | undefined {
+  return videoId ? toApiUrl(`/api/videos/${videoId}/poster`) : undefined;
+}
+
 export interface VideoTimingFrame {
   frame_index: number;
   pts_seconds: number;
@@ -1016,6 +1080,45 @@ export async function getReconstructedBallTrajectory(
   return path ? requestJson<ReconstructedBallTrajectoryArtifact>(path) : null;
 }
 
+export async function getShotRallyEvents(
+  result: AnalysisPipelineResult,
+): Promise<ShotRallyEventsArtifact | null> {
+  const path = result.artifacts.shot_rally_events_url;
+  if (!path) return null;
+  try {
+    return await requestJson<ShotRallyEventsArtifact>(path);
+  } catch (error) {
+    if (error instanceof AnalysisApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function getMetricSnapshot(
+  result: AnalysisPipelineResult,
+): Promise<MetricSnapshotArtifact | null> {
+  const path = result.artifacts.metric_snapshot_url;
+  if (!path) return null;
+  try {
+    return await requestJson<MetricSnapshotArtifact>(path);
+  } catch (error) {
+    if (error instanceof AnalysisApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function getNormalizedMetrics(
+  result: AnalysisPipelineResult,
+): Promise<NormalizedMetricArtifact | null> {
+  const path = result.artifacts.normalized_metrics_url;
+  if (!path) return null;
+  try {
+    return await requestJson<NormalizedMetricArtifact>(path);
+  } catch (error) {
+    if (error instanceof AnalysisApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 export async function getMultiviewBallStereoEvidence(
   result: AnalysisPipelineResult,
 ): Promise<MultiviewBallStereoEvidenceArtifact | null> {
@@ -1038,11 +1141,7 @@ export async function getPositionScatterPlots(result: AnalysisPipelineResult): P
 }
 
 export async function getStructuredVizData(jobId: string): Promise<StructuredVisualizationData | null> {
-  try {
-    return await requestJson<StructuredVisualizationData>(`/api/analysis/jobs/${jobId}/visualization-data`);
-  } catch {
-    return null;
-  }
+  return requestJson<StructuredVisualizationData>(`/api/analysis/jobs/${jobId}/visualization-data`);
 }
 
 export async function getPlayerRenderTrajectory(jobId: string): Promise<RawPlayerRenderTrajectory | null> {
@@ -1064,6 +1163,7 @@ import type {
   FieldSession,
   FieldSessionCreate,
   FieldSessionDeleteResult,
+  FieldSessionUpdateRequest,
   ProbeResult,
   CaptureStopResult,
   RecordingSession,
@@ -1302,7 +1402,7 @@ export async function getFieldSession(id: string): Promise<FieldSession> {
   return normalizeFieldSession(await requestJson<FieldSession>(`/api/field-sessions/${id}`));
 }
 
-export async function updateFieldSession(id: string, request: Partial<FieldSessionCreate>): Promise<FieldSession> {
+export async function updateFieldSession(id: string, request: FieldSessionUpdateRequest): Promise<FieldSession> {
   return requestJson<FieldSession>(`/api/field-sessions/${id}`, {
     body: JSON.stringify(request),
     method: "PATCH",
@@ -1372,6 +1472,74 @@ export async function deleteTimelineEvent(eventId: string): Promise<void> {
 
 export async function getCaptureTake(takeId: string): Promise<CaptureTakeSummary> {
   return requestJson<CaptureTakeSummary>(`/api/capture-takes/${takeId}`);
+}
+
+export async function getMetricCourtSceneDraft(takeId: string): Promise<MetricCourtSceneCalibration | null> {
+  try {
+    return await requestJson<MetricCourtSceneCalibration>(
+      `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/draft`,
+    );
+  } catch (error) {
+    if (isAnalysisApiError(error) && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function saveMetricCourtSceneDraft(
+  takeId: string,
+  draft: MetricCourtSceneDraftRequest,
+): Promise<MetricCourtSceneCalibration> {
+  return requestJson<MetricCourtSceneCalibration>(
+    `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/draft`,
+    { method: "PUT", body: JSON.stringify(draft) },
+  );
+}
+
+export async function validateMetricCourtScene(
+  takeId: string,
+): Promise<MetricCourtSceneValidationResponse> {
+  return requestJson<MetricCourtSceneValidationResponse>(
+    `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/validate`,
+    { method: "POST" },
+  );
+}
+
+export async function publishMetricCourtScene(takeId: string): Promise<MetricCourtSceneCalibration> {
+  return requestJson<MetricCourtSceneCalibration>(
+    `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/publish`,
+    { method: "POST" },
+  );
+}
+
+export async function getCurrentMetricCourtScene(takeId: string): Promise<MetricCourtSceneCalibration | null> {
+  try {
+    return await requestJson<MetricCourtSceneCalibration>(
+      `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/current`,
+    );
+  } catch (error) {
+    if (isAnalysisApiError(error) && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function getMetricCourtSceneRevision(
+  takeId: string,
+  revision: number,
+): Promise<MetricCourtSceneCalibration | null> {
+  try {
+    return await requestJson<MetricCourtSceneCalibration>(
+      `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/revisions/${revision}`,
+    );
+  } catch (error) {
+    if (isAnalysisApiError(error) && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function listMetricCourtSceneRevisions(takeId: string): Promise<MetricCourtSceneRevisionSummary[]> {
+  return requestJson<MetricCourtSceneRevisionSummary[]>(
+    `/api/capture-takes/${encodeURIComponent(takeId)}/metric-court-scene/revisions`,
+  );
 }
 
 export async function getSyncAnchorStatus(takeId: string, requireManual = false): Promise<SyncAnchorStatus> {
@@ -1453,6 +1621,98 @@ export async function listSegments(
   if (segmentType) sp.set("segment_type", segmentType);
   const q = sp.toString();
   return requestJson<CaptureSegmentSummary[]>(`/api/capture-takes/${takeId}/segments${q ? `?${q}` : ""}`);
+}
+
+// ── Scoring calibration annotation API ──
+
+export function listScoringCalibrationPackages(takeId: string): Promise<ScoringCalibrationPackage[]> {
+  return requestJson<ScoringCalibrationPackage[]>(`/api/capture-takes/${takeId}/scoring-calibration/packages`);
+}
+
+export function createScoringCalibrationPackage(
+  takeId: string,
+  payload: AnnotationPackageCreateRequest = {},
+): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/capture-takes/${takeId}/scoring-calibration/packages`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getScoringCalibrationPackage(revisionId: string): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}`);
+}
+
+export function createScoringCalibrationRevision(
+  revisionId: string,
+  payload: AnnotationPackageRevisionRequest = {},
+): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/revisions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createScoringCalibrationAnnotation(
+  revisionId: string,
+  payload: AnnotationUpsertRequest,
+): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/annotations`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateScoringCalibrationAnnotation(
+  revisionId: string,
+  annotationId: string,
+  payload: AnnotationUpdateRequest,
+): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/annotations/${annotationId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function revokeScoringCalibrationAnnotation(revisionId: string, annotationId: string): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/annotations/${annotationId}`, {
+    method: "DELETE",
+  });
+}
+
+export function decideScoringCalibrationCandidate(
+  revisionId: string,
+  candidateId: string,
+  payload: CandidateDecisionRequest,
+): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/candidates/${encodeURIComponent(candidateId)}/decision`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function reviewScoringCalibrationPackage(revisionId: string): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/review`, { method: "POST" });
+}
+
+export function lockScoringCalibrationPackage(revisionId: string): Promise<ScoringCalibrationPackage> {
+  return requestJson<ScoringCalibrationPackage>(`/api/scoring-calibration/packages/${revisionId}/lock`, { method: "POST" });
+}
+
+export function getScoringCalibrationGoldSet(revisionId: string) {
+  return requestJson(`/api/scoring-calibration/packages/${revisionId}/gold-set`);
+}
+
+export function getScoringCalibrationGoldSetStatus(takeId: string): Promise<{
+  capture_take_id: string;
+  status: "available" | "not_ready" | string;
+  reason?: string;
+  package_id?: string;
+  revision?: number;
+  schema_version?: string;
+  quality?: Record<string, unknown>;
+}> {
+  return requestJson(`/api/capture-takes/${takeId}/scoring-calibration/gold-set-status`);
 }
 
 export function listVidatPackages(captureTakeId: string): Promise<VidatPackage[]> {

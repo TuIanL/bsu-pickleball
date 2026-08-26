@@ -65,6 +65,10 @@ class AnalysisArtifacts(BaseModel):
     bounce_events_url: str | None = None
     reconstructed_ball_trajectory_json_path: str | None = None
     reconstructed_ball_trajectory_url: str | None = None
+    ball_semantic_timeline_json_path: str | None = None
+    ball_semantic_timeline_url: str | None = None
+    ball_semantic_boundary_eval_json_path: str | None = None
+    ball_semantic_boundary_eval_url: str | None = None
     # multiview_ball_stereo_evidence.v1（joint 模式不可变双摄球证据）
     multiview_ball_stereo_evidence_json_path: str | None = None
     multiview_ball_stereo_evidence_url: str | None = None
@@ -99,6 +103,20 @@ class AnalysisArtifacts(BaseModel):
     performance_insights_url: str | None = None
     performance_insights_status: str | None = None
     performance_insights_detail: str | None = None
+    # shot-rally-events.v1 / metric-snapshot.v1（canonical 事实层与描述性指标）
+    shot_rally_events_json_path: str | None = None
+    shot_rally_events_url: str | None = None
+    shot_rally_events_status: str | None = None
+    shot_rally_events_detail: str | None = None
+    metric_snapshot_json_path: str | None = None
+    metric_snapshot_url: str | None = None
+    metric_snapshot_status: str | None = None
+    metric_snapshot_detail: str | None = None
+    # normalized-metric-snapshot.v1（描述性指标的规范化与评分资格中间层）
+    normalized_metrics_json_path: str | None = None
+    normalized_metrics_url: str | None = None
+    normalized_metrics_status: str | None = None
+    normalized_metrics_detail: str | None = None
     # global-player-roster.v1（joint 模式，诊断 / 映射 contract，stabilize-joint-global-player-roster）
     roster_manifest_json_path: str | None = None
     roster_url: str | None = None
@@ -140,6 +158,10 @@ class AnalysisArtifacts(BaseModel):
     bounce_events_detail: str | None = None
     reconstructed_ball_trajectory_status: str | None = None
     reconstructed_ball_trajectory_detail: str | None = None
+    ball_semantic_timeline_status: str | None = None
+    ball_semantic_timeline_detail: str | None = None
+    ball_semantic_boundary_eval_status: str | None = None
+    ball_semantic_boundary_eval_detail: str | None = None
     multiview_ball_stereo_evidence_status: str | None = None
     multiview_ball_stereo_evidence_detail: str | None = None
     analysis_overlay_video_status: str | None = None

@@ -9,6 +9,13 @@ function artifact(): ReconstructedBallTrajectoryArtifact {
     status: "partial",
     detail: "estimated",
     reconstruction_mode: "hybrid_segmented",
+    reference_view_id: "cam_a",
+    render_view_id: "cam_a",
+    video_overlay_policy: {
+      window_semantics: "half_open",
+      retention_policy: "single_active_segment",
+      path_coordinate_space: "render_view_id",
+    },
     overall_status: "UNAVAILABLE",
     display_trajectory_status: "degraded",
     events: [],
@@ -46,5 +53,45 @@ describe("hybrid video ball overlay", () => {
     expect(retained[0].at(-1)?.endpointType).toBe("bounce");
     expect(retained[0].map((sample) => sample.provenance)).toEqual(["detected", "interpolated", "predicted"]);
     expect(resolveHybridBallPathSegments(artifact(), 2.21, "cam_a")).toEqual([]);
+  });
+
+  it("does not draw backend diagnostic-only segments by default", () => {
+    const value = artifact();
+    value.segments[0].display_eligible = false;
+    expect(hasUsableHybridBallSamples(value, "cam_a")).toBe(false);
+    expect(resolveHybridBallPathSegments(value, 1.25, "cam_a")).toEqual([]);
+  });
+
+  it("renders only the successor at a shared segment boundary", () => {
+    const value = artifact();
+    value.segments = [
+      value.segments[0],
+      {
+        ...value.segments[0],
+        segment_id: "flight-2",
+        primary_view_id: "cam_b",
+        image_paths_by_view: {
+          cam_a: [
+            { frame_index: 43, timestamp_sec: 1.4, image_xy: [220, 120], source: "detected", provenance: "detected", confidence: 0.9 },
+            { frame_index: 49, timestamp_sec: 1.6, image_xy: [260, 140], source: "detected", provenance: "detected", confidence: 0.9 },
+          ],
+          cam_b: [
+            { frame_index: 43, timestamp_sec: 1.4, image_xy: [900, 120], source: "detected", provenance: "detected", confidence: 0.9 },
+            { frame_index: 49, timestamp_sec: 1.6, image_xy: [940, 140], source: "detected", provenance: "detected", confidence: 0.9 },
+          ],
+        },
+      },
+    ];
+    const paths = resolveHybridBallPathSegments(value, 1.4);
+    expect(paths).toHaveLength(1);
+    expect(paths[0][0].image_xy).toEqual([220, 120]);
+  });
+
+  it("never falls back to a segment primary view when render view is unknown", () => {
+    const value = artifact();
+    delete value.render_view_id;
+    delete value.reference_view_id;
+    expect(hasUsableHybridBallSamples(value)).toBe(false);
+    expect(resolveHybridBallPathSegments(value, 1.25)).toEqual([]);
   });
 });

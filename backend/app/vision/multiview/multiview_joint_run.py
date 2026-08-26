@@ -280,9 +280,14 @@ class MultiViewJointRun:
                 reference_timestamp_seconds=timestamp_s,
             )
             if self.ball_processor is not None:
-                # 球 detector 消费同一份 canonical bundle；球侧异常由 processor 自身降级，
-                # 不得打断 player joint 的主链。
-                self.ball_processor.process_tick(tick_id=tick_number, bundle=bundle)
+                # 先只准备球候选；tracker commit 延迟到当 tick 球员 barrier 之后。
+                # 球侧异常由 processor 自身降级，不得打断 player joint 的主链。
+                prepare = getattr(self.ball_processor, "prepare_tick", None)
+                if prepare is not None:
+                    prepare(tick_id=tick_number, bundle=bundle)
+                else:
+                    # 历史注入的球处理器仍走旧 process_tick 兼容路径。
+                    self.ball_processor.process_tick(tick_id=tick_number, bundle=bundle)
             tick_authoritative = self._tick_is_authoritative(bundle)
             take_ms = bundle.take_timestamp_ms
             f0_tick_metadata[tick_number] = {
@@ -546,6 +551,18 @@ class MultiViewJointRun:
             fused = self.associator.fuse_assignments(
                 updates, include_tentative=True, predictions=predictions,
             )
+            if self.ball_processor is not None and hasattr(self.ball_processor, "commit_tick"):
+                # 当前 tick 的球员观察和 global identity 已完成；语义策略在此之后
+                # 评估，随后每视角 tracker 最多 commit 一次。
+                self.ball_processor.commit_tick(
+                    tick_id=tick_number,
+                    bundle=bundle,
+                    semantic_evidence={
+                        "player_observation_count": len(all_obs),
+                        "global_player_count": len(fused),
+                        "player_context_ready": True,
+                    },
+                )
 
             # ---- available-miss ledger（顺序冻结：association → ledger →
             #      display diagnostics → fusion/debug）----

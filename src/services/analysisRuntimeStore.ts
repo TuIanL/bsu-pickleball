@@ -20,6 +20,10 @@ export interface AnalysisRuntimeSnapshot {
   stage?: string;
   stages: AnalysisJobSummary["stages"];
   viewRuns?: AnalysisJobSummary["viewRuns"];
+  canonicalStatus?: AnalysisJobSummary["canonicalStatus"];
+  workerHeartbeatAt?: string;
+  interruptedAt?: string;
+  interruptionCode?: string;
 }
 
 type Listener = () => void;
@@ -31,7 +35,7 @@ const CONCURRENCY_LIMIT = 4;
 const snapshots = new Map<string, AnalysisRuntimeSnapshot>();
 const listeners = new Set<Listener>();
 
-let watchedJobIds = new Set<string>();
+const watchedJobIds = new Set<string>();
 let intervalMs = DEFAULT_INTERVAL_MS;
 let schedulerTimer: number | undefined;
 let documentVisible = typeof document === "undefined" ? true : !document.hidden;
@@ -54,6 +58,10 @@ function toSnapshot(job: AnalysisJobSummary): AnalysisRuntimeSnapshot {
     stage: currentStage?.label ?? job.stage,
     stages: job.stages,
     viewRuns: job.viewRuns,
+    canonicalStatus: job.canonicalStatus,
+    workerHeartbeatAt: job.workerHeartbeatAt,
+    interruptedAt: job.interruptedAt,
+    interruptionCode: job.interruptionCode,
   };
 }
 
@@ -72,7 +80,12 @@ async function tick() {
       chunk.map((id) =>
         getAnalysisJob(id)
           .then((job) => {
-            if (job) snapshots.set(job.id, toSnapshot(job));
+            if (job) {
+              snapshots.set(job.id, toSnapshot(job));
+              if (!isActiveStatus(job.status)) {
+                watchedJobIds.delete(job.id);
+              }
+            }
           })
           .catch(() => {
             // 单 job 失败不拖垮整个调度
@@ -116,6 +129,10 @@ export function watchAnalysisJob(jobId: string) {
 export function unwatchAnalysisJob(jobId: string, clearSnapshot = false) {
   watchedJobIds.delete(jobId);
   if (clearSnapshot) snapshots.delete(jobId);
+  if (watchedJobIds.size === 0 && schedulerTimer !== undefined) {
+    window.clearTimeout(schedulerTimer);
+    schedulerTimer = undefined;
+  }
 }
 
 /** 注入冷 build 的粗粒度快照（可选），避免等待首个 tick 才有进度 */

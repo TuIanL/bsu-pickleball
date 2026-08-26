@@ -1,8 +1,29 @@
 import { describe, expect, it } from "vitest";
 import type { EstimatedBallTrajectory } from "../../services/ballTrajectoryVisualization";
-import { getLastRenderablePoint, splitContinuousTrajectoryPaths, splitTrajectoryRuns, VIEW_CONFIG } from "./BallTrajectoryScene";
+import { getLastRenderablePoint, netProfilePoints, splitContinuousTrajectoryPaths, splitTrajectoryRuns, VIEW_CONFIG } from "./BallTrajectoryScene";
 
 describe("BallTrajectoryScene hybrid line encoding", () => {
+  it("uses scene profile heights for the rendered net", () => {
+    const points = netProfilePoints({
+      status: "ready",
+      revision: 2,
+      net_profile: {
+        sampled_top_profile: [
+          { x: 0, y: 22, z: 3 },
+          { x: 10, y: 22, z: 2.833333333 },
+          { x: 20, y: 22, z: 3 },
+        ],
+        control_points: [],
+        post_world_points: [],
+        profile_type: "standard",
+        height_source: "standard",
+        coordinate_units: "feet",
+      },
+    } as never);
+
+    expect(points.map((point) => point.z)).toEqual([3, expect.closeTo(34 / 12), 3]);
+  });
+
   it("keeps detected, interpolated, and predicted samples in separately styled WebGL runs", () => {
     const trajectory = {
       id: "flight-webgl",
@@ -71,6 +92,19 @@ describe("BallTrajectoryScene hybrid line encoding", () => {
       ],
     } as unknown as EstimatedBallTrajectory;
 
+    expect(getLastRenderablePoint(trajectory)?.courtXFt).toBe(4);
+  });
+
+  it("rejects negative and non-finite heights before building Three.js geometry", () => {
+    const trajectory = {
+      points: [
+        { courtXFt: 1, courtYFt: 2, estimatedHeightFt: 1 },
+        { courtXFt: 2, courtYFt: 3, estimatedHeightFt: -0.1 },
+        { courtXFt: 3, courtYFt: 4, estimatedHeightFt: Number.NaN },
+        { courtXFt: 4, courtYFt: 5, estimatedHeightFt: 0 },
+      ],
+    } as unknown as EstimatedBallTrajectory;
+    expect(splitContinuousTrajectoryPaths(trajectory)).toHaveLength(0);
     expect(getLastRenderablePoint(trajectory)?.courtXFt).toBe(4);
   });
 });

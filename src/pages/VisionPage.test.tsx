@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisJobSummary } from "../types/report";
+import type { AnalysisJobSummary, AnalysisPipelineResult } from "../types/report";
 import { demoAnalysisReport } from "../data/demoData";
 import { VisionPage } from "./VisionPage";
 import * as analysisClient from "../services/analysisClient";
@@ -21,10 +21,11 @@ vi.mock("../services/analysisClient", () => ({
   getAnalysisOverlayVideoUrl: vi.fn(() => undefined),
   getPositionHeatmaps: vi.fn(() => Promise.resolve(null)),
   getPositionScatterPlots: vi.fn(() => Promise.resolve(null)),
+  getShotRallyEvents: vi.fn(() => Promise.resolve(null)),
 }));
 
 // 重型展示组件在本次测试中不关心，渲染为空避免额外依赖
-vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: () => <div /> }));
+vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: () => <div data-testid="video-analysis-card" /> }));
 vi.mock("../components/platform/MetricCard", () => ({ MetricCard: () => <div /> }));
 vi.mock("../components/platform/SkillRatings", () => ({ SkillRatings: () => <div /> }));
 vi.mock("../components/RecommendedDrills", () => ({ RecommendedDrills: () => <div /> }));
@@ -97,5 +98,57 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
     renderPage(makeJob({ status: "processing", progress: 40 }));
     expect(await screen.findByText(/任务还在排队或处理中/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "查看双摄协同详情" })).toBeNull();
+  });
+
+  it("嵌入式视频分析在无有效报告证据时禁用下级报告且不触发 view 切换", async () => {
+    const result = {
+      job_id: "job-vision", status: "completed", generated_at: "2026-08-13T00:00:00.000Z",
+      tracks: [],
+      metrics: { distances: [], speeds: [], kitchen_dwell: [], doubles_spacing: [], heatmap: { rows: 0, cols: 0, cells: [] } },
+      artifacts: {}, message: "no evidence", stages: [],
+    } as unknown as AnalysisPipelineResult;
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(makeJob());
+    vi.mocked(analysisClient.getAnalysisReport).mockResolvedValue(demoAnalysisReport);
+    vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue(result);
+    const onSelectView = vi.fn();
+    render(<VisionPage jobId="job-vision" onNavigate={vi.fn()} recentJob={null} embedded onSelectView={onSelectView} />);
+
+    const reportButton = await screen.findByRole("button", { name: "本场表现报告" }) as HTMLButtonElement;
+    expect(reportButton.disabled).toBe(true);
+    fireEvent.click(reportButton);
+    expect(onSelectView).not.toHaveBeenCalled();
+  });
+
+  it("时序 artifact 读取失败时保留视频、任务状态和原有位置图卡片", async () => {
+    const result = {
+      job_id: "job-vision",
+      status: "completed",
+      generated_at: "2026-08-13T00:00:00.000Z",
+      tracks: [],
+      metrics: {
+        distances: [],
+        speeds: [],
+        kitchen_dwell: [],
+        doubles_spacing: [],
+        heatmap: { rows: 0, cols: 0, cells: [] },
+      },
+      artifacts: { shot_rally_events_url: "/api/analysis/jobs/job-vision/artifacts/shot-rally-events" },
+    } as unknown as AnalysisPipelineResult;
+    const job = makeJob({ analysisKind: "single_view" });
+    vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
+    vi.mocked(analysisClient.getAnalysisReport).mockResolvedValue(demoAnalysisReport);
+    vi.mocked(analysisClient.getAnalysisResult).mockResolvedValue(result);
+    vi.mocked(analysisClient.getShotRallyEvents).mockRejectedValue(new Error("malformed artifact"));
+
+    render(<VisionPage jobId={job.id} onNavigate={vi.fn()} recentJob={null} />);
+
+    expect(await screen.findByText("回合—击球阶段时序图")).toBeTruthy();
+    expect(await screen.findByText("读取失败")).toBeTruthy();
+    expect(screen.getByText("视频分析结果")).toBeTruthy();
+    expect(screen.getByTestId("video-analysis-card")).toBeTruthy();
+    expect(screen.getByText("分析完成")).toBeTruthy();
+    expect(screen.getAllByText("位置热力图").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("位置散点图").length).toBeGreaterThan(0);
+    expect(screen.getByText("区域空间热力图")).toBeTruthy();
   });
 });

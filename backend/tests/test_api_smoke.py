@@ -1,3 +1,5 @@
+import json
+import pytest
 from datetime import UTC
 
 from fastapi.testclient import TestClient
@@ -28,6 +30,39 @@ from app.vision.player_tracking_engine.person_detector import EmptyPersonDetecto
 from app.vision.pose.rtmpose26_adapter import RTMPose26Adapter
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_test_uploads_after_test():
+    """保险：删除本测试通过 API 上传产生的视频元数据 JSON 与媒体文件。
+
+    无论它们落在隔离临时目录还是（万一隔离失效时）生产目录，都删除，杜绝污染
+    累积。仅针对 ``source == "upload"`` 的新增条目，不动合法的 ``recording`` 登记。
+    与 ``conftest._isolate_uploads_singleton`` 正交：即使将来单例隔离因重构失效，
+    上传用例也不再污染生产目录。
+    """
+    from pathlib import Path
+
+    from app.services.storage_service import StorageService
+    from app.services.video_service import video_service
+
+    uploads_dir = video_service.storage.uploads_dir
+    before = {p.name for p in uploads_dir.glob("*.json")}
+    yield
+    for json_path in uploads_dir.glob("*.json"):
+        if json_path.name in before:
+            continue
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if payload.get("source") != "upload":
+            continue
+        media_name = Path(payload.get("path", "")).name
+        if media_name:
+            StorageService.delete_path(uploads_dir / media_name)
+        StorageService.delete_path(json_path)
+        VIDEOS.pop(payload.get("id", ""), None)
 
 
 def test_health_endpoint():
@@ -280,6 +315,9 @@ def test_storage_service_resolves_extended_analysis_artifact_paths(tmp_path):
     assert storage.scatter_plots_manifest_json_path(job_id) == (
         storage.outputs_dir / job_id / "position_visualizations" / "scatter_plots" / "manifest.json"
     )
+    assert storage.shot_rally_events_json_path(job_id) == storage.outputs_dir / job_id / "shot_rally_events.json"
+    assert storage.metric_snapshot_json_path(job_id) == storage.outputs_dir / job_id / "metric_snapshot.json"
+    assert storage.normalized_metrics_json_path(job_id) == storage.outputs_dir / job_id / "normalized_metrics.json"
 
 
 def test_analysis_artifacts_extended_fields_are_optional_and_serializable():
@@ -288,6 +326,7 @@ def test_analysis_artifacts_extended_fields_are_optional_and_serializable():
     assert legacy.ball_overlay_json_path is None
     assert legacy.detections_jsonl_path is None
     assert legacy.analysis_overlay_video_url is None
+    assert legacy.normalized_metrics_json_path is None
 
     artifact = AnalysisArtifacts(
         detections_jsonl_path="/tmp/detections.jsonl",
@@ -385,6 +424,93 @@ def test_known_extended_artifact_route_returns_404_when_missing(monkeypatch, tmp
         restore_analysis_state(snapshot)
 
     assert all(response.status_code == 404 for response in responses.values())
+
+
+def test_canonical_artifact_routes_return_json_and_404_when_missing(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-canonical-artifact-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(
+        storage.shot_rally_events_json_path(job.id),
+        {
+            "schema_version": "shot-rally-events.v1",
+            "job_id": job.id,
+            "status": "available",
+            "detail": "fixture",
+            "generated_at": "2026-08-24T00:00:00+00:00",
+            "time_unit": "ms",
+            "coordinate_system": {"court": "ft", "image": "px"},
+            "rallies": [],
+            "shots": [],
+            "diagnostics": {},
+        },
+    )
+
+    try:
+        events = client.get(f"/api/analysis/jobs/{job.id}/artifacts/shot-rally-events")
+        missing = client.get(f"/api/analysis/jobs/{job.id}/artifacts/metric-snapshot")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert events.status_code == 200
+    assert events.json()["schema_version"] == "shot-rally-events.v1"
+    assert missing.status_code == 404
+
+
+def test_normalized_metric_artifact_route_returns_json_and_404_when_missing(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-normalized-artifact-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(
+        storage.normalized_metrics_json_path(job.id),
+        {
+            "schema_version": "normalized-metric-snapshot.v1",
+            "job_id": job.id,
+            "status": "available",
+            "detail": "fixture",
+            "generated_at": "2026-08-24T00:00:00+00:00",
+            "input_artifact": "metric-snapshot.v1",
+            "metric_definition_version": "metric-definition-profile.v1",
+            "evidence_sufficiency_version": "evidence-sufficiency-profile.v1",
+            "scoring_reference_version": "scoring-reference-profile.v1",
+            "scoring_reference_hash": "fixture",
+            "metrics": [],
+            "score_coverage": {
+                "metric_count": 0,
+                "eligible_metric_count": 0,
+                "display_only_metric_count": 0,
+                "insufficient_metric_count": 0,
+                "not_applicable_metric_count": 0,
+                "unsupported_metric_count": 0,
+                "failed_metric_count": 0,
+                "eligible_metric_keys": [],
+                "missing_metric_keys": [],
+            },
+            "diagnostics": [],
+        },
+    )
+
+    try:
+        available = client.get(f"/api/analysis/jobs/{job.id}/artifacts/normalized-metrics")
+        missing = client.get(f"/api/analysis/jobs/{job.id}/artifacts/metric-snapshot")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert available.status_code == 200
+    assert available.json()["schema_version"] == "normalized-metric-snapshot.v1"
+    assert missing.status_code == 404
 
 
 def test_detections_jsonl_artifact_route_preserves_record_boundaries(monkeypatch, tmp_path):
@@ -489,6 +615,71 @@ def test_court_view_roi_artifact_route_returns_json(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["status"] == "available"
+
+
+def test_ball_semantic_timeline_artifact_route_preserves_enforced_diagnostics(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-ball-semantic-enforced-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(
+        storage.ball_semantic_timeline_json_path(job.id),
+        {
+            "schema_version": "ball_semantic_timeline.v1",
+            "job_id": job.id,
+            "diagnostics": {
+                "policy_mode": "enforced",
+                "rollout_id": "take-20260720",
+                "boundary_events": [{"action": "seal_formal_segment", "applied": True}],
+            },
+        },
+    )
+
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-semantic-timeline")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    assert response.json()["diagnostics"]["policy_mode"] == "enforced"
+    assert response.json()["diagnostics"]["boundary_events"][0]["applied"] is True
+
+
+def test_ball_semantic_boundary_eval_artifact_route_returns_json_and_missing_is_404(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-ball-semantic-boundary-eval-route", status="completed")
+    JOBS[job.id] = job
+    missing_job = make_job_summary("job-ball-semantic-boundary-eval-missing", status="completed")
+    JOBS[missing_job.id] = missing_job
+    storage.write_json(
+        storage.ball_semantic_boundary_eval_json_path(job.id),
+        {
+            "schema_version": "ball_semantic_boundary_eval.v1",
+            "artifact_kind": "ball_semantic_boundary_eval",
+            "metrics": {"boundary_precision": 1.0},
+        },
+    )
+
+    try:
+        available = client.get(f"/api/analysis/jobs/{job.id}/artifacts/ball-semantic-boundary-eval")
+        missing = client.get(f"/api/analysis/jobs/{missing_job.id}/artifacts/ball-semantic-boundary-eval")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert available.status_code == 200
+    assert available.json()["schema_version"] == "ball_semantic_boundary_eval.v1"
+    assert missing.status_code == 404
 
 
 def test_player_selection_artifact_routes_return_json(monkeypatch, tmp_path):

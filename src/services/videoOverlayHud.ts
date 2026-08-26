@@ -3,6 +3,8 @@ import type {
   BounceEventsArtifact,
   FusedPlayerOverlayFrame,
   PipelineTrackPoint,
+  ReconstructedBallTrajectoryArtifact,
+  ReconstructedBallTrajectorySegment,
 } from "../types/report";
 import { canonicalPlayerNumber, formatPlayerId } from "../utils/analysisHelpers";
 
@@ -19,6 +21,8 @@ export interface HudPoint {
 
 export interface HudPlayer {
   id: string;
+  /** 用于跨视频框/小地图一致着色的稳定身份 ID。 */
+  playerId: string;
   label: string;
   segments: HudPoint[][];
   latest: HudPoint | null;
@@ -62,6 +66,10 @@ export interface VideoOverlayHudOptions {
    * 单摄模式（frames 为空）时忽略，回退到 pipelineTracks。
    */
   overlayFrames?: FusedPlayerOverlayFrame[];
+  /** 优先用于小地图的分段重建球路（canonical court-space）。 */
+  reconstructedBallTrajectory?: ReconstructedBallTrajectoryArtifact | null;
+  /** 完整分段结束后在 HUD 中保留的秒数，与视频叠加层一致。 */
+  reconstructedBallRetentionSeconds?: number;
 }
 
 const DEFAULT_OPTIONS: Required<VideoOverlayHudOptions> = {
@@ -77,6 +85,8 @@ const DEFAULT_OPTIONS: Required<VideoOverlayHudOptions> = {
   maxTrailJumpFt: 6,
   staleThresholdSeconds: 0.5,
   overlayFrames: [],
+  reconstructedBallTrajectory: null,
+  reconstructedBallRetentionSeconds: 0.8,
 };
 
 function finiteNumber(value: unknown): number | null {
@@ -167,6 +177,39 @@ function playerKey(track: PipelineTrackPoint): string {
   return canonicalPlayerNumber(track.track_id)?.toString() ?? track.track_id ?? "unknown";
 }
 
+function isDisplayableReconstructedSegment(segment: ReconstructedBallTrajectorySegment): boolean {
+  if (segment.status === "unavailable" || segment.status === "UNAVAILABLE" || segment.status === "insufficient_spatial_anchors") return false;
+  if (segment.reconstruction_mode === "unavailable" || segment.reconstruction_mode === "image_only") return false;
+  if (segment.display_eligible === false || segment.display_level === "none" || segment.quality?.display_level === "none") return false;
+  return segment.end_endpoint?.outcome_classification !== "environment_outlier";
+}
+
+function reconstructedBallSegments(
+  artifact: ReconstructedBallTrajectoryArtifact | null | undefined,
+  currentTime: number,
+  config: Required<VideoOverlayHudOptions>,
+): HudPoint[][] {
+  if (!artifact || artifact.status === "unavailable" || artifact.display_trajectory_status === "unavailable") return [];
+  const candidates = (artifact.segments ?? []).flatMap((segment, segmentIndex) => {
+    if (!isDisplayableReconstructedSegment(segment)) return [];
+    const points = segment.samples
+      .filter((sample) => sample.validity !== "invalid")
+      .map((sample) => validPoint(sample.court_xy?.[0], sample.court_xy?.[1], sample.timestamp_sec, sample.confidence, sample.source === "interpolated", config.courtWidth, config.courtLength))
+      .filter((point): point is HudPoint => point !== null)
+      .sort((left, right) => left.timestampSeconds - right.timestampSeconds);
+    if (!points.length) return [];
+    const start = points[0].timestampSeconds;
+    const end = points.at(-1)!.timestampSeconds;
+    const retained = currentTime >= end && currentTime <= end + config.reconstructedBallRetentionSeconds;
+    if (!(currentTime >= start && currentTime < end) && !retained) return [];
+    const visible = points.filter((point) => point.timestampSeconds >= (retained ? start : currentTime - config.ballTrailSeconds) && point.timestampSeconds <= currentTime);
+    return visible.length ? [{ points: splitAtGaps(visible, config.maxGapSeconds, config.maxBallPoints), start, end, retained, segmentIndex }] : [];
+  });
+  const active = candidates.filter((candidate) => !candidate.retained).sort((a, b) => b.start - a.start || b.segmentIndex - a.segmentIndex);
+  const selected = active[0] ?? candidates.sort((a, b) => b.end - a.end || b.segmentIndex - a.segmentIndex)[0];
+  return selected?.points ?? [];
+}
+
 export function buildVideoOverlayHud(
   tracks: PipelineTrackPoint[] | null | undefined,
   ballTrajectory: BallTrajectoryArtifact | null | undefined,
@@ -250,6 +293,7 @@ export function buildVideoOverlayHud(
       const latest = latestSegmentPoint(segments);
       return {
         id,
+        playerId: canonicalPlayerNumber(sourceId) !== null ? `Player_${canonicalPlayerNumber(sourceId)}` : sourceId,
         label: formatPlayerId(sourceId) || "球员",
         segments,
         latest,
@@ -260,7 +304,8 @@ export function buildVideoOverlayHud(
     .filter((player) => player.latest !== null)
     .sort((left, right) => left.label.localeCompare(right.label, "en"));
 
-  const ballPoints = (ballTrajectory?.samples ?? [])
+  const reconstructedSegments = reconstructedBallSegments(config.reconstructedBallTrajectory, currentTime, config);
+  const ballPoints = reconstructedSegments.length ? [] : (ballTrajectory?.samples ?? [])
     .filter((sample) => sample.image_xy && (sample.accepted ?? true))
     .map((sample) => validPoint(
       sample.court_xy?.[0],
@@ -274,7 +319,9 @@ export function buildVideoOverlayHud(
     .filter((point): point is HudPoint => point !== null)
     .filter((point) => point.timestampSeconds <= currentTime && point.timestampSeconds >= ballCutoff)
     .sort((left, right) => left.timestampSeconds - right.timestampSeconds);
-  const ballSegments = splitAtGaps(ballPoints, config.maxGapSeconds, config.maxBallPoints);
+  const ballSegments = reconstructedSegments.length
+    ? reconstructedSegments
+    : splitAtGaps(ballPoints, config.maxGapSeconds, config.maxBallPoints);
 
   const bounces = (bounceEvents?.events ?? [])
     .map((event) => {
@@ -303,6 +350,6 @@ export function buildVideoOverlayHud(
     ballLatest: latestSegmentPoint(ballSegments),
     bounces,
     visiblePlayerCount: players.length,
-    ballPointCount: ballPoints.length,
+    ballPointCount: reconstructedSegments.length ? reconstructedSegments.flat().length : ballPoints.length,
   };
 }

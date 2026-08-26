@@ -8,6 +8,7 @@ import type {
   ReconstructedBallTrajectorySegment,
   ShotOwnershipStatus,
 } from "../types/report";
+import { resolveCanonicalPlayerId } from "../evidence/playerIdentity";
 
 export const PICKLEBALL_COURT_WIDTH_FT = 20;
 export const PICKLEBALL_COURT_LENGTH_FT = 44;
@@ -25,6 +26,10 @@ export interface EstimatedTrajectoryPoint {
   confidence: number | null;
   interpolated: boolean;
   heightSource: string | null;
+  heightConfidence?: number | null;
+  heightUncertaintyFt?: number | null;
+  heightValidity?: string | null;
+  geometryBreakBefore?: boolean;
   source: TrajectoryPointSource;
 }
 
@@ -61,6 +66,8 @@ export interface EstimatedBallTrajectory {
   points: EstimatedTrajectoryPoint[];
   anchors?: TrajectoryAnchorMarker[];
   quality?: TrajectoryQualitySummary;
+  displayEligible?: boolean;
+  qualityGateSummary?: ReconstructedBallTrajectorySegment["quality_gate_summary"];
   reconstructionMode?: string;
   metricValidity?: string | null;
   metricEligibility?: {
@@ -78,6 +85,7 @@ export interface EstimatedBallTrajectory {
   hitterRenderSlot: string | null;
   ownershipStatus: ShotOwnershipStatus;
   ownershipConfidence: number | null;
+  heightConfidence?: number | null;
 }
 
 export interface EstimatedBallShot {
@@ -302,11 +310,21 @@ function isDisplayableSegment(segment: ReconstructedBallTrajectorySegment): bool
   if (segment.status === "insufficient_spatial_anchors") return false;
   if (segment.reconstruction_mode === "image_only" || segment.reconstruction_mode === "unavailable") return false;
   if (segment.status === "unavailable" || segment.status === "UNAVAILABLE") return false;
+  if (segment.display_eligible === false) return false;
   const displayLevel = segment.display_level ?? segment.quality?.display_level;
   if (displayLevel === "none") return false;
   if (displayLevel === "low" && segment.reconstruction_mode !== "single_view_visual_arc") return false;
   // 环境离群证据仅保留给 diagnostics，不进入正式曲线。
   if (segment.end_endpoint?.outcome_classification === "environment_outlier") return false;
+  // 兼容历史 v4：非法 3D 段不再把负高度交给 Three.js；新产物会在后端已回退为同段 2.5D。
+  if (segment.reconstruction_mode === "stereo_estimated_3d" || segment.reconstruction_mode === "multiview_estimated_3d") {
+    const hasInvalidHeight = segment.samples.some((sample) => {
+      const raw = sample as ReconstructedBallTrajectorySample & { z_ft?: number };
+      const height = finiteNumber(raw.estimated_height_ft ?? raw.z_ft);
+      return height === null || height < 0;
+    });
+    if (hasInvalidHeight || segment.height_validity === "invalid") return false;
+  }
   return segment.samples.some((sample) => finiteNumber(sample.court_xy?.[0]) !== null && finiteNumber(sample.court_xy?.[1]) !== null);
 }
 
@@ -314,19 +332,50 @@ function buildReconstructedTrajectory(
   segment: ReconstructedBallTrajectorySegment,
   sequence: number,
 ): EstimatedBallTrajectory {
+  let heightGapPending = false;
+  let geometryGapPending = false;
+  let previousTimestamp: number | null = null;
+  const consumeHeightGap = () => {
+    const shouldBreak = heightGapPending;
+    heightGapPending = false;
+    return shouldBreak;
+  };
+  const consumeGeometryGap = () => {
+    const shouldBreak = geometryGapPending;
+    geometryGapPending = false;
+    return shouldBreak;
+  };
   const points: EstimatedTrajectoryPoint[] = segment.samples.flatMap((sample, sampleIndex) => {
     const raw = sample as ReconstructedBallTrajectorySample & {
       x_ft?: number;
       y_ft?: number;
       z_ft?: number;
       t_sec?: number;
+      gap_boundary_reason?: string | null;
+      display_break?: boolean;
+      gap_length_seconds?: number | null;
     };
-    if (raw.validity === "invalid") return [];
+    if (raw.validity === "invalid") {
+      heightGapPending = true;
+      geometryGapPending = true;
+      return [];
+    }
     const x = finiteNumber(raw.court_xy?.[0] ?? raw.x_ft);
     const y = finiteNumber(raw.court_xy?.[1] ?? raw.y_ft);
     const timestamp = finiteNumber(raw.timestamp_sec ?? raw.t_sec);
     const frameIndex = finiteNumber(raw.frame_index ?? sampleIndex);
-    if (x === null || y === null || timestamp === null || frameIndex === null) return [];
+    if (x === null || y === null || timestamp === null || frameIndex === null) {
+      heightGapPending = true;
+      geometryGapPending = true;
+      return [];
+    }
+    if (
+      raw.display_break === true
+      || raw.gap_boundary_reason
+      || (previousTimestamp !== null && timestamp - previousTimestamp > 0.2)
+    ) {
+      geometryGapPending = true;
+    }
     const source = raw.source === "model_predicted" || raw.source === "predicted" || raw.provenance === "predicted"
       ? "model_predicted"
       : raw.source === "interpolated"
@@ -334,8 +383,22 @@ function buildReconstructedTrajectory(
         : raw.source === "anchor"
           ? "anchor"
           : "detected";
-    const estimatedHeight = finiteNumber(raw.estimated_height_ft ?? raw.z_ft);
+    const rawHeight = raw.estimated_height_ft ?? raw.z_ft;
+    const estimatedHeight = finiteNumber(rawHeight);
+    if (rawHeight !== null && rawHeight !== undefined && estimatedHeight === null) {
+      heightGapPending = true;
+      geometryGapPending = true;
+      return [];
+    }
+    if (estimatedHeight !== null && estimatedHeight < 0) {
+      heightGapPending = true;
+      geometryGapPending = true;
+      return [];
+    }
+    previousTimestamp = timestamp;
     const interpolated = source === "interpolated" || source === "model_predicted";
+    const heightBreakBefore = consumeHeightGap();
+    const geometryBreakBefore = consumeGeometryGap();
     return [{
       frameIndex,
       timestampSeconds: timestamp,
@@ -345,6 +408,10 @@ function buildReconstructedTrajectory(
       confidence: finiteNumber(raw.confidence),
       interpolated,
       heightSource: raw.height_source ?? null,
+      heightConfidence: finiteNumber(raw.height_confidence),
+      heightUncertaintyFt: finiteNumber(raw.height_uncertainty_ft),
+      heightValidity: raw.height_validity ?? (estimatedHeight === null ? "unknown" : null),
+      geometryBreakBefore: heightBreakBefore || geometryBreakBefore,
       source,
     }];
   });
@@ -358,6 +425,10 @@ function buildReconstructedTrajectory(
   const direction: TrajectoryDirection = last.courtYFt >= first.courtYFt ? "near-to-far" : "far-to-near";
   const heights = points.flatMap((point) => point.estimatedHeightFt === null ? [] : [point.estimatedHeightFt]);
   const peakEstimatedHeightFt = heights.length ? Math.max(...heights) : null;
+  const heightConfidenceValues = points.flatMap((point) => point.heightConfidence == null ? [] : [point.heightConfidence]);
+  const heightConfidence = heightConfidenceValues.length
+    ? Math.min(...heightConfidenceValues)
+    : null;
 
   const quality = segment.quality;
   const displayLevel = quality?.display_level ?? null;
@@ -416,6 +487,8 @@ function buildReconstructedTrajectory(
       netCrossingStatus: quality?.net_crossing_status ?? null,
       observationCoverage: finiteNumber(quality?.observation_coverage),
     },
+    displayEligible: segment.display_eligible,
+    qualityGateSummary: segment.quality_gate_summary,
     reconstructionMode: segment.reconstruction_mode,
     metricValidity: segment.metric_validity ?? segment.quality?.metric_validity ?? null,
     metricEligibility: {
@@ -433,6 +506,7 @@ function buildReconstructedTrajectory(
     hitterRenderSlot: segment.hitter_render_slot ?? null,
     ownershipStatus: segment.ownership_status ?? "not_applicable",
     ownershipConfidence: finiteNumber(segment.ownership_confidence),
+    heightConfidence,
   };
 }
 
@@ -453,6 +527,8 @@ function emptyReconstructedTrajectory(segment: ReconstructedBallTrajectorySegmen
     anchors: [],
     reconstructionMode: segment.reconstruction_mode,
     metricValidity: segment.metric_validity ?? null,
+    displayEligible: segment.display_eligible,
+    qualityGateSummary: segment.quality_gate_summary,
     primaryViewId: segment.primary_view_id ?? null,
     primaryViewReason: segment.primary_view_reason ?? null,
     endpointOutcome: segment.end_endpoint?.outcome_classification ?? null,
@@ -545,6 +621,42 @@ export interface TrajectoryFilterOptions {
 }
 
 type ConfidenceFilterLike = "all" | "high";
+
+/**
+ * 报告页个人视图的严格球员筛选：以 Shot 为归属单位，只接受已确认的
+ * canonical hitter，并保留该 Shot 的全部飞行 segment。
+ *
+ * 未归属/歧义归属/无 Shot 上下文的轨迹不能被当作当前球员的球路；同时
+ * 不在 view model 层覆盖 hitterPlayerId，避免丢失 artifact 的原始证据。
+ */
+export function filterTrajectoriesByConfirmedPlayer(
+  trajectories: EstimatedBallTrajectory[],
+  playerId: string | null | undefined,
+): { trajectories: EstimatedBallTrajectory[]; shots: EstimatedBallShot[] } {
+  const canonicalPlayerId = resolveCanonicalPlayerId(playerId, null);
+  if (!canonicalPlayerId) return { trajectories: [], shots: [] };
+
+  const playerShots = buildShots(trajectories).filter((shot) => {
+    if (shot.ownershipStatus !== "confirmed") return false;
+    if (resolveCanonicalPlayerId(shot.hitterPlayerId, null) !== canonicalPlayerId) return false;
+
+    // 归属必须在 Shot 的所有 segment 上一致，才能把整条 Shot 交给个人视图。
+    // 这样不会把同一 Shot 中的未知/歧义 segment 静默归入某个球员。
+    return shot.segments.every((segment) => (
+      segment.shotId === shot.shotId
+      && segment.ownershipStatus === "confirmed"
+      && resolveCanonicalPlayerId(segment.hitterPlayerId, null) === canonicalPlayerId
+    ));
+  });
+
+  const playerShotIds = new Set(playerShots.map((shot) => shot.shotId));
+  return {
+    trajectories: trajectories.filter((trajectory) => (
+      trajectory.shotId !== null && playerShotIds.has(trajectory.shotId)
+    )),
+    shots: playerShots,
+  };
+}
 
 function matchesPlayerFilter(trajectory: EstimatedBallTrajectory, playerFilter: TrajectoryFilterOptions["playerFilter"]): boolean {
   if (playerFilter === "all") return true;

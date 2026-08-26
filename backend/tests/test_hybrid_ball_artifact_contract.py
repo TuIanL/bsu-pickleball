@@ -22,6 +22,13 @@ class _Storage:
 def _v4_payload():
     return {
         "schema_version": "reconstructed_ball_trajectory.v4",
+        "reference_view_id": "cam_1",
+        "render_view_id": "cam_1",
+        "video_overlay_policy": {
+            "window_semantics": "half_open",
+            "retention_policy": "single_active_segment",
+            "path_coordinate_space": "render_view_id",
+        },
         "overall_status": "UNAVAILABLE",
         "display_trajectory_status": "degraded",
         "coordinate_semantics": {
@@ -64,6 +71,18 @@ def test_unknown_hybrid_mode_is_rejected():
     payload = _v4_payload()
     payload["segments"][0]["reconstruction_mode"] = "magic_trajectory"
     assert "reconstruction_mode" in _validate_ball_artifact_payloads(payload, None)
+
+
+def test_render_view_must_match_reference_view():
+    payload = _v4_payload()
+    payload["render_view_id"] = "cam_2"
+    assert "render_view_id" in (_validate_ball_artifact_payloads(payload, None) or "")
+
+
+def test_v4_negative_height_is_rejected_at_publish_boundary():
+    payload = _v4_payload()
+    payload["segments"][0]["samples"][0]["estimated_height_ft"] = -0.1
+    assert "高度必须是非负" in (_validate_ball_artifact_payloads(payload, None) or "")
 
 
 def test_unified_slug_contract_supports_historical_v1_v2_v3_and_new_v4():

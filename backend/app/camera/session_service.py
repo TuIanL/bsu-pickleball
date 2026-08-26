@@ -786,6 +786,34 @@ class SessionService:
         # 把会话写入磁盘 JSON
         self._storage.write_json(self._session_path(session.session_id), session.model_dump(mode="json"))
 
+    def update_display_metadata(
+        self,
+        session_id: str,
+        *,
+        display_title: str | None = None,
+        display_date: datetime | None = None,
+    ) -> RecordingSession | None:
+        """更新单摄录制的用户自定义显示元数据（Library 卡片兜底真源）。
+
+        空值（空串 / None）视为撤销覆盖，回退到派生值；更新后写盘并同步内存缓存。
+        """
+        session = self.get_session(session_id)
+        if session is None:
+            return None
+        new_title = (display_title or "").strip() or None
+        new_date = display_date
+        if new_title == session.display_title and new_date == session.display_date:
+            return session
+        session = session.model_copy(
+            update={
+                "display_title": new_title,
+                "display_date": new_date,
+            }
+        )
+        SESSIONS[session_id] = session
+        self._persist(session)
+        return session
+
     def _load(self, session_id: str) -> RecordingSession | None:
         # 从磁盘读取会话
         path = self._session_path(session_id)

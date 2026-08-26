@@ -439,3 +439,144 @@ artifact API SHALL 允许读取上述两个公开 artifact 名称，并继续拒
 - **THEN** API SHALL 拒绝请求
 - **AND** SHALL 不泄露宿主文件系统信息
 
+### Requirement: Canonical Rally/Shot artifact paths and references
+
+系统 SHALL 为 `shot-rally-events` 和 `metric-snapshot` 提供确定性的 artifact path、url、status 和 detail 引用。关联 CaptureTake 的任务 SHALL 将文件写入对应会话目录的 `analysis/<job_id>/` 下；旧任务或上传任务 SHALL 使用兼容的 `outputs/<job_id>/` 目录。`AnalysisPipelineResult.artifacts` 中的新增字段 SHALL 可选，以保持旧结果兼容。
+
+#### Scenario: CaptureTake 任务生成事件产物
+
+- **WHEN** 关联 CaptureTake 的 job `job-123` 生成 canonical 事件和指标快照
+- **THEN** 两个文件 SHALL 位于该 take 的 `analysis/job-123/` 目录
+- **AND** Pipeline result SHALL 暴露两个 artifact 的公开 url、状态和详情
+
+#### Scenario: 旧任务保持兼容
+
+- **WHEN** 没有 `capture_take_id` 的旧 job 生成或读取新 artifact
+- **THEN** 系统 SHALL 使用 `outputs/job-123/` 下的兼容路径
+- **AND** 缺少新 artifact SHALL NOT 破坏旧 tracking、pose、trajectory 或 report 请求
+
+### Requirement: Canonical event artifact API
+
+系统 SHALL 在 `GET /api/analysis/jobs/{job_id}/artifacts/{artifact_name}` 中接受 `shot-rally-events` 和 `metric-snapshot`，并返回对应 JSON。已知但未生成的 artifact SHALL 返回 404；路径穿越、绝对路径和跨 job artifact 请求 SHALL 被拒绝。
+
+#### Scenario: 读取可用事件产物
+
+- **WHEN** 客户端请求已生成的 `shot-rally-events`
+- **THEN** API SHALL 返回 200
+- **AND** Content SHALL 是 `shot-rally-events.v1` JSON
+
+#### Scenario: 读取未生成产物
+
+- **WHEN** 客户端请求当前 job 尚未生成的 `metric-snapshot`
+- **THEN** API SHALL 返回 404
+- **AND** MUST NOT 返回 422 或模拟数据
+
+### Requirement: Canonical event schema metadata
+
+事件和指标 artifact SHALL 在文件和 Pipeline result 中保持 schema version、status、detail 和实际可用性一致。`available` 只允许用于文件已成功写入且 API 可读的情况；`skipped`、`unavailable` 或 `failed` 必须携带原因。
+
+#### Scenario: 生成状态一致
+
+- **WHEN** 事件组合阶段因缺少球员归属输入而降级
+- **THEN** 文件 status、Pipeline result status 和 detail SHALL 表达同一个降级原因
+- **AND** 不得仅因 path 存在就把 artifact 标记为 available
+
+#### Scenario: 空事件结果
+
+- **WHEN** 组合阶段成功完成但没有可确认的 Shot
+- **THEN** `shot_rally_events.json` MAY 为 available 且包含空数组
+- **AND** detail SHALL 说明没有确认事件，而不是省略该状态
+
+### Requirement: Normalized metric artifact paths and references
+
+系统 SHALL 为 `normalized-metrics` 提供确定性的 artifact path、url、status 和 detail 引用。关联 CaptureTake 的任务 SHALL 将文件写入对应会话目录的 `analysis/<job_id>/normalized_metrics.json`；旧任务或上传任务 SHALL 使用兼容的 `outputs/<job_id>/normalized_metrics.json`。`AnalysisPipelineResult.artifacts` 中的新增字段 SHALL 可选，以保持旧结果兼容。
+
+#### Scenario: CaptureTake 任务生成 normalized artifact
+
+- **WHEN** 关联 CaptureTake 的 job `job-123` 生成 normalized metric snapshot
+- **THEN** 文件 SHALL 位于该 take 的 `analysis/job-123/normalized_metrics.json`
+- **AND** Pipeline result SHALL 暴露公开 url、status、detail 和可选 path
+
+#### Scenario: 旧任务保持兼容
+
+- **WHEN** 没有 `capture_take_id` 的旧 job 读取或生成 normalized artifact
+- **THEN** 系统 SHALL 使用 `outputs/job-123/normalized_metrics.json`
+- **AND** 缺少该可选 artifact SHALL NOT 破坏旧 tracking、trajectory、report 或 insights 请求
+
+### Requirement: Normalized metric artifact API
+
+系统 SHALL 在 `GET /api/analysis/jobs/{job_id}/artifacts/{artifact_name}` 中接受 `normalized-metrics`，并返回 `normalized-metric-snapshot.v1` JSON。已知但未生成的 artifact SHALL 返回 404；绝对路径、路径穿越和跨 job artifact 请求 SHALL 被拒绝。
+
+#### Scenario: 读取可用 normalized artifact
+
+- **WHEN** 客户端请求已生成的 `normalized-metrics`
+- **THEN** API SHALL 返回 200
+- **AND** response SHALL 是 `normalized-metric-snapshot.v1` JSON
+
+#### Scenario: 读取未生成 normalized artifact
+
+- **WHEN** 当前 job 没有生成 normalized artifact
+- **THEN** API SHALL 返回 404
+- **AND** MUST NOT 返回 422、默认分数或模拟数据
+
+### Requirement: Normalized artifact state consistency
+
+normalized artifact 文件、Pipeline result 和 API 可用性 SHALL 保持 schema version、status、detail 和实际文件状态一致。`available` 只允许用于文件成功写入且 API 可读的情况；`skipped`、`unavailable` 或 `failed` SHALL 携带原因。
+
+#### Scenario: 参考 profile 缺失
+
+- **WHEN** 输入 metric snapshot 可读但没有适用的 scoring reference profile
+- **THEN** normalized artifact MAY 写入并标记为 `available`（包含 unsupported entries），或按实现选择 `unavailable`
+- **AND** detail SHALL 明确说明 profile 缺失
+- **AND** SHALL NOT 生成默认 utility 或 overall score
+
+#### Scenario: 空 normalized 结果
+
+- **WHEN** job 已完成但没有任何指标满足规范化条件
+- **THEN** artifact MAY 为 `available` 且 `metrics` 为空或全为降级条目
+- **AND** `score_coverage` 和 detail SHALL 说明没有 eligible metric
+
+### Requirement: Semantic boundary evaluation artifact is versioned and optional
+
+系统 SHALL 支持可选的 `ball_semantic_boundary_eval.v1` artifact，用于记录语义边界 replay、证据摘要、adjudication 结果和评估指标；该 artifact 不得替代或破坏既有球轨迹、球 overlay 和球员分析 artifact。
+
+#### Scenario: Evaluation artifact has a deterministic path and status
+
+- **WHEN** 启用语义边界评估的 CaptureTake 分析任务完成回放
+- **THEN** artifact SHALL 写入对应 session 的 `analysis/<job_id>/ball_semantic_boundary_eval.json`
+- **AND** result SHALL 暴露 schema version、path/url、status 和 detail
+
+#### Scenario: Legacy output path remains compatible
+
+- **WHEN** 任务没有 CaptureTake 上下文而使用旧 `outputs/<job_id>/` 路径
+- **THEN** 系统 SHALL 将 artifact 写入兼容 outputs 目录
+- **AND** 既有 artifact path resolver 和历史球轨迹读取行为 SHALL 保持不变
+
+#### Scenario: Missing or disabled evaluation is explicit
+
+- **WHEN** 语义边界评估关闭、没有参考标签或评估依赖不可用
+- **THEN** artifact status SHALL 为 `skipped`、`unavailable` 或 `partial`
+- **AND** 主球检测、球跟踪、球路和球员分析 SHALL 不因此失败
+
+### Requirement: Semantic boundary evaluation payload supports replay and metrics
+
+`ball_semantic_boundary_eval.v1` SHALL 包含 job/take identity、policy version、rollout snapshot、source metadata、按 canonical timestamp 排序的 tick records、evidence summary、pending/confirmed phase、boundary action、formal candidate before/after、segment id、fallback/error 和 metrics。
+
+#### Scenario: Tick records can be replayed
+
+- **WHEN** 客户端或离线工具读取 evaluation artifact
+- **THEN** 每个 tick record SHALL 能恢复 phase、authority、evidence ids、adjudication state 和 action result
+- **AND** 同一输入按相同 policy version 重放 SHALL 得到确定性结果
+
+#### Scenario: Metrics distinguish recommendation and execution
+
+- **WHEN** fixture 或人工参考边界存在
+- **THEN** metrics SHALL 分别记录 Shadow recommendation、Enforced execution 和 reference comparison
+- **AND** 至少包含 boundary precision、recall、confirmation latency、false suppression 和 cross-segment contamination
+
+#### Scenario: Artifact API accepts the known artifact name
+
+- **WHEN** 客户端请求当前任务已有的 `ball-semantic-boundary-eval`
+- **THEN** API SHALL 返回 200 JSON
+- **AND** 当 artifact 未生成时 SHALL 返回 404，而不是 422
+

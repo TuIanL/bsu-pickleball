@@ -178,6 +178,9 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
   }, [item, selection?.invalidRequestedJob, ref, currentSearch, onNavigate]);
 
   const goView = (v: LibraryView) => {
+    if (v !== "overview" && caps && caps[v] !== "available") {
+      return;
+    }
     // D3：view 切换用 replace（同一素材对象内）
     onNavigate(buildLibraryWorkspacePath(ref, {
       view: v,
@@ -186,7 +189,7 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
     }), { replace: true });
   };
 
-  const title = item?.title ?? (ref.kind === "upload" ? "上传视频" : ref.kind === "recording" ? "录制" : "双摄录制");
+  const title = item?.displayTitle ?? item?.title ?? (ref.kind === "upload" ? "上传视频" : ref.kind === "recording" ? "录制" : "双摄录制");
 
   if (loading) {
     return <div className="grid min-h-[60vh] place-items-center text-sm text-[var(--capture-text-muted,#8f9d96)]">加载素材…</div>;
@@ -246,12 +249,14 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
               // video 例外：availability 不可用时不禁用（内容区给出明确不可用提示）。
               const lockable = ["analysis", "trajectory", "report", "segments", "technical"].includes(tab.key);
               const locked = Boolean(caps && lockable && caps[tab.key as Exclude<LibraryView, "overview">] !== "available");
+              const lockReason = locked ? caps?.reasons?.[tab.key] : undefined;
               return (
                 <button
                   key={tab.key}
                   disabled={locked}
                   className={`-mb-px shrink-0 border-b-2 px-4 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:text-[var(--capture-text-muted,#8f9d96)]/60 ${effectiveView === tab.key ? "border-[var(--capture-brand-primary,#23985b)] text-[var(--capture-brand-primary,#23985b)]" : "border-transparent text-[var(--capture-text-secondary,#64736c)] hover:text-[var(--capture-text-primary,#182b24)]"}`}
                   onClick={() => goView(tab.key)}
+                  title={lockReason}
                   type="button"
                 >
                   {tab.label}
@@ -352,7 +357,7 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
           selectedJobId ? (
             selectedJob?.analysisKind === "multiview" ? (
               <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载技术详情…</div>}>
-                <MultiviewObservabilityView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} embedded onSelectView={goView} />
+                <MultiviewObservabilityView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} embedded />
               </Suspense>
             ) : (
               <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载技术详情…</div>}>
@@ -565,6 +570,8 @@ function analysisJobStatusLabel(status: LibraryAnalysisJobView["status"]): strin
       return "已失败";
     case "canceled":
       return "已取消";
+    case "interrupted":
+      return "任务失联";
     default:
       return status;
   }
@@ -596,6 +603,7 @@ function statusText(item: LibraryItemViewModel): string {
     case "running": return "正在分析";
     case "succeeded": return "分析完成";
     case "failed": return "分析失败";
+    case "interrupted": return "任务失联";
     default: return "待分析";
   }
 }

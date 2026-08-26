@@ -38,7 +38,7 @@ function SpeedMetric({ value }: { value: import("../../evidence/evidenceTypes").
 }
 
 export default function PbPlayerHeaderCard() {
-  const { selectedSubject, report, evidence } = usePbReport();
+  const { selectedSubject, evidence } = usePbReport();
 
   const playerName = selectedSubject?.name || "球员";
 
@@ -49,8 +49,7 @@ export default function PbPlayerHeaderCard() {
   const paddleSpeed = evidence?.summary.paddleSpeedMph;
   const inRate = evidence?.summary.inRatePct;
 
-  const shownTotal =
-    totalShots?.status === "available" ? totalShots.value : (report?.shotRows?.length ?? 0);
+  const shownTotal = totalShots?.status === "available" ? totalShots.value : "—";
 
   return (
     <div className="pb-card p-5 sm:p-6">

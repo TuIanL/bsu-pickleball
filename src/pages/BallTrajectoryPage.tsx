@@ -9,6 +9,7 @@ import {
   getAnalysisJob,
   getAnalysisResult,
   getBallTrajectory,
+  getMetricCourtSceneRevision,
   getReconstructedBallTrajectory,
 } from "../services/analysisClient";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../services/ballTrajectoryVisualization";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import type { AnalysisJobSummary, ReconstructedBallTrajectoryArtifact } from "../types/report";
+import type { MetricCourtSceneCalibration } from "../types/metricCourtScene";
 
 type LoadState = "loading" | "available" | "empty" | "failed";
 type ConfidenceFilter = "all" | "high";
@@ -74,6 +76,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [v3Artifact, setV3Artifact] = useState<ReconstructedBallTrajectoryArtifact | null>(null);
   const [job, setJob] = useState<AnalysisJobSummary | null>(null);
+  const [sceneCalibration, setSceneCalibration] = useState<MetricCourtSceneCalibration | null>(null);
   const [data, setData] = useState<BallTrajectoryVisualizationData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [webGlError, setWebGlError] = useState("");
@@ -93,6 +96,15 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
         const result = isPipelineResult(rawResult) ? rawResult : null;
         if (!nextJob) throw new Error("分析任务不存在或已被删除");
         if (!result) throw new Error("该任务尚未生成可读取的分析结果");
+
+        const scene = nextJob.metadata.capture_take_id
+          && nextJob.sceneCalibrationMode === "metric"
+          && nextJob.sceneCalibrationRevision != null
+          ? await getMetricCourtSceneRevision(
+            nextJob.metadata.capture_take_id,
+            nextJob.sceneCalibrationRevision,
+          )
+          : null;
 
         const trajectoryArtifact = await getReconstructedBallTrajectory(result);
         const pipelineStatus = result.artifacts.reconstructed_ball_trajectory_status;
@@ -120,6 +132,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
         }
         if (!alive) return;
         setJob(nextJob);
+        setSceneCalibration(scene);
         setData(nextData);
         setSelectedShotId(nextData.shots[0]?.shotId ?? nextData.trajectories[0]?.id ?? null);
         setLoadState(nextData.trajectories.length || hasUnifiedArtifact ? "available" : "empty");
@@ -310,6 +323,8 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
               selectedShotId={effectiveSelectedShotId}
               onSelectShot={handleSelectShot}
               onWebGlError={handleWebGlError}
+              sceneCalibration={sceneCalibration}
+              metricValidity={v3Artifact?.coordinate_semantics?.validity ?? v3Artifact?.coordinate_semantics?.metric_validity ?? null}
             />
           ) : (
             <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#DDE5E0] bg-[#F8FAF9] p-8 text-center">

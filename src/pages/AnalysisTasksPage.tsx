@@ -456,6 +456,7 @@ export function AnalysisTasksPage({
   const completedCount = visibleJobs.filter((job) => job.status === "completed").length;
   const failedCount = visibleJobs.filter((job) => job.status === "failed").length;
   const canceledCount = visibleJobs.filter((job) => job.status === "canceled").length;
+  const interruptedCount = visibleJobs.filter((job) => job.status === "interrupted").length;
   const eligibleJobs = visibleJobs.filter((job) => !isActiveAnalysisJob(job));
   const eligibleJobIds = eligibleJobs.map((job) => job.id);
   const eligibleJobKey = eligibleJobIds.join("|");
@@ -710,6 +711,7 @@ export function AnalysisTasksPage({
               ["已完成", completedCount],
               ["失败", failedCount],
               ["已取消", canceledCount],
+              ["任务失联", interruptedCount],
             ]
             : sourceFilter === "sync_recording"
               ? [
@@ -1136,6 +1138,7 @@ export function AnalysisTaskCard({
   const currentStage = job.stages.find((stage) => stage.id === job.stage) ?? job.stages.find((stage) => stage.status === "active");
   const updatedAt = formatDateTime(job.updatedAt || job.createdAt);
   const canCancel = isCancelableAnalysisJob(job);
+  const isInterrupted = job.status === "interrupted";
 
   return (
     <article className={`sport-card p-5 sm:p-6 ${recent ? "border-[#22C55E]/50" : ""}`}>
@@ -1212,9 +1215,15 @@ export function AnalysisTaskCard({
               任务已取消{job.canceledAt ? ` · ${formatDateTime(job.canceledAt)}` : ""}。
             </p>
           ) : null}
+          {isInterrupted ? (
+            <p className="mt-3 rounded-2xl border border-[#FF9500]/25 bg-[#FF9500]/10 p-3 text-sm font-semibold leading-6 text-[#A45A00]">
+              任务失联：{job.publicErrorMessage ?? "Worker 在规定时间内没有心跳，已保留最后进度，请重新分析。"}
+              {job.workerHeartbeatAt ? <span className="mt-1 block text-xs">最后心跳：{formatDateTime(job.workerHeartbeatAt)}</span> : null}
+            </p>
+          ) : null}
         </div>
         <div>
-          {job.status !== "failed" && job.status !== "canceled" ? (
+          {job.status !== "failed" && job.status !== "canceled" && !isInterrupted ? (
             <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
               <div className="flex items-end justify-between">
                 <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">进度</span>
@@ -1258,6 +1267,11 @@ export function AnalysisTaskCard({
             {job.status === "canceled" ? (
               <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
                 新建分析
+              </button>
+            ) : null}
+            {isInterrupted ? (
+              <button className="green-button px-4 py-2.5" onClick={() => onNavigate("/analysis/new")} type="button">
+                重新分析
               </button>
             ) : null}
             {canCancel ? (

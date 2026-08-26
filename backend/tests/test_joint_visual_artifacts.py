@@ -405,8 +405,10 @@ def test_compose_publishes_fused_player_overlay(tmp_path):
     assert result.artifacts.fused_player_overlay_status == "available"
     assert result.artifacts.fused_player_overlay_json_path is not None
     overlay = storage.read_json(storage.fused_player_overlay_json_path("job-p2"))
-    assert overlay["schema_version"] == "multiview-fused-player-overlay.v1"
+    assert overlay["schema_version"] == "multiview-fused-player-overlay.v2"
     assert overlay["reference_view_id"] == "cam_1"
+    assert set(overlay["views"]) == {"cam_1", "cam_2"}
+    assert overlay["views"]["cam_1"]["frames"][0]["players"][0]["player_id"] == "Player_1"
     assert len(overlay["frames"]) == 1
     players = overlay["frames"][0]["players"]
     assert len(players) == 1
@@ -416,6 +418,81 @@ def test_compose_publishes_fused_player_overlay(tmp_path):
     # manifest 含 fusedPlayerOverlay 入口
     manifest = storage.read_json(storage.fusion_manifest_json_path("job-p2"))
     assert manifest["artifacts"]["fusedPlayerOverlay"]["url"] == result.artifacts.fused_player_overlay_url
+
+
+def test_historical_v1_fused_overlay_safely_stays_reference_view_only(tmp_path):
+    """历史 v1 缺少可修复证据时，接口保留 reference-view 产物且不虚报 cam_2。"""
+    from fastapi.testclient import TestClient
+
+    from app.api import routes_analysis
+    from app.main import app
+    from app.services.mock_analysis import JOBS, RESULTS
+    from app.services.storage_service import StorageService
+    from app.vision.multiview.fused_overlay_types import build_fused_player_overlay_payload
+
+    storage = StorageService()
+    take_dir = tmp_path / "take"
+    storage.register_capture_job("job-legacy-overlay", take_dir)
+    job = AnalysisJobSummary(
+        id="job-legacy-overlay",
+        status="completed",
+        stage="report",
+        progress=100,
+        createdAt="2026-08-15T00:00:00+00:00",
+        updatedAt="2026-08-15T00:00:00+00:00",
+        videoId="vid-a",
+        calibrationId="calib-a",
+        analysisKind="multiview",
+        executionMode="late_fusion_v1",
+        frameStride=2,
+        sourceFps=60.0,
+        clipStartMs=0,
+        clipEndMs=60000,
+        viewRuns={},
+        referenceViewId="cam_1",
+        jointViewInputs=[],
+        metadata={
+            "fileName": "legacy.mp4", "fileSize": 10, "matchTitle": "Legacy",
+            "venue": "Court", "matchDate": "2026-08-15",
+            "matchFormat": "doubles", "cameraAngle": "elevated",
+            "athleteLabel": "P", "level": "MVP",
+        },
+        stages=[],
+    )
+    storage.write_json_atomic(
+        storage.fused_player_overlay_json_path(job.id),
+        build_fused_player_overlay_payload(
+            job_id=job.id,
+            video_id=job.videoId,
+            reference_view_id="cam_1",
+            frame_size={"width": 640, "height": 480},
+            frames=[],
+            status="no_detections",
+            detail="历史单路 overlay",
+        ),
+    )
+
+    original_storage = routes_analysis._STORAGE
+    snapshot = JOBS.copy(), RESULTS.copy()
+    routes_analysis._STORAGE = storage
+    JOBS.clear()
+    RESULTS.clear()
+    JOBS[job.id] = job
+    try:
+        with TestClient(app) as client:
+            response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/fused-player-overlay")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["schema_version"] == "multiview-fused-player-overlay.v1"
+        assert payload["reference_view_id"] == "cam_1"
+        assert "views" not in payload
+    finally:
+        routes_analysis._STORAGE = original_storage
+        JOBS.clear()
+        JOBS.update(snapshot[0])
+        RESULTS.clear()
+        RESULTS.update(snapshot[1])
+        StorageService.unregister_capture_job(job.id)
 
 
 def test_fused_overlay_unavailable_without_geometry(tmp_path):

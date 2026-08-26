@@ -105,6 +105,8 @@ class BallFrameSample:
     track_state: str | None = None  # 当前帧轨迹锁定状态
     predicted_position: Point2D | None = None  # 预测位置（LOCKED/LOST 缺失时输出）
     overall_decision: str | None = None  # 最终决策标签
+    publication_eligible: bool = True  # 未锁定的 tentative 点仅保留 raw/diagnostics，不进入正式球路
+    quality_status: str = "accepted"  # accepted / rejected / diagnostic_only
     diagnostics: dict[str, Any] = field(default_factory=dict)  # 调试信息
 
 
@@ -136,12 +138,13 @@ class TrajectoryPoint:
         注意：只有当 sample.accepted 为 True 时，才保留其 image_xy / court_xy / confidence；
         否则这些字段设为 None（表示该点不可信，后续清洗/插值会处理）。
         """
+        authoritative = sample.accepted and sample.publication_eligible
         return cls(
             frame_index=sample.frame_index,
             timestamp_sec=sample.timestamp_sec,
-            image_xy=sample.image_xy if sample.accepted else None,
-            court_xy=sample.court_xy if sample.accepted else None,
-            confidence=sample.confidence if sample.accepted else None,
+            image_xy=sample.image_xy if authoritative else None,
+            court_xy=sample.court_xy if authoritative else None,
+            confidence=sample.confidence if authoritative else None,
             interpolated=sample.interpolated,
             source=sample.source,
             in_bounds=sample.in_bounds,

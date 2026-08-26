@@ -27,17 +27,17 @@ export default function PbCourtCoverage() {
   const { evidence } = usePbReport();
 
   const distanceFt = evidence?.courtCoverage.distanceFt;
-  const heatmap = evidence?.courtCoverage.heatmap;
+  const zoneStats = evidence?.courtCoverage.zoneStats;
 
-  const heatmapDataForStructured = useMemo<StructuredVisualizationData | null>(() => {
-    if (!heatmap || heatmap.status !== "available") return null;
+  const zoneDataForStructured = useMemo<StructuredVisualizationData | null>(() => {
+    if (!zoneStats || zoneStats.status !== "available") return null;
     return {
       court: { court_width_ft: 20, court_length_ft: 44 },
-      heatmaps: { players: [heatmap.value] },
       scatter_plots: { players: [], ball: [], bounces: [] },
       player_trajectories: [],
-    } as unknown as StructuredVisualizationData;
-  }, [heatmap]);
+      zone_stats: { players: [zoneStats.value] },
+    };
+  }, [zoneStats]);
 
   return (
     <div className="pb-card p-5 sm:p-6">
@@ -69,19 +69,19 @@ export default function PbCourtCoverage() {
         className="w-full rounded-xl overflow-hidden bg-[#f9fafb] border border-[var(--pb-card-border,#e5e7eb)]"
         style={{ aspectRatio: "16 / 10" }}
       >
-        {heatmapDataForStructured ? (
+        {zoneDataForStructured ? (
           <div className="w-full h-full p-2">
             <StructuredZoneHeatmap
-              data={heatmapDataForStructured}
-              {...({ colorScheme: "pb-vision" } as unknown as object)}
+              data={zoneDataForStructured}
+              colorScheme="pb-vision"
             />
           </div>
         ) : (
           <div className="w-full h-full">
-            {heatmap?.status === "unavailable" ? (
-              <PbEvidenceUnavailable reason={heatmap.reason} />
-            ) : (
+            {evidence?.isDemo ? (
               <PickleballCourtPlaceholder />
+            ) : (
+              <PbEvidenceUnavailable reason={zoneStats?.status === "available" ? undefined : zoneStats?.reason ?? "暂无区域统计"} />
             )}
           </div>
         )}

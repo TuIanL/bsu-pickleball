@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { render, within } from "@testing-library/react";
 import { CourtMinimap } from "./CourtMinimap";
-import type { BallTrajectoryArtifact, BounceEventsArtifact, PipelineTrackPoint } from "../../types/report";
+import type { BallTrajectoryArtifact, BounceEventsArtifact, PipelineTrackPoint, ReconstructedBallTrajectoryArtifact } from "../../types/report";
+import { resolvePlayerIdentityHue } from "../../utils/overlayPresentation";
 
 function pt(overrides: Partial<PipelineTrackPoint> = {}): PipelineTrackPoint {
   return {
@@ -56,6 +57,17 @@ describe("CourtMinimap", () => {
     expect(p1Matches).toBeLessThanOrEqual(3);
   });
 
+  it("uses the same identity hue as video boxes regardless of visible player ordering", () => {
+    const tracks: PipelineTrackPoint[] = [
+      pt({ track_id: "Player_4", timestamp_seconds: 9.8, court_point: { x: 4, y: 39 } }),
+      pt({ track_id: "Player_2", timestamp_seconds: 9.9, court_point: { x: 16, y: 5 } }),
+    ];
+    const { container } = render(<CourtMinimap tracks={tracks} currentTimeSec={10} trailSeconds={30} />);
+
+    expect(container.querySelector("[data-testid='hud-player-2']")?.getAttribute("data-player-color")).toBe(resolvePlayerIdentityHue("Player_2"));
+    expect(container.querySelector("[data-testid='hud-player-4']")?.getAttribute("data-player-color")).toBe(resolvePlayerIdentityHue("Player_4"));
+  });
+
   it("returns null when no tracks are provided", () => {
     const { container } = render(<CourtMinimap tracks={[]} currentTimeSec={0} />);
     expect(container.firstChild).toBeNull();
@@ -95,6 +107,33 @@ describe("CourtMinimap", () => {
     const y2 = Number(p2!.getAttribute("y"));
     // 近端 P1（court y=39）渲染在更大 SVG y（下方）；远端 P2（court y=5）渲染在更小 SVG y（上方）
     expect(y1).toBeGreaterThan(y2);
+  });
+
+  it("changes only SVG positions for each display-view court orientation", () => {
+    const tracks = [pt({ track_id: "Player_1", timestamp_seconds: 10, court_point: { x: 4, y: 5 } })];
+    const position = (courtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y") => {
+      const { container, unmount } = render(
+        <CourtMinimap courtOrientation={courtOrientation} currentTimeSec={10} tracks={tracks} />,
+      );
+      const label = Array.from(container.querySelectorAll("text")).find((node) => node.textContent === "P1")!;
+      const player = container.querySelector("[data-testid='hud-player-1']")!;
+      const result = { x: Number(label.getAttribute("x")), y: Number(label.getAttribute("y")), color: player.getAttribute("data-player-color") };
+      unmount();
+      return result;
+    };
+
+    const identity = position("identity");
+    const rotated = position("rotate_180");
+    const mirrorX = position("mirror_x");
+    const mirrorY = position("mirror_y");
+
+    expect(rotated.x).toBeGreaterThan(identity.x);
+    expect(rotated.y).toBeGreaterThan(identity.y);
+    expect(mirrorX.x).toBeGreaterThan(identity.x);
+    expect(mirrorX.y).toBe(identity.y);
+    expect(mirrorY.x).toBe(identity.x);
+    expect(mirrorY.y).toBeGreaterThan(identity.y);
+    expect(rotated.color).toBe(identity.color);
   });
 
   it("marks stale players with a lost indicator instead of a current position", () => {
@@ -138,5 +177,60 @@ describe("CourtMinimap", () => {
     expect(hud.getByTestId("hud-ball-current")).toBeTruthy();
     expect(hud.getByTestId("hud-bounce")).toBeTruthy();
     expect(getByText("球 LIVE")).toBeTruthy();
+  });
+
+  it("renders a displayable reconstructed court path when the legacy ball artifact is absent", () => {
+    const reconstructedBallTrajectory: ReconstructedBallTrajectoryArtifact = {
+      schema_version: "reconstructed_ball_trajectory.v4",
+      job_id: "test",
+      status: "partial",
+      detail: "estimated",
+      reconstruction_mode: "hybrid_segmented",
+      overall_status: "PARTIAL_3D",
+      display_trajectory_status: "available",
+      events: [],
+      segments: [{
+        segment_id: "flight-1",
+        reconstruction_mode: "single_view_event_anchored_2_5d",
+        status: "available",
+        anchors: [],
+        samples: [
+          { frame_index: 1, timestamp_sec: 2, court_xy: [8, 14], source: "detected", confidence: 0.9 },
+          { frame_index: 2, timestamp_sec: 2.1, court_xy: [9, 15], source: "interpolated", confidence: 0.8 },
+        ],
+      }],
+    };
+    const { container } = render(
+      <CourtMinimap reconstructedBallTrajectory={reconstructedBallTrajectory} currentTimeSec={2.1} tracks={[]} />,
+    );
+
+    expect(container.querySelector("[data-testid='hud-ball-current']")).toBeTruthy();
+    expect(container.querySelectorAll("line[stroke='#D9FF3F'], line[stroke='rgba(217,255,63,0.48)']").length).toBeGreaterThan(0);
+  });
+
+  it("breaks reconstructed court paths at long time gaps", () => {
+    const reconstructedBallTrajectory: ReconstructedBallTrajectoryArtifact = {
+      schema_version: "reconstructed_ball_trajectory.v4",
+      job_id: "test",
+      status: "available",
+      detail: "estimated",
+      reconstruction_mode: "hybrid_segmented",
+      overall_status: "PARTIAL_3D",
+      display_trajectory_status: "available",
+      events: [],
+      segments: [{
+        segment_id: "flight-1",
+        reconstruction_mode: "single_view_event_anchored_2_5d",
+        status: "available",
+        anchors: [],
+        samples: [
+          { frame_index: 1, timestamp_sec: 1, court_xy: [8, 14], source: "detected" },
+          { frame_index: 2, timestamp_sec: 2, court_xy: [9, 15], source: "detected" },
+        ],
+      }],
+    };
+    const { container } = render(<CourtMinimap reconstructedBallTrajectory={reconstructedBallTrajectory} currentTimeSec={2} tracks={[]} />);
+
+    expect(container.querySelectorAll("line[stroke='#D9FF3F']").length).toBe(0);
   });
 });

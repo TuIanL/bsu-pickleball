@@ -75,7 +75,7 @@ def _selection(points_by_view):
     return select_main_view(metrics)
 
 
-def _measurement(timestamp_ms: float, *, trusted: bool = True):
+def _measurement(timestamp_ms: float, *, trusted: bool = True, metric_validity: str = "approximate_multiview"):
     return BallStereoMeasurement(
         take_timestamp_ms=timestamp_ms,
         cam1_timestamp_ms=timestamp_ms,
@@ -93,6 +93,7 @@ def _measurement(timestamp_ms: float, *, trusted: bool = True):
         confidence=0.9,
         depth_valid=True,
         high_quality_anchor=trusted,
+        metric_validity=metric_validity,
     )
 
 
@@ -148,6 +149,26 @@ def test_two_trusted_anchors_and_qualified_fit_publish_estimated_3d():
     )
     assert segment["reconstruction_mode"] == "stereo_estimated_3d"
     assert segment["metric_validity"] == "approximate_multiview"
+    assert not segment["metric_eligibility"]["peak_height"]
+
+
+def test_metric_stereo_anchors_publish_metric_eligibility():
+    reconstructed = Reconstructed3DSegment(
+        "flight-1",
+        FULL_ESTIMATED_3D,
+        samples=[Reconstructed3DSample(0.0, 2.0, 3.0, 2.0), Reconstructed3DSample(1.0, 3.4, 3.7, 0.0)],
+        reprojection_error_px=5.0,
+        stereo_coverage=0.8,
+    )
+    segment = _build(
+        measurements=[
+            _measurement(10.0, metric_validity="metric_multiview"),
+            _measurement(200.0, metric_validity="metric_multiview"),
+        ],
+        reconstructed_3d=reconstructed,
+        base={"segment_id": "flight-1", "samples": [{"timestamp_sec": 0.0}, {"timestamp_sec": 0.23}]},
+    )
+    assert segment["metric_validity"] == "metric_multiview"
     assert segment["metric_eligibility"]["peak_height"]
 
 
@@ -175,6 +196,24 @@ def test_unqualified_3d_does_not_block_other_displayable_segments():
     )
     assert degraded["display_level"] != "none"
     assert unavailable["reconstruction_mode"] == "unavailable"
+
+
+def test_negative_3d_is_rejected_and_same_segment_falls_back_to_2_5d():
+    reconstructed = Reconstructed3DSegment(
+        "flight-1",
+        FULL_ESTIMATED_3D,
+        samples=[Reconstructed3DSample(0.0, 2.0, 3.0, -7.0), Reconstructed3DSample(1.0, 3.4, 3.7, 0.0)],
+        reprojection_error_px=5.0,
+        stereo_coverage=0.8,
+    )
+    segment = _build(
+        reconstructed_3d=reconstructed,
+        measurements=[_measurement(10.0), _measurement(200.0)],
+        base={"segment_id": "flight-1", "samples": [{"estimated_height_ft": -7.0}, {"estimated_height_ft": 0.0}]},
+    )
+    assert segment["reconstruction_mode"] != "stereo_estimated_3d"
+    assert segment["height_quality_reason"] == "below_ground"
+    assert all(sample["estimated_height_ft"] is None or sample["estimated_height_ft"] >= 0 for sample in segment["samples"])
 
 
 def test_hybrid_segment_reconstruction_is_deterministic():

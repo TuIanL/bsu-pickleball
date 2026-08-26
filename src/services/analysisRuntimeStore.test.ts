@@ -8,9 +8,18 @@ import {
   watchAnalysisJob,
 } from "./analysisRuntimeStore";
 
+const getAnalysisJob = vi.hoisted(() => vi.fn());
+
+vi.mock("./analysisClient", () => ({
+  getAnalysisJob,
+}));
+
 describe("analysisRuntimeStore", () => {
   afterEach(() => {
     for (const id of [...listWatchedAnalysisJobs()]) unwatchAnalysisJob(id, true);
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    getAnalysisJob.mockReset();
   });
 
   it("stores and reads a seeded snapshot", () => {
@@ -60,5 +69,27 @@ describe("analysisRuntimeStore", () => {
     unwatchAnalysisJob("job-a", true);
     expect(getAnalysisRuntimeSnapshot("job-a")).toBeUndefined();
     expect(getAnalysisRuntimeSnapshot("job-b")?.progress).toBe(0);
+  });
+
+  it("stops polling after the durable interrupted status is received", async () => {
+    vi.useFakeTimers();
+    getAnalysisJob.mockResolvedValue({
+      id: "job-lost",
+      status: "interrupted",
+      canonicalStatus: "interrupted",
+      progress: 47,
+      stage: "tracking",
+      stages: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:01:00Z",
+      metadata: {},
+    });
+    watchAnalysisJob("job-lost");
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(getAnalysisJob).toHaveBeenCalledWith("job-lost");
+    expect(listWatchedAnalysisJobs()).not.toContain("job-lost");
+    expect(getAnalysisRuntimeSnapshot("job-lost")?.status).toBe("interrupted");
   });
 });

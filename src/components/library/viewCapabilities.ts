@@ -12,6 +12,7 @@
 import type { LibraryItemViewModel } from "../../services/libraryAdapter";
 import type { AnalysisPipelineResult } from "../../types/report";
 import type { LibraryAnalysisJobView } from "../../services/libraryAdapter";
+import { getReportCapability } from "../../services/reportCapability";
 
 export type LibraryView = "overview" | "video" | "analysis" | "trajectory" | "report" | "segments" | "technical";
 
@@ -53,7 +54,7 @@ export function computeLibraryViewCapabilities(
   const selectedJob = selected?.job;
   const legacyResult = Boolean(item.primaryResultAnalysisJobId ?? item.primaryAnalysisJobId);
   const hasSelection = selected ? Boolean(selectedJob) : legacyResult;
-  const terminalDiagnostic = selectedJob?.status === "failed" || selectedJob?.status === "canceled";
+  const terminalDiagnostic = selectedJob?.status === "failed" || selectedJob?.status === "canceled" || selectedJob?.status === "interrupted";
   const completed = selected ? selectedJob?.status === "completed" : legacyResult;
   const manifestPending = Boolean(selected && completed && (selected.manifestState === "idle" || selected.manifestState === "loading"));
   const manifestReady = selected ? Boolean(completed && selected.manifest) : legacyResult;
@@ -65,6 +66,16 @@ export function computeLibraryViewCapabilities(
           selected.manifest?.artifacts.ball_trajectory_url),
       )
     : legacyResult;
+  const reportCapability = selected
+    ? getReportCapability({
+      job: selectedJob,
+      manifest: selected?.manifest,
+      manifestState: selected?.manifestState,
+    })
+    : {
+      state: "unavailable" as const,
+      reason: legacyResult ? "正在核对报告所需的真实分析数据" : "该素材尚无可用的分析结果",
+    };
   const canPlayVideo = item.availabilityState !== "unavailable";
   const hasTake = Boolean(item.fieldSessionId && item.captureTakeId);
 
@@ -72,20 +83,25 @@ export function computeLibraryViewCapabilities(
     video: canPlayVideo ? "available" : "unavailable",
     analysis: manifestPending ? "loading" : manifestReady ? "available" : "unavailable",
     trajectory: manifestPending ? "loading" : trajectoryReady ? "available" : "unavailable",
-    report: manifestPending ? "loading" : manifestReady ? "available" : "unavailable",
+    report: reportCapability.state,
     segments: hasTake ? "available" : "unavailable",
     technical: hasSelection && (completed || terminalDiagnostic) ? "available" : "unavailable",
     reasons,
   };
 
   if (!canPlayVideo) reasons.video = "视频存储暂不可用";
+  if (reportCapability.state !== "available") reasons.report = reportCapability.reason;
   if (!hasSelection) {
     const msg = "该素材尚无可用的分析结果";
     reasons.analysis = msg;
     reasons.report = msg;
     reasons.technical = msg;
   } else if (terminalDiagnostic) {
-    const msg = selectedJob?.status === "canceled" ? "该任务已取消，未生成结果" : "分析失败，未生成结果";
+    const msg = selectedJob?.status === "canceled"
+      ? "该任务已取消，未生成结果"
+      : selectedJob?.status === "interrupted"
+        ? "任务失联，Worker 未在规定时间内返回结果"
+        : "分析失败，未生成结果";
     reasons.analysis = msg;
     reasons.trajectory = msg;
     reasons.report = msg;

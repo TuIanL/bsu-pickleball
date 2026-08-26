@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.camera.ffmpeg_utils import check_ffmpeg_available
 from app.camera.models import (
+    SessionDisplayUpdateRequest,
     SyncRecordingSession,
     SyncStartRequest,
     SyncTestRequest,
@@ -139,6 +140,19 @@ def get_active_sync_recording() -> SyncRecordingSession | None:
 def get_sync_recording(session_id: str) -> SyncRecordingSession:
     """读取单个双摄同步录制会话详情"""
     session = sync_recording_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"同步录制会话 {session_id} 不存在")
+    return session
+
+
+@router.patch("/{session_id}", response_model=SyncRecordingSession)
+def update_sync_recording_display(session_id: str, payload: SessionDisplayUpdateRequest) -> SyncRecordingSession:
+    """更新双摄素材的用户自定义显示标题/日期（Library 卡片兜底真源；空值撤销覆盖）。"""
+    session = sync_recording_service.update_display_metadata(
+        session_id,
+        display_title=payload.display_title,
+        display_date=payload.display_date,
+    )
     if session is None:
         raise HTTPException(status_code=404, detail=f"同步录制会话 {session_id} 不存在")
     return session

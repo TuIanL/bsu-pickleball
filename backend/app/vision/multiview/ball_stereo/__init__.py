@@ -18,6 +18,11 @@ from app.vision.multiview.ball_stereo.bundle_refine import (  # noqa: F401
 )
 from app.vision.multiview.ball_stereo.landing_authority import resolve_landing  # noqa: F401
 from app.vision.multiview.ball_stereo.metrics import BallMetrics, compute_metrics  # noqa: F401
+from app.vision.multiview.ball_stereo.net_assisted_camera import (  # noqa: F401
+    NetCameraQuality,
+    evaluate_net_camera_quality,
+    refine_virtual_camera_with_net,
+)
 from app.vision.multiview.ball_stereo.segment_reconstruction import (  # noqa: F401
     Observation,
     Reconstructed3DSegment,

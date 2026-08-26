@@ -24,6 +24,11 @@ import {
   resolveEvidencePresentation,
   resolvePlayerIdentityHue,
 } from "../../utils/overlayPresentation";
+import {
+  canonicalTimeToSourceTimeMs,
+  sourceTimeToCanonicalTimeMs,
+  type DisplayTimeMapping,
+} from "../../utils/multiviewDisplay";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
@@ -65,6 +70,13 @@ interface VideoAnalysisCardProps {
   fusedPlayerOverlayDetail?: string;
   fusedPlayerOverlayLoadState?: OverlayLoadState;
   fusedPlayerOverlayStatus?: string;
+  /** 当前结果展示视角；与分析任务 referenceViewId 分离。 */
+  displayViewId?: string;
+  displayViewOptions?: Array<{ id: string; label: string; available: boolean; reason?: string }>;
+  onDisplayViewChange?: (viewId: string) => void;
+  displayViewNotice?: string;
+  displayTimeMapping?: DisplayTimeMapping;
+  displayCourtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
   videoSrc?: string;
   /** H.264 源视频兜底：当 videoSrc（overlay 视频）编码不被浏览器支持时自动回退 */
   fallbackVideoSrc?: string;
@@ -124,6 +136,12 @@ export function VideoAnalysisCard({
   fusedPlayerOverlayDetail,
   fusedPlayerOverlayLoadState = "idle",
   fusedPlayerOverlayStatus,
+  displayViewId,
+  displayViewOptions,
+  onDisplayViewChange,
+  displayViewNotice,
+  displayTimeMapping,
+  displayCourtOrientation,
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
@@ -161,6 +179,12 @@ export function VideoAnalysisCard({
           fusedPlayerOverlayDetail={fusedPlayerOverlayDetail}
           fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
           fusedPlayerOverlayStatus={fusedPlayerOverlayStatus}
+          displayViewId={displayViewId}
+          displayViewOptions={displayViewOptions}
+          onDisplayViewChange={onDisplayViewChange}
+          displayViewNotice={displayViewNotice}
+          displayTimeMapping={displayTimeMapping}
+          displayCourtOrientation={displayCourtOrientation}
           videoSrc={videoSrc}
           fallbackVideoSrc={fallbackVideoSrc}
           pipelineTracks={pipelineTracks}
@@ -360,6 +384,12 @@ function RealVideoOverlay({
   fusedPlayerOverlayDetail,
   fusedPlayerOverlayLoadState = "idle",
   fusedPlayerOverlayStatus,
+  displayViewId,
+  displayViewOptions,
+  onDisplayViewChange,
+  displayViewNotice,
+  displayTimeMapping,
+  displayCourtOrientation,
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
@@ -392,6 +422,12 @@ function RealVideoOverlay({
   fusedPlayerOverlayDetail?: string;
   fusedPlayerOverlayLoadState?: OverlayLoadState;
   fusedPlayerOverlayStatus?: string;
+  displayViewId?: string;
+  displayViewOptions?: Array<{ id: string; label: string; available: boolean; reason?: string }>;
+  onDisplayViewChange?: (viewId: string) => void;
+  displayViewNotice?: string;
+  displayTimeMapping?: DisplayTimeMapping;
+  displayCourtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
   videoSrc: string;
   fallbackVideoSrc?: string;
   /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
@@ -402,6 +438,12 @@ function RealVideoOverlay({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const seekAppliedRef = useRef(false);
+  const pendingDisplaySwitchRef = useRef<{
+    canonicalSeekMs: number;
+    resumePlayback: boolean;
+    source?: string;
+    seekApplied?: boolean;
+  } | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [activeVideoSrc, setActiveVideoSrc] = useState<string | undefined>(videoSrc);
@@ -419,22 +461,38 @@ function RealVideoOverlay({
   const [showBallPath, setShowBallPath] = useState(true);
   const [showBounces, setShowBounces] = useState(true);
   const [showCourtHud, setShowCourtHud] = useState(false);
+  const mappingOffsetSeconds = Number(displayTimeMapping?.offsetMs ?? 0) / 1000;
+  const mappingRate = Number(displayTimeMapping?.rate ?? 1) > 0 ? Number(displayTimeMapping?.rate ?? 1) : 1;
+  // Player/球路/小地图都消费 canonical 时间；video.currentTime 仍是目标媒体时间。
+  const canonicalTime = sourceTimeToCanonicalTimeMs(currentTime * 1000, displayTimeMapping) / 1000;
+  const canonicalToSourceSeconds = (value: number) => canonicalTimeToSourceTimeMs(value * 1000, displayTimeMapping) / 1000;
 
-  const source = fusedPlayerOverlay?.source ?? trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
+  const selectedFusedOverlay = useMemo(() => {
+    if (!fusedPlayerOverlay) return null;
+    const target = displayViewId ?? fusedPlayerOverlay.reference_view_id;
+    if (target === fusedPlayerOverlay.reference_view_id) return fusedPlayerOverlay;
+    return fusedPlayerOverlay.views?.[target] ?? null;
+  }, [displayViewId, fusedPlayerOverlay]);
+  const targetTrackingOverlay = displayViewId
+    && fusedPlayerOverlay
+    && displayViewId !== fusedPlayerOverlay.reference_view_id
+    ? null
+    : trackingOverlay;
+  const source = selectedFusedOverlay?.source ?? trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
   // 加载优先级（spec multiview-fused-player-overlay）：joint 模式 fused overlay 优先，
   // 不可用/无数据时 fallback 到 trackingOverlay（单摄行为完全不变）。
-  const useFusedOverlay = Boolean(fusedPlayerOverlay?.frames.length);
+  const useFusedOverlay = Boolean(selectedFusedOverlay?.frames.length);
   const fusedRenderFrame = useMemo(
-    () => resolveFusedPlayerOverlayFrame(fusedPlayerOverlay?.frames ?? [], currentTime),
-    [fusedPlayerOverlay, currentTime]
+    () => resolveFusedPlayerOverlayFrame(selectedFusedOverlay?.frames ?? [], canonicalTime),
+    [selectedFusedOverlay, canonicalTime]
   );
   const detectionRenderFrame = useMemo(
-    () => resolveDetectionFrame(trackingOverlay?.frames ?? [], currentTime),
-    [currentTime, trackingOverlay]
+    () => resolveDetectionFrame(targetTrackingOverlay?.frames ?? [], canonicalTime),
+    [canonicalTime, targetTrackingOverlay]
   );
   const poseRenderFrame = useMemo(
-    () => resolvePoseFrame(poseOverlay?.frames ?? [], currentTime),
-    [currentTime, poseOverlay]
+    () => resolvePoseFrame(poseOverlay?.frames ?? [], canonicalTime),
+    [canonicalTime, poseOverlay]
   );
 
   const boxCount = useFusedOverlay
@@ -443,32 +501,32 @@ function RealVideoOverlay({
   const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
   const poseInGap = poseRenderFrame?.inGap ?? false;
   const hybridBallPathSegments = useMemo(
-    () => resolveHybridBallPathSegments(reconstructedBallTrajectory, currentTime, trajectoryViewId),
-    [currentTime, reconstructedBallTrajectory, trajectoryViewId],
+    () => resolveHybridBallPathSegments(reconstructedBallTrajectory, canonicalTime, trajectoryViewId),
+    [canonicalTime, reconstructedBallTrajectory, trajectoryViewId],
   );
   const ballPathSegments = useMemo(
     () => hybridBallPathSegments.length
       ? hybridBallPathSegments
       : reconstructedBallTrajectory
         ? []
-        : resolveBallPathSegments(ballTrajectory, currentTime),
-    [ballTrajectory, currentTime, hybridBallPathSegments, reconstructedBallTrajectory],
+        : resolveBallPathSegments(ballTrajectory, canonicalTime),
+    [ballTrajectory, canonicalTime, hybridBallPathSegments, reconstructedBallTrajectory],
   );
   const ballSamples = useMemo(() => ballPathSegments.flat(), [ballPathSegments]);
   const allBounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
   const visibleBounceMarkers = useMemo(
-    () => resolveVisibleBounceMarkers(allBounceMarkers, currentTime),
-    [allBounceMarkers, currentTime]
+    () => resolveVisibleBounceMarkers(allBounceMarkers, canonicalTime),
+    [allBounceMarkers, canonicalTime]
   );
   const ballCount = ballSamples.length;
   const boxesAvailable = useFusedOverlay
-    ? Boolean(fusedPlayerOverlay?.frames.length)
-    : Boolean(trackingOverlay?.frames.length);
+    ? Boolean(selectedFusedOverlay?.frames.length)
+    : Boolean(targetTrackingOverlay?.frames.length);
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
   const ballAvailable = hasUsableHybridBallSamples(reconstructedBallTrajectory, trajectoryViewId) || hasUsableBallSamples(ballTrajectory);
   const bounceAvailable = Boolean(allBounceMarkers.length);
   const trackingStatusLabel = useFusedOverlay
-    ? resolveLayerStatus(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.status ?? fusedPlayerOverlayStatus)
+    ? resolveLayerStatus(fusedPlayerOverlayLoadState, selectedFusedOverlay?.status ?? fusedPlayerOverlayStatus)
     : resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
   const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
   const ballStatusLabel = resolveLayerStatus(
@@ -477,7 +535,7 @@ function RealVideoOverlay({
   );
   const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   const trackingDetail = useFusedOverlay
-    ? layerDetail(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
+    ? layerDetail(fusedPlayerOverlayLoadState, selectedFusedOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
     : layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
   const ballDetail = layerDetail(
@@ -575,9 +633,18 @@ function RealVideoOverlay({
         setNaturalSize({ width: video.videoWidth, height: video.videoHeight });
       }
       // 证据 seek 契约：metadata loaded 后跳转（clamp 到 [0, duration]；每个 seekToMs 只应用一次）。
-      if (seekToMs !== undefined && !seekAppliedRef.current && seekToMs >= 0) {
+      const pendingSwitch = pendingDisplaySwitchRef.current;
+      // displayViewId 已更新但 activeVideoSrc 仍是旧媒体源的中间 render 中，
+      // 不得把新机位的时间映射误应用到即将卸载的旧 video。
+      const switchTargetIsMounted = Boolean(pendingSwitch && activeVideoSrc === videoSrc);
+      if (switchTargetIsMounted && pendingSwitch && pendingSwitch.source !== activeVideoSrc) {
+        pendingSwitch.source = activeVideoSrc;
+      }
+      const requestedSeekMs = seekToMs ?? (switchTargetIsMounted ? pendingSwitch?.canonicalSeekMs : undefined);
+      if (requestedSeekMs !== undefined && !seekAppliedRef.current && requestedSeekMs >= 0) {
         seekAppliedRef.current = true;
-        const targetSeconds = seekToMs / 1000;
+        if (pendingSwitch) pendingSwitch.seekApplied = true;
+        const targetSeconds = canonicalToSourceSeconds(requestedSeekMs / 1000);
         if (Number.isFinite(video.duration) && video.duration > 0) {
           video.currentTime = Math.min(Math.max(targetSeconds, 0), video.duration);
         } else {
@@ -592,7 +659,19 @@ function RealVideoOverlay({
     video.addEventListener("play", handlePlay);
     video.addEventListener("pause", handlePause);
     video.addEventListener("ended", handlePause);
-    video.addEventListener("seeked", syncTime);
+    const handleSeeked = () => {
+      syncTime();
+      const pendingSwitch = pendingDisplaySwitchRef.current;
+      if (!pendingSwitch || pendingSwitch.source !== activeVideoSrc || !pendingSwitch.seekApplied) return;
+      pendingDisplaySwitchRef.current = null;
+      if (pendingSwitch.resumePlayback && video.paused) {
+        void video.play().catch(() => {
+          // 浏览器策略拒绝自动续播时停在已映射的正确时间，由用户手动继续。
+        });
+      }
+    };
+
+    video.addEventListener("seeked", handleSeeked);
     video.addEventListener("seeking", syncTime);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("durationchange", handleDurationChange);
@@ -608,7 +687,7 @@ function RealVideoOverlay({
       video.removeEventListener("play", handlePlay);
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("ended", handlePause);
-      video.removeEventListener("seeked", syncTime);
+      video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("seeking", syncTime);
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
       video.removeEventListener("durationchange", handleDurationChange);
@@ -620,7 +699,7 @@ function RealVideoOverlay({
         window.cancelAnimationFrame(animationId);
       }
     };
-  }, [videoSrc, seekToMs]);
+  }, [activeVideoSrc, seekToMs, mappingOffsetSeconds, mappingRate]);
 
   const togglePlayback = () => {
     const video = videoRef.current;
@@ -632,6 +711,16 @@ function RealVideoOverlay({
     } else {
       video.pause();
     }
+  };
+
+  const switchDisplayView = (nextViewId: string) => {
+    if (!onDisplayViewChange || nextViewId === displayViewId) return;
+    // 切换只改变展示视频；先保存当前 canonical 时间，目标媒体加载后恢复。
+    pendingDisplaySwitchRef.current = {
+      canonicalSeekMs: canonicalTime * 1000,
+      resumePlayback: Boolean(videoRef.current && !videoRef.current.paused),
+    };
+    onDisplayViewChange(nextViewId);
   };
 
   const toggleMuted = () => {
@@ -670,8 +759,9 @@ function RealVideoOverlay({
     if (!video) {
       return;
     }
-    video.currentTime = seekTime;
-    setCurrentTime(seekTime);
+    const sourceTime = canonicalToSourceSeconds(seekTime);
+    video.currentTime = sourceTime;
+    setCurrentTime(sourceTime);
   };
 
   const handleVideoError = () => {
@@ -742,20 +832,21 @@ function RealVideoOverlay({
           const [x1, y1, x2, y2] = detection.bbox;
           const width = Math.max(0, x2 - x1);
           const height = Math.max(0, y2 - y1);
+          const hue = resolvePlayerIdentityHue(detection.player_id);
           return (
             <g key={`${detection.track_id ?? "person"}-${x1}-${y1}`}>
               <rect
-                fill="rgba(34,197,94,0.08)"
+                fill={hueWithAlpha(hue, 0.08)}
                 height={height}
                 rx={Math.max(4, source.width * 0.003)}
-                stroke="#22C55E"
+                stroke={hue}
                 strokeWidth={Math.max(2, source.width * 0.0018)}
                 width={width}
                 x={x1}
                 y={y1}
               />
               <text
-                fill="#D9FF3F"
+                fill={hue}
                 fontSize={Math.max(14, source.width * 0.014)}
                 fontWeight="800"
                 paintOrder="stroke"
@@ -893,6 +984,32 @@ function RealVideoOverlay({
         <strong className="text-sm text-white">{match.venue}</strong>
         </div>
 
+        {displayViewOptions && displayViewOptions.length > 1 ? (
+          <div className="absolute left-4 top-[4.8rem] z-20 flex items-center gap-1 rounded-xl border border-white/10 bg-black/55 p-1 backdrop-blur">
+            <span className="px-2 text-[0.65rem] font-bold text-white/60">主视角</span>
+            {displayViewOptions.map((option) => (
+              <button
+                aria-pressed={option.id === displayViewId}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-black transition ${
+                  option.id === displayViewId ? "bg-[#22C55E] text-[#071008]" : "text-white/80 hover:bg-white/10"
+                } ${!option.available ? "cursor-not-allowed opacity-45" : ""}`}
+                disabled={!option.available}
+                key={option.id}
+                onClick={() => switchDisplayView(option.id)}
+                title={option.available ? `切换到${option.label}` : option.reason}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {displayViewNotice ? (
+          <p className="absolute left-4 top-[7.8rem] z-20 max-w-[18rem] rounded-lg bg-black/55 px-2 py-1 text-[0.65rem] font-semibold text-[#FFD7A0]">
+            {displayViewNotice}
+          </p>
+        ) : null}
+
         <div aria-label="视频分析图层" className="absolute right-2 top-2 z-20 flex gap-1.5 sm:right-4 sm:top-4">
           <OverlayToggle
             active={showBoxes}
@@ -941,7 +1058,7 @@ function RealVideoOverlay({
           />
         </div>
 
-        {(pipelineTracks?.length || ballAvailable || bounceAvailable) ? (
+        {(pipelineTracks?.length || useFusedOverlay || ballAvailable || bounceAvailable) ? (
           <div className="absolute right-2 top-12 z-10 flex origin-top-right flex-col items-end gap-1.5 scale-[0.82] shadow-black/20 sm:right-4 sm:top-14 sm:scale-100">
             <button
               aria-expanded={showCourtHud}
@@ -962,14 +1079,16 @@ function RealVideoOverlay({
                 <CourtMinimapErrorBoundary>
                   <CourtMinimap
                     ballTrajectory={ballTrajectory}
+                    reconstructedBallTrajectory={reconstructedBallTrajectory}
                     bounceEvents={bounceEvents}
                     showBallPath={showBallPath}
                     showBallPoint={showBallPoint}
                     showBounces={showBounces}
                     tracks={pipelineTracks ?? []}
-                    currentTimeSec={currentTime}
+                    currentTimeSec={canonicalTime}
+                    courtOrientation={displayCourtOrientation}
                     trailSeconds={3}
-                    overlayFrames={fusedPlayerOverlay?.frames ?? []}
+                    overlayFrames={selectedFusedOverlay?.frames ?? []}
                   />
                 </CourtMinimapErrorBoundary>
               </div>
@@ -979,7 +1098,7 @@ function RealVideoOverlay({
 
         <div className="absolute bottom-24 left-4 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-white backdrop-blur">
         <p className="text-xs font-semibold text-slate-400">
-          {formatSeconds(currentTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
+          {formatSeconds(canonicalTime)} · {boxCount} 个框 · {skeletonCount} 组骨架
           {ballTrajectoryLoadState !== "idle" ? ` · ${ballCount ? "球可见" : "球层无当前点"}` : ""}
         </p>
         <strong className="text-sm">{match.currentRally}</strong>
@@ -1059,7 +1178,7 @@ function RealVideoOverlay({
         </div>
       </div>
       <ServeRallyStrip
-        currentTime={currentTime}
+        currentTime={canonicalTime}
         loadState={serveEventsLoadState}
         markers={serveMarkers}
         onSeek={seekToServeMarker}
@@ -1167,7 +1286,7 @@ function OverlayToggle({
 
   return (
     <button
-      aria-label={`${active ? "隐藏" : "显示"}${label}`}
+      aria-label={available ? `${active ? "隐藏" : "显示"}${label}` : `${label}不可用`}
       aria-pressed={active}
       className={`grid size-8 place-items-center rounded-md border backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D9FF3F] disabled:cursor-not-allowed disabled:opacity-45 ${active ? activeClasses : "border-white/15 bg-black/50 text-white"}`}
       disabled={!available}
@@ -1244,16 +1363,28 @@ function finiteImagePoint(value: unknown): value is [number, number] {
     && Number.isFinite(value[1]);
 }
 
+function resolveHybridRenderViewId(
+  artifact: ReconstructedBallTrajectoryArtifact,
+  viewId?: string,
+): string | null {
+  // segment.primary_view_id 是重建质量视角，不是视频像素坐标空间；旧 artifact
+  // 没有任务级视角时必须安全不渲染，不能静默把 cam_2 坐标画到 cam_1 视频。
+  return viewId ?? artifact.render_view_id ?? artifact.reference_view_id ?? null;
+}
+
 export function hasUsableHybridBallSamples(
   artifact: ReconstructedBallTrajectoryArtifact | null | undefined,
   viewId?: string,
 ): boolean {
+  if (!artifact) return false;
+  const renderViewId = resolveHybridRenderViewId(artifact, viewId);
+  if (!renderViewId) return false;
   return (artifact?.segments ?? []).some((segment) => {
     if (segment.status === "unavailable" || segment.reconstruction_mode === "unavailable") return false;
+    if (segment.display_eligible === false) return false;
     if (segment.end_endpoint?.outcome_classification === "environment_outlier") return false;
-    const selectedView = viewId ?? segment.primary_view_id ?? undefined;
-    if (!selectedView) return false;
-    return (segment.image_paths_by_view?.[selectedView] ?? []).some((sample) => finiteImagePoint(sample.image_xy));
+    if (segment.video_overlay?.available === false) return false;
+    return (segment.image_paths_by_view?.[renderViewId] ?? []).some((sample) => finiteImagePoint(sample.image_xy));
   });
 }
 
@@ -1266,20 +1397,29 @@ export function resolveHybridBallPathSegments(
   viewId?: string,
 ): ImageBallSample[][] {
   if (!artifact || artifact.display_trajectory_status === "unavailable") return [];
-  const output: ImageBallSample[][] = [];
-  for (const segment of artifact.segments ?? []) {
+  const renderViewId = resolveHybridRenderViewId(artifact, viewId);
+  if (!renderViewId) return [];
+  const candidates: Array<{
+    path: ImageBallSample[];
+    start: number;
+    end: number;
+    retained: boolean;
+    segmentIndex: number;
+  }> = [];
+  for (const [segmentIndex, segment] of (artifact.segments ?? []).entries()) {
     if (segment.status === "unavailable" || segment.reconstruction_mode === "unavailable") continue;
+    if (segment.display_eligible === false) continue;
     if (segment.end_endpoint?.outcome_classification === "environment_outlier") continue;
-    const selectedView = viewId ?? segment.primary_view_id ?? undefined;
-    if (!selectedView) continue;
-    const path = (segment.image_paths_by_view?.[selectedView] ?? [])
+    if (segment.video_overlay?.available === false) continue;
+    const path = (segment.image_paths_by_view?.[renderViewId] ?? [])
       .filter((sample) => finiteImagePoint(sample.image_xy) && Number.isFinite(sample.timestamp_sec))
       .sort((left, right) => left.timestamp_sec - right.timestamp_sec);
     if (!path.length) continue;
     const start = path[0].timestamp_sec;
     const end = path[path.length - 1].timestamp_sec;
-    if (currentTime < start || currentTime > end + HYBRID_SEGMENT_RETENTION_SECONDS) continue;
-    const retained = currentTime > end;
+    const active = currentTime >= start && currentTime < end;
+    const retained = currentTime >= end && currentTime <= end + HYBRID_SEGMENT_RETENTION_SECONDS;
+    if (!active && !retained) continue;
     const cutoff = retained ? start : currentTime - BALL_TRAIL_SECONDS;
     const visible = path
       .filter((sample) => sample.timestamp_sec >= cutoff && sample.timestamp_sec <= currentTime)
@@ -1300,9 +1440,24 @@ export function resolveHybridBallPathSegments(
       last.endpointOutcome = segment.end_endpoint?.outcome_classification;
       last.endpointNotice = segment.end_endpoint?.non_adjudication_notice ?? undefined;
     }
-    output.push(sampleBallPathEvenly(visible, MAX_BALL_PATH_POINTS));
+    candidates.push({
+      path: sampleBallPathEvenly(visible, MAX_BALL_PATH_POINTS),
+      start,
+      end,
+      retained,
+      segmentIndex,
+    });
   }
-  return output;
+  if (!candidates.length) return [];
+  // 半开区间 + 单活动 segment：后继段一旦开始，前段 retention 立即失效；
+  // 若 artifact 存在重叠窗口，确定性选择 start 更晚的段，避免双轨迹。
+  const active = candidates
+    .filter((candidate) => !candidate.retained)
+    .sort((left, right) => right.start - left.start || right.segmentIndex - left.segmentIndex);
+  if (active.length) return [active[0].path];
+  const retained = candidates
+    .sort((left, right) => right.end - left.end || right.segmentIndex - left.segmentIndex);
+  return [retained[0].path];
 }
 
 function sampleBallPathEvenly(samples: ImageBallSample[], maxPoints: number): ImageBallSample[] {
@@ -1444,7 +1599,7 @@ function FusedPlayerBox({
       ? Math.max(14, source.width * 0.012)
       : Math.max(12, source.width * 0.01);
     return (
-      <g key={`fused-${entity.player_id}`} opacity={baseOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
+      <g data-testid={`fused-player-${entity.player_id}`} key={`fused-${entity.player_id}`} opacity={baseOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
         <circle
           cx={entity.footpoint[0]}
           cy={entity.footpoint[1]}
@@ -1498,7 +1653,7 @@ function FusedPlayerBox({
       ? ""
       : ` · ${pres.label}`;
   return (
-    <g key={`fused-${entity.player_id}`} opacity={boxOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
+    <g data-testid={`fused-player-${entity.player_id}`} key={`fused-${entity.player_id}`} opacity={boxOpacity} style={{ transition: "opacity 0.3s ease-in-out" }}>
       <rect
         fill={hueWithAlpha(hue, 0.1)}
         height={height}

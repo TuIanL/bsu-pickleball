@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNTIME_DIR="$REPO_ROOT/.runtime"
+RUNTIME_DIR="${PICKLEBALL_RUNTIME_DIR:-$REPO_ROOT/.runtime}"
 PID_DIR="$RUNTIME_DIR/pids"
 LOG_DIR="$RUNTIME_DIR/logs"
 
@@ -155,8 +155,9 @@ report_remaining_listener() {
 }
 
 say "Stopping Pickleball local runtime..."
-stop_recorded_process "Frontend" "$PID_DIR/frontend.pid"
+stop_recorded_process "Analysis worker" "$PID_DIR/analysis-worker.pid"
 stop_recorded_process "Backend" "$PID_DIR/backend.pid"
+stop_recorded_process "Frontend" "$PID_DIR/frontend.pid"
 
 stop_port_listeners "Frontend" "$FRONTEND_PORT"
 stop_port_listeners "Backend" "$BACKEND_PORT"

@@ -12,6 +12,7 @@ Parent 被 claim 后:
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -234,7 +235,12 @@ def _deserialize_joint_view_input(payload: Mapping[str, object]) -> JointViewInp
     )
 
 
-def _build_ball_virtual_projection(calibration, view_input: JointViewInput, frame_size: tuple[int, int]):
+def _build_ball_virtual_projection(
+    calibration,
+    view_input: JointViewInput,
+    frame_size: tuple[int, int],
+    scene_calibration=None,
+):
     """从已有四角标定构造球侧近似虚拟相机；失败返回 None。"""
     if calibration is None or calibration.inverse_homography is None or len(calibration.keypoints) < 4:
         return None
@@ -256,7 +262,24 @@ def _build_ball_virtual_projection(calibration, view_input: JointViewInput, fram
         corner_canonical=canonical_corners,
         corner_image=image_corners,
     )
-    return result if result.available else None
+    if not result.available or scene_calibration is None:
+        return result if result.available else None
+    scene_view = next(
+        (item for item in scene_calibration.views if item.view_id == view_input.camera_slot),
+        None,
+    )
+    if scene_view is None:
+        return result
+    from app.vision.multiview.ball_stereo.net_assisted_camera import refine_virtual_camera_for_scene
+
+    return refine_virtual_camera_for_scene(
+        result,
+        court_world=canonical_corners,
+        court_image=image_corners,
+        scene_calibration=scene_calibration,
+        view_id=view_input.camera_slot,
+        court_orientation=orientation,
+    )
 
 
 def _build_canonical_ball_processor(
@@ -266,9 +289,16 @@ def _build_canonical_ball_processor(
     view_inputs: list[JointViewInput],
     runtimes: Mapping[str, JointViewRuntime],
     calibrations: Mapping[str, object],
+    take_dir: Path | None = None,
 ):
     """构造共享 canonical tick 的球 detector/tracker；模型或几何不可用时返回降级处理器。"""
     from app.vision.multiview.ball_stereo.canonical_runner import CanonicalBallStereoProcessor
+    from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
+        BallSearchPolicy,
+        BallSemanticPolicyConfig,
+        SemanticPolicyMode,
+        SemanticTimelineProvider,
+    )
 
     take_id = parent.metadata.capture_take_id or ""
     reference_view_id = parent.referenceViewId or view_inputs[0].camera_slot
@@ -278,13 +308,48 @@ def _build_canonical_ball_processor(
             job_id=parent.id, take_id=take_id, reason="未配置球检测模型（PICKLEBALL_BALL_MODEL_PATH）"
         )
 
+    scene_calibration = None
+    if take_dir is not None and getattr(parent, "sceneCalibrationRevision", None):
+        try:
+            from app.services.metric_court_scene_service import MetricCourtSceneService
+
+            scene_calibration = MetricCourtSceneService().get_revision(
+                take_dir,
+                int(parent.sceneCalibrationRevision),
+            )
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            logger.warning("metric scene revision unavailable for joint ball projection: %s", exc)
+
     projections: dict[str, object] = {}
+    projection_sources: list[str] = []
+    projection_metric_qualified: list[bool] = []
+    height_uncertainties: list[float] = []
+    projection_diagnostics: dict[str, dict[str, object]] = {}
     for item in view_inputs:
         virtual = _build_ball_virtual_projection(
-            calibrations.get(item.camera_slot), item, runtimes[item.camera_slot].frame_size
+            calibrations.get(item.camera_slot),
+            item,
+            runtimes[item.camera_slot].frame_size,
+            scene_calibration=scene_calibration,
         )
         if virtual is not None:
             projections[item.camera_slot] = virtual.projection
+            source = str(getattr(virtual, "source", "homography_constrained_virtual"))
+            diagnostics = dict(getattr(virtual, "disambiguation", {}) or {})
+            projection_sources.append(source)
+            projection_diagnostics[item.camera_slot] = {
+                "source": source,
+                "approximate": bool(getattr(virtual, "approximate", True)),
+                **diagnostics,
+            }
+            projection_metric_qualified.append(
+                source == "net_refined_virtual"
+                and not bool(getattr(virtual, "approximate", True))
+                and bool(diagnostics.get("metric_qualified", True))
+            )
+            uncertainty = diagnostics.get("height_uncertainty_ft")
+            if isinstance(uncertainty, (int, float)) and math.isfinite(float(uncertainty)) and uncertainty >= 0:
+                height_uncertainties.append(float(uncertainty))
     if reference_view_id not in projections or secondary_view_id not in projections:
         return CanonicalBallStereoProcessor.unavailable(
             job_id=parent.id,
@@ -316,6 +381,70 @@ def _build_canonical_ball_processor(
     # 球分析与 player joint 共用 canonical tick；给球侧预留独立预算，超时后只关闭
     # 球处理器，避免把球模型异常升级成 Parent 整体失败。
     ball_budget = configured_stage_timeout * 0.5 if configured_stage_timeout > 0 else None
+    try:
+        semantic_mode = SemanticPolicyMode(
+            str(getattr(settings, "ball_semantic_policy_mode", "shadow") or "shadow").lower()
+        )
+    except ValueError:
+        semantic_mode = SemanticPolicyMode.SHADOW
+    semantic_config = BallSemanticPolicyConfig(
+        mode=semantic_mode,
+        enforce_authoritative_non_play=bool(
+            getattr(settings, "ball_semantic_enforce_authoritative_non_play", False)
+        ),
+        enforced_rollout_enabled=bool(getattr(settings, "ball_semantic_enforced_rollout", False)),
+        rollout_id=str(getattr(settings, "ball_semantic_rollout_id", "default") or "default"),
+        semantic_timeline_enabled=bool(getattr(settings, "ball_semantic_timeline_enabled", True)),
+        serve_prepare_confidence=float(getattr(settings, "ball_semantic_serve_prepare_confidence", 0.55)),
+        serve_armed_confidence=float(getattr(settings, "ball_semantic_serve_armed_confidence", 0.70)),
+        rally_end_min_evidence=int(getattr(settings, "ball_semantic_rally_end_min_evidence", 2)),
+        policy_version=str(
+            getattr(settings, "ball_semantic_policy_version", "semantic_boundary_policy.v1")
+        ),
+        min_confirm_ticks=int(getattr(settings, "ball_semantic_min_confirm_ticks", 2)),
+        grace_window_sec=float(getattr(settings, "ball_semantic_grace_window_seconds", 0.20)),
+        rescue_min_consecutive_ticks=int(
+            getattr(settings, "ball_semantic_rescue_min_consecutive_ticks", 2)
+        ),
+        rescue_min_motion_pixels=float(
+            getattr(settings, "ball_semantic_rescue_min_motion_pixels", 15.0)
+        ),
+        evidence_freshness_sec=float(
+            getattr(settings, "ball_semantic_evidence_freshness_seconds", 0.50)
+        ),
+        conflict_penalty=float(getattr(settings, "ball_semantic_conflict_penalty", 0.25)),
+        boundary_eval_enabled=bool(getattr(settings, "ball_semantic_boundary_eval_enabled", True)),
+    )
+    semantic_provider = (
+        SemanticTimelineProvider.from_capture_take(take_id, config=semantic_config)
+        if bool(getattr(settings, "enable_ball_semantic_policy", True))
+        and semantic_config.semantic_timeline_enabled
+        else None
+    )
+    metric_scene_ready = (
+        scene_calibration is not None
+        and getattr(scene_calibration, "status", None) == "ready"
+        and len(projection_sources) == len(view_inputs)
+        and len(projection_metric_qualified) == len(view_inputs)
+        and all(projection_metric_qualified)
+    )
+    net_scene_camera_ready = (
+        scene_calibration is not None
+        and getattr(scene_calibration, "status", None) == "ready"
+        and len(projection_sources) == len(view_inputs)
+        and all(
+            source == "net_refined_virtual"
+            and not bool(projection_diagnostics[item.camera_slot].get("approximate", True))
+            for item in view_inputs
+        )
+    )
+    quality_reasons = sorted(
+        {
+            str(reason)
+            for diagnostics in projection_diagnostics.values()
+            for reason in diagnostics.get("quality_rejection_reasons", [])
+        }
+    )
     return CanonicalBallStereoProcessor(
         job_id=parent.id,
         take_id=take_id,
@@ -330,6 +459,33 @@ def _build_canonical_ball_processor(
         max_time_gate_ms=min(40.0, max(1.0, 1000.0 / max(float(parent.sourceFps or 30.0), 1.0))),
         max_duration_seconds=ball_budget,
         hybrid_enabled=bool(getattr(settings, "enable_hybrid_ball_trajectory", True)),
+        semantic_provider=semantic_provider,
+        semantic_policy=BallSearchPolicy(semantic_config) if semantic_provider is not None else None,
+        scene_calibration_revision=(
+            int(parent.sceneCalibrationRevision)
+            if getattr(parent, "sceneCalibrationRevision", None) is not None
+            else None
+        ),
+        camera_model_source=(
+            "net_refined_virtual"
+            if all(source == "net_refined_virtual" for source in projection_sources)
+            else "homography_constrained_virtual"
+            if all(source == "homography_constrained_virtual" for source in projection_sources)
+            else "mixed_virtual"
+        ),
+        metric_validity=("metric_multiview" if metric_scene_ready else "approximate_multiview"),
+        height_uncertainty_ft=max(height_uncertainties) if height_uncertainties else None,
+        scene_quality={
+            "scene_status": getattr(scene_calibration, "status", "missing") if scene_calibration is not None else "missing",
+            "effective_status": "ready" if metric_scene_ready else "degraded",
+            "camera_model_sources": projection_sources,
+            "camera_diagnostics": projection_diagnostics,
+            "metric_qualified": metric_scene_ready,
+            "rejection_reasons": quality_reasons,
+        },
+        scene_metric_required=(
+            str(getattr(parent, "sceneCalibrationMode", "approximate")) == "metric"
+        ),
     )
 
 
@@ -349,7 +505,8 @@ def _run_joint_ball_post_stage(parent, storage, videos: Mapping[str, object], vi
     """joint 模式球 3D 后置阶段（非阻塞，绝不影响权威结果）。
 
     复用 real_data_runner 的球链：对两路已解析的视频+标定跑球 3D，写入 evidence v1 + v3。
-    窗口按 clip 取，上限 60s 控制耗时。球链失败仅告警，不破坏球员结果。
+    窗口严格按 parent 的公共时间轴取；未指定窗口时覆盖参考视频全长。
+    球链失败仅告警，不破坏球员结果。
     """
     try:
         from app.vision.multiview.ball_stereo.real_data_runner import ViewConfig, run_real_data
@@ -370,15 +527,50 @@ def _run_joint_ball_post_stage(parent, storage, videos: Mapping[str, object], vi
 
         cam1 = _view_config(view_inputs[0])
         cam2 = _view_config(view_inputs[1])
+        scene_calibration = None
+        if getattr(parent, "sceneCalibrationRevision", None):
+            try:
+                from app.database import get_session_factory
+                from app.models.capture_take import CaptureTake
+                from app.services.metric_court_scene_service import MetricCourtSceneService
+
+                db = get_session_factory()()
+                try:
+                    take = db.query(CaptureTake).filter(CaptureTake.id == parent.metadata.capture_take_id).first()
+                    if take is not None and take.session_dir:
+                        scene_calibration = MetricCourtSceneService(storage).get_revision(
+                            take.session_dir,
+                            int(parent.sceneCalibrationRevision),
+                        )
+                finally:
+                    db.close()
+            except (FileNotFoundError, ValueError, OSError) as exc:
+                logger.warning("metric scene revision unavailable for real-data ball runner: %s", exc)
+        import cv2
+
+        reference_video = videos[view_inputs[0].camera_slot]
+        probe = cv2.VideoCapture(str(reference_video.path))
+        try:
+            source_fps = float(probe.get(cv2.CAP_PROP_FPS) or 30.0)
+            source_frame_count = int(probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        finally:
+            probe.release()
+        source_duration_s = source_frame_count / source_fps if source_frame_count > 0 and source_fps > 0 else 0.0
         start_s = float(parent.clipStartMs or 0) / 1000.0
-        end_s = float(parent.clipEndMs if parent.clipEndMs else start_s + 60000) / 1000.0
-        if end_s - start_s > 60.0:  # 控制在 60s 内，避免长时间计算
-            end_s = start_s + 60.0
+        end_s = (
+            float(parent.clipEndMs) / 1000.0
+            if parent.clipEndMs is not None
+            else source_duration_s
+        )
+        if end_s <= start_s:
+            logger.warning("joint ball post-stage skipped: invalid effective window [%ss, %ss)", start_s, end_s)
+            return
         run_real_data(
             cam1=cam1, cam2=cam2,
             window_start_s=start_s, window_end_s=end_s, frame_stride=2,
             take_id=parent.metadata.capture_take_id or "",
             job_id=parent.id, write_evidence_to_job=True,
+            scene_calibration=scene_calibration,
         )
         logger.info("joint ball post-stage wrote evidence + v3 for job %s", parent.id)
     except Exception as exc:  # noqa: BLE001
@@ -599,6 +791,7 @@ class MultiViewJointExecutor:
                 view_inputs=view_inputs,
                 runtimes=runtimes,
                 calibrations=calibrations,
+                take_dir=take_dir,
             )
             run = MultiViewJointRun(
                 run_id=run_id, capture_take_id=capture_take_id, reference_view_id=reference_view_id,

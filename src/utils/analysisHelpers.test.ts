@@ -74,9 +74,10 @@ describe("formatPlayerId", () => {
 });
 
 describe("isTerminalAnalysisJob", () => {
-  it("returns true for failed and canceled tasks", () => {
+  it("returns true for failed, canceled and interrupted tasks", () => {
     expect(isTerminalAnalysisJob(makeJob("a", "failed", "2026-01-01T00:00:00Z"))).toBe(true);
     expect(isTerminalAnalysisJob(makeJob("b", "canceled", "2026-01-01T00:00:00Z"))).toBe(true);
+    expect(isTerminalAnalysisJob(makeJob("c", "interrupted", "2026-01-01T00:00:00Z"))).toBe(true);
   });
 
   it("returns false for other statuses", () => {

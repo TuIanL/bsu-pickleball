@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from dataclasses import replace
 from typing import Any
 
 from app.vision.multiview.fused_overlay_bundle import JointOverlayEvidenceBundle
@@ -109,6 +110,12 @@ class OverlayBuilderConfig:
     scale_profile_bins: int = 32
     scale_profile_min_total_samples: int = 50
     scale_profile_min_samples_per_bin: int = 5
+    # 投影框与其他可信真实框的最大允许 IoU
+    projected_collision_iou_threshold: float = 0.25
+    # evidence 切换时 presentation geometry 的最大脚点速度（px/s）
+    presentation_max_step_px_per_s: float = 1100.0
+    # evidence 切换时 bbox 宽高的最大相邻比例
+    presentation_max_scale_ratio: float = 1.35
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +144,10 @@ class TargetViewBBoxMemory:
     def __init__(self, config: OverlayBuilderConfig) -> None:
         self._config = config
         self._entries: dict[tuple[str, str], BBoxMemoryEntry] = {}
+
+    def reset(self) -> None:
+        """清空 job/build 级 bbox 记忆，避免跨任务复用上一场几何。"""
+        self._entries.clear()
 
     def is_qualifying_bbox(
         self,
@@ -248,6 +259,9 @@ class FusedPlayerOverlayBuilder:
         # 时间连续性（stabilize-multiview-overlay-temporal-continuity）：
         # (gid, view) → 最近一次 materialize 的 presentation bbox + ts（供 held_presentation 复用）
         self._last_presentation_bbox: dict[tuple[str, str], tuple[list[float], float]] = {}
+        self._last_presentation_evidence: dict[tuple[str, str], str] = {}
+        self._current_reference_real_bboxes: dict[str, tuple[float, float, float, float]] = {}
+        self.diagnostics: dict[str, int] = {}
 
     # ---- 决策辅助 ----------------------------------------------------------
 
@@ -309,33 +323,65 @@ class FusedPlayerOverlayBuilder:
         *,
         bundle: JointOverlayEvidenceBundle,
         expected_player_count: int = 4,
+        target_view_id: str | None = None,
     ) -> list[FusedPlayerOverlayFrame]:
         """遍历 canonical ticks 生成 overlay frames。
 
         Pass 1：整场收集该 view 真实 bbox → 冻结 ViewPersonScaleProfile；
         Pass 2：逐 tick 生成 overlay（查询已冻结 profile）。
         """
+        target = target_view_id or bundle.reference_view_id
+        if target not in bundle.view_ids:
+            logger.warning("fused overlay builder: target view %r is not in %s", target, bundle.view_ids)
+            return []
+        # Builder 内部沿用 reference_view_id 这一历史字段作为“当前目标视角”。
+        # 通过只读替换 bundle 解耦 target view 与任务级 reference view，绝不改变
+        # roster、fused canonical positions 或原始 evidence。
+        target_bundle = replace(
+            bundle,
+            reference_view_id=target,
+            # bootstrap backfill 的 bbox 是历史 reference image-space 证据，
+            # 不能在 B 视角被误当成真实框。
+            bootstrap_backfill=(bundle.bootstrap_backfill if target == bundle.reference_view_id else {}),
+        )
         frames: list[FusedPlayerOverlayFrame] = []
-        snapshot = bundle.f0_snapshot
+        snapshot = target_bundle.f0_snapshot
         if snapshot is None:
             logger.warning("fused overlay builder: f0_snapshot is None, no frames generated")
             return frames
 
         # 跨 job 状态隔离：每次 build 重置状态机（new build / new job / roster reset）
         self.display_state_machine.reset()
+        self.bbox_memory.reset()
+        self._last_presentation_bbox.clear()
+        self._last_presentation_evidence.clear()
+        self._current_reference_real_bboxes.clear()
+        self.diagnostics = {}
 
         # ---- Pass 1：收集 view scale profile（只收真实 bbox）----
-        self._build_scale_profiles(snapshot, bundle)
+        self._build_scale_profiles(snapshot, target_bundle)
 
         for tick in snapshot.ticks:
             frame_index = tick.reference_frame_index
             now_ms = tick.canonical_timestamp_ms
+            self._current_reference_real_bboxes = self._reference_real_bboxes(
+                tick=tick,
+                reference_view_id=target,
+            )
             players: list[FusedPlayerOverlayPlayer] = []
             for gid in sorted(snapshot.global_player_ids):
                 entity = self._decide_display_entity(
-                    bundle=bundle, tick=tick, gid=gid, frame_index=frame_index, now_ms=now_ms
+                    bundle=target_bundle, tick=tick, gid=gid, frame_index=frame_index, now_ms=now_ms
                 )
                 if entity is not None:
+                    canonical_position = target_bundle.fused_position_for(gid, frame_index)
+                    if canonical_position is not None and entity.canonical_court_position_ft is None:
+                        entity = entity.model_copy(update={
+                            "canonical_court_position_ft": [
+                                float(canonical_position[0]),
+                                float(canonical_position[1]),
+                            ],
+                        })
                     players.append(entity)
                 if len(players) >= expected_player_count:
                     break
@@ -347,6 +393,162 @@ class FusedPlayerOverlayBuilder:
                 )
             )
         return frames
+
+    def _reference_real_bboxes(self, *, tick, reference_view_id: str) -> dict[str, tuple[float, float, float, float]]:
+        """收集当前 tick 的合格 reference-view 真实框，用于投影碰撞门控。"""
+        result: dict[str, tuple[float, float, float, float]] = {}
+        for gid, view_id, state in tick.observations:
+            if view_id != reference_view_id or not state.observed:
+                continue
+            if state.origin not in {"base", "guided_roi", "offline_refinement"}:
+                continue
+            if (state.quality or 0.0) < self.config.strong_quality_threshold:
+                continue
+            bbox = state.bbox
+            if bbox is None or len(bbox) != 4:
+                continue
+            candidate = tuple(float(value) for value in bbox)
+            if candidate[2] <= candidate[0] or candidate[3] <= candidate[1]:
+                continue
+            result[gid] = candidate
+        return result
+
+    @staticmethod
+    def _bbox_iou(
+        left: tuple[float, float, float, float],
+        right: tuple[float, float, float, float],
+    ) -> float:
+        x1 = max(left[0], right[0])
+        y1 = max(left[1], right[1])
+        x2 = min(left[2], right[2])
+        y2 = min(left[3], right[3])
+        intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        if intersection <= 0:
+            return 0.0
+        left_area = max(0.0, left[2] - left[0]) * max(0.0, left[3] - left[1])
+        right_area = max(0.0, right[2] - right[0]) * max(0.0, right[3] - right[1])
+        union = left_area + right_area - intersection
+        return intersection / union if union > 0 else 0.0
+
+    def _projected_bbox_candidate(
+        self,
+        *,
+        gid: str,
+        reference_view_id: str,
+        footpoint: tuple[float, float],
+        now_ms: float,
+    ) -> list[float] | None:
+        """计算 projected bbox 候选，不更新任何 memory/profile。"""
+        stale, _age_ms = self.bbox_memory.freshness(
+            global_player_id=gid,
+            view_id=reference_view_id,
+            now_ms=now_ms,
+        )
+        reanchored = self.bbox_memory.reanchor(
+            global_player_id=gid,
+            view_id=reference_view_id,
+            new_footpoint=footpoint,
+            now_ms=now_ms,
+        )
+        if reanchored is not None and not stale:
+            return list(reanchored.bbox)
+        profile = self._scale_profiles.get(reference_view_id)
+        scaled = profile.query(footpoint[1]) if profile is not None else None
+        if scaled is not None:
+            width, height = scaled
+            return [
+                footpoint[0] - width / 2.0,
+                footpoint[1] - height,
+                footpoint[0] + width / 2.0,
+                footpoint[1],
+            ]
+        return list(reanchored.bbox) if reanchored is not None else None
+
+    def _projection_collision_reason(
+        self,
+        *,
+        gid: str,
+        bbox: list[float] | None,
+    ) -> str | None:
+        if bbox is None or len(bbox) != 4:
+            return None
+        candidate = tuple(float(value) for value in bbox)
+        for other_gid, other_bbox in self._current_reference_real_bboxes.items():
+            if other_gid == gid:
+                continue
+            if self._bbox_iou(candidate, other_bbox) >= self.config.projected_collision_iou_threshold:
+                self.diagnostics["projection_collision_rejected"] = self.diagnostics.get("projection_collision_rejected", 0) + 1
+                return f"projection_collision_with_{other_gid}"
+        return None
+
+    def _projection_continuity_reason(
+        self,
+        *,
+        gid: str,
+        view_id: str,
+        bbox: list[float] | None,
+        now_ms: float,
+    ) -> str | None:
+        """拒绝跨视角投影相对上一份展示几何的异常跳变。"""
+        if bbox is None or len(bbox) != 4:
+            return None
+        previous = self._last_presentation_bbox.get((gid, view_id))
+        if previous is None:
+            return None
+        previous_bbox, previous_ts = previous
+        elapsed_s = max((now_ms - previous_ts) / 1000.0, 1.0 / 60.0)
+        previous_foot = ((previous_bbox[0] + previous_bbox[2]) / 2.0, previous_bbox[3])
+        current_foot = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
+        speed = ((current_foot[0] - previous_foot[0]) ** 2 + (current_foot[1] - previous_foot[1]) ** 2) ** 0.5 / elapsed_s
+        previous_width = max(previous_bbox[2] - previous_bbox[0], 1.0)
+        previous_height = max(previous_bbox[3] - previous_bbox[1], 1.0)
+        current_width = max(bbox[2] - bbox[0], 1.0)
+        current_height = max(bbox[3] - bbox[1], 1.0)
+        scale_ratio = max(
+            current_width / previous_width,
+            previous_width / current_width,
+            current_height / previous_height,
+            previous_height / current_height,
+        )
+        if speed > self.config.presentation_max_step_px_per_s or scale_ratio > self.config.presentation_max_scale_ratio:
+            self.diagnostics["projection_continuity_rejected"] = self.diagnostics.get("projection_continuity_rejected", 0) + 1
+            return "projection_geometry_jump"
+        return None
+
+    def _stabilize_real_bbox(
+        self,
+        *,
+        gid: str,
+        view_id: str,
+        evidence_type: str,
+        bbox: list[float],
+        now_ms: float,
+    ) -> tuple[list[float], str | None]:
+        """在 evidence 来源切换时限制 presentation geometry 的异常跳变。"""
+        key = (gid, view_id)
+        previous = self._last_presentation_bbox.get(key)
+        previous_evidence = self._last_presentation_evidence.get(key)
+        if previous is None or previous_evidence == evidence_type:
+            return bbox, None
+        previous_bbox, previous_ts = previous
+        elapsed_s = max((now_ms - previous_ts) / 1000.0, 1.0 / 60.0)
+        previous_foot = ((previous_bbox[0] + previous_bbox[2]) / 2.0, previous_bbox[3])
+        current_foot = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
+        speed = ((current_foot[0] - previous_foot[0]) ** 2 + (current_foot[1] - previous_foot[1]) ** 2) ** 0.5 / elapsed_s
+        previous_width = max(previous_bbox[2] - previous_bbox[0], 1.0)
+        previous_height = max(previous_bbox[3] - previous_bbox[1], 1.0)
+        current_width = max(bbox[2] - bbox[0], 1.0)
+        current_height = max(bbox[3] - bbox[1], 1.0)
+        scale_ratio = max(
+            current_width / previous_width,
+            previous_width / current_width,
+            current_height / previous_height,
+            previous_height / current_height,
+        )
+        if speed > self.config.presentation_max_step_px_per_s or scale_ratio > self.config.presentation_max_scale_ratio:
+            self.diagnostics["presentation_geometry_held"] = self.diagnostics.get("presentation_geometry_held", 0) + 1
+            return list(previous_bbox), "presentation_geometry_held"
+        return bbox, None
 
     def _build_scale_profiles(self, snapshot, bundle: JointOverlayEvidenceBundle) -> None:
         """Pass 1：整场收集该 view 真实 bbox 样本并冻结 scale profile。
@@ -443,18 +645,28 @@ class FusedPlayerOverlayBuilder:
             and raw.bbox is not None
         )
         has_synthetic_bbox = False
+        projection_rejection_reason: str | None = None
         if evidence_type == "cross_view_projected" and projection is not None:
-            reanchored = self.bbox_memory.reanchor(
-                global_player_id=gid,
-                view_id=reference_view_id,
-                new_footpoint=projection.image_footpoint,
+            candidate_bbox = self._projected_bbox_candidate(
+                gid=gid,
+                reference_view_id=reference_view_id,
+                footpoint=projection.image_footpoint,
                 now_ms=now_ms,
             )
-            profile = self._scale_profiles.get(reference_view_id)
-            scaled = None
-            if profile is not None:
-                scaled = profile.query(projection.image_footpoint[1])
-            has_synthetic_bbox = reanchored is not None or scaled is not None
+            projection_rejection_reason = self._projection_collision_reason(
+                gid=gid,
+                bbox=candidate_bbox,
+            )
+            if projection_rejection_reason is None:
+                projection_rejection_reason = self._projection_continuity_reason(
+                    gid=gid,
+                    view_id=reference_view_id,
+                    bbox=candidate_bbox,
+                    now_ms=now_ms,
+                )
+            has_synthetic_bbox = candidate_bbox is not None and projection_rejection_reason is None
+            if projection_rejection_reason is not None:
+                self.diagnostics["projection_gate_rejected"] = self.diagnostics.get("projection_gate_rejected", 0) + 1
 
         ctx = DisplayContext(
             now_ms=now_ms,
@@ -474,7 +686,22 @@ class FusedPlayerOverlayBuilder:
 
         # ---- 按 DisplayPlan materialize ----
         if raw is not None and plan.state in ("REAL_BOX", "ASSISTED_BOX") and has_real_bbox:
-            entity = raw.model_copy(update={"display_state": plan.state})
+            stable_bbox, display_reason = self._stabilize_real_bbox(
+                gid=gid,
+                view_id=reference_view_id,
+                evidence_type=str(raw.evidence_type),
+                bbox=list(raw.bbox or []),
+                now_ms=now_ms,
+            )
+            stable_footpoint = [(stable_bbox[0] + stable_bbox[2]) / 2.0, stable_bbox[3]]
+            entity = raw.model_copy(update={
+                "bbox": stable_bbox,
+                "footpoint": stable_footpoint,
+                "display_state": plan.state,
+                "display_reason": display_reason,
+            })
+            self._last_presentation_bbox[(gid, reference_view_id)] = (stable_bbox, now_ms)
+            self._last_presentation_evidence[(gid, reference_view_id)] = str(raw.evidence_type)
             return entity
 
         if evidence_type == "cross_view_projected" and projection is not None:
@@ -487,6 +714,7 @@ class FusedPlayerOverlayBuilder:
                 now_ms=now_ms,
                 reference_view_id=reference_view_id,
                 plan=plan,
+                projection_rejection_reason=projection_rejection_reason,
             )
 
         if raw is not None:
@@ -721,6 +949,7 @@ class FusedPlayerOverlayBuilder:
         now_ms: float,
         reference_view_id: str,
         plan: DisplayPlan,
+        projection_rejection_reason: str | None = None,
     ) -> FusedPlayerOverlayPlayer:
         """跨摄补全的稳定版：按 DisplayPlan 决定 bbox 来源（fallback 层级 + 状态标注）。
 
@@ -743,43 +972,40 @@ class FusedPlayerOverlayBuilder:
             if mem is not None and (now_ms - mem[1]) <= self.config.projected_box_hold_ms:
                 held = mem[0]
 
-        reanchored = self.bbox_memory.reanchor(
-            global_player_id=gid,
-            view_id=reference_view_id,
-            new_footpoint=projection.image_footpoint,
-            now_ms=now_ms,
-        )
-        profile = self._scale_profiles.get(reference_view_id)
-        scaled = None
-        if profile is not None:
-            scaled = profile.query(projection.image_footpoint[1])
-        if held is not None:
-            bbox = held
-            bbox_source = "last_good_bbox_reanchored"
-            stale = True
-        elif reanchored is not None and not stale:
-            # fresh personal memory（age ≤ ttl）
-            bbox = list(reanchored.bbox)
-            bbox_source = "last_good_bbox_reanchored"
-        elif scaled is not None:
-            # view scale profile（当前 footpoint 深度估计，优先于 stale memory）
-            cx = projection.image_footpoint[0]
-            cy = projection.image_footpoint[1]
-            w, h = scaled
-            bbox = [cx - w / 2.0, cy - h, cx + w / 2.0, cy]
-            bbox_source = "view_scale_profiled"
-        elif reanchored is not None:
-            # stale personal memory grace（仅 profile 不可用时兜底）
-            bbox = list(reanchored.bbox)
-            bbox_source = "last_good_bbox_reanchored"
-            stale = True
-        else:
-            bbox = None
-            bbox_source = "none"
+        if plan.state != "PROJECTED_POINT":
+            reanchored = self.bbox_memory.reanchor(
+                global_player_id=gid,
+                view_id=reference_view_id,
+                new_footpoint=projection.image_footpoint,
+                now_ms=now_ms,
+            )
+            profile = self._scale_profiles.get(reference_view_id)
+            scaled = profile.query(projection.image_footpoint[1]) if profile is not None else None
+            if held is not None:
+                bbox = held
+                bbox_source = "last_good_bbox_reanchored"
+                stale = True
+            elif reanchored is not None and not stale:
+                # fresh personal memory（age ≤ ttl）
+                bbox = list(reanchored.bbox)
+                bbox_source = "last_good_bbox_reanchored"
+            elif scaled is not None:
+                # view scale profile（当前 footpoint 深度估计，优先于 stale memory）
+                cx = projection.image_footpoint[0]
+                cy = projection.image_footpoint[1]
+                w, h = scaled
+                bbox = [cx - w / 2.0, cy - h, cx + w / 2.0, cy]
+                bbox_source = "view_scale_profiled"
+            elif reanchored is not None:
+                # stale personal memory grace（仅 profile 不可用时兜底）
+                bbox = list(reanchored.bbox)
+                bbox_source = "last_good_bbox_reanchored"
+                stale = True
 
         # 刷新演示 bbox 记忆（真实/投影 materialize 均刷新；预测光圈不刷新）
         if bbox is not None:
             self._last_presentation_bbox[(gid, reference_view_id)] = (bbox, now_ms)
+            self._last_presentation_evidence[(gid, reference_view_id)] = "cross_view_projected"
 
         return FusedPlayerOverlayPlayer(
             player_id=player_id,
@@ -798,6 +1024,8 @@ class FusedPlayerOverlayBuilder:
             display_state=plan.state,
             bbox_stale=stale,
             bbox_age_ms=age_ms,
+            display_reason=("projection_collision_fallback" if projection_rejection_reason else None),
+            projection_rejection_reason=projection_rejection_reason,
         )
 
     def _build_predicted_only(

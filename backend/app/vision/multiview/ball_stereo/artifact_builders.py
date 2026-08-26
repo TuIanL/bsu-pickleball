@@ -73,6 +73,10 @@ def _samples_payload(samples: Sequence[Reconstructed3DSample], duration_sec: flo
             "source": "model_predicted" if sample.source == "predicted" else "detected",
             "validity": sample.validity,
             "confidence": None,
+            "height_source": sample.height_source,
+            "height_confidence": sample.height_confidence,
+            "height_uncertainty_ft": sample.height_uncertainty_ft,
+            "height_validity": sample.height_validity,
         })
     return out
 
@@ -98,6 +102,9 @@ def build_v3_trajectory(
     duration_by_segment: dict[str, float],
     quality_summary: dict | None = None,
     diagnostics: dict | None = None,
+    scene_calibration_revision: int | None = None,
+    metric_validity: str = "approximate_multiview",
+    height_uncertainty_ft: float | None = None,
 ) -> dict:
     """构造 `reconstructed_ball_trajectory.v3` 产物字典。"""
     seg_payload = []
@@ -115,6 +122,15 @@ def build_v3_trajectory(
             "reprojection_error_px": seg.reprojection_error_px,
             "stereo_coverage": seg.stereo_coverage,
             "prediction_ratio": seg.prediction_ratio,
+            "display_eligible": display_level in {"high", "medium"},
+            "quality_gate_summary": {
+                "schema_version": "ball_quality_gates.v1",
+                "stereo_coverage": seg.stereo_coverage,
+                "predicted_ratio": seg.prediction_ratio,
+                "display_eligible_reason": "passed_3d_segment_quality" if display_level in {"high", "medium"} else "insufficient_3d_quality",
+            },
+            "height_validity": seg.height_validity,
+            "height_quality_reason": seg.height_quality_reason,
             "quality": {
                 "observation_coverage": seg.stereo_coverage,
                 "image_fit_rmse_px": seg.reprojection_error_px,
@@ -122,6 +138,8 @@ def build_v3_trajectory(
                 "display_level": display_level,
                 "overall": max(0.0, min(1.0, 1.0 - float(seg.reprojection_error_px) / 60.0))
                 if math.isfinite(seg.reprojection_error_px) else 0.0,
+                "height_validity": seg.height_validity,
+                "height_quality_reason": seg.height_quality_reason,
             },
             "samples": _samples_payload(seg.samples, duration_by_segment.get(seg.segment_id, 1.0)),
             "metrics": {
@@ -166,7 +184,9 @@ def build_v3_trajectory(
         "coordinate_semantics": {
             "xy": "canonical_court_ft",
             "z": "estimated_multiview_height_ft",
-            "validity": "approximate_multiview",
+            "validity": metric_validity,
+            "scene_calibration_revision": scene_calibration_revision,
+            "height_uncertainty_ft": height_uncertainty_ft,
         },
         "landing_point": landing_payload,
         "overall_status": overall_status,

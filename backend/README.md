@@ -128,7 +128,16 @@ Canonical lifecycle:
 queued -> running -> succeeded
                  \-> failed
                  \-> canceled
+                 \-> interrupted
 ```
+
+`interrupted` 表示控制面在 heartbeat 超时或服务启动恢复时确认 Worker 已失联，
+不是 API 网络错误。任务摘要会保留最后阶段、最后进度、最后 heartbeat、Worker run ID
+和稳定的 `interruptionCode`；此状态是终态，普通进度更新不会把它改回 `running`。
+
+分析任务控制面位于 SQLite（默认 `data/analysis_control.sqlite3`），可被 API 与独立
+Worker 跨进程安全读写；历史 `data/outputs/jobs/*.json` 会按 job ID 一次性导入，且不会
+覆盖已经存在的控制面记录。
 
 For frontend compatibility, API summaries still expose display statuses such as
 `queued`, `processing`, `completed`, `failed`, and `canceled`, plus a
@@ -147,6 +156,11 @@ Useful runtime settings:
 
 ```bash
 PICKLEBALL_ENABLE_JOB_WORKER=true
+PICKLEBALL_ANALYSIS_WORKER_MODE=external
+PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
+PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_TIMEOUT_SECONDS=30
+PICKLEBALL_ANALYSIS_WORKER_POLL_INTERVAL_SECONDS=0.5
+PICKLEBALL_ANALYSIS_WORKER_SHUTDOWN_GRACE_SECONDS=10
 PICKLEBALL_MAX_CPU_JOBS=1
 PICKLEBALL_ENABLE_GPU_JOBS=false
 PICKLEBALL_MAX_GPU_JOBS=1
@@ -156,6 +170,15 @@ PICKLEBALL_JOB_MAX_RETRIES=1
 
 Default local behavior is conservative: one heavy analysis job at a time. This
 prevents one long video or model-heavy run from overwhelming the local service.
+
+For local development, use `npm run app:start` and `npm run app:stop`. The start script
+keeps API, analysis-worker, and frontend PID files/logs separate under `.runtime/`. The API
+is started with `PICKLEBALL_ENABLE_JOB_WORKER=false`; the worker is started with `true` and
+`python -m app.analysis_worker`, so Uvicorn hot reload cannot kill an in-flight analysis.
+Stop sends SIGTERM to the Worker first and waits up to the configured grace period before
+forcing shutdown. If a Worker is killed, inspect `.runtime/logs/analysis-worker.log`, then
+query the job again after the heartbeat timeout; a durable `interrupted` task can be safely
+re-analyzed without treating a frontend fetch failure as task loss.
 
 Duplicate real-analysis submissions are detected through input/config signatures
 covering video reference, calibration reference, frame stride/options, analysis mode,

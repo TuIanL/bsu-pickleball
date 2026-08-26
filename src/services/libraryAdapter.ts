@@ -29,6 +29,7 @@ import {
   getSyncRecording,
   getRecording,
   getVideoStreamUrl,
+  getVideoPosterUrl,
 } from "./analysisClient";
 import { isAnalysisJobForSyncRecording } from "./dualCameraAnalysisGrouping";
 
@@ -49,7 +50,8 @@ export type LibraryAnalysisState =
   | "running"
   | "succeeded"
   | "failed"
-  | "canceled";
+  | "canceled"
+  | "interrupted";
 
 // 用户需要采取的动作槽（避免 UI 显示「处理中」实则在等用户点按钮）
 export type LibraryRequiredAction = "merge" | "retry_merge" | "start_analysis";
@@ -62,7 +64,8 @@ export type LibraryDisplayState =
   | "analyzing" // 正在分析
   | "completed" // 分析完成
   | "failed" // 失败（视频或分析）
-  | "canceled"; // 已取消
+  | "canceled" // 已取消
+  | "interrupted"; // Worker 失联
 
 export interface LibraryItemViewModel {
   ref: LibraryItemRef;
@@ -102,6 +105,10 @@ export interface LibraryItemViewModel {
   durationSec?: number;
   venue?: string;
   courtName?: string;
+  /** 用户自定义显示标题（最高优先级；缺省时回退派生 title） */
+  displayTitle?: string;
+  /** 用户自定义比赛日期（最高优先级；缺省时回退 startedAt） */
+  displayDate?: string;
 
   // 来源引用（供工程层 / 详情地址）
   fieldSessionId?: string;
@@ -159,6 +166,7 @@ function deriveDisplayState(s: {
   if (s.mediaState === "recording") return "recording";
   if (s.mediaState === "failed") return "failed";
   if (s.mediaState === "canceled" || s.analysisState === "canceled") return "canceled";
+  if (s.analysisState === "interrupted") return "interrupted";
   if (s.analysisState === "failed") return "failed";
   if (s.mediaState === "processing") return "pending";
   if (s.analysisState === "running" || s.analysisState === "queued") return "analyzing";
@@ -168,13 +176,11 @@ function deriveDisplayState(s: {
 
 function semanticTitle(opts: {
   matchTitle?: string;
-  fieldSessionTitle?: string;
   startedAt?: string;
   matchFormat?: "singles" | "doubles";
   fallback: string;
 }): string {
   if (opts.matchTitle) return opts.matchTitle;
-  if (opts.fieldSessionTitle) return opts.fieldSessionTitle;
   // 「时间 + 比赛形式」：如「8月20日 双打」
   const date = opts.startedAt ? (() => {
     const d = new Date(opts.startedAt);
@@ -260,6 +266,7 @@ export interface LibraryAnalysisSelection {
 function selectLibraryAnalysisState(jobs: AnalysisJobSummary[]): LibraryAnalysisSelection {
   const active = newestFirst(jobs.filter((j) => !isInternalChild(j) && isActiveJob(j)))[0];
   const result = newestFirst(jobs.filter((j) => !isInternalChild(j) && j.status === "completed"))[0];
+  const interrupted = newestFirst(jobs.filter((j) => !isInternalChild(j) && j.status === "interrupted"))[0];
   const currentStage =
     active?.stages.find((s) => s.status === "active") ?? active?.stages.find((s) => s.status === "failed");
 
@@ -270,6 +277,8 @@ function selectLibraryAnalysisState(jobs: AnalysisJobSummary[]): LibraryAnalysis
     analysisState = "succeeded";
   } else if (jobs.some(isActiveJob)) {
     analysisState = "running";
+  } else if (interrupted) {
+    analysisState = "interrupted";
   } else if (jobs.some((j) => j.status === "failed")) {
     analysisState = "failed";
   } else if (jobs.some((j) => j.status === "canceled")) {
@@ -352,11 +361,12 @@ export async function buildLibraryItems(
       ref: { kind: "sync_recording", sourceId: sync.session_id },
       title: semanticTitle({
         matchTitle: titleJob?.metadata?.matchTitle,
-        fieldSessionTitle: fs?.title,
         startedAt: sync.started_at,
         matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,
         fallback: sync.court_name || `同步录制 · ${sync.session_id}`,
       }),
+      displayTitle: sync.display_title || undefined,
+      displayDate: sync.display_date || undefined,
       sourceType: "sync_recording",
       mediaState,
       availabilityState: mapAvailability(sync),
@@ -365,6 +375,10 @@ export async function buildLibraryItems(
       requiredAction,
       // 双摄封面用可播放视频流（default analysis 优先，其次任一注册机位），让前端 <video> 画出首帧
       coverVideoUrl: getVideoStreamUrl(
+        sync.default_analysis_video_id ?? sync.registered_video_ids?.cam_1 ?? sync.registered_video_ids?.cam_2,
+      ),
+      // 预生成 poster（merged video 帧天然左右拼接），命中时前端直接 <img>，跳过视频流解码
+      thumbnailUrl: getVideoPosterUrl(
         sync.default_analysis_video_id ?? sync.registered_video_ids?.cam_1 ?? sync.registered_video_ids?.cam_2,
       ),
       // 双摄封面左右拼接：暴露两路机位流地址（存在才填充，缺失由封面渲染层占位）
@@ -400,11 +414,12 @@ export async function buildLibraryItems(
       ref: { kind: "recording", sourceId: rec.session_id },
       title: semanticTitle({
         matchTitle: titleJob?.metadata?.matchTitle,
-        fieldSessionTitle: fs?.title,
         startedAt: rec.started_at,
         matchFormat: rec.match_format === "doubles" || rec.match_format === "singles" ? rec.match_format : undefined,
         fallback: rec.court_name || `录制 · ${rec.session_id}`,
       }),
+      displayTitle: rec.display_title || undefined,
+      displayDate: rec.display_date || undefined,
       sourceType: "recording",
       mediaState,
       availabilityState: mapAvailability(rec),
@@ -412,6 +427,7 @@ export async function buildLibraryItems(
       displayState: deriveDisplayState({ mediaState, analysisState: selection.analysisState, requiredAction }),
       requiredAction,
       coverVideoUrl: getVideoStreamUrl(rec.video_id),
+      thumbnailUrl: getVideoPosterUrl(rec.video_id),
       primaryAnalysisJobId: selection.primaryAnalysisJobId,
       primaryResultAnalysisJobId: selection.primaryResultAnalysisJobId,
       activeAnalysisJobId: selection.activeAnalysisJobId,
@@ -444,6 +460,8 @@ export async function buildLibraryItems(
     items.push({
       ref: { kind: "upload", sourceId: video.id },
       title: video.original_filename.replace(/\.(mp4|mov|m4v)$/i, "") || video.id,
+      displayTitle: video.display_title || undefined,
+      displayDate: video.display_date || undefined,
       sourceType: "upload",
       mediaState: "ready",
       availabilityState: "available",
@@ -451,6 +469,7 @@ export async function buildLibraryItems(
       displayState: deriveDisplayState({ mediaState: "ready", analysisState: selection.analysisState, requiredAction }),
       requiredAction,
       coverVideoUrl: getVideoStreamUrl(video.id),
+      thumbnailUrl: getVideoPosterUrl(video.id),
       primaryAnalysisJobId: selection.primaryAnalysisJobId,
       primaryResultAnalysisJobId: selection.primaryResultAnalysisJobId,
       activeAnalysisJobId: selection.activeAnalysisJobId,
@@ -492,11 +511,12 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
       ref,
       title: semanticTitle({
         matchTitle: titleJob?.metadata?.matchTitle,
-        fieldSessionTitle: fs?.title,
         startedAt: sync.started_at,
         matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,
         fallback: sync.court_name || `同步录制 · ${sync.session_id}`,
       }),
+      displayTitle: sync.display_title || undefined,
+      displayDate: sync.display_date || undefined,
       sourceType: "sync_recording",
       mediaState,
       availabilityState: mapAvailability(sync),
@@ -505,6 +525,8 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
       requiredAction,
       // 双摄封面用可播放视频流（default analysis 优先），让前端 <video> 画出首帧
       coverVideoUrl: getVideoStreamUrl(sync.default_analysis_video_id ?? sync.registered_video_ids?.cam_1 ?? sync.registered_video_ids?.cam_2),
+      // 预生成 poster（merged video 帧天然左右拼接），命中时前端直接 <img>
+      thumbnailUrl: getVideoPosterUrl(sync.default_analysis_video_id ?? sync.registered_video_ids?.cam_1 ?? sync.registered_video_ids?.cam_2),
       // 双摄封面左右拼接：暴露两路机位流地址（存在才填充，缺失由封面渲染层占位）
       cameraCoverSources: {
         ...(sync.registered_video_ids?.cam_1 ? { cam_1: getVideoStreamUrl(sync.registered_video_ids.cam_1) } : {}),
@@ -540,11 +562,12 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
       ref,
       title: semanticTitle({
         matchTitle: titleJob?.metadata?.matchTitle,
-        fieldSessionTitle: fs?.title,
         startedAt: rec.started_at,
         matchFormat: rec.match_format === "doubles" || rec.match_format === "singles" ? rec.match_format : undefined,
         fallback: rec.court_name || `录制 · ${rec.session_id}`,
       }),
+      displayTitle: rec.display_title || undefined,
+      displayDate: rec.display_date || undefined,
       sourceType: "recording",
       mediaState,
       availabilityState: mapAvailability(rec),
@@ -552,6 +575,7 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
       displayState: deriveDisplayState({ mediaState, analysisState: selection.analysisState, requiredAction }),
       requiredAction,
       coverVideoUrl: getVideoStreamUrl(rec.video_id),
+      thumbnailUrl: getVideoPosterUrl(rec.video_id),
       primaryAnalysisJobId: selection.primaryAnalysisJobId,
       primaryResultAnalysisJobId: selection.primaryResultAnalysisJobId,
       activeAnalysisJobId: selection.activeAnalysisJobId,
@@ -582,6 +606,8 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
   return {
     ref,
     title: video.original_filename.replace(/\.(mp4|mov|m4v)$/i, "") || video.id,
+    displayTitle: video.display_title || undefined,
+    displayDate: video.display_date || undefined,
     sourceType: "upload",
     mediaState: "ready",
     availabilityState: "available",

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary, RecordingSession, SyncRecordingSession, VideoMetadata } from "../types/report";
 import { buildLibraryItems, type LibraryItemRef } from "./libraryAdapter";
-import { getVideoStreamUrl } from "./analysisClient";
+import { getVideoStreamUrl, getVideoPosterUrl } from "./analysisClient";
 
 function meta(partial: Record<string, unknown> = {}): AnalysisJobSummary["metadata"] {
   return {
@@ -80,13 +80,14 @@ function sync(partial: Partial<SyncRecordingSession>): SyncRecordingSession {
 }
 
 const listAnalysisJobs = vi.fn();
+const listFieldSessions = vi.fn().mockResolvedValue([]);
 
 vi.mock("./analysisClient", async () => {
   const actual = await vi.importActual<typeof import("./analysisClient")>("./analysisClient");
   return {
     ...actual,
     listAnalysisJobs: () => listAnalysisJobs(),
-    listFieldSessions: () => Promise.resolve([]),
+    listFieldSessions: () => listFieldSessions(),
     getFieldSession: () => Promise.reject(new Error("field session not found")),
   };
 });
@@ -173,6 +174,31 @@ describe("buildLibraryItems", () => {
     expect(oneCam.cam_2).toBeUndefined();
   });
 
+  it("三来源映射预生成 poster thumbnailUrl（无 poster 时 undefined）", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    const items = await buildLibraryItems({
+      videos: [video({ id: "video-p", source: "upload" })],
+      recordings: [recording({ session_id: "rec-p", video_id: "rec-vid" })],
+      syncRecordings: [
+        sync({
+          session_id: "sync-p",
+          registered_video_ids: { cam_1: "cam1-vid" },
+          default_analysis_video_id: "analysis-vid",
+        }),
+        sync({ session_id: "sync-no-video" }), // 无任何注册机位 → thumbnailUrl 应为 undefined
+      ],
+      jobs: [],
+    });
+    const upload = items.find((i) => i.ref.kind === "upload")!;
+    const rec = items.find((i) => i.ref.kind === "recording")!;
+    const syncItem = items.find((i) => i.ref.sourceId === "sync-p")!;
+    const syncNoVideo = items.find((i) => i.ref.sourceId === "sync-no-video")!;
+    expect(upload.thumbnailUrl).toBe(getVideoPosterUrl("video-p"));
+    expect(rec.thumbnailUrl).toBe(getVideoPosterUrl("rec-vid"));
+    expect(syncItem.thumbnailUrl).toBe(getVideoPosterUrl("analysis-vid")); // merged video poster 优先
+    expect(syncNoVideo.thumbnailUrl).toBeUndefined();
+  });
+
   it("recording 素材按 recordingSessionId 归属：running 任务为 active，不占 primaryResult", async () => {
     const recJob = job({
       id: "r-job", analysisKind: "single_view", recordingSessionId: "rec-1",
@@ -192,6 +218,31 @@ describe("buildLibraryItems", () => {
     expect(item.analysisState).toBe("running");
     expect(item.analysisProgress).toBe(62);
     expect(item.analysisStage).toBe("轨迹跟踪");
+  });
+
+  it("recording 任务失联时映射为独立终态并停止 active 投影", async () => {
+    const lostJob = job({
+      id: "lost-job",
+      analysisKind: "single_view",
+      recordingSessionId: "rec-1",
+      metadata: meta({ recording_session_id: "rec-1" }),
+      status: "interrupted",
+      progress: 62,
+      workerHeartbeatAt: "2026-08-20T10:59:00Z",
+      interruptedAt: "2026-08-20T11:00:00Z",
+      interruptionCode: "worker_heartbeat_timeout",
+    });
+    listAnalysisJobs.mockResolvedValue([lostJob]);
+    const items = await buildLibraryItems({
+      videos: [],
+      recordings: [recording({ session_id: "rec-1" })],
+      syncRecordings: [],
+      jobs: [lostJob],
+    });
+    const item = items.find((candidate) => candidate.ref.kind === "recording")!;
+    expect(item.analysisState).toBe("interrupted");
+    expect(item.displayState).toBe("interrupted");
+    expect(item.activeAnalysisJobId).toBeUndefined();
   });
 
   it("再次分析期间 primaryResult 保持旧 completed 结果，不被 active 顶掉", async () => {
@@ -295,5 +346,75 @@ describe("buildLibraryItems", () => {
     });
     // matchTitle / FieldSession 标题缺失时，用「时间 + 比赛形式」而非 court_name 当主标题
     expect(untitled.find((i) => i.ref.kind === "recording")?.title).toBe("8月20日 单打");
+  });
+
+  it("upload displayTitle/displayDate 映射（video 用户自定义真源优先）", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    const items = await buildLibraryItems({
+      videos: [
+        video({ id: "v1", display_title: "自定义名称", display_date: "2026-08-15" }),
+        video({ id: "v2" }),
+      ],
+      recordings: [], syncRecordings: [], jobs: [],
+    });
+    const renamed = items.find((i) => i.ref.kind === "upload" && i.ref.sourceId === "v1");
+    expect(renamed?.displayTitle).toBe("自定义名称");
+    expect(renamed?.displayDate).toBe("2026-08-15");
+    const defaulted = items.find((i) => i.ref.kind === "upload" && i.ref.sourceId === "v2");
+    expect(defaulted?.displayTitle).toBeUndefined();
+    expect(defaulted?.displayDate).toBeUndefined();
+  });
+
+  it("recording/sync displayTitle/displayDate 映射（素材自身真源优先，场次不回退）", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    listFieldSessions.mockResolvedValue([
+      { id: "fs-1", title: "场次标题", started_at: "2026-08-10T00:00:00Z" },
+    ] as never);
+    const items = await buildLibraryItems({
+      videos: [],
+      recordings: [recording({ session_id: "rec-1", field_session_id: "fs-1" })],
+      syncRecordings: [sync({ session_id: "sync-1", field_session_id: "fs-1" })],
+      jobs: [],
+    });
+    // 素材自身未设 display_* → 不再回退到 FieldSession.title / started_at
+    expect(items.find((i) => i.ref.kind === "recording")?.displayTitle).toBeUndefined();
+    expect(items.find((i) => i.ref.kind === "recording")?.displayDate).toBeUndefined();
+    expect(items.find((i) => i.ref.kind === "sync_recording")?.displayTitle).toBeUndefined();
+    expect(items.find((i) => i.ref.kind === "sync_recording")?.displayDate).toBeUndefined();
+  });
+
+  it("recording/sync displayTitle/displayDate 映射（素材自身 display_* 优先）", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    listFieldSessions.mockResolvedValue([
+      { id: "fs-1", title: "场次标题", started_at: "2026-08-10T00:00:00Z" },
+    ] as never);
+    const items = await buildLibraryItems({
+      videos: [],
+      recordings: [recording({ session_id: "rec-1", field_session_id: "fs-1", display_title: "自建标题", display_date: "2026-08-12" })],
+      syncRecordings: [sync({ session_id: "sync-1", field_session_id: "fs-1", display_title: "双摄标题", display_date: "2026-08-13" })],
+      jobs: [],
+    });
+    expect(items.find((i) => i.ref.kind === "recording")?.displayTitle).toBe("自建标题");
+    expect(items.find((i) => i.ref.kind === "recording")?.displayDate).toBe("2026-08-12");
+    expect(items.find((i) => i.ref.kind === "sync_recording")?.displayTitle).toBe("双摄标题");
+    expect(items.find((i) => i.ref.kind === "sync_recording")?.displayDate).toBe("2026-08-13");
+  });
+
+  it("同场次多卡 displayTitle/displayDate 互不牵连", async () => {
+    listAnalysisJobs.mockResolvedValue([]);
+    listFieldSessions.mockResolvedValue([
+      { id: "fs-1", title: "场次标题", started_at: "2026-08-10T00:00:00Z" },
+    ] as never);
+    const items = await buildLibraryItems({
+      videos: [],
+      recordings: [
+        recording({ session_id: "rec-1", field_session_id: "fs-1", display_title: "甲" }),
+        recording({ session_id: "rec-2", field_session_id: "fs-1", display_title: "乙" }),
+      ],
+      syncRecordings: [],
+      jobs: [],
+    });
+    expect(items.find((i) => i.ref.sourceId === "rec-1")?.displayTitle).toBe("甲");
+    expect(items.find((i) => i.ref.sourceId === "rec-2")?.displayTitle).toBe("乙");
   });
 });

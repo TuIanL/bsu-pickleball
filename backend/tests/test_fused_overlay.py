@@ -290,6 +290,34 @@ class TestEvidenceBundle:
 
 
 class TestBranchDecisionChain:
+    def test_target_view_switch_reuses_canonical_identity_and_position(self) -> None:
+        snapshot = F0RefinementSnapshot(
+            run_id="run-view-switch",
+            reference_view_id="cam_1",
+            view_ids=("cam_1", "cam_2"),
+            global_player_ids=("global_player_1",),
+            ticks=(
+                _make_tick(
+                    observations=(
+                        ("global_player_1", "cam_1", _make_state(bbox=(100.0, 200.0, 150.0, 300.0))),
+                        ("global_player_1", "cam_2", _make_state(bbox=(300.0, 120.0, 350.0, 220.0))),
+                    ),
+                ),
+            ),
+        )
+        bundle = _make_bundle(
+            f0_snapshot=snapshot,
+            fused_positions={"global_player_1": {10: (10.0, 20.0)}},
+        )
+
+        cam_a = FusedPlayerOverlayBuilder().build(bundle=bundle, target_view_id="cam_1")
+        cam_b = FusedPlayerOverlayBuilder().build(bundle=bundle, target_view_id="cam_2")
+
+        assert cam_a[0].players[0].player_id == cam_b[0].players[0].player_id == "Player_1"
+        assert cam_a[0].players[0].bbox != cam_b[0].players[0].bbox
+        assert cam_a[0].players[0].canonical_court_position_ft == [10.0, 20.0]
+        assert cam_b[0].players[0].canonical_court_position_ft == [10.0, 20.0]
+
     def test_strong_f0_base_observed(self) -> None:
         snapshot = F0RefinementSnapshot(
             run_id="run-1",
@@ -417,6 +445,50 @@ class TestBranchDecisionChain:
         assert player.footpoint == [100.0, 200.0]
         assert player.bbox is None
         assert player.bbox_source == "none"
+
+    def test_projected_bbox_collision_keeps_stable_geometry_and_records_reason(self) -> None:
+        """投影框若会覆盖另一名可信球员，不发布新 synthetic geometry。"""
+        snapshot = F0RefinementSnapshot(
+            run_id="run-collision",
+            reference_view_id="cam_1",
+            view_ids=("cam_1", "cam_2"),
+            global_player_ids=("global_player_1", "global_player_2"),
+            ticks=(
+                _make_tick(
+                    canonical_tick=1,
+                    reference_frame_index=10,
+                    canonical_timestamp_ms=1000.0,
+                    observations=(
+                        ("global_player_1", "cam_1", _make_state(quality=0.9, bbox=(100.0, 200.0, 150.0, 300.0))),
+                    ),
+                ),
+                _make_tick(
+                    canonical_tick=2,
+                    reference_frame_index=20,
+                    canonical_timestamp_ms=1033.0,
+                    observations=(
+                        ("global_player_1", "cam_1", _make_state(observed=False, quality=0.0, origin="missing", bbox=None, canonical_position=None)),
+                        ("global_player_1", "cam_2", _make_state(quality=0.9, bbox=(300.0, 200.0, 350.0, 300.0))),
+                        ("global_player_2", "cam_1", _make_state(quality=0.9, bbox=(75.0, 150.0, 125.0, 250.0))),
+                    ),
+                ),
+            ),
+        )
+        bundle = _make_bundle(
+            f0_snapshot=snapshot,
+            roster_map={"global_player_1": "Player_1", "global_player_2": "Player_2"},
+            fused_samples={
+                "global_player_1": {20: {"global_player_id": "global_player_1", "fusion_status": "dual_observed"}},
+            },
+            fused_positions={"global_player_1": {20: (10.0, 20.0)}},
+        )
+        builder = FusedPlayerOverlayBuilder()
+        frames = builder.build(bundle=bundle)
+        player = next(item for item in frames[1].players if item.player_id == "Player_1")
+        assert player.evidence_type == "cross_view_projected"
+        assert player.projection_rejection_reason == "projection_collision_with_global_player_2"
+        assert player.display_reason == "projection_collision_fallback"
+        assert builder.diagnostics["projection_gate_rejected"] == 1
 
     def test_predicted_only_when_within_ttl(self) -> None:
         snapshot = F0RefinementSnapshot(

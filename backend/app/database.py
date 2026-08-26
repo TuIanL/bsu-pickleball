@@ -161,6 +161,7 @@ def init_db() -> None:
     import app.models.live_coding_state  # noqa: F401
     import app.models.media_fragment  # noqa: F401
     import app.models.segment_edit_operation  # noqa: F401
+    import app.models.scoring_calibration_annotation  # noqa: F401
     import app.models.timeline_event  # noqa: F401
     import app.models.track_finalization  # noqa: F401
     import app.models.track_timeline_span  # noqa: F401

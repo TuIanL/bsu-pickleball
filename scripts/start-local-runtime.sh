@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/backend"
-RUNTIME_DIR="$REPO_ROOT/.runtime"
+RUNTIME_DIR="${PICKLEBALL_RUNTIME_DIR:-$REPO_ROOT/.runtime}"
 PID_DIR="$RUNTIME_DIR/pids"
 LOG_DIR="$RUNTIME_DIR/logs"
 
@@ -20,8 +20,10 @@ RTMPOSE_CHECKPOINT_DEFAULT="$REPO_ROOT/models/rtmpose/rtmpose-m_simcc-body7_pt-b
 COURT_LINE_MODEL_DEFAULT="$REPO_ROOT/models/court-line/best.pt"
 
 BACKEND_PID_FILE="$PID_DIR/backend.pid"
+WORKER_PID_FILE="$PID_DIR/analysis-worker.pid"
 FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
 BACKEND_LOG="$LOG_DIR/backend.log"
+WORKER_LOG="$LOG_DIR/analysis-worker.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 
 say() {
@@ -144,6 +146,24 @@ wait_for_url() {
   return 1
 }
 
+wait_for_process() {
+  local name="$1"
+  local pid_file="$2"
+  local log_file="$3"
+
+  for _ in $(seq 1 20); do
+    if process_from_file_is_running "$pid_file"; then
+      say "$name is running"
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  say "$name exited during startup."
+  tail_log "$log_file"
+  return 1
+}
+
 cleanup_started_processes() {
   "$SCRIPT_DIR/stop-local-runtime.sh" >/dev/null 2>&1 || true
 }
@@ -159,12 +179,14 @@ command -v curl >/dev/null 2>&1 || die "curl is required for readiness checks."
 mkdir -p "$PID_DIR" "$LOG_DIR" "$RUNTIME_DIR/matplotlib"
 
 ensure_no_recorded_process "Backend" "$BACKEND_PID_FILE"
+ensure_no_recorded_process "Analysis worker" "$WORKER_PID_FILE"
 ensure_no_recorded_process "Frontend" "$FRONTEND_PID_FILE"
 ensure_port_available "PICKLEBALL_BACKEND" "$BACKEND_PORT"
 ensure_port_available "PICKLEBALL_FRONTEND" "$FRONTEND_PORT"
 
 PICKLEBALL_ENABLE_POSE_INFERENCE="${PICKLEBALL_ENABLE_POSE_INFERENCE:-true}"
 PICKLEBALL_ENABLE_MODEL_INFERENCE="${PICKLEBALL_ENABLE_MODEL_INFERENCE:-true}"
+PICKLEBALL_ANALYSIS_WORKER_MODE="${PICKLEBALL_ANALYSIS_WORKER_MODE:-external}"
 PICKLEBALL_RTMPOSE_CONFIG_PATH="${PICKLEBALL_RTMPOSE_CONFIG_PATH:-$RTMPOSE_CONFIG_DEFAULT}"
 PICKLEBALL_RTMPOSE_CHECKPOINT_PATH="${PICKLEBALL_RTMPOSE_CHECKPOINT_PATH:-$RTMPOSE_CHECKPOINT_DEFAULT}"
 TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD="${TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD:-1}"
@@ -201,10 +223,12 @@ if [[ -n "$PICKLEBALL_COURT_LINE_MODEL_PATH" ]]; then
 fi
 
 : > "$BACKEND_LOG"
+: > "$WORKER_LOG"
 : > "$FRONTEND_LOG"
 
 say "Starting Pickleball local runtime..."
 say "Logs: $LOG_DIR"
+say "Analysis worker mode: $PICKLEBALL_ANALYSIS_WORKER_MODE"
 say "Court-line model: $PICKLEBALL_COURT_LINE_MODEL_PATH"
 say "Court-line device: $PICKLEBALL_COURT_LINE_DEVICE"
 say "RTMPose device:    $PICKLEBALL_RTMPOSE_DEVICE"
@@ -214,6 +238,9 @@ say "RTMPose device:    $PICKLEBALL_RTMPOSE_DEVICE"
   export MPLCONFIGDIR="${MPLCONFIGDIR:-$RUNTIME_DIR/matplotlib}"
   export PICKLEBALL_ENABLE_MODEL_INFERENCE
   export PICKLEBALL_ENABLE_POSE_INFERENCE
+  export PICKLEBALL_ANALYSIS_WORKER_MODE
+  # API reload must never create an in-process analysis worker.
+  export PICKLEBALL_ENABLE_JOB_WORKER=false
   export PICKLEBALL_ENABLE_PROJECTION_DEBUG_JSONL="${PICKLEBALL_ENABLE_PROJECTION_DEBUG_JSONL:-}"
   export PICKLEBALL_COURT_LINE_MODEL_PATH
   export PICKLEBALL_COURT_LINE_DEVICE
@@ -228,6 +255,26 @@ say "RTMPose device:    $PICKLEBALL_RTMPOSE_DEVICE"
 echo "$!" > "$BACKEND_PID_FILE"
 
 (
+  cd "$BACKEND_DIR"
+  export MPLCONFIGDIR="${MPLCONFIGDIR:-$RUNTIME_DIR/matplotlib}"
+  export PICKLEBALL_ENABLE_MODEL_INFERENCE
+  export PICKLEBALL_ENABLE_POSE_INFERENCE
+  export PICKLEBALL_ANALYSIS_WORKER_MODE
+  export PICKLEBALL_ENABLE_JOB_WORKER=true
+  export PICKLEBALL_ENABLE_PROJECTION_DEBUG_JSONL="${PICKLEBALL_ENABLE_PROJECTION_DEBUG_JSONL:-}"
+  export PICKLEBALL_COURT_LINE_MODEL_PATH
+  export PICKLEBALL_COURT_LINE_DEVICE
+  export PICKLEBALL_RTMPOSE_CONFIG_PATH
+  export PICKLEBALL_RTMPOSE_CHECKPOINT_PATH
+  export PICKLEBALL_RTMPOSE_DEVICE
+  export PICKLEBALL_COURT_VIEW_MATCH_THRESHOLD="${PICKLEBALL_COURT_VIEW_MATCH_THRESHOLD:-0.5}"
+  export PICKLEBALL_CORS_ORIGINS
+  export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD
+  exec "$PYTHON_BIN" -m app.analysis_worker
+) > "$WORKER_LOG" 2>&1 &
+echo "$!" > "$WORKER_PID_FILE"
+
+(
   cd "$REPO_ROOT"
   export VITE_ANALYSIS_API_URL
   exec "$VITE_BIN" --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
@@ -235,6 +282,11 @@ echo "$!" > "$BACKEND_PID_FILE"
 echo "$!" > "$FRONTEND_PID_FILE"
 
 if ! wait_for_url "Backend" "http://localhost:$BACKEND_PORT/health" "$BACKEND_PID_FILE" "$BACKEND_LOG"; then
+  cleanup_started_processes
+  exit 1
+fi
+
+if ! wait_for_process "Analysis worker" "$WORKER_PID_FILE" "$WORKER_LOG"; then
   cleanup_started_processes
   exit 1
 fi

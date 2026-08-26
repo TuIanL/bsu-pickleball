@@ -45,3 +45,56 @@ def test_catalog_is_readonly_upload_still_uses_upload_route():
         not (r.methods and "POST" in r.methods)
         for r in catalog_routes
     )
+
+
+def test_patch_updates_display_metadata(monkeypatch):
+    """PATCH /api/videos/{id} 写入用户自定义显示标题/日期（library-card-metadata-editing）。"""
+    from app.schemas.video import VideoUpdateRequest
+
+    stored: dict[str, VideoMetadata] = {"v1": _video("v1")}
+
+    def fake_get(video_id):
+        return stored.get(video_id)
+
+    def fake_update(video_id, *, display_title=None, display_date=None):
+        meta = stored[video_id]
+        updated = meta.model_copy(
+            update={
+                "display_title": (display_title or "").strip() or None,
+                "display_date": display_date,
+            }
+        )
+        stored[video_id] = updated
+        return updated
+
+    monkeypatch.setattr(routes_video.video_service, "get_video", fake_get)
+    monkeypatch.setattr(routes_video.video_service, "update_video", fake_update)
+
+    result = routes_video.update_video_metadata(
+        "v1",
+        VideoUpdateRequest(display_title="自定义名称", display_date="2026-08-15"),
+    )
+    assert result.display_title == "自定义名称"
+    assert result.display_date is not None
+    assert result.display_date.year == 2026
+
+    # 空值撤销覆盖
+    result2 = routes_video.update_video_metadata(
+        "v1",
+        VideoUpdateRequest(display_title=""),
+    )
+    assert result2.display_title is None
+
+
+def test_patch_missing_video_returns_404(monkeypatch):
+    """PATCH 不存在的 video 返回 404。"""
+    from fastapi import HTTPException
+
+    from app.schemas.video import VideoUpdateRequest
+
+    monkeypatch.setattr(routes_video.video_service, "get_video", lambda video_id: None)
+    monkeypatch.setattr(routes_video.video_service, "update_video", lambda *a, **k: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        routes_video.update_video_metadata("missing", VideoUpdateRequest(display_title="x"))
+    assert exc_info.value.status_code == 404

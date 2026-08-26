@@ -64,6 +64,38 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_uploads_singleton():
+    """Force the global ``video_service`` singleton to use the isolated temp
+    storage for the entire session, so any video uploaded through the API
+    (e.g. ``test_api_smoke.py`` via ``TestClient(app)``) lands in the temp
+    directory instead of the production ``backend/data/uploads``.
+
+    This is the root-cause fix for test-upload pollution: ``routes_video``
+    calls the module-level ``video_service`` singleton, so replacing its
+    ``.storage`` attribute in place covers every route reference (no need to
+    rebind module-level variables, which would miss already-imported refs).
+    """
+
+    from app.core import config
+    from app.services import video_service as _video_service_module
+    from app.services.storage_service import StorageService
+
+    # 重新解析设置：此时 pytest_configure 已把 PICKLEBALL_* 指向临时根。
+    config.get_settings.cache_clear()
+    settings = config.get_settings()
+
+    # 原地替换单例的存储（而非重绑模块变量），对所有引用生效。
+    _video_service_module.video_service.storage = StorageService(settings)
+    # 清空内存缓存，强制后续读取走隔离磁盘目录。
+    _video_service_module.VIDEOS.clear()
+
+    yield
+
+    # teardown：再次清空内存缓存，避免跨会话残留。
+    _video_service_module.VIDEOS.clear()
+
+
 @pytest.fixture
 def isolated_settings(tmp_path: Path) -> Settings:
     """Return a complete Settings object rooted under the test temp dir."""

@@ -34,6 +34,7 @@ class Settings(BaseModel):
     # ---- 数据与模型存放目录 ----
     data_dir: Path = Path("data")  # 总数据目录
     database_path: Path = Path("data/app.sqlite3")  # 本地 SQLite 数据库文件
+    analysis_control_database_path: Path | None = None  # 分析任务控制面；缺省与 database_path 同目录
     uploads_dir: Path = Path("data/uploads")  # 上传视频存放目录
     outputs_dir: Path = Path("data/outputs")  # 分析结果输出目录
     calibrations_dir: Path = Path("data/calibrations")  # 标定文件目录
@@ -87,6 +88,26 @@ class Settings(BaseModel):
     ball_analysis_strict: bool = False  # 球分析严格模式：true 时球分析异常导致 pipeline failed
     ball_stationary_blacklist_frames: int = 60  # 球静止候选加入黑名单的累计帧阈值
     ball_stationary_blacklist_seconds: float = 2.0  # 球静止候选加入黑名单的累计时长
+
+    # ---- 比赛语义驱动球搜索（第一阶段默认 Shadow + fail-open）----
+    enable_ball_semantic_policy: bool = True
+    ball_semantic_policy_mode: str = "shadow"  # shadow | enforced
+    ball_semantic_enforce_authoritative_non_play: bool = False
+    # 第二阶段按 take/job 显式启用的正式门控；默认仍关闭，保持第一阶段回滚语义。
+    ball_semantic_enforced_rollout: bool = False
+    ball_semantic_rollout_id: str = "default"
+    ball_semantic_timeline_enabled: bool = True
+    ball_semantic_serve_prepare_confidence: float = 0.55
+    ball_semantic_serve_armed_confidence: float = 0.70
+    ball_semantic_rally_end_min_evidence: int = 2
+    ball_semantic_policy_version: str = "semantic_boundary_policy.v1"
+    ball_semantic_min_confirm_ticks: int = 2
+    ball_semantic_grace_window_seconds: float = 0.20
+    ball_semantic_rescue_min_consecutive_ticks: int = 2
+    ball_semantic_rescue_min_motion_pixels: float = 15.0
+    ball_semantic_evidence_freshness_seconds: float = 0.50
+    ball_semantic_conflict_penalty: float = 0.25
+    ball_semantic_boundary_eval_enabled: bool = True
 
     # ---- 可视化输出 ----
     enable_analysis_overlay_video: bool = False  # 是否生成分析叠加视频（骨架已由前端 SVG 实时渲染）
@@ -155,6 +176,11 @@ class Settings(BaseModel):
 
     # ---- 任务队列 / Worker ----
     enable_job_worker: bool = True  # 是否启用后台任务 Worker
+    analysis_worker_mode: str = "embedded"  # embedded 兼容模式 / external 独立进程模式
+    analysis_worker_heartbeat_interval_seconds: float = 5.0
+    analysis_worker_heartbeat_timeout_seconds: float = 30.0
+    analysis_worker_poll_interval_seconds: float = 0.5
+    analysis_worker_shutdown_grace_seconds: float = 10.0
     max_cpu_jobs: int = 1  # 最大并行 CPU 任务数
     max_gpu_jobs: int = 1  # 最大并行 GPU 任务数
     enable_gpu_jobs: bool = False  # 是否启用 GPU 任务
@@ -280,6 +306,11 @@ def get_settings() -> Settings:
         app_name=os.getenv("PICKLEBALL_APP_NAME", Settings.model_fields["app_name"].default),
         data_dir=Path(os.getenv("PICKLEBALL_DATA_DIR", "data")),
         database_path=Path(os.getenv("PICKLEBALL_DATABASE_PATH", "data/app.sqlite3")),
+        analysis_control_database_path=(
+            Path(os.environ["PICKLEBALL_ANALYSIS_CONTROL_DATABASE_PATH"])
+            if os.getenv("PICKLEBALL_ANALYSIS_CONTROL_DATABASE_PATH")
+            else None
+        ),
         uploads_dir=Path(os.getenv("PICKLEBALL_UPLOADS_DIR", "data/uploads")),
         outputs_dir=Path(os.getenv("PICKLEBALL_OUTPUTS_DIR", "data/outputs")),
         calibrations_dir=Path(os.getenv("PICKLEBALL_CALIBRATIONS_DIR", "data/calibrations")),
@@ -350,6 +381,54 @@ def get_settings() -> Settings:
             2.0,
             reference_fps=30.0,
         ),
+        enable_ball_semantic_policy=os.getenv("PICKLEBALL_ENABLE_BALL_SEMANTIC_POLICY", "true").lower()
+        in {"1", "true", "yes"},
+        ball_semantic_policy_mode=os.getenv("PICKLEBALL_BALL_SEMANTIC_POLICY_MODE", "shadow").lower(),
+        ball_semantic_enforce_authoritative_non_play=os.getenv(
+            "PICKLEBALL_BALL_SEMANTIC_ENFORCE_AUTHORITATIVE_NON_PLAY", "false"
+        ).lower()
+        in {"1", "true", "yes"},
+        ball_semantic_enforced_rollout=os.getenv(
+            "PICKLEBALL_BALL_SEMANTIC_ENFORCED_ROLLOUT", "false"
+        ).lower()
+        in {"1", "true", "yes"},
+        ball_semantic_rollout_id=os.getenv("PICKLEBALL_BALL_SEMANTIC_ROLLOUT_ID", "default"),
+        ball_semantic_timeline_enabled=os.getenv("PICKLEBALL_BALL_SEMANTIC_TIMELINE_ENABLED", "true").lower()
+        in {"1", "true", "yes"},
+        ball_semantic_serve_prepare_confidence=_clamp_float(
+            os.getenv("PICKLEBALL_BALL_SEMANTIC_SERVE_PREPARE_CONFIDENCE", "0.55"), 0.0, 1.0
+        ),
+        ball_semantic_serve_armed_confidence=_clamp_float(
+            os.getenv("PICKLEBALL_BALL_SEMANTIC_SERVE_ARMED_CONFIDENCE", "0.70"), 0.0, 1.0
+        ),
+        ball_semantic_rally_end_min_evidence=max(
+            2, int(os.getenv("PICKLEBALL_BALL_SEMANTIC_RALLY_END_MIN_EVIDENCE", "2"))
+        ),
+        ball_semantic_policy_version=os.getenv(
+            "PICKLEBALL_BALL_SEMANTIC_POLICY_VERSION", "semantic_boundary_policy.v1"
+        ),
+        ball_semantic_min_confirm_ticks=max(
+            1, int(os.getenv("PICKLEBALL_BALL_SEMANTIC_MIN_CONFIRM_TICKS", "2"))
+        ),
+        ball_semantic_grace_window_seconds=max(
+            0.0, float(os.getenv("PICKLEBALL_BALL_SEMANTIC_GRACE_WINDOW_SECONDS", "0.20"))
+        ),
+        ball_semantic_rescue_min_consecutive_ticks=max(
+            1, int(os.getenv("PICKLEBALL_BALL_SEMANTIC_RESCUE_MIN_CONSECUTIVE_TICKS", "2"))
+        ),
+        ball_semantic_rescue_min_motion_pixels=max(
+            0.0, float(os.getenv("PICKLEBALL_BALL_SEMANTIC_RESCUE_MIN_MOTION_PIXELS", "15.0"))
+        ),
+        ball_semantic_evidence_freshness_seconds=max(
+            0.0, float(os.getenv("PICKLEBALL_BALL_SEMANTIC_EVIDENCE_FRESHNESS_SECONDS", "0.50"))
+        ),
+        ball_semantic_conflict_penalty=_clamp_float(
+            os.getenv("PICKLEBALL_BALL_SEMANTIC_CONFLICT_PENALTY", "0.25"), 0.0, 1.0
+        ),
+        ball_semantic_boundary_eval_enabled=os.getenv(
+            "PICKLEBALL_BALL_SEMANTIC_BOUNDARY_EVAL_ENABLED", "true"
+        ).lower()
+        in {"1", "true", "yes"},
         enable_analysis_overlay_video=os.getenv("PICKLEBALL_ENABLE_ANALYSIS_OVERLAY_VIDEO", "true").lower()
         in {"1", "true", "yes"},
         enable_position_visualizations=os.getenv("PICKLEBALL_ENABLE_POSITION_VISUALIZATIONS", "true").lower()
@@ -475,6 +554,19 @@ def get_settings() -> Settings:
         court_line_geometry_min_area_ratio=float(os.getenv("PICKLEBALL_COURT_LINE_GEOMETRY_MIN_AREA_RATIO", "0.03")),
         court_line_frame_ratio=_clamp_float(os.getenv("PICKLEBALL_COURT_LINE_FRAME_RATIO", "0.1"), 0.0, 0.95),
         enable_job_worker=os.getenv("PICKLEBALL_ENABLE_JOB_WORKER", "true").lower() in {"1", "true", "yes"},
+        analysis_worker_mode=os.getenv("PICKLEBALL_ANALYSIS_WORKER_MODE", "embedded").lower(),
+        analysis_worker_heartbeat_interval_seconds=max(
+            0.5, float(os.getenv("PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS", "5"))
+        ),
+        analysis_worker_heartbeat_timeout_seconds=max(
+            2.0, float(os.getenv("PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_TIMEOUT_SECONDS", "30"))
+        ),
+        analysis_worker_poll_interval_seconds=max(
+            0.1, float(os.getenv("PICKLEBALL_ANALYSIS_WORKER_POLL_INTERVAL_SECONDS", "0.5"))
+        ),
+        analysis_worker_shutdown_grace_seconds=max(
+            1.0, float(os.getenv("PICKLEBALL_ANALYSIS_WORKER_SHUTDOWN_GRACE_SECONDS", "10"))
+        ),
         max_cpu_jobs=max(1, int(os.getenv("PICKLEBALL_MAX_CPU_JOBS", "1"))),
         max_gpu_jobs=max(1, int(os.getenv("PICKLEBALL_MAX_GPU_JOBS", "1"))),
         enable_gpu_jobs=os.getenv("PICKLEBALL_ENABLE_GPU_JOBS", "false").lower() in {"1", "true", "yes"},

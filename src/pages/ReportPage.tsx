@@ -6,6 +6,7 @@ import type {
   AppPath,
   ReportType,
   AnalysisJobSummary,
+  AnalysisPipelineResult,
   ReconstructedBallTrajectoryArtifact,
 } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
@@ -20,6 +21,7 @@ import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { PerformanceInsightsPanel } from "../components/platform/PerformanceInsightsPanel";
 import { formatDateTime, toneStyles, errorToNotice } from "../utils/analysisHelpers";
 import PbVisionReportLayout from "../components/pb-vizion/PbVisionReportLayout";
+import { getReportCapability } from "../services/reportCapability";
 
 function useJobReport(jobId?: string) {
   const [loadedReport, setLoadedReport] = useState<{
@@ -27,6 +29,7 @@ function useJobReport(jobId?: string) {
     job: AnalysisJobSummary | null;
     jobId: string;
     report: AnalysisReport | null;
+    result: AnalysisPipelineResult | null;
     trajectoryArtifact: ReconstructedBallTrajectoryArtifact | null;
   } | null>(null);
 
@@ -55,6 +58,7 @@ function useJobReport(jobId?: string) {
             job: nextJob,
             jobId,
             report: nextReport,
+            result: pipelineResult,
             trajectoryArtifact,
           });
         }
@@ -65,6 +69,7 @@ function useJobReport(jobId?: string) {
             job: null,
             jobId,
             report: null,
+            result: null,
             trajectoryArtifact: null,
           });
         }
@@ -79,7 +84,7 @@ function useJobReport(jobId?: string) {
   }, [jobId]);
 
   if (!jobId) {
-    return { error: null, job: null, report: demoReport, trajectoryArtifact: null };
+    return { error: null, job: null, report: demoReport, result: null, trajectoryArtifact: null };
   }
 
   if (loadedReport?.jobId !== jobId) {
@@ -87,6 +92,7 @@ function useJobReport(jobId?: string) {
       error: null,
       job: undefined,
       report: undefined,
+      result: undefined,
       trajectoryArtifact: undefined,
     };
   }
@@ -95,6 +101,7 @@ function useJobReport(jobId?: string) {
     error: loadedReport.error,
     job: loadedReport.job,
     report: loadedReport.report,
+    result: loadedReport.result,
     trajectoryArtifact: loadedReport.trajectoryArtifact,
   };
 }
@@ -126,7 +133,7 @@ export function ReportPage({
   onNavigate: NavigateFn;
   reportType: ReportType;
 }) {
-  const { error, job, report, trajectoryArtifact } = useJobReport(jobId);
+  const { error, job, report, result, trajectoryArtifact } = useJobReport(jobId);
   const searchParams = useCurrentSearchParams();
   const taskReturnPath = taskListPathForJob(job);
 
@@ -200,6 +207,20 @@ export function ReportPage({
         backPath={taskReturnPath}
       />
     );
+  }
+
+  if (jobId && job) {
+    const capability = getReportCapability({ job, manifest: result ?? null, manifestState: "loaded" });
+    if (capability.state !== "available") {
+      return (
+        <StatusState
+          title="暂无有效报告数据"
+          body={capability.reason}
+          onNavigate={onNavigate}
+          backPath={taskReturnPath}
+        />
+      );
+    }
   }
 
   const analysis = (report ?? demoReport) as AnalysisReport;

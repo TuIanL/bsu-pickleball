@@ -5,9 +5,7 @@
 ## Purpose
 
 定义 Player Report 的证据来源、主体身份、指标可追溯性与 fail-closed 展示契约，确保报告只展示有权威依据的球员分析结果，并兼容演示数据与历史产物。
-
 ## Requirements
-
 ### Requirement: Player Report 主体仅限 canonical player
 系统 SHALL 使 Player Report 的主体选择仅包含 `PerformanceSubject.kind === "player"` 的球员（id 形如 `Player_1..Player_4`）；team subject（`team_near` / `team_far`）SHALL NOT 进入报告主体选择器或默认主体，Team Report SHALL 由后续独立能力实现。
 
@@ -46,17 +44,32 @@
 - **AND** SHALL NOT 因尾号 N 被猜测为 `Player_N`
 
 ### Requirement: source fail-closed（job evidence-only）
-系统 SHALL 仅在 `report.source === "demo"` 时允许 mock/Demo Adapter 数据；`job / undefined / unknown` SHALL 一律走 evidence-only。任何在 job 路径被调用的数据生产函数 SHALL NOT 返回 mock/近似值，而 SHALL 返回 `unavailable` 语义。
+
+系统 SHALL 仅在 `report.source === "demo"` 时允许 mock/Demo Adapter 数据；`job / undefined / unknown` SHALL 一律走 evidence-only。真实 job 的结构化可视化 artifact（包括 `zone_stats`）属于 evidence，必须按 canonical player 读取并携带 provenance；任何缺失或无法读取的 artifact SHALL 返回 unavailable/failed 语义。
 
 #### Scenario: job 报告不生成近似值
-- **WHEN** 报告 `source` 为 `job`（或缺失/未知），且缺少某指标（速度、百分位、发球/接发统计、距离、第三拍比例、技能评分、教练建议）
-- **THEN** 该指标 SHALL 为 `unavailable`，显示"本次分析暂未生成"
-- **AND** SHALL NOT 回退为近似或稳定哈希数值（如 35mph / 727ft / 4.04）
+
+- **WHEN** 报告 `source` 为 `job`（或缺失/未知），且缺少某指标或结构化区域数据
+- **THEN** 该指标 SHALL 为 `unavailable`，显示 artifact 未生成、加载失败、本次不支持或无该球员等原因
+- **AND** SHALL NOT 回退为近似、稳定哈希数值、静态占位热力图或 demo 区域数据
 
 #### Scenario: demo 标注可见且 mock 不泄漏
+
 - **WHEN** 当前报告 `source === "demo"`
-- **THEN** 报告页顶部 SHALL 显示可见的"演示数据"标注
-- **ELSE**（非 demo）SHALL NOT 使用任何 mock / DemoAdapter 数值
+- **THEN** 报告页顶部 SHALL 显示可见的“演示数据”标注
+- **ELSE**（非 demo）SHALL NOT 使用任何 mock / DemoAdapter 数值或区域可视化
+
+#### Scenario: structured visualization artifact 作为真实证据
+
+- **WHEN** real job 的 `/visualization-data` 返回 selected canonical player 的 `zone_stats`
+- **THEN** `PlayerReportEvidence` SHALL 将该区域统计标记为 `available`
+- **AND** 该值 SHALL 携带 `structured_visualization` provenance
+
+#### Scenario: structured visualization artifact 缺失
+
+- **WHEN** real job 的 structured visualization 请求返回 404、网络错误、损坏数据或没有匹配球员
+- **THEN** 区域统计证据 SHALL 为 `unavailable` 或 `failed` 并携带原因
+- **AND** 报告 SHALL 不得从 `metrics.heatmap`、展示名、数组位置或硬编码值猜测区域占用
 
 ### Requirement: job 路径禁止 import mock（架构可验证）
 系统 SHALL 使报告展示组件（`src/components/pb-vizion/**`）不得 import `pbMockData` 或 Demo Adapter（Demo 数据入口组件除外）；此约束 SHALL 由自动化架构/单测强制，而非仅依赖人工。
@@ -118,9 +131,65 @@
 - **AND** 不伪装为"合法第三拍率"
 
 ### Requirement: 报告指标可追溯且数据来源单一
-系统 SHALL 使报告页展示的每个指标都能追溯到明确 artifact / event / finding（`PlayerReportEvidence` 聚合为组件唯一数据入口）。
+
+系统 SHALL 使报告页展示的每个指标都能追溯到明确 artifact / event / finding（`PlayerReportEvidence` 聚合为组件唯一数据入口），包括区域空间热力图及其占用统计。
 
 #### Scenario: 数据来源单一
-- **WHEN** 报告页任一 PB 组件需要展示数值
+
+- **WHEN** 报告页任一 PB 组件需要展示数值、区域颜色或区域占用率
 - **THEN** 该值 SHALL 来自 `PlayerReportEvidence`（或其下的 Demo Adapter，仅 demo 源）
-- **AND** 组件 SHALL NOT 私自再查 `report.shotRows` / `mockData` / 硬编码回退
+- **AND** 组件 SHALL NOT 私自再查 `report.shotRows`、`mockData`、散落的 pipeline 字段或硬编码回退
+
+#### Scenario: 区域统计来源可审计
+
+- **WHEN** 报告展示 `zone_stats` 的区域占用、NVZ 占用率、站位距离或反馈
+- **THEN** 每个 available 区域证据 SHALL 引用 structured visualization artifact 和 canonical player identity
+- **AND** evidence 缺失时 SHALL 展示 unavailable 原因而不是 0% 或空白结论
+
+### Requirement: Player Report consumes canonical event evidence
+
+真实 job 的 Player Report SHALL 优先从 `shot-rally-events.v1` 和 `metric-snapshot.v1` 组装逐拍证据与聚合指标。报告组件 SHALL 继续只使用 canonical `Player_N` 关联球员，并 SHALL NOT 直接拼接散落的 tracking、trajectory 或 mock 字段作为第二数据源。
+
+#### Scenario: 事件产物可用
+
+- **WHEN** 真实 job 存在可读的 canonical 事件和指标 artifact
+- **THEN** Player Report Evidence SHALL 从这些 artifact 生成 `ShotEvidence`、发接发统计、回合统计和空间/质量指标
+- **AND** 每个 available 指标 SHALL 携带 provenance 和 evidence 引用
+
+#### Scenario: 事件产物不可用
+
+- **WHEN** canonical artifact 为 unavailable、failed 或未生成
+- **THEN** 报告 SHALL 显示对应指标的 unavailable/failed 状态和原因
+- **AND** SHALL NOT 回退到 mock、展示名匹配、数组位置或硬编码默认值
+
+### Requirement: Shot evidence exposes rally context
+
+由 canonical 事件映射的 `ShotEvidence` SHALL 能表达 `shot_id`、`rally_id`、`ordinal_in_rally`、canonical `player_id`、阶段、击球类型、时间窗、质量、结果/错误（若可用）和来源引用。字段不可用时 SHALL 保留明确的不可用原因。
+
+#### Scenario: 按第三拍筛选
+
+- **WHEN** 用户选择第三拍过滤器
+- **THEN** 报告 SHALL 按 `rally_id + ordinal_in_rally = 3` 筛选
+- **AND** SHALL NOT 使用全局 shotRows 数组下标推断第三拍
+
+#### Scenario: 未归属击球
+
+- **WHEN** Shot 的 ownership status 为 ambiguous 或 unassigned
+- **THEN** ShotEvidence SHALL 保留该 Shot 的时间和 rally context
+- **AND** SHALL 不把它归入任意球员的个人统计
+
+### Requirement: Metric Snapshot maps to strong evidence values
+
+Metric Snapshot 中的每一项指标 SHALL 映射为 `EvidenceValue<T>`。`available` 必须携带 value、provenance、confidence（若有）和 numerator/denominator 事实；`insufficient_evidence`、`not_applicable`、`unavailable` 或 `failed` 必须携带 reason 且 value 为 null。
+
+#### Scenario: 可审计的合法率
+
+- **WHEN** 指标快照提供合法发球 numerator=8、denominator=10
+- **THEN** Player Report SHALL 展示 80% 或等价格式
+- **AND** SHALL 同时保留 8/10、样本量和证据引用
+
+#### Scenario: 没有机会样本
+
+- **WHEN** 指标 denominator=0 或低于最低样本阈值
+- **THEN** Player Report SHALL 展示数据不足/不适用状态
+- **AND** SHALL NOT 展示 0% 作为球员能力结论

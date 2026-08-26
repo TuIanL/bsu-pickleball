@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, Layers, LineChart, Route, Timer } from "lucide-react";
 import type { NavigateFn, AppPath, NavigatePath, ReportType } from "../app/navigationTypes";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, FusedPlayerOverlayArtifact, StructuredVisualizationData, ReconstructedBallTrajectoryArtifact } from "../types/report";
+import type { ShotRallyEventsArtifact } from "../types/shotRallyEvents";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { RailMeta } from "../components/RailMeta";
@@ -14,12 +15,15 @@ import { ProgressChart } from "../components/platform/ProgressChart";
 import StructuredHeatmap from "../components/platform/StructuredHeatmap";
 import StructuredScatterPlot from "../components/platform/StructuredScatterPlot";
 import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap";
+import RallyShotTimeline from "../components/platform/RallyShotTimeline";
 import { supportedReportTypes } from "../app/router";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import type { LibraryView } from "../components/library/viewCapabilities";
-import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots, getReconstructedBallTrajectory } from "../services/analysisClient";
+import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots, getReconstructedBallTrajectory, getShotRallyEvents } from "../services/analysisClient";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles } from "../utils/analysisHelpers";
+import { resolveDisplayViewId, withDisplayViewQuery } from "../utils/multiviewDisplay";
+import { getReportCapability, type ReportCapability } from "../services/reportCapability";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
@@ -41,6 +45,8 @@ function useVisualAnalysisReport(jobId?: string) {
     poseOverlayLoadState: OverlayLoadState;
     report: AnalysisReport | null;
     result: AnalysisPipelineResult | null;
+    shotRallyEvents: ShotRallyEventsArtifact | null;
+    shotRallyEventsLoadState: OverlayLoadState;
     scatterManifest: VisualizationManifest | null;
     scatterLoadState: OverlayLoadState;
     serveEvents: ServeEventsArtifact | null;
@@ -77,6 +83,8 @@ function useVisualAnalysisReport(jobId?: string) {
         fusedPlayerOverlayLoadState: OverlayLoadState;
         heatmapsManifest: VisualizationManifest | null;
         heatmapsLoadState: OverlayLoadState;
+        shotRallyEvents: ShotRallyEventsArtifact | null;
+        shotRallyEventsLoadState: OverlayLoadState;
         scatterManifest: VisualizationManifest | null;
         scatterLoadState: OverlayLoadState;
       }>
@@ -103,6 +111,7 @@ function useVisualAnalysisReport(jobId?: string) {
         const shouldLoadBounceEvents = Boolean(pipelineResult?.artifacts.bounce_events_url);
         const shouldLoadHeatmaps = Boolean(pipelineResult?.artifacts.heatmaps_url);
         const shouldLoadScatter = Boolean(pipelineResult?.artifacts.scatter_plots_url);
+        const shouldLoadShotRallyEvents = Boolean(pipelineResult?.artifacts.shot_rally_events_url);
 
         if (!alive) {
           return;
@@ -125,6 +134,8 @@ function useVisualAnalysisReport(jobId?: string) {
           poseOverlayLoadState: shouldLoadPose ? "loading" : "unavailable",
           report: adaptedReport,
           result: pipelineResult,
+          shotRallyEvents: null,
+          shotRallyEventsLoadState: shouldLoadShotRallyEvents ? "loading" : "unavailable",
           scatterManifest: null,
           scatterLoadState: shouldLoadScatter ? "loading" : "unavailable",
           serveEvents: null,
@@ -279,6 +290,24 @@ function useVisualAnalysisReport(jobId?: string) {
               });
             });
         }
+
+        if (pipelineResult && shouldLoadShotRallyEvents) {
+          getShotRallyEvents(pipelineResult)
+            .then((artifact) => {
+              setOverlayState({
+                shotRallyEvents: artifact,
+                shotRallyEventsLoadState: artifact
+                  ? artifact.status === "failed" ? "failed" : "available"
+                  : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({
+                shotRallyEvents: null,
+                shotRallyEventsLoadState: "failed",
+              });
+            });
+        }
       } catch (error) {
         if (alive) {
           setLoadedResult({
@@ -298,6 +327,8 @@ function useVisualAnalysisReport(jobId?: string) {
             poseOverlayLoadState: "unavailable",
             report: null,
             result: null,
+            shotRallyEvents: null,
+            shotRallyEventsLoadState: "unavailable",
             scatterManifest: null,
             scatterLoadState: "unavailable",
             serveEvents: null,
@@ -335,6 +366,8 @@ function useVisualAnalysisReport(jobId?: string) {
       poseOverlayLoadState: "idle" as OverlayLoadState,
       report: demoReport,
       result: null,
+      shotRallyEvents: null,
+      shotRallyEventsLoadState: "idle" as OverlayLoadState,
       scatterManifest: null,
       scatterLoadState: "idle" as OverlayLoadState,
       serveEvents: null,
@@ -364,6 +397,8 @@ function useVisualAnalysisReport(jobId?: string) {
       poseOverlayLoadState: "idle" as OverlayLoadState,
       report: undefined,
       result: undefined,
+      shotRallyEvents: undefined,
+      shotRallyEventsLoadState: "idle" as OverlayLoadState,
       scatterManifest: undefined,
       scatterLoadState: "idle" as OverlayLoadState,
       serveEvents: undefined,
@@ -392,6 +427,8 @@ function useVisualAnalysisReport(jobId?: string) {
     poseOverlayLoadState: loadedResult.poseOverlayLoadState,
     report: loadedResult.report,
     result: loadedResult.result,
+    shotRallyEvents: loadedResult.shotRallyEvents,
+    shotRallyEventsLoadState: loadedResult.shotRallyEventsLoadState,
     scatterManifest: loadedResult.scatterManifest,
     scatterLoadState: loadedResult.scatterLoadState,
     serveEvents: loadedResult.serveEvents,
@@ -421,6 +458,8 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     poseOverlayLoadState,
     report,
     result,
+    shotRallyEvents,
+    shotRallyEventsLoadState,
     scatterManifest,
     scatterLoadState,
     serveEvents,
@@ -432,6 +471,76 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     videoSrc,
   } = useVisualAnalysisReport(jobId);
   const taskReturnPath = taskListPathForJob(job);
+  const referenceViewId = job?.referenceViewId ?? "cam_1";
+  const displayViewInputs = job?.analysisKind === "multiview"
+    ? (job.jointViewInputs ?? []).filter((item, index, all) => all.findIndex((candidate) => candidate.cameraSlot === item.cameraSlot) === index)
+    : [];
+  const displayViewIds = displayViewInputs.length
+    ? displayViewInputs.map((item) => item.cameraSlot)
+    : job?.analysisKind === "multiview" ? [referenceViewId] : [];
+  const urlDisplayView = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("displayView") : null;
+  const [displayViewId, setDisplayViewId] = useState<string>(resolveDisplayViewId(urlDisplayView, displayViewIds, referenceViewId));
+  useEffect(() => {
+    const next = resolveDisplayViewId(urlDisplayView, displayViewIds, referenceViewId);
+    setDisplayViewId((current) => current === next ? current : next);
+  }, [job?.id, referenceViewId, urlDisplayView, displayViewIds.join(",")]);
+  const displayViewInput = displayViewInputs.find((item) => item.cameraSlot === displayViewId);
+  const selectedVideoId = displayViewInput?.videoId ?? (displayViewId === referenceViewId ? job?.videoId : undefined);
+  const trajectoryRenderViewId = displayViewId || (
+    reconstructedBallTrajectory?.render_view_id
+      ?? reconstructedBallTrajectory?.reference_view_id
+      ?? (job?.analysisKind === "multiview" ? referenceViewId : undefined)
+  );
+  const displayViewOptions = displayViewIds.map((viewId) => {
+    const input = displayViewInputs.find((item) => item.cameraSlot === viewId);
+    const hasVideo = Boolean(input?.videoId ?? (viewId === referenceViewId ? job?.videoId : undefined));
+    const targetView = fusedPlayerOverlay?.views?.[viewId];
+    const hasProjection = viewId === referenceViewId
+      ? Boolean(fusedPlayerOverlay?.frames.length)
+      : Boolean(targetView?.frames.length) && targetView?.status === "available";
+    const mappingAvailable = input?.sourceTimestampMappingStatus !== "unavailable";
+    return {
+      id: viewId,
+      label: viewId === "cam_1" ? "A 机位" : viewId === "cam_2" ? "B 机位" : viewId,
+      available: hasVideo && mappingAvailable && hasProjection,
+      reason: !hasVideo
+        ? "该机位没有可播放视频。"
+        : !mappingAvailable
+          ? "该机位没有可用的 canonical→媒体时间映射。"
+          : !hasProjection
+            ? "该机位没有生成对应的 Player overlay，请重新运行双摄分析。"
+            : undefined,
+    };
+  });
+  const updateDisplayView = (nextViewId: string) => {
+    if (!displayViewIds.includes(nextViewId)) return;
+    if (!displayViewOptions.find((option) => option.id === nextViewId)?.available) return;
+    setDisplayViewId(nextViewId);
+    if (typeof window !== "undefined") {
+      const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      onNavigate(withDisplayViewQuery(currentPath, nextViewId) as AppPath, { replace: true });
+    }
+  };
+  useEffect(() => {
+    if (fusedPlayerOverlayLoadState === "loading" || displayViewId === referenceViewId) return;
+    const selectedOption = displayViewOptions.find((option) => option.id === displayViewId);
+    if (!selectedOption?.available) {
+      updateDisplayView(referenceViewId);
+    }
+  }, [displayViewId, displayViewOptions, fusedPlayerOverlayLoadState, referenceViewId]);
+  const unavailableDisplayView = displayViewOptions.find((option) => option.id !== referenceViewId && !option.available);
+  const displayViewNotice = displayViewId !== referenceViewId
+    ? displayViewOptions.find((option) => option.id === displayViewId)?.reason
+    : fusedPlayerOverlayLoadState !== "loading"
+      ? unavailableDisplayView?.reason
+      : undefined;
+  const displayVideoSrc = getVideoStreamUrl(selectedVideoId) ?? videoSrc;
+  const displayFallbackVideoSrc = displayViewId === referenceViewId ? overlayVideoSrc : undefined;
+  const displayTimeMapping = {
+    offsetMs: displayViewInput?.sourceTimestampOffsetMs ?? 0,
+    rate: displayViewInput?.sourceTimestampRate ?? 1,
+  };
+  const displayCourtOrientation = displayViewInput?.courtOrientation ?? null;
 
   if (jobId && (job === undefined || report === undefined)) {
     if (embedded) {
@@ -513,7 +622,22 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     ? withTaskListContext(`/analysis/${analysis.jobId}/reports/${type}`, taskContextForJob(job))
     : `/reports/${type}` as AppPath;
   const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
+  const handleTimelineSeek = (timestampMs: number) => {
+    if (!jobId) return;
+    onNavigate(contextualPath(`/analysis/${jobId}/vision?t=${Math.round(timestampMs)}`));
+  };
   const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
+  const reportCapability = jobId
+    ? getReportCapability({
+      job,
+      manifest: result ?? null,
+      manifestState: result === undefined ? "loading" : "loaded",
+    })
+    : {
+      state: "available" as const,
+      reason: "",
+      evidence: { canonicalTracks: false, movementMetrics: false, structuredVisualization: false },
+    };
 
       if (jobId) {
     return (
@@ -570,6 +694,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
               ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
               reconstructedBallTrajectory={reconstructedBallTrajectory ?? null}
+              trajectoryViewId={trajectoryRenderViewId}
               bounceEvents={bounceEvents ?? null}
               bounceEventsDetail={result?.artifacts.bounce_events_detail}
               bounceEventsLoadState={bounceEventsLoadState}
@@ -593,9 +718,15 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
               fusedPlayerOverlayStatus={result?.artifacts.fused_player_overlay_status}
               fusedPlayerOverlay={fusedPlayerOverlay ?? null}
+              displayViewId={displayViewId}
+              displayViewOptions={displayViewOptions}
+              onDisplayViewChange={updateDisplayView}
+              displayViewNotice={displayViewNotice}
+              displayTimeMapping={displayTimeMapping}
+              displayCourtOrientation={displayCourtOrientation}
               // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
-              videoSrc={videoSrc ?? undefined}
-              fallbackVideoSrc={overlayVideoSrc ?? undefined}
+              videoSrc={displayVideoSrc ?? undefined}
+              fallbackVideoSrc={displayFallbackVideoSrc}
               pipelineTracks={result?.tracks}
               seekToMs={seekToMs}
             />
@@ -608,22 +739,31 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               scatterLoadState={scatterLoadState}
               scatterStatus={result?.artifacts.position_visualizations_status}
               scatterDetail={result?.artifacts.position_visualizations_detail}
+              shotRallyEvents={shotRallyEvents ?? null}
+              shotRallyEventsLoadState={shotRallyEventsLoadState}
+              shotRallyEventsStatus={result?.artifacts.shot_rally_events_status}
+              shotRallyEventsDetail={result?.artifacts.shot_rally_events_detail}
               jobId={jobId}
+              onSeekToMs={handleTimelineSeek}
             />
           </div>
           <AnalysisStatusRail
             analysis={analysis}
             ballTrajectory={ballTrajectory ?? null}
-            ballTrajectoryLoadState={ballTrajectoryLoadState}
+            ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
             bounceEvents={bounceEvents ?? null}
             bounceEventsLoadState={bounceEventsLoadState}
             job={job}
             onNavigate={onNavigate}
             embedded={embedded}
             onSelectView={onSelectView}
+            fusedPlayerOverlay={fusedPlayerOverlay ?? null}
+            fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
+            displayViewId={displayViewId}
             poseOverlay={poseOverlay ?? null}
             poseOverlayLoadState={poseOverlayLoadState}
             reportPath={reportPath}
+            reportCapability={reportCapability}
             result={result}
             heatmapsManifest={heatmapsManifest ?? null}
             heatmapsLoadState={heatmapsLoadState}
@@ -690,6 +830,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
             ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
             ballTrajectoryStatus={result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status}
             reconstructedBallTrajectory={reconstructedBallTrajectory ?? null}
+            trajectoryViewId={trajectoryRenderViewId}
             bounceEvents={bounceEvents ?? null}
             bounceEventsDetail={result?.artifacts.bounce_events_detail}
             bounceEventsLoadState={bounceEventsLoadState}
@@ -713,9 +854,15 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
             fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
             fusedPlayerOverlayStatus={result?.artifacts.fused_player_overlay_status}
             fusedPlayerOverlay={fusedPlayerOverlay ?? null}
+            displayViewId={displayViewId}
+            displayViewOptions={displayViewOptions}
+            onDisplayViewChange={updateDisplayView}
+            displayViewNotice={displayViewNotice}
+            displayTimeMapping={displayTimeMapping}
+            displayCourtOrientation={displayCourtOrientation}
             // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
-            videoSrc={videoSrc ?? undefined}
-            fallbackVideoSrc={overlayVideoSrc ?? undefined}
+            videoSrc={displayVideoSrc ?? undefined}
+            fallbackVideoSrc={displayFallbackVideoSrc}
             pipelineTracks={result?.tracks}
           />
           {analysis.source === "job" ? (
@@ -728,7 +875,12 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               scatterLoadState={scatterLoadState}
               scatterStatus={result?.artifacts.position_visualizations_status}
               scatterDetail={result?.artifacts.position_visualizations_detail}
+              shotRallyEvents={shotRallyEvents ?? null}
+              shotRallyEventsLoadState={shotRallyEventsLoadState}
+              shotRallyEventsStatus={result?.artifacts.shot_rally_events_status}
+              shotRallyEventsDetail={result?.artifacts.shot_rally_events_detail}
               jobId={jobId}
+              onSeekToMs={handleTimelineSeek}
             />
           ) : null}
         </div>
@@ -783,7 +935,12 @@ function VisualizationArtifactGallery({
   scatterLoadState,
   scatterStatus,
   scatterDetail,
+  shotRallyEvents,
+  shotRallyEventsLoadState,
+  shotRallyEventsStatus,
+  shotRallyEventsDetail,
   jobId,
+  onSeekToMs,
 }: {
   heatmapsManifest: VisualizationManifest | null;
   heatmapsLoadState: OverlayLoadState;
@@ -793,7 +950,12 @@ function VisualizationArtifactGallery({
   scatterLoadState: OverlayLoadState;
   scatterStatus?: string;
   scatterDetail?: string;
+  shotRallyEvents: ShotRallyEventsArtifact | null;
+  shotRallyEventsLoadState: OverlayLoadState;
+  shotRallyEventsStatus?: string;
+  shotRallyEventsDetail?: string;
   jobId?: string;
+  onSeekToMs?: (timestampMs: number) => void;
 }) {
   const [structuredViz, setStructuredViz] = useState<StructuredVisualizationData | null>(null);
   useEffect(() => {
@@ -842,7 +1004,7 @@ function VisualizationArtifactGallery({
   ];
 
   const hasAnyItems = groups.some((group) => (group.manifest?.items.length ?? 0) > 0 || group.hasStructured);
-  if (!hasAnyItems && groups.every((group) => group.loadState === "unavailable" || group.status === "skipped" || !group.status)) {
+  if (!hasAnyItems && !jobId && groups.every((group) => group.loadState === "unavailable" || group.status === "skipped" || !group.status)) {
     return null;
   }
 
@@ -853,7 +1015,7 @@ function VisualizationArtifactGallery({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">可视化产物</p>
-          <h2 className="mt-2 text-xl font-black text-[#14241B]">热力图与散点图</h2>
+          <h2 className="mt-2 text-xl font-black text-[#14241B]">位置与回合可视化</h2>
         </div>
         <LineChart className="text-[#168A34]" size={22} aria-hidden="true" />
       </div>
@@ -912,6 +1074,15 @@ function VisualizationArtifactGallery({
             </article>
           );
         })}
+        {jobId && (
+          <RallyShotTimeline
+            artifact={shotRallyEvents}
+            detail={shotRallyEventsDetail}
+            loadState={shotRallyEventsLoadState}
+            onSeekToMs={onSeekToMs}
+            status={shotRallyEventsStatus}
+          />
+        )}
       </div>
     </section>
   );
@@ -928,10 +1099,14 @@ function AnalysisStatusRail({
   job,
   onNavigate,
   embedded,
+  fusedPlayerOverlay,
+  fusedPlayerOverlayLoadState,
+  displayViewId,
   onSelectView,
   poseOverlay,
   poseOverlayLoadState,
   reportPath,
+  reportCapability,
   result,
   scatterManifest,
   scatterLoadState,
@@ -950,10 +1125,14 @@ function AnalysisStatusRail({
   job?: AnalysisJobSummary | null;
   onNavigate: NavigateFn;
   embedded?: boolean;
+  fusedPlayerOverlay: FusedPlayerOverlayArtifact | null;
+  fusedPlayerOverlayLoadState: OverlayLoadState;
+  displayViewId?: string;
   onSelectView?: (view: LibraryView) => void;
   poseOverlay: PoseOverlayArtifact | null;
   poseOverlayLoadState: OverlayLoadState;
   reportPath: (type: ReportType) => NavigatePath;
+  reportCapability: ReportCapability;
   result?: AnalysisPipelineResult | null;
   scatterManifest: VisualizationManifest | null;
   scatterLoadState: OverlayLoadState;
@@ -962,11 +1141,22 @@ function AnalysisStatusRail({
   trackingOverlay: TrackingOverlayArtifact | null;
   trackingOverlayLoadState: OverlayLoadState;
 }) {
+  const fusedPlayerOverlayIsConfigured = Boolean(
+    fusedPlayerOverlay
+      || fusedPlayerOverlayLoadState === "loading"
+      || fusedPlayerOverlayLoadState === "failed"
+      || result?.artifacts.fused_player_overlay_url,
+  );
+  const selectedFusedView = displayViewId ? fusedPlayerOverlay?.views?.[displayViewId] : undefined;
   const overlayRows = [
     {
       label: "人物框",
-      status: overlayLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? result?.artifacts.tracking_overlay_status),
-      detail: result?.artifacts.tracking_overlay_detail ?? trackingOverlay?.detail,
+      status: fusedPlayerOverlayIsConfigured
+        ? overlayLayerStatus(fusedPlayerOverlayLoadState, fusedPlayerOverlay?.status ?? result?.artifacts.fused_player_overlay_status)
+        : overlayLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? result?.artifacts.tracking_overlay_status),
+      detail: fusedPlayerOverlayIsConfigured
+        ? selectedFusedView?.detail ?? result?.artifacts.fused_player_overlay_detail ?? fusedPlayerOverlay?.detail
+        : result?.artifacts.tracking_overlay_detail ?? trackingOverlay?.detail,
     },
     {
       label: "骨架姿态",
@@ -982,9 +1172,15 @@ function AnalysisStatusRail({
       label: "球轨迹",
       status: overlayLayerStatus(
         ballTrajectoryLoadState,
-        ballTrajectory?.status ?? result?.artifacts.cleaned_ball_trajectory_status ?? result?.artifacts.ball_trajectory_status
+        result?.artifacts.reconstructed_ball_trajectory_status
+          ?? ballTrajectory?.status
+          ?? result?.artifacts.cleaned_ball_trajectory_status
+          ?? result?.artifacts.ball_trajectory_status
       ),
-      detail: result?.artifacts.cleaned_ball_trajectory_detail ?? result?.artifacts.ball_trajectory_detail ?? ballTrajectory?.detail,
+      detail: result?.artifacts.reconstructed_ball_trajectory_detail
+        ?? result?.artifacts.cleaned_ball_trajectory_detail
+        ?? result?.artifacts.ball_trajectory_detail
+        ?? ballTrajectory?.detail,
     },
     {
       label: "弹跳候选",
@@ -1084,9 +1280,15 @@ function AnalysisStatusRail({
           ) : null}
           {supportedActions.map((action) => (
             <button
-              className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
+              className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6] disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={reportCapability.state !== "available"}
               key={action.type}
-              onClick={() => (embedded && onSelectView ? onSelectView("report") : onNavigate(reportPath(action.type)))}
+              onClick={() => {
+                if (reportCapability.state !== "available") return;
+                if (embedded && onSelectView) onSelectView("report");
+                else onNavigate(reportPath(action.type));
+              }}
+              title={reportCapability.state === "available" ? undefined : reportCapability.reason}
               type="button"
             >
               {action.title}
@@ -1112,9 +1314,15 @@ function overlayLayerStatus(loadState: OverlayLoadState, artifactStatus?: string
     return "failed";
   }
   if (loadState === "available") {
-    return artifactStatus ?? "available";
+    return normalizeOverlayStatus(artifactStatus ?? "available");
   }
-  return artifactStatus ?? "unavailable";
+  return normalizeOverlayStatus(artifactStatus ?? "unavailable");
+}
+
+function normalizeOverlayStatus(status: string): string {
+  if (status === "succeeded" || status === "completed") return "available";
+  if (status === "degraded") return "partial";
+  return status;
 }
 
 function overlayStatusMeta(status?: string) {

@@ -16,6 +16,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -48,13 +49,36 @@ from app.services.analysis_progress import (
     stage_definitions,
     stage_ids,
 )
+from app.services.analysis_control_plane import AnalysisControlPlane
 from app.services.storage_service import StorageService
 from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
 
 logger = logging.getLogger(__name__)
 
+
+def _is_local_process_alive(pid: int | None) -> bool:
+    """Return whether a locally recorded worker process still exists.
+
+    A CPU-bound native extension can hold the GIL long enough to delay the
+    in-process heartbeat thread.  In external-worker mode that is not proof
+    that the worker process disappeared, so callers must not revoke its lease
+    solely from a stale timestamp while its PID is still alive.
+    """
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # We cannot inspect another user's process, but it is definitely not
+        # safe to declare that live process lost.
+        return True
+    return True
+
+
 # 终态（任务到此就结束了，不能再变）：成功 / 失败 / 已取消
-TERMINAL_CANONICAL_STATUSES: set[AnalysisCanonicalStatus] = {"succeeded", "failed", "canceled"}
+TERMINAL_CANONICAL_STATUSES: set[AnalysisCanonicalStatus] = {"succeeded", "failed", "canceled", "interrupted"}
 # 仍"活跃"的兼容状态：上传中 / 排队中 / 处理中
 ACTIVE_COMPAT_STATUSES: set[AnalysisJobStatus] = {"uploaded", "queued", "processing"}
 # 允许重试的阶段：视频读取 / 报告 / 可视化
@@ -94,6 +118,7 @@ def canonical_to_display_status(status: AnalysisCanonicalStatus) -> AnalysisJobS
         "succeeded": "completed",
         "failed": "failed",
         "canceled": "canceled",
+        "interrupted": "interrupted",
     }[status]
 
 
@@ -106,6 +131,7 @@ def display_to_canonical_status(status: AnalysisJobStatus) -> AnalysisCanonicalS
         "completed": "succeeded",
         "failed": "failed",
         "canceled": "canceled",
+        "interrupted": "interrupted",
     }[status]
 
 
@@ -277,6 +303,10 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
     if payload.multiview and payload.multiview.executionMode == "joint_tracking_v2":
         config_payload["p1OnlineRecovery"] = P1OnlineRecoveryConfig().snapshot()
         config_payload["debugTraceEnabled"] = bool(payload.multiview.debugTraceEnabled)
+    if payload.multiview:
+        config_payload["sceneCalibrationMode"] = payload.multiview.sceneCalibrationMode
+        config_payload["sceneCalibrationRevision"] = payload.multiview.sceneCalibrationRevision
+        config_payload["sceneViewIds"] = sorted(payload.multiview.sceneViewIds)
     input_payload = {
         "videoId": payload.videoId,
         "calibrationId": payload.calibrationId,
@@ -288,21 +318,59 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         "segmentVersion": payload.segmentVersion,
         # 执行模式进入输入签名:同一 take 的 late_fusion_v1 / joint_tracking_v2 视为不同任务(A/B 不被去重)
         "executionMode": payload.multiview.executionMode if payload.multiview else None,
+        "sceneCalibrationMode": payload.multiview.sceneCalibrationMode if payload.multiview else None,
+        "sceneCalibrationRevision": payload.multiview.sceneCalibrationRevision if payload.multiview else None,
+        "sceneViewIds": sorted(payload.multiview.sceneViewIds) if payload.multiview else [],
     }
     return _stable_hash(input_payload), _stable_hash(config_payload)
 
 
 class JobStore:
-    # 任务的持久化存储：内存字典 + 磁盘 JSON（带线程锁保证并发安全）。
+    """分析任务控制面：SQLite 是权威，JSON 是兼容快照和调试出口。"""
+
     def __init__(self, storage: StorageService | None = None) -> None:
         self.storage = storage or StorageService()
-        self._lock = threading.RLock()  # 可重入锁：同一线程可多次加锁
+        self._lock = threading.RLock()
+        settings = self.storage.settings
+        configured_path = getattr(settings, "analysis_control_database_path", None)
+        control_path = (
+            settings.resolve_path(configured_path)
+            if configured_path is not None
+            else settings.resolve_path(settings.outputs_dir).parent / "analysis_control.sqlite3"
+        )
+        self.control_plane = AnalysisControlPlane(control_path)
         self._jobs: dict[str, AnalysisJobSummary] = {}
+        self._import_legacy_jobs()
+
+    def _model(self, payload: dict[str, object]) -> AnalysisJobSummary:
+        return normalize_job(AnalysisJobSummary.model_validate(payload))
+
+    def _payload(self, job: AnalysisJobSummary) -> dict[str, object]:
+        return self._model(job.model_dump(mode="json")).model_dump(mode="json")
+
+    def _persist_payload(self, payload: dict[str, object] | None) -> AnalysisJobSummary | None:
+        if payload is None:
+            return None
+        job = self._model(payload)
+        with self._lock:
+            self._jobs[job.id] = job
+            self.storage.write_json_atomic(self.storage.job_json_path(job.id), job.model_dump(mode="json"))
+        return job
+
+    def _import_legacy_jobs(self) -> int:
+        payloads: list[dict[str, object]] = []
+        jobs_dir = self.storage.jobs_dir()
+        if jobs_dir.exists():
+            for path in sorted(jobs_dir.glob("*.json")):
+                try:
+                    payloads.append(self._payload(AnalysisJobSummary.model_validate(self.storage.read_json(path))))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Skipping unreadable legacy analysis job %s: %s", path, exc)
+        return self.control_plane.import_legacy(payloads)
 
     def create_job(
         self, payload: AnalysisJobCreate, *, job_id: str | None = None, report_id: str | None = None
     ) -> AnalysisJobSummary:
-        # 新建一个任务，初始状态为 queued（排队中）。
         now = utc_now()
         input_sig, config_sig = analysis_signature(payload)
         job_id = job_id or f"job-{uuid4().hex[:10]}"
@@ -353,64 +421,75 @@ class JobStore:
             executionMode=payload.multiview.executionMode if payload.multiview else "late_fusion_v1",
             orchestrationStatus="waiting_sources" if payload.analysisKind == "multiview" else "none",
             debugTraceEnabled=bool(payload.multiview.debugTraceEnabled) if payload.multiview else False,
+            sceneCalibrationRevision=(
+                payload.multiview.sceneCalibrationRevision
+                if payload.multiview and payload.multiview.sceneCalibrationMode == "metric"
+                else None
+            ),
+            sceneCalibrationMode=payload.multiview.sceneCalibrationMode if payload.multiview else "approximate",
+            sceneCalibrationStatus=(
+                "ready"
+                if payload.multiview and payload.multiview.sceneCalibrationMode == "metric"
+                else "missing"
+            ),
         )
         return self.save(job)
 
     def save(self, job: AnalysisJobSummary) -> AnalysisJobSummary:
-        # 保存任务：先统一化，再写内存 + 落盘（原子写）。
         normalized = normalize_job(job)
-        with self._lock:
-            self._jobs[normalized.id] = normalized
-            self.storage.write_json_atomic(
-                self.storage.job_json_path(normalized.id),
-                normalized.model_dump(mode="json"),
-            )
-        return normalized
+        payload = normalized.model_dump(mode="json")
+        self.control_plane.upsert(payload)
+        return self._persist_payload(payload) or normalized
 
     def update(self, job_id: str, **updates: object) -> AnalysisJobSummary | None:
-        # 局部更新任务的若干字段（其它字段保持原样）。
-        with self._lock:
-            job = self.get(job_id)
-            if job is None:
-                return None
-            payload = job.model_dump()
+        expected_status = updates.pop("_expected_canonical_status", None)
+        expected_worker_run_id = updates.pop("_expected_worker_run_id", None)
+
+        def mutator(payload: dict[str, object]) -> dict[str, object] | None:
+            current_status = payload.get("canonicalStatus")
+            requested_status = updates.get("canonicalStatus")
+            requested_display = updates.get("status") or updates.get("displayStatus")
+            if current_status in TERMINAL_CANONICAL_STATUSES:
+                if requested_status is not None and requested_status != current_status:
+                    return None
+                if requested_display in ACTIVE_COMPAT_STATUSES:
+                    return None
             payload.update(updates)
             payload["updatedAt"] = utc_now()
-            return self.save(AnalysisJobSummary.model_validate(payload))
+            return self._payload(self._model(payload))
+
+        return self._persist_payload(
+            self.control_plane.mutate(
+                job_id,
+                mutator,
+                expected_status=str(expected_status) if expected_status is not None else None,
+                expected_worker_run_id=str(expected_worker_run_id) if expected_worker_run_id is not None else None,
+            )
+        )
 
     def get(self, job_id: str) -> AnalysisJobSummary | None:
-        # 取任务：先查内存，再查磁盘。
-        with self._lock:
-            cached = self._jobs.get(job_id)
-            if cached is not None:
-                return cached
-
-            path = self.storage.job_json_path(job_id)
-            if not path.exists():
-                return None
-            try:
-                job = normalize_job(AnalysisJobSummary.model_validate(self.storage.read_json(path)))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Skipping unreadable analysis job summary %s: %s", path, exc)
-                return None
-            self._jobs[job_id] = job
-            return job
+        self._import_legacy_jobs()
+        try:
+            return self._persist_payload(self.control_plane.get(job_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unable to read analysis job %s from control plane: %s", job_id, exc)
+            return None
 
     def list(self) -> list[AnalysisJobSummary]:
-        # 列出所有任务：磁盘 jobs 目录 + 内存中未落盘的，按更新时间倒序。
-        jobs: dict[str, AnalysisJobSummary] = {}
-        jobs_dir = self.storage.jobs_dir()
-        if jobs_dir.exists():
-            for path in sorted(jobs_dir.glob("*.json")):
-                job = self._load_job_from_path(path)
-                if job is not None:
-                    jobs[job.id] = job
-        with self._lock:
-            jobs.update(self._jobs)
-        return sorted(jobs.values(), key=lambda job: (job.updatedAt or job.createdAt, job.createdAt), reverse=True)
+        self._import_legacy_jobs()
+        jobs: list[AnalysisJobSummary] = []
+        for payload in self.control_plane.list():
+            try:
+                job = self._model(payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Skipping invalid analysis control payload: %s", exc)
+                continue
+            with self._lock:
+                self._jobs[job.id] = job
+            jobs.append(job)
+        return jobs
 
     def find_by_signature(self, input_signature: str, config_signature: str) -> AnalysisJobSummary | None:
-        # 按"输入+配置签名"查找一个"非终态"的已有任务（用于去重）。
         for job in self.list():
             if (
                 job.inputSignature == input_signature
@@ -421,12 +500,6 @@ class JobStore:
         return None
 
     def is_runnable(self, job: AnalysisJobSummary) -> bool:
-        """统一可执行判定：业务状态（queued）与编排状态正交。
-
-        - 普通 single_view：queued 即可执行；
-        - multiview / late_fusion_v1：须 child 就绪（fusion_ready / fallback_ready）；
-        - multiview / joint_tracking_v2：preflight 后即 joint_ready 可执行（无 child）。
-        """
         if job.canonicalStatus != "queued":
             return False
         if job.analysisKind == "single_view":
@@ -438,33 +511,32 @@ class JobStore:
         return False
 
     def claim_next(self, worker_id: str) -> AnalysisJobSummary | None:
-        # Worker 来"领取"下一个可执行的排队任务：按优先级、排队时间排序，取最高。
-        with self._lock:
-            queued = [
-                job
-                for job in self.list()
-                if self.is_runnable(job) and not job.cancelRequestedAt
-            ]
-            if not queued:
-                return None
-            queued.sort(key=lambda job: (-job.priority, job.queuedAt or job.createdAt, job.id))
-            return self._claim(queued[0], worker_id)
+        def selector(payload: dict[str, object]) -> bool:
+            job = self._model(payload)
+            return self.is_runnable(job) and not job.cancelRequestedAt
+
+        def mutator(payload: dict[str, object]) -> dict[str, object]:
+            return self._claim_payload(self._model(payload), worker_id).model_dump(mode="json")
+
+        return self._persist_payload(self.control_plane.mutate_next(selector, mutator))
 
     def claim(self, job_id: str, worker_id: str) -> AnalysisJobSummary | None:
-        # 指定 job_id 领取（用于手动触发某个任务）。
-        with self._lock:
-            job = self.get(job_id)
-            if job is None or not self.is_runnable(job) or job.cancelRequestedAt:
+        def mutator(payload: dict[str, object]) -> dict[str, object] | None:
+            job = self._model(payload)
+            if not self.is_runnable(job) or job.cancelRequestedAt:
                 return None
-            return self._claim(job, worker_id)
+            return self._claim_payload(job, worker_id).model_dump(mode="json")
 
-    def _claim(self, job: AnalysisJobSummary, worker_id: str) -> AnalysisJobSummary:
-        # 内部：把任务从 queued 置为 running（processing），并标记阶段开始。
+        return self._persist_payload(self.control_plane.mutate(job_id, mutator, expected_status="queued"))
+
+    def _claim_payload(
+        self, job: AnalysisJobSummary, worker_id: str, worker_run_id: str | None = None
+    ) -> AnalysisJobSummary:
         now = utc_now()
         mode = resolve_progress_mode(job.analysisKind, job.executionMode)
         claim_stage_id = "video-read" if mode == "single_view" else stage_ids(mode)[0]
         claim_label, claim_detail = stage_details_for(mode, claim_stage_id)
-        payload = job.model_dump()
+        payload = job.model_dump(mode="json")
         payload.update(
             {
                 "canonicalStatus": "running",
@@ -475,7 +547,14 @@ class JobStore:
                 "startedAt": now,
                 "updatedAt": now,
                 "workerId": worker_id,
+                "workerPid": os.getpid(),
+                "workerRunId": worker_run_id or f"{worker_id}-{uuid4().hex}",
+                "claimedAt": now,
+                "workerHeartbeatAt": now,
+                "lastProgressAt": now,
                 "attempt": job.attempt + 1,
+                "interruptedAt": None,
+                "interruptionCode": None,
                 "stages": merge_stage_progress(
                     job.stages,
                     AnalysisStage(
@@ -489,50 +568,90 @@ class JobStore:
                 ),
             }
         )
-        return self.save(AnalysisJobSummary.model_validate(payload))
+        return self._model(payload)
+
+    def heartbeat(self, job_id: str, worker_run_id: str, *, heartbeat_at: str | None = None) -> bool:
+        heartbeat_at = heartbeat_at or utc_now()
+
+        def mutator(payload: dict[str, object]) -> dict[str, object]:
+            payload["workerHeartbeatAt"] = heartbeat_at
+            return self._payload(self._model(payload))
+
+        updated = self.control_plane.mutate(
+            job_id,
+            mutator,
+            expected_status="running",
+            expected_worker_run_id=worker_run_id,
+            require_worker_run_id=True,
+        )
+        if updated is None:
+            return False
+        try:
+            self._persist_payload(updated)
+        except OSError as exc:
+            # SQLite 控制面已经成功写入 heartbeat；兼容 JSON 快照不是
+            # liveness 的权威来源，不能因为一次文件系统写入失败而让
+            # heartbeat 线程退出并把仍在运行的任务误判为失联。
+            logger.warning(
+                "Unable to refresh legacy JSON snapshot for heartbeat of job %s; "
+                "control-plane heartbeat was persisted: %s",
+                job_id,
+                exc,
+            )
+        return True
+
+    def is_lease_current(self, job_id: str, worker_run_id: str | None) -> bool:
+        if not worker_run_id:
+            return False
+        payload = self.control_plane.get(job_id)
+        return bool(
+            payload
+            and payload.get("canonicalStatus") == "running"
+            and payload.get("workerRunId") == worker_run_id
+        )
 
     def cancel(self, job_id: str) -> tuple[AnalysisJobSummary | None, str]:
-        # 取消任务：返回 (任务, 状态)。状态可能是 not_found / terminal / canceled / requested。
-        with self._lock:
-            job = self.get(job_id)
-            if job is None:
-                return None, "not_found"
-            if job.canonicalStatus in TERMINAL_CANONICAL_STATUSES:
-                return job, "terminal"
-            now = utc_now()
-            if job.canonicalStatus == "queued":
-                # 还在排队就直接置为已取消
-                mode = resolve_progress_mode(job.analysisKind, job.executionMode)
-                label, _detail = stage_details_for(mode, job.stage)
-                canceled_stages = merge_stage_progress(
-                    job.stages,
-                    AnalysisStage(
-                        id=job.stage,
-                        label=label,
-                        status="canceled",
-                        detail="任务已在排队阶段取消",
-                        progress=100,
-                        errorCode=ANALYSIS_ERROR_CODES["job_canceled"],
-                    ),
-                    mode=mode,
-                )
-                updated = self._terminal_job(
-                    job,
-                    "canceled",
-                    stages=canceled_stages,
-                    error_code=ANALYSIS_ERROR_CODES["job_canceled"],
-                    message="任务已取消",
-                    finished_at=now,
-                    canceled_at=now,
-                    cancel_requested_at=now,
-                )
-                return updated, "canceled"
-            # 已在运行：只记录"取消请求"，由 Worker 在循环中检查并真正停止
-            updated = self.update(job_id, cancelRequestedAt=job.cancelRequestedAt or now)
-            return updated, "requested"
+        job = self.get(job_id)
+        if job is None:
+            return None, "not_found"
+        if job.canonicalStatus in TERMINAL_CANONICAL_STATUSES:
+            return job, "terminal"
+        now = utc_now()
+        if job.canonicalStatus == "queued":
+            mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+            label, _detail = stage_details_for(mode, job.stage)
+            canceled_stages = merge_stage_progress(
+                job.stages,
+                AnalysisStage(
+                    id=job.stage,
+                    label=label,
+                    status="canceled",
+                    detail="任务已在排队阶段取消",
+                    progress=100,
+                    errorCode=ANALYSIS_ERROR_CODES["job_canceled"],
+                ),
+                mode=mode,
+            )
+            updated = self._terminal_job(
+                job,
+                "canceled",
+                stages=canceled_stages,
+                error_code=ANALYSIS_ERROR_CODES["job_canceled"],
+                message="任务已取消",
+                finished_at=now,
+                canceled_at=now,
+                cancel_requested_at=now,
+            )
+            return updated, "canceled"
+        updated = self.update(
+            job_id,
+            cancelRequestedAt=job.cancelRequestedAt or now,
+            _expected_canonical_status="running",
+            _expected_worker_run_id=job.workerRunId,
+        )
+        return updated or self.get(job_id), "requested"
 
     def mark_stage(self, job: AnalysisJobSummary, stage: AnalysisStage) -> AnalysisJobSummary:
-        # 更新任务的某个阶段进度；若该阶段失败，则把整个任务置为失败。
         mode = resolve_progress_mode(job.analysisKind, job.executionMode)
         stages = merge_stage_progress(job.stages, stage, mode=mode)
         progress = compute_progress_from_stages(
@@ -548,6 +667,7 @@ class JobStore:
             "stage": current_stage_from_stages(stages, fallback=stage.id),
             "progress": progress,
             "stages": stages,
+            "lastProgressAt": utc_now(),
         }
         if stage.status == "failed":
             updates.update(
@@ -562,11 +682,15 @@ class JobStore:
                     "finishedAt": utc_now(),
                 }
             )
-        updated = self.update(job.id, **updates)
-        return updated or job
+        updated = self.update(
+            job.id,
+            **updates,
+            _expected_canonical_status="running" if job.canonicalStatus == "running" else None,
+            _expected_worker_run_id=job.workerRunId,
+        )
+        return updated or self.get(job.id) or job
 
     def mark_succeeded(self, job: AnalysisJobSummary, stages: list[AnalysisStage]) -> AnalysisJobSummary:
-        # 标记任务成功：补上 report 阶段为 done，整体置为 succeeded。
         mode = resolve_progress_mode(job.analysisKind, job.executionMode)
         report_id = stage_ids(mode)[-1]
         report_label, report_detail = stage_details_for(mode, report_id)
@@ -589,7 +713,6 @@ class JobStore:
         error_code: str | None = None,
         internal_message: str | None = None,
     ) -> AnalysisJobSummary:
-        # 标记任务失败。
         mode = resolve_progress_mode(job.analysisKind, job.executionMode)
         return self._terminal_job(
             job,
@@ -599,15 +722,10 @@ class JobStore:
             message=message,
             internal_message=internal_message,
             stage=first_failed_stage(stages),
-            progress=compute_progress_from_stages(
-                stages,
-                mode=mode,
-                previous_progress=job.progress,
-            ),
+            progress=compute_progress_from_stages(stages, mode=mode, previous_progress=job.progress),
         )
 
     def mark_canceled(self, job: AnalysisJobSummary, *, message: str = "任务已取消") -> AnalysisJobSummary:
-        # 标记任务已取消。
         mode = resolve_progress_mode(job.analysisKind, job.executionMode)
         label, _detail = stage_details_for(mode, job.stage)
         canceled_stage = AnalysisStage(
@@ -628,15 +746,74 @@ class JobStore:
             canceled_at=utc_now(),
         )
 
+    def mark_interrupted(
+        self,
+        job: AnalysisJobSummary,
+        *,
+        reason: str = "worker_heartbeat_timeout",
+        message: str = "Worker 在规定时间内没有心跳，任务已失联；已保留最后进度，请重新分析。",
+    ) -> AnalysisJobSummary:
+        return self._terminal_job(
+            job,
+            "interrupted",
+            stages=job.stages,
+            error_code=ANALYSIS_ERROR_CODES.get(reason, ANALYSIS_ERROR_CODES["worker_lost"]),
+            message=message,
+            finished_at=utc_now(),
+            interrupted_at=utc_now(),
+            interruption_code=reason,
+        )
+
+    def recover_stale_running(self, timeout_seconds: float) -> int:
+        now = datetime.now(UTC)
+        recovered = 0
+        for job in self.list():
+            if job.canonicalStatus != "running":
+                continue
+            raw_heartbeat = job.workerHeartbeatAt or job.updatedAt or job.createdAt
+            try:
+                heartbeat = datetime.fromisoformat(raw_heartbeat)
+            except (TypeError, ValueError):
+                continue
+            if (now - heartbeat).total_seconds() <= timeout_seconds:
+                continue
+
+            # 外置 Worker 的 Python heartbeat 线程可能被长时间的 NumPy / SciPy
+            # 原生计算饿死；PID 仍存活时不能把正在收尾的任务抢先置为 interrupted。
+            # embedded 模式中 workerPid 等于当前 API 进程，此时仍沿用 heartbeat
+            # 超时判定，避免卡住的同进程线程永久占用任务。
+            if job.workerPid and job.workerPid != os.getpid() and _is_local_process_alive(job.workerPid):
+                logger.warning(
+                    "Analysis job %s heartbeat is stale, but external worker pid %s is alive; keeping lease",
+                    job.id,
+                    job.workerPid,
+                )
+                continue
+
+            reason = "worker_heartbeat_timeout" if job.workerHeartbeatAt else "worker_lost"
+            updated = self._terminal_job(
+                job,
+                "interrupted",
+                stages=job.stages,
+                error_code=ANALYSIS_ERROR_CODES[reason],
+                message="Worker 在规定时间内没有心跳，任务已失联；已保留最后进度，请重新分析。",
+                finished_at=utc_now(),
+                interrupted_at=utc_now(),
+                interruption_code=reason,
+            )
+            if updated.canonicalStatus == "interrupted":
+                recovered += 1
+        return recovered
+
     def delete(self, job_id: str) -> bool:
-        # 删除任务：内存和磁盘都清掉。
         with self._lock:
             self._jobs.pop(job_id, None)
-            path = self.storage.job_json_path(job_id)
-            if path.exists():
-                path.unlink()
-                return True
-            return False
+        deleted = self.control_plane.delete(job_id)
+        path = self.storage.job_json_path(job_id)
+        if path.exists():
+            path.unlink()
+            deleted = True
+        return deleted
 
     def _terminal_job(
         self,
@@ -652,45 +829,50 @@ class JobStore:
         finished_at: str | None = None,
         canceled_at: str | None = None,
         cancel_requested_at: str | None = None,
+        interrupted_at: str | None = None,
+        interruption_code: str | None = None,
     ) -> AnalysisJobSummary:
-        # 内部：把一个任务置为"终态"（成功/失败/取消），统一更新各类时间戳与状态字段。
         now = finished_at or utc_now()
         display = canonical_to_display_status(canonical_status)
-        payload = job.model_dump()
-        payload.update(
-            {
-                "canonicalStatus": canonical_status,
-                "status": display,
-                "displayStatus": display,
-                "stage": stage or current_stage_from_stages(stages, fallback=job.stage),
-                "progress": 100
-                if progress is None and canonical_status == "succeeded"
-                else progress
-                if progress is not None
-                else job.progress,
-                "updatedAt": now,
-                "finishedAt": now,
-                "stages": stages,
-                "errorCode": error_code,
-                "errorMessage": message,
-                "publicErrorMessage": message,
-                "internalErrorMessage": internal_message,
-                "cancelRequestedAt": cancel_requested_at or job.cancelRequestedAt,
-                "canceledAt": canceled_at or job.canceledAt,
-            }
-        )
-        return self.save(AnalysisJobSummary.model_validate(payload))
+        terminal_updates = {
+            "canonicalStatus": canonical_status,
+            "status": display,
+            "displayStatus": display,
+            "stage": stage or current_stage_from_stages(stages, fallback=job.stage),
+            "progress": 100
+            if progress is None and canonical_status == "succeeded"
+            else progress
+            if progress is not None
+            else job.progress,
+            "updatedAt": now,
+            "finishedAt": now,
+            "stages": stages,
+            "errorCode": error_code,
+            "errorMessage": message,
+            "publicErrorMessage": message,
+            "internalErrorMessage": internal_message,
+            "cancelRequestedAt": cancel_requested_at or job.cancelRequestedAt,
+            "canceledAt": canceled_at or job.canceledAt,
+            "interruptedAt": interrupted_at or job.interruptedAt,
+            "interruptionCode": interruption_code or job.interruptionCode,
+        }
 
-    def _load_job_from_path(self, path: Path) -> AnalysisJobSummary | None:
-        # 内部：从磁盘读一个任务 JSON（损坏的跳过，不报错）。
-        try:
-            job = normalize_job(AnalysisJobSummary.model_validate(self.storage.read_json(path)))
-        except Exception as exc:  # noqa: BLE001 - corrupted persisted jobs should not break the task list.
-            logger.warning("Skipping unreadable analysis job summary %s: %s", path, exc)
-            return None
-        with self._lock:
-            self._jobs[job.id] = job
-        return job
+        def mutator(current: dict[str, object]) -> dict[str, object]:
+            # The executor may hold a snapshot from before another process has
+            # persisted immutable task references (for example scene revision).
+            # Start from the current control-plane row so terminal updates cannot
+            # overwrite those references with stale defaults from the snapshot.
+            payload = dict(current)
+            payload.update(terminal_updates)
+            return self._payload(self._model(payload))
+
+        updated = self.control_plane.mutate(
+            job.id,
+            mutator,
+            expected_status=job.canonicalStatus,
+            expected_worker_run_id=job.workerRunId,
+        )
+        return self._persist_payload(updated) or self.get(job.id) or job
 
 
 class CancellationToken:
@@ -713,6 +895,10 @@ class JobCanceledError(RuntimeError):
     pass
 
 
+class WorkerLeaseLostError(RuntimeError):
+    """Worker 无法继续证明自己拥有当前任务租约。"""
+
+
 class StageTimeoutError(RuntimeError):
     # 某个阶段超时时抛出的异常
     pass
@@ -732,6 +918,7 @@ class ResourceLimiter:
 
 class AnalysisWorkerRuntime:
     # Worker 运行时：在后台线程里不断领取任务并执行分析流水线。
+    # external 模式下本对象运行在独立 OS 进程；embedded 模式保留给兼容调用。
     def __init__(
         self,
         store: JobStore,
@@ -803,10 +990,51 @@ class AnalysisWorkerRuntime:
         while not self._stop_event.is_set():
             ran = self.run_one()
             if ran is None:
-                self._wake_event.wait(0.5)
+                self._wake_event.wait(self.settings.analysis_worker_poll_interval_seconds)
                 self._wake_event.clear()
 
     def _execute(self, job: AnalysisJobSummary) -> AnalysisJobSummary:
+        """为单次执行建立独立 heartbeat 循环，再进入原有 Pipeline 执行体。"""
+        heartbeat_stop = threading.Event()
+        heartbeat_failed = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(job, heartbeat_stop, heartbeat_failed),
+            name=f"{self.worker_id}-heartbeat-{job.id}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            return self._execute_pipeline(job, heartbeat_failed)
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=max(1.0, self.settings.analysis_worker_heartbeat_interval_seconds * 2))
+
+    def _heartbeat_loop(
+        self,
+        job: AnalysisJobSummary,
+        stop_event: threading.Event,
+        failed_event: threading.Event,
+    ) -> None:
+        """heartbeat 不依赖阶段回调，覆盖长时间没有进度事件的模型阶段。"""
+        run_id = job.workerRunId
+        if not run_id or not self.store.heartbeat(job.id, run_id):
+            failed_event.set()
+            self._stop_event.set()
+            logger.warning("Worker %s lost lease before executing job %s", self.worker_id, job.id)
+            return
+        while not stop_event.wait(self.settings.analysis_worker_heartbeat_interval_seconds):
+            if not self.store.heartbeat(job.id, run_id):
+                failed_event.set()
+                self._stop_event.set()
+                logger.warning("Worker %s lost lease while executing job %s", self.worker_id, job.id)
+                return
+
+    def _execute_pipeline(
+        self,
+        job: AnalysisJobSummary,
+        heartbeat_failed: threading.Event,
+    ) -> AnalysisJobSummary:
         # 真正执行一个任务：构造取消令牌 → 跑流水线 → 根据结果更新任务状态。
         # 含重试、取消、超时、异常兜底。
         token = CancellationToken(self.store, job.id)
@@ -816,6 +1044,8 @@ class AnalysisWorkerRuntime:
         def progress_callback(stage_result: PipelineStageResult) -> None:
             # 流水线每完成一个阶段就回调这里，更新任务阶段进度。
             nonlocal latest
+            if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
+                raise WorkerLeaseLostError(f"Worker lease lost for job {job.id}")
             token.raise_if_cancelled()
             latest = self.store.mark_stage(latest, stage_from_pipeline(stage_result))
             self._raise_if_stage_timed_out(latest)
@@ -836,6 +1066,8 @@ class AnalysisWorkerRuntime:
                 try:
                     result = self.resource_limiter.run_cpu(run_executor)
                     break
+                except WorkerLeaseLostError:
+                    raise
                 except StageTimeoutError:
                     raise
                 except JobCanceledError:
@@ -857,6 +1089,8 @@ class AnalysisWorkerRuntime:
                         publicMessage="阶段执行失败，正在按策略重试",
                     )
                     latest = self.store.mark_stage(latest, retry_stage)
+            if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
+                raise WorkerLeaseLostError(f"Worker lease lost for job {job.id}")
             if token.is_cancel_requested():
                 self._cleanup_tmp(job.id)
                 return self._notify_terminal(self.store.mark_canceled(latest))
@@ -869,6 +1103,9 @@ class AnalysisWorkerRuntime:
                 return latest
             self._cleanup_tmp(job.id)
             return self._notify_terminal(self.store.mark_failed(latest, stages=stages, message=result.message))
+        except WorkerLeaseLostError as exc:
+            logger.warning("Analysis job %s execution lease lost: %s", job.id, exc)
+            return self.store.get(job.id) or latest
         except JobCanceledError:
             self._cleanup_tmp(job.id)
             return self._notify_terminal(self.store.mark_canceled(latest))

@@ -31,6 +31,8 @@ from app.vision.pickleball_game_analysis.image_space_trajectory_fitter import (
 )
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
     AnchorType,
+    HeightSource,
+    HeightValidity,
     ReconstructedSample,
     ReconstructedSegment,
     ReconstructionConfig,
@@ -136,18 +138,38 @@ class EventAnchoredTrajectoryReconstructor:
         anchor_type: AnchorType | None = None
         height_ft: float | None = None
         uncertainty = 0.0
+        height_source: str | None = None
+        height_confidence: float | None = None
 
         if event.event_type == TrajectoryEventType.BOUNCE:
             anchor_type = AnchorType.BOUNCE
             height_ft = 0.0
             uncertainty = 0.3
+            height_source = HeightSource.BOUNCE.value
+            height_confidence = max(0.0, min(1.0, float(event.confidence)))
         elif event.event_type in (
             TrajectoryEventType.HIT,
             TrajectoryEventType.SERVE_RESET,
         ):
             anchor_type = AnchorType.CONTACT
-            height_ft = round(self.config.default_contact_height_ft, 3)
-            uncertainty = self.config.contact_height_uncertainty_ft
+            # 证据优先级：逐事件可验证高度 > 受约束的全局接触先验。
+            # 绝不根据球场区域推断击球高度。
+            candidate_height = event.height_ft
+            if candidate_height is not None and isfinite(candidate_height):
+                height_ft = min(
+                    self.config.contact_height_max_ft,
+                    max(self.config.contact_height_min_ft, float(candidate_height)),
+                )
+                height_source = event.height_source or HeightSource.STEREO_EVENT_ESTIMATE.value
+                height_confidence = event.height_confidence
+                uncertainty = event.height_uncertainty_ft or self.config.contact_height_uncertainty_ft
+            else:
+                height_ft = round(self.config.default_contact_height_ft, 3)
+                height_source = HeightSource.GLOBAL_CONTACT_PRIOR.value
+                height_confidence = min(0.5, max(0.0, float(event.confidence)))
+                uncertainty = self.config.contact_height_uncertainty_ft
+            height_confidence = max(0.0, min(1.0, float(height_confidence or 0.0)))
+            uncertainty = max(0.0, float(uncertainty))
         else:
             return None  # loss / end_of_stream 不是空间锚点
 
@@ -167,6 +189,8 @@ class EventAnchoredTrajectoryReconstructor:
             confidence=event.confidence if anchor_type == AnchorType.BOUNCE else min(0.5, event.confidence),
             uncertainty_ft=uncertainty,
             event_id=event.event_id,
+            height_source=height_source,
+            height_confidence=height_confidence,
         )
 
     def _resolve_anchor_conflict(self, start, end, segment, events_by_id):
@@ -333,9 +357,9 @@ class EventAnchoredTrajectoryReconstructor:
         if anchor is None:
             return None
         if anchor.anchor_type == AnchorType.BOUNCE:
-            return "bounce"
+            return HeightSource.BOUNCE.value
         if anchor.anchor_type == AnchorType.CONTACT:
-            return "global_contact_prior"
+            return anchor.height_source or HeightSource.GLOBAL_CONTACT_PRIOR.value
         return None
 
     def _height_at(self, p: float, z0: float | None, z1: float | None, peak: float) -> float | None:
@@ -343,7 +367,10 @@ class EventAnchoredTrajectoryReconstructor:
         if z0 is None and z1 is None:
             return None
         if z0 is None:
-            z0 = z1
+            # 未知起点、已知终点：只在终点使用 z1，起点保持开放弧线，不能复制 z1
+            reverse = 1.0 - p
+            sp = reverse * reverse * (3.0 - 2.0 * reverse)
+            return z1 + (peak - z1) * sp
         if z1 is None:
             # 只知起点：向峰值平滑上升并保持（末端渐隐由 height_confidence 表达）
             sp = p * p * (3.0 - 2.0 * p)  # smoothstep
@@ -414,21 +441,37 @@ class EventAnchoredTrajectoryReconstructor:
 
             # 高度
             height_ft = self._height_at(p, z0, z1, peak)
-            height_conf: float | None = 1.0
-            height_src: str | None = "estimated"
+            known_anchor_confidences = [
+                anchor.height_confidence
+                for anchor in (start, end)
+                if anchor is not None and anchor.height_confidence is not None
+            ]
+            known_anchor_uncertainties = [
+                anchor.uncertainty_ft
+                for anchor in (start, end)
+                if anchor is not None and anchor.height_ft is not None
+            ]
+            base_height_confidence = min(known_anchor_confidences) if known_anchor_confidences else None
+            base_height_uncertainty = max(known_anchor_uncertainties) if known_anchor_uncertainties else None
+            height_conf: float | None = base_height_confidence if base_height_confidence is not None else 0.0
+            height_src: str | None = HeightSource.ESTIMATED.value
+            height_validity = HeightValidity.VALID.value if not (start_unknown or end_unknown) else HeightValidity.UNKNOWN_OPEN_END.value
             if height_ft is None:
                 height_conf = None
-                height_src = None
+                height_src = HeightSource.UNKNOWN_OPEN_END.value
+                height_validity = HeightValidity.UNKNOWN.value
             elif end_unknown and p > 0.6:
                 # 未知端渐隐
-                height_conf = max(0.0, 1.0 - (p - 0.6) / 0.4)
+                height_conf = (base_height_confidence or 0.0) * max(0.0, 1.0 - (p - 0.6) / 0.4)
             elif start_unknown and p < 0.4:
                 # 仅终点有锚点时，未知起点从透明逐渐进入可信区间。
-                height_conf = max(0.0, p / 0.4)
+                height_conf = (base_height_confidence or 0.0) * max(0.0, p / 0.4)
             if start is not None and point.frame_index == start.frame_index:
                 height_src = height_sources[0]
+                height_conf = start.height_confidence
             if end is not None and point.frame_index == end.frame_index:
                 height_src = height_sources[1]
+                height_conf = end.height_confidence
 
             samples.append(
                 ReconstructedSample(
@@ -440,11 +483,10 @@ class EventAnchoredTrajectoryReconstructor:
                     confidence=confidence,
                     height_source=height_src,
                     height_confidence=round(height_conf, 3) if height_conf is not None else None,
-                    height_uncertainty_ft=(
-                        round(self.config.contact_height_uncertainty_ft, 3) if height_ft is not None else None
-                    ),
+                    height_uncertainty_ft=round(base_height_uncertainty, 3) if height_ft is not None and base_height_uncertainty is not None else None,
                     gap_length_frames=gap_length,
                     reprojection_error_px=reproj,
+                    height_validity=height_validity,
                 )
             )
         return samples

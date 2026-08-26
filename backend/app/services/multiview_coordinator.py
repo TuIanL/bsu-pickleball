@@ -24,6 +24,7 @@ from app.schemas.analysis import (
     AnalysisJobCreate,
     AnalysisJobSummary,
     AnalysisStage,
+    CanonicalFramePayload,
     SourceJobRef,
     ViewRunSummary,
 )
@@ -42,6 +43,7 @@ from app.services.multiview_acceptance import (
     repair_capture_track_video_indices,
     timing_sidecar_path,
 )
+from app.services.metric_court_scene_service import MetricCourtSceneService
 from app.services.storage_service import StorageService
 from app.services.sync_anchor_service import SyncAnchorAssetService, SyncAnchorNotFoundError
 from app.services.video_service import video_service
@@ -54,7 +56,7 @@ from app.vision.multiview.sync import load_sync_calibration, resolve_sync_author
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
+TERMINAL_STATUSES = {"succeeded", "failed", "canceled", "interrupted"}
 NON_TERMINAL_STATUSES = {"queued", "running"}
 
 
@@ -76,12 +78,43 @@ class MultiviewPreflightError(ValueError):
         super().__init__("MultiView preflight failed: " + "; ".join(self.issues))
 
 
+def validate_scene_view_provenance(scene, capture_take_id: str, views) -> list[str]:
+    """Return independent scene/camera/video/image-size mismatch diagnostics."""
+    issues: list[str] = []
+    if scene.capture_take_id != capture_take_id:
+        issues.append("scene calibration capture_take_id mismatch")
+    if scene.status != "ready":
+        issues.append(f"scene calibration status is not ready: {scene.status}")
+    requested_view_ids = {view.viewId for view in views}
+    scene_views = {view.view_id: view for view in scene.views}
+    if set(scene_views) < requested_view_ids:
+        issues.extend(
+            f"scene calibration view missing: {view_id}"
+            for view_id in sorted(requested_view_ids - set(scene_views))
+        )
+    for view in views:
+        calibrated_view = scene_views.get(view.viewId)
+        if calibrated_view is None:
+            continue
+        if calibrated_view.camera_id and calibrated_view.camera_id != (view.cameraId or view.viewId):
+            issues.append(f"scene camera provenance mismatch for view {view.viewId}")
+        if calibrated_view.video_id and calibrated_view.video_id != view.videoId:
+            issues.append(f"scene video provenance mismatch for view {view.viewId}")
+        if calibrated_view.image_width and view.imageWidth and calibrated_view.image_width != view.imageWidth:
+            issues.append(f"scene image width mismatch for view {view.viewId}")
+        if calibrated_view.image_height and view.imageHeight and calibrated_view.image_height != view.imageHeight:
+            issues.append(f"scene image height mismatch for view {view.viewId}")
+    return list(dict.fromkeys(issues))
+
+
 def _view_stage_status(run: ViewRunSummary | None) -> str:
     if run is None or run.status in {"queued", "pending", "missing"}:
         return "pending"
     if run.status in {"succeeded", "completed"}:
         return "done"
-    if run.status in {"failed", "canceled"}:
+    if run.status in {"failed", "canceled", "interrupted"}:
+        if run.status == "interrupted":
+            return "failed"
         return run.status
     return "active"
 
@@ -121,6 +154,38 @@ def _check_capture_take_dir(capture_take_id: str) -> str | None:
         return None
 
 
+def _restore_existing_canonical_input(
+    payload: AnalysisJobCreate,
+    take_dir: str | None,
+) -> AnalysisJobCreate:
+    """复用 take 已有 canonical frame，避免普通重试被当成重定义。
+
+    ``canonicalFrame`` 为空表示调用方没有发起新的物理朝向 revision；此时
+    endpoint definition 与每路 orientation 都由 take-scoped ccf_* 只读恢复。
+    真正的朝向变更仍可通过显式 canonicalFrame/revision 走原有冲突保护。
+    """
+    mv = payload.multiview
+    if mv is None or mv.canonicalFrame is not None or not take_dir:
+        return payload
+    existing = load_canonical_court_frame(take_dir)
+    if existing is None:
+        return payload
+    views = [
+        view.model_copy(update={
+            "courtOrientation": existing.orientation_by_view.get(view.viewId, view.courtOrientation),
+        })
+        for view in mv.views
+    ]
+    restored_mv = mv.model_copy(update={
+        "views": views,
+        "canonicalFrame": CanonicalFramePayload(
+            endA=existing.end_a_definition,
+            endB=existing.end_b_definition,
+        ),
+    })
+    return payload.model_copy(update={"multiview": restored_mv})
+
+
 def preflight_multiview(
     payload: AnalysisJobCreate,
     *,
@@ -139,6 +204,8 @@ def preflight_multiview(
         return PreflightResult(ok=False, issues=["capture_take_id required for multiview analysis"])
     if len(mv.views) < 2:
         return PreflightResult(ok=False, issues=["at least two views required"])
+    if mv.sceneCalibrationMode == "metric" and mv.sceneCalibrationRevision is None:
+        return PreflightResult(ok=False, issues=["metric scene calibration revision required"])
     if (payload.clipStartMs is None) != (payload.clipEndMs is None):
         return PreflightResult(ok=False, issues=["clipStartMs and clipEndMs must be provided together"])
     if payload.clipStartMs is not None and payload.clipEndMs is not None:
@@ -157,8 +224,36 @@ def preflight_multiview(
             ],
         )
 
+    payload = _restore_existing_canonical_input(payload, take_dir)
+    mv = payload.multiview
+    assert mv is not None
+
     issues: list[str] = []
     diagnostics: dict[str, object] = {}
+    scene = None
+    if mv.sceneCalibrationMode == "metric":
+        try:
+            scene = MetricCourtSceneService(storage).get_revision(
+                take_dir,
+                mv.sceneCalibrationRevision or 0,
+            )
+        except (FileNotFoundError, ValueError):
+            issues.append(
+                f"scene calibration revision unavailable: capture_take_id={payload.metadata.capture_take_id} "
+                f"revision={mv.sceneCalibrationRevision}"
+            )
+        if scene is not None:
+            requested_view_ids = {view.viewId for view in mv.views}
+            declared_view_ids = set(mv.sceneViewIds) if mv.sceneViewIds else requested_view_ids
+            if declared_view_ids != requested_view_ids:
+                issues.append("scene calibration view coverage mismatch")
+            issues.extend(validate_scene_view_provenance(scene, payload.metadata.capture_take_id, mv.views))
+            scene_views = {view.view_id: view for view in scene.views}
+            diagnostics["scene_calibration"] = {
+                "revision": scene.revision,
+                "status": scene.status,
+                "view_ids": sorted(scene_views),
+            }
     require_manual_sync = mv.executionMode == "joint_tracking_v2"
     acceptance_run = require_manual_sync and bool(mv.debugTraceEnabled)
     sync_status = None
@@ -462,6 +557,10 @@ class MultiViewAnalysisCoordinator:
 
     def create_multiview_job(self, payload: AnalysisJobCreate) -> AnalysisJobSummary:
         """创建 1 个 public Parent + 每个 view 一个 dedicated internal child。"""
+        payload = _restore_existing_canonical_input(
+            payload,
+            _check_capture_take_dir(payload.metadata.capture_take_id),
+        )
         sync_calibration_revision: int | None = None
         require_manual_sync = bool(
             payload.multiview and payload.multiview.executionMode == "joint_tracking_v2"
@@ -564,6 +663,7 @@ class MultiViewAnalysisCoordinator:
 
         # joint_tracking_v2:不创建 AnalysisJob children,直接持久化 jointViewInputs → joint_ready
         if mv.executionMode == "joint_tracking_v2":
+            sync_manifest = load_sync_calibration(take_dir) if take_dir else None
             joint_inputs = [
                 {
                     "cameraSlot": view.viewId,
@@ -572,6 +672,34 @@ class MultiViewAnalysisCoordinator:
                     "videoId": view.videoId,
                     "calibrationId": view.calibrationId,
                     "courtOrientation": view.courtOrientation,
+                    "imageWidth": view.imageWidth,
+                    "imageHeight": view.imageHeight,
+                    "sceneCalibrationRevision": mv.sceneCalibrationRevision,
+                    "sceneCalibrationMode": mv.sceneCalibrationMode,
+                    # canonical reference time → this view source media time.
+                    "sourceTimestampOffsetMs": (
+                        0.0
+                        if view.viewId == mv.referenceViewId
+                        else float(getattr(sync_manifest.mapping_for(view.cameraId or view.viewId), "offset_ms", 0.0))
+                        if sync_manifest is not None and sync_manifest.mapping_for(view.cameraId or view.viewId) is not None
+                        else 0.0
+                    ),
+                    "sourceTimestampRate": (
+                        1.0
+                        if view.viewId == mv.referenceViewId
+                        else float(getattr(sync_manifest.mapping_for(view.cameraId or view.viewId), "rate", 1.0))
+                        if sync_manifest is not None and sync_manifest.mapping_for(view.cameraId or view.viewId) is not None
+                        else 1.0
+                    ),
+                    "sourceTimestampMappingStatus": (
+                        "available"
+                        if view.viewId == mv.referenceViewId
+                        or (
+                            sync_manifest is not None
+                            and sync_manifest.mapping_for(view.cameraId or view.viewId) is not None
+                        )
+                        else "unavailable"
+                    ),
                 }
                 for view in mv.views
             ]
@@ -589,6 +717,11 @@ class MultiViewAnalysisCoordinator:
                 "viewRuns": joint_view_runs,
                 "canonicalFrameId": canonical_frame.frame_id,
                 "syncCalibrationRevision": sync_calibration_revision,
+                "sceneCalibrationRevision": mv.sceneCalibrationRevision,
+                "sceneCalibrationMode": mv.sceneCalibrationMode,
+                "sceneCalibrationStatus": (
+                    "ready" if mv.sceneCalibrationMode == "metric" else "missing"
+                ),
             }
             ref_view = next((v for v in mv.views if v.viewId == mv.referenceViewId), None)
             if ref_view is not None:
@@ -781,7 +914,7 @@ class MultiViewAnalysisCoordinator:
             )
 
         succeeded = [c for c in child_status if c == "succeeded"]
-        failed_or_canceled = [c for c in child_status if c in {"failed", "canceled"}]
+        failed_or_canceled = [c for c in child_status if c in {"failed", "canceled", "interrupted"}]
         pending = [c for c in child_status if c in NON_TERMINAL_STATUSES or c == "missing"]
 
         if pending:
@@ -791,14 +924,21 @@ class MultiViewAnalysisCoordinator:
         elif succeeded and failed_or_canceled:
             new_status = "fallback_ready"
         else:
-            new_status = "failed"
+            new_status = "interrupted" if "interrupted" in child_status else "failed"
 
-        if new_status == "failed":
-            parent = self.store.mark_failed(
-                parent,
-                stages=parent.stages,
-                message="双摄分析失败：两路 Source Job 均未完成。",
-            )
+        if new_status in {"failed", "interrupted"}:
+            if new_status == "interrupted":
+                parent = self.store.mark_interrupted(
+                    parent,
+                    reason="worker_lost",
+                    message="双摄分析失联：至少一路 Worker 没有心跳，已保留最后进度，请重新分析。",
+                )
+            else:
+                parent = self.store.mark_failed(
+                    parent,
+                    stages=parent.stages,
+                    message="双摄分析失败：两路 Source Job 均未完成。",
+                )
             parent = self.store.update(parent.id, viewRuns=view_runs)
             return parent
 

@@ -12,9 +12,11 @@ from app.api.routes_calibration import router as calibration_router
 from app.api.routes_camera import router as camera_router
 from app.api.routes_coding_actions import router as coding_actions_router
 from app.api.routes_field_sessions import router as field_sessions_router
+from app.api.routes_metric_court_scene import router as metric_court_scene_router
 from app.api.routes_recording import router as recording_router
 from app.api.routes_segment_editing import router as segment_editing_router
 from app.api.routes_segment_editing import router2 as analysis_batch_router
+from app.api.routes_scoring_calibration import router as scoring_calibration_router
 from app.api.routes_storage import router as storage_router
 from app.api.routes_sync_recording import router as sync_recording_router
 from app.api.routes_showcase import router as showcase_router
@@ -39,8 +41,8 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     """Initialize durable services before serving requests and stop workers on exit."""
     init_db()
-    start_analysis_worker()
     recover_zombie_jobs()
+    start_analysis_worker()
     _cleanup_stale_leases()
     # 异步后台补写缺失的 registered video PTS sidecar；失败仅告警，不阻塞启动
     start_timing_backfill()
@@ -73,6 +75,7 @@ app.include_router(storage_router)
 app.include_router(vidat_router)
 app.include_router(calibration_router)
 app.include_router(manual_calibration_router)
+app.include_router(metric_court_scene_router)
 app.include_router(camera_router)
 app.include_router(recording_router)
 app.include_router(sync_recording_router)
@@ -83,6 +86,7 @@ app.include_router(timeline_events_router)
 app.include_router(coding_actions_router)
 app.include_router(segment_editing_router)
 app.include_router(analysis_batch_router)
+app.include_router(scoring_calibration_router)
 
 # 挂载双摄短录测试首帧静态目录
 _TEST_FRAMES_DIR = _os.path.join(

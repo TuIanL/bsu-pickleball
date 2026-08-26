@@ -46,6 +46,7 @@ class FieldSessionUpdate(BaseModel):
     camera_setup: Literal["single", "dual", "debug_single"] | None = None
     display_mode: DisplayModeLiteral | None = None
     notes: str | None = None
+    started_at: datetime | None = None
 
 
 class FieldSessionSummary(BaseModel):

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Tags } from "lucide-react";
 import type { RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn, NavigatePath, TaskListContext } from "../app/navigationTypes";
 import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
@@ -332,6 +332,15 @@ export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { se
             <h1 className="text-xl font-black text-[#14241B] truncate">{title}</h1>
             <p className="text-sm text-slate-500 truncate">{subtitle}</p>
           </div>
+          {session.field_session_id && session.capture_take_id ? (
+            <button
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-[#2F80ED] px-3 py-2 text-xs font-bold text-[#2F80ED] transition hover:bg-[#EFF6FF]"
+              onClick={() => onNavigate(`/capture/${session.field_session_id}/takes/${session.capture_take_id}/scoring-calibration`)}
+              type="button"
+            >
+              <Tags size={15} /> 评分校准
+            </button>
+          ) : null}
         </div>
       )}
 

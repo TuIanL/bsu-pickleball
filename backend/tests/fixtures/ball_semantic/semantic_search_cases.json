@@ -1,0 +1,95 @@
+{
+  "schema_version": "ball_semantic_fixture.v1",
+  "description": "语义球搜索策略的确定性回放场景",
+  "cases": [
+    {
+      "id": "unknown_without_context",
+      "events": [],
+      "probes": [
+        {"timestamp_ms": 0, "expected_phase": "UNKNOWN", "expected_action": "fallback"}
+      ]
+    },
+    {
+      "id": "non_play_handheld_or_outside_object",
+      "events": [
+        {"id": "np-1", "event_type": "non_play_start", "timestamp_ms": 1000, "source": "manual"}
+      ],
+      "probes": [
+        {
+          "timestamp_ms": 1500,
+          "evidence": {"raw_object_hint": "handheld_or_outside_object"},
+          "expected_phase": "NON_PLAY_CONFIRMED",
+          "expected_action": "soft_gate"
+        }
+      ]
+    },
+    {
+      "id": "serve_prepare_and_armed",
+      "events": [],
+      "probes": [
+        {
+          "timestamp_ms": 2000,
+          "evidence": {"serve_candidate_confidence": 0.60},
+          "expected_phase": "PRE_SERVE",
+          "expected_action": "serve_reacquire"
+        },
+        {
+          "timestamp_ms": 2100,
+          "evidence": {"serve_candidate_confidence": 0.60, "serve_armed": true},
+          "expected_phase": "SERVE_ARMED",
+          "expected_action": "serve_reacquire"
+        }
+      ]
+    },
+    {
+      "id": "formal_rally_and_occlusion",
+      "events": [{"id": "rally-1", "event_type": "rally_start", "timestamp_ms": 3000, "source": "algorithm"}],
+      "probes": [
+        {
+          "timestamp_ms": 3100,
+          "evidence": {"rally_active": true, "rally_confidence": 0.82},
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_action": "allow"
+        },
+        {
+          "timestamp_ms": 3200,
+          "evidence": {"rally_end_evidence_count": 1, "ball_visibility": "occluded"},
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_action": "allow"
+        }
+      ]
+    },
+    {
+      "id": "rally_end_candidate",
+      "events": [],
+      "probes": [
+        {
+          "timestamp_ms": 4100,
+          "evidence": {"rally_active": true, "rally_confidence": 0.80},
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_action": "allow"
+        },
+        {
+          "timestamp_ms": 4200,
+          "evidence": {"rally_end_evidence_count": 2, "ball_visibility": "lost"},
+          "expected_phase": "RALLY_END_CANDIDATE",
+          "expected_action": "allow"
+        }
+      ]
+    },
+    {
+      "id": "post_rally_after_non_play_end",
+      "events": [
+        {"id": "np-2", "event_type": "non_play_start", "timestamp_ms": 5000, "source": "corrected"},
+        {"id": "np-3", "event_type": "non_play_end", "timestamp_ms": 6000, "source": "corrected"}
+      ],
+      "probes": [
+        {
+          "timestamp_ms": 6500,
+          "expected_phase": "POST_RALLY",
+          "expected_action": "soft_gate"
+        }
+      ]
+    }
+  ]
+}

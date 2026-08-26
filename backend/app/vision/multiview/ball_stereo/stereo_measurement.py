@@ -47,6 +47,11 @@ class BallStereoMeasurement:
     segment_id: str | None = None
     high_quality_anchor: bool = False
     quality_components: dict[str, float] = field(default_factory=dict)
+    scene_calibration_revision: int | None = None
+    camera_model_source: str = "homography_constrained_virtual"
+    metric_validity: str = "approximate_multiview"
+    height_uncertainty_ft: float | None = None
+    scene_quality: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -74,6 +79,11 @@ class BallStereoMeasurement:
             "segment_id": self.segment_id,
             "high_quality_anchor": self.high_quality_anchor,
             "quality_components": dict(self.quality_components),
+            "scene_calibration_revision": self.scene_calibration_revision,
+            "camera_model_source": self.camera_model_source,
+            "metric_validity": self.metric_validity,
+            "height_uncertainty_ft": self.height_uncertainty_ft,
+            "scene_quality": dict(self.scene_quality),
         }
 
     @classmethod
@@ -107,6 +117,11 @@ class BallStereoMeasurement:
             segment_id=str(payload["segment_id"]) if payload.get("segment_id") is not None else None,
             high_quality_anchor=bool(payload.get("high_quality_anchor", False)),
             quality_components={str(key): float(value) for key, value in dict(payload.get("quality_components") or {}).items()},
+            scene_calibration_revision=(int(payload["scene_calibration_revision"]) if payload.get("scene_calibration_revision") is not None else None),
+            camera_model_source=str(payload.get("camera_model_source", "homography_constrained_virtual")),
+            metric_validity=str(payload.get("metric_validity", "approximate_multiview")),
+            height_uncertainty_ft=(float(payload["height_uncertainty_ft"]) if payload.get("height_uncertainty_ft") is not None else None),
+            scene_quality=dict(payload.get("scene_quality") or {}),
         )
 
 
@@ -197,6 +212,11 @@ def measure_stereo(
     take_timestamp_ms: float | None = None,
     sync_error_ms: float = 0.0,
     max_time_delta_ms: float = 40.0,
+    scene_calibration_revision: int | None = None,
+    camera_model_source: str = "homography_constrained_virtual",
+    metric_validity: str = "approximate_multiview",
+    height_uncertainty_ft: float | None = None,
+    scene_quality: dict[str, object] | None = None,
 ) -> BallStereoMeasurement:
     """生成一次近似立体测量（含时间模型：不做先二维内插，取 canonical/midpoint 时刻）。
 
@@ -252,4 +272,9 @@ def measure_stereo(
         ray_angle_deg=round(ray_angle_deg, 3),
         depth_valid=depth_valid,
         coordinate_units="canonical_court_ft",
+        scene_calibration_revision=scene_calibration_revision,
+        camera_model_source=camera_model_source,
+        metric_validity=metric_validity,
+        height_uncertainty_ft=height_uncertainty_ft,
+        scene_quality=dict(scene_quality or {}),
     )

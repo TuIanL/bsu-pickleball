@@ -77,6 +77,29 @@ class SampleSource(StrEnum):
     ANCHOR = "anchor"
 
 
+class HeightValidity(StrEnum):
+    """高度是否可以安全地作为球场上方的渲染坐标。"""
+
+    VALID = "valid"
+    UNKNOWN = "unknown"
+    UNKNOWN_OPEN_END = "unknown_open_end"
+    INVALID_NON_FINITE = "invalid_non_finite"
+    INVALID_BELOW_GROUND = "invalid_below_ground"
+    INVALID_BOUNCE_ENDPOINT = "invalid_bounce_endpoint"
+    INVALID_HEIGHT_JUMP = "invalid_height_jump"
+
+
+class HeightSource(StrEnum):
+    """接触/轨迹高度证据来源，前后端共享这些语义值。"""
+
+    BOUNCE = "bounce"
+    STEREO_EVENT_ESTIMATE = "stereo_event_estimate"
+    PLAYER_CONTEXT_ESTIMATE = "player_context_estimate"
+    GLOBAL_CONTACT_PRIOR = "global_contact_prior"
+    ESTIMATED = "estimated"
+    UNKNOWN_OPEN_END = "unknown_open_end"
+
+
 class NetCrossingStatus(StrEnum):
     """过网状态软诊断取值。"""
 
@@ -144,6 +167,11 @@ class TrajectoryEvent:
     ownership_confidence: float | None = None
     ownership_source_event_id: str | None = None
     attribution: PlayerAttribution | None = None
+    # 可选的逐事件高度证据；没有合格证据时必须保持 None，由重建层使用受限全局先验。
+    height_ft: float | None = None
+    height_source: str | None = None
+    height_confidence: float | None = None
+    height_uncertainty_ft: float | None = None
 
     @property
     def is_anchor_capable(self) -> bool:
@@ -169,6 +197,8 @@ class SpatialAnchor:
     confidence: float = 0.0
     uncertainty_ft: float = 0.0
     event_id: str | None = None
+    height_source: str | None = None
+    height_confidence: float | None = None
 
 
 @dataclass
@@ -214,6 +244,7 @@ class ReconstructedSample:
     height_uncertainty_ft: float | None = None
     gap_length_frames: int | None = None
     reprojection_error_px: float | None = None
+    height_validity: str = HeightValidity.UNKNOWN.value
 
 
 @dataclass
@@ -239,6 +270,8 @@ class ReconstructedSegment:
     ownership_status: str = OwnershipStatus.NOT_APPLICABLE.value
     ownership_confidence: float | None = None
     ownership_source_event_id: str | None = None
+    height_validity: str = HeightValidity.UNKNOWN.value
+    height_quality_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -335,5 +368,13 @@ def event_to_payload(event: TrajectoryEvent) -> dict:
         if event.ownership_confidence is not None
         else None,
         "ownership_source_event_id": event.ownership_source_event_id,
+        "height_ft": round(float(event.height_ft), 3) if event.height_ft is not None else None,
+        "height_source": event.height_source,
+        "height_confidence": round(float(event.height_confidence), 3)
+        if event.height_confidence is not None
+        else None,
+        "height_uncertainty_ft": round(float(event.height_uncertainty_ft), 3)
+        if event.height_uncertainty_ft is not None
+        else None,
         "attribution": attribution,
     }

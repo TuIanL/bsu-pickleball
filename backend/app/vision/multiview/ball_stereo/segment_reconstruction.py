@@ -55,6 +55,10 @@ class Reconstructed3DSample:
     z_ft: float
     source: str = "derived"
     validity: str = "valid"
+    height_source: str | None = "estimated"
+    height_confidence: float | None = None
+    height_uncertainty_ft: float | None = None
+    height_validity: str = "valid"
 
 
 @dataclass
@@ -66,6 +70,8 @@ class Reconstructed3DSegment:
     stereo_coverage: float = 0.0
     prediction_ratio: float = 0.0
     adult: None = None
+    height_validity: str = "unknown"
+    height_quality_reason: str | None = None
 
 
 def _b_spline_basis(t: float, knots: np.ndarray, degree: int, i: int) -> float:
@@ -184,6 +190,29 @@ def _argmin_z(spline: CubicSpline3D) -> float:
     return float(ts[int(np.argmin(zs))])
 
 
+def validate_height_profile(
+    samples: list[Reconstructed3DSample],
+    *,
+    bounce_end: bool = False,
+    ground_tolerance_ft: float = 1e-4,
+    bounce_tolerance_ft: float = 1e-3,
+    max_adjacent_jump_ft: float = 12.0,
+) -> tuple[bool, str | None]:
+    """对优化后的密集高度采样执行发布前安全校验。"""
+    if not samples:
+        return False, "empty_height_profile"
+    heights = np.asarray([sample.z_ft for sample in samples], dtype=float)
+    if not np.isfinite(heights).all():
+        return False, "non_finite_height"
+    if float(np.min(heights)) < -ground_tolerance_ft:
+        return False, "below_ground"
+    if bounce_end and abs(float(heights[-1])) > bounce_tolerance_ft:
+        return False, "bounce_endpoint_not_grounded"
+    if len(heights) > 1 and float(np.max(np.abs(np.diff(heights)))) > max_adjacent_jump_ft:
+        return False, "abnormal_height_jump"
+    return True, None
+
+
 def reconstruct_segment(
     *,
     segment_id: str,
@@ -275,6 +304,19 @@ def reconstruct_segment(
 
     params0 = init.reshape(-1)
 
+    lower = np.full(n_control * 3, -np.inf, dtype=float)
+    upper = np.full(n_control * 3, np.inf, dtype=float)
+    # z 是优化变量的第三个分量。地面是硬边界，不再依赖软惩罚把负高度拉回去。
+    lower[2::3] = 0.0
+    if bounce_end:
+        # clamped spline 的末端等于最后一个控制点，因此 bounce 端可直接施加等式边界。
+        lower[-1] = 0.0
+        # scipy 要求每个上下界严格有间隔；用 1e-9 作为数值等式窗口，发布采样仍强制为 0。
+        upper[-1] = 1e-9
+    params0[2::3] = np.maximum(params0[2::3], 0.0)
+    if bounce_end:
+        params0[-1] = 0.0
+
     try:
         result = least_squares(
             _residuals,
@@ -283,6 +325,7 @@ def reconstruct_segment(
                   w_zneg, w_plaus, max_height_ft, max_speed_ft_s, t_span, t_norm_min, t_span),
             method="trf", max_nfev=1200,
             loss="soft_l1",  # Huber 近似
+            bounds=(lower, upper),
         )
     except Exception:
         if landing_xy is not None:
@@ -310,6 +353,22 @@ def reconstruct_segment(
             errs.append(math.hypot(h[0] / w - o.u, h[1] / w - o.v))
     reproj = float(np.mean(errs)) if errs else math.inf
 
+    height_ok, height_reason = validate_height_profile(samples, bounce_end=bounce_end)
+    if not height_ok:
+        for sample in samples:
+            sample.validity = "invalid"
+            sample.height_validity = f"invalid_{height_reason}" if height_reason else "invalid"
+        return Reconstructed3DSegment(
+            segment_id=segment_id,
+            status=UNAVAILABLE,
+            samples=samples,
+            reprojection_error_px=round(reproj, 3) if np.isfinite(reproj) else math.inf,
+            stereo_coverage=round(coverage, 3),
+            prediction_ratio=round(1.0 - coverage, 3),
+            height_validity="invalid",
+            height_quality_reason=height_reason,
+        )
+
     if len(observations) >= min_observations and np.isfinite(reproj) and reproj < 60.0:
         status = FULL_ESTIMATED_3D if coverage >= 0.5 else PARTIAL_3D
     else:
@@ -325,4 +384,5 @@ def reconstruct_segment(
         reprojection_error_px=round(reproj, 3),
         stereo_coverage=round(coverage, 3),
         prediction_ratio=round(1.0 - coverage, 3),
+        height_validity="valid",
     )

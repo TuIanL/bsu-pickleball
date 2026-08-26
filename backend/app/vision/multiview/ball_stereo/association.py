@@ -10,8 +10,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
+import numpy as np
+
+from app.vision.pickleball_game_analysis.ball_quality_gate import (
+    BallQualityGateConfig,
+    evaluate_pair_quality,
+)
 from app.vision.multiview.ball_stereo.stereo_measurement import (
     measure_stereo,
     triangulate_linear,
@@ -32,7 +38,8 @@ class AssociatedPair:
     rejection_reason: str | None = None
     quality_label: str = "rejected"
     anchor_eligible: bool = False
-    quality_components: dict[str, float] = field(default_factory=dict)
+    quality_components: dict[str, Any] = field(default_factory=dict)
+    stereo_measurement: Any | None = None
 
 
 @dataclass
@@ -125,9 +132,10 @@ def associate_views(
     max_trusted_reprojection_px: float = 24.0,
     weights: AssociationWeights = _ASSOCIATION_DEFAULTS,
 ) -> list[AssociatedPair]:
-    """跨视角关联：先硬门，再排序。返回按 score 降序的通过硬门的配对。
+    """跨视角关联：先物理硬门，再按质量排序并计算权威 pair 资格。
 
-    不做 epipolar 硬门槛——所有配对只要通过物理硬门就得分，由排序相对好坏。
+    低质量 pair 仍返回给 diagnostic，但只有通过共享质量门且与次优
+    pair 有足够分差的结果才会被标记为 ``anchor_eligible``。
     """
     if not _time_delta_small(cam1_timestamp_ms, cam2_timestamp_ms, max_time_gate_ms):
         return []
@@ -218,9 +226,82 @@ def associate_views(
                     quality_label="trusted_anchor" if anchor_eligible else "low_quality_audit_only",
                     anchor_eligible=anchor_eligible,
                     quality_components=components,
+                    stereo_measurement=measurement,
                 )
             )
 
     passed = [r for r in results if r.passes_hard_gate]
     passed.sort(key=lambda r: r.score, reverse=True)
-    return passed
+    quality_config = BallQualityGateConfig(
+        max_reprojection_error_px=max_trusted_reprojection_px,
+        min_pair_score_margin=0.08,
+        court_margin_ft=court_margin_ft,
+    )
+    qualified: list[AssociatedPair] = []
+    for index, pair in enumerate(passed):
+        # 重新三角化只用于质量评估；正式 measurement 仍由 canonical runner
+        # 在选出唯一可信 pair 后生成，避免低质量 pair 进入权威证据。
+        try:
+            xyz = triangulate_linear(
+                projection_cam1,
+                projection_cam2,
+                pair.cam1_candidate[:2],
+                pair.cam2_candidate[:2],
+            )
+            take = (cam1_timestamp_ms + cam2_timestamp_ms) / 2.0
+            measurement = pair.stereo_measurement or measure_stereo(
+                projection_cam1=projection_cam1,
+                projection_cam2=projection_cam2,
+                image_xy1=pair.cam1_candidate[:2],
+                image_xy2=pair.cam2_candidate[:2],
+                cam1_timestamp_ms=cam1_timestamp_ms,
+                cam2_timestamp_ms=cam2_timestamp_ms,
+                take_timestamp_ms=take,
+                sync_error_ms=abs(cam1_timestamp_ms - cam2_timestamp_ms),
+                max_time_delta_ms=max_time_gate_ms,
+            )
+            max_residual = max(
+                measurement.reprojection_error_cam1_px,
+                measurement.reprojection_error_cam2_px,
+                measurement.epipolar_residual_px,
+            )
+            decision = evaluate_pair_quality(
+                timestamp_delta_ms=abs(cam1_timestamp_ms - cam2_timestamp_ms),
+                reprojection_error_px=max_residual,
+                geometry_quality=measurement.geometry_quality,
+                depth_valid=measurement.depth_valid,
+                xyz=xyz,
+                score=pair.score,
+                next_best_score=passed[index + 1].score if index + 1 < len(passed) else None,
+                previous_xyz=previous_xyz,
+                config=quality_config,
+                max_time_delta_ms=max_time_gate_ms,
+                court_width_ft=max_court_x_ft,
+                court_length_ft=max_court_y_ft,
+            )
+        except (ValueError, FloatingPointError, np.linalg.LinAlgError):
+            decision = None
+        if decision is None:
+            qualified.append(pair)
+            continue
+        anchor_eligible = decision.accepted
+        qualified.append(
+            AssociatedPair(
+                pair.cam1_candidate,
+                pair.cam2_candidate,
+                pair.score,
+                passes_hard_gate=pair.passes_hard_gate,
+                rejection_reason=None if anchor_eligible else decision.reason,
+                quality_label="trusted_anchor" if anchor_eligible else "low_quality_audit_only",
+                anchor_eligible=anchor_eligible,
+                quality_components={
+                    **dict(pair.quality_components),
+                    "quality_gate_reason": decision.reason,
+                    "score_margin": (
+                        pair.score - passed[index + 1].score if index + 1 < len(passed) else None
+                    ),
+                },
+                stereo_measurement=measurement,
+            )
+        )
+    return qualified

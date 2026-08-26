@@ -67,6 +67,8 @@ export type AppPath =
   | `/reports/${ReportType}`
   | `/recording/${string}`
   | `/capture/${string}/analyze`
+  | `/capture/${string}/takes/${string}/segments`
+  | `/capture/${string}/takes/${string}/scoring-calibration`
   | `/capture/takes/${string}/analyze`
   | "/sync-calibration"
   | `/showcase/${string}`;
@@ -81,6 +83,7 @@ export type RouteState =
   | { name: "captureNew"; path: "/capture/new"; shellMode: "standard"; navigationSection: "capture" }
   | { name: "captureConsole"; path: `/capture/${string}`; sessionId: string; shellMode: "capture"; navigationSection: "capture" }
   | { name: "segmentManager"; path: `/capture/${string}/takes/${string}/segments`; fieldSessionId: string; takeId: string; shellMode: "standard"; navigationSection: "capture" }
+  | { name: "scoringCalibration"; path: `/capture/${string}/takes/${string}/scoring-calibration`; fieldSessionId: string; takeId: string; shellMode: "standard"; navigationSection: "capture" }
   | { name: "tasks"; path: "/tasks"; taskSource?: TaskListSource; taskSessionId?: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "new-analysis"; path: "/analysis/new"; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "analysis-tasks"; path: "/analysis/tasks"; taskSource?: TaskListSource; taskSessionId?: string; shellMode: "standard"; navigationSection: "analysis" }

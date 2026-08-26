@@ -12,6 +12,7 @@ demo 模式下（没有真实视频）会直接返回一份写死的样例报告
 from __future__ import annotations
 
 import logging
+import os
 import re
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -75,10 +76,21 @@ def _demo_settings():
 
 
 def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
-    # Worker 完成回调：保存基础结果 → 生成 insights（含 result 二次持久化）→ 生成报告。
-    # 顺序（change design.md D2）：基础 result → insights 落盘 → artifacts 更新 +
-    # result.json 重写 + RESULTS cache 同步 → 最后 Report Projector。
+    # Worker 完成回调：保存基础结果 → canonical 事实层 → normalized metrics → insights → 生成报告。
+    # post-pipeline 组合失败只影响可选 artifact，不影响主视觉结果；demo 不生成真实事件。
     if result.status == "completed" and job.analysisMode != "demo":
+        from app.services.canonical_shot_rally_events import generate_and_persist_canonical_events
+
+        result, events, snapshot = generate_and_persist_canonical_events(job, result, storage=_STORAGE)
+        from app.services.metric_normalization import generate_and_persist_normalized_metrics
+
+        result, _normalized = generate_and_persist_normalized_metrics(
+            job,
+            result,
+            events=events,
+            snapshot=snapshot,
+            storage=_STORAGE,
+        )
         from app.services.performance_insights.service import generate_and_persist_insights
 
         result, _insights = generate_and_persist_insights(job, result, storage=_STORAGE)
@@ -110,8 +122,7 @@ def _on_worker_terminal(job: AnalysisJobSummary) -> None:
             job.id,
             orchestrationStatus="completed",
             viewRuns={
-                view_id: ViewRunSummary(status="succeeded", stage=job.stage, progress=100)
-                for view_id in view_ids
+                view_id: ViewRunSummary(status="succeeded", stage=job.stage, progress=100) for view_id in view_ids
             },
         )
 
@@ -143,6 +154,7 @@ def _build_worker(store: JobStore) -> AnalysisWorkerRuntime:
         pipeline_factory=_pipeline_factory,
         on_completed=_on_worker_completed,
         on_terminal=_on_worker_terminal,
+        worker_id=os.getenv("PICKLEBALL_ANALYSIS_WORKER_ID", f"analysis-worker-{os.getpid()}"),
     )
 
 
@@ -163,7 +175,6 @@ def _sync_orchestration_storage(storage: StorageService | None = None) -> None:
     _WORKER_STARTED = False
     if was_started:
         start_analysis_worker()
-
 
 
 def create_mock_job(metadata: AnalysisUploadMetadata) -> AnalysisJobSummary:
@@ -232,8 +243,8 @@ def create_analysis_job(
             if existing is not None:
                 return existing
 
-        if background_tasks is not None:
-            # Web 请求场景：用 FastAPI 的 BackgroundTasks 异步跑
+        if background_tasks is not None and _WORKER is not None and _worker_is_embedded():
+            # embedded 兼容模式仍可由 Web 请求触发指定任务；external 模式只入队。
             job = _JOB_STORE.create_job(payload)
             with _LOCK:
                 JOBS[job.id] = job
@@ -292,7 +303,8 @@ def create_analysis_job(
 def run_analysis_job(job_id: str, payload: AnalysisJobCreate, report_id: str) -> None:
     # BackgroundTasks 调用的目标：让 Worker 去执行指定任务。
     _sync_orchestration_storage()
-    _WORKER.run_job(job_id)
+    if _WORKER is not None:
+        _WORKER.run_job(job_id)
 
 
 def _update_job(job: AnalysisJobSummary, **updates: object) -> AnalysisJobSummary:
@@ -351,9 +363,13 @@ def list_analysis_jobs(
     # 列出所有分析任务（磁盘 + 内存），按更新时间倒序。
     # 默认只返回 visibility=public 的 Parent/单摄任务；internal child 仅 include_internal=True（诊断）时返回。
     _sync_orchestration_storage(storage)
+    _recover_stale_jobs_on_read()
     jobs: dict[str, AnalysisJobSummary] = {job.id: job for job in _JOB_STORE.list()}
     with _LOCK:
-        jobs.update({job_id: normalize_job(job) for job_id, job in JOBS.items()})
+        # SQLite 控制面是跨进程权威；API reload 后的旧内存快照不能覆盖
+        # Worker 已经写入的 heartbeat/interrupted/terminal 状态。
+        for job_id, cached_job in JOBS.items():
+            jobs.setdefault(job_id, normalize_job(cached_job))
     all_jobs = sorted(jobs.values(), key=lambda job: _job_sort_key(job), reverse=True)
     if include_internal:
         return all_jobs
@@ -377,6 +393,7 @@ def _job_sort_key(job: AnalysisJobSummary) -> tuple[str, str]:
 def get_mock_job(job_id: str) -> AnalysisJobSummary | None:
     # 按 job_id 取任务：先查 JobStore，再查内存，都没有返回 None。
     _sync_orchestration_storage()
+    _recover_stale_jobs_on_read()
     job = _JOB_STORE.get(job_id)
     if job is None:
         cached = JOBS.get(job_id)
@@ -384,7 +401,12 @@ def get_mock_job(job_id: str) -> AnalysisJobSummary | None:
             return None
         job = normalize_job(cached)
     # 双摄 Parent 运行中：viewRuns 惰性刷新为 child 实时进度（不落盘，避免写放大）
-    if job.analysisKind == "multiview" and job.canonicalStatus not in {"succeeded", "failed", "canceled"}:
+    if job.analysisKind == "multiview" and job.canonicalStatus not in {
+        "succeeded",
+        "failed",
+        "canceled",
+        "interrupted",
+    }:
         live = _get_coordinator().live_view_runs(job)
         projected = _get_coordinator().live_parent_snapshot(job, live)
         if projected != job:
@@ -398,6 +420,15 @@ def get_mock_job(job_id: str) -> AnalysisJobSummary | None:
     with _LOCK:
         JOBS[job_id] = job
     return job
+
+
+def _recover_stale_jobs_on_read() -> None:
+    """列表/详情读取时做轻量 heartbeat 对账，避免任务永远停在 processing。"""
+    from app.core.config import get_settings
+
+    recovered = _JOB_STORE.recover_stale_running(get_settings().analysis_worker_heartbeat_timeout_seconds)
+    if recovered:
+        _get_coordinator().reconcile_all()
 
 
 def _resolve_parent_video_source(job: AnalysisJobSummary) -> AnalysisJobSummary | None:
@@ -477,7 +508,13 @@ def _is_safe_artifact_root(root: Path | None, job_id: str, outputs_dir: Path) ->
 def delete_analysis_job(job_id: str, *, allow_internal: bool = False) -> AnalysisDeleteResult:
     # 删除分析任务：从内存和磁盘清掉所有相关产物。
     _sync_orchestration_storage()
-    job = get_mock_job(job_id)
+    # 删除是写操作：先读取控制面原始状态，保留 queued/processing 的“不可删除”
+    # 保护；任务查询本身仍会执行 heartbeat watchdog 并把真正失联任务标记为 interrupted。
+    job = _JOB_STORE.get(job_id)
+    if job is None:
+        job = JOBS.get(job_id)
+        if job is not None:
+            job = normalize_job(job)
     if job is None:
         return AnalysisDeleteResult(job_id=job_id, status="not_found", detail="Analysis job not found")
 
@@ -570,8 +607,14 @@ def cancel_analysis_job(job_id: str) -> AnalysisJobSummary | None:
     return job
 
 
-def start_analysis_worker() -> None:
-    # 启动后台分析 Worker（受配置 enable_job_worker 控制）。
+def _worker_is_embedded() -> bool:
+    from app.core.config import get_settings
+
+    return get_settings().analysis_worker_mode != "external"
+
+
+def start_analysis_worker(*, force: bool = False) -> None:
+    # 启动后台分析 Worker（external 模式由独立 analysis-worker 入口 force 启动）。
     global _WORKER_STARTED
     _sync_orchestration_storage()
     from app.core.config import get_settings
@@ -579,7 +622,8 @@ def start_analysis_worker() -> None:
     # 启动对账：推进遗留双摄 Parent（child 已完成但 Parent 仍 waiting_sources）
     _get_coordinator().reconcile_all()
 
-    if get_settings().enable_job_worker and _WORKER is not None:
+    settings = get_settings()
+    if (force or _worker_is_embedded()) and settings.enable_job_worker and _WORKER is not None:
         _WORKER.start()
         _WORKER_STARTED = True
 
@@ -587,59 +631,23 @@ def start_analysis_worker() -> None:
 def stop_analysis_worker() -> None:
     # 停止后台分析 Worker。
     global _WORKER_STARTED
+    from app.core.config import get_settings
+
     if _WORKER is not None:
-        _WORKER.stop()
+        _WORKER.stop(timeout=get_settings().analysis_worker_shutdown_grace_seconds)
     _WORKER_STARTED = False
 
 
 def recover_zombie_jobs() -> int:
-    """启动时回收僵尸任务：把长时间无进度更新的 running 任务标记为 failed。
-
-    被 reload 风暴、进程崩溃或 Worker 线程异常中断留下的 running 任务，
-    claim_next() 永远不会重新认领（它只认领 queued），必须显式置为终态。
-    这里的判断依据是 updatedAt 距离当前时间超过阈值（默认 120 秒）。
-    """
-    import logging
-    from datetime import datetime
-
+    """按独立 Worker heartbeat lease 回收失联运行任务。"""
     from app.core.config import get_settings
 
-    logger = logging.getLogger(__name__)
     settings = get_settings()
-    threshold_seconds = max(60, settings.job_zombie_timeout_seconds)
-    now = datetime.now(UTC)
-    recovered = 0
-
     _sync_orchestration_storage()
-    for job in _JOB_STORE.list():
-        if job.canonicalStatus != "running":
-            continue
-        try:
-            updated = datetime.fromisoformat(job.updatedAt or job.createdAt)
-        except (ValueError, TypeError):
-            continue
-        if (now - updated).total_seconds() <= threshold_seconds:
-            continue
-
-        logger.warning(
-            "标记僵尸任务 %s 为 failed（%s 未更新，阈值=%ss）",
-            job.id,
-            updated.isoformat(),
-            threshold_seconds,
-        )
-        try:
-            _JOB_STORE.mark_failed(
-                job,
-                stages=job.stages,
-                message="分析任务因后端异常中断（热重载风暴或 Worker 崩溃），请重新提交。",
-                error_code="ZOMBIE_RECOVERED",
-            )
-            recovered += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("无法回收僵尸任务 %s: %s", job.id, exc)
+    recovered = _JOB_STORE.recover_stale_running(settings.analysis_worker_heartbeat_timeout_seconds)
 
     if recovered:
-        logger.info("启动时回收了 %s 个僵尸任务", recovered)
+        logger.info("启动时将 %s 个失联运行任务标记为 interrupted", recovered)
 
     # 对账双摄 Parent/Child 依赖（child 已完成但 Parent 仍 waiting_sources 的情况）
     _get_coordinator().reconcile_all()

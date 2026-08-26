@@ -99,6 +99,8 @@ class RecordingSession(BaseModel):
     session_dir: str | None = None
     storage_status: str = "available"
     display_mode: Literal["standard", "showcase"] = "standard"
+    display_title: str | None = None  # 用户自定义显示标题（Library 卡片优先采用；缺省回退派生标题）
+    display_date: datetime | None = None  # 用户自定义比赛日期（Library 卡片优先采用；缺省回退 started_at）
 
 
 # 删除录制会话的结果
@@ -254,6 +256,8 @@ class SyncRecordingSession(BaseModel):
     merge_started_at: datetime | None = None
     merge_completed_at: datetime | None = None
     merge_results: dict[str, dict[str, object]] = Field(default_factory=dict)
+    display_title: str | None = None  # 用户自定义显示标题（Library 卡片优先采用；缺省回退派生标题）
+    display_date: datetime | None = None  # 用户自定义比赛日期（Library 卡片优先采用；缺省回退 started_at）
 
     @model_validator(mode="before")
     @classmethod
@@ -292,3 +296,10 @@ class SyncStopResponse(BaseModel):
     default_analysis_video_id: str | None = None
     analysis_available: bool = False
     analysis_blocked_reason: str | None = None
+
+
+# 录制/双摄素材的用户自定义显示元数据（Library 卡片内联编辑的兜底真源）。
+# 空值表示撤销覆盖（回退到派生标题 / started_at）。
+class SessionDisplayUpdateRequest(BaseModel):
+    display_title: str | None = None
+    display_date: datetime | None = None

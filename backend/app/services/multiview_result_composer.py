@@ -103,6 +103,22 @@ def _validate_ball_artifact_payloads(
     if schema_version == "reconstructed_ball_trajectory.v4":
         if v3.get("display_trajectory_status") not in {"available", "degraded", "unavailable"}:
             return "reconstructed ball trajectory display_trajectory_status 非法"
+        reference_view_id = v3.get("reference_view_id")
+        render_view_id = v3.get("render_view_id")
+        if reference_view_id is not None and not isinstance(reference_view_id, str):
+            return "reconstructed ball trajectory reference_view_id 必须是字符串"
+        if render_view_id is not None and not isinstance(render_view_id, str):
+            return "reconstructed ball trajectory render_view_id 必须是字符串"
+        if reference_view_id and render_view_id and reference_view_id != render_view_id:
+            return "reconstructed ball trajectory render_view_id 必须与 reference_view_id 一致"
+        video_policy = v3.get("video_overlay_policy")
+        if video_policy is not None:
+            if not isinstance(video_policy, dict):
+                return "reconstructed ball trajectory video_overlay_policy 必须是对象"
+            if video_policy.get("window_semantics") not in {None, "half_open"}:
+                return "reconstructed ball trajectory window_semantics 非法"
+            if video_policy.get("retention_policy") not in {None, "single_active_segment"}:
+                return "reconstructed ball trajectory retention_policy 非法"
     segments = v3.get("segments")
     if not isinstance(segments, list):
         return "reconstructed ball trajectory segments 必须是数组"
@@ -146,6 +162,15 @@ def _validate_ball_artifact_payloads(
                 not isinstance(timestamp, (int, float)) or not math.isfinite(float(timestamp)) or float(timestamp) < 0
             ):
                 return f"trajectory segment[{index}] sample[{sample_index}] 时间必须是非负秒数"
+            if schema_version == "reconstructed_ball_trajectory.v4":
+                height = sample.get("estimated_height_ft", sample.get("z_ft"))
+                if height is not None and (
+                    not isinstance(height, (int, float)) or not math.isfinite(float(height)) or float(height) < 0
+                ):
+                    return f"trajectory segment[{index}] sample[{sample_index}] 高度必须是非负有限英尺数"
+        if schema_version == "reconstructed_ball_trajectory.v4" and segment.get("reconstruction_mode") == "stereo_estimated_3d":
+            if segment.get("height_validity") == "invalid":
+                return f"trajectory segment[{index}] 非法 3D 高度不得声明为 stereo_estimated_3d"
     return None
 
 # 从 reference view 继承到 Parent 命名空间的产物契约：
@@ -178,6 +203,20 @@ _INHERITED_ARTIFACT_SPECS: dict[str, tuple[str, str, str, str | None, bool]] = {
         "reconstructed-ball-trajectory",
         "reconstructed_ball_trajectory_url",
         "reconstructed_ball_trajectory_status",
+        True,
+    ),
+    "ball_semantic_timeline_json_path": (
+        "ball_semantic_timeline_json_path",
+        "ball-semantic-timeline",
+        "ball_semantic_timeline_url",
+        "ball_semantic_timeline_status",
+        True,
+    ),
+    "ball_semantic_boundary_eval_json_path": (
+        "ball_semantic_boundary_eval_json_path",
+        "ball-semantic-boundary-eval",
+        "ball_semantic_boundary_eval_url",
+        "ball_semantic_boundary_eval_status",
         True,
     ),
     # 多视角球立体证据（不可变原始证据，joint 模式球 3D 链的输入证据）
@@ -902,6 +941,7 @@ class MultiViewResultComposer:
                 build_overlay_evidence_bundle,
             )
             from app.vision.multiview.fused_overlay_types import (
+                FusedPlayerOverlayView,
                 build_fused_player_overlay_payload,
             )
 
@@ -921,24 +961,72 @@ class MultiViewResultComposer:
                 final_source=str(overlay_context.get("final_source", "first_pass_f0")),
                 bootstrap_backfill=getattr(joint_output, "bootstrap_display_backfill", None),
             )
-            builder = FusedPlayerOverlayBuilder()
-            frames = builder.build(bundle=bundle)
             expected_player_count = int(
                 joint_output.diagnostics.get("expected_player_count", 4)
                 if isinstance(joint_output.diagnostics, dict)
                 else 4
             )
+            view_ids = [str(view_id) for view_id in bundle.view_ids if str(view_id) in geometry_map]
+            if reference_view_id not in view_ids:
+                view_ids.insert(0, reference_view_id)
+            video_ids = {
+                str(item.get("cameraSlot")): str(item.get("videoId"))
+                for item in (getattr(job, "jointViewInputs", None) or [])
+                if isinstance(item, dict) and item.get("cameraSlot") and item.get("videoId")
+            }
+            view_payloads: dict[str, FusedPlayerOverlayView] = {}
+            builders: dict[str, FusedPlayerOverlayBuilder] = {}
+            for view_id in view_ids:
+                geometry = geometry_map.get(view_id)
+                if geometry is None:
+                    continue
+                builder = FusedPlayerOverlayBuilder()
+                view_frames = builder.build(
+                    bundle=bundle,
+                    expected_player_count=expected_player_count,
+                    target_view_id=view_id,
+                )
+                builders[view_id] = builder
+                view_source = {
+                    "width": int(getattr(geometry, "frame_width", 0) or 0),
+                    "height": int(getattr(geometry, "frame_height", 0) or 0),
+                }
+                view_payloads[view_id] = FusedPlayerOverlayView(
+                    view_id=view_id,
+                    video_id=video_ids.get(view_id),
+                    status="available" if view_frames and any(frame.players for frame in view_frames) else "no_detections",
+                    detail=(
+                        f"已生成 {len(view_frames)} 帧 {view_id} image-space Player overlay；"
+                        "身份与 canonical tick 复用同一份 joint evidence"
+                    ),
+                    source=view_source,
+                    frames=view_frames,
+                )
+            reference_view = view_payloads.get(reference_view_id)
+            if reference_view is None:
+                artifacts.fused_player_overlay_status = "unavailable"
+                artifacts.fused_player_overlay_detail = "reference view overlay 生成失败"
+                return
             payload = build_fused_player_overlay_payload(
                 job_id=job.id,
                 video_id=job.videoId,
                 reference_view_id=reference_view_id,
                 frame_size=frame_size,
-                frames=frames,
-                status="available" if frames and any(f.players for f in frames) else "no_detections",
+                frames=reference_view.frames,
+                status=reference_view.status,
                 detail=(
-                    f"已生成 {len(frames)} 帧 fused overlay（{expected_player_count} 名 canonical 球员，"
-                    f"来源 F0/F1 evidence + roster + {reference_view_id} 几何）"
+                    f"已生成 {len(reference_view.frames)} 帧 fused overlay（{expected_player_count} 名 canonical 球员，"
+                    f"包含 {len(view_payloads)} 个展示视角；来源 F0/F1 evidence + roster + view geometry）"
                 ),
+                diagnostics={
+                    "view_ids": view_ids,
+                    "view_diagnostics": {
+                        view_id: dict(getattr(builder, "diagnostics", {}) or {})
+                        for view_id, builder in builders.items()
+                    },
+                },
+                views=view_payloads,
+                schema_version="multiview-fused-player-overlay.v2",
             )
             overlay_path = self.storage.fused_player_overlay_json_path(job.id)
             overlay_path.parent.mkdir(parents=True, exist_ok=True)

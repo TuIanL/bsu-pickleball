@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 # FastAPI 核心组件
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
 from app.schemas.video import (
@@ -31,6 +31,7 @@ from app.schemas.video import (
     VideoMetadata,
     VideoTimingMaterializeResponse,
     VideoTimingResponse,
+    VideoUpdateRequest,
     VideoUploadResponse,
 )
 
@@ -112,6 +113,21 @@ def read_video(video_id: str) -> VideoMetadata:
     video = video_service.get_video(video_id)
     if video is None:
         # 没找到就返回 HTTP 404（资源不存在）
+        raise HTTPException(status_code=404, detail="Video not found")
+    return video
+
+
+# 定义一个"更新视频显示元数据"的接口
+# PATCH /api/videos/{video_id}：供 Library 卡片内联编辑写入用户自定义标题/比赛日期。
+# 空值表示撤销覆盖（回退到 original_filename / uploaded_at 派生值）。
+@router.patch("/{video_id}", response_model=VideoMetadata)
+def update_video_metadata(video_id: str, payload: VideoUpdateRequest) -> VideoMetadata:
+    video = video_service.update_video(
+        video_id,
+        display_title=payload.display_title,
+        display_date=payload.display_date,
+    )
+    if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
 
@@ -298,3 +314,42 @@ def stream_video(video_id: str, request: Request) -> StreamingResponse:
         media_type=media_type,
         headers=headers,
     )
+
+
+@router.get("/{video_id}/poster")
+def video_poster(video_id: str, request: Request) -> FileResponse:
+    """比赛库封面 poster 图（预生成，非实时解码视频流）。
+
+    视频登记 / 上传 / 双摄合并时已由 `cover_poster.generate_poster` 落盘同名
+    `*.poster.jpg`；此处仅按 video_id 解析并服务。未生成时返回 404，
+    前端自动回退到视频流首帧封面。
+    """
+    video = video_service.get_video(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    from app.services.cover_poster import poster_path_for
+
+    poster = poster_path_for(video.path)
+    if not poster.exists() or poster.stat().st_size <= 0:
+        raise HTTPException(status_code=404, detail="Poster not available")
+
+    # 通过 Last-Modified / ETag 做条件缓存：重新合并覆盖同名 poster 后浏览器会重新拉取，
+    # 等效于 `?v=<mtime>` 缓存击穿，但不污染 URL、不破坏既有引用。
+    mtime = poster.stat().st_mtime
+    headers = {
+        "Cache-Control": "public, max-age=3600",
+        "Last-Modified": _http_date(mtime),
+        "ETag": f'"{int(mtime)}"',
+    }
+    if request.headers.get("if-none-match") == f'"{int(mtime)}"':
+        from fastapi.responses import Response
+
+        return Response(status_code=304, headers=headers)
+    return FileResponse(poster, media_type="image/jpeg", headers=headers)
+
+
+def _http_date(timestamp: float) -> str:
+    from email.utils import formatdate
+
+    return formatdate(timestamp, usegmt=True)

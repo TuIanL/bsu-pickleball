@@ -136,7 +136,7 @@ export function AppSidebar({ navigationSection, onNavigate }: AppSidebarProps) {
         </span>
         <span className="hidden min-w-0 sm:block">
           <span className="block text-sm font-black tracking-[0.02em] text-[var(--capture-text-primary,#182b24)]">
-            拍动视析
+            瞬境
           </span>
           <span className="block text-[10px] text-[var(--capture-text-muted,#8f9d96)]">匹克球运动分析</span>
         </span>

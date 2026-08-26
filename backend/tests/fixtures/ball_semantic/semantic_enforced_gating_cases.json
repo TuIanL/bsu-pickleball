@@ -1,0 +1,48 @@
+{
+  "schema_version": "ball_semantic_enforced_fixture.v1",
+  "description": "Enforced authority、回合边界和发球预热的确定性回放场景",
+  "cases": [
+    {
+      "id": "manual_non_play_seals_formal_segment",
+      "events": [
+        {"id": "rally-1", "event_type": "rally_start", "timestamp_ms": 0, "source": "manual"},
+        {"id": "np-1", "event_type": "non_play_start", "timestamp_ms": 1000, "source": "manual"}
+      ],
+      "probes": [
+        {"timestamp_ms": 500, "expected_phase": "RALLY_ACTIVE", "expected_action": "allow", "expected_boundary": "open_formal_segment", "expected_hard_gate": false},
+        {"timestamp_ms": 1100, "expected_phase": "NON_PLAY_CONFIRMED", "expected_action": "suppress_formal", "expected_boundary": "seal_formal_segment", "expected_hard_gate": true},
+        {"timestamp_ms": 1200, "expected_phase": "NON_PLAY_CONFIRMED", "expected_action": "suppress_formal", "expected_boundary": "none", "expected_hard_gate": true}
+      ]
+    },
+    {
+      "id": "corrected_rally_end_reopens_next_rally",
+      "events": [
+        {"id": "rally-1", "event_type": "rally_start", "timestamp_ms": 0, "source": "corrected"},
+        {"id": "rally-1-end", "event_type": "rally_end", "timestamp_ms": 1000, "source": "corrected"},
+        {"id": "rally-2", "event_type": "rally_start", "timestamp_ms": 2000, "source": "corrected"}
+      ],
+      "probes": [
+        {"timestamp_ms": 1100, "expected_phase": "POST_RALLY", "expected_action": "suppress_formal", "expected_boundary": "seal_formal_segment", "expected_hard_gate": true},
+        {"timestamp_ms": 2100, "expected_phase": "RALLY_ACTIVE", "expected_action": "allow", "expected_boundary": "open_formal_segment", "expected_hard_gate": false}
+      ]
+    },
+    {
+      "id": "pre_serve_warm_does_not_publish_handheld_candidate",
+      "events": [
+        {"id": "np-1", "event_type": "non_play_start", "timestamp_ms": 0, "source": "manual"},
+        {"id": "np-2", "event_type": "non_play_end", "timestamp_ms": 1000, "source": "manual"}
+      ],
+      "probes": [
+        {"timestamp_ms": 1200, "evidence": {"serve_candidate_confidence": 0.60}, "expected_phase": "PRE_SERVE", "expected_action": "serve_reacquire", "expected_boundary": "warm_reacquire", "expected_hard_gate": false},
+        {"timestamp_ms": 1300, "evidence": {"serve_candidate_confidence": 0.60, "serve_armed": true}, "expected_phase": "SERVE_ARMED", "expected_action": "serve_reacquire", "expected_boundary": "serve_reacquire", "expected_hard_gate": false}
+      ]
+    },
+    {
+      "id": "unknown_provider_fails_open",
+      "events": [],
+      "probes": [
+        {"timestamp_ms": 0, "expected_phase": "UNKNOWN", "expected_action": "fallback", "expected_boundary": "none", "expected_hard_gate": false}
+      ]
+    }
+  ]
+}

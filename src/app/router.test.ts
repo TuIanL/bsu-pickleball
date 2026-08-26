@@ -27,6 +27,17 @@ describe("parsePath", () => {
         navigationSection: "capture",
       },
     },
+    {
+      pathname: "/capture/fs-1/takes/take-1/scoring-calibration",
+      expected: {
+        name: "scoringCalibration",
+        path: "/capture/fs-1/takes/take-1/scoring-calibration",
+        fieldSessionId: "fs-1",
+        takeId: "take-1",
+        shellMode: "standard",
+        navigationSection: "capture",
+      },
+    },
     // Workspace
     { pathname: "/workspace", expected: { name: "library", path: "/library", shellMode: "standard", navigationSection: "library" } },
     // Library

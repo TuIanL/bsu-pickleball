@@ -243,4 +243,29 @@ describe("AnalysisTaskCard 列表卡进度区", () => {
     expect(screen.queryByText("42%")).toBeNull();
     expect(screen.getByText(/模型加载失败/)).toBeTruthy();
   });
+
+  it("interrupted 任务显示任务失联和重新分析入口，不显示分析中进度条", () => {
+    const job = makeTaskJob({
+      status: "interrupted",
+      progress: 42,
+      workerHeartbeatAt: "2026-08-12T01:00:00.000Z",
+      publicErrorMessage: "Worker 在规定时间内没有心跳",
+    });
+    const onNavigate = vi.fn();
+    render(
+      <AnalysisTaskCard
+        job={job}
+        onCancel={vi.fn()}
+        onDelete={vi.fn()}
+        onNavigate={onNavigate}
+        onToggleSelected={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("任务失联")).toBeTruthy();
+    expect(screen.getByText(/Worker 在规定时间内没有心跳/)).toBeTruthy();
+    expect(screen.queryByText("42%")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重新分析" }));
+    expect(onNavigate).toHaveBeenCalledWith("/analysis/new");
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
+  });
 });

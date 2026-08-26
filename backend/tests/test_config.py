@@ -23,6 +23,87 @@ def test_overlay_frame_stride_env_override_is_preserved(monkeypatch):
         config.get_settings.cache_clear()
 
 
+def test_ball_semantic_policy_defaults_to_shadow_fail_open(monkeypatch, tmp_path):
+    for name in [
+        "PICKLEBALL_ENABLE_BALL_SEMANTIC_POLICY",
+        "PICKLEBALL_BALL_SEMANTIC_POLICY_MODE",
+        "PICKLEBALL_BALL_SEMANTIC_ENFORCE_AUTHORITATIVE_NON_PLAY",
+        "PICKLEBALL_BALL_SEMANTIC_ENFORCED_ROLLOUT",
+        "PICKLEBALL_BALL_SEMANTIC_ROLLOUT_ID",
+        "PICKLEBALL_BALL_SEMANTIC_TIMELINE_ENABLED",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(tmp_path / "empty-models"))
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.enable_ball_semantic_policy is True
+        assert settings.ball_semantic_policy_mode == "shadow"
+        assert settings.ball_semantic_enforce_authoritative_non_play is False
+        assert settings.ball_semantic_enforced_rollout is False
+        assert settings.ball_semantic_rollout_id == "default"
+        assert settings.ball_semantic_timeline_enabled is True
+        assert settings.ball_semantic_rally_end_min_evidence == 2
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_ball_semantic_policy_can_be_disabled_for_rollback(monkeypatch, tmp_path):
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(tmp_path / "empty-models"))
+    monkeypatch.setenv("PICKLEBALL_ENABLE_BALL_SEMANTIC_POLICY", "false")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_POLICY_MODE", "enforced")
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.enable_ball_semantic_policy is False
+        assert settings.ball_semantic_policy_mode == "enforced"
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_ball_semantic_enforced_rollout_is_explicit_and_identifiable(monkeypatch, tmp_path):
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(tmp_path / "empty-models"))
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_POLICY_MODE", "enforced")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_ENFORCED_ROLLOUT", "true")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_ROLLOUT_ID", "take-20260720-shadow-compare")
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.ball_semantic_enforced_rollout is True
+        assert settings.ball_semantic_rollout_id == "take-20260720-shadow-compare"
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_ball_semantic_boundary_calibration_settings_are_configurable(monkeypatch, tmp_path):
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(tmp_path / "empty-models"))
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_POLICY_VERSION", "semantic-boundary-test.v2")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_MIN_CONFIRM_TICKS", "4")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_GRACE_WINDOW_SECONDS", "0.35")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_RESCUE_MIN_CONSECUTIVE_TICKS", "3")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_RESCUE_MIN_MOTION_PIXELS", "21")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_EVIDENCE_FRESHNESS_SECONDS", "0.8")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_CONFLICT_PENALTY", "0.1")
+    monkeypatch.setenv("PICKLEBALL_BALL_SEMANTIC_BOUNDARY_EVAL_ENABLED", "false")
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.ball_semantic_policy_version == "semantic-boundary-test.v2"
+        assert settings.ball_semantic_min_confirm_ticks == 4
+        assert settings.ball_semantic_grace_window_seconds == 0.35
+        assert settings.ball_semantic_rescue_min_consecutive_ticks == 3
+        assert settings.ball_semantic_rescue_min_motion_pixels == 21.0
+        assert settings.ball_semantic_evidence_freshness_seconds == 0.8
+        assert settings.ball_semantic_conflict_penalty == 0.1
+        assert settings.ball_semantic_boundary_eval_enabled is False
+    finally:
+        config.get_settings.cache_clear()
+
+
 def test_pose_inference_auto_enables_when_rtmpose_assets_are_discovered(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     config_path = model_dir / "rtmpose" / "rtmpose-m_8xb512-700e_body8-halpe26-256x192.py"

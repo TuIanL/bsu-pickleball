@@ -66,3 +66,36 @@ def test_orphan_capture_take_recovery_marks_only_active_orphans_failed(isolated_
         assert check.get(CaptureTake, "completed").status is CaptureTakeStatus.completed
     finally:
         check.close()
+
+
+def test_api_upload_does_not_pollute_production_uploads():
+    """通过 API 上传的视频 MUST 落在隔离临时目录，绝不写入生产 uploads 目录。
+
+    这是 cleanup-test-upload-pollution 变更的核心回归断言：``conftest`` 的
+    ``_isolate_uploads_singleton`` 会话级 fixture 把全局 ``video_service`` 单例的
+    storage 指向临时目录，使 ``TestClient`` 上传产物不再污染 ``backend/data/uploads``。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services.storage_service import StorageService
+    from app.services.video_service import VIDEOS, video_service
+
+    production_uploads = Path(__file__).resolve().parents[1] / "data" / "uploads"
+
+    response = TestClient(app).post(
+        "/api/videos/upload",
+        files={"file": ("isolation-check.mp4", b"not-a-real-video", "video/mp4")},
+    )
+    assert response.status_code == 200
+    video = response.json()["video"]
+
+    media_path = Path(video["path"])
+    assert media_path.exists(), "上传媒体文件应已落盘"
+    # 关键断言：不能落在生产 uploads 目录树下。
+    assert production_uploads.resolve() not in [p.resolve() for p in media_path.parents]
+
+    # 本测试自带清理（与 autouse teardown 正交，确保无论如何都回收）。
+    StorageService.delete_path(media_path)
+    StorageService.delete_path(video_service.storage.uploads_dir / f"{video['id']}.json")
+    VIDEOS.pop(video["id"], None)

@@ -32,6 +32,7 @@ from app.vision.multiview.ball_stereo.segment_view_selection import (
     select_main_view,
 )
 from app.vision.multiview.ball_stereo.stereo_measurement import BallStereoMeasurement, measure_stereo
+from app.vision.pickleball_game_analysis.ball_quality_gate import QUALITY_GATE_SCHEMA_VERSION
 from app.vision.pickleball_game_analysis.ball_contact_event_detector import (
     BallContactEventDetector,
     ContactDetectorConfig,
@@ -44,7 +45,19 @@ from app.vision.pickleball_game_analysis.reconstruction_schemas import (
     TrajectoryEvent,
     event_to_payload,
 )
-from app.vision.pickleball_game_analysis.schemas import TrajectoryPoint
+from app.vision.pickleball_game_analysis.schemas import BallFrameSample, TrajectoryPoint
+from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
+    BallBoundaryAction,
+    BallSearchPolicy,
+    MatchSemanticSnapshot,
+    SemanticAuthority,
+    SemanticPhase,
+    SemanticTimelineProvider,
+    compute_semantic_shadow_metrics,
+)
+from app.vision.pickleball_game_analysis.semantic_boundary_calibration import (
+    build_semantic_boundary_evaluation_payload,
+)
 
 
 @dataclass
@@ -116,6 +129,14 @@ class CanonicalBallStereoProcessor:
         max_duration_seconds: float | None = None,
         disabled_reason: str | None = None,
         hybrid_enabled: bool = True,
+        semantic_provider: SemanticTimelineProvider | None = None,
+        semantic_policy: BallSearchPolicy | None = None,
+        scene_calibration_revision: int | None = None,
+        camera_model_source: str = "homography_constrained_virtual",
+        metric_validity: str = "approximate_multiview",
+        height_uncertainty_ft: float | None = None,
+        scene_quality: dict[str, object] | None = None,
+        scene_metric_required: bool = False,
     ) -> None:
         self.job_id = job_id
         self.take_id = take_id
@@ -137,9 +158,18 @@ class CanonicalBallStereoProcessor:
         self._started_monotonic = time.monotonic()
         self.disabled_reason = disabled_reason
         self.hybrid_enabled = bool(hybrid_enabled)
+        self.semantic_provider = semantic_provider
+        self.semantic_policy = semantic_policy
+        self.scene_calibration_revision = scene_calibration_revision
+        self.camera_model_source = camera_model_source
+        self.metric_validity = metric_validity
+        self.height_uncertainty_ft = height_uncertainty_ft
+        self.scene_quality = dict(scene_quality or {})
+        self.scene_metric_required = bool(scene_metric_required)
         self.measurements: list[BallStereoMeasurement] = []
         self.observations: list[Observation] = []
         self.pairings: list[dict[str, Any]] = []
+        self.pairing_diagnostics: list[dict[str, Any]] = []
         self.candidate_filtering: list[dict[str, Any]] = []
         self.trajectory_points_by_view: dict[str, list[TrajectoryPoint]] = {
             self.reference_view_id: [],
@@ -160,6 +190,14 @@ class CanonicalBallStereoProcessor:
         self._failure_reason: str | None = disabled_reason
         self._disabled = disabled_reason is not None
         self._last_trusted_xyz: tuple[float, float, float] | None = None
+        self._prepared_ticks: dict[int, dict[str, Any]] = {}
+        self._semantic_evidence_by_tick: dict[int, dict[str, Any]] = {}
+        self._committed_tick_ids: set[int] = set()
+        self.semantic_snapshots: list[MatchSemanticSnapshot] = []
+        self.semantic_decisions: list[Any] = []
+        self.semantic_boundary_events: list[dict[str, Any]] = []
+        self._semantic_hard_gate_active = False
+        self._semantic_boundary_action_ids: set[str] = set()
 
     @classmethod
     def unavailable(cls, *, job_id: str, take_id: str, reason: str) -> "CanonicalBallStereoProcessor":
@@ -174,10 +212,12 @@ class CanonicalBallStereoProcessor:
             disabled_reason=reason,
         )
 
-    def process_tick(self, *, tick_id: int, bundle: Any) -> None:
-        """处理一个 canonical tick；任何球侧异常都降级，不打断球员主链。"""
-        self.counters["canonical_ticks"] += 1
+    def prepare_tick(self, *, tick_id: int, bundle: Any) -> None:
+        """只执行 detector/filter 并缓存候选，不推进任何 BallTracker 状态。"""
         if self._disabled:
+            return
+        if tick_id in self._committed_tick_ids or tick_id in self._prepared_ticks:
+            self.counters["duplicate_prepare_calls"] = self.counters.get("duplicate_prepare_calls", 0) + 1
             return
         if (
             self.max_duration_seconds is not None
@@ -187,9 +227,7 @@ class CanonicalBallStereoProcessor:
             self._disable("双摄球路分析阶段超时，已保留球员分析结果")
             return
 
-        candidates_by_view: dict[str, list[tuple[float, float, float]]] = {}
-        samples_by_view: dict[str, Any] = {}
-        snapshots_by_view: dict[str, Any] = {}
+        prepared_views: dict[str, dict[str, Any]] = {}
         for view_id in (self.reference_view_id, self.secondary_view_id):
             if bundle.frame_status.get(view_id) != "available":
                 continue
@@ -229,29 +267,270 @@ class CanonicalBallStereoProcessor:
                         for decision in filter_result.decisions
                     ]
                 else:
-                    # 测试/旧注入 tracker 的兼容路径；正式 BallTracker 均提供共享过滤器。
                     shared_candidates = raw_candidates
                     decisions = []
                 self.candidate_filtering.append(
-                    {"tick_id": tick_id, "view_id": view_id, "decisions": decisions}
+                    {"tick_id": tick_id, "view_id": view_id, "decisions": decisions, "phase": "prepare"}
                 )
-                snapshots_by_view[view_id] = (
+                snapshots = (
                     tracker.pre_tick_snapshot(_canonical_timestamp_ms(frame_sample) / 1000.0)
                     if hasattr(tracker, "pre_tick_snapshot")
                     else None
                 )
-                sample = tracker.update_from_candidates(
-                    frame_index=int(frame_sample.source_frame_index),
-                    timestamp_sec=_canonical_timestamp_ms(frame_sample) / 1000.0,
-                    view_candidates=shared_candidates,
-                    frame_shape=frame.shape,
-                    homography=None,
+                prepared_views[view_id] = {
+                    "frame": frame,
+                    "frame_sample": frame_sample,
+                    "raw_candidates": raw_candidates,
+                    "shared_candidates": shared_candidates,
+                    "snapshot": snapshots,
+                }
+            except Exception as exc:  # noqa: BLE001
+                self._disable(f"球检测运行失败：{exc}")
+                return
+        self._prepared_ticks[tick_id] = {"bundle": bundle, "views": prepared_views}
+
+    def commit_tick(
+        self,
+        *,
+        tick_id: int,
+        bundle: Any,
+        semantic_evidence: Mapping[str, Any] | None = None,
+    ) -> None:
+        """在当 tick 球员上下文完成后提交一次 tracker 更新。"""
+        if tick_id in self._committed_tick_ids:
+            self.counters["duplicate_commit_calls"] = self.counters.get("duplicate_commit_calls", 0) + 1
+            return
+        self._semantic_evidence_by_tick[tick_id] = dict(semantic_evidence or {})
+        self.process_tick(tick_id=tick_id, bundle=bundle)
+
+    def process_tick(self, *, tick_id: int, bundle: Any) -> None:
+        """处理一个 canonical tick；任何球侧异常都降级，不打断球员主链。"""
+        if tick_id in self._committed_tick_ids:
+            self.counters["duplicate_process_calls"] = self.counters.get("duplicate_process_calls", 0) + 1
+            return
+        self._committed_tick_ids.add(tick_id)
+        self.counters["canonical_ticks"] += 1
+        if self._disabled:
+            return
+        if (
+            self.max_duration_seconds is not None
+            and time.monotonic() - self._started_monotonic > self.max_duration_seconds
+        ):
+            self.counters["timed_out"] += 1
+            self._disable("双摄球路分析阶段超时，已保留球员分析结果")
+            return
+
+        prepared_tick = self._prepared_ticks.pop(tick_id, None)
+        semantic_evidence = self._semantic_evidence_by_tick.pop(tick_id, {})
+        semantic_snapshot = None
+        semantic_decision = None
+        if self.semantic_provider is not None and self.semantic_policy is not None:
+            raw_count = sum(
+                len(view.get("raw_candidates", ()))
+                for view in (prepared_tick or {}).get("views", {}).values()
+            )
+            semantic_snapshot = self.semantic_provider.snapshot(
+                float(bundle.take_timestamp_ms),
+                evidence={
+                    **semantic_evidence,
+                    "raw_candidate_count": raw_count,
+                    "ball_continuity": max(
+                        (
+                            float(getattr(view.get("snapshot"), "continuity_score", 0.0))
+                            for view in (prepared_tick or {}).get("views", {}).values()
+                        ),
+                        default=0.0,
+                    ),
+                },
+            )
+            semantic_decision = self.semantic_policy.evaluate(
+                semantic_snapshot,
+                raw_candidate_count=raw_count,
+            )
+            self.semantic_snapshots.append(semantic_snapshot)
+            self.semantic_decisions.append(semantic_decision)
+            self.counters["semantic_tick_count"] = self.counters.get("semantic_tick_count", 0) + 1
+            if semantic_snapshot.semantic_fallback:
+                self.counters["semantic_fallback_tick_count"] = self.counters.get("semantic_fallback_tick_count", 0) + 1
+            if not semantic_decision.formal_publish_allowed:
+                self.counters["semantic_formal_suppression_tick_count"] = (
+                    self.counters.get("semantic_formal_suppression_tick_count", 0) + 1
                 )
+
+        semantic_enforced_authority = bool(
+            semantic_decision is not None
+            and semantic_decision.policy_mode.value == "enforced"
+            and semantic_decision.rollout_enabled
+            and semantic_decision.authority in {SemanticAuthority.MANUAL, SemanticAuthority.CORRECTED}
+        )
+        semantic_boundary_should_apply = bool(
+            semantic_enforced_authority
+            and semantic_decision is not None
+            and semantic_decision.boundary_action != BallBoundaryAction.NONE
+        )
+        if semantic_boundary_should_apply and semantic_decision is not None:
+            action_id = semantic_decision.boundary_action_id
+            self.semantic_boundary_events.append(
+                {
+                    "tick_id": tick_id,
+                    "take_timestamp_ms": float(bundle.take_timestamp_ms),
+                    "action": semantic_decision.boundary_action.value,
+                    "action_id": action_id,
+                    "phase": semantic_decision.phase.value,
+                    "authority": semantic_decision.authority.value,
+                    "applied_views": [],
+                    "duplicate": bool(action_id and action_id in self._semantic_boundary_action_ids),
+                }
+            )
+            if action_id:
+                self._semantic_boundary_action_ids.add(action_id)
+
+        candidates_by_view: dict[str, list[tuple[float, float, float]]] = {}
+        samples_by_view: dict[str, Any] = {}
+        snapshots_by_view: dict[str, Any] = {}
+        for view_id in (self.reference_view_id, self.secondary_view_id):
+            prepared_view = (prepared_tick or {}).get("views", {}).get(view_id)
+            if bundle.frame_status.get(view_id) != "available":
+                continue
+            frame_sample = prepared_view.get("frame_sample") if prepared_view else bundle.views.get(view_id)
+            if frame_sample is None:
+                self.counters["missing_bundle_frames"] = self.counters.get("missing_bundle_frames", 0) + 1
+                continue
+            frame = prepared_view.get("frame") if prepared_view else getattr(frame_sample, "frame", None)
+            if frame is None:
+                runtime = self.runtimes.get(view_id)
+                frame = runtime.get_frame(frame_sample.source_frame_index) if runtime is not None else None
+            if frame is None:
+                self.counters["decode_missing_frames"] = self.counters.get("decode_missing_frames", 0) + 1
+                continue
+            detector = self.detectors.get(view_id)
+            tracker = self.trackers.get(view_id)
+            if detector is None or tracker is None:
+                self._disable("球 detector/tracker 未配置")
+                return
+            try:
+                if prepared_view is not None:
+                    raw_candidates = list(prepared_view["raw_candidates"])
+                    shared_candidates = list(prepared_view["shared_candidates"])
+                    snapshots_by_view[view_id] = prepared_view.get("snapshot")
+                else:
+                    raw_candidates = list(
+                        detector.detect(frame, conf=float(getattr(tracker.config, "confidence", 0.18)))
+                    )
+                    self.counters["detector_calls"] += 1
+                    self.counters["candidate_count"] += len(raw_candidates)
+                    if hasattr(tracker, "filter_candidates"):
+                        filter_result = tracker.filter_candidates(raw_candidates, frame.shape)
+                        shared_candidates = list(filter_result.candidates)
+                        decisions = [
+                            {
+                                "candidate_id": decision.candidate_id,
+                                "image_xy": list(decision.image_xy),
+                                "accepted": decision.accepted,
+                                "reason": decision.reason,
+                                "diagnostics": dict(decision.diagnostics),
+                            }
+                            for decision in filter_result.decisions
+                        ]
+                    else:
+                        shared_candidates = raw_candidates
+                        decisions = []
+                    self.candidate_filtering.append(
+                        {"tick_id": tick_id, "view_id": view_id, "decisions": decisions, "phase": "commit"}
+                    )
+                    snapshots_by_view[view_id] = (
+                        tracker.pre_tick_snapshot(_canonical_timestamp_ms(frame_sample) / 1000.0)
+                        if hasattr(tracker, "pre_tick_snapshot")
+                        else None
+                    )
+
+                boundary_result: dict[str, Any] = {}
+                if semantic_boundary_should_apply and semantic_decision is not None:
+                    action_id = semantic_decision.boundary_action_id
+                    if hasattr(tracker, "apply_semantic_boundary"):
+                        boundary_result = tracker.apply_semantic_boundary(
+                            semantic_decision.boundary_action.value,
+                            action_id,
+                            timestamp_sec=_canonical_timestamp_ms(frame_sample) / 1000.0,
+                        )
+                    if self.semantic_boundary_events:
+                        self.semantic_boundary_events[-1].setdefault("view_results", {})[view_id] = boundary_result
+                        if boundary_result.get("applied"):
+                            self.semantic_boundary_events[-1]["applied_views"].append(view_id)
+
+                hard_gate = bool(
+                    semantic_decision is not None
+                    and semantic_decision.hard_gate_active
+                    and not semantic_decision.tracker_update_allowed
+                )
+                if hard_gate:
+                    self._semantic_hard_gate_active = True
+                    sample = BallFrameSample(
+                        frame_index=int(frame_sample.source_frame_index),
+                        timestamp_sec=_canonical_timestamp_ms(frame_sample) / 1000.0,
+                        image_xy=None,
+                        court_xy=None,
+                        confidence=None,
+                        visible=bool(raw_candidates),
+                        accepted=False,
+                        candidate_count=len(raw_candidates),
+                        reject_reason=semantic_decision.reason,
+                        source="semantic_policy",
+                        track_state=tracker.track_state.value,
+                        overall_decision=semantic_decision.action.value,
+                        publication_eligible=False,
+                        quality_status="diagnostic_only",
+                        diagnostics={
+                            "semantic_snapshot": semantic_snapshot.to_dict() if semantic_snapshot else None,
+                            "semantic_decision": semantic_decision.to_dict(),
+                            "boundary_result": boundary_result,
+                            "formal_candidate_count_before": len(raw_candidates),
+                            "formal_candidate_count_after": 0,
+                        },
+                    )
+                else:
+                    if self._semantic_hard_gate_active and not boundary_result.get("applied"):
+                        if hasattr(tracker, "clear"):
+                            tracker.clear()
+                    self._semantic_hard_gate_active = False
+                    sample = tracker.update_from_candidates(
+                        frame_index=int(frame_sample.source_frame_index),
+                        timestamp_sec=_canonical_timestamp_ms(frame_sample) / 1000.0,
+                        view_candidates=shared_candidates,
+                        frame_shape=frame.shape,
+                        homography=None,
+                    )
+                    if semantic_decision is not None:
+                        if not semantic_decision.formal_publish_allowed:
+                            sample = replace(
+                                sample,
+                                source="semantic_warm",
+                                publication_eligible=False,
+                                quality_status="warm_diagnostic",
+                                overall_decision=semantic_decision.action.value,
+                            )
+                        sample = replace(
+                            sample,
+                            diagnostics={
+                                **dict(sample.diagnostics),
+                                "semantic_snapshot": semantic_snapshot.to_dict() if semantic_snapshot else None,
+                                "semantic_decision": semantic_decision.to_dict(),
+                                "boundary_result": boundary_result,
+                                "formal_candidate_count_before": len(raw_candidates),
+                                "formal_candidate_count_after": (
+                                    1 if semantic_decision.formal_publish_allowed and sample.accepted else 0
+                                ),
+                            },
+                        )
             except Exception as exc:  # noqa: BLE001 - 球侧不可用不得破坏球员主链
                 self._disable(f"球检测运行失败：{exc}")
                 return
             self.counters["available_view_frames"] += 1
-            candidates_by_view[view_id] = [_candidate_tuple(item) for item in shared_candidates]
+            candidates_by_view[view_id] = (
+                []
+                if semantic_decision is not None and not semantic_decision.formal_publish_allowed
+                else [_candidate_tuple(item) for item in shared_candidates]
+            )
             samples_by_view[view_id] = sample
             if getattr(sample, "accepted", False) and getattr(sample, "image_xy", None) is not None:
                 self.counters["accepted_view_observations"] += 1
@@ -307,9 +586,34 @@ class CanonicalBallStereoProcessor:
             self._append_single_view_observations(bundle, samples_by_view)
             self.counters["unmatched_ticks"] += 1
             return
-        pair = pairs[0]
+        trusted_pairs = [candidate_pair for candidate_pair in pairs if candidate_pair.anchor_eligible]
+        if not trusted_pairs:
+            self.pairing_diagnostics.extend(
+                {
+                    "tick_id": tick_id,
+                    "cam1_source_frame_index": int(ref_sample.source_frame_index),
+                    "cam2_source_frame_index": int(sec_sample.source_frame_index),
+                    "cam1_timestamp_ms": ref_ts,
+                    "cam2_timestamp_ms": sec_ts,
+                    "take_timestamp_ms": float(bundle.take_timestamp_ms),
+                    "sync_error_ms": abs(ref_ts - sec_ts),
+                    "association_score": candidate_pair.score,
+                    "quality_label": candidate_pair.quality_label,
+                    "anchor_eligible": False,
+                    "measurement_published": False,
+                    "rejection_reason": candidate_pair.rejection_reason,
+                    "quality_components": dict(candidate_pair.quality_components),
+                    "time_gate_ms": self.max_time_gate_ms,
+                }
+                for candidate_pair in pairs
+            )
+            self.counters["low_quality_pair_diagnostics"] = self.counters.get("low_quality_pair_diagnostics", 0) + len(pairs)
+            self._append_single_view_observations(bundle, samples_by_view)
+            self.counters["unmatched_ticks"] += 1
+            return
+        pair = trusted_pairs[0]
         try:
-            measurement = measure_stereo(
+            measurement = pair.stereo_measurement or measure_stereo(
                 projection_cam1=self.projections[self.reference_view_id],
                 projection_cam2=self.projections[self.secondary_view_id],
                 image_xy1=pair.cam1_candidate[:2],
@@ -327,17 +631,36 @@ class CanonicalBallStereoProcessor:
             self.counters["depth_rejected"] = self.counters.get("depth_rejected", 0) + 1
             return
         measurement = measurement.__class__(
-            **{
-                **measurement.__dict__,
+                **{
+                    **measurement.__dict__,
                 "canonical_tick": tick_id,
                 "cam1_source_frame_index": int(ref_sample.source_frame_index),
                 "cam2_source_frame_index": int(sec_sample.source_frame_index),
-                "high_quality_anchor": pair.anchor_eligible,
-                "quality_components": dict(pair.quality_components),
-            }
+                    "high_quality_anchor": (
+                        pair.anchor_eligible
+                        and (
+                            not self.scene_metric_required
+                            or self.metric_validity == "metric_multiview"
+                        )
+                    ),
+                    "quality_components": {
+                        **dict(pair.quality_components),
+                        "scene_metric_anchor_eligible": float(
+                            not self.scene_metric_required
+                            or self.metric_validity == "metric_multiview"
+                        ),
+                    },
+                    "scene_calibration_revision": self.scene_calibration_revision,
+                    "camera_model_source": self.camera_model_source,
+                    "metric_validity": self.metric_validity,
+                    "height_uncertainty_ft": self.height_uncertainty_ft,
+                    "scene_quality": dict(self.scene_quality),
+                }
         )
         self.measurements.append(measurement)
-        if pair.anchor_eligible:
+        if pair.anchor_eligible and (
+            not self.scene_metric_required or self.metric_validity == "metric_multiview"
+        ):
             self._last_trusted_xyz = (
                 measurement.estimated_x_ft,
                 measurement.estimated_y_ft,
@@ -397,7 +720,11 @@ class CanonicalBallStereoProcessor:
         timestamp_sec = float(bundle.take_timestamp_ms) / 1000.0
         for view_id in (self.reference_view_id, self.secondary_view_id):
             sample = samples_by_view.get(view_id)
-            accepted = bool(sample is not None and getattr(sample, "accepted", False))
+            accepted = bool(
+                sample is not None
+                and getattr(sample, "accepted", False)
+                and getattr(sample, "publication_eligible", True)
+            )
             image_xy = getattr(sample, "image_xy", None) if accepted else None
             self.trajectory_points_by_view[view_id].append(
                 TrajectoryPoint(
@@ -414,6 +741,7 @@ class CanonicalBallStereoProcessor:
                             if bundle.views.get(view_id) is not None
                             else None
                         ),
+                        "ball_frame_diagnostics": dict(getattr(sample, "diagnostics", {}) or {}),
                     },
                 )
             )
@@ -482,7 +810,11 @@ class CanonicalBallStereoProcessor:
 
     def _append_single_view_observations(self, bundle: Any, samples_by_view: Mapping[str, Any]) -> None:
         for view_id, sample in samples_by_view.items():
-            if not getattr(sample, "accepted", False) or getattr(sample, "image_xy", None) is None:
+            if (
+                not getattr(sample, "accepted", False)
+                or not getattr(sample, "publication_eligible", True)
+                or getattr(sample, "image_xy", None) is None
+            ):
                 continue
             projection = self.projections.get(view_id)
             frame_sample = bundle.views.get(view_id)
@@ -539,6 +871,23 @@ class CanonicalBallStereoProcessor:
                     bounce_end=flight.end_event_type is not None and flight.end_event_type.value == "bounce",
                     stereo_measurements=segment_measurements,
                 )
+                if self.metric_validity == "metric_multiview":
+                    segment.samples = [
+                        replace(
+                            sample,
+                            height_source="metric_multiview",
+                            height_confidence=(
+                                max(0.0, 1.0 - self.height_uncertainty_ft / 2.0)
+                                if self.height_uncertainty_ft is not None
+                                else sample.height_confidence
+                            ),
+                            height_uncertainty_ft=self.height_uncertainty_ft,
+                        )
+                        for sample in segment.samples
+                    ]
+                    segment.height_quality_reason = (
+                        "scene_revision_ready" if segment.height_validity == "valid" else segment.height_quality_reason
+                    )
                 metrics_by_view = {
                     view_id: compute_view_segment_metrics(
                         view_id,
@@ -583,6 +932,9 @@ class CanonicalBallStereoProcessor:
             landing=None,
             metrics_by_segment=metrics_by_segment,
             duration_by_segment=duration_by_segment,
+            scene_calibration_revision=self.scene_calibration_revision,
+            metric_validity=self.metric_validity,
+            height_uncertainty_ft=self.height_uncertainty_ft,
         )
         v3["events"] = [event_to_payload(event) for event in events]
         base_segments = {segment["segment_id"]: segment for segment in v3.get("segments") or []}
@@ -614,20 +966,58 @@ class CanonicalBallStereoProcessor:
                 )
                 for flight, main_view, segment_measurements in hybrid_inputs
             ]
+            for segment in hybrid_segments:
+                target_path = (segment.get("image_paths_by_view") or {}).get(self.reference_view_id) or []
+                target_available = any(
+                    isinstance(sample, dict)
+                    and isinstance(sample.get("image_xy"), (list, tuple))
+                    and len(sample.get("image_xy")) >= 2
+                    for sample in target_path
+                )
+                segment["video_overlay"] = {
+                    "render_view_id": self.reference_view_id,
+                    "available": target_available,
+                    "path_source": "native_target_view" if target_available else "unavailable",
+                    "reason": None if target_available else "target_view_image_path_missing",
+                }
             v3["segments"] = hybrid_segments
             v3["schema_version"] = "reconstructed_ball_trajectory.v4"
             v3["reconstruction_mode"] = "hybrid_segmented"
+            # `primary_view_id` 只描述该段的最佳重建证据；视频叠加必须统一到任务
+            # reference view，避免把 cam_2 image-space 坐标直接画到 cam_1 视频。
+            v3["reference_view_id"] = self.reference_view_id
+            v3["render_view_id"] = self.reference_view_id
+            v3["video_overlay_policy"] = {
+                "window_semantics": "half_open",
+                "retention_policy": "single_active_segment",
+                "path_coordinate_space": "render_view_id",
+            }
             v3["coordinate_semantics"] = {
+                **dict(v3.get("coordinate_semantics") or {}),
                 "xy": "canonical_court_ft",
                 "z": "estimated_multiview_or_visualization_only_height_ft",
                 "validity": "per_segment_metric_validity",
                 "image_paths": "per_view_image_px_at_real_timestamp",
+                "camera_model_source": self.camera_model_source,
+                "scene_quality": dict(self.scene_quality),
             }
-            displayable = [segment for segment in hybrid_segments if segment["display_level"] != "none"]
+            if any(segment.get("reconstruction_mode") == "stereo_estimated_3d" for segment in hybrid_segments):
+                v3["overall_status"] = "FULL_ESTIMATED_3D"
+            elif any(segment.get("reconstruction_mode") != "unavailable" for segment in hybrid_segments):
+                v3["overall_status"] = "PARTIAL_3D"
+            else:
+                v3["overall_status"] = "LANDING_ONLY" if v3.get("landing_point") else "UNAVAILABLE"
+            v3["status"] = {
+                "FULL_ESTIMATED_3D": "available",
+                "PARTIAL_3D": "partial",
+                "LANDING_ONLY": "partial",
+                "UNAVAILABLE": "unavailable",
+            }.get(v3["overall_status"], "unavailable")
+            displayable = [segment for segment in hybrid_segments if segment.get("display_eligible") is True]
             v3["display_trajectory_status"] = (
                 "available"
                 if any(segment["display_level"] in {"high", "medium"} for segment in displayable)
-                else "degraded" if displayable else "unavailable"
+                else "unavailable"
             )
         detail = self._failure_reason or {
             "FULL_ESTIMATED_3D": "双摄三维球路分析完成",
@@ -644,6 +1034,38 @@ class CanonicalBallStereoProcessor:
             detail = "双摄三维不足，已生成估算分段球路（仅用于可视化）"
         if self._failure_reason:
             status = "unavailable"
+        semantic_accepted_timestamps_ms = [
+            float(point.timestamp_sec) * 1000.0
+            for points in self.trajectory_points_by_view.values()
+            for point in points
+            if point.image_xy is not None
+        ]
+        semantic_metrics = compute_semantic_shadow_metrics(
+            self.semantic_snapshots,
+            self.semantic_decisions,
+            accepted_timestamps_ms=semantic_accepted_timestamps_ms,
+        )
+        semantic_enabled = self.semantic_provider is not None and self.semantic_policy is not None
+        semantic_baseline = {
+            "mode": self.semantic_policy.config.mode.value if self.semantic_policy is not None else "disabled",
+            "rollout_id": self.semantic_policy.config.rollout_id if self.semantic_policy is not None else None,
+            "rollout_enabled": (
+                bool(self.semantic_policy.config.enforced_rollout_enabled)
+                if self.semantic_policy is not None
+                else False
+            ),
+            "raw_candidate_count": self.counters.get("candidate_count", 0),
+            "tracker_accepted_view_observations": self.counters.get("accepted_view_observations", 0),
+            "stereo_measurement_count": self.counters.get("stereo_measurements", 0),
+            "policy_suppressed_candidate_count": semantic_metrics["effective_suppressed_candidate_count"],
+            "formal_tracker_acceptance_delta_vs_shadow": 0 if semantic_enabled and self.semantic_policy.config.mode.value == "shadow" else None,
+            "stereo_measurement_delta_vs_shadow": 0 if semantic_enabled and self.semantic_policy.config.mode.value == "shadow" else None,
+            "comparison_status": "shadow_same_path" if semantic_enabled and self.semantic_policy.config.mode.value == "shadow" else "not_available",
+            "boundary_event_count": len(self.semantic_boundary_events),
+            "boundary_action_applied_view_count": sum(
+                len(event.get("applied_views") or ()) for event in self.semantic_boundary_events
+            ),
+        }
         diagnostics = {
             "pipeline": "canonical_tick_ball_stereo.v1",
             "frame_stride": self.frame_stride,
@@ -657,11 +1079,44 @@ class CanonicalBallStereoProcessor:
             "reprojection_error_px": min((segment.reprojection_error_px for segment in segments), default=math.inf),
             "prediction_ratio": max((segment.prediction_ratio for segment in segments), default=0.0),
             "event_resolution": event_diagnostics,
+            "semantic_policy": {
+                "enabled": self.semantic_provider is not None and self.semantic_policy is not None,
+                "provider": (
+                    self.semantic_provider.diagnostics_snapshot()
+                    if self.semantic_provider is not None
+                    else {"enabled": False}
+                ),
+                "snapshot_count": len(self.semantic_snapshots),
+                "decision_count": len(self.semantic_decisions),
+                "metrics": semantic_metrics,
+                "shadow_baseline": semantic_baseline,
+                "boundary_events": list(self.semantic_boundary_events),
+                "snapshots": [snapshot.to_dict() for snapshot in self.semantic_snapshots],
+                "decisions": [decision.to_dict() for decision in self.semantic_decisions],
+            },
             "segment_windows": segment_windows,
             "counters": dict(self.counters),
             "candidate_filtering": self.candidate_filtering,
+            "pairing_diagnostics": self.pairing_diagnostics,
+            "quality_gate_version": QUALITY_GATE_SCHEMA_VERSION,
             "failure_reason": self._failure_reason,
         }
+        if self.semantic_policy is not None and self.semantic_policy.config.boundary_eval_enabled:
+            diagnostics["semantic_boundary_evaluation"] = build_semantic_boundary_evaluation_payload(
+                job_id=self.job_id,
+                take_id=self.take_id,
+                snapshots=self.semantic_snapshots,
+                decisions=self.semantic_decisions,
+                evidence_ledger=(
+                    self.semantic_provider.diagnostics_snapshot().get("evidence_ledger", [])
+                    if self.semantic_provider is not None
+                    else []
+                ),
+                diagnostics=diagnostics,
+                reference_boundaries=diagnostics.get("reference_boundaries"),
+                frame_stride=self.frame_stride,
+                timestamp_provenance={"timestamp_unit": "canonical_take_ms"},
+            )
         def segment_id_for_time(timestamp_sec: float) -> str | None:
             return next(
                 (
@@ -688,7 +1143,7 @@ class CanonicalBallStereoProcessor:
                 **pairing,
                 "segment_id": segment_id_for_time(float(pairing["take_timestamp_ms"]) / 1000.0),
             }
-            for pairing in self.pairings
+            for pairing in [*self.pairings, *self.pairing_diagnostics]
         ]
         evidence = build_stereo_evidence_v1(
             take_id=self.take_id,
@@ -696,7 +1151,15 @@ class CanonicalBallStereoProcessor:
             pairings=segmented_pairings,
             observations=segmented_observations,
             diagnostics=diagnostics,
-            source_context={"job_id": self.job_id, "clock": "CanonicalAnalysisClock"},
+            source_context={
+                "job_id": self.job_id,
+                "clock": "CanonicalAnalysisClock",
+                "scene_calibration_revision": self.scene_calibration_revision,
+                "camera_model_source": self.camera_model_source,
+                "metric_validity": self.metric_validity,
+                "height_uncertainty_ft": self.height_uncertainty_ft,
+                "scene_quality": dict(self.scene_quality),
+            },
         )
         v3["quality_summary"] = {
             "stereo_coverage": diagnostics["stereo_coverage"],

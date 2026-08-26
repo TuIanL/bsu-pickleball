@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 # 检查当前系统是否安装了 FFmpeg 这个外部工具
 from app.camera.ffmpeg_utils import check_ffmpeg_available
-from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest
+from app.camera.models import RecordingDeleteResult, RecordingSession, RecordingStartRequest, SessionDisplayUpdateRequest
 
 # 录制会话服务：真正管理录制生命周期（开始/停止/取消/查询）的对象
 from app.camera.session_service import session_service
@@ -133,6 +133,19 @@ def get_recording(session_id: str) -> RecordingSession:
     读取单个录制会话的详情
     """
     session = session_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"录制会话 {session_id} 不存在")
+    return session
+
+
+@router.patch("/{session_id}", response_model=RecordingSession)
+def update_recording_display(session_id: str, payload: SessionDisplayUpdateRequest) -> RecordingSession:
+    """更新录制素材的用户自定义显示标题/日期（Library 卡片兜底真源；空值撤销覆盖）。"""
+    session = session_service.update_display_metadata(
+        session_id,
+        display_title=payload.display_title,
+        display_date=payload.display_date,
+    )
     if session is None:
         raise HTTPException(status_code=404, detail=f"录制会话 {session_id} 不存在")
     return session

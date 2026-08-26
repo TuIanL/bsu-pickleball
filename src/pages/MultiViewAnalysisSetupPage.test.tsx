@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getCaptureTake: vi.fn(),
+  getMetricCourtSceneDraft: vi.fn(),
+  saveMetricCourtSceneDraft: vi.fn(),
+  validateMetricCourtScene: vi.fn(),
+  publishMetricCourtScene: vi.fn(),
   getSyncAnchorStatus: vi.fn(),
   getSyncRecording: vi.fn(),
   getVideoStreamUrl: vi.fn(),
@@ -13,6 +17,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../services/analysisClient", () => ({
   getCaptureTake: mocks.getCaptureTake,
+  getMetricCourtSceneDraft: mocks.getMetricCourtSceneDraft,
+  saveMetricCourtSceneDraft: mocks.saveMetricCourtSceneDraft,
+  validateMetricCourtScene: mocks.validateMetricCourtScene,
+  publishMetricCourtScene: mocks.publishMetricCourtScene,
   getSyncAnchorStatus: mocks.getSyncAnchorStatus,
   getSyncRecording: mocks.getSyncRecording,
   getVideoStreamUrl: mocks.getVideoStreamUrl,
@@ -39,6 +47,37 @@ vi.mock("../components/platform/CourtCornerCalibrator", () => ({
         { id: "bottom_right", label: "近端右角", viewX: 90, viewY: 90, x: 90, y: 90 },
         { id: "bottom_left", label: "近端左角", viewX: 10, viewY: 90, x: 10, y: 90 },
       ])} type="button">完成标定 {props.videoId}</button>
+    </div>
+  ),
+}));
+
+vi.mock("../components/platform/NetProfileCalibrator", () => ({
+  HOLDOUT_ORDER: [
+    { id: "holdout_left_quarter", label: "左四分之一点", x: 5 },
+    { id: "holdout_right_quarter", label: "右四分之一点", x: 15 },
+  ],
+  estimateNetProfileHeight: (profile: { control_points: Array<{ world: { z: number } }> }) => profile.control_points[1]?.world.z ?? 0,
+  NetProfileCalibrator: (props: { viewId: string; onCancel: () => void; onComplete: (draft: unknown) => void }) => (
+    <div data-testid={`net-calibrator-${props.viewId}`}>
+      <button onClick={props.onCancel} type="button">上一步</button>
+      <button onClick={() => props.onComplete({
+        profile: {
+          profile_type: "standard",
+          height_source: "standard",
+          coordinate_units: "feet",
+          control_points: [
+            { id: "left", world: { x: 0, y: 22, z: 3 }, confirmed: true },
+            { id: "center", world: { x: 10, y: 22, z: 34 / 12 }, confirmed: true },
+            { id: "right", world: { x: 20, y: 22, z: 3 }, confirmed: true },
+          ],
+          sampled_top_profile: [],
+        },
+        annotations: { left: { x: 100, y: 200 }, center: { x: 320, y: 180 }, right: { x: 540, y: 200 } },
+        holdoutAnnotations: { holdout_left_quarter: { x: 210, y: 190 }, holdout_right_quarter: { x: 430, y: 190 } },
+        imageWidth: 640,
+        imageHeight: 360,
+        frameIndex: 30,
+      })} type="button">完成球网 {props.viewId}</button>
     </div>
   ),
 }));
@@ -111,11 +150,19 @@ describe("MultiViewAnalysisSetupPage", () => {
 
   beforeEach(() => {
     mocks.getCaptureTake.mockReset();
+    mocks.getMetricCourtSceneDraft.mockReset();
+    mocks.saveMetricCourtSceneDraft.mockReset();
+    mocks.validateMetricCourtScene.mockReset();
+    mocks.publishMetricCourtScene.mockReset();
     mocks.getSyncAnchorStatus.mockReset();
     mocks.getSyncRecording.mockReset();
     mocks.getVideoStreamUrl.mockReset();
     mocks.createMultiviewAnalysisJob.mockReset();
     mocks.getVideoStreamUrl.mockImplementation((videoId: string) => `/video/${videoId}`);
+    mocks.getMetricCourtSceneDraft.mockResolvedValue(null);
+    mocks.saveMetricCourtSceneDraft.mockImplementation((_takeId: string, payload: unknown) => Promise.resolve(payload));
+    mocks.validateMetricCourtScene.mockResolvedValue({ status: "ready", rejection_reasons: [] });
+    mocks.publishMetricCourtScene.mockResolvedValue({ revision: 1 });
     mocks.getFusedManifest.mockResolvedValue(null);
     mocks.getFusionDiagnostics.mockResolvedValue(null);
   });
@@ -196,6 +243,21 @@ describe("MultiViewAnalysisSetupPage", () => {
     expect((nextButton as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("uses the recording duration as the default and maximum clip end", async () => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID, { duration_sec: 300 }));
+
+    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "仅分析指定窗口（快速验证短片段）" }));
+    const inputs = screen.getAllByRole("spinbutton") as HTMLInputElement[];
+    expect(inputs[0].value).toBe("0");
+    expect(inputs[1].value).toBe("300");
+    expect(inputs[1].max).toBe("300");
+  });
+
   it.each([
     ["required", false, "需要标注", "开始标注"],
     ["draft", false, "草稿未完成", "继续标注"],
@@ -229,6 +291,8 @@ describe("MultiViewAnalysisSetupPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
     fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
     fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成球网 cam_1" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成球网 cam_2" }));
     fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
 
     expect(await screen.findByText("双摄分析启动失败")).toBeTruthy();
@@ -248,6 +312,8 @@ describe("MultiViewAnalysisSetupPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
     fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
     fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成球网 cam_1" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成球网 cam_2" }));
     fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
 
     await waitFor(() => expect(mocks.createMultiviewAnalysisJob).toHaveBeenCalled());
@@ -273,6 +339,8 @@ describe("MultiViewAnalysisSetupPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "下一步：A 机位标定" }));
     fireEvent.click(screen.getByRole("button", { name: "完成标定 video-a" }));
     fireEvent.click(screen.getByRole("button", { name: "完成标定 video-b" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成球网 cam_1" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成球网 cam_2" }));
     fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
 
     await waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));

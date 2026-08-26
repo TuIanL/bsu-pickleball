@@ -1,0 +1,139 @@
+{
+  "schema_version": "ball_semantic_boundary_fixture.v1",
+  "policy_version": "semantic_boundary_policy.v1",
+  "real_capture_windows": [
+    {
+      "capture_date": "2026-07-20",
+      "capture_mode": "double_camera",
+      "take_id": "acceptance-sync_20260720_122645_317228",
+      "reference_labels": "pending_manual_boundary_annotation",
+      "detector_provenance": "runtime_detector_output_required",
+      "status": "metadata_registered_not_yet_scored"
+    }
+  ],
+  "cases": [
+    {
+      "id": "synthetic_prepare_serve_active",
+      "events": [],
+      "probes": [
+        {
+          "timestamp_ms": 0,
+          "evidence": {
+            "serve_candidate_confidence": 0.60,
+            "serve_detector_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "PRE_SERVE",
+          "expected_boundary_status": "none"
+        },
+        {
+          "timestamp_ms": 100,
+          "evidence": {
+            "serve_candidate_confidence": 0.76,
+            "serve_armed": true,
+            "serve_detector_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "SERVE_ARMED",
+          "expected_boundary_status": "pending_start"
+        },
+        {
+          "timestamp_ms": 250,
+          "evidence": {
+            "rally_active": true,
+            "rally_confidence": 0.86,
+            "ball_motion_pixels": 32,
+            "valid_ball_motion": true,
+            "player_motion_pixels": 28,
+            "evidence_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_boundary_status": "confirmed_start"
+        }
+      ],
+      "reference_boundaries": [
+        {"id": "start-1", "kind": "start", "timestamp_ms": 250}
+      ]
+    },
+    {
+      "id": "synthetic_pending_end_then_rescue",
+      "events": [],
+      "probes": [
+        {
+          "timestamp_ms": 1000,
+          "evidence": {
+            "rally_active": true,
+            "rally_confidence": 0.88,
+            "ball_motion_pixels": 30,
+            "valid_ball_motion": true,
+            "evidence_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_boundary_status": "confirmed_start"
+        },
+        {
+          "timestamp_ms": 1100,
+          "evidence": {
+            "rally_end_evidence_count": 1,
+            "ball_visibility": "lost",
+            "evidence_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_boundary_status": "pending_end"
+        },
+        {
+          "timestamp_ms": 1200,
+          "evidence": {
+            "rally_active": true,
+            "rally_confidence": 0.72,
+            "ball_motion_pixels": 24,
+            "valid_ball_motion": true,
+            "player_motion_pixels": 20,
+            "evidence_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_boundary_status": "pending_end"
+        },
+        {
+          "timestamp_ms": 1300,
+          "evidence": {
+            "rally_active": true,
+            "rally_confidence": 0.78,
+            "ball_motion_pixels": 26,
+            "valid_ball_motion": true,
+            "player_motion_pixels": 21,
+            "evidence_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "RALLY_ACTIVE",
+          "expected_boundary_status": "rescued_active"
+        }
+      ],
+      "reference_boundaries": []
+    },
+    {
+      "id": "synthetic_confirmed_end_and_reacquire",
+      "events": [
+        {"id": "manual-non-play-start", "event_type": "non_play_start", "timestamp_ms": 2000, "source": "manual"},
+        {"id": "manual-non-play-end", "event_type": "non_play_end", "timestamp_ms": 3000, "source": "manual"}
+      ],
+      "probes": [
+        {
+          "timestamp_ms": 2200,
+          "evidence": {"evidence_provenance": {"origin": "synthetic_fixture"}},
+          "expected_phase": "NON_PLAY_CONFIRMED",
+          "expected_boundary_status": "confirmed_end"
+        },
+        {
+          "timestamp_ms": 3200,
+          "evidence": {
+            "serve_candidate_confidence": 0.63,
+            "serve_detector_provenance": {"origin": "synthetic_fixture"}
+          },
+          "expected_phase": "PRE_SERVE",
+          "expected_boundary_status": "pending_start"
+        }
+      ],
+      "reference_boundaries": [
+        {"id": "end-1", "kind": "end", "timestamp_ms": 2200}
+      ]
+    }
+  ]
+}

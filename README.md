@@ -80,9 +80,17 @@ macOS 用户也可使用根目录的便捷脚本双击启动/停止：
 | `PICKLEBALL_BACKEND_PORT` | 后端端口 | 8000 |
 | `PICKLEBALL_DATA_DIR` | 数据目录 | data |
 | `PICKLEBALL_ENABLE_POSE_INFERENCE` | 启用姿态推理 | 自动检测模型是否存在 |
-| `PICKLEBALL_JOB_ZOMBIE_TIMEOUT_SECONDS` | 僵尸任务超时 | 120 |
+| `PICKLEBALL_ANALYSIS_WORKER_MODE` | Worker 模式：`external` / `embedded` | external（本地脚本） |
+| `PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS` | Worker 心跳间隔 | 5 |
+| `PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_TIMEOUT_SECONDS` | 任务失联判定阈值 | 30 |
+| `PICKLEBALL_ANALYSIS_CONTROL_DATABASE_PATH` | 分析控制面 SQLite 路径 | data/analysis_control.sqlite3 |
 
 完整配置项列表见 `backend/app/core/config.py` 中的 `Settings` 类。
+
+`npm run app:start` 默认启动三个独立运行单元：API（支持 reload）、analysis-worker
+和 Vite 前端。PID 文件位于 `.runtime/pids/`，日志位于 `.runtime/logs/`；API reload
+不会重启 Worker。若 Worker 进程异常退出，服务重启或下一次任务查询会将超过 heartbeat
+阈值的 `processing` 任务标记为“任务失联”，前端会停止轮询并提供“重新分析”入口。
 
 ### 构建
 

@@ -48,19 +48,32 @@ The system SHALL keep video timeline review close to the video player while movi
 - **THEN** the selected chip visibly changes state and the displayed shot list or shot summary reflects that local selection
 
 ### Requirement: Video workspace report actions
-The system SHALL present compact lower-level result actions from the visual analysis workspace without exposing removed landing or ball-capture analysis as current real-job reports.
 
-#### Scenario: User views report actions
-- **WHEN** the user reviews a completed job-specific video analysis workspace
-- **THEN** the status rail or adjacent secondary navigation shows actions for analysis details and currently supported movement or diagnosis views rather than a landing report action
+系统 SHALL 在视频分析工作区提供紧凑的下级结果入口，并且报告入口必须复用统一的 report capability。无有效报告证据时不得暴露可点击的报告导航，也不得通过嵌入式 view 切换或程序化导航绕过禁用状态；系统不得把已移除的落点或球捕获分析暴露为当前真实 job 报告。
 
-#### Scenario: User selects a result action
-- **WHEN** the user clicks analysis details from a completed job-specific result
-- **THEN** the system navigates to `/analysis/:jobId/details`
+#### Scenario: User views report actions with valid evidence
 
-#### Scenario: User selects a supported report action
-- **WHEN** the user clicks a currently supported report action from a completed job-specific result
-- **THEN** the system navigates to the matching job-specific `/analysis/:jobId/reports/:type` report detail page or equivalent lower-level tab state
+- **WHEN** 用户查看包含有效报告证据的 completed job-specific video analysis workspace
+- **THEN** status rail 或相邻二级导航 SHALL 显示分析详情及当前支持的 movement/diagnosis 报告动作
+- **AND** 点击支持的报告动作 SHALL 导航到匹配的 job-specific report detail page 或等价 workspace tab
+
+#### Scenario: User views report actions without valid evidence
+
+- **WHEN** completed job 没有有效球员空间、运动指标或结构化可视化证据
+- **THEN** 报告动作 SHALL 保持可见但置灰、设置 `disabled` 或显示 unavailable 状态
+- **AND** 点击、`onSelectView("report")` 或等价程序化导航 SHALL 不得打开报告内容
+- **AND** SHALL 显示“暂无有效报告数据”或明确缺失原因
+
+#### Scenario: User selects analysis details
+
+- **WHEN** 用户从 completed job 结果中点击分析详情
+- **THEN** 系统 SHALL 导航到 `/analysis/:jobId/details`
+
+#### Scenario: Direct report URL has no evidence
+
+- **WHEN** 用户直接访问没有有效报告证据的 `/analysis/:jobId/reports/:type`
+- **THEN** 系统 SHALL 显示稳定的无有效报告空态并提供返回当前素材/任务的路径
+- **AND** SHALL NOT 回退到 demo 报告或使用其他 Job 的产物
 
 ### Requirement: Premium sports-tech visual style
 The system SHALL make the visual analysis workspace feel like a mature AI sports video analytics product with a bright sports-tech theme.
@@ -452,4 +465,36 @@ The visual analysis workspace SHALL allow ball-related layers to coexist with so
 #### Scenario: 从报告/球路返回数据分析
 - **WHEN** 用户从其他 view 回到「数据分析」
 - **THEN** 系统 SHALL 保持同一素材上下文与历史 replace 语义
+
+### Requirement: 数据分析区域展示回合—击球阶段时序图
+
+对于已完成的真实视频分析任务，视觉分析页的数据分析区域 SHALL 在现有位置热力图、位置散点图和区域空间热力图之外，提供回合—击球阶段时序图卡片。该卡片 SHALL 标明数据来源为当前任务，并与视频和其他可视化模块保持独立加载。
+
+#### Scenario: 完成任务存在可用事件 artifact
+
+- **WHEN** 用户打开包含可用 `shot-rally-events.v1` 的已完成真实任务视觉分析页
+- **THEN** 数据分析区域 SHALL 显示回合—击球阶段时序图
+- **AND** 页面 SHALL 保留现有三张位置类可视化图
+
+#### Scenario: 完成任务缺少事件 artifact
+
+- **WHEN** 用户打开已完成真实任务，但该任务没有可读取的 `shot-rally-events.v1`
+- **THEN** 数据分析区域 SHALL 保留时序图卡片并显示明确 unavailable/failed 状态
+- **AND** SHALL NOT 回退为 demo 时序图
+
+### Requirement: 时序图状态不得阻塞视频优先工作区
+
+视觉分析页 SHALL 将回合—击球阶段时序图的请求、解析和渲染状态限制在该卡片内，不得因为时序 artifact 加载慢、缺失或失败而阻塞视频播放、任务状态、报告入口或已有位置可视化。
+
+#### Scenario: 时序图慢于视频和位置图
+
+- **WHEN** 视频、任务状态和位置可视化已经加载，而时序 artifact 仍在加载
+- **THEN** 页面 SHALL 先显示视频和已有位置可视化
+- **AND** 时序图卡片 SHALL 单独显示 loading
+
+#### Scenario: 时序图发生解析错误
+
+- **WHEN** 时序 artifact 返回格式错误或前端解析失败
+- **THEN** 页面 SHALL 将时序图标记为 failed 并提供可读原因
+- **AND** SHALL 保持视频、状态栏和其他可视化可用
 

@@ -44,7 +44,7 @@ export function isCancelableAnalysisJob(job: AnalysisJobSummary) {
 
 /** 终端失败/取消任务：可作为「一键清除」的目标 */
 export function isTerminalAnalysisJob(job: AnalysisJobSummary) {
-  return job.status === "failed" || job.status === "canceled";
+  return job.status === "failed" || job.status === "canceled" || job.status === "interrupted";
 }
 
 /** 任务排序键：创建时间 / 更新时间 */
@@ -76,6 +76,7 @@ export function analysisStatusMeta(status: AnalysisJobSummary["status"]) {
     completed: { label: "分析完成", className: "bg-[#22C55E]/14 text-[#168A34]" },
     failed: { label: "分析失败", className: "bg-[#FF4D4F]/12 text-[#C92A2A]" },
     canceled: { label: "已取消", className: "bg-slate-200 text-slate-700" },
+    interrupted: { label: "任务失联", className: "bg-[#FF9500]/14 text-[#A45A00]" },
   } satisfies Record<AnalysisJobSummary["status"], { label: string; className: string }>;
 
   return styles[status];

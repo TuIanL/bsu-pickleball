@@ -11,8 +11,10 @@ import type {
   PlayerReportEvidence,
   PlayerReportEvidenceSources,
   ShotEvidence,
+  ThirdShotStats,
 } from "./evidenceTypes";
 import type { TrainingRecommendation } from "../types/report";
+import type { MetricSnapshotEntry } from "../types/shotRallyEvents";
 import {
   sameCanonicalPlayer,
   resolveCanonicalPlayerId,
@@ -31,6 +33,44 @@ function available<T>(value: T, provenance: EvidenceRef[], confidence?: number):
   return { status: "available", value, provenance, confidence };
 }
 
+function metricEvidence<T extends number | ThirdShotStats>(
+  metric: MetricSnapshotEntry | undefined,
+  fallbackReason: string,
+  transform: (metric: MetricSnapshotEntry) => T,
+): EvidenceValue<T> {
+  if (!metric) return unavailable(fallbackReason, [{ kind: "metric_snapshot" }]);
+  const provenance: EvidenceRef[] = [
+    { kind: "metric_snapshot", artifactId: "metric-snapshot.v1", field: metric.metric_key },
+    ...metric.evidence_ids.map((eventId) => ({ kind: "canonical_events" as const, eventId })),
+  ];
+  if (metric.status === "available" && metric.value !== null) {
+    return {
+      status: "available",
+      value: transform(metric),
+      provenance,
+      confidence: metric.confidence ?? undefined,
+      numerator: typeof metric.numerator === "number" ? metric.numerator : undefined,
+      denominator: typeof metric.denominator === "number" ? metric.denominator : undefined,
+      sampleCount: metric.sample_count,
+    };
+  }
+  const status = metric.status === "insufficient_evidence" || metric.status === "not_applicable" || metric.status === "failed"
+    ? metric.status
+    : "unavailable";
+  return { status, value: null, reason: metric.reason ?? fallbackReason, provenance };
+}
+
+function findMetric(
+  sources: PlayerReportEvidenceSources,
+  metricKey: string,
+  scope: "match" | "team" | "player",
+  subjectId: string,
+): MetricSnapshotEntry | undefined {
+  return sources.metricSnapshot?.metrics.find(
+    (metric) => metric.metric_key === metricKey && metric.scope === scope && metric.subject_id === subjectId,
+  );
+}
+
 const NOT_GENERATED = "本次分析暂未生成";
 const NO_PLAYER = "未识别到该球员数据";
 
@@ -40,6 +80,9 @@ function extractHeatmap(
   playerId: string,
   roster: Record<string, string> | null | undefined
 ): EvidenceValue<import("../types/report").HeatmapPlayerGrid> {
+  if (sources.report.source !== "demo") {
+    return unavailable("真实报告不使用位置网格代替区域统计", [{ kind: "heatmap" }]);
+  }
   const reportAny = sources.report as unknown as {
     metrics?: { heatmap?: { players?: import("../types/report").HeatmapPlayerGrid[] } };
     visualizations?: {
@@ -55,6 +98,49 @@ function extractHeatmap(
     if (match) return available(match, [{ kind: "heatmap", field: "players" }]);
   }
   return unavailable(NO_PLAYER, [{ kind: "heatmap" }]);
+}
+
+/**
+ * 区域空间热力图只能消费 structured visualization 的 zone_stats。
+ * 这里按 canonical identity 严格匹配，禁止根据展示名、数组位置或 heatmap 网格猜测。
+ */
+function extractZoneStats(
+  sources: PlayerReportEvidenceSources,
+  playerId: string,
+  roster: Record<string, string> | null | undefined,
+): EvidenceValue<import("../types/report").PlayerZoneStats> {
+  const canonicalId = resolveCanonicalPlayerId(playerId, roster);
+  const provenance: EvidenceRef[] = [{
+    kind: "structured_visualization",
+    artifactId: "structured-visualization-data",
+    field: "zone_stats.players",
+    playerId: canonicalId ?? undefined,
+  }];
+  const visualization = sources.visualization;
+
+  if (!visualization) {
+    const reason = sources.visualizationReason
+      ?? (sources.visualizationState === "loading"
+        ? "正在读取结构化区域统计"
+        : "本次任务未生成结构化区域统计");
+    return unavailable(reason, provenance);
+  }
+
+  const players = visualization.zone_stats?.players;
+  if (!Array.isArray(players) || players.length === 0) {
+    return unavailable("暂无区域统计", provenance);
+  }
+  if (!canonicalId) {
+    return unavailable("当前球员未映射为 canonical player，无法关联区域统计", provenance);
+  }
+  const matched = players.find((player) => sameCanonicalPlayer(player.id, canonicalId, roster));
+  if (!matched) {
+    return unavailable("结构化区域统计中没有当前球员", provenance);
+  }
+  if (!Array.isArray(matched.zones) || matched.zones.length === 0) {
+    return unavailable("当前球员暂无区域统计", provenance);
+  }
+  return available(matched, provenance);
 }
 
 /** 从 report.metrics.distances 提取跑动距离（仅真实值），否则 unavailable（绝不回退 727）。 */
@@ -88,6 +174,18 @@ function buildSummary(
   isDemo: boolean
 ): PlayerReportEvidence["summary"] {
   const canonicalId = resolveCanonicalPlayerId(playerId, roster);
+  if (!isDemo) {
+    return {
+      totalShots: metricEvidence(
+        canonicalId ? findMetric(sources, "shot_count", "player", canonicalId) : undefined,
+        "canonical Metric Snapshot 尚未生成该球员的击球统计",
+        (metric) => Number(metric.value),
+      ),
+      inRatePct: unavailable(NOT_GENERATED, [{ kind: "metric_snapshot", field: "serve_in_rate" }]),
+      ballSpeedMph: unavailable(NOT_GENERATED, [{ kind: "metric_snapshot", field: "ball_speed_mph" }]),
+      paddleSpeedMph: unavailable(NOT_GENERATED, [{ kind: "metric_snapshot", field: "paddle_speed_mph" }]),
+    };
+  }
   const rows = Array.isArray(sources.report.shotRows) ? sources.report.shotRows : [];
 
   let matched = 0;
@@ -127,6 +225,24 @@ function buildServeReturn(
   roster: Record<string, string> | null | undefined,
   isDemo: boolean
 ): PlayerReportEvidence["serveReturn"] {
+  const canonicalId = resolveCanonicalPlayerId(playerId, roster) ?? playerId;
+  if (!isDemo) {
+    return {
+      serveCount: metricEvidence(
+        findMetric(sources, "serve_count", "player", canonicalId),
+        "canonical Metric Snapshot 尚未生成发球统计",
+        (metric) => Number(metric.value),
+      ),
+      serveInRatePct: unavailable("发球进区率：当前事件层尚未证明合法/出界结果", [{ kind: "metric_snapshot", field: "serve_in_rate" }]),
+      serveDepth: unavailable("发球深度：当前事件层尚未生成", [{ kind: "metric_snapshot", field: "serve_depth" }]),
+      returnCount: metricEvidence(
+        findMetric(sources, "return_count", "player", canonicalId),
+        "canonical Metric Snapshot 尚未生成接发统计",
+        (metric) => Number(metric.value),
+      ),
+      returnDepth: unavailable("接发深度：当前事件层尚未生成", [{ kind: "metric_snapshot", field: "return_depth" }]),
+    };
+  }
   // Serve/Return authority（设计 D7）：ServeEvents 只证明发球次数/发球者；In/Out、深度不可证明。
   let serveCount = 0;
   let serveCountAny = false;
@@ -180,12 +296,25 @@ function buildTrajectories(
 }
 
 function buildInsights(
-  sources: PlayerReportEvidenceSources
+  sources: PlayerReportEvidenceSources,
+  playerId: string,
 ): PlayerReportEvidence["insights"] {
   const pi = sources.report.performanceInsights;
   const findings = pi?.findings?.length ? pi.findings : [];
   const recommendations = pi?.recommendations?.length ? pi.recommendations : [];
   const coachNotes = (sources.report.coachNotes ?? []) as unknown as TrainingRecommendation[];
+
+  const thirdShotMetric = findMetric(sources, "third_shot_count", "player", playerId);
+  const thirdShot = thirdShotMetric
+    ? metricEvidence(
+      thirdShotMetric,
+      "当前没有可靠的第三拍样本",
+      (metric) => ({
+        numerator: Number(metric.numerator ?? metric.value ?? 0),
+        denominator: Number(metric.denominator ?? 0),
+      }),
+    )
+    : unavailable<ThirdShotStats>("当前没有可靠的第三拍样本", [{ kind: "metric_snapshot", field: "third_shot_count" }]);
 
   return {
     findings: findings.length
@@ -197,7 +326,7 @@ function buildInsights(
     coachNotes: coachNotes.length
       ? available(coachNotes as typeof coachNotes, [{ kind: "performance_insight", field: "coachNotes" }])
       : unavailable("当前数据不足以生成可靠训练建议"),
-    thirdShot: unavailable("本次分析暂无第三拍统计"),
+    thirdShot,
   };
 }
 
@@ -207,6 +336,27 @@ function buildInsights(
  * 绝不 i+1 伪造）。ordinal 只由本层产出，PB 组件不得自行推断。
  */
 function buildShotExploration(sources: PlayerReportEvidenceSources): ShotEvidence[] {
+  const canonical = sources.canonicalEvents;
+  if (canonical) {
+    return canonical.shots.map((shot) => ({
+      id: shot.shot_id,
+      rallyId: shot.rally_id ?? null,
+      ordinalInRally: shot.ordinal_in_rally ?? null,
+      playerId: shot.hitter_player_id ?? null,
+      type: shot.shot_type ?? shot.stage ?? "",
+      stage: shot.stage ?? null,
+      startMs: shot.start_ms,
+      endMs: shot.end_ms,
+      ownershipStatus: shot.ownership_status,
+      qualityScore: shot.quality.score ?? null,
+      result: shot.result ?? null,
+      errorType: shot.error_type ?? null,
+      provenance: [
+        { kind: "canonical_events", artifactId: "shot-rally-events.v1", eventId: shot.shot_id },
+      ],
+    }));
+  }
+  if (sources.report.source !== "demo") return [];
   const rows = Array.isArray(sources.report.shotRows) ? sources.report.shotRows : [];
 
   const ordinalByIndex = new Map<number, { rallyId: string | null; ordinal: number | null }>();
@@ -236,7 +386,7 @@ function buildShotExploration(sources: PlayerReportEvidenceSources): ShotEvidenc
       ordinalInRally: o?.ordinal ?? null,
       playerId: row.player ?? null,
       type: row.type ?? "",
-      qualityScore: row.qualityScore ?? 0,
+      qualityScore: row.qualityScore ?? null,
       provenance: [{ kind: "report", field: "shotRows" }],
     };
   });
@@ -259,10 +409,11 @@ export function buildPlayerReportEvidence(
     courtCoverage: {
       distanceFt: extractDistanceFt(sources, playerId, roster),
       heatmap: extractHeatmap(sources, playerId, roster),
+      zoneStats: extractZoneStats(sources, playerId, roster),
     },
     serveReturn: buildServeReturn(sources, playerId, roster, isDemo),
     shotExploration: buildShotExploration(sources),
     trajectories: buildTrajectories(sources),
-    insights: buildInsights(sources),
+    insights: buildInsights(sources, canonicalId),
   };
 }

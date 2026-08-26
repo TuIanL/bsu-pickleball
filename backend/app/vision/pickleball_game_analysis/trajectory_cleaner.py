@@ -6,6 +6,10 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from app.vision.pickleball_game_analysis.ball_quality_gate import (
+    BallQualityGateConfig,
+    evaluate_interpolation_gap,
+)
 from app.vision.pickleball_game_analysis.schemas import Point2D, TrajectoryPoint
 
 
@@ -19,7 +23,9 @@ class TrajectoryCleanerConfig:
       - 对短距离缺失（连续无球）做线性插值补全。
     """
 
-    max_interpolation_gap: int = 12  # 允许插值的最大缺失帧数（超过则不补）
+    # 旧字段保留用于读取历史配置；新运行链路优先使用秒级上限。
+    max_interpolation_gap: int = 12
+    max_interpolation_gap_seconds: float | None = None
     outlier_step_floor_px: float = 90.0  # 单帧位移的异常阈值下限（像素/帧），低于此不可能判为异常
 
 
@@ -83,28 +89,58 @@ class TrajectoryCleaner:
         短缺口线性插值：对两个有效点之间的缺失帧，按位置线性补全。
 
         规则：
-          - 缺口长度 gap-1 超过 max_interpolation_gap 则不补；
+          - 新配置按实际 timestamp 秒数判断缺口，旧配置才按样本数量回退；
           - 对中间每帧，按 alpha 比例在左右有效点之间插值 image_xy（及 court_xy）；
-          - 补全点标记 interpolated=True、source="interpolated"、confidence=None（插值无置信度）。
+          - 补全点标记 interpolated=True、source="interpolated"、confidence=None（插值无置信度）；
+          - 遇到显式 reset/lost/searching/异常跳变边界时不跨越。
         """
         interpolated = [replace(point) for point in points]
         valid = [index for index, point in enumerate(interpolated) if point.image_xy is not None]
         for left, right in zip(valid[:-1], valid[1:], strict=False):
             gap = right - left
-            if gap <= 1 or gap - 1 > self.config.max_interpolation_gap:
+            if gap <= 1:
                 continue
             left_point = interpolated[left]
             right_point = interpolated[right]
             if left_point.image_xy is None or right_point.image_xy is None:
                 continue
+            blocked = any(self._is_explicit_break(point) for point in interpolated[left + 1 : right])
+            if self.config.max_interpolation_gap_seconds is not None:
+                gate = evaluate_interpolation_gap(
+                    left_point.timestamp_sec,
+                    right_point.timestamp_sec,
+                    config=BallQualityGateConfig(
+                        max_interpolation_gap_seconds=self.config.max_interpolation_gap_seconds
+                    ),
+                    blocked=blocked,
+                )
+                if not gate.accepted:
+                    self._mark_gap_boundary(interpolated, left, right, gate.reason, gate.diagnostics)
+                    continue
+            elif blocked or gap - 1 > self.config.max_interpolation_gap:
+                self._mark_gap_boundary(
+                    interpolated,
+                    left,
+                    right,
+                    "explicit_break" if blocked else "legacy_frame_gap",
+                    {"gap_frames": gap - 1},
+                )
+                continue
+            timestamp_gap = right_point.timestamp_sec - left_point.timestamp_sec
+            if timestamp_gap <= 0:
+                self._mark_gap_boundary(interpolated, left, right, "non_increasing_timestamp", {})
+                continue
             for index in range(left + 1, right):
-                alpha = (index - left) / gap
+                alpha = (interpolated[index].timestamp_sec - left_point.timestamp_sec) / timestamp_gap
+                alpha = max(0.0, min(1.0, alpha))
                 image_xy = self._lerp(left_point.image_xy, right_point.image_xy, alpha)
                 court_xy = None
                 if left_point.court_xy is not None and right_point.court_xy is not None:
                     court_xy = self._lerp(left_point.court_xy, right_point.court_xy, alpha)
                 diagnostics = dict(interpolated[index].diagnostics)
                 diagnostics["interpolation_source_frames"] = [left_point.frame_index, right_point.frame_index]
+                diagnostics["interpolation_gap_seconds"] = timestamp_gap
+                diagnostics["provenance"] = "interpolated"
                 interpolated[index] = replace(
                     interpolated[index],
                     image_xy=image_xy,
@@ -115,6 +151,30 @@ class TrajectoryCleaner:
                     diagnostics=diagnostics,
                 )
         return interpolated
+
+    @staticmethod
+    def _is_explicit_break(point: TrajectoryPoint) -> bool:
+        diagnostics = point.diagnostics or {}
+        return bool(
+            diagnostics.get("display_break")
+            or diagnostics.get("trajectory_break")
+            or diagnostics.get("reset")
+            or point.source in {"lost", "searching", "reset", "motion_jump"}
+        )
+
+    @staticmethod
+    def _mark_gap_boundary(
+        points: list[TrajectoryPoint],
+        left: int,
+        right: int,
+        reason: str,
+        diagnostics: dict[str, object],
+    ) -> None:
+        for index in range(left + 1, right):
+            point_diagnostics = dict(points[index].diagnostics)
+            point_diagnostics["gap_boundary_reason"] = reason
+            point_diagnostics["gap_boundary_diagnostics"] = diagnostics
+            points[index] = replace(points[index], diagnostics=point_diagnostics)
 
     @staticmethod
     def _coords(points: list[TrajectoryPoint]) -> np.ndarray:

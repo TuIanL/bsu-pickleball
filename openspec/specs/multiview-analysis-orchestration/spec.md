@@ -5,7 +5,7 @@ TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orches
 ## Requirements
 ### Requirement: AnalysisJob 编排字段
 
-系统 MUST 为 `AnalysisJobSummary` 增加编排字段：`analysisKind`（`single_view` / `multiview`，历史 job 缺省 `single_view`）、`visibility`（`public` / `internal`，缺省 `public`）、`parentJobId`（缺省 None）、`analysisScope`（`full` / `perception`，缺省 `full`；**Parent 不适用为 None**）、`orchestrationStatus`（独立编排维度）、`fusionRunId`（缺省 None）、`sourceJobs`（数组 `[{cameraSlot, jobId}]`，Parent 的所有权映射）、`viewRuns`（各机位 `status / stage / progress` 聚合）。`canonicalStatus` 五态 `queued / running / succeeded / failed / canceled` MUST 保持不变，等待 child 的 Parent 在 canonical 上仍属 `queued`。任务摘要的 `stages` MUST 根据 `executionMode` 使用规范化阶段图；`viewRuns` 只有在存在真实 dedicated child 或内部 `ViewRun` 时才返回非空内容。
+系统 MUST 为 `AnalysisJobSummary` 保留现有编排字段，并允许 `canonicalStatus` 使用 `queued / running / succeeded / failed / canceled / interrupted`。`interrupted` 表示 Parent 或 child 的 Worker 执行失联；等待 child 的 Parent 在 child 尚未完成时仍保持 `canonicalStatus=queued` 和 `orchestrationStatus=waiting_sources`。任务摘要的 `stages` MUST 根据 `executionMode` 使用规范化阶段图；`viewRuns` 只有在存在真实 dedicated child 或内部 `ViewRun` 时才返回非空内容。
 
 #### Scenario: 历史任务读取兼容
 
@@ -19,11 +19,11 @@ TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orches
 - **THEN** 系统 SHALL 创建一个 `analysisKind=multiview` 的 public Parent，初始 `canonicalStatus=queued, orchestrationStatus=waiting_sources`
 - **AND** Parent SHALL 根据其 `executionMode` 选择对应的顶层阶段图，而不是复用单摄阶段后追加双摄阶段
 
-#### Scenario: joint tracking 暴露内部子进度
+#### Scenario: interrupted child is represented
 
-- **WHEN** `joint_tracking_v2` Parent 通过素材检查并开始处理 A/B 机位
-- **THEN** Parent SHALL 在 `viewRuns` 中返回内部 A/B `ViewRun` 的 `status / stage / progress`
-- **AND** 在内部子运行尚未创建前，系统 SHALL 省略 `viewRuns` 或返回明确的未开始语义，不得使用空对象冒充实时进度
+- **WHEN** 一个 multiview child 因 Worker heartbeat 超时进入 `canonicalStatus=interrupted`
+- **THEN** Parent 的 `viewRuns` SHALL 暴露该机位的 interrupted/lost 状态和最后已知进度
+- **AND** Parent SHALL NOT 继续把该 child 当作普通 running child
 
 ### Requirement: 编排状态独立维度
 
@@ -69,7 +69,7 @@ TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orches
 
 ### Requirement: MultiViewAnalysisCoordinator 事件驱动编排
 
-系统 MUST 提供 `MultiViewAnalysisCoordinator` 负责 Parent ↔ Source Job A/B ↔ `MultiViewFusionRun` 的编排：创建 Parent + 两个 child、监听 child completion、推进 Parent 编排状态。Parent MUST NOT 持有"被 claim 后 while 等待 child"的逻辑（`AnalysisWorkerRuntime._running_lock` 一次只执行一个任务，那会死锁）。
+系统 MUST 提供 `MultiViewAnalysisCoordinator` 负责 Parent ↔ Source Job A/B ↔ `MultiViewFusionRun` 的编排：创建 Parent + 两个 child、监听 child completion/interruption、推进 Parent 编排状态。Parent MUST NOT 持有“被 claim 后 while 等待 child”的逻辑。
 
 #### Scenario: 双路完成推进 fusion_ready
 
@@ -77,21 +77,21 @@ TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orches
 - **THEN** Coordinator SHALL 把 Parent 推进到 `orchestrationStatus=fusion_ready`
 - **AND** Parent SHALL 随后可被 `claim_next` 领取
 
-#### Scenario: 单路失败推进 fallback_ready
+#### Scenario: 单路失败或失联推进 fallback_ready
 
-- **WHEN** 一个 child completed、另一个 failed 或 canceled
+- **WHEN** 一个 child completed、另一个 child failed、canceled 或 interrupted
 - **THEN** Coordinator SHALL 把 Parent 推进到 `orchestrationStatus=fallback_ready`
-- **AND** Parent SHALL 仍可被 claim（按确定性单视角降级规则执行）
+- **AND** Parent SHALL 仍可被 claim，并按确定性单视角降级规则执行
 
-#### Scenario: 双路失败 Parent failed
+#### Scenario: 双路失败或失联 Parent 终止
 
-- **WHEN** cam_1 与 cam_2 两个 child 均 failed
-- **THEN** Parent SHALL 被置为 `canonicalStatus=failed`
-- **AND** 不得声称存在任何可用轨迹来源
+- **WHEN** cam_1 与 cam_2 两个 child 均 failed、canceled 或 interrupted
+- **THEN** Parent SHALL 被置为明确的 failed/interrupted terminal 状态
+- **AND** Parent SHALL 不得继续停留在 `waiting_sources`
 
 ### Requirement: 应用启动 reconciliation
 
-应用启动后，Coordinator MUST 对账扫描 `analysisKind=multiview AND canonicalStatus not terminal`，第一轮按 child 终态推进 Parent（双路完成 → `fusion_ready`；单路完成 → `fallback_ready`；双路失败 → `failed`；至少一路非终态 → 保持 `waiting_sources`，child 交给现有 zombie recovery）；第二轮把 `fusion_ready / fallback_ready` 且无 worker 所有者的 Parent 保持 `canonical queued` 等待 claim。
+应用启动后，Coordinator MUST 对账扫描 `analysisKind=multiview AND canonicalStatus not terminal`，并在 Worker liveness recovery 后按 child 终态推进 Parent。至少一路 child 仍有新鲜 lease 时保持等待；child 已 interrupted 时按失败型终态参与 fallback/failed 判定；`fusion_ready / fallback_ready` 且无 Worker 所有者的 Parent 保持 queued 等待 claim。
 
 #### Scenario: 重启后 Parent 恢复
 
@@ -99,11 +99,12 @@ TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orches
 - **THEN** reconciliation SHALL 把 Parent 推进到 `fusion_ready`
 - **AND** 该 Parent SHALL 可被正常 claim 执行
 
-#### Scenario: 职责分离
+#### Scenario: child heartbeat expired during restart
 
-- **WHEN** reconciliation 处理 Parent/Child 依赖关系
-- **THEN** 现有 `recover_zombie_jobs()` 仍只负责 Worker 执行状态恢复
-- **AND** 两者 SHALL 相互独立、不揉成一个方法
+- **WHEN** 重启时 child heartbeat 已过期
+- **THEN** Worker recovery SHALL 先将 child 标记为 interrupted
+- **AND** Coordinator SHALL 随后把 Parent 推进到 fallback_ready、failed 或 interrupted 的稳定状态
+- **AND** Parent SHALL 不得无限显示等待 child
 
 ### Requirement: 取消与删除级联
 

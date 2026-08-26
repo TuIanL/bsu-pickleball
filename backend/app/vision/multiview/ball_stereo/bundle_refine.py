@@ -30,6 +30,7 @@ from app.vision.multiview.ball_stereo.segment_reconstruction import (
     CubicSpline3D,
     Observation,
     Reconstructed3DSample,
+    validate_height_profile,
 )
 
 
@@ -82,6 +83,8 @@ class BundleResult:
     reprojection_error_px: float
     stereo_coverage: float = 0.0
     prediction_ratio: float = 0.0
+    height_validity: str = "unknown"
+    height_quality_reason: str | None = None
 
 
 def bundle_refine(
@@ -188,6 +191,9 @@ def bundle_refine(
                  f_bounds[1][0], -0.5, -0.5, -0.5, -10, -10, -10] + [float("-inf")] * (n_control * 3)
         upper = [f_bounds[0][1], 0.5, 0.5, 0.5, 10, 10, 10,
                  f_bounds[1][1], 0.5, 0.5, 0.5, 10, 10, 10] + [float("inf")] * (n_control * 3)
+        control_offset = 14
+        for index in range(n_control):
+            lower[control_offset + index * 3 + 2] = 0.0
         try:
             result = least_squares(residuals, p0, method="trf", bounds=(lower, upper),
                                    loss="soft_l1", max_nfev=3000, xtol=1e-6)
@@ -227,11 +233,19 @@ def bundle_refine(
         reproj = float(np.mean(errs)) if errs else float("inf")
         status = FULL_ESTIMATED_3D if (np.isfinite(reproj) and reproj < 60.0 and coverage >= 0.5) \
             else (PARTIAL_3D if np.isfinite(reproj) and reproj < 60.0 else "UNAVAILABLE")
+        height_ok, height_reason = validate_height_profile(samples)
+        if not height_ok:
+            status = "UNAVAILABLE"
+            for sample in samples:
+                sample.validity = "invalid"
+                sample.height_validity = f"invalid_{height_reason}" if height_reason else "invalid"
         return BundleResult(
             cam1=CameraInit(f1, R1, T1, cam1.cx, cam1.cy),
             cam2=CameraInit(f2, R2, T2, cam2.cx, cam2.cy),
             samples=samples, status=status, reprojection_error_px=round(reproj, 3),
             stereo_coverage=round(coverage, 3), prediction_ratio=round(1 - coverage, 3),
+            height_validity="valid" if height_ok else "invalid",
+            height_quality_reason=height_reason,
         ), per_obs, spline, P1, P2
 
     result = _fit(active_obs)

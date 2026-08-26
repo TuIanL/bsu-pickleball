@@ -12,6 +12,14 @@ from app.vision.multiview.ball_stereo.canonical_runner import (
     _ensure_unique_event_ids,
 )
 from app.vision.pickleball_game_analysis.reconstruction_schemas import TrajectoryEvent, TrajectoryEventType
+from app.vision.pickleball_game_analysis.schemas import BallFrameSample
+from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
+    BallBoundaryAction,
+    BallSearchPolicy,
+    BallSemanticPolicyConfig,
+    SemanticPolicyMode,
+    SemanticTimelineProvider,
+)
 
 
 class _Detector:
@@ -27,7 +35,10 @@ class _Detector:
 class _Tracker:
     def __init__(self):
         self.config = SimpleNamespace(confidence=0.18)
+        self.track_state = SimpleNamespace(value="searching")
         self.candidate_snapshots = []
+        self.samples = []
+        self.semantic_boundary_calls = []
 
     def filter_candidates(self, candidates, frame_shape):
         decisions = [
@@ -45,7 +56,30 @@ class _Tracker:
     def update_from_candidates(self, *, frame_index, timestamp_sec, view_candidates, frame_shape, homography):
         self.candidate_snapshots.append(view_candidates)
         candidate = view_candidates[0]
-        return SimpleNamespace(accepted=True, image_xy=(candidate.image_xy[0], candidate.image_xy[1]))
+        sample = BallFrameSample(
+            frame_index=int(frame_index),
+            timestamp_sec=float(timestamp_sec),
+            image_xy=(candidate.image_xy[0], candidate.image_xy[1]),
+            court_xy=None,
+            confidence=float(getattr(candidate, "confidence", 0.0)),
+            visible=True,
+            accepted=True,
+            publication_eligible=True,
+            diagnostics={},
+        )
+        self.samples.append(sample)
+        return sample
+
+    def apply_semantic_boundary(self, action, action_id, *, timestamp_sec=None):
+        self.semantic_boundary_calls.append((action, action_id, timestamp_sec))
+        return {
+            "applied": True,
+            "duplicate": False,
+            "action": action,
+            "action_id": action_id,
+            "before": {"formal_segment_lifecycle": "open"},
+            "after": {"formal_segment_lifecycle": "sealed" if action == BallBoundaryAction.SEAL_FORMAL_SEGMENT.value else "warm"},
+        }
 
 
 def _projection_pair() -> tuple[np.ndarray, np.ndarray]:
@@ -122,6 +156,130 @@ def test_detector_runs_once_per_available_view_and_tracker_shares_snapshot():
     assert processor.finish().stereo_evidence["measurements"][0]["cam1_timestamp_ms"] == 100.0
 
 
+def test_prepare_does_not_update_tracker_until_player_barrier_commit():
+    processor, detectors, trackers = _processor()
+
+    processor.prepare_tick(tick_id=7, bundle=_bundle())
+
+    assert detectors["cam_1"].calls == 1
+    assert detectors["cam_2"].calls == 1
+    assert trackers["cam_1"].candidate_snapshots == []
+    assert trackers["cam_2"].candidate_snapshots == []
+    assert processor.counters["canonical_ticks"] == 0
+
+    processor.commit_tick(
+        tick_id=7,
+        bundle=_bundle(),
+        semantic_evidence={"player_context_ready": True},
+    )
+
+    assert detectors["cam_1"].calls == 1
+    assert detectors["cam_2"].calls == 1
+    assert len(trackers["cam_1"].candidate_snapshots) == 1
+    assert len(trackers["cam_2"].candidate_snapshots) == 1
+    assert processor.counters["canonical_ticks"] == 1
+
+
+def test_repeated_prepare_or_commit_cannot_repeat_detector_or_tracker_update():
+    processor, detectors, trackers = _processor()
+
+    processor.prepare_tick(tick_id=7, bundle=_bundle())
+    processor.prepare_tick(tick_id=7, bundle=_bundle())
+    processor.commit_tick(tick_id=7, bundle=_bundle())
+    processor.commit_tick(tick_id=7, bundle=_bundle())
+    processor.process_tick(tick_id=7, bundle=_bundle())
+
+    assert detectors["cam_1"].calls == 1
+    assert detectors["cam_2"].calls == 1
+    assert len(trackers["cam_1"].candidate_snapshots) == 1
+    assert len(trackers["cam_2"].candidate_snapshots) == 1
+    assert processor.counters["canonical_ticks"] == 1
+    assert processor.counters["duplicate_prepare_calls"] == 1
+    assert processor.counters["duplicate_commit_calls"] == 1
+    assert processor.counters["duplicate_process_calls"] == 1
+
+
+def test_dual_views_share_one_canonical_semantic_snapshot_and_shadow_baseline():
+    config = BallSemanticPolicyConfig(mode=SemanticPolicyMode.SHADOW)
+    provider = SemanticTimelineProvider.from_events(
+        [{"id": "np-1", "event_type": "non_play_start", "timestamp_ms": 0, "source": "manual"}],
+        config=config,
+    )
+    processor, detectors, trackers = _processor()
+    processor.semantic_provider = provider
+    processor.semantic_policy = BallSearchPolicy(config)
+
+    processor.prepare_tick(tick_id=7, bundle=_bundle())
+    processor.commit_tick(
+        tick_id=7,
+        bundle=_bundle(),
+        semantic_evidence={"player_context_ready": True, "global_player_count": 4},
+    )
+
+    assert detectors["cam_1"].calls == 1
+    assert detectors["cam_2"].calls == 1
+    assert len(processor.semantic_snapshots) == 1
+    assert len(processor.semantic_decisions) == 1
+    assert processor.semantic_snapshots[0].phase.value == "NON_PLAY_CONFIRMED"
+    assert {
+        processor.trajectory_points_by_view[view_id][0].diagnostics["ball_frame_diagnostics"]["semantic_snapshot"]["phase"]
+        for view_id in ("cam_1", "cam_2")
+    } == {"NON_PLAY_CONFIRMED"}
+
+    diagnostics = processor.finish().diagnostics["semantic_policy"]
+    assert diagnostics["shadow_baseline"]["comparison_status"] == "shadow_same_path"
+    assert diagnostics["shadow_baseline"]["formal_tracker_acceptance_delta_vs_shadow"] == 0
+
+
+def test_enforced_authoritative_boundary_is_shared_before_both_view_commits():
+    config = BallSemanticPolicyConfig(
+        mode=SemanticPolicyMode.ENFORCED,
+        enforced_rollout_enabled=True,
+    )
+    provider = SemanticTimelineProvider.from_events(
+        [{"id": "np-1", "event_type": "non_play_start", "timestamp_ms": 0, "source": "manual"}],
+        config=config,
+    )
+    processor, detectors, trackers = _processor()
+    processor.semantic_provider = provider
+    processor.semantic_policy = BallSearchPolicy(config)
+
+    processor.prepare_tick(tick_id=7, bundle=_bundle())
+    processor.commit_tick(tick_id=7, bundle=_bundle(), semantic_evidence={"player_context_ready": True})
+
+    assert detectors["cam_1"].calls == 1
+    assert detectors["cam_2"].calls == 1
+    assert len(processor.semantic_boundary_events) == 1
+    assert len(trackers["cam_1"].semantic_boundary_calls) == 1
+    assert len(trackers["cam_2"].semantic_boundary_calls) == 1
+    assert trackers["cam_1"].semantic_boundary_calls[0][1] == trackers["cam_2"].semantic_boundary_calls[0][1]
+    assert processor.counters["stereo_measurements"] == 0
+    assert all(sample.publication_eligible is False for tracker in trackers.values() for sample in tracker.samples)
+
+
+def test_enforced_boundary_with_missing_secondary_view_still_has_one_joint_action():
+    config = BallSemanticPolicyConfig(
+        mode=SemanticPolicyMode.ENFORCED,
+        enforced_rollout_enabled=True,
+    )
+    provider = SemanticTimelineProvider.from_events(
+        [{"id": "np-1", "event_type": "non_play_start", "timestamp_ms": 0, "source": "corrected"}],
+        config=config,
+    )
+    processor, detectors, trackers = _processor(secondary_available=False)
+    processor.semantic_provider = provider
+    processor.semantic_policy = BallSearchPolicy(config)
+
+    processor.prepare_tick(tick_id=1, bundle=_bundle(secondary_available=False))
+    processor.commit_tick(tick_id=1, bundle=_bundle(secondary_available=False))
+
+    assert detectors["cam_1"].calls == 1
+    assert detectors["cam_2"].calls == 0
+    assert len(processor.semantic_boundary_events) == 1
+    assert len(trackers["cam_1"].semantic_boundary_calls) == 1
+    assert processor.counters["stereo_measurements"] == 0
+
+
 def test_stereo_gate_uses_sync_mapped_time_not_raw_source_offset():
     processor, _, _ = _processor()
     processor.max_time_gate_ms = 1.0
@@ -178,6 +336,13 @@ def test_finish_reconstructs_independent_event_segments_instead_of_one_full_wind
     result = processor.finish()
     segment_ids = [segment["segment_id"] for segment in result.v3_trajectory["segments"]]
     assert segment_ids == ["flight-1", "flight-2", "flight-3"]
+    assert result.v3_trajectory["reference_view_id"] == "cam_1"
+    assert result.v3_trajectory["render_view_id"] == "cam_1"
+    assert result.v3_trajectory["video_overlay_policy"] == {
+        "window_semantics": "half_open",
+        "retention_policy": "single_active_segment",
+        "path_coordinate_space": "render_view_id",
+    }
     assert "seg_canonical_1" not in segment_ids
     windows = result.diagnostics["segment_windows"]
     assert windows[0]["end_event_id"] == "hit-4"
