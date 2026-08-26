@@ -129,3 +129,31 @@ def test_new_request_can_reject_canonical_frame_conflict(tmp_path):
         end_b_definition="南端",
         orientation_by_view={"cam_1": "rotate_180", "cam_2": "identity"},
     )
+
+
+def test_existing_frame_can_be_completed_with_a_new_view_orientation(tmp_path):
+    frame = resolve_or_create_canonical_court_frame(
+        tmp_path,
+        "take_1",
+        "北端",
+        "南端",
+        orientation_by_view={"cam_1": "identity"},
+    )
+
+    assert validate_canonical_court_frame_compatibility(
+        frame,
+        capture_take_id="take_1",
+        end_a_definition="北端",
+        end_b_definition="南端",
+        orientation_by_view={"cam_1": "identity", "cam_2": "rotate_180"},
+    ) is None
+
+    completed = resolve_or_create_canonical_court_frame(
+        tmp_path,
+        "take_1",
+        "北端",
+        "南端",
+        orientation_by_view={"cam_1": "identity", "cam_2": "rotate_180"},
+    )
+    assert completed.frame_id == frame.frame_id
+    assert completed.orientation_by_view == {"cam_1": "identity", "cam_2": "rotate_180"}

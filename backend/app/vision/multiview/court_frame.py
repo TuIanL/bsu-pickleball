@@ -229,10 +229,36 @@ def resolve_or_create_canonical_court_frame(
     end_b_definition: str,
     orientation_by_view: dict[str, str] | None = None,
 ) -> CanonicalCourtFrameDefinition:
-    """读取既有定义；不存在则创建并持久化。保证同一 take 复用同一 frame_id。"""
+    """读取既有定义；不存在则创建，并补全历史定义缺失的机位朝向。
+
+    ``orientation_by_view`` 是对同一物理坐标系的逐机位投影声明。早期的
+    场景标定可能只包含 A 机位；后来加入 B 机位不应生成新 frame 或被当成
+    坐标系翻转。已存在的机位声明仍保持不可变，调用方须先完成兼容性校验。
+    """
     existing = load_canonical_court_frame(take_dir)
     if existing is not None:
-        return existing
+        additions = {
+            view_id: orientation
+            for view_id, orientation in (orientation_by_view or {}).items()
+            if view_id not in existing.orientation_by_view
+        }
+        if not additions:
+            return existing
+        completed = CanonicalCourtFrameDefinition(
+            frame_id=existing.frame_id,
+            capture_take_id=existing.capture_take_id,
+            end_a_definition=existing.end_a_definition,
+            end_b_definition=existing.end_b_definition,
+            created_at=existing.created_at,
+            schema_version=existing.schema_version,
+            orientation_by_view={**existing.orientation_by_view, **additions},
+        )
+        path = canonical_court_frame_path(take_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(completed.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+        return completed
     definition = CanonicalCourtFrameDefinition.create(
         capture_take_id=capture_take_id,
         end_a_definition=end_a_definition,
@@ -261,13 +287,17 @@ def validate_canonical_court_frame_compatibility(
             "endpoint definition differs from the existing canonical frame "
             f"{existing.frame_id}"
         )
-    if (
-        existing.orientation_by_view
-        and orientation_by_view
-        and existing.orientation_by_view != orientation_by_view
-    ):
-        return (
-            "view orientation differs from the existing canonical frame "
-            f"{existing.frame_id}"
-        )
+    if existing.orientation_by_view and orientation_by_view:
+        # 允许历史 ccf_* 补上当时未参与标定的机位；只要已声明机位没有被
+        # 改写，就仍是同一个 canonical court frame。
+        mismatched_views = [
+            view_id
+            for view_id, orientation in existing.orientation_by_view.items()
+            if view_id in orientation_by_view and orientation_by_view[view_id] != orientation
+        ]
+        if mismatched_views:
+            return (
+                "view orientation differs from the existing canonical frame "
+                f"{existing.frame_id}: {', '.join(sorted(mismatched_views))}"
+            )
     return None
