@@ -1007,6 +1007,29 @@ class MultiViewResultComposer:
                 artifacts.fused_player_overlay_status = "unavailable"
                 artifacts.fused_player_overlay_detail = "reference view overlay 生成失败"
                 return
+            fused_overlay_diagnostics = {
+                "config": {
+                    "projected_bbox_footpoint_residual_px": next(
+                        (float(builder.config.projected_bbox_footpoint_residual_px) for builder in builders.values()),
+                        80.0,
+                    ),
+                    "display_topology_debounce_ms": next(
+                        (float(builder.config.display_topology_debounce_ms) for builder in builders.values()),
+                        250.0,
+                    ),
+                },
+                "events": [
+                    event
+                    for builder in builders.values()
+                    for event in (getattr(builder, "display_diagnostics", None) or [])
+                ],
+                "view_diagnostics": {
+                    view_id: dict(getattr(builder, "diagnostics", {}) or {})
+                    for view_id, builder in builders.items()
+                },
+            }
+            if isinstance(getattr(joint_output, "diagnostics", None), dict):
+                joint_output.diagnostics["fused_overlay"] = fused_overlay_diagnostics
             payload = build_fused_player_overlay_payload(
                 job_id=job.id,
                 video_id=job.videoId,
@@ -1022,9 +1045,10 @@ class MultiViewResultComposer:
                     "view_ids": view_ids,
                     "view_diagnostics": {
                         view_id: dict(getattr(builder, "diagnostics", {}) or {})
-                        for view_id, builder in builders.items()
+                            for view_id, builder in builders.items()
+                        },
+                        "quality": fused_overlay_diagnostics,
                     },
-                },
                 views=view_payloads,
                 schema_version="multiview-fused-player-overlay.v2",
             )
@@ -1069,7 +1093,17 @@ class MultiViewResultComposer:
                     "status": "unavailable",
                     "detail": "joint output 缺少 player display diagnostics 产物",
                     "rows": [],
+                    "events": [],
                 }
+            overlay_events = []
+            if isinstance(getattr(joint_output, "diagnostics", None), dict):
+                fused_overlay = joint_output.diagnostics.get("fused_overlay") or {}
+                overlay_events = list(fused_overlay.get("events") or []) if isinstance(fused_overlay, dict) else []
+            if overlay_events:
+                payload = dict(payload)
+                payload["events"] = list(payload.get("events") or []) + overlay_events
+                from app.vision.multiview.player_display_diagnostics import validate_player_display_diagnostics
+                validate_player_display_diagnostics(payload)
             diag_path = self.storage.player_display_diagnostics_json_path(job.id)
             diag_path.parent.mkdir(parents=True, exist_ok=True)
             self.storage.write_json(diag_path, payload)

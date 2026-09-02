@@ -19,6 +19,8 @@ class IdentificationThresholds(BaseModel):
     max_identity_switches: int = Field(default=0, ge=0)
     max_duplicate_bindings: int = Field(default=0, ge=0)
     max_cross_side_samples: int = Field(default=0, ge=0)
+    max_local_slot_reassociation_violations: int = Field(default=0, ge=0)
+    max_display_topology_transitions: int = Field(default=12, ge=0)
 
 
 class AppearanceQualitySummary(BaseModel):
@@ -51,6 +53,8 @@ class PlayerIdentificationSummary(BaseModel):
     ambiguous_count: int = Field(default=0, ge=0)
     quarantined_count: int = Field(default=0, ge=0)
     accepted_count: int = Field(default=0, ge=0)
+    local_slot_reassociation_violation_count: int = Field(default=0, ge=0)
+    display_topology_transition_count: int = Field(default=0, ge=0)
     appearance: AppearanceQualitySummary = Field(default_factory=AppearanceQualitySummary)
 
 
@@ -64,6 +68,9 @@ class PipelineFunnelCounters(BaseModel):
     cross_side_count: int = Field(default=0, ge=0)
     quarantined_count: int = Field(default=0, ge=0)
     identity_switch_count: int = Field(default=0, ge=0)
+    local_slot_reassociation_violation_count: int = Field(default=0, ge=0)
+    display_topology_transition_count: int = Field(default=0, ge=0)
+    bbox_footpoint_inconsistency_count: int = Field(default=0, ge=0)
 
 
 class FourPlayerIdentificationQuality(BaseModel):
@@ -122,17 +129,27 @@ def evaluate_quality(artifact: FourPlayerIdentificationQuality) -> FourPlayerIde
     switch_count = artifact.funnel.identity_switch_count + sum(
         player.identity_switch_count for player in artifact.players.values()
     )
+    local_reassociation_violations = max(
+        artifact.funnel.local_slot_reassociation_violation_count,
+        sum(player.local_slot_reassociation_violation_count for player in artifact.players.values()),
+    )
     hard = {
         "confirmed_roster": artifact.confirmed_roster_count == thresholds.required_confirmed_roster,
         "duplicate_binding_zero": duplicate_count <= thresholds.max_duplicate_bindings,
         "cross_side_zero": cross_side_count <= thresholds.max_cross_side_samples,
         "identity_switch_zero": switch_count <= thresholds.max_identity_switches,
+        "local_slot_reassociation_zero": (
+            local_reassociation_violations <= thresholds.max_local_slot_reassociation_violations
+        ),
     }
     absolute: dict[str, bool] = {}
     for player_id in CANONICAL_PLAYERS:
         player = artifact.players[player_id]
         absolute[f"{player_id}.coverage"] = player.canonical_coverage >= thresholds.min_player_coverage
         absolute[f"{player_id}.longest_gap"] = player.longest_gap_seconds <= thresholds.max_gap_seconds
+        absolute[f"{player_id}.display_topology_stable"] = (
+            player.display_topology_transition_count <= thresholds.max_display_topology_transitions
+        )
     failures = [name for name, passed in {**hard, **absolute}.items() if not passed]
     return artifact.model_copy(
         update={
@@ -169,6 +186,10 @@ def compare_quality(
         and candidate.thresholds.max_identity_switches <= baseline.thresholds.max_identity_switches
         and candidate.thresholds.max_duplicate_bindings <= baseline.thresholds.max_duplicate_bindings
         and candidate.thresholds.max_cross_side_samples <= baseline.thresholds.max_cross_side_samples
+        and candidate.thresholds.max_local_slot_reassociation_violations
+        <= baseline.thresholds.max_local_slot_reassociation_violations
+        and candidate.thresholds.max_display_topology_transitions
+        <= baseline.thresholds.max_display_topology_transitions
     )
     deltas: dict[str, dict[str, float]] = {}
     relative_pass = True
@@ -270,9 +291,30 @@ def build_quality_from_joint_artifacts(
                 source_tracks[player_id][str(view_id)].add(track_id)
             if accepted and observation.get("view_status") == "available" and track_id is not None:
                 detection_ticks[player_id].add(timestamp)
-    diagnostics = list((display_diagnostics or {}).get("rows") or [])
+    display_diagnostics = display_diagnostics or {}
+    diagnostics = list(display_diagnostics.get("rows") or [])
     reconnects: dict[str, int] = defaultdict(int)
     ambiguous: dict[str, int] = defaultdict(int)
+    local_reassociation_violations: dict[str, int] = defaultdict(int)
+    topology_transitions: dict[str, int] = defaultdict(int)
+    topology_window_counts: dict[str, dict[tuple[Any, ...], int]] = defaultdict(dict)
+    reassociation_events = [
+        event for event in display_diagnostics.get("events", []) or []
+        if isinstance(event, dict) and event.get("reason") == "reassociated"
+    ]
+    recovery_config = dict((runtime_diagnostics or {}).get("p1_online_recovery_config") or {})
+    required_reassociation_frames = int(
+        recovery_config.get("association_reassociation_frames") or 5
+    )
+    if reassociation_events:
+        for event in reassociation_events:
+            if int(event.get("evidence_count") or 0) < required_reassociation_frames:
+                challenger_global_id = str(event.get("challenger_global_id") or "")
+                player_id = global_to_player.get(challenger_global_id)
+                if player_id in CANONICAL_PLAYERS:
+                    local_reassociation_violations[player_id] += 1
+    seen_reassociation_events: set[tuple[Any, ...]] = set()
+    seen_topology_events: set[tuple[Any, ...]] = set()
     for row in diagnostics:
         player_id = str(row.get("player_id") or "")
         if player_id not in CANONICAL_PLAYERS:
@@ -283,6 +325,47 @@ def build_quality_from_joint_artifacts(
         ).lower()
         reconnects[player_id] += int("recover" in reason or "reconnect" in reason)
         ambiguous[player_id] += int("ambiguous" in reason or bool(row.get("roster_conflict")))
+        reassociation_reason = str(row.get("local_slot_reassociation_status") or "")
+        if not reassociation_events and reassociation_reason == "reassociated":
+            event_key = (
+                row.get("canonical_tick"), row.get("view_id"), row.get("local_slot"), reassociation_reason
+            )
+            if event_key not in seen_reassociation_events:
+                seen_reassociation_events.add(event_key)
+                if int(row.get("reassociation_evidence_count") or 0) < required_reassociation_frames:
+                    local_reassociation_violations[player_id] += 1
+    # The event stream contains cumulative ``display_transition_count`` values
+    # for the current debounce window. Count each actual state edge once;
+    # summing the cumulative value would double-count the same transitions.
+    for event in (display_diagnostics or {}).get("events", []) or []:
+        if not isinstance(event, dict):
+            continue
+        player_id = str(event.get("player_id") or "")
+        if player_id not in CANONICAL_PLAYERS:
+            continue
+        previous_state = event.get("previous_display_state")
+        display_state = event.get("display_state")
+        if not previous_state or previous_state == display_state:
+            continue
+        event_key = (
+            event.get("timestamp_ms"), event.get("view_id"), player_id,
+            previous_state, display_state,
+        )
+        if event_key not in seen_topology_events:
+            seen_topology_events.add(event_key)
+            topology_transitions[player_id] += 1
+        if event.get("display_transition_count") is not None:
+            window_key = (event.get("view_id"), event.get("display_window_start_ms"))
+            topology_window_counts[player_id][window_key] = max(
+                topology_window_counts[player_id].get(window_key, 0),
+                int(event.get("display_transition_count") or 0),
+            )
+    # ``display_transition_count`` is cumulative within a short debounce
+    # window. The quality gate is a window gate, so use the worst window for
+    # each canonical player instead of summing every window's state edges.
+    for player_id, windows in topology_window_counts.items():
+        if windows:
+            topology_transitions[player_id] = max(windows.values())
     appearance_diagnostics = dict((runtime_diagnostics or {}).get("appearance") or {})
     association_appearance = dict(appearance_diagnostics.get("association") or {})
     galleries_by_global = dict(association_appearance.get("galleries") or {})
@@ -318,6 +401,8 @@ def build_quality_from_joint_artifacts(
             ambiguous_count=ambiguous[player_id] + trajectory_ambiguous[player_id],
             quarantined_count=trajectory_quarantined[player_id],
             accepted_count=len(observed),
+            local_slot_reassociation_violation_count=local_reassociation_violations[player_id],
+            display_topology_transition_count=topology_transitions[player_id],
             appearance=AppearanceQualitySummary(
                 descriptor_attempts=descriptor_attempts,
                 descriptor_available=descriptor_available,
@@ -351,6 +436,14 @@ def build_quality_from_joint_artifacts(
             attempted_ticks=attempted,
             base_detection_ticks=sum(len(values) for values in detection_ticks.values()),
             tracker_fragments=sum(player.source_track_count for player in summaries.values()),
+            local_slot_reassociation_violation_count=sum(local_reassociation_violations.values()),
+            display_topology_transition_count=sum(topology_transitions.values()),
+            bbox_footpoint_inconsistency_count=sum(
+                1
+                for event in display_diagnostics.get("events", []) or []
+                if isinstance(event, dict)
+                and event.get("projection_rejection_reason") == "bbox_footpoint_inconsistency"
+            ),
         ),
         camera_profiles=dict(association_appearance.get("profiles") or {}),
     )

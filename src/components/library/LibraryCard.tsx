@@ -111,17 +111,15 @@ function InlineEditTitle({
   const [failed, setFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 进入编辑时同步草稿并全选（便于直接重命名）
+  // 进入编辑时聚焦并全选（草稿/失败态重置移至点击进入编辑的事件处理器，避免 setState-in-effect）
   useEffect(() => {
     if (!editing) return;
-    setDraft(value);
-    setFailed(false);
     const raf = requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     });
     return () => cancelAnimationFrame(raf);
-  }, [editing, value]);
+  }, [editing]);
 
   const commit = async (next: string) => {
     const trimmed = next.trim();
@@ -174,7 +172,11 @@ function InlineEditTitle({
   return (
     <button
       className="group/title -mx-1 flex w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition hover:bg-[var(--capture-brand-soft,#ddf1e5)]/70"
-      onClick={() => setEditing(true)}
+      onClick={() => {
+        setDraft(value);
+        setFailed(false);
+        setEditing(true);
+      }}
       type="button"
       aria-label="重命名标题"
     >
@@ -206,9 +208,9 @@ function InlineEditDate({
   const [failed, setFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // 进入编辑时聚焦/唤起日期选择器（失败态重置移至点击进入编辑的事件处理器，避免 setState-in-effect）
   useEffect(() => {
     if (!editing) return;
-    setFailed(false);
     const raf = requestAnimationFrame(() => inputRef.current?.showPicker?.() ?? inputRef.current?.focus());
     return () => cancelAnimationFrame(raf);
   }, [editing]);
@@ -261,7 +263,10 @@ function InlineEditDate({
   return (
     <button
       className="group/date -mx-1 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition hover:bg-[var(--capture-brand-soft,#ddf1e5)]/70"
-      onClick={() => setEditing(true)}
+      onClick={() => {
+        setFailed(false);
+        setEditing(true);
+      }}
       type="button"
       aria-label="修改比赛日期"
     >

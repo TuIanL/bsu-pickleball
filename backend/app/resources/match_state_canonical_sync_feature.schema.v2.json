@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_canonical_sync_feature.v2",
+  "title": "Match State Canonical Sync Feature",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feature_schema",
+    "capture_take_id",
+    "source_session_id",
+    "timebase",
+    "canonical_timestamp_ms",
+    "reference_source_frame_index",
+    "sync_revision",
+    "sync",
+    "views",
+    "quality"
+  ],
+  "properties": {
+    "schema_version": {"const": "match_state_canonical_sync_feature.v2"},
+    "feature_schema": {"type": "string", "minLength": 1},
+    "capture_take_id": {"type": "string", "minLength": 1},
+    "source_session_id": {"type": "string", "minLength": 1},
+    "timebase": {"const": "reference_camera_source_pts"},
+    "canonical_timestamp_ms": {"type": "number", "minimum": 0},
+    "reference_source_frame_index": {"type": "integer", "minimum": 0},
+    "sync_revision": {"type": "string", "minLength": 1},
+    "sync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_camera_id", "status", "authoritative_joint_eligible", "camera_status"],
+      "properties": {
+        "reference_camera_id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["authoritative", "degraded", "extrapolated", "unavailable"]},
+        "authoritative_joint_eligible": {"type": "boolean"},
+        "camera_status": {
+          "type": "object",
+          "required": ["cam_1", "cam_2"],
+          "properties": {
+            "cam_1": {"enum": ["authoritative", "degraded", "extrapolated", "unavailable"]},
+            "cam_2": {"enum": ["authoritative", "degraded", "extrapolated", "unavailable"]}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "views": {
+      "type": "object",
+      "required": ["cam_1", "cam_2"],
+      "properties": {
+        "cam_1": {"$ref": "#/$defs/view"},
+        "cam_2": {"$ref": "#/$defs/view"}
+      },
+      "additionalProperties": false
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["dual_view_available", "authoritative_joint_eligible", "sync_status"],
+      "properties": {
+        "dual_view_available": {"type": "boolean"},
+        "authoritative_joint_eligible": {"type": "boolean"},
+        "sync_status": {"enum": ["authoritative", "degraded", "extrapolated", "unavailable"]}
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "source_frame_index",
+        "source_pts_ms",
+        "mapped_target_pts_ms",
+        "alignment_error_ms",
+        "timing_authority",
+        "sync_quality",
+        "sync_status",
+        "mapping_mode",
+        "sync_revision"
+      ],
+      "properties": {
+        "source_frame_index": {"type": ["integer", "null"], "minimum": 0},
+        "source_pts_ms": {"type": ["number", "null"]},
+        "mapped_target_pts_ms": {"type": ["number", "null"]},
+        "alignment_error_ms": {"type": ["number", "null"]},
+        "timing_authority": {"enum": ["source_pts", "legacy_nominal_fps", "missing"]},
+        "sync_quality": {"enum": ["good", "degraded", "unknown"]},
+        "sync_status": {"enum": ["authoritative", "degraded", "extrapolated", "unavailable"]},
+        "mapping_mode": {"type": "string", "minLength": 1},
+        "sync_revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["camera_role", "camera_id", "canonical_timestamp_ms", "source", "structured", "court_line", "features", "quality"],
+      "properties": {
+        "camera_role": {"enum": ["cam_1", "cam_2"]},
+        "camera_id": {"type": ["string", "null"]},
+        "canonical_timestamp_ms": {"type": "number", "minimum": 0},
+        "source": {"$ref": "#/$defs/source"},
+        "structured": {"type": "object"},
+        "court_line": {"type": "object"},
+        "features": {"type": "object"},
+        "quality": {"type": "object"}
+      }
+    }
+  }
+}

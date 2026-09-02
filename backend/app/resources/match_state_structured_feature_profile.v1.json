@@ -1,0 +1,55 @@
+{
+  "schema_version": "match_state_structured_feature_profile.v1",
+  "profile_id": "quality-first-dual-view-12fps-v1",
+  "extractor": {
+    "name": "pickleball_structured_visual_features",
+    "version": "1.0.0",
+    "sampling_fps": 12.0,
+    "person_detector": {
+      "model": "yolo11x.pt",
+      "image_size": 1280,
+      "confidence_threshold": 0.15,
+      "maximum_pose_subjects": 4
+    },
+    "pose": {
+      "model": "rtmpose-m-body7-halpe26-256x192",
+      "runtime": "rtmlib-onnxruntime-cuda",
+      "keypoint_schema": "halpe26",
+      "keypoint_count": 26,
+      "visibility_threshold": 0.3
+    },
+    "ball": {
+      "model": "pickleball-ball.pt",
+      "image_size": 1280,
+      "confidence_threshold": 0.03,
+      "retain_all_candidates": true,
+      "missing_detection_semantics": "unknown_not_no_ball"
+    },
+    "court_line": {
+      "model": "best.pt",
+      "image_size": 1280,
+      "confidence_threshold": 0.2,
+      "sample_interval_seconds": 60.0,
+      "projection_policy": "retain image geometry and mark court coordinates unavailable until a validated homography exists"
+    }
+  },
+  "quality_mask": {
+    "four_players_required": true,
+    "minimum_pose_visible_ratio": 0.65,
+    "ball_detection_required_for_loss": false,
+    "court_projection_required_for_loss": false,
+    "always_retain_confidence_visibility_and_missing_masks": true
+  },
+  "cache_contract": {
+    "key_fields": [
+      "dataset_manifest_id",
+      "logical_media_uri",
+      "extractor_name",
+      "extractor_version",
+      "sampling_fps",
+      "preprocessing_config_sha256"
+    ],
+    "atomic_completion_marker": "summary.json:status=complete",
+    "reuse_when_key_matches": true
+  }
+}

@@ -6,6 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentType
+from app.schemas.segment_creation import RallyCreateRequest
+from app.schemas.segment_boundary_review import BOUNDARY_REVIEW_SCHEMA_VERSION, BoundaryReviewRequest
+from app.schemas.segment_ordinal import RALLY_ORDINAL_UPDATE_SCHEMA_VERSION, RallyOrdinalUpdateRequest
 from app.services import analysis_batch_service, segment_edit_service
 from app.services.capture_segment_service import get_segment
 from app.services.capture_take_service import get_capture_take
@@ -58,6 +62,33 @@ def reset_boundary(segment_id: str, db: Session = Depends(get_db)):
     seg = segment_edit_service.reset_boundary(db, seg)
     db.commit()
     return _seg_dict(seg)
+
+
+@router.post("/{segment_id}/boundary-review")
+def review_boundary(segment_id: str, request: BoundaryReviewRequest, db: Session = Depends(get_db)):
+    seg = get_segment(db, segment_id)
+    if seg is None:
+        raise HTTPException(404, "Segment 不存在")
+    try:
+        take = get_capture_take(db, seg.capture_take_id)
+        seg = segment_edit_service.review_rally_boundary(
+            db,
+            seg,
+            decision=request.decision,
+            expected_version=request.expected_version,
+            start_ms=request.start_ms,
+            end_ms=request.end_ms,
+            note=request.note,
+            take_duration_ms=take.duration_ms if take is not None else None,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        if "edit_version 冲突" in str(exc):
+            raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(400, str(exc)) from exc
+    records = segment_edit_service.boundary_review_records(db, seg.capture_take_id)
+    return _boundary_review_seg_dict(seg, records.get(seg.id))
 
 
 # ── Split / Merge ──
@@ -131,6 +162,108 @@ def delete_segment(segment_id: str, db: Session = Depends(get_db)):
 # ── AnalysisBatch ──
 
 router2 = APIRouter(prefix="/api/capture-takes", tags=["analysis-batches"])
+
+
+@router2.post("/{capture_take_id}/segments")
+def create_rally_segment(
+    capture_take_id: str,
+    request: RallyCreateRequest,
+    db: Session = Depends(get_db),
+):
+    """从双摄复核工作台补录一条漏记 rally。"""
+    take = get_capture_take(db, capture_take_id)
+    if take is None:
+        raise HTTPException(404, "CaptureTake 不存在")
+    try:
+        segment = segment_edit_service.create_manual_rally(
+            db,
+            capture_take_id=capture_take_id,
+            start_ms=request.start_ms,
+            end_ms=request.end_ms,
+            label=request.label,
+            take_duration_ms=take.duration_ms,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return _seg_dict(segment)
+
+
+@router2.post("/{capture_take_id}/rally-ordinals")
+def update_rally_ordinals(
+    capture_take_id: str,
+    request: RallyOrdinalUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """在一个录像（一个比赛局）内修正 rally 的连续序号。"""
+    take = get_capture_take(db, capture_take_id)
+    if take is None:
+        raise HTTPException(404, "CaptureTake 不存在")
+    try:
+        segments, operation_id = segment_edit_service.renumber_rally_ordinals(
+            db,
+            capture_take_id=capture_take_id,
+            mode=request.mode,
+            anchor_segment_id=request.anchor_segment_id,
+            start_ordinal=request.start_ordinal,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "schema_version": RALLY_ORDINAL_UPDATE_SCHEMA_VERSION,
+        "capture_take_id": capture_take_id,
+        "operation_id": operation_id,
+        "mode": request.mode,
+        "start_ordinal": request.start_ordinal,
+        "segments": [_seg_dict(segment) for segment in segments],
+    }
+
+
+@router2.get("/{capture_take_id}/boundary-review")
+def get_boundary_review(capture_take_id: str, db: Session = Depends(get_db)):
+    take = get_capture_take(db, capture_take_id)
+    if take is None:
+        raise HTTPException(404, "CaptureTake 不存在")
+    candidate_segments = (
+        db.query(CaptureSegment)
+        .filter(
+            CaptureSegment.capture_take_id == capture_take_id,
+            CaptureSegment.segment_type == SegmentType.rally,
+            CaptureSegment.edit_status != EditStatus.superseded,
+        )
+        .order_by(CaptureSegment.start_ms.asc())
+        .all()
+    )
+    records = segment_edit_service.boundary_review_records(db, capture_take_id)
+    segments = [
+        segment
+        for segment in candidate_segments
+        if segment.edit_status == EditStatus.active
+        or (records.get(segment.id) or {}).get("review_status") == "excluded"
+    ]
+    segments, suppressed_duplicate_ids = segment_edit_service.deduplicate_boundary_review_segments(
+        segments, records
+    )
+    items = [_boundary_review_seg_dict(segment, records.get(segment.id)) for segment in segments]
+    counts = {
+        status: sum(item["boundary_review_status"] == status for item in items)
+        for status in ("pending", "confirmed", "corrected", "excluded")
+    }
+    return {
+        "schema_version": BOUNDARY_REVIEW_SCHEMA_VERSION,
+        "capture_take_id": capture_take_id,
+        "total_count": len(items),
+        "pending_count": counts["pending"],
+        "confirmed_count": counts["confirmed"],
+        "corrected_count": counts["corrected"],
+        "excluded_count": counts["excluded"],
+        "suppressed_duplicate_count": len(suppressed_duplicate_ids),
+        "suppressed_duplicate_segment_ids": suppressed_duplicate_ids,
+        "segments": items,
+    }
 
 
 @router2.post("/{capture_take_id}/analysis-batches")
@@ -217,12 +350,34 @@ def _seg_dict(seg) -> dict:
         "end_ms": seg.end_ms,
         "corrected_start_ms": seg.corrected_start_ms,
         "corrected_end_ms": seg.corrected_end_ms,
+        "corrected_at": seg.corrected_at.isoformat() if getattr(seg, "corrected_at", None) else None,
         "effective_start_ms": seg.effective_start_ms if hasattr(seg, "effective_start_ms") else seg.start_ms,
         "effective_end_ms": seg.effective_end_ms if hasattr(seg, "effective_end_ms") else seg.end_ms,
         "edit_version": seg.edit_version if hasattr(seg, "edit_version") else 0,
+        "created_by_operation_id": getattr(seg, "created_by_operation_id", None),
         "edit_status": seg.edit_status.value
         if hasattr(seg.edit_status, "value")
         else getattr(seg, "edit_status", "active"),
         "status": seg.status.value if hasattr(seg.status, "value") else seg.status,
+        "source": seg.source.value if hasattr(seg.source, "value") else seg.source,
         "is_highlight": seg.is_highlight,
     }
+
+
+def _boundary_review_seg_dict(seg, review: dict | None) -> dict:
+    item = _seg_dict(seg)
+    status = str((review or {}).get("review_status") or "pending")
+    if seg.edit_status == EditStatus.archived:
+        status = "excluded"
+    elif status == "excluded":
+        # 恢复后的回合必须重新确认，不能沿用旧的排除决定。
+        status = "pending"
+    item.update(
+        {
+            "boundary_review_status": status,
+            "boundary_review_note": (review or {}).get("note"),
+            "boundary_reviewed_at": (review or {}).get("reviewed_at"),
+            "boundary_review_operation_id": (review or {}).get("operation_id"),
+        }
+    )
+    return item

@@ -152,6 +152,7 @@ class ViewFrameResult:
     sync_quality: str = "unknown"
     local_identity_by_track: dict[int, str] = field(default_factory=dict)
     local_identity_epoch_by_track: dict[int, int] = field(default_factory=dict)
+    local_tracklet_lineage_by_track: dict[int, str] = field(default_factory=dict)
     observation_origin_by_track: dict[int, str] = field(default_factory=dict)
     guidance_id_by_track: dict[int, str] = field(default_factory=dict)
     donor_view_by_track: dict[int, str] = field(default_factory=dict)
@@ -592,8 +593,26 @@ class ViewTrackingSession:
             if sample.track_id is not None and sample.tracking_status == "tentative"
         }
         epoch_by_player = dict(self.render_identity_epoch_by_player)
+        # PlayerLockManager increments its slot epoch on a real reconnect/track
+        # change. Prefer that lifecycle epoch over the renderer-only epoch so a
+        # raw track fragment gets a stable, auditable lineage without treating
+        # the new track as a brand-new person.
+        lock_epoch_by_player = {
+            player_id: int(getattr(slot, "identity_epoch", 0) or 0)
+            for player_id, slot in self.player_lock_manager.slots.items()
+        }
         identity_epoch_by_track = {
-            int(track_id): epoch_by_player.get(canonical_player_id(player_id), 0)
+            int(track_id): max(
+                epoch_by_player.get(canonical_player_id(player_id), 0),
+                lock_epoch_by_player.get(canonical_player_id(player_id), 0),
+            )
+            for track_id, player_id in player_by_track.items()
+            if int(track_id) in surviving_track_ids
+        }
+        tracklet_lineage_by_track = {
+            int(track_id): (
+                f"{canonical_player_id(player_id)}:epoch:{identity_epoch_by_track.get(int(track_id), 0)}"
+            )
             for track_id, player_id in player_by_track.items()
             if int(track_id) in surviving_track_ids
         }
@@ -734,6 +753,7 @@ class ViewTrackingSession:
             candidate_detections=candidate_detections,
             local_identity_by_track={int(k): v for k, v in player_by_track.items() if int(k) in surviving_track_ids},
             local_identity_epoch_by_track=identity_epoch_by_track,
+            local_tracklet_lineage_by_track=tracklet_lineage_by_track,
             observation_origin_by_track=origin_by_track,
             guidance_id_by_track=guidance_by_track,
             donor_view_by_track=donor_by_track,

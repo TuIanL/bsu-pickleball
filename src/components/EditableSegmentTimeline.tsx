@@ -8,6 +8,7 @@ interface EditableSegmentTimelineProps {
   currentTimeMs: number;
   activeSegmentId?: string | null;
   savingSegmentId?: string | null;
+  reviewMode?: boolean;
   onSeek: (ms: number) => void;
   onSegmentClick?: (segmentId: string, startMs: number) => void;
   onBoundaryChange: (segmentId: string, startMs: number, endMs: number, expectedVersion: number) => void | Promise<void>;
@@ -28,10 +29,12 @@ export function EditableSegmentTimeline({
   currentTimeMs,
   activeSegmentId = null,
   savingSegmentId = null,
+  reviewMode = false,
   onSeek,
   onSegmentClick,
   onBoundaryChange,
 }: EditableSegmentTimelineProps) {
+  const tracks = reviewMode ? [{ key: "rally", label: "回合", color: "#22C55E" } as const] : TRACKS;
   const scale = (ms: number) => `${(Math.max(0, Math.min(ms, totalDurationMs)) / totalDurationMs) * 100}%`;
   const timelineRef = useRef<HTMLDivElement>(null);
   const suppressClickRef = useRef(false);
@@ -57,7 +60,7 @@ export function EditableSegmentTimeline({
   const handlePointerDown = useCallback((e: React.PointerEvent, seg: CaptureSegmentSummary, handle: "left" | "right") => {
     e.stopPropagation();
     e.preventDefault();
-    if (savingSegmentId || seg.edit_status === "superseded" || seg.status === "open") return;
+    if (savingSegmentId || seg.edit_status !== "active" || seg.status === "open") return;
     const start = seg.effective_start_ms ?? seg.start_ms;
     const end = seg.effective_end_ms ?? seg.end_ms;
     if (end == null || end <= start) return;
@@ -163,13 +166,13 @@ export function EditableSegmentTimeline({
       <div
         ref={timelineRef}
         className="relative select-none"
-        style={{ height: TRACKS.length * 28 + 20 }}
+        style={{ height: tracks.length * 28 + 20 }}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
         onClick={handleTimelineClick}
       >
-        {TRACKS.map((track, ti) => {
+        {tracks.map((track, ti) => {
           const items = segmentsByType[track.key] ?? [];
           const top = ti * 28;
           return (
@@ -179,24 +182,27 @@ export function EditableSegmentTimeline({
                 {items.map(seg => {
                   const draft = dragging?.segId === seg.id ? dragging : null;
                   const s = draft?.draftStart ?? seg.effective_start_ms ?? seg.start_ms;
-                  const e = draft?.draftEnd ?? seg.effective_end_ms ?? seg.end_ms ?? totalDurationMs;
+                  const rawEnd = draft?.draftEnd ?? seg.effective_end_ms ?? seg.end_ms ?? totalDurationMs;
+                  // 异常的倒置边界也要保留一个可见的最小宽度，用户才能点击它回到修复面板。
+                  const e = rawEnd > s ? rawEnd : Math.min(totalDurationMs, s + MIN_SEGMENT_DURATION_MS);
                   const isSuperseded = seg.edit_status === "superseded";
+                  const isArchived = seg.edit_status === "archived";
                   const isOpen = seg.status === "open";
                   const isActive = activeSegmentId === seg.id;
                   const isSaving = savingSegmentId === seg.id;
                   return (
                     <div
                       key={seg.id}
-                      className={`absolute top-0 h-full rounded-md border transition-opacity ${isActive ? "ring-2 ring-offset-1 ring-[#14241B] z-10" : ""} ${isSuperseded ? "opacity-30 border-dashed" : isOpen ? "opacity-100 animate-pulse" : isSaving ? "opacity-50" : "opacity-80"}`}
+                      className={`absolute top-0 h-full rounded-md border transition-opacity ${isActive ? "ring-2 ring-offset-1 ring-[#14241B] z-10" : ""} ${isSuperseded ? "opacity-30 border-dashed" : isArchived ? "opacity-40 border-dashed" : isOpen ? "opacity-100 animate-pulse" : isSaving ? "opacity-50" : "opacity-80"}`}
                       style={{
                         left: scale(s),
                         width: `calc(${scale(Math.max(s, e))} - ${scale(s)})`,
                         backgroundColor: `${track.color}20`,
-                        borderColor: track.color,
                         borderWidth: 1.5,
-                        cursor: isSuperseded || isSaving ? "default" : "pointer",
+                        borderColor: isArchived ? "#EF4444" : track.color,
+                        cursor: isSuperseded || isArchived || isSaving ? "default" : "pointer",
                       }}
-                      title={`${seg.label}: ${(s / 1000).toFixed(1)}s → ${(e / 1000).toFixed(1)}s`}
+                      title={`${seg.label}: ${(s / 1000).toFixed(1)}s → ${(rawEnd / 1000).toFixed(1)}s`}
                       onClick={(event) => {
                         event.stopPropagation();
                         if (suppressClickRef.current) {
@@ -206,7 +212,7 @@ export function EditableSegmentTimeline({
                         if (!isSuperseded) onSegmentClick?.(seg.id, s);
                       }}
                     >
-                      {!isSuperseded && !isOpen && (
+                      {!isSuperseded && !isArchived && !isOpen && (
                         <>
                           <div
                             className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-black/20 z-10"
@@ -231,7 +237,7 @@ export function EditableSegmentTimeline({
 
         {/* Event markers */}
         {eventMarkers.length > 0 && (
-          <div className="absolute left-0 right-0 flex items-center gap-2" style={{ top: TRACKS.length * 28 + 2 }}>
+            <div className="absolute left-0 right-0 flex items-center gap-2" style={{ top: tracks.length * 28 + 2 }}>
             <span className="text-xs font-bold w-6 text-right text-slate-400 shrink-0">事件</span>
             <div className="relative flex-1 h-4">
               {eventMarkers.map((evt) => (

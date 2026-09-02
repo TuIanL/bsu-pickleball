@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_rgb_canonical_sync_manifest.v2",
+  "title": "Match State RGB Canonical Sync Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "generated_at",
+    "clips_file",
+    "clip_count",
+    "identity",
+    "sync_status_counts",
+    "sync_validation_status",
+    "clips_jsonl_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "match_state_rgb_canonical_sync_manifest.v2"},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+    "clips_file": {"type": "string", "minLength": 1},
+    "clip_count": {"type": "integer", "minimum": 1},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_rgb_manifest_id",
+        "base_rgb_manifest_sha256",
+        "base_clips_jsonl_sha256",
+        "sync_assets_manifest_id",
+        "sync_assets_manifest_sha256",
+        "sync_core_sha256",
+        "clip_count"
+      ],
+      "properties": {
+        "base_rgb_manifest_id": {"type": "string", "minLength": 1},
+        "base_rgb_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "base_clips_jsonl_sha256": {"$ref": "#/$defs/sha256"},
+        "sync_assets_manifest_id": {"type": "string", "minLength": 1},
+        "sync_assets_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "sync_core_sha256": {"$ref": "#/$defs/sha256"},
+        "clip_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sync_status_counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "sync_validation_status": {"const": "complete"},
+    "split_status": {"type": ["string", "null"]},
+    "clips_jsonl_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

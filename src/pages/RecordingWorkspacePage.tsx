@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Loader2, Tags } from "lucide-react";
+import { ArrowLeft, ListChecks, Loader2, Tags } from "lucide-react";
 import type { RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn, NavigatePath, TaskListContext } from "../app/navigationTypes";
 import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
@@ -333,13 +333,22 @@ export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { se
             <p className="text-sm text-slate-500 truncate">{subtitle}</p>
           </div>
           {session.field_session_id && session.capture_take_id ? (
-            <button
-              className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-[#2F80ED] px-3 py-2 text-xs font-bold text-[#2F80ED] transition hover:bg-[#EFF6FF]"
-              onClick={() => onNavigate(`/capture/${session.field_session_id}/takes/${session.capture_take_id}/scoring-calibration`)}
-              type="button"
-            >
-              <Tags size={15} /> 评分校准
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-[#168A34] px-3 py-2 text-xs font-bold text-[#168A34] transition hover:bg-[#F0FDF4]"
+                onClick={() => onNavigate(`/capture/${session.field_session_id}/takes/${session.capture_take_id}/segments?mode=boundary-review`)}
+                type="button"
+              >
+                <ListChecks size={15} /> 有效回合复核
+              </button>
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-[#2F80ED] px-3 py-2 text-xs font-bold text-[#2F80ED] transition hover:bg-[#EFF6FF]"
+                onClick={() => onNavigate(`/capture/${session.field_session_id}/takes/${session.capture_take_id}/scoring-calibration`)}
+                type="button"
+              >
+                <Tags size={15} /> 评分校准
+              </button>
+            </div>
           ) : null}
         </div>
       )}

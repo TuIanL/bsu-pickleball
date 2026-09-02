@@ -436,6 +436,16 @@ def read_player_display_diagnostics(
         if overlay_entry:
             row.setdefault("overlay_evidence_type", overlay_entry.get("evidence_type"))
             row.setdefault("overlay_bbox_source", overlay_entry.get("bbox_source"))
+    event_rows = []
+    for event in payload.get("events", []) or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("player_id") not in {None, player_id}:
+            continue
+        event_ms = float(event.get("timestamp_ms") or 0.0)
+        if lo <= event_ms <= hi:
+            event_rows.append(event)
+    event_rows.sort(key=lambda event: (float(event.get("timestamp_ms") or 0.0), str(event.get("view_id") or "")))
     return JSONResponse(
         {
             "job_id": job_id,
@@ -445,6 +455,7 @@ def read_player_display_diagnostics(
             "status": payload.get("status", "available"),
             "detail": payload.get("detail", ""),
             "rows": filtered,
+            "events": event_rows,
         }
     )
 

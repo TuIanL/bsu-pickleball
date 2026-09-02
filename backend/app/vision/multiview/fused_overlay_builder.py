@@ -116,6 +116,10 @@ class OverlayBuilderConfig:
     presentation_max_step_px_per_s: float = 1100.0
     # evidence 切换时 bbox 宽高的最大相邻比例
     presentation_max_scale_ratio: float = 1.35
+    # projected bbox 底边中心到当前 projected footpoint 的最大 residual
+    projected_bbox_footpoint_residual_px: float = 80.0
+    # collision/geometry rejection 后，安全 point/hidden 的最短 topology debounce 窗口
+    display_topology_debounce_ms: float = 250.0
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +258,7 @@ class FusedPlayerOverlayBuilder:
             synthetic_upgrade_confirm_ticks=self.config.synthetic_upgrade_confirm_ticks,
             confirm_max_gap_ms=self.config.confirm_max_gap_ms,
             predicted_ttl_ms=self.config.predicted_ttl_ms,
+            topology_debounce_ms=self.config.display_topology_debounce_ms,
         )
         self._scale_profiles: dict[str, ViewPersonScaleProfile] = {}
         # 时间连续性（stabilize-multiview-overlay-temporal-continuity）：
@@ -261,6 +266,7 @@ class FusedPlayerOverlayBuilder:
         self._last_presentation_bbox: dict[tuple[str, str], tuple[list[float], float]] = {}
         self._last_presentation_evidence: dict[tuple[str, str], str] = {}
         self._current_reference_real_bboxes: dict[str, tuple[float, float, float, float]] = {}
+        self.display_diagnostics: list[dict[str, object]] = []
         self.diagnostics: dict[str, int] = {}
 
     # ---- 决策辅助 ----------------------------------------------------------
@@ -356,6 +362,7 @@ class FusedPlayerOverlayBuilder:
         self._last_presentation_bbox.clear()
         self._last_presentation_evidence.clear()
         self._current_reference_real_bboxes.clear()
+        self.display_diagnostics = []
         self.diagnostics = {}
 
         # ---- Pass 1：收集 view scale profile（只收真实 bbox）----
@@ -383,6 +390,29 @@ class FusedPlayerOverlayBuilder:
                             ],
                         })
                     players.append(entity)
+                    if (
+                        entity.projection_rejection_reason
+                        or entity.presentation_geometry_reused
+                        or (
+                            entity.previous_display_state is not None
+                            and entity.previous_display_state != entity.display_state
+                        )
+                    ):
+                        self.display_diagnostics.append({
+                            "frame_index": frame_index,
+                            "timestamp_ms": now_ms,
+                            "player_id": entity.player_id,
+                            "view_id": target,
+                            "display_state": entity.display_state,
+                            "previous_display_state": entity.previous_display_state,
+                            "display_transition_count": entity.display_transition_count,
+                            "display_state_sequence": list(entity.display_state_sequence),
+                            "display_window_start_ms": entity.display_window_start_ms,
+                            "transition_reason": entity.display_reason,
+                            "projection_rejection_reason": entity.projection_rejection_reason,
+                            "bbox_footpoint_residual_px": entity.bbox_footpoint_residual_px,
+                            "presentation_geometry_reused": entity.presentation_geometry_reused,
+                        })
                 if len(players) >= expected_player_count:
                     break
             frames.append(
@@ -479,6 +509,32 @@ class FusedPlayerOverlayBuilder:
             if self._bbox_iou(candidate, other_bbox) >= self.config.projected_collision_iou_threshold:
                 self.diagnostics["projection_collision_rejected"] = self.diagnostics.get("projection_collision_rejected", 0) + 1
                 return f"projection_collision_with_{other_gid}"
+        return None
+
+    @staticmethod
+    def _bbox_footpoint_residual(
+        bbox: list[float] | tuple[float, float, float, float] | None,
+        footpoint: tuple[float, float] | list[float] | None,
+    ) -> float | None:
+        if bbox is None or len(bbox) != 4 or footpoint is None or len(footpoint) != 2:
+            return None
+        return (
+            ((float(bbox[0]) + float(bbox[2])) / 2.0 - float(footpoint[0])) ** 2
+            + (float(bbox[3]) - float(footpoint[1])) ** 2
+        ) ** 0.5
+
+    def _projection_footpoint_reason(
+        self,
+        *,
+        bbox: list[float] | None,
+        footpoint: tuple[float, float],
+    ) -> str | None:
+        residual = self._bbox_footpoint_residual(bbox, footpoint)
+        if residual is not None and residual > self.config.projected_bbox_footpoint_residual_px:
+            self.diagnostics["bbox_footpoint_inconsistency_rejected"] = (
+                self.diagnostics.get("bbox_footpoint_inconsistency_rejected", 0) + 1
+            )
+            return "bbox_footpoint_inconsistency"
         return None
 
     def _projection_continuity_reason(
@@ -646,6 +702,7 @@ class FusedPlayerOverlayBuilder:
         )
         has_synthetic_bbox = False
         projection_rejection_reason: str | None = None
+        held_presentation_safe = True
         if evidence_type == "cross_view_projected" and projection is not None:
             candidate_bbox = self._projected_bbox_candidate(
                 gid=gid,
@@ -664,9 +721,25 @@ class FusedPlayerOverlayBuilder:
                     bbox=candidate_bbox,
                     now_ms=now_ms,
                 )
+            if projection_rejection_reason is None:
+                projection_rejection_reason = self._projection_footpoint_reason(
+                    bbox=candidate_bbox,
+                    footpoint=projection.image_footpoint,
+                )
             has_synthetic_bbox = candidate_bbox is not None and projection_rejection_reason is None
             if projection_rejection_reason is not None:
                 self.diagnostics["projection_gate_rejected"] = self.diagnostics.get("projection_gate_rejected", 0) + 1
+            previous = self._last_presentation_bbox.get((gid, reference_view_id))
+            if previous is not None:
+                held_bbox, _held_ts = previous
+                held_collision = self._projection_collision_reason(gid=gid, bbox=held_bbox)
+                held_residual = self._bbox_footpoint_residual(held_bbox, projection.image_footpoint)
+                held_presentation_safe = (
+                    held_collision is None
+                    and (held_residual is None or held_residual <= self.config.projected_bbox_footpoint_residual_px)
+                )
+                if not held_presentation_safe:
+                    self.diagnostics["held_presentation_rejected"] = self.diagnostics.get("held_presentation_rejected", 0) + 1
 
         ctx = DisplayContext(
             now_ms=now_ms,
@@ -678,6 +751,8 @@ class FusedPlayerOverlayBuilder:
             geometry_valid=geometry_valid,
             bbox_age_ms=age_ms,
             bbox_stale=stale,
+            projection_rejection_reason=projection_rejection_reason,
+            held_presentation_safe=held_presentation_safe,
         )
         plan = self.display_state_machine.step(player_id=player_id, view_id=reference_view_id, ctx=ctx)
 
@@ -699,6 +774,12 @@ class FusedPlayerOverlayBuilder:
                 "footpoint": stable_footpoint,
                 "display_state": plan.state,
                 "display_reason": display_reason,
+                "previous_display_state": plan.previous_state,
+                "display_transition_count": plan.transition_count,
+                "display_state_sequence": list(plan.state_sequence),
+                "display_window_start_ms": plan.window_start_ms,
+                "presentation_geometry_reused": plan.presentation_geometry_reused,
+                "bbox_footpoint_residual_px": self._bbox_footpoint_residual(stable_bbox, (stable_footpoint[0], stable_footpoint[1])),
             })
             self._last_presentation_bbox[(gid, reference_view_id)] = (stable_bbox, now_ms)
             self._last_presentation_evidence[(gid, reference_view_id)] = str(raw.evidence_type)
@@ -718,7 +799,14 @@ class FusedPlayerOverlayBuilder:
             )
 
         if raw is not None:
-            return raw.model_copy(update={"display_state": plan.state})
+            return raw.model_copy(update={
+                "display_state": plan.state,
+                "previous_display_state": plan.previous_state,
+                "display_transition_count": plan.transition_count,
+                "display_state_sequence": list(plan.state_sequence),
+                "display_window_start_ms": plan.window_start_ms,
+                "display_reason": plan.transition_reason,
+            })
         return None
 
     def _decide_entity(
@@ -1007,6 +1095,13 @@ class FusedPlayerOverlayBuilder:
             self._last_presentation_bbox[(gid, reference_view_id)] = (bbox, now_ms)
             self._last_presentation_evidence[(gid, reference_view_id)] = "cross_view_projected"
 
+        residual = self._bbox_footpoint_residual(bbox, projection.image_footpoint)
+        display_reason = (
+            "projection_collision_fallback"
+            if projection_rejection_reason is not None
+            else plan.transition_reason
+        )
+
         return FusedPlayerOverlayPlayer(
             player_id=player_id,
             label=_player_label(player_id),
@@ -1024,8 +1119,14 @@ class FusedPlayerOverlayBuilder:
             display_state=plan.state,
             bbox_stale=stale,
             bbox_age_ms=age_ms,
-            display_reason=("projection_collision_fallback" if projection_rejection_reason else None),
+            display_reason=display_reason,
             projection_rejection_reason=projection_rejection_reason,
+            bbox_footpoint_residual_px=residual,
+            presentation_geometry_reused=plan.presentation_geometry_reused,
+            previous_display_state=plan.previous_state,
+            display_transition_count=plan.transition_count,
+            display_state_sequence=list(plan.state_sequence),
+            display_window_start_ms=plan.window_start_ms,
         )
 
     def _build_predicted_only(

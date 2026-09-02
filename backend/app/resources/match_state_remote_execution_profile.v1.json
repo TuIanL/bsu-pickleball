@@ -1,0 +1,58 @@
+{
+  "schema_version": "match_state_remote_execution_profile.v1",
+  "profile_id": "remote-heavy-compute-v1",
+  "local_allowed_stages": [
+    "dataset_audit",
+    "boundary_review",
+    "label_snapshot",
+    "metadata_only_clip_manifest",
+    "manifest_validation",
+    "remote_job_packaging"
+  ],
+  "remote_required_stages": [
+    "media_index_or_remux",
+    "video_decode",
+    "rgb_frame_sampling",
+    "rgb_embedding_extraction",
+    "rtmpose_extraction",
+    "ball_detection_and_tracking",
+    "court_coordinate_projection",
+    "model_training",
+    "model_evaluation",
+    "batch_inference"
+  ],
+  "media_contract": {
+    "logical_uri_template": "matchstate://2026-07-20/{source_session_id}/{camera_role}",
+    "remote_relative_path_template": "media/{source_session_id}/{camera_role}.ts",
+    "remote_dataset_root_env": "MATCH_STATE_DATASET_ROOT",
+    "rule": "Manifests use logical URIs as identity; local absolute paths are provenance only and must never be required on the remote host."
+  },
+  "cache_contract": {
+    "key_fields": [
+      "dataset_manifest_id",
+      "logical_media_uri",
+      "extractor_name",
+      "extractor_version",
+      "sampling_fps",
+      "preprocessing_config_sha256"
+    ],
+    "reuse_across_experiments": true,
+    "never_recompute_when_key_matches": true
+  },
+  "transfer_policy": {
+    "upload_source_media_once": true,
+    "materialize_thousands_of_local_clip_files": false,
+    "include_in_job_package": [
+      "dataset_manifest",
+      "rgb_clip_manifest",
+      "label_profile",
+      "remote_execution_profile",
+      "training_config",
+      "code_revision"
+    ],
+    "exclude_from_job_package": [
+      "credentials",
+      "local_absolute_path_dependency"
+    ]
+  }
+}

@@ -57,6 +57,8 @@ class JointObservation:
     canonical_y_ft: float | None = None
     view_player_id: str = ""
     local_identity_epoch: int = 0
+    # stable within one PlayerLockManager identity epoch; raw track ids may fragment
+    tracklet_lineage_id: str | None = None
     track_id: int | None = None
     confidence: float = 0.0
     projection_confidence: float | None = None
@@ -90,6 +92,7 @@ class AssociationUpdate:
     confidence: float
     tentative: bool = False
     reanchor: bool = False  # fix-multiview-reacquire-after-fusion-pollution D3：灾难恢复 reseed 请求
+    quarantined: bool = False
 
 
 @dataclass
@@ -107,6 +110,12 @@ class AssociationDecision:
     global_id: str | None = None
     reason: str | None = None
     tentative: bool = False
+    local_identity_epoch: int | None = None
+    tracklet_lineage_id: str | None = None
+    incumbent_global_id: str | None = None
+    challenger_global_id: str | None = None
+    reassociation_evidence_count: int | None = None
+    quarantined: bool = False
 
 
 def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -148,6 +157,7 @@ class GlobalPlayerAssociator:
         appearance_cost_weight_ft: float = 0.8,
         appearance_ambiguity_margin: float = 0.08,
         appearance_mode: str = "enabled",
+        reassociation_ambiguity_margin_ft: float = 0.5,
     ) -> None:
         self.registry = registry
         self.max_association_distance_ft = max_association_distance_ft
@@ -168,9 +178,11 @@ class GlobalPlayerAssociator:
         if appearance_mode not in {"disabled", "shadow", "enabled"}:
             raise ValueError(f"unsupported appearance mode: {appearance_mode}")
         self.appearance_mode = appearance_mode
+        self.reassociation_ambiguity_margin_ft = max(0.0, reassociation_ambiguity_margin_ft)
         self.diagnostics: dict[str, int] = {}
         # 只读决策可观测：最近一次 process_tick 的 per-observation 决策记录
         self.last_tick_decisions: list[AssociationDecision] = []
+        self.last_tick_local_slot_events: list[dict[str, object]] = []
         # 结构化 conflict 仲裁明细（D4）：{global_player_id, cam1_xy, cam2_xy,
         # r_cam1, r_cam2, gate, selected_source, reason}
         self.last_tick_fusion_decisions: list[dict] = []
@@ -181,6 +193,10 @@ class GlobalPlayerAssociator:
         self.mapping: dict[tuple[str, str, int], str] = {}
         # mapping_key -> challenger_gid -> 连续强证据帧数（PendingReassociation）
         self._pending_reassoc: dict[tuple[str, str, int], dict[str, int]] = {}
+        # (view, local slot) -> last accepted lineage/binding. This survives raw
+        # track-id fragmentation and lets a new epoch prove which incumbent it
+        # is challenging before the slot is released.
+        self._local_slot_history: dict[tuple[str, str], dict[str, object]] = {}
         self._appearance_galleries: dict[str, dict[str, AppearanceTemplateGallery]] = defaultdict(dict)
         self._appearance_pairs: dict[tuple[str, str], deque[tuple[PlayerAppearanceDescriptor, PlayerAppearanceDescriptor]]] = defaultdict(lambda: deque(maxlen=48))
         self._camera_color_profiles: dict[tuple[str, str], CameraColorProfile] = {}
@@ -197,6 +213,10 @@ class GlobalPlayerAssociator:
         global_id: str | None = None,
         reason: str | None = None,
         tentative: bool = False,
+        incumbent_global_id: str | None = None,
+        challenger_global_id: str | None = None,
+        reassociation_evidence_count: int | None = None,
+        quarantined: bool = False,
     ) -> None:
         """附加一条只读 AssociationDecision（不改任何算法行为）。"""
         self.last_tick_decisions.append(
@@ -207,8 +227,80 @@ class GlobalPlayerAssociator:
                 global_id=global_id,
                 reason=reason,
                 tentative=tentative,
+                local_identity_epoch=int(obs.local_identity_epoch),
+                tracklet_lineage_id=obs.tracklet_lineage_id,
+                incumbent_global_id=incumbent_global_id,
+                challenger_global_id=challenger_global_id,
+                reassociation_evidence_count=reassociation_evidence_count,
+                quarantined=quarantined,
             )
         )
+
+    def _incumbent_for_slot(self, obs: JointObservation) -> str | None:
+        """Resolve the incumbent before matching a new local epoch.
+
+        The old mapping key is intentionally removed when the lock manager starts
+        a new epoch. The registry slot and the short lineage history are the
+        authoritative continuity sources in that case.
+        """
+        mapped = self.mapping.get(self.mapping_key(obs))
+        if mapped in self.registry.players:
+            return mapped
+        if obs.view_player_id:
+            occupant = self.registry.reference_slot_occupant(obs.view_id, obs.view_player_id)
+            if occupant in self.registry.players:
+                return occupant
+        history = self._local_slot_history.get((obs.view_id, self.observation_key(obs)))
+        historical = history.get("global_id") if history else None
+        return historical if historical in self.registry.players else None
+
+    def _remember_local_slot(self, obs: JointObservation, gid: str) -> None:
+        if not obs.view_player_id:
+            return
+        self._local_slot_history[(obs.view_id, obs.view_player_id)] = {
+            "global_id": gid,
+            "identity_epoch": int(obs.local_identity_epoch),
+            "track_id": obs.track_id,
+            "tracklet_lineage_id": obs.tracklet_lineage_id,
+            "last_seen_take_timestamp_ms": obs.take_timestamp_ms,
+        }
+
+    def _slot_lineage_compatible(self, obs: JointObservation, incumbent: str, challenger: str) -> bool:
+        """Reject a track-fragment takeover without a new identity epoch/lineage."""
+        binding = self.registry.players.get(incumbent, None)
+        incumbent_binding = binding.view_bindings.get(obs.view_id) if binding is not None else None
+        if incumbent_binding is None:
+            return obs.tracklet_lineage_id is None
+        # A newer lock identity epoch is explicit evidence that the local slot
+        # may have been recovered after a raw track fragment. Do not let the
+        # previous epoch's lineage veto that controlled reassociation.
+        if obs.local_identity_epoch > int(incumbent_binding.local_identity_epoch):
+            return True
+        if obs.tracklet_lineage_id is not None and incumbent_binding.track_id is not None:
+            # A stable lock lineage may legitimately span raw track ids.
+            history = self._local_slot_history.get((obs.view_id, self.observation_key(obs))) or {}
+            previous_lineage = history.get("tracklet_lineage_id")
+            if previous_lineage is not None:
+                return previous_lineage == obs.tracklet_lineage_id
+        # Legacy callers do not expose lineage; preserve their existing
+        # geometry-only reassociation contract while production observations are
+        # protected by the explicit lineage field above.
+        return obs.tracklet_lineage_id is None
+
+    @staticmethod
+    def _same_court_side(obs: JointObservation, incumbent: str, challenger: str, predictions) -> bool:
+        """Use a dead-zone side check as a veto, never as a positive identity ID."""
+        if incumbent not in predictions or challenger not in predictions:
+            return True
+        y = float(obs.canonical_y_ft or 0.0)
+        half = 22.0
+        dead_zone = 1.5
+        obs_side = None if abs(y - half) <= dead_zone else ("near" if y < half else "far")
+        if obs_side is None:
+            return True
+        incumbent_side = "near" if float(predictions[incumbent][1]) < half else "far"
+        challenger_side = "near" if float(predictions[challenger][1]) < half else "far"
+        return incumbent_side == challenger_side == obs_side
 
     @classmethod
     def mapping_key(cls, obs: JointObservation) -> tuple[str, str, int]:
@@ -338,6 +430,7 @@ class GlobalPlayerAssociator:
         tick = tick if tick is not None else (max((o.source_frame_index for o in observations), default=0))
         # 只读决策可观测：每 tick 重置，供 display diagnostics 消费
         self.last_tick_decisions = []
+        self.last_tick_local_slot_events = []
         # 1) canonical 化 + 清理失效强绑定
         for obs in observations:
             identity_key = self.observation_key(obs)
@@ -382,6 +475,7 @@ class GlobalPlayerAssociator:
                     ViewBinding(
                         view_player_id=obs.view_player_id or None,
                         local_identity_epoch=obs.local_identity_epoch,
+                        tracklet_lineage_id=obs.tracklet_lineage_id,
                         track_id=obs.track_id,
                         last_seen_take_timestamp_ms=obs.take_timestamp_ms,
                         last_source_frame_index=obs.source_frame_index,
@@ -405,6 +499,7 @@ class GlobalPlayerAssociator:
                     assigned_obs.add(id(obs))
                     continue
                 self.mapping[self.mapping_key(obs)] = expected
+                self._remember_local_slot(obs, expected)
                 updates.append(AssociationUpdate(expected, obs.view_id, obs, 1.0 / (1.0 + geometry)))
                 assigned_obs.add(id(obs))
                 self.diagnostics["guided_expected_preserved"] = self.diagnostics.get("guided_expected_preserved", 0) + 1
@@ -474,7 +569,7 @@ class GlobalPlayerAssociator:
                     appearance_best = min(appearance_distances, key=appearance_distances.get)
                     diagnostic = "appearance_supports" if appearance_best == gid else "appearance_conflicts"
                     self.diagnostics[diagnostic] = self.diagnostics.get(diagnostic, 0) + 1
-                incumbent = self.mapping.get(self.mapping_key(obs))
+                incumbent = self._incumbent_for_slot(obs)
                 if incumbent is not None and incumbent != gid:
                     # PendingReassociation（D6）：challenger 需连续强证据（margin + 连续一致）
                     incumbent_cost = ranking[key].get(incumbent, float("inf"))
@@ -482,11 +577,35 @@ class GlobalPlayerAssociator:
                     pkey = self.mapping_key(obs)
                     pending = self._pending_reassoc.setdefault(pkey, {})
                     prev_challenger = next(iter(pending), None) if pending else None
+                    slot_occupant = (
+                        self.registry.reference_slot_occupant(obs.view_id, obs.view_player_id)
+                        if obs.view_player_id
+                        else None
+                    )
+                    lineage_ok = self._slot_lineage_compatible(obs, incumbent, gid)
+                    side_ok = self._same_court_side(obs, incumbent, gid, predictions)
+                    margin_ok = challenger_cost + max(
+                        self.switch_margin, self.reassociation_ambiguity_margin_ft
+                    ) < incumbent_cost
+                    slot_ok = slot_occupant in (None, incumbent)
+                    evidence_ok = lineage_ok and side_ok and margin_ok and slot_ok
                     if (
-                        challenger_cost + self.switch_margin < incumbent_cost
+                        evidence_ok
                         and (prev_challenger is None or prev_challenger == gid)
                     ):
                         pending[gid] = pending.get(gid, 0) + 1
+                        evidence_count = pending[gid]
+                        event = {
+                            "view_id": obs.view_id,
+                            "local_slot": self.observation_key(obs),
+                            "identity_epoch": int(obs.local_identity_epoch),
+                            "tracklet_lineage_id": obs.tracklet_lineage_id,
+                            "incumbent_global_id": incumbent,
+                            "challenger_global_id": gid,
+                            "evidence_count": evidence_count,
+                            "reason": "reassociation_pending",
+                        }
+                        self.last_tick_local_slot_events.append(event)
                         if pending[gid] >= self.reassociation_frames:
                             self.diagnostics["reassociated"] = self.diagnostics.get("reassociated", 0) + 1
                             pending.clear()
@@ -496,10 +615,25 @@ class GlobalPlayerAssociator:
                                 obs, gid, feasibility[key][gid], updates, override_slot=True
                             ):
                                 assigned_obs.add(id(obs))
-                                self._record_decision(obs, "assigned", global_id=gid, reason="reassociated")
+                                event["reason"] = "reassociated"
+                                self._record_decision(
+                                    obs,
+                                    "assigned",
+                                    global_id=gid,
+                                    reason="reassociated",
+                                    incumbent_global_id=incumbent,
+                                    challenger_global_id=gid,
+                                    reassociation_evidence_count=evidence_count,
+                                )
                             else:
                                 self._record_decision(
-                                    obs, "rejected", global_id=gid, reason="reference_slot_conflict"
+                                    obs,
+                                    "rejected",
+                                    global_id=gid,
+                                    reason="reference_slot_conflict",
+                                    incumbent_global_id=incumbent,
+                                    challenger_global_id=gid,
+                                    reassociation_evidence_count=evidence_count,
                                 )
                         else:
                             self.diagnostics["reassoc_pending"] = self.diagnostics.get("reassoc_pending", 0) + 1
@@ -508,7 +642,14 @@ class GlobalPlayerAssociator:
                             ):
                                 assigned_obs.add(id(obs))
                                 self._record_decision(
-                                    obs, "pending", global_id=incumbent, reason="reassoc_pending", tentative=True
+                                    obs,
+                                    "pending",
+                                    global_id=incumbent,
+                                    reason="reassoc_pending",
+                                    tentative=True,
+                                    incumbent_global_id=incumbent,
+                                    challenger_global_id=gid,
+                                    reassociation_evidence_count=evidence_count,
                                 )
                             else:
                                 self._record_decision(
@@ -516,12 +657,42 @@ class GlobalPlayerAssociator:
                                 )
                     else:
                         pending.clear()
+                        reason = (
+                            "reassociation_ambiguous"
+                            if margin_ok and (not lineage_ok or not side_ok)
+                            else "local_slot_conflict"
+                            if not slot_ok
+                            else "reassociation_margin_insufficient"
+                        )
+                        self.diagnostics[reason] = self.diagnostics.get(reason, 0) + 1
+                        self.last_tick_local_slot_events.append({
+                            "view_id": obs.view_id,
+                            "local_slot": self.observation_key(obs),
+                            "identity_epoch": int(obs.local_identity_epoch),
+                            "tracklet_lineage_id": obs.tracklet_lineage_id,
+                            "incumbent_global_id": incumbent,
+                            "challenger_global_id": gid,
+                            "evidence_count": 0,
+                            "reason": reason,
+                        })
                         if self._accept_pair(
-                            obs, incumbent, feasibility[key].get(incumbent, 1.0), updates, tentative=True
+                            obs,
+                            incumbent,
+                            feasibility[key].get(incumbent, 1.0),
+                            updates,
+                            tentative=True,
+                            quarantined=True,
                         ):
                             assigned_obs.add(id(obs))
                             self._record_decision(
-                                obs, "assigned", global_id=incumbent, reason="incumbent_kept", tentative=True
+                                obs,
+                                "assigned",
+                                global_id=incumbent,
+                                reason=reason,
+                                tentative=True,
+                                incumbent_global_id=incumbent,
+                                challenger_global_id=gid,
+                                quarantined=True,
                             )
                         else:
                             self._record_decision(
@@ -559,6 +730,7 @@ class GlobalPlayerAssociator:
                         ViewBinding(
                             view_player_id=obs.view_player_id or None,
                             local_identity_epoch=obs.local_identity_epoch,
+                            tracklet_lineage_id=obs.tracklet_lineage_id,
                             track_id=obs.track_id,
                             last_seen_take_timestamp_ms=obs.take_timestamp_ms,
                             last_source_frame_index=obs.source_frame_index,
@@ -580,6 +752,7 @@ class GlobalPlayerAssociator:
                         assigned_obs.add(id(obs))
                         continue
                     updates.append(AssociationUpdate(existing, obs.view_id, obs, 0.0, tentative=True))
+                    self._remember_local_slot(obs, existing)
                     assigned_obs.add(id(obs))
                     self._record_decision(
                         obs, "assigned", global_id=existing, reason="continuity_preserved", tentative=True
@@ -600,6 +773,7 @@ class GlobalPlayerAssociator:
                         ViewBinding(
                             view_player_id=obs.view_player_id or None,
                             local_identity_epoch=obs.local_identity_epoch,
+                            tracklet_lineage_id=obs.tracklet_lineage_id,
                             track_id=obs.track_id,
                             last_seen_take_timestamp_ms=obs.take_timestamp_ms,
                             last_source_frame_index=obs.source_frame_index,
@@ -622,6 +796,7 @@ class GlobalPlayerAssociator:
                         assigned_obs.add(id(obs))
                         continue
                     updates.append(AssociationUpdate(historical, obs.view_id, obs, 0.0, tentative=True))
+                    self._remember_local_slot(obs, historical)
                     assigned_obs.add(id(obs))
                     self._record_decision(
                         obs, "assigned", global_id=historical, reason="historical_reacquired", tentative=True
@@ -685,6 +860,11 @@ class GlobalPlayerAssociator:
                                     canonical_y_ft=cand.canonical_y_ft,
                                     view_player_id=str(binding.get("view_player_id") or ""),
                                     local_identity_epoch=int(binding.get("identity_epoch") or 0),
+                                    tracklet_lineage_id=(
+                                        str(binding.get("tracklet_lineage_id"))
+                                        if binding.get("tracklet_lineage_id") is not None
+                                        else None
+                                    ),
                                     track_id=int(binding.get("track_id") or 0) or None,
                                     confidence=0.5,
                                 ),
@@ -695,6 +875,10 @@ class GlobalPlayerAssociator:
         self.registry.expire_candidates(tick)
 
         self._update_appearance_models(updates)
+
+        for event in self.last_tick_local_slot_events:
+            event.setdefault("canonical_tick", tick)
+            event.setdefault("timestamp_ms", float(timestamp_s) * 1000.0)
 
         return updates
 
@@ -778,6 +962,7 @@ class GlobalPlayerAssociator:
         *,
         tentative: bool = False,
         override_slot: bool = False,
+        quarantined: bool = False,
     ) -> bool:
         """接受一对观测→global 绑定并产出 update。
 
@@ -788,14 +973,13 @@ class GlobalPlayerAssociator:
         local 身份应从 incumbent 切换到 challenger 时，先 release 旧槽位再绑定，
         否则唯一性保护会错误拦截合法切换。
         """
-        if override_slot and obs.view_player_id:
-            self.registry.release_view_slot(obs.view_id, obs.view_player_id)
         binding_ok = self.registry.set_binding(
             gid,
             obs.view_id,
             ViewBinding(
                 view_player_id=obs.view_player_id or None,
                 local_identity_epoch=obs.local_identity_epoch,
+                tracklet_lineage_id=obs.tracklet_lineage_id,
                 track_id=obs.track_id,
                 last_seen_take_timestamp_ms=obs.take_timestamp_ms,
                 last_source_frame_index=obs.source_frame_index,
@@ -806,6 +990,7 @@ class GlobalPlayerAssociator:
                 donor_view=obs.donor_view,
             ),
             obs.take_timestamp_ms,
+            allow_slot_reassignment=override_slot,
         )
         if not binding_ok:
             self.diagnostics["reference_slot_conflict"] = (
@@ -813,8 +998,18 @@ class GlobalPlayerAssociator:
             )
             return False
         self.mapping[self.mapping_key(obs)] = gid
+        self._remember_local_slot(obs, gid)
         dist = max(0.0, feasibility_value) * self.base_gate_ft  # 归一化距离还原（仅诊断）
-        updates.append(AssociationUpdate(gid, obs.view_id, obs, 1.0 / (1.0 + dist), tentative=tentative))
+        updates.append(
+            AssociationUpdate(
+                gid,
+                obs.view_id,
+                obs,
+                1.0 / (1.0 + dist),
+                tentative=tentative,
+                quarantined=quarantined,
+            )
+        )
         return True
 
     def fuse_assignments(
@@ -839,6 +1034,11 @@ class GlobalPlayerAssociator:
         """
         grouped: dict[str, list[AssociationUpdate]] = {}
         for u in updates:
+            if u.quarantined:
+                self.diagnostics["quarantined_fusion_sample"] = (
+                    self.diagnostics.get("quarantined_fusion_sample", 0) + 1
+                )
+                continue
             if u.tentative and not include_tentative:
                 continue
             grouped.setdefault(u.global_id, []).append(u)

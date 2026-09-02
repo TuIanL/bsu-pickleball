@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.capture_segment import CaptureSegment, EditStatus, SegmentStatus, SegmentType
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentStatus, SegmentType
 from app.models.segment_edit_operation import EditOperationType, SegmentEditOperation
+from app.schemas.segment_creation import RALLY_CREATION_SCHEMA_VERSION
+from app.schemas.segment_boundary_review import BOUNDARY_REVIEW_SCHEMA_VERSION, BoundaryReviewDecision
+from app.schemas.segment_ordinal import RALLY_ORDINAL_UPDATE_SCHEMA_VERSION
 
 _OP_PREFIX = "eo"
 _MIN_RALLY_MS = 500
 _MAX_MERGE_GAP_MS = 500
+_DEFAULT_RALLY_LABEL = re.compile(r"^第\d+分$")
 
 
 def _gen_id(prefix: str) -> str:
@@ -86,6 +91,360 @@ def reset_boundary(db: Session, segment: CaptureSegment) -> CaptureSegment:
     segment.updated_at = datetime.now(UTC)
     db.flush()
     return segment
+
+
+# ── 有效回合边界人工复核 ──
+
+
+def create_manual_rally(
+    db: Session,
+    *,
+    capture_take_id: str,
+    start_ms: int,
+    end_ms: int,
+    label: str = "",
+    take_duration_ms: int | None = None,
+) -> CaptureSegment:
+    """从复核工作台补录一条完整的、尚未确认的 rally。"""
+
+    _validate_candidate_bounds(start_ms, end_ms, take_duration_ms)
+    existing = (
+        db.query(CaptureSegment)
+        .filter(
+            CaptureSegment.capture_take_id == capture_take_id,
+            CaptureSegment.segment_type == SegmentType.rally,
+            CaptureSegment.edit_status == EditStatus.active,
+        )
+        .order_by(CaptureSegment.start_ms.asc(), CaptureSegment.id.asc())
+        .all()
+    )
+
+    for current in existing:
+        current_start = _eff_start(current)
+        current_end = _eff_end(current)
+        overlaps = (
+            current_start < end_ms and current_end is None
+        ) or (
+            current_end is not None and current_start < end_ms and current_end > start_ms
+        )
+        if overlaps:
+            raise ValueError(f"新增回合与已有第{current.ordinal}分时间重叠，请先检查已有边界")
+
+    ordered = sorted(existing, key=lambda segment: (_eff_start(segment), _eff_end(segment) or 2**63, segment.id))
+    insert_index = sum(1 for current in ordered if _eff_start(current) < start_ms)
+    ordinal = insert_index + 1
+    renumbered: list[dict[str, int | str]] = []
+    now = datetime.now(UTC)
+    for index, current in enumerate(ordered):
+        next_ordinal = index + 1 if index < insert_index else index + 2
+        if current.ordinal == next_ordinal:
+            continue
+        previous_ordinal = current.ordinal
+        current.ordinal = next_ordinal
+        current.updated_at = now
+        # 保留已有自定义标签；只同步系统默认的“第 N 分”标签，避免覆盖人工命名。
+        if _DEFAULT_RALLY_LABEL.fullmatch((current.label or "").strip()):
+            current.label = f"第{next_ordinal}分"
+        renumbered.append({"segment_id": current.id, "from": previous_ordinal, "to": next_ordinal})
+
+    operation_id = _gen_id(_OP_PREFIX)
+    created_label = label.strip() or f"第{ordinal}分"
+    segment = CaptureSegment(
+        id=_gen_id("sg"),
+        capture_take_id=capture_take_id,
+        segment_type=SegmentType.rally,
+        ordinal=ordinal,
+        label=created_label,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        status=SegmentStatus.closed,
+        source=SegmentSource.manual,
+        edit_status=EditStatus.active,
+        created_by_operation_id=operation_id,
+    )
+    db.add(segment)
+    _create_op(
+        db,
+        operation_id,
+        capture_take_id,
+        EditOperationType.create,
+        [],
+        [segment.id],
+        {
+            "schema_version": RALLY_CREATION_SCHEMA_VERSION,
+            "operation": "manual_rally_create",
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "ordinal": ordinal,
+            "label": created_label,
+            "renumbered_ordinals": renumbered,
+        },
+    )
+    db.flush()
+    return segment
+
+
+def renumber_rally_ordinals(
+    db: Session,
+    *,
+    capture_take_id: str,
+    mode: str,
+    anchor_segment_id: str | None = None,
+    start_ordinal: int = 1,
+) -> tuple[list[CaptureSegment], str | None]:
+    """修正一个录像（一个比赛局）内 rally 的序号，并保留操作审计。
+
+    ordinal 的实际顺序以 take 时间为准。``from_anchor`` 只修改选中的
+    rally 及其后续 rally，``whole_take`` 则从整段视频的第一条 active rally
+    开始连续编号。边界字段完全不参与修改。
+    """
+
+    if mode not in {"from_anchor", "whole_take"}:
+        raise ValueError("不支持的 rally 序号修正模式")
+    if start_ordinal < 1:
+        raise ValueError("起始分序号必须大于等于 1")
+    if mode == "from_anchor" and not anchor_segment_id:
+        raise ValueError("从当前分开始连续编号时必须指定 anchor_segment_id")
+
+    existing = (
+        db.query(CaptureSegment)
+        .filter(
+            CaptureSegment.capture_take_id == capture_take_id,
+            CaptureSegment.segment_type == SegmentType.rally,
+            CaptureSegment.edit_status == EditStatus.active,
+        )
+        .all()
+    )
+    ordered = sorted(
+        existing,
+        key=lambda segment: (_eff_start(segment), _eff_end(segment) or 2**63, segment.id),
+    )
+
+    if mode == "whole_take":
+        anchor_index = 0
+    else:
+        anchor_index = next(
+            (index for index, segment in enumerate(ordered) if segment.id == anchor_segment_id),
+            None,
+        )
+        if anchor_index is None:
+            raise ValueError("当前分不存在、不是 rally 或已被排除，无法修正序号")
+
+        preserved_ordinals = {segment.ordinal for segment in ordered[:anchor_index]}
+        requested_ordinals = range(start_ordinal, start_ordinal + len(ordered) - anchor_index)
+        collision = next((ordinal for ordinal in requested_ordinals if ordinal in preserved_ordinals), None)
+        if collision is not None:
+            raise ValueError(f"第{collision}分已存在于当前分之前，请输入不重复的起始序号")
+
+    changes: list[dict[str, int | str | None]] = []
+    changed_ids: list[str] = []
+    now = datetime.now(UTC)
+    for offset, segment in enumerate(ordered[anchor_index:]):
+        next_ordinal = start_ordinal + offset
+        previous_ordinal = segment.ordinal
+        previous_label = segment.label
+        next_label = previous_label
+        if _DEFAULT_RALLY_LABEL.fullmatch((previous_label or "").strip()):
+            next_label = f"第{next_ordinal}分"
+
+        if previous_ordinal == next_ordinal and previous_label == next_label:
+            continue
+
+        segment.ordinal = next_ordinal
+        segment.label = next_label
+        segment.edit_version += 1
+        segment.updated_at = now
+        changed_ids.append(segment.id)
+        changes.append(
+            {
+                "segment_id": segment.id,
+                "from_ordinal": previous_ordinal,
+                "to_ordinal": next_ordinal,
+                "from_label": previous_label,
+                "to_label": next_label,
+            }
+        )
+
+    operation_id: str | None = None
+    if changes:
+        operation_id = _gen_id(_OP_PREFIX)
+        _create_op(
+            db,
+            operation_id,
+            capture_take_id,
+            EditOperationType.ordinal_renumber,
+            changed_ids,
+            changed_ids,
+            {
+                "schema_version": RALLY_ORDINAL_UPDATE_SCHEMA_VERSION,
+                "operation": "manual_rally_ordinal_renumber",
+                "mode": mode,
+                "anchor_segment_id": anchor_segment_id,
+                "start_ordinal": start_ordinal,
+                "changes": changes,
+            },
+        )
+
+    db.flush()
+    return ordered, operation_id
+
+
+def review_rally_boundary(
+    db: Session,
+    segment: CaptureSegment,
+    *,
+    decision: BoundaryReviewDecision,
+    expected_version: int,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    note: str | None = None,
+    take_duration_ms: int | None = None,
+) -> CaptureSegment:
+    """复核一个 rally，保留原始边界并写入现有编辑审计表。"""
+
+    if segment.segment_type != SegmentType.rally:
+        raise ValueError("仅支持复核 rally 类型")
+    if segment.edit_status == EditStatus.superseded:
+        raise ValueError("已被替代的 rally 不能复核")
+    if segment.edit_version != expected_version:
+        raise ValueError(f"edit_version 冲突: 期望 {expected_version}，当前 {segment.edit_version}")
+    if decision != BoundaryReviewDecision.excluded and segment.edit_status != EditStatus.active:
+        raise ValueError("已排除的 rally 请先恢复后再复核")
+
+    before_start = _eff_start(segment)
+    before_end = _eff_end(segment)
+    now = datetime.now(UTC)
+
+    if decision == BoundaryReviewDecision.excluded:
+        reviewed_start = before_start
+        reviewed_end = before_end
+        segment.edit_status = EditStatus.archived
+    else:
+        reviewed_start = before_start if start_ms is None else start_ms
+        reviewed_end = before_end if end_ms is None else end_ms
+        _validate_candidate_bounds(reviewed_start, reviewed_end, take_duration_ms)
+        if reviewed_end is None:
+            raise ValueError("开放中的 rally 不能标记为已复核")
+        segment.corrected_start_ms = reviewed_start
+        segment.corrected_end_ms = reviewed_end
+        segment.corrected_at = now
+        segment.status = SegmentStatus.corrected
+
+    segment.edit_version += 1
+    segment.updated_at = now
+    _create_op(
+        db,
+        _gen_id(_OP_PREFIX),
+        segment.capture_take_id,
+        EditOperationType.boundary_correction,
+        [segment.id],
+        [segment.id],
+        {
+            "schema_version": BOUNDARY_REVIEW_SCHEMA_VERSION,
+            "review_status": decision.value,
+            "source_start_ms": segment.start_ms,
+            "source_end_ms": segment.end_ms,
+            "before_start_ms": before_start,
+            "before_end_ms": before_end,
+            "reviewed_start_ms": reviewed_start,
+            "reviewed_end_ms": reviewed_end,
+            "note": note or None,
+        },
+    )
+    db.flush()
+    return segment
+
+
+def boundary_review_records(db: Session, capture_take_id: str) -> dict[str, dict]:
+    """返回每个 segment 最新的边界复核记录。"""
+
+    operations = (
+        db.query(SegmentEditOperation)
+        .filter(
+            SegmentEditOperation.capture_take_id == capture_take_id,
+            SegmentEditOperation.operation_type == EditOperationType.boundary_correction,
+        )
+        .order_by(SegmentEditOperation.created_at.asc())
+        .all()
+    )
+    latest: dict[str, dict] = {}
+    for operation in operations:
+        try:
+            payload = json.loads(operation.payload_json or "{}")
+            segment_ids = json.loads(operation.input_segment_ids or "[]")
+        except (TypeError, ValueError):
+            continue
+        if payload.get("schema_version") != BOUNDARY_REVIEW_SCHEMA_VERSION:
+            continue
+        for segment_id in segment_ids:
+            latest[str(segment_id)] = {
+                **payload,
+                "operation_id": operation.id,
+                "reviewed_at": operation.created_at.isoformat() if operation.created_at else None,
+            }
+    return latest
+
+
+def deduplicate_boundary_review_segments(
+    segments: list[CaptureSegment], records: dict[str, dict]
+) -> tuple[list[CaptureSegment], list[str]]:
+    """隐藏不同标注版本产生的近乎完全重叠回合，保留更可信的一条。"""
+
+    kept: list[CaptureSegment] = []
+    suppressed_ids: list[str] = []
+    for segment in sorted(segments, key=lambda item: (_eff_start(item), _eff_end(item) or 2**63)):
+        duplicate_index = next(
+            (index for index, current in enumerate(kept) if _near_duplicate_rallies(current, segment)),
+            None,
+        )
+        if duplicate_index is None:
+            kept.append(segment)
+            continue
+
+        current = kept[duplicate_index]
+        if _boundary_review_preference(segment, records) > _boundary_review_preference(current, records):
+            kept[duplicate_index] = segment
+            suppressed_ids.append(current.id)
+        else:
+            suppressed_ids.append(segment.id)
+
+    kept.sort(key=lambda item: (_eff_start(item), _eff_end(item) or 2**63))
+    return kept, suppressed_ids
+
+
+def _near_duplicate_rallies(first: CaptureSegment, second: CaptureSegment) -> bool:
+    # 用不可变的原始边界判断“标注版本副本”；人工修正可能已让两个副本的有效边界拉开。
+    first_end = first.end_ms
+    second_end = second.end_ms
+    if first_end is None or second_end is None:
+        return False
+
+    first_start = first.start_ms
+    second_start = second.start_ms
+    if abs(first_start - second_start) <= 250 and abs(first_end - second_end) <= 250:
+        return True
+
+    overlap = max(0, min(first_end, second_end) - max(first_start, second_start))
+    union = max(first_end, second_end) - min(first_start, second_start)
+    return union > 0 and overlap / union >= 0.95
+
+
+def _boundary_review_preference(segment: CaptureSegment, records: dict[str, dict]) -> tuple[int, ...]:
+    review_status = str((records.get(segment.id) or {}).get("review_status") or "pending")
+    review_rank = {"corrected": 4, "confirmed": 3, "pending": 2, "excluded": 1}.get(review_status, 0)
+    source_rank = {
+        SegmentSource.corrected: 4,
+        SegmentSource.manual: 3,
+        SegmentSource.vidat_import: 2,
+        SegmentSource.algorithm: 1,
+    }.get(segment.source, 0)
+    return (
+        review_rank,
+        source_rank,
+        int(segment.annotation_package_id is None),
+        int(segment.parent_segment_id is not None),
+        segment.edit_version,
+    )
 
 
 # ── 拆分 ──

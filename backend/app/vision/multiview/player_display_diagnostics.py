@@ -138,6 +138,15 @@ class PlayerDisplayDiagnosticsRow(BaseModel):
     # fix-multiview-cam1-bootstrap-4player D4：reference 槽位身份冲突显式观测
     # （两个 global 抢同一 (view_id, view_player_id)；缺省 false 兼容旧产物）
     roster_conflict: bool = False
+    # fix-p2-p4-overlay-identity-flicker：local slot reassociation 事件（缺失=legacy）
+    local_slot: str | None = None
+    local_identity_epoch: int | None = Field(default=None, ge=0)
+    tracklet_lineage_id: str | None = None
+    local_slot_reassociation_status: str | None = None
+    incumbent_global_player_id: str | None = None
+    challenger_global_player_id: str | None = None
+    reassociation_evidence_count: int | None = Field(default=None, ge=0)
+    reassociation_reason: str | None = None
 
     @field_validator("expected_image_position")
     @classmethod
@@ -160,6 +169,8 @@ class PlayerDisplayDiagnosticsArtifact(BaseModel):
     status: Literal["available", "unavailable", "failed"] = "available"
     detail: str = ""
     rows: list[PlayerDisplayDiagnosticsRow] = Field(default_factory=list)
+    # Additive event stream. Legacy artifacts may omit this field.
+    events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def validate_player_display_diagnostics(payload: object) -> None:
@@ -192,6 +203,13 @@ def validate_player_display_diagnostics(payload: object) -> None:
                 f"diagnostics row {index} expected_region_status={region_status!r} but "
                 "eligible_detections_in_expected_gate must be null"
             )
+    events = payload.get("events", [])
+    if events is not None and not isinstance(events, list):
+        raise ValueError("player display diagnostics events must be a list when present")
+    if isinstance(events, list):
+        for index, event in enumerate(events):
+            if not isinstance(event, dict):
+                raise ValueError(f"diagnostics event {index} must be an object")
 
 
 def build_player_display_diagnostics_payload(
@@ -202,6 +220,7 @@ def build_player_display_diagnostics_payload(
     rows: list[PlayerDisplayDiagnosticsRow],
     status: str = "available",
     detail: str = "",
+    events: list[dict[str, Any]] | None = None,
 ) -> dict[str, object]:
     """构造可序列化的契约 payload（validator 校验通过后返回）。"""
     payload: dict[str, object] = {
@@ -212,6 +231,7 @@ def build_player_display_diagnostics_payload(
         "status": status,
         "detail": detail,
         "rows": [row.model_dump(mode="json") for row in rows],
+        "events": [dict(event) for event in (events or [])],
     }
     validate_player_display_diagnostics(payload)
     return payload
@@ -237,6 +257,7 @@ def build_display_diagnostics_rows(
     guidance_decisions: list[Any],
     same_tick_guidance_by_view: dict[str, list[Any]] | None = None,
     roster_conflicts: dict[tuple[str, str], int] | None = None,
+    local_slot_rebind_events: list[dict[str, Any]] | None = None,
 ) -> list[PlayerDisplayDiagnosticsRow]:
     """对一个 canonical tick 构建 `roster confirmed player × available view` 的漏斗行。
 
@@ -260,6 +281,12 @@ def build_display_diagnostics_rows(
     assoc_by_key: dict[tuple[str, str], Any] = {}
     for d in association_decisions:
         assoc_by_key.setdefault((d.view_id, d.observation_key), d)
+    rebind_by_slot: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in local_slot_rebind_events or []:
+        view_id = str(event.get("view_id") or "")
+        local_slot = str(event.get("local_slot") or "")
+        if view_id and local_slot:
+            rebind_by_slot[(view_id, local_slot)] = dict(event)
 
     for player in roster:
         gid = str(player.get("global_player_id", ""))
@@ -384,6 +411,8 @@ def build_display_diagnostics_rows(
                     else "projection_failed" if eligible_present else "not_assessed"
                 )
 
+            rebind_event = rebind_by_slot.get((view_id, str(local_player_id or "")))
+
             rows.append(
                 PlayerDisplayDiagnosticsRow(
                     canonical_tick=canonical_tick,
@@ -416,6 +445,38 @@ def build_display_diagnostics_rows(
                     roster_conflict=bool(
                         roster_conflicts and (view_id, view_player_id) in roster_conflicts
                     ),
+                    local_slot=(str(rebind_event.get("local_slot")) if rebind_event else None),
+                    local_identity_epoch=(
+                        int(rebind_event.get("identity_epoch"))
+                        if rebind_event and rebind_event.get("identity_epoch") is not None
+                        else None
+                    ),
+                    tracklet_lineage_id=(
+                        str(rebind_event.get("tracklet_lineage_id"))
+                        if rebind_event and rebind_event.get("tracklet_lineage_id") is not None
+                        else None
+                    ),
+                    local_slot_reassociation_status=(
+                        str(rebind_event.get("reason")) if rebind_event else None
+                    ),
+                    incumbent_global_player_id=(
+                        str(rebind_event.get("incumbent_global_id"))
+                        if rebind_event and rebind_event.get("incumbent_global_id") is not None
+                        else None
+                    ),
+                    challenger_global_player_id=(
+                        str(rebind_event.get("challenger_global_id"))
+                        if rebind_event and rebind_event.get("challenger_global_id") is not None
+                        else None
+                    ),
+                    reassociation_evidence_count=(
+                        int(rebind_event.get("evidence_count"))
+                        if rebind_event and rebind_event.get("evidence_count") is not None
+                        else None
+                    ),
+                    reassociation_reason=(
+                        str(rebind_event.get("reason")) if rebind_event else None
+                    ),
                 )
             )
     # fix-multiview-player-identity T1 收尾：同一 (player_id, view_id) 在 roster 快照中出现
@@ -439,4 +500,3 @@ def _collect_observations(view_result: Any) -> list[Any]:
         pos for pos in getattr(view_result, "frame_positions", []) or []
         if getattr(pos, "court_position", None) is not None
     ]
-

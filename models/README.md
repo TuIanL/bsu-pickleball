@@ -10,19 +10,20 @@ Ball and future paddle detectors can live under dedicated subdirectories such as
 
 ```text
 models/ball/
-  tennis-ball.pt
+  pickleball-ball.pt  # 当前默认球检测模型
+  tennis-ball.pt      # 旧模型，保留用于回滚
 ```
 
 When `PICKLEBALL_BALL_MODEL_PATH` is not set, the backend auto-discovers common
-local ball model paths including `models/ball/tennis-ball.pt`,
-`models/ball/pickleball-ball.pt`, `models/ball/best.pt`, and
+local ball model paths, preferring `models/ball/pickleball-ball.pt`, followed by
+`models/ball/tennis-ball.pt`, `models/ball/best.pt`, and
 `models/pickleball-multitarget/model.pt`.
 
 You can still override the active model explicitly:
 
 ```bash
 PICKLEBALL_ENABLE_BALL_DETECTION=true
-PICKLEBALL_BALL_MODEL_PATH=../models/ball/tennis-ball.pt
+PICKLEBALL_BALL_MODEL_PATH=../models/ball/pickleball-ball.pt
 PICKLEBALL_ENABLE_BOUNCE_DETECTION=true
 ```
 

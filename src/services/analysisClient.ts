@@ -30,6 +30,10 @@ import type {
   LiveCodingState,
   CaptureTakeSummary,
   CaptureSegmentSummary,
+  BoundaryReviewRequest,
+  BoundaryReviewSummary,
+  RallyOrdinalUpdateRequest,
+  RallyOrdinalUpdateResponse,
   AnalysisBatchCreateResponse,
   AnalysisBatchDetail,
   FusedManifest,
@@ -67,6 +71,7 @@ import type {
   MetricCourtSceneRevisionSummary,
   MetricCourtSceneValidationResponse,
 } from "../types/metricCourtScene";
+import type { CalibrationReadResponse } from "../types/videoCourtOverlay";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
@@ -642,6 +647,11 @@ export async function createManualCalibration(
     }),
     method: "POST",
   });
+}
+
+/** 读取指定机位的完整标定详情，供展示层复用已保存的 court→image 矩阵。 */
+export async function getCalibration(calibrationId: string): Promise<CalibrationReadResponse> {
+  return requestJson<CalibrationReadResponse>(`/calibration/${encodeURIComponent(calibrationId)}`);
 }
 
 export async function requestAutomaticCalibration(
@@ -1623,6 +1633,26 @@ export async function listSegments(
   return requestJson<CaptureSegmentSummary[]>(`/api/capture-takes/${takeId}/segments${q ? `?${q}` : ""}`);
 }
 
+export async function createRallySegment(
+  takeId: string,
+  request: { start_ms: number; end_ms: number; label?: string },
+): Promise<CaptureSegmentSummary> {
+  return requestJson<CaptureSegmentSummary>(`/api/capture-takes/${takeId}/segments`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function renumberRallyOrdinals(
+  takeId: string,
+  request: RallyOrdinalUpdateRequest,
+): Promise<RallyOrdinalUpdateResponse> {
+  return requestJson<RallyOrdinalUpdateResponse>(`/api/capture-takes/${takeId}/rally-ordinals`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
 // ── Scoring calibration annotation API ──
 
 export function listScoringCalibrationPackages(takeId: string): Promise<ScoringCalibrationPackage[]> {
@@ -1898,6 +1928,20 @@ export async function patchSegment(
   }
   return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}?${sp.toString()}`, {
     method: "PATCH",
+  });
+}
+
+export async function getBoundaryReview(takeId: string): Promise<BoundaryReviewSummary> {
+  return requestJson<BoundaryReviewSummary>(`/api/capture-takes/${takeId}/boundary-review`);
+}
+
+export async function reviewSegmentBoundary(
+  segmentId: string,
+  request: BoundaryReviewRequest,
+): Promise<CaptureSegmentSummary> {
+  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/boundary-review`, {
+    method: "POST",
+    body: JSON.stringify(request),
   });
 }
 

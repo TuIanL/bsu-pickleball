@@ -684,6 +684,7 @@ export interface CaptureSegmentSummary {
   end_ms?: number;
   corrected_start_ms?: number;
   corrected_end_ms?: number;
+  corrected_at?: string | null;
   effective_start_ms?: number;
   effective_end_ms?: number;
   edit_version: number;
@@ -692,6 +693,45 @@ export interface CaptureSegmentSummary {
   source: string;
   is_highlight: boolean;
   parent_segment_id?: string;
+  boundary_review_status?: "pending" | "confirmed" | "corrected" | "excluded";
+  boundary_review_note?: string | null;
+  boundary_reviewed_at?: string | null;
+  boundary_review_operation_id?: string | null;
+  created_by_operation_id?: string | null;
+}
+
+export interface BoundaryReviewSummary {
+  schema_version: "match-state-boundary-review.v1" | string;
+  capture_take_id: string;
+  total_count: number;
+  pending_count: number;
+  confirmed_count: number;
+  corrected_count: number;
+  excluded_count: number;
+  segments: CaptureSegmentSummary[];
+}
+
+export interface BoundaryReviewRequest {
+  decision: "confirmed" | "corrected" | "excluded";
+  expected_version: number;
+  start_ms?: number;
+  end_ms?: number;
+  note?: string;
+}
+
+export interface RallyOrdinalUpdateRequest {
+  mode: "from_anchor" | "whole_take";
+  anchor_segment_id?: string;
+  start_ordinal: number;
+}
+
+export interface RallyOrdinalUpdateResponse {
+  schema_version: "manual-rally-ordinal.v1" | string;
+  capture_take_id: string;
+  operation_id: string | null;
+  mode: "from_anchor" | "whole_take";
+  start_ordinal: number;
+  segments: CaptureSegmentSummary[];
 }
 
 // ── AnalysisBatch ──
@@ -1096,6 +1136,12 @@ export interface FusedPlayerOverlayEntity {
   bbox_age_ms?: number | null;
   display_reason?: string | null;
   projection_rejection_reason?: string | null;
+  bbox_footpoint_residual_px?: number | null;
+  presentation_geometry_reused?: boolean;
+  previous_display_state?: string | null;
+  display_transition_count?: number;
+  display_state_sequence?: string[];
+  display_window_start_ms?: number | null;
   /** bootstrap_backfill 携带的 canonical court 坐标 [x, y]（英尺），供小地图消费；其余类型可为 null */
   canonical_court_position_ft?: [number, number] | number[] | null;
 }
@@ -1226,6 +1272,15 @@ export interface PlayerDisplayDiagnosticsRow {
   same_tick_guidance_status?: string | null;
   /** reference 槽位身份冲突（两个 global 抢同一 Player_N；旧产物按 false） */
   roster_conflict?: boolean;
+  /** local slot rebind diagnostics（旧产物缺失时为 unavailable） */
+  local_slot?: string | null;
+  local_identity_epoch?: number | null;
+  tracklet_lineage_id?: string | null;
+  local_slot_reassociation_status?: string | null;
+  incumbent_global_player_id?: string | null;
+  challenger_global_player_id?: string | null;
+  reassociation_evidence_count?: number | null;
+  reassociation_reason?: string | null;
   /** 查询 API 合并的 fused overlay 展示层信息（可选） */
   overlay_evidence_type?: string | null;
   overlay_bbox_source?: string | null;
@@ -1239,6 +1294,7 @@ export interface PlayerDisplayDiagnosticsResponse {
   status: string;
   detail: string;
   rows: PlayerDisplayDiagnosticsRow[];
+  events?: Array<Record<string, unknown>>;
   /** 产物缺失/不可用时后端返回结构化 unavailable（fix-multiview-player-identity T1.3） */
   error?: { code: string; message: string; job_id?: string };
 }

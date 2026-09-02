@@ -29,6 +29,9 @@ class P1OnlineRecoveryConfig:
     local_identity_switch_penalty: float = 0.25
     guidance_global_mismatch_penalty: float = 0.5
     reassociation_confirm_ticks: int = 3
+    association_reassociation_frames: int = 5
+    association_switch_margin: float = 0.15
+    association_reassociation_ambiguity_margin_ft: float = 0.5
     guided_merge_iou_threshold: float = 0.5
     recovery_episode_gap_ms: float = 300.0
     # available-miss fast path：上一 canonical tick 出现 available miss 时，

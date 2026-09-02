@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.camera.camera_registry import camera_registry
 from app.camera.preview_service import _build_auth_stream_url
+from app.core.config import get_settings
 from app.vision.detectors.ball_adapter import YoloBallDetectorAdapter
 from app.vision.pickleball_game_analysis.ball_tracker import BallTracker
 from app.vision.player_tracking_engine.multi_object_tracker import MultiObjectTracker
@@ -259,7 +260,9 @@ class ShowcaseRuntime:
         self.processing_width = int(os.getenv("PICKLEBALL_SHOWCASE_PROCESSING_WIDTH", "960"))
         self.jpeg_quality = int(os.getenv("PICKLEBALL_SHOWCASE_JPEG_QUALITY", "78"))
         self.ball_enabled = os.getenv("PICKLEBALL_SHOWCASE_BALL_ENABLED", "0").lower() in {"1", "true", "yes"}
-        ball_path = os.getenv("PICKLEBALL_BALL_MODEL_PATH")
+        # 显式环境变量优先；未设置时复用后端统一的自动发现结果，确保实时展示
+        # 与离线分析/双摄分析使用同一份默认球模型。
+        ball_path = os.getenv("PICKLEBALL_BALL_MODEL_PATH") or get_settings().ball_model_path
         self.workers: dict[str, _CameraWorker] = {}
         for slot in ("cam_1", "cam_2"):
             config = slots.get(slot)

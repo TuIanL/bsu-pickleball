@@ -292,8 +292,8 @@ def get_settings() -> Settings:
     ball_model_path = os.getenv("PICKLEBALL_BALL_MODEL_PATH") or _first_existing_path(
         model_dir,
         [
-            "ball/tennis-ball.pt",
             "ball/pickleball-ball.pt",
+            "ball/tennis-ball.pt",
             "ball/best.pt",
             "pickleball-multitarget/model.pt",
         ],

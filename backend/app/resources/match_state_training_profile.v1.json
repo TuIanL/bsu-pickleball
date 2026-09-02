@@ -1,0 +1,173 @@
+{
+  "schema_version": "match_state_training_profile.v1",
+  "profile_id": "quality-first-match-state-experiments-v1",
+  "task": {
+    "name": "match_state_temporal_segmentation",
+    "stage": "stage_1_binary",
+    "classes": ["rally_active", "non_play"],
+    "unknown_class": "unknown",
+    "positive_definition": "只包含经过人工复核的有效回合，不包含发球前准备。",
+    "negative_definition": "有效视频中除有效回合外的全部可用状态，包括准备、回合后、捡球、交谈、等待和暂停。"
+  },
+  "data_contract": {
+    "dataset_manifest_schema": "match_state_dataset_manifest.v1",
+    "rgb_clip_manifest_schema": "match_state_rgb_clip_manifest.v1",
+    "rgb_clip_schema": "match_state_rgb_clip.v1",
+    "group_split_schema": "match_state_group_split.v1",
+    "structured_cache_schema": "match_state_structured_feature_cache.v1",
+    "group_unit": "capture_take_id",
+    "required_sync_status": "passed",
+    "required_quality_labels": ["high_confidence", "uncertain", "excluded"],
+    "required_artifacts": [
+      "dataset_manifest",
+      "rgb_clip_manifest",
+      "group_split",
+      "dual_sync_report",
+      "label_profile",
+      "remote_execution_profile",
+      "structured_feature_profile",
+      "training_profile"
+    ]
+  },
+  "temporal_input": {
+    "clip_duration_ms": 4000,
+    "sampling_fps": 12.0,
+    "frame_count": 48,
+    "encoder_frame_count": 16,
+    "encoder_sampling": "uniform_subsample_from_48_frames",
+    "timeline_label_step_ms": 250,
+    "center_label_for_sampling": true,
+    "hard_loss_quality": "high_confidence",
+    "ignore_quality": ["uncertain", "excluded"],
+    "padding_label": "padding",
+    "padding_loss_weight": 0.0,
+    "boundary_uncertainty_ms": 250
+  },
+  "experiment_matrix": [
+    {
+      "id": "rgb_only_v1",
+      "description": "源视频 RGB 时序输入，不读取现有语义预测。",
+      "modalities": ["rgb"],
+      "requires_structured_cache": false
+    },
+    {
+      "id": "structured_pose_ball_v1",
+      "description": "四名球员骨架、球检测/轨迹和质量 mask。",
+      "modalities": ["pose", "ball", "quality"],
+      "requires_structured_cache": true
+    },
+    {
+      "id": "rgb_structured_fusion_v1",
+      "description": "RGB 与骨架/球路的晚融合时序模型。",
+      "modalities": ["rgb", "pose", "ball", "quality"],
+      "requires_structured_cache": true
+    }
+  ],
+  "model": {
+    "family": "temporal_late_fusion",
+    "rgb_encoder": {
+      "name": "r3d_18",
+      "pretrained": true,
+      "input_size": [224, 224],
+      "input_frame_count": 16,
+      "freeze_backbone_initial_epochs": 3
+    },
+    "structured_encoder": {
+      "pose_keypoints": 26,
+      "player_slots": 4,
+      "features_per_player": 6,
+      "ball_features": 8,
+      "quality_features": 8,
+      "hidden_dim": 128
+    },
+    "temporal_head": {
+      "name": "dilated_tcn",
+      "hidden_dim": 256,
+      "layers": 4,
+      "dropout": 0.2
+    },
+    "output": {
+      "frame_labels": ["rally_active", "non_play", "unknown"],
+      "probability_key": "state_probabilities",
+      "unknown_policy": "quality_gate_then_unknown"
+    }
+  },
+  "training": {
+    "seed": 20260720,
+    "deterministic": true,
+    "epochs": 30,
+    "batch_size": 8,
+    "gradient_accumulation_steps": 2,
+    "num_workers": 8,
+    "mixed_precision": "bf16_if_supported",
+    "optimizer": "adamw",
+    "learning_rate": 0.0001,
+    "weight_decay": 0.0001,
+    "gradient_clip_norm": 1.0,
+    "early_stopping": {
+      "monitor": "validation_macro_f1",
+      "patience": 7,
+      "mode": "max"
+    },
+    "class_weight": "inverse_sqrt_high_confidence_center_counts",
+    "loss": {
+      "classification": "masked_cross_entropy",
+      "boundary": "disabled_until_stage_2",
+      "uncertain_windows_are_masked": true
+    }
+  },
+  "split": {
+    "primary": "5_train_1_validation_1_test_by_capture_take",
+    "robustness": "leave_one_take_out",
+    "same_split_for_all_experiments": true,
+    "allow_clip_overlap_across_splits": false
+  },
+  "evaluation": {
+    "required_metrics": [
+      "macro_f1",
+      "rally_active_precision",
+      "rally_active_recall",
+      "non_play_precision",
+      "non_play_recall",
+      "unknown_rate",
+      "boundary_start_mae_ms",
+      "boundary_end_mae_ms"
+    ],
+    "report_per_camera": true,
+    "report_per_take": true,
+    "report_leave_one_take_out": true,
+    "boundary_tolerance_ms": [250, 500, 1000]
+  },
+  "inference": {
+    "minimum_confidence": 0.65,
+    "minimum_coverage": 0.75,
+    "minimum_duration_ms": 500,
+    "hysteresis": 0.1,
+    "unknown_on_insufficient_evidence": true
+  },
+  "runtime": {
+    "heavy_compute_stage": "remote_required",
+    "local_cli_operations": ["validate", "package"],
+    "device_policy": "cuda_preferred",
+    "allow_cpu_training": false,
+    "do_not_materialize_local_video_clips": true
+  },
+  "model_package": {
+    "schema_version": "match_state_model_package.v1",
+    "required_files": [
+      "model.pt",
+      "model_package.json",
+      "training_profile.json",
+      "evaluation_report.json"
+    ],
+    "required_provenance": [
+      "dataset_manifest_sha256",
+      "rgb_clip_manifest_sha256",
+      "group_split_sha256",
+      "structured_feature_profile_sha256",
+      "code_revision",
+      "config_sha256"
+    ],
+    "unavailable_behavior": "return unavailable or insufficient_evidence and preserve existing analysis"
+  }
+}

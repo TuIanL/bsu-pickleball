@@ -17,15 +17,12 @@ import type {
   SyncRecordingSession,
   VideoMetadata,
   CameraSlotRole,
-  FieldSession,
 } from "../types/report";
 import {
   listVideosCatalog,
   listRecordings,
   listSyncRecordings,
   listAnalysisJobs,
-  listFieldSessions,
-  getFieldSession,
   getSyncRecording,
   getRecording,
   getVideoStreamUrl,
@@ -332,16 +329,12 @@ async function safeList<T>(fetch: () => Promise<T[]>): Promise<T[]> {
 export async function buildLibraryItems(
   options: BuildLibraryOptions = {},
 ): Promise<LibraryItemViewModel[]> {
-  const [jobs, videos, recordings, syncRecordings, fieldSessions] = await Promise.all([
+  const [jobs, videos, recordings, syncRecordings] = await Promise.all([
     options.jobs ?? safeList(listAnalysisJobs),
     options.videos ?? safeList(listVideosCatalog),
     options.recordings ?? safeList(listRecordings),
     options.syncRecordings ?? safeList(listSyncRecordings),
-    safeList(listFieldSessions),
   ]);
-  // P2A：一次批量 join FieldSession（建立 Map），禁止每张卡 N+1 拉取
-  const fieldSessionById = new Map<string, FieldSession>();
-  for (const fs of fieldSessions) fieldSessionById.set(fs.id, fs);
 
   const items: LibraryItemViewModel[] = [];
 
@@ -356,7 +349,6 @@ export async function buildLibraryItems(
     const selection = selectLibraryAnalysisState(multiviewParents);
     const historyCount = multiviewParents.length;
     const { mediaState, requiredAction } = mapMediaAndRequired("sync_recording", sync);
-    const fs = sync.field_session_id ? fieldSessionById.get(sync.field_session_id) : undefined;
     items.push({
       ref: { kind: "sync_recording", sourceId: sync.session_id },
       title: semanticTitle({
@@ -409,7 +401,6 @@ export async function buildLibraryItems(
     const titleJob = newestFirst(publicOwned)[0];
     const selection = selectLibraryAnalysisState(owned);
     const { mediaState, requiredAction } = mapMediaAndRequired("recording", rec);
-    const fs = rec.field_session_id ? fieldSessionById.get(rec.field_session_id) : undefined;
     items.push({
       ref: { kind: "recording", sourceId: rec.session_id },
       title: semanticTitle({
@@ -506,7 +497,6 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
     const titleJob = newestFirst(multiviewParents)[0] ?? newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
     const selection = selectLibraryAnalysisState(multiviewParents);
     const { mediaState, requiredAction } = mapMediaAndRequired("sync_recording", sync);
-    const fs = sync.field_session_id ? await getFieldSessionSafe(sync.field_session_id) : undefined;
     return {
       ref,
       title: semanticTitle({
@@ -557,7 +547,6 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
     const titleJob = newestFirst(publicOwned)[0];
     const selection = selectLibraryAnalysisState(owned);
     const { mediaState, requiredAction } = mapMediaAndRequired("recording", rec);
-    const fs = rec.field_session_id ? await getFieldSessionSafe(rec.field_session_id) : undefined;
     return {
       ref,
       title: semanticTitle({
@@ -637,14 +626,6 @@ async function getSyncRecordingSafe(sessionId: string): Promise<SyncRecordingSes
 async function getRecordingSafe(sessionId: string): Promise<RecordingSession | null> {
   try {
     return await getRecording(sessionId);
-  } catch {
-    return null;
-  }
-}
-
-async function getFieldSessionSafe(id: string): Promise<FieldSession | null> {
-  try {
-    return await getFieldSession(id);
   } catch {
     return null;
   }

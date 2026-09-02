@@ -109,6 +109,7 @@ class ViewBinding:
 
     view_player_id: str | None = None
     local_identity_epoch: int = 0
+    tracklet_lineage_id: str | None = None
     track_id: int | None = None
     last_seen_take_timestamp_ms: float | None = None
     last_source_frame_index: int | None = None
@@ -680,6 +681,7 @@ class GlobalPlayerRegistry:
         now_take_ms: float,
         weak_after_ms: float = 300.0,
         lost_after_ms: float = 1000.0,
+        allow_slot_reassignment: bool = False,
     ) -> bool:
         """设置某 view 的绑定；槽位唯一性冲突时返回 False（不覆盖）。
 
@@ -698,10 +700,20 @@ class GlobalPlayerRegistry:
         if binding.view_player_id:
             incumbent = self.reference_slot_occupant(view_id, binding.view_player_id)
             if incumbent is not None and incumbent != global_id:
-                key = (view_id, binding.view_player_id)
-                self.reference_slot_conflicts[key] = self.reference_slot_conflicts.get(key, 0) + 1
-                self.last_reference_slot_conflict = (view_id, binding.view_player_id, incumbent, global_id)
-                return False
+                if not allow_slot_reassignment:
+                    key = (view_id, binding.view_player_id)
+                    self.reference_slot_conflicts[key] = self.reference_slot_conflicts.get(key, 0) + 1
+                    self.last_reference_slot_conflict = (view_id, binding.view_player_id, incumbent, global_id)
+                    return False
+                incumbent_state = self.players.get(incumbent)
+                if incumbent_state is None:
+                    return False
+                incumbent_binding = incumbent_state.view_bindings.get(view_id)
+                if incumbent_binding is None or incumbent_binding.view_player_id != binding.view_player_id:
+                    return False
+                # One in-memory transaction: clear the old occupant and install
+                # the new binding without exposing an intermediate duplicate.
+                incumbent_state.view_bindings[view_id] = replace(incumbent_binding, view_player_id=None)
         binding.update_visibility(now_take_ms, weak_after_ms, lost_after_ms)
         state.view_bindings[view_id] = binding
         return True

@@ -12,7 +12,9 @@ from app.database import Base
 
 
 class EditOperationType(enum.StrEnum):
+    create = "create"
     boundary_correction = "boundary_correction"
+    ordinal_renumber = "ordinal_renumber"
     rename = "rename"
     split = "split"
     merge = "merge"

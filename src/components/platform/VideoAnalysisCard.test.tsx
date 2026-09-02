@@ -14,6 +14,7 @@ import type {
   VideoOverlayLabel,
   FusedPlayerOverlayArtifact,
 } from "../../types/report";
+import type { DisplayViewGeometry } from "../../types/videoCourtOverlay";
 
 const match: MatchSummary = {
   title: "Test Match",
@@ -240,6 +241,134 @@ describe("VideoAnalysisCard court HUD collapse", () => {
     // 再次点击收起
     fireEvent.click(card.getByLabelText("收起球场地图"));
     expect(card.queryByTestId("court-minimap-hud")).toBeNull();
+  });
+});
+
+describe("VideoAnalysisCard projected court layers", () => {
+  const geometry: DisplayViewGeometry = {
+    viewId: "cam_1",
+    videoId: "video-1",
+    calibrationId: "calibration-1",
+    orientation: "identity",
+    sourceSize: { width: 1920, height: 1080 },
+    calibrationImageSize: { width: 1920, height: 1080 },
+    netImageSize: { width: 1920, height: 1080 },
+    inverseHomography: [
+      [40, 0, 100],
+      [0, 20, 100],
+      [0, 0, 1],
+    ],
+    calibrationQuality: { reprojection_error: 1.2, status: "ok" },
+    netAnnotations: {
+      left: { x: 300, y: 500 },
+      center: { x: 960, y: 480 },
+      right: { x: 1620, y: 500 },
+    },
+    courtState: "available",
+    courtDetail: "场地标定可用",
+    netState: "available",
+    netDetail: "球网标定可用",
+  };
+
+  it("renders court and net in the same video SVG with independent toggles", () => {
+    const { container } = render(
+      <VideoAnalysisCard
+        displayViewGeometry={geometry}
+        displayViewId="cam_1"
+        labels={emptyLabels}
+        match={match}
+        players={emptyPlayers}
+        timeline={emptyTimeline}
+        videoSrc="/test.mp4"
+      />,
+    );
+    const card = within(container);
+    const svg = card.getByTestId("video-court-net-overlay").closest("svg");
+
+    expect(card.getByTestId("video-court-boundary")).toBeTruthy();
+    expect(card.getByTestId("video-net-overlay")).toBeTruthy();
+    expect(svg).toBeTruthy();
+    expect(svg?.getAttribute("viewBox")).toBe("0 0 1920 1080");
+
+    fireEvent.click(card.getByLabelText("隐藏球场投影"));
+    expect(card.queryByTestId("video-court-boundary")).toBeNull();
+    expect(card.getByTestId("video-net-overlay")).toBeTruthy();
+
+    fireEvent.click(card.getByLabelText("隐藏球网投影"));
+    expect(card.queryByTestId("video-net-overlay")).toBeNull();
+  });
+
+  it("disables only the unavailable geometry layer", () => {
+    const { container } = render(
+      <VideoAnalysisCard
+        displayViewGeometry={{ ...geometry, netState: "unavailable", netDetail: "球网三点缺失", netAnnotations: {} }}
+        displayViewId="cam_1"
+        labels={emptyLabels}
+        match={match}
+        players={emptyPlayers}
+        timeline={emptyTimeline}
+        videoSrc="/test.mp4"
+      />,
+    );
+    const card = within(container);
+
+    expect(card.getByTestId("video-court-boundary")).toBeTruthy();
+    expect(card.getByLabelText("球网投影不可用").hasAttribute("disabled")).toBe(true);
+    expect(card.getByLabelText("隐藏球场投影").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("does not reuse the old geometry before the target view seek completes", () => {
+    const viewB: DisplayViewGeometry = {
+      ...geometry,
+      viewId: "cam_2",
+      videoId: "video-2",
+      inverseHomography: [
+        [40, 0, 500],
+        [0, 20, 100],
+        [0, 0, 1],
+      ],
+      netAnnotations: {
+        left: { x: 700, y: 500 },
+        center: { x: 1360, y: 480 },
+        right: { x: 1820, y: 500 },
+      },
+    };
+
+    function Harness() {
+      const [view, setView] = useState("cam_1");
+      return (
+        <VideoAnalysisCard
+          displayViewGeometry={view === "cam_1" ? geometry : viewB}
+          displayViewId={view}
+          displayViewOptions={[
+            { id: "cam_1", label: "A 机位", available: true },
+            { id: "cam_2", label: "B 机位", available: true },
+          ]}
+          labels={emptyLabels}
+          match={match}
+          onDisplayViewChange={setView}
+          players={emptyPlayers}
+          timeline={emptyTimeline}
+          videoSrc="/test.mp4"
+        />
+      );
+    }
+
+    const { container } = render(<Harness />);
+    const card = within(container);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(card.getByTestId("video-court-boundary").getAttribute("points")).toContain("100,100");
+
+    fireEvent.click(card.getByRole("button", { name: "B 机位" }));
+    expect(card.queryByTestId("video-court-boundary")).toBeNull();
+
+    fireEvent.loadedMetadata(video);
+    expect(card.getByTestId("video-court-boundary").getAttribute("points")).toContain("500,100");
+
+    fireEvent.click(card.getByRole("button", { name: "A 机位" }));
+    expect(card.queryByTestId("video-court-boundary")).toBeNull();
+    fireEvent.loadedMetadata(video);
+    expect(card.getByTestId("video-court-boundary").getAttribute("points")).toContain("100,100");
   });
 });
 

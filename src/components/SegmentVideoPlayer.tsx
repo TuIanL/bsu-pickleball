@@ -3,6 +3,8 @@ import { Play, Pause, SkipForward, SkipBack } from "lucide-react";
 
 export interface SegmentVideoPlayerHandle {
   seekToTakeTime(timestampMs: number): void;
+  syncToTakeTime(timestampMs: number, toleranceMs?: number): void;
+  getCurrentTimeMs(): number;
   play(): void;
   pause(): void;
   playSegment(startMs: number, endMs: number): void;
@@ -21,7 +23,11 @@ interface SegmentVideoPlayerProps {
   onTimeUpdate?: (takeTimeMs: number) => void;
   onDurationReady?: (durationMs: number) => void;
   onSegmentPlaybackEnd?: () => void;
+  onPlaybackToggle?: (currentTimeMs: number, playing: boolean) => void;
+  onSeekRequest?: (takeTimeMs: number) => void;
+  onFrameStepRequest?: (direction: "forward" | "backward", currentTimeMs: number, stepMs?: number) => void;
   syncQuality?: string;
+  preload?: "none" | "metadata" | "auto";
 }
 
 export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVideoPlayerProps>(
@@ -35,7 +41,11 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
       onTimeUpdate,
       onDurationReady,
       onSegmentPlaybackEnd,
+      onPlaybackToggle,
+      onSeekRequest,
+      onFrameStepRequest,
       syncQuality,
+      preload = "auto",
     },
     ref,
   ) {
@@ -99,6 +109,7 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
       video.addEventListener("play", onPlay);
       video.addEventListener("pause", onPause);
       video.addEventListener("ended", onEnded);
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) onLoaded();
 
       return () => {
         video.removeEventListener("loadedmetadata", onLoaded);
@@ -112,6 +123,18 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
     useImperativeHandle(ref, () => ({
       seekToTakeTime(ms: number) {
         seekVideo(ms);
+      },
+      syncToTakeTime(ms: number, toleranceMs = 12) {
+        const video = videoRef.current;
+        if (!video) return;
+        const maxMs = duration > 0 ? duration : Number.POSITIVE_INFINITY;
+        const nextMs = Math.max(0, Math.min(ms, maxMs));
+        if (Math.abs(video.currentTime * 1000 - nextMs) <= toleranceMs) return;
+        video.currentTime = nextMs / 1000;
+        setCurrentTime(nextMs);
+      },
+      getCurrentTimeMs() {
+        return (videoRef.current?.currentTime ?? currentTime / 1000) * 1000;
       },
       play() {
         videoRef.current?.play();
@@ -137,26 +160,48 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
         const video = videoRef.current;
         if (video) video.currentTime -= 1 / fps;
       },
-    }), [fps, duration, seekVideo]);
+    }), [currentTime, duration, fps, seekVideo]);
+
+    const getLiveCurrentTimeMs = () => (videoRef.current?.currentTime ?? currentTime / 1000) * 1000;
+
+    const handleFrameStep = (direction: "forward" | "backward") => {
+      const liveTimeMs = getLiveCurrentTimeMs();
+      if (onFrameStepRequest) {
+        onFrameStepRequest(direction, liveTimeMs);
+        return;
+      }
+      const video = videoRef.current;
+      if (video) video.currentTime += direction === "forward" ? 1 / fps : -(1 / fps);
+    };
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        const video = videoRef.current;
-        if (video) video.currentTime -= e.shiftKey ? 1 : (1 / fps);
+        if (onFrameStepRequest) {
+          onFrameStepRequest("backward", getLiveCurrentTimeMs(), e.shiftKey ? 1000 : (1000 / fps));
+        } else {
+          const video = videoRef.current;
+          if (video) video.currentTime -= e.shiftKey ? 1 : (1 / fps);
+        }
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        const video = videoRef.current;
-        if (video) video.currentTime += e.shiftKey ? 1 : (1 / fps);
+        if (onFrameStepRequest) {
+          onFrameStepRequest("forward", getLiveCurrentTimeMs(), e.shiftKey ? 1000 : (1000 / fps));
+        } else {
+          const video = videoRef.current;
+          if (video) video.currentTime += e.shiftKey ? 1 : (1 / fps);
+        }
       } else if (e.key === " ") {
         e.preventDefault();
         const video = videoRef.current;
         if (video) {
-          if (video.paused) void video.play();
+          if (onPlaybackToggle) {
+            onPlaybackToggle(getLiveCurrentTimeMs(), !video.paused);
+          } else if (video.paused) void video.play();
           else video.pause();
         }
       }
-    }, [fps]);
+    }, [fps, onFrameStepRequest, onPlaybackToggle]);
 
     const formatTime = (ms: number) => {
       const s = Math.floor(ms / 1000);
@@ -166,7 +211,9 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
     };
 
     const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      seekVideo(Number(e.target.value));
+      const nextMs = Number(e.target.value);
+      if (onSeekRequest) onSeekRequest(nextMs);
+      else seekVideo(nextMs);
     };
 
     return (
@@ -176,7 +223,7 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
           src={videoUrl}
           className="w-full aspect-video bg-black"
           controls={false}
-          preload="auto"
+          preload={preload}
         />
         <div className="bg-[#1a1a2e] px-3 pt-2">
           <input
@@ -196,22 +243,31 @@ export const SegmentVideoPlayer = forwardRef<SegmentVideoPlayerHandle, SegmentVi
           <div className="flex items-center gap-2">
             <button
               className="p-1 hover:bg-white/10 rounded"
-              onClick={() => videoRef.current && (videoRef.current.currentTime -= 1 / fps)}
+              onClick={() => handleFrameStep("backward")}
               title="后退一帧"
+              type="button"
             >
               <SkipBack size={14} />
             </button>
             <button
               className="p-1 hover:bg-white/10 rounded"
-              onClick={() => videoRef.current && (videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause())}
+              onClick={() => {
+                const video = videoRef.current;
+                if (!video) return;
+                if (onPlaybackToggle) onPlaybackToggle(getLiveCurrentTimeMs(), !video.paused);
+                else if (video.paused) void video.play();
+                else video.pause();
+              }}
               title="播放/暂停"
+              type="button"
             >
               {playing ? <Pause size={14} /> : <Play size={14} />}
             </button>
             <button
               className="p-1 hover:bg-white/10 rounded"
-              onClick={() => videoRef.current && (videoRef.current.currentTime += 1 / fps)}
+              onClick={() => handleFrameStep("forward")}
               title="前进一帧"
+              type="button"
             >
               <SkipForward size={14} />
             </button>

@@ -85,6 +85,12 @@ class FusedPlayerOverlayPlayer(BaseModel):
     # 展示层拒绝/降级原因（不改变 evidence provenance）
     display_reason: str | None = None
     projection_rejection_reason: str | None = None
+    bbox_footpoint_residual_px: float | None = Field(default=None, ge=0)
+    presentation_geometry_reused: bool = False
+    previous_display_state: str | None = None
+    display_transition_count: int = Field(default=0, ge=0)
+    display_state_sequence: list[str] = Field(default_factory=list)
+    display_window_start_ms: float | None = Field(default=None, ge=0)
 
     @field_validator("bbox")
     @classmethod

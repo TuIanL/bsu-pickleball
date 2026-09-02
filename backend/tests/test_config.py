@@ -227,6 +227,25 @@ def test_ball_model_path_auto_discovers_local_ball_model(monkeypatch, tmp_path):
         config.get_settings.cache_clear()
 
 
+def test_ball_model_path_prefers_current_pickleball_model(monkeypatch, tmp_path):
+    model_dir = tmp_path / "models"
+    ball_dir = model_dir / "ball"
+    ball_dir.mkdir(parents=True)
+    current_model_path = ball_dir / "pickleball-ball.pt"
+    legacy_model_path = ball_dir / "tennis-ball.pt"
+    current_model_path.write_text("current weights", encoding="utf-8")
+    legacy_model_path.write_text("legacy weights", encoding="utf-8")
+    monkeypatch.setenv("PICKLEBALL_MODEL_DIR", str(model_dir))
+    monkeypatch.delenv("PICKLEBALL_BALL_MODEL_PATH", raising=False)
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+        assert settings.ball_model_path == str(current_model_path)
+    finally:
+        config.get_settings.cache_clear()
+
+
 def test_court_line_model_path_auto_discovers_local_model(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     court_model_path = model_dir / "court-line" / "best.pt"

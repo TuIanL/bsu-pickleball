@@ -396,37 +396,37 @@ def test_builder_stable_output_and_scale_profile_no_feedback():
     ticks = (
         F0TickSnapshot(
             canonical_tick=0, canonical_timestamp_ms=1000.0, reference_frame_index=10,
-            observations=(("global_player_1", "cam_1", state("base", 0.8, (100.0, 200.0, 150.0, 300.0), 1000.0)),),
+                observations=(("global_player_1", "cam_1", state("base", 0.8, (75.0, 100.0, 125.0, 200.0), 1000.0)),),
             global_positions=(("global_player_1", (10.0, 20.0)),),
             predictions=(("global_player_1", (10.0, 20.0)),),
         ),
         F0TickSnapshot(
             canonical_tick=1, canonical_timestamp_ms=1033.0, reference_frame_index=11,
-            observations=(("global_player_1", "cam_2", state("base", 0.8, (100.0, 200.0, 150.0, 300.0), 1033.0)),),
+                observations=(("global_player_1", "cam_2", state("base", 0.8, (75.0, 100.0, 125.0, 200.0), 1033.0)),),
             global_positions=(("global_player_1", (10.0, 20.0)),),
             predictions=(("global_player_1", (10.0, 20.0)),),
         ),
         F0TickSnapshot(
             canonical_tick=2, canonical_timestamp_ms=1066.0, reference_frame_index=12,
-            observations=(("global_player_1", "cam_2", state("base", 0.8, (100.0, 200.0, 150.0, 300.0), 1066.0)),),
+                observations=(("global_player_1", "cam_2", state("base", 0.8, (75.0, 100.0, 125.0, 200.0), 1066.0)),),
             global_positions=(("global_player_1", (10.0, 20.0)),),
             predictions=(("global_player_1", (10.0, 20.0)),),
         ),
         F0TickSnapshot(
             canonical_tick=3, canonical_timestamp_ms=1099.0, reference_frame_index=13,
-            observations=(("global_player_1", "cam_2", state("base", 0.8, (100.0, 200.0, 150.0, 300.0), 1099.0)),),
+                observations=(("global_player_1", "cam_2", state("base", 0.8, (75.0, 100.0, 125.0, 200.0), 1099.0)),),
             global_positions=(("global_player_1", (10.0, 20.0)),),
             predictions=(("global_player_1", (10.0, 20.0)),),
         ),
         F0TickSnapshot(
             canonical_tick=4, canonical_timestamp_ms=1132.0, reference_frame_index=14,
-            observations=(("global_player_1", "cam_2", state("base", 0.8, (100.0, 200.0, 150.0, 300.0), 1132.0)),),
+                observations=(("global_player_1", "cam_2", state("base", 0.8, (75.0, 100.0, 125.0, 200.0), 1132.0)),),
             global_positions=(("global_player_1", (10.0, 20.0)),),
             predictions=(("global_player_1", (10.0, 20.0)),),
         ),
         F0TickSnapshot(
             canonical_tick=5, canonical_timestamp_ms=1165.0, reference_frame_index=15,
-            observations=(("global_player_1", "cam_1", state("base", 0.8, (100.0, 200.0, 150.0, 300.0), 1165.0)),),
+                observations=(("global_player_1", "cam_1", state("base", 0.8, (75.0, 100.0, 125.0, 200.0), 1165.0)),),
             global_positions=(("global_player_1", (10.0, 20.0)),),
             predictions=(("global_player_1", (10.0, 20.0)),),
         ),

@@ -24,8 +24,42 @@ import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles } from "../utils/analysisHelpers";
 import { resolveDisplayViewId, withDisplayViewQuery } from "../utils/multiviewDisplay";
 import { getReportCapability, type ReportCapability } from "../services/reportCapability";
+import { useDisplayViewGeometry, type DisplayViewGeometryInput } from "../hooks/useDisplayViewGeometry";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
+
+interface EffectiveDisplayViewInput {
+  urlDisplayView: string | null;
+  selectedDisplayViewId: string;
+  displayViewIds: string[];
+  displayViewOptions: { id: string; available: boolean }[];
+  referenceViewId: string;
+  overlayLoadState: OverlayLoadState;
+}
+
+/**
+ * 解析「实际生效」的展示机位（渲染期纯函数，替代原先两个 setState-in-effect）：
+ * 1) URL 中存在合法视图时以其为准（深链/后退语义与原 effect 一致），否则用本地选择；
+ * 2) 非 reference 且不可用、且 overlay 已结束加载 → 回退 reference（保留原 effect 的等待加载语义）。
+ */
+function resolveEffectiveDisplayViewId({
+  urlDisplayView,
+  selectedDisplayViewId,
+  displayViewIds,
+  displayViewOptions,
+  referenceViewId,
+  overlayLoadState,
+}: EffectiveDisplayViewInput): string {
+  const urlSelection = urlDisplayView && displayViewIds.includes(urlDisplayView) ? urlDisplayView : selectedDisplayViewId;
+  const fromSelection = resolveDisplayViewId(urlSelection, displayViewIds, referenceViewId);
+  if (fromSelection !== referenceViewId) {
+    const option = displayViewOptions.find((item) => item.id === fromSelection);
+    if (!option?.available && overlayLoadState !== "loading") {
+      return referenceViewId;
+    }
+  }
+  return fromSelection;
+}
 
 function useVisualAnalysisReport(jobId?: string) {
   const [loadedResult, setLoadedResult] = useState<{
@@ -479,18 +513,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     ? displayViewInputs.map((item) => item.cameraSlot)
     : job?.analysisKind === "multiview" ? [referenceViewId] : [];
   const urlDisplayView = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("displayView") : null;
-  const [displayViewId, setDisplayViewId] = useState<string>(resolveDisplayViewId(urlDisplayView, displayViewIds, referenceViewId));
-  useEffect(() => {
-    const next = resolveDisplayViewId(urlDisplayView, displayViewIds, referenceViewId);
-    setDisplayViewId((current) => current === next ? current : next);
-  }, [job?.id, referenceViewId, urlDisplayView, displayViewIds.join(",")]);
-  const displayViewInput = displayViewInputs.find((item) => item.cameraSlot === displayViewId);
-  const selectedVideoId = displayViewInput?.videoId ?? (displayViewId === referenceViewId ? job?.videoId : undefined);
-  const trajectoryRenderViewId = displayViewId || (
-    reconstructedBallTrajectory?.render_view_id
-      ?? reconstructedBallTrajectory?.reference_view_id
-      ?? (job?.analysisKind === "multiview" ? referenceViewId : undefined)
-  );
+  // 展示机位选项（纯派生，无副作用；先于 displayViewId 定义以避免 TDZ）
   const displayViewOptions = displayViewIds.map((viewId) => {
     const input = displayViewInputs.find((item) => item.cameraSlot === viewId);
     const hasVideo = Boolean(input?.videoId ?? (viewId === referenceViewId ? job?.videoId : undefined));
@@ -512,22 +535,38 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
             : undefined,
     };
   });
+  // 用户/URL 选定的展示机位（原始选择，未经可用性回退；仅 updateDisplayView 写入）
+  const [selectedDisplayViewId, setSelectedDisplayViewId] = useState<string>(
+    resolveDisplayViewId(urlDisplayView, displayViewIds, referenceViewId),
+  );
+  // 实际生效的展示机位（渲染期派生，替代原先两个 setState-in-effect）：
+  // 1) URL 中存在合法视图时以其为准（深链/后退语义与原 effect 一致），否则用本地选择；
+  // 2) 非 reference 且不可用、且 overlay 已结束加载 → 回退 reference（原 effect2 的等待加载语义保留）。
+  // 计算成本低（小数组遍历），直接逐渲染重算，无需 memo。
+  const displayViewId = resolveEffectiveDisplayViewId({
+    urlDisplayView,
+    selectedDisplayViewId,
+    displayViewIds,
+    displayViewOptions,
+    referenceViewId,
+    overlayLoadState: fusedPlayerOverlayLoadState,
+  });
+  const displayViewInput = displayViewInputs.find((item) => item.cameraSlot === displayViewId);
+  const selectedVideoId = displayViewInput?.videoId ?? (displayViewId === referenceViewId ? job?.videoId : undefined);
+  const trajectoryRenderViewId = displayViewId || (
+    reconstructedBallTrajectory?.render_view_id
+      ?? reconstructedBallTrajectory?.reference_view_id
+      ?? (job?.analysisKind === "multiview" ? referenceViewId : undefined)
+  );
   const updateDisplayView = (nextViewId: string) => {
     if (!displayViewIds.includes(nextViewId)) return;
     if (!displayViewOptions.find((option) => option.id === nextViewId)?.available) return;
-    setDisplayViewId(nextViewId);
+    setSelectedDisplayViewId(nextViewId);
     if (typeof window !== "undefined") {
       const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       onNavigate(withDisplayViewQuery(currentPath, nextViewId) as AppPath, { replace: true });
     }
   };
-  useEffect(() => {
-    if (fusedPlayerOverlayLoadState === "loading" || displayViewId === referenceViewId) return;
-    const selectedOption = displayViewOptions.find((option) => option.id === displayViewId);
-    if (!selectedOption?.available) {
-      updateDisplayView(referenceViewId);
-    }
-  }, [displayViewId, displayViewOptions, fusedPlayerOverlayLoadState, referenceViewId]);
   const unavailableDisplayView = displayViewOptions.find((option) => option.id !== referenceViewId && !option.available);
   const displayViewNotice = displayViewId !== referenceViewId
     ? displayViewOptions.find((option) => option.id === displayViewId)?.reason
@@ -541,6 +580,29 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     rate: displayViewInput?.sourceTimestampRate ?? 1,
   };
   const displayCourtOrientation = displayViewInput?.courtOrientation ?? null;
+  const geometryInputs: DisplayViewGeometryInput[] = job
+    ? displayViewInputs.length
+      ? displayViewInputs.map((input) => ({
+          viewId: input.cameraSlot,
+          videoId: input.videoId,
+          calibrationId: input.calibrationId,
+          imageWidth: input.imageWidth,
+          imageHeight: input.imageHeight,
+          courtOrientation: input.courtOrientation,
+        }))
+      : [{
+          viewId: referenceViewId,
+          videoId: job.videoId,
+          calibrationId: job.calibrationId,
+          courtOrientation: displayCourtOrientation,
+        }]
+    : [];
+  const geometryByViewId = useDisplayViewGeometry({
+    captureTakeId: job?.metadata.capture_take_id,
+    sceneCalibrationRevision: job?.sceneCalibrationRevision,
+    inputs: geometryInputs,
+  });
+  const displayViewGeometry = geometryByViewId[displayViewId] ?? null;
 
   if (jobId && (job === undefined || report === undefined)) {
     if (embedded) {
@@ -724,6 +786,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               displayViewNotice={displayViewNotice}
               displayTimeMapping={displayTimeMapping}
               displayCourtOrientation={displayCourtOrientation}
+              displayViewGeometry={displayViewGeometry}
               // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
               videoSrc={displayVideoSrc ?? undefined}
               fallbackVideoSrc={displayFallbackVideoSrc}
@@ -860,6 +923,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
             displayViewNotice={displayViewNotice}
             displayTimeMapping={displayTimeMapping}
             displayCourtOrientation={displayCourtOrientation}
+            displayViewGeometry={displayViewGeometry}
             // 优先使用 H.264 源视频（浏览器原生支持）；overlay 视频（mpeg4 编码）作为增强层
             videoSrc={displayVideoSrc ?? undefined}
             fallbackVideoSrc={displayFallbackVideoSrc}

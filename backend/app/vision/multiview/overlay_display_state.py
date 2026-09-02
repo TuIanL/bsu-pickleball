@@ -61,6 +61,12 @@ class DisplayPlan:
     bbox_age_ms: float | None = None
     # 该 tick 是否仍渲染（HIDDEN 时为 False）
     render: bool = True
+    previous_state: DisplayState | None = None
+    transition_count: int = 0
+    state_sequence: tuple[DisplayState, ...] = ()
+    window_start_ms: float | None = None
+    transition_reason: str | None = None
+    presentation_geometry_reused: bool = False
 
 
 @dataclass
@@ -83,6 +89,11 @@ class DisplayContext:
     # bbox freshness（单一权威，来自 last_real_observed_ms）
     bbox_age_ms: float | None = None
     bbox_stale: bool = False
+    # projected candidate was rejected by collision/continuity/footpoint gates
+    projection_rejection_reason: str | None = None
+    # a held presentation bbox was independently checked against the current
+    # projected footpoint and trusted real bboxes
+    held_presentation_safe: bool = True
 
 
 @dataclass
@@ -95,6 +106,11 @@ class _PlayerDisplayState:
     last_real_bbox_ts: float | None = None   # hysteresis_grace_ms 计时权威（真实观测）
     last_valid_box_ts: float | None = None   # projected_box_hold_ms 计时权威（最后有效演示 bbox 几何）
     last_state_transition_ts: float | None = None  # 诊断（跨状态转换时间戳）
+    invalid_projection_until_ts: float | None = None
+    topology_window_start_ts: float | None = None
+    topology_transition_count: int = 0
+    topology_state_sequence: list[DisplayState] = field(default_factory=list)
+    last_transition_reason: str | None = None
 
 
 class OverlayDisplayStateMachine:
@@ -118,12 +134,14 @@ class OverlayDisplayStateMachine:
         synthetic_upgrade_confirm_ticks: int = 3,
         confirm_max_gap_ms: float = 250.0,
         predicted_ttl_ms: float = 500.0,
+        topology_debounce_ms: float = 250.0,
     ) -> None:
         self.hysteresis_grace_ms = hysteresis_grace_ms
         self.projected_box_hold_ms = projected_box_hold_ms
         self.synthetic_upgrade_confirm_ticks = max(1, int(synthetic_upgrade_confirm_ticks))
         self.confirm_max_gap_ms = confirm_max_gap_ms
         self.predicted_ttl_ms = predicted_ttl_ms
+        self.topology_debounce_ms = max(0.0, topology_debounce_ms)
         self._states: dict[tuple[str, str], _PlayerDisplayState] = {}
 
     def reset(self) -> None:
@@ -132,6 +150,42 @@ class OverlayDisplayStateMachine:
 
     # ---- 主入口 ------------------------------------------------------------
 
+    def _transition_plan(
+        self,
+        st: _PlayerDisplayState,
+        *,
+        state: DisplayState,
+        now: float,
+        transition_reason: str | None = None,
+        **plan,
+    ) -> DisplayPlan:
+        previous_state = st.state
+        if st.topology_window_start_ts is None or (
+            now - st.topology_window_start_ts > self.topology_debounce_ms
+        ):
+            st.topology_window_start_ts = now
+            st.topology_transition_count = 0
+            st.topology_state_sequence = [previous_state]
+        if previous_state != state:
+            st.topology_transition_count += 1
+            if not st.topology_state_sequence or st.topology_state_sequence[-1] != previous_state:
+                st.topology_state_sequence.append(previous_state)
+            st.topology_state_sequence.append(state)
+            st.last_state_transition_ts = now
+            st.state = state
+            st.last_transition_reason = transition_reason
+        elif transition_reason is not None:
+            st.last_transition_reason = transition_reason
+        return DisplayPlan(
+            state=state,
+            previous_state=previous_state,
+            transition_count=st.topology_transition_count,
+            state_sequence=tuple(st.topology_state_sequence),
+            window_start_ms=st.topology_window_start_ts,
+            transition_reason=st.last_transition_reason,
+            **plan,
+        )
+
     def step(self, *, player_id: str, view_id: str, ctx: DisplayContext) -> DisplayPlan:
         key = (player_id, view_id)
         st = self._states.setdefault(key, _PlayerDisplayState())
@@ -139,10 +193,8 @@ class OverlayDisplayStateMachine:
         now = ctx.now_ms
 
         def _emit(state: DisplayState, **plan) -> DisplayPlan:
-            if st.state != state:
-                st.last_state_transition_ts = now
-                st.state = state
-            return DisplayPlan(state=state, **plan)
+            reason = plan.pop("transition_reason", None)
+            return self._transition_plan(st, state=state, now=now, transition_reason=reason, **plan)
 
         # 1) 硬 stop（最高优先级）：prediction 超 TTL 且无有效 point → 必须 HIDDEN
         if ctx.prediction_expired and not ctx.has_valid_point:
@@ -155,6 +207,7 @@ class OverlayDisplayStateMachine:
             st.last_synthetic_tick_ts = None
             st.last_real_bbox_ts = now
             st.last_valid_box_ts = now  # 真实 bbox 是最新有效几何（作 hold 起点）
+            st.invalid_projection_until_ts = None
             return _emit(
                 target,
                 preferred_bbox_source="real",
@@ -172,7 +225,12 @@ class OverlayDisplayStateMachine:
         if not ctx.geometry_valid:
             target = "PROJECTED_POINT" if ctx.has_valid_point else "HIDDEN"
             st.synthetic_confirm_count = 0
-            return _emit(target, preferred_bbox_source="none", render=target != "HIDDEN")
+            return _emit(
+                target,
+                preferred_bbox_source="none",
+                render=target != "HIDDEN",
+                transition_reason="geometry_invalid",
+            )
 
         # 5) cross_view_projected：donor/global 有 projected 位置证据
         if evidence == "cross_view_projected":
@@ -181,11 +239,11 @@ class OverlayDisplayStateMachine:
         # 6) predicted_only：仅预测，无 projected 位置证据 → 绝不画人体框
         if evidence == "predicted_only":
             if not ctx.prediction_expired:
-                return _emit("PREDICTED_POINT", preferred_bbox_source="none")
+                return _emit("PREDICTED_POINT", preferred_bbox_source="none", transition_reason="predicted_only")
             return _emit("HIDDEN", render=False)
 
         # 7) 无证据 → HIDDEN
-        return _emit("HIDDEN", render=False)
+        return _emit("HIDDEN", render=False, transition_reason="no_display_evidence")
 
     def _cross_view(self, ctx: DisplayContext, st: _PlayerDisplayState, now: float) -> DisplayPlan:
         """cross_view 降级链：hysteresis_grace（真实刚丢）+ projected_box_hold（模板瞬失）。
@@ -199,45 +257,70 @@ class OverlayDisplayStateMachine:
         within_grace = self._within_ts(st.last_real_bbox_ts, self.hysteresis_grace_ms, now)
         within_hold = self._within_ts(st.last_valid_box_ts, self.projected_box_hold_ms, now)
 
+        if ctx.projection_rejection_reason is not None:
+            st.synthetic_confirm_count = 0
+            st.last_synthetic_tick_ts = None
+            st.invalid_projection_until_ts = now + self.topology_debounce_ms
+            return self._point(ctx, st, now, reason=ctx.projection_rejection_reason)
+
         if ctx.has_synthetic_bbox:
             st.last_valid_box_ts = now  # 具体模板 → 刷新 hold 权威
+            if st.invalid_projection_until_ts is not None:
+                if now < st.invalid_projection_until_ts:
+                    return self._point(ctx, st, now, reason="projection_topology_debounce")
+                st.invalid_projection_until_ts = None
             upgrade = had_box or within_grace or self._confirm_synthetic(st, now)
             if not upgrade:
                 # 点→框仍处于确认期：保留 confirm 计数继续累计（不 reset）
-                return self._point(ctx, st, now)
+                return self._point(ctx, st, now, reason="synthetic_confirmation_pending")
             return self._plan_box(ctx, st, had_held=False)
 
         # 无模板：模板瞬失宽限（hold）或真实刚丢（grace）内保持上一份演示几何
         st.synthetic_confirm_count = 0  # 模板消失，确认计数作废
-        if within_hold or within_grace:
+        if (within_hold or within_grace) and ctx.held_presentation_safe:
             if had_box or within_grace:
                 return self._plan_box(ctx, st, had_held=True)
-        return self._point(ctx, st, now)
+        return self._point(
+            ctx,
+            st,
+            now,
+            reason="held_presentation_unsafe" if (within_hold or within_grace) else None,
+        )
 
     def _plan_box(self, ctx: DisplayContext, st: _PlayerDisplayState, *, had_held: bool) -> DisplayPlan:
         """收敛到 PROJECTED_BOX，并给出 bbox source 提示（template / held presentation）。"""
-        if st.state != "PROJECTED_BOX":
-            st.last_state_transition_ts = ctx.now_ms
-            st.state = "PROJECTED_BOX"
         bbox_source = "held_presentation" if had_held else (
             "reanchor" if not ctx.bbox_stale else "scale_profile"
         )
-        return DisplayPlan(
+        return self._transition_plan(
+            st,
             state="PROJECTED_BOX",
+            now=ctx.now_ms,
             preferred_bbox_source=bbox_source,
             bbox_stale=ctx.bbox_stale,
             bbox_age_ms=ctx.bbox_age_ms,
+            presentation_geometry_reused=had_held,
         )
 
-    def _point(self, ctx: DisplayContext, st: _PlayerDisplayState, now: float) -> DisplayPlan:
+    def _point(
+        self,
+        ctx: DisplayContext,
+        st: _PlayerDisplayState,
+        now: float,
+        *,
+        reason: str | None = None,
+    ) -> DisplayPlan:
         """收敛到 PROJECTED_POINT / PREDICTED_POINT（footpoint 光圈，不造框）。"""
         target: DisplayState = "PROJECTED_POINT"
-        if st.state != target:
-            st.last_state_transition_ts = now
-            st.state = target
         if ctx.has_valid_point:
             st.last_point_ts = now
-        return DisplayPlan(state=target, preferred_bbox_source="none")
+        return self._transition_plan(
+            st,
+            state=target,
+            now=now,
+            transition_reason=reason,
+            preferred_bbox_source="none",
+        )
 
     @staticmethod
     def _within_ts(ts: float | None, window_ms: float, now: float) -> bool:

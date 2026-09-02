@@ -215,6 +215,7 @@ class MultiViewJointRun:
         # player display diagnostics（只读；失败不影响核心结果）
         self._display_diag_rows: list[Any] = []
         self._display_diag_error: str | None = None
+        self._local_slot_events: list[dict[str, object]] = []
         # same-tick RecoveryAttemptLedger（B-Phase-2）：同 pair 去重 + 每 view ROI 预算
         self._same_tick_attempted: set[tuple[str, str]] = set()
         self._same_tick_ledger: dict[str, list[Any]] = {view_id: [] for view_id in self.runtimes}
@@ -547,6 +548,10 @@ class MultiViewJointRun:
 
             # ---- tick barrier:两路完成后才更新 global ----
             updates = self.associator.process_tick(all_obs, timestamp_s, self.orientations, tick=tick_number)
+            self._local_slot_events.extend(
+                dict(event)
+                for event in (getattr(self.associator, "last_tick_local_slot_events", None) or [])
+            )
             # D1:conflict 仲裁使用 pre-tick prediction（tick barrier 前冻结,含 uncertainty）
             fused = self.associator.fuse_assignments(
                 updates, include_tentative=True, predictions=predictions,
@@ -629,6 +634,9 @@ class MultiViewJointRun:
                         # 计数（association 只读观测）→ roster_conflict 字段
                         roster_conflicts=(
                             getattr(self.registry, "reference_slot_conflicts", None) or {}
+                        ),
+                        local_slot_rebind_events=(
+                            getattr(self.associator, "last_tick_local_slot_events", None) or []
                         ),
                     )
                 )
@@ -921,6 +929,7 @@ class MultiViewJointRun:
             "recovery_funnel": dict(self.recovery_funnel),
             "roi_recovery": {"per_view": per_view_roi_recovery},
             "association_counters": dict(getattr(self.associator, "diagnostics", {})),
+            "local_slot_rebind_events": list(self._local_slot_events),
             "appearance": {
                 "association": self.associator.appearance_diagnostics(),
                 "per_view": per_view_appearance,
@@ -941,6 +950,8 @@ class MultiViewJointRun:
                     "bindings": {
                         view_id: {
                             "view_player_id": binding.view_player_id,
+                            "identity_epoch": binding.local_identity_epoch,
+                            "tracklet_lineage_id": binding.tracklet_lineage_id,
                             "track_id": binding.track_id,
                             "visibility": binding.visibility,
                         }
@@ -1031,6 +1042,7 @@ class MultiViewJointRun:
                 rows=self._display_diag_rows,
                 status=diag_status,
                 detail=display_diagnostics_error or "",
+                events=self._local_slot_events,
             )
         except Exception as exc:  # noqa: BLE001 产物构建失败不阻断核心结果
             display_diagnostics_error = f"{type(exc).__name__}: {exc}"
@@ -1091,6 +1103,7 @@ class MultiViewJointRun:
                 "quality": observation.confidence,
                 "view_player_id": observation.view_player_id,
                 "local_identity_epoch": observation.local_identity_epoch,
+                "tracklet_lineage_id": observation.tracklet_lineage_id,
                 "source_track_id": observation.track_id,
                 "detection_origin": observation.detection_origin,
                 "guidance_id": observation.guidance_id,
@@ -1208,6 +1221,7 @@ class MultiViewJointRun:
                         "visibility": binding.visibility,
                         "view_player_id": binding.view_player_id,
                         "identity_epoch": binding.local_identity_epoch,
+                        "tracklet_lineage_id": binding.tracklet_lineage_id,
                         "track_id": binding.track_id,
                         "quality": binding.quality,
                         "lock_state": binding.lock_state,
@@ -1556,6 +1570,7 @@ class MultiViewJointRun:
                     canonical_y_ft=None,
                     view_player_id=player_id,
                     local_identity_epoch=int(getattr(result, "local_identity_epoch_by_track", {}).get(track_id, 0)),
+                    tracklet_lineage_id=getattr(result, "local_tracklet_lineage_by_track", {}).get(track_id),
                     track_id=track_id,
                     confidence=pos.confidence or 0.0,
                     projection_confidence=pos.projection_confidence,

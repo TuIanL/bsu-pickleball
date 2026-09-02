@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_model_package.v1",
+  "title": "Match State Model Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_id",
+    "model_name",
+    "model_version",
+    "task",
+    "classes",
+    "input_contract",
+    "thresholds",
+    "provenance",
+    "artifacts",
+    "runtime"
+  ],
+  "properties": {
+    "schema_version": {"const": "match_state_model_package.v1"},
+    "package_id": {"type": "string", "minLength": 1},
+    "model_name": {"type": "string", "minLength": 1},
+    "model_version": {"type": "string", "minLength": 1},
+    "task": {"const": "match_state_temporal_segmentation"},
+    "classes": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "rally_active"},
+        {"const": "non_play"},
+        {"const": "unknown"}
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "input_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modalities", "sampling_fps", "clip_duration_ms", "feature_schema"],
+      "properties": {
+        "modalities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "sampling_fps": {"type": "number", "exclusiveMinimum": 0},
+        "clip_duration_ms": {"type": "integer", "exclusiveMinimum": 0},
+        "feature_schema": {"type": "string", "minLength": 1}
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_confidence", "minimum_coverage", "minimum_duration_ms", "hysteresis"],
+      "properties": {
+        "minimum_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "minimum_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "minimum_duration_ms": {"type": "integer", "minimum": 0},
+        "hysteresis": {"type": "number", "minimum": 0, "maximum": 1},
+        "unknown_on_insufficient_evidence": {"type": "boolean"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_manifest_sha256",
+        "rgb_clip_manifest_sha256",
+        "group_split_sha256",
+        "structured_feature_profile_sha256",
+        "code_revision",
+        "config_sha256"
+      ],
+      "properties": {
+        "dataset_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "rgb_clip_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "group_split_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "structured_feature_profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "code_revision": {"type": "string", "minLength": 1},
+        "config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weights", "training_config", "evaluation_report"],
+      "properties": {
+        "weights": {"const": "model.pt"},
+        "training_config": {"const": "training_profile.json"},
+        "evaluation_report": {"const": "evaluation_report.json"},
+        "checksums": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sha256", "size_bytes"],
+            "properties": {
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "size_bytes": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "source_dataset_manifest_id": {"type": "string", "minLength": 1},
+    "source_rgb_manifest_id": {"type": "string", "minLength": 1},
+    "structured_feature_profile_schema": {"type": "string", "minLength": 1},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "device", "fallback"],
+      "properties": {
+        "status": {"enum": ["ready", "unavailable", "insufficient_evidence"]},
+        "device": {"type": "string", "minLength": 1},
+        "fallback": {"const": "preserve_existing_analysis"}
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { Bone, Box, CircleDot, CirclePause, Diamond, Map, Maximize2, Minimize2, Pause, Play, Route, Volume2, VolumeX } from "lucide-react";
+import { Bone, Box, CircleDot, CirclePause, Diamond, Map, Maximize2, Minimize2, Pause, Play, Route, Ruler, Volume2, VolumeX } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
   BallTrajectoryArtifact,
@@ -29,6 +29,9 @@ import {
   sourceTimeToCanonicalTimeMs,
   type DisplayTimeMapping,
 } from "../../utils/multiviewDisplay";
+import type { DisplayViewGeometry } from "../../types/videoCourtOverlay";
+import { buildCourtOverlayGeometry, buildNetOverlayPoints, clipNetOverlayPointsToCourt } from "../../services/videoCourtOverlay";
+import { VideoCourtOverlay } from "./VideoCourtOverlay";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
@@ -77,6 +80,7 @@ interface VideoAnalysisCardProps {
   displayViewNotice?: string;
   displayTimeMapping?: DisplayTimeMapping;
   displayCourtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
+  displayViewGeometry?: DisplayViewGeometry | null;
   videoSrc?: string;
   /** H.264 源视频兜底：当 videoSrc（overlay 视频）编码不被浏览器支持时自动回退 */
   fallbackVideoSrc?: string;
@@ -142,6 +146,7 @@ export function VideoAnalysisCard({
   displayViewNotice,
   displayTimeMapping,
   displayCourtOrientation,
+  displayViewGeometry,
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
@@ -185,6 +190,7 @@ export function VideoAnalysisCard({
           displayViewNotice={displayViewNotice}
           displayTimeMapping={displayTimeMapping}
           displayCourtOrientation={displayCourtOrientation}
+          displayViewGeometry={displayViewGeometry}
           videoSrc={videoSrc}
           fallbackVideoSrc={fallbackVideoSrc}
           pipelineTracks={pipelineTracks}
@@ -390,6 +396,7 @@ function RealVideoOverlay({
   displayViewNotice,
   displayTimeMapping,
   displayCourtOrientation,
+  displayViewGeometry,
   videoSrc,
   fallbackVideoSrc,
   pipelineTracks,
@@ -428,6 +435,7 @@ function RealVideoOverlay({
   displayViewNotice?: string;
   displayTimeMapping?: DisplayTimeMapping;
   displayCourtOrientation?: "identity" | "rotate_180" | "mirror_x" | "mirror_y" | null;
+  displayViewGeometry?: DisplayViewGeometry | null;
   videoSrc: string;
   fallbackVideoSrc?: string;
   /** 管线轨迹点（含 court_point 球场坐标），用于实时小地图 */
@@ -441,9 +449,11 @@ function RealVideoOverlay({
   const pendingDisplaySwitchRef = useRef<{
     canonicalSeekMs: number;
     resumePlayback: boolean;
+    targetViewId?: string;
     source?: string;
     seekApplied?: boolean;
   } | null>(null);
+  const userPausedDuringSwitchRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [activeVideoSrc, setActiveVideoSrc] = useState<string | undefined>(videoSrc);
@@ -460,7 +470,16 @@ function RealVideoOverlay({
   const [showBallPoint, setShowBallPoint] = useState(true);
   const [showBallPath, setShowBallPath] = useState(true);
   const [showBounces, setShowBounces] = useState(true);
+  const [showCourtOverlay, setShowCourtOverlay] = useState(true);
+  const [showNetOverlay, setShowNetOverlay] = useState(true);
   const [showCourtHud, setShowCourtHud] = useState(false);
+  const geometryIdentity = `${displayViewId ?? ""}:${displayViewGeometry?.videoId ?? ""}:${videoSrc}`;
+  const [activeGeometryIdentity, setActiveGeometryIdentity] = useState(geometryIdentity);
+  const geometryIdentityRef = useRef(geometryIdentity);
+  // latest-ref 模式：commit 后同步（事件处理器读取时序不变价），禁止渲染期写 ref
+  useEffect(() => {
+    geometryIdentityRef.current = geometryIdentity;
+  });
   const mappingOffsetSeconds = Number(displayTimeMapping?.offsetMs ?? 0) / 1000;
   const mappingRate = Number(displayTimeMapping?.rate ?? 1) > 0 ? Number(displayTimeMapping?.rate ?? 1) : 1;
   // Player/球路/小地图都消费 canonical 时间；video.currentTime 仍是目标媒体时间。
@@ -479,6 +498,30 @@ function RealVideoOverlay({
     ? null
     : trackingOverlay;
   const source = selectedFusedOverlay?.source ?? trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
+  const geometryForActiveView = displayViewGeometry && geometryIdentity === activeGeometryIdentity
+    ? displayViewGeometry
+    : null;
+  const courtOverlayGeometry = useMemo(
+    () => geometryForActiveView?.courtState === "available"
+      ? buildCourtOverlayGeometry(
+          geometryForActiveView.inverseHomography,
+          geometryForActiveView.calibrationImageSize,
+          source,
+        )
+      : null,
+    [geometryForActiveView, source],
+  );
+  const netOverlayPoints = useMemo(() => {
+    if (geometryForActiveView?.netState !== "available") return null;
+    const rawPoints = buildNetOverlayPoints(
+      geometryForActiveView.netAnnotations,
+      geometryForActiveView.netImageSize,
+      source,
+    );
+    return clipNetOverlayPointsToCourt(rawPoints, courtOverlayGeometry);
+  }, [courtOverlayGeometry, geometryForActiveView, source]);
+  const courtOverlayAvailable = Boolean(courtOverlayGeometry);
+  const netOverlayAvailable = Boolean(netOverlayPoints);
   // 加载优先级（spec multiview-fused-player-overlay）：joint 模式 fused overlay 优先，
   // 不可用/无数据时 fallback 到 trackingOverlay（单摄行为完全不变）。
   const useFusedOverlay = Boolean(selectedFusedOverlay?.frames.length);
@@ -569,6 +612,14 @@ function RealVideoOverlay({
     return () => window.clearTimeout(t);
   }, [videoSrc]);
 
+  // URL 直达或父组件恢复展示视角时，没有 pending switch 也可以直接确认几何身份。
+  // 交互切换期间 pending switch 会阻止这里提前切换，避免旧视频短暂绘制新机位几何。
+  useEffect(() => {
+    if (!pendingDisplaySwitchRef.current && geometryIdentity !== activeGeometryIdentity) {
+      setActiveGeometryIdentity(geometryIdentityRef.current);
+    }
+  }, [activeGeometryIdentity, geometryIdentity]);
+
   // 加载超时护栏：拒绝无限转圈 —— 12s 内未拿到 metadata 则显式失败并允许重试
   useEffect(() => {
     window.clearTimeout(loadTimeoutRef.current);
@@ -626,6 +677,20 @@ function RealVideoOverlay({
       setIsPlaying(false);
       syncTime();
     };
+    const commitPendingDisplaySwitch = () => {
+      const pendingSwitch = pendingDisplaySwitchRef.current;
+      if (!pendingSwitch || pendingSwitch.source !== activeVideoSrc || !pendingSwitch.seekApplied) return false;
+      setActiveGeometryIdentity(geometryIdentityRef.current);
+      pendingDisplaySwitchRef.current = null;
+      if (pendingSwitch.resumePlayback && !userPausedDuringSwitchRef.current && video.paused) {
+        void video.play().catch(() => {
+          // 浏览器策略拒绝自动续播时停在已映射的正确时间，由用户手动继续。
+          setIsPlaying(false);
+        });
+      }
+      userPausedDuringSwitchRef.current = false;
+      return true;
+    };
     const handleLoadedMetadata = () => {
       setLoadError(null);
       setDuration(Number.isFinite(video.duration) ? video.duration : 0);
@@ -645,11 +710,15 @@ function RealVideoOverlay({
         seekAppliedRef.current = true;
         if (pendingSwitch) pendingSwitch.seekApplied = true;
         const targetSeconds = canonicalToSourceSeconds(requestedSeekMs / 1000);
+        const alreadyAtTarget = Math.abs(video.currentTime - targetSeconds) < 0.05;
         if (Number.isFinite(video.duration) && video.duration > 0) {
-          video.currentTime = Math.min(Math.max(targetSeconds, 0), video.duration);
+          const clampedTarget = Math.min(Math.max(targetSeconds, 0), video.duration);
+          if (!alreadyAtTarget) video.currentTime = clampedTarget;
         } else {
-          video.currentTime = targetSeconds;
+          if (!alreadyAtTarget) video.currentTime = targetSeconds;
         }
+        // 目标时间已经是当前时间时，浏览器可能不会派发 seeked；metadata 已足够完成切换。
+        if (switchTargetIsMounted && alreadyAtTarget) commitPendingDisplaySwitch();
       }
       syncTime();
     };
@@ -663,12 +732,7 @@ function RealVideoOverlay({
       syncTime();
       const pendingSwitch = pendingDisplaySwitchRef.current;
       if (!pendingSwitch || pendingSwitch.source !== activeVideoSrc || !pendingSwitch.seekApplied) return;
-      pendingDisplaySwitchRef.current = null;
-      if (pendingSwitch.resumePlayback && video.paused) {
-        void video.play().catch(() => {
-          // 浏览器策略拒绝自动续播时停在已映射的正确时间，由用户手动继续。
-        });
-      }
+      commitPendingDisplaySwitch();
     };
 
     video.addEventListener("seeked", handleSeeked);
@@ -707,8 +771,11 @@ function RealVideoOverlay({
       return;
     }
     if (video.paused) {
-      void video.play();
+      void video.play().catch(() => {
+        setIsPlaying(false);
+      });
     } else {
+      if (pendingDisplaySwitchRef.current) userPausedDuringSwitchRef.current = true;
       video.pause();
     }
   };
@@ -716,10 +783,13 @@ function RealVideoOverlay({
   const switchDisplayView = (nextViewId: string) => {
     if (!onDisplayViewChange || nextViewId === displayViewId) return;
     // 切换只改变展示视频；先保存当前 canonical 时间，目标媒体加载后恢复。
+    seekAppliedRef.current = false;
     pendingDisplaySwitchRef.current = {
       canonicalSeekMs: canonicalTime * 1000,
       resumePlayback: Boolean(videoRef.current && !videoRef.current.paused),
+      targetViewId: nextViewId,
     };
+    userPausedDuringSwitchRef.current = false;
     onDisplayViewChange(nextViewId);
   };
 
@@ -818,6 +888,11 @@ function RealVideoOverlay({
           preserveAspectRatio="xMidYMid meet"
           viewBox={`0 0 ${source.width} ${source.height}`}
         >
+        <VideoCourtOverlay
+          courtGeometry={showCourtOverlay ? courtOverlayGeometry : null}
+          netPoints={showNetOverlay ? netOverlayPoints : null}
+          sourceWidth={source.width}
+        />
         {showBoxes && useFusedOverlay
           ? fusedRenderFrame?.frame?.players?.map((player) => (
             <FusedPlayerBox
@@ -1010,7 +1085,7 @@ function RealVideoOverlay({
           </p>
         ) : null}
 
-        <div aria-label="视频分析图层" className="absolute right-2 top-2 z-20 flex gap-1.5 sm:right-4 sm:top-4">
+        <div aria-label="视频分析图层" className="absolute right-2 top-2 z-20 flex max-w-[calc(100%-1rem)] flex-wrap justify-end gap-1.5 sm:right-4 sm:top-4">
           <OverlayToggle
             active={showBoxes}
             available={boxesAvailable}
@@ -1055,6 +1130,24 @@ function RealVideoOverlay({
             onClick={() => setShowBounces((value) => !value)}
             tone="orange"
             unavailableReason={bounceDetail}
+          />
+          <OverlayToggle
+            active={showCourtOverlay}
+            available={courtOverlayAvailable}
+            icon={<Ruler size={15} aria-hidden="true" />}
+            label="球场投影"
+            onClick={() => setShowCourtOverlay((value) => !value)}
+            tone="green"
+            unavailableReason={geometryForActiveView?.courtDetail ?? displayViewGeometry?.courtDetail ?? "正在读取场地标定"}
+          />
+          <OverlayToggle
+            active={showNetOverlay}
+            available={netOverlayAvailable}
+            icon={<Route size={15} aria-hidden="true" />}
+            label="球网投影"
+            onClick={() => setShowNetOverlay((value) => !value)}
+            tone="orange"
+            unavailableReason={geometryForActiveView?.netDetail ?? displayViewGeometry?.netDetail ?? "正在读取球网标定"}
           />
         </div>
 
@@ -1112,6 +1205,11 @@ function RealVideoOverlay({
         {ballTrajectoryLoadState !== "idle" && !ballCount ? (
           <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">
             球轨迹：{statusCopy(ballStatusLabel, ballDetail)}
+          </p>
+        ) : null}
+        {displayViewGeometry && (!courtOverlayAvailable || !netOverlayAvailable) ? (
+          <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">
+            投影状态：{courtOverlayAvailable ? "球场可用" : displayViewGeometry.courtDetail} · {netOverlayAvailable ? "球网可用" : displayViewGeometry.netDetail}
           </p>
         ) : null}
         {ballCount ? <p className="mt-1 max-w-sm text-[0.68rem] font-semibold text-slate-300">图像空间球路 · 小地图为球场平面投影 · 视觉估算</p> : null}

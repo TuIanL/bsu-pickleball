@@ -5,6 +5,20 @@ import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "./SegmentVide
 afterEach(() => cleanup());
 
 describe("SegmentVideoPlayer 片段回放", () => {
+  it("挂载时媒体元数据已就绪也会同步时长", () => {
+    const readyState = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "readyState");
+    const duration = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "duration");
+    Object.defineProperty(HTMLMediaElement.prototype, "readyState", { configurable: true, get: () => 1 });
+    Object.defineProperty(HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 12.5 });
+    const onDurationReady = vi.fn();
+
+    render(<SegmentVideoPlayer ref={{ current: null }} videoUrl="/video.mp4" onDurationReady={onDurationReady} />);
+
+    expect(onDurationReady).toHaveBeenCalledWith(12500);
+    if (readyState) Object.defineProperty(HTMLMediaElement.prototype, "readyState", readyState);
+    if (duration) Object.defineProperty(HTMLMediaElement.prototype, "duration", duration);
+  });
+
   it("播放片段到终点后自动暂停并通知页面", async () => {
     const ref = { current: null as SegmentVideoPlayerHandle | null };
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -73,5 +87,34 @@ describe("SegmentVideoPlayer 片段回放", () => {
 
     expect(video.currentTime).toBe(4.5);
     expect(onTimeUpdate).toHaveBeenLastCalledWith(4500);
+  });
+
+  it("提供同步控制回调时，播放、逐帧和拖动都交给共享控制器", () => {
+    const onPlaybackToggle = vi.fn();
+    const onSeekRequest = vi.fn();
+    const onFrameStepRequest = vi.fn();
+    const { container } = render(
+      <SegmentVideoPlayer
+        ref={{ current: null }}
+        videoUrl="/video.mp4"
+        onPlaybackToggle={onPlaybackToggle}
+        onSeekRequest={onSeekRequest}
+        onFrameStepRequest={onFrameStepRequest}
+      />,
+    );
+    const video = container.querySelector("video")!;
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 2.5 });
+    Object.defineProperty(video, "duration", { configurable: true, value: 10 });
+    fireEvent.loadedMetadata(video);
+
+    fireEvent.click(screen.getByTitle("播放/暂停"));
+    fireEvent.click(screen.getByTitle("后退一帧"));
+    fireEvent.click(screen.getByTitle("前进一帧"));
+    fireEvent.change(screen.getByRole("slider", { name: "视频播放进度" }), { target: { value: "4500" } });
+
+    expect(onPlaybackToggle).toHaveBeenCalledWith(2500, false);
+    expect(onFrameStepRequest).toHaveBeenNthCalledWith(1, "backward", 2500);
+    expect(onFrameStepRequest).toHaveBeenNthCalledWith(2, "forward", 2500);
+    expect(onSeekRequest).toHaveBeenCalledWith(4500);
   });
 });

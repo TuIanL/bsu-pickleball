@@ -1,0 +1,64 @@
+{
+  "schema_version": "p2-p4-overlay-flicker-regression.v1",
+  "job_id": "job-43e7475fd8",
+  "recording_session_id": "sync_20260720_122645_317228",
+  "capture_take_id": "ct_6949bef776a5",
+  "reference_view": "cam_1",
+  "window_seconds": [7.0, 13.0],
+  "canonical_slots": ["Player_1", "Player_2", "Player_3", "Player_4"],
+  "target_players": ["Player_2", "Player_4"],
+  "canonical_global_ids": {
+    "Player_2": "global_player_2",
+    "Player_4": "global_player_4"
+  },
+  "baseline_observed": {
+    "overlay_window_frame_count": 181,
+    "player_overlay_frame_counts": {
+      "Player_2": 135,
+      "Player_4": 179
+    },
+    "player_2_display_states": {
+      "base_observed/REAL_BOX": 68,
+      "cross_view_projected/PROJECTED_BOX": 60,
+      "cross_view_projected/PROJECTED_POINT": 7
+    },
+    "player_2_projection_rejection_reasons": {
+      "projection_geometry_jump": 24,
+      "projection_collision_with_global_player_1": 13,
+      "presentation_geometry_held": 6
+    },
+    "cam_2_local_slot_rebinds": [
+      {
+        "local_slot": "Player_2",
+        "incumbent_global_id": "global_player_4",
+        "challenger_global_id": "global_player_1",
+        "approximate_seconds": 11.066
+      },
+      {
+        "local_slot": "Player_4",
+        "incumbent_global_id": "global_player_1",
+        "challenger_global_id": "global_player_4",
+        "approximate_seconds": 12.666
+      }
+    ],
+    "known_failure": "P2 projected bbox may remain near the old P2 position while its projected footpoint overlaps P4; cam_2 Player_2 can be reassociated to P4 without an ambiguity gate."
+  },
+  "acceptance_config": {
+    "association_reassociation_frames": 5,
+    "association_switch_margin": 0.15,
+    "association_reassociation_ambiguity_margin_ft": 0.5,
+    "projected_bbox_footpoint_residual_px": 80.0,
+    "projected_collision_iou_threshold": 0.25,
+    "display_topology_debounce_ms": 250.0,
+    "max_local_slot_reassociation_violations": 0,
+    "max_display_topology_transitions": 12
+  },
+  "assertions": {
+    "canonical_identity_is_stable": true,
+    "unconfirmed_local_slot_rebind_is_quarantined": true,
+    "quarantined_samples_do_not_enter_formal_trajectory": true,
+    "rejected_projection_has_no_misleading_bbox": true,
+    "bbox_footpoint_residual_within_config": true,
+    "display_topology_transition_within_config": true
+  }
+}

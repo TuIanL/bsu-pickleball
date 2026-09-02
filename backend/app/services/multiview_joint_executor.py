@@ -782,6 +782,11 @@ class MultiViewJointExecutor:
             associator = GlobalPlayerAssociator(
                 registry,
                 max_association_distance_ft=3.0,
+                switch_margin=recovery_config.association_switch_margin,
+                reassociation_frames=recovery_config.association_reassociation_frames,
+                reassociation_ambiguity_margin_ft=(
+                    recovery_config.association_reassociation_ambiguity_margin_ft
+                ),
                 appearance_mode=getattr(settings, "four_player_appearance_mode", "shadow"),
             )
             gen = GuidanceGenerator(CrossViewGuidancePolicy())

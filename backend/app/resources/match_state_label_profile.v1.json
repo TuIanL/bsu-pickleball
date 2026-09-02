@@ -1,0 +1,61 @@
+{
+  "schema_version": "match_state_label_profile.v1",
+  "profile_id": "pickleball-rally-active-reviewed-v1",
+  "authoritative_boundary_source": "capture_segments.effective_start_ms/effective_end_ms after boundary review",
+  "stage_1_target": {
+    "type": "binary_temporal_segmentation",
+    "classes": [
+      "rally_active",
+      "non_play"
+    ],
+    "definitions": {
+      "rally_active": "从有效发球动作进入比赛起，至该分因落地、出界、下网或其他死球事件结束；不包含发球前准备。",
+      "non_play": "所有不属于有效回合的可用视频时间，包括发球前准备、回合后反应、捡球、交谈、等待、换边和暂停。"
+    }
+  },
+  "quality_labels": [
+    "high_confidence",
+    "uncertain",
+    "excluded"
+  ],
+  "reviewed_boundary_policy": {
+    "uncertain_radius_ms": 250,
+    "rally_active_high_confidence": "[reviewed_start_ms + 250, reviewed_end_ms - 250]",
+    "non_play_high_confidence": "complement of [reviewed_start_ms - 250, reviewed_end_ms + 250] within the take",
+    "uncertain": "the remaining transition intervals around reviewed starts and ends",
+    "short_rally_policy": "boundary_only when no positive high-confidence interior remains"
+  },
+  "unreviewed_legacy_fallback": {
+    "enabled_for_current_dataset": false,
+    "start_uncertain_radius_ms": 1500,
+    "end_uncertain_radius_ms": 2500,
+    "basis": "rounded-up p90 absolute error from 255 reviewed legacy boundaries"
+  },
+  "excluded_policy": {
+    "explicitly_excluded_rallies": "excluded",
+    "invalid_or_unclosed_boundaries": "excluded",
+    "unavailable_or_unsynchronized_media": "excluded",
+    "transition_windows": "uncertain and masked from hard classification and boundary loss"
+  },
+  "sampling_policy": {
+    "include_non_play": true,
+    "group_split_unit": "capture_take_id",
+    "negative_sampling": "sample across pre-rally, inter-rally and long-break regions; balance batches without discarding the full evaluation timeline",
+    "do_not_use_as_features": [
+      "score",
+      "winner",
+      "existing rally/non_play semantic prediction",
+      "manually reviewed boundary timestamps"
+    ]
+  },
+  "stage_2_taxonomy": {
+    "status": "requires additional labels or reviewed weak-label rules",
+    "classes": [
+      "pre_serve",
+      "post_rally",
+      "timeout_or_side_change",
+      "unknown"
+    ],
+    "note": "These classes are not treated as hard ground truth in stage 1 because only rally boundaries were manually reviewed."
+  }
+}

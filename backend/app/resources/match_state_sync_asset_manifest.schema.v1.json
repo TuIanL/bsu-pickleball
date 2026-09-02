@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_sync_asset_manifest.v1",
+  "title": "Match State Sync Asset Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "manifest_id", "generated_at", "identity", "entries"],
+  "properties": {
+    "schema_version": {"const": "match_state_sync_asset_manifest.v1"},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_manifest_id",
+        "dataset_manifest_sha256",
+        "audit_sha256",
+        "camera_role_mapping_source",
+        "timing_authority_policy",
+        "mapping_formula_source",
+        "canonical_clock_source",
+        "sync_core_sha256"
+      ],
+      "properties": {
+        "dataset_manifest_id": {"type": "string", "minLength": 1},
+        "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "audit_sha256": {"$ref": "#/$defs/sha256"},
+        "camera_role_mapping_source": {"type": "string", "minLength": 1},
+        "timing_authority_policy": {"type": "string", "minLength": 1},
+        "mapping_formula_source": {"type": "string", "minLength": 1},
+        "canonical_clock_source": {"type": "string", "minLength": 1},
+        "sync_core_sha256": {"$ref": "#/$defs/sha256"},
+        "sync_core_relative_path": {"type": "string", "minLength": 1}
+      }
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference_camera",
+        "camera_id",
+        "offset_ms",
+        "rate",
+        "drift_ppm",
+        "residual_rms_ms",
+        "anchor_count",
+        "quality",
+        "valid_start_seconds",
+        "valid_end_seconds"
+      ],
+      "properties": {
+        "reference_camera": {"type": "string", "minLength": 1},
+        "camera_id": {"type": "string", "minLength": 1},
+        "offset_ms": {"type": "number"},
+        "rate": {"type": "number", "exclusiveMinimum": 0},
+        "drift_ppm": {"type": "number"},
+        "residual_rms_ms": {"type": "number", "minimum": 0},
+        "anchor_count": {"type": "integer", "minimum": 0},
+        "quality": {"enum": ["good", "degraded", "unknown"]},
+        "reason": {"type": ["string", "null"]},
+        "valid_start_seconds": {"type": ["number", "null"]},
+        "valid_end_seconds": {"type": ["number", "null"]}
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "remote_relative_path",
+        "sha256",
+        "frame_count",
+        "first_pts_seconds",
+        "last_pts_seconds",
+        "duration_seconds"
+      ],
+      "properties": {
+        "authority": {"const": "source_pts"},
+        "source_path": {"type": "string", "minLength": 1},
+        "remote_relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "frame_count": {"type": "integer", "minimum": 1},
+        "first_pts_seconds": {"type": "number"},
+        "last_pts_seconds": {"type": "number"},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "estimated_fps": {"type": ["number", "null"], "exclusiveMinimum": 0}
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "camera_role",
+        "camera_id",
+        "reference_camera_id",
+        "logical_media_uri",
+        "timing",
+        "mapping"
+      ],
+      "properties": {
+        "camera_role": {"enum": ["cam_1", "cam_2"]},
+        "camera_id": {"type": "string", "minLength": 1},
+        "reference_camera_id": {"type": "string", "minLength": 1},
+        "logical_media_uri": {"type": "string", "minLength": 1},
+        "remote_media_relative_path": {"type": ["string", "null"]},
+        "timing": {"$ref": "#/$defs/timing"},
+        "mapping": {"$ref": "#/$defs/mapping"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_path", "remote_relative_path", "sha256"],
+      "properties": {
+        "source_path": {"type": ["string", "null"]},
+        "remote_relative_path": {"type": ["string", "null"]},
+        "sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_take_id",
+        "source_session_id",
+        "reference_camera_id",
+        "sync_revision",
+        "sync_quality",
+        "source",
+        "anchor_count",
+        "calibration",
+        "anchors",
+        "confirmation",
+        "cameras",
+        "sync_core_sha256"
+      ],
+      "properties": {
+        "capture_take_id": {"type": "string", "minLength": 1},
+        "source_session_id": {"type": "string", "minLength": 1},
+        "reference_camera_id": {"type": "string", "minLength": 1},
+        "sync_revision": {"type": "string", "minLength": 1},
+        "sync_quality": {"enum": ["good", "degraded", "unknown"]},
+        "source": {"type": "string", "minLength": 1},
+        "anchor_count": {"type": ["integer", "null"], "minimum": 0},
+        "calibration": {"$ref": "#/$defs/artifact"},
+        "anchors": {"$ref": "#/$defs/artifact"},
+        "confirmation": {"$ref": "#/$defs/artifact"},
+        "cameras": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/camera"}
+        },
+        "sync_core_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}
