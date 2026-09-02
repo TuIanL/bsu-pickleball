@@ -4,23 +4,28 @@ dist
 *.local
 coverage
 .runtime/
-runs/
-datasets/
-data/
-!datasets/README.md
+/runs/
+/datasets/*
+!/datasets/README.md
+/data/
 
 # Python backend
+.venv/
 backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
+.pytest_cache/
 backend/.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 backend/runs/
-backend/data/uploads/*
-backend/data/outputs/*
-backend/data/calibrations/*
-backend/data/tmp/*
-!backend/data/**/.gitkeep
+# 本地运行时数据整体忽略，仅保留目录占位与 README
+# （recordings / sync-recordings / cameras / vidat-annotations / sqlite 等均属于运行时产物）
+backend/data/*
+!backend/data/*/
+backend/data/*/**
 !backend/data/README.md
+!backend/data/**/.gitkeep
 
 # Local analysis runtime files
 storage/uploads/*
@@ -36,6 +41,32 @@ models/*
 *.onnx
 *.ckpt
 *.engine
+
+# 原始视频素材（避免大体积媒体误入库）
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# OpenSpec change 的实验产物：数据集 manifest、clip 清单、模型包与评估报告
+# （proposal / design / specs / tasks.md 仍需入库）
+openspec/changes/**/artifacts/
+
+# 本地数据库与 WAL 文件
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+
+# 日志
+*.log
+
+# 本地环境变量
+.env
+.env.*
+!.env.example
 
 # WorkBuddy project memory (daily logs, session notes)
 .workbuddy/
