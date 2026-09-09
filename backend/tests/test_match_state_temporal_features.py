@@ -162,3 +162,12 @@ def test_timeline_metrics_report_iou_boundaries_misses_and_false_positives():
     state = evaluate_state_windows(windows, ground_truth)
     assert state["unknown_rate"] == 0.5
     assert state["confusion_matrix"][0][0] == 1
+
+
+def test_rally_matching_rejects_incidental_low_iou_overlap():
+    ground_truth = [{"start_ms": 1000, "end_ms": 2000}]
+    predicted = [{"start_ms": 1900, "end_ms": 3000}]
+    rally = evaluate_rally_segments(predicted, ground_truth)
+    assert rally["matched_count"] == 0
+    assert rally["missed_count"] == 1
+    assert rally["false_positive_count"] == 1

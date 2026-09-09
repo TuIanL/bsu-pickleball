@@ -176,6 +176,7 @@ def test_step_emits_disjoint_candidate_detections_under_lock_only():
         """固定 eligible={1}：确定性复现"部分 track 已锁定、部分未锁定"。"""
 
         _initial_lock_assignments: dict = {}
+        slots: dict = {}
 
         def update(self, **_kwargs):
             return PlayerLockUpdate(eligible_track_ids={1})

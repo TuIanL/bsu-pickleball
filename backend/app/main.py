@@ -14,12 +14,12 @@ from app.api.routes_coding_actions import router as coding_actions_router
 from app.api.routes_field_sessions import router as field_sessions_router
 from app.api.routes_metric_court_scene import router as metric_court_scene_router
 from app.api.routes_recording import router as recording_router
+from app.api.routes_scoring_calibration import router as scoring_calibration_router
 from app.api.routes_segment_editing import router as segment_editing_router
 from app.api.routes_segment_editing import router2 as analysis_batch_router
-from app.api.routes_scoring_calibration import router as scoring_calibration_router
+from app.api.routes_showcase import router as showcase_router
 from app.api.routes_storage import router as storage_router
 from app.api.routes_sync_recording import router as sync_recording_router
-from app.api.routes_showcase import router as showcase_router
 from app.api.routes_timeline_events import router as timeline_events_router
 from app.api.routes_vidat import router as vidat_router
 from app.api.routes_video import router as video_router
@@ -27,6 +27,7 @@ from app.api.routes_video import router as video_router
 # 导入配置和日志设置
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.upload_limit import UploadBodyLimitMiddleware
 from app.database import init_db
 from app.services.mock_analysis import recover_zombie_jobs, start_analysis_worker, stop_analysis_worker
 from app.services.timing_backfill import start_timing_backfill
@@ -69,6 +70,9 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
 )
 
+
+app.add_middleware(UploadBodyLimitMiddleware)
+
 # 注册各个功能模块的路由
 app.include_router(video_router)
 app.include_router(storage_router)
@@ -89,9 +93,7 @@ app.include_router(analysis_batch_router)
 app.include_router(scoring_calibration_router)
 
 # 挂载双摄短录测试首帧静态目录
-_TEST_FRAMES_DIR = _os.path.join(
-    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), "data", "sync-recordings", "tests"
-)
+_TEST_FRAMES_DIR = str(settings.resolved_static_test_frames_dir)
 _os.makedirs(_TEST_FRAMES_DIR, exist_ok=True)
 app.mount("/api/sync-recordings/test-frames", StaticFiles(directory=_TEST_FRAMES_DIR), name="test_frames")
 

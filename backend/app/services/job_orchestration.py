@@ -13,14 +13,12 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import logging
 import os
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -34,9 +32,9 @@ from app.schemas.analysis import (
     AnalysisStage,
     AnalysisStageId,
     AnalysisStageStatus,
-    build_match_context,
 )
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
+from app.services.analysis_control_plane import AnalysisControlPlane
 from app.services.analysis_progress import (
     ProgressMode,
     StageTransitionError,
@@ -46,10 +44,8 @@ from app.services.analysis_progress import (
     normalize_stage_snapshot,
     resolve_progress_mode,
     stage_definition,
-    stage_definitions,
     stage_ids,
 )
-from app.services.analysis_control_plane import AnalysisControlPlane
 from app.services.storage_service import StorageService
 from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
 
@@ -358,6 +354,8 @@ class JobStore:
         return job
 
     def _import_legacy_jobs(self) -> int:
+        if self.control_plane.legacy_import_complete():
+            return 0
         payloads: list[dict[str, object]] = []
         jobs_dir = self.storage.jobs_dir()
         if jobs_dir.exists():
@@ -367,6 +365,18 @@ class JobStore:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Skipping unreadable legacy analysis job %s: %s", path, exc)
         return self.control_plane.import_legacy(payloads)
+
+    def import_legacy_jobs(self) -> int:
+        """Explicitly reconcile legacy JSON snapshots into the control plane."""
+        payloads: list[dict[str, object]] = []
+        jobs_dir = self.storage.jobs_dir()
+        if jobs_dir.exists():
+            for path in sorted(jobs_dir.glob("*.json")):
+                try:
+                    payloads.append(self._payload(AnalysisJobSummary.model_validate(self.storage.read_json(path))))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Skipping unreadable legacy analysis job %s: %s", path, exc)
+        return self.control_plane.import_legacy(payloads, force=True)
 
     def create_job(
         self, payload: AnalysisJobCreate, *, job_id: str | None = None, report_id: str | None = None
@@ -468,15 +478,19 @@ class JobStore:
         )
 
     def get(self, job_id: str) -> AnalysisJobSummary | None:
-        self._import_legacy_jobs()
         try:
-            return self._persist_payload(self.control_plane.get(job_id))
+            payload = self.control_plane.get(job_id)
+            if payload is None:
+                return None
+            job = self._model(payload)
+            with self._lock:
+                self._jobs[job.id] = job
+            return job
         except Exception as exc:  # noqa: BLE001
             logger.warning("Unable to read analysis job %s from control plane: %s", job_id, exc)
             return None
 
     def list(self) -> list[AnalysisJobSummary]:
-        self._import_legacy_jobs()
         jobs: list[AnalysisJobSummary] = []
         for payload in self.control_plane.list():
             try:
@@ -882,8 +896,8 @@ class CancellationToken:
         self.job_id = job_id
 
     def is_cancel_requested(self) -> bool:
-        job = self.store.get(self.job_id)
-        return bool(job and job.cancelRequestedAt and job.canonicalStatus not in TERMINAL_CANONICAL_STATUSES)
+        canonical_status, cancel_requested_at = self.store.control_plane.get_cancel_state(self.job_id)
+        return bool(cancel_requested_at and canonical_status not in TERMINAL_CANONICAL_STATUSES)
 
     def raise_if_cancelled(self) -> None:
         if self.is_cancel_requested():

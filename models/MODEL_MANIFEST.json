@@ -1,0 +1,28 @@
+{
+  "schema_version": "pickleball-model-manifest.v1",
+  "generated_at": "2026-09-06",
+  "verification": "sha256",
+  "models": [
+    {
+      "id": "rtmpose-body8-halpe26-config",
+      "path": "rtmpose/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py",
+      "sha256": "5341e1287a50c4d53c5f0cbac8f779f8f7a42493c92e916b7e2e38b659b7328b",
+      "optional": true,
+      "source": "OpenMMLab mmpose dev-1.x RTMPose Body8 Halpe26"
+    },
+    {
+      "id": "rtmpose-body8-halpe26-checkpoint",
+      "path": "rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
+      "sha256": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90",
+      "optional": true,
+      "source": "OpenMMLab RTMPose v1 checkpoint"
+    },
+    {
+      "id": "court-line-best",
+      "path": "court-line/best.pt",
+      "sha256": "a13afa56c259c21f2dbf8a81eea5d49e84948cc3a1a5441752bfa36bc1d4140c",
+      "optional": true,
+      "source": "Project-local court-line detector"
+    }
+  ]
+}

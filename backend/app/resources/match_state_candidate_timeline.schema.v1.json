@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_candidate_timeline.schema.v1.json",
+  "title": "Match-state candidate timeline v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "capture_take_id",
+    "source_session_id",
+    "duration_ms",
+    "model",
+    "source_provenance",
+    "decoder",
+    "windows",
+    "candidate_segments",
+    "review_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "match_state_candidate_timeline.v1"},
+    "capture_take_id": {"type": "string", "minLength": 1},
+    "source_session_id": {"type": "string", "minLength": 1},
+    "duration_ms": {"type": "number", "exclusiveMinimum": 0},
+    "review_status": {"enum": ["unreviewed", "in_review", "reviewed"]},
+    "model": {
+      "type": "object",
+      "required": ["package_id", "model_name", "model_version", "modalities"],
+      "properties": {
+        "package_id": {"type": "string", "minLength": 1},
+        "model_name": {"type": "string", "minLength": 1},
+        "model_version": {"type": "string", "minLength": 1},
+        "modalities": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "source_provenance": {
+      "type": "object",
+      "required": [
+        "model_package",
+        "dataset_manifest_sha256",
+        "timeline_generator_revision"
+      ],
+      "additionalProperties": true
+    },
+    "decoder": {
+      "type": "object",
+      "required": [
+        "minimum_confidence",
+        "minimum_coverage",
+        "minimum_duration_ms",
+        "hysteresis",
+        "unknown_on_insufficient_evidence"
+      ],
+      "additionalProperties": true
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "center_ms",
+          "state_probabilities",
+          "coverage",
+          "insufficient_evidence",
+          "state",
+          "confidence",
+          "evidence_ok"
+        ],
+        "properties": {
+          "center_ms": {"type": "number", "minimum": 0},
+          "state_probabilities": {
+            "type": "object",
+            "required": ["rally_active", "non_play"],
+            "properties": {
+              "rally_active": {"type": "number", "minimum": 0, "maximum": 1},
+              "non_play": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "additionalProperties": true
+          },
+          "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+          "insufficient_evidence": {"type": "boolean"},
+          "state": {"enum": ["rally_active", "non_play", "unknown"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "evidence_ok": {"type": "boolean"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "candidate_segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "segment_index",
+          "start_ms",
+          "end_ms",
+          "duration_ms",
+          "confidence",
+          "evidence_window_count",
+          "boundary_evidence",
+          "status"
+        ],
+        "properties": {
+          "candidate_id": {"type": "string", "minLength": 1},
+          "segment_index": {"type": "integer", "minimum": 1},
+          "start_ms": {"type": "number", "minimum": 0},
+          "end_ms": {"type": "number", "exclusiveMinimum": 0},
+          "duration_ms": {"type": "number", "exclusiveMinimum": 0},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "evidence_window_count": {"type": "integer", "minimum": 1},
+          "boundary_evidence": {
+            "type": "object",
+            "required": [
+              "window_index_start",
+              "window_index_end",
+              "first_active_center_ms",
+              "last_active_center_ms",
+              "first_active_probability",
+              "last_active_probability",
+              "first_coverage",
+              "last_coverage"
+            ],
+            "additionalProperties": true
+          },
+          "status": {"enum": ["unreviewed", "accepted", "corrected", "rejected"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "decoder_tuning": {"type": "object"},
+    "ground_truth_segments": {"type": "array"},
+    "evaluation": {"type": "object"}
+  },
+  "additionalProperties": true
+}

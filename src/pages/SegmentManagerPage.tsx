@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw, Tags, BadgeCheck, Ban, Crosshair, ListChecks, StepForward } from "lucide-react";
-import type { BoundaryReviewSummary, CaptureSegmentSummary, CaptureTakeSummary, SessionTimelineEvent } from "../types/report";
+import type { BoundaryReviewSummary, CaptureSegmentSummary, CaptureTakeSummary, MatchStateCandidateReviewSummary, MatchStateCandidateSegment, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn } from "../app/navigationTypes";
-import { createRallySegment, getBoundaryReview, getCaptureTake, listSegments, patchSegment, reviewSegmentBoundary, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl, renumberRallyOrdinals } from "../services/analysisClient";
+import { createRallySegment, decideMatchStateCandidate, getBoundaryReview, getCaptureTake, getMatchStateCandidates, isAnalysisApiError, listSegments, patchSegment, reviewSegmentBoundary, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl, renumberRallyOrdinals } from "../services/analysisClient";
 import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
 import { EditableSegmentTimeline } from "../components/EditableSegmentTimeline";
 
 type FilterType = "all" | "set" | "game" | "rally";
 type ReviewQueueFilter = "sampled" | "pending" | "reviewed" | "excluded" | "all";
+type ReviewFocus = "model" | "manual";
 type BoundaryDraft = { startMs?: number; endMs?: number | null };
 type NewRallyDraft = { startMs: number | null; endMs: number | null };
 
@@ -27,8 +28,14 @@ export function SegmentManagerPage({
   const [events, setEvents] = useState<SessionTimelineEvent[]>([]);
   const [filter, setFilter] = useState<FilterType>("rally");
   const [reviewMode, setReviewMode] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mode") === "boundary-review");
+  const [reviewFocus, setReviewFocus] = useState<ReviewFocus>("manual");
   const [reviewQueueFilter, setReviewQueueFilter] = useState<ReviewQueueFilter>("sampled");
   const [reviewSummary, setReviewSummary] = useState<BoundaryReviewSummary | null>(null);
+  const [candidateSummary, setCandidateSummary] = useState<MatchStateCandidateReviewSummary | null>(null);
+  const [activeCandidateId, setActiveCandidateId] = useState<string | null>(null);
+  const [candidateDraft, setCandidateDraft] = useState<BoundaryDraft>({});
+  const [candidateSaving, setCandidateSaving] = useState(false);
+  const [candidateError, setCandidateError] = useState<string | null>(null);
   const [boundaryDrafts, setBoundaryDrafts] = useState<Record<string, BoundaryDraft>>({});
   const [newRallyDraft, setNewRallyDraft] = useState<NewRallyDraft | null>(null);
   const [newRallySaving, setNewRallySaving] = useState(false);
@@ -99,6 +106,22 @@ export function SegmentManagerPage({
     void loadData();
   }, [loadData]);
 
+  const loadModelCandidates = useCallback(async () => {
+    try {
+      const candidates = await getMatchStateCandidates(takeId);
+      setCandidateSummary(candidates);
+      if (candidates.status === "available" && candidates.candidates.length > 0) setReviewFocus("model");
+      setActiveCandidateId((current) => current ?? candidates.candidates.find((item) => item.status === "unreviewed")?.candidate_id ?? null);
+    } catch {
+      setCandidateSummary({ schema_version: "match-state-candidate-review.v1", status: "unavailable", reason: "candidate_api_unavailable", capture_take_id: takeId, revision: 0, candidates: [] });
+    }
+  }, [takeId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- publishes an independent async API result.
+    if (reviewMode) void loadModelCandidates();
+  }, [loadModelCandidates, reviewMode]);
+
   useEffect(() => () => {
     if (labelClickTimerRef.current !== null) window.clearTimeout(labelClickTimerRef.current);
   }, []);
@@ -118,6 +141,10 @@ export function SegmentManagerPage({
       })
       .sort((a, b) => (a.effective_start_ms ?? a.start_ms) - (b.effective_start_ms ?? b.start_ms)),
     [boundaryDrafts, segments],
+  );
+  const activeCandidate = useMemo(
+    () => candidateSummary?.candidates.find((candidate) => candidate.candidate_id === activeCandidateId) ?? null,
+    [activeCandidateId, candidateSummary?.candidates],
   );
   const sampledReviewIds = useMemo(
     () => new Set(sampleEvenly(reviewRallies, 6).map((segment) => segment.id)),
@@ -204,28 +231,123 @@ export function SegmentManagerPage({
     setSynchronizedPlaying(false);
   }, [setSynchronizedPlaying]);
 
-  const focusReviewRally = useCallback((segment: CaptureSegmentSummary, playContext = false) => {
+  const focusReviewRally = useCallback((segment: CaptureSegmentSummary, mode: "idle" | "context" | "segment" = "idle") => {
     const start = segment.effective_start_ms ?? segment.start_ms;
     const rawEnd = segment.effective_end_ms ?? segment.end_ms ?? start + 500;
+    const segmentEnd = rawEnd > start ? rawEnd : Math.min(timelineTotalMs, start + 500);
     const contextStart = Math.max(0, start - 3000);
     // 边界倒置的异常回合也必须能被选中和播放上下文，先给它一个安全的可播放窗口，
     // 让用户可以把错误的另一端重新标定回来。
-    const contextEnd = Math.min(timelineTotalMs, Math.max(start + 3000, rawEnd + 3000));
+    const contextEnd = Math.min(timelineTotalMs, Math.max(start + 3000, segmentEnd + 3000));
+    const playbackStart = mode === "context" ? contextStart : start;
+    const playbackEnd = mode === "segment" ? segmentEnd : contextEnd;
     setActiveSegmentId(segment.id);
-    setCurrentTimeMs(contextStart);
-    setPlaybackMode(playContext ? "segment" : "idle");
-    if (playContext) {
-      playbackWindowRef.current = { startMs: contextStart, endMs: contextEnd };
+    setCurrentTimeMs(playbackStart);
+    setPlaybackMode(mode === "idle" ? "idle" : "segment");
+    if (mode !== "idle") {
+      playbackWindowRef.current = { startMs: playbackStart, endMs: playbackEnd };
       setSynchronizedPlaying(true);
-      playerRef.current?.playSegment(contextStart, contextEnd);
-      secondaryPlayerRef.current?.playSegment(contextStart, contextEnd);
+      playerRef.current?.playSegment(playbackStart, playbackEnd);
+      secondaryPlayerRef.current?.playSegment(playbackStart, playbackEnd);
     } else {
       playbackWindowRef.current = null;
       // 选中或切换队列只定位；如果此前正在播放，先让两个视角一起停下。
       pauseAllPlayers();
-      seekAllPlayers(contextStart);
+      seekAllPlayers(playbackStart);
     }
   }, [pauseAllPlayers, seekAllPlayers, setSynchronizedPlaying, timelineTotalMs]);
+
+  const focusModelCandidate = useCallback((candidate: MatchStateCandidateSegment, playContext = false) => {
+    // 候选复核播放使用候选本身的边界：从候选起点开始，到候选终点自动暂停。
+    // 之前这里沿用了人工边界的“前后 3 秒”上下文窗口，导致播放会越过候选终点，
+    // 用户无法在播放器停下的瞬间判断模型给出的结束边界。
+    const previewStart = Math.max(0, candidate.start_ms);
+    const previewEnd = Math.min(timelineTotalMs, Math.max(previewStart + 500, candidate.end_ms));
+    setActiveCandidateId(candidate.candidate_id);
+    setActiveSegmentId(null);
+    setCandidateDraft({});
+    setCandidateError(null);
+    setCurrentTimeMs(previewStart);
+    if (playContext) {
+      playbackWindowRef.current = { startMs: previewStart, endMs: previewEnd };
+      setPlaybackMode("segment");
+      setSynchronizedPlaying(true);
+      playerRef.current?.playSegment(previewStart, previewEnd);
+      secondaryPlayerRef.current?.playSegment(previewStart, previewEnd);
+    } else {
+      setPlaybackMode("idle");
+      pauseAllPlayers();
+      seekAllPlayers(previewStart);
+      // 选中后如果用户点击播放器自身的播放按钮，也应沿用候选边界自动暂停。
+      // 必须在 seekAllPlayers 之后设置，因为 seek 可能清理上一个片段播放窗口。
+      playbackWindowRef.current = { startMs: previewStart, endMs: previewEnd };
+    }
+  }, [pauseAllPlayers, seekAllPlayers, setSynchronizedPlaying, timelineTotalMs]);
+
+  const handleReviewFocusChange = useCallback((next: ReviewFocus) => {
+    setReviewFocus(next);
+    if (next === "model") {
+      if (activeCandidate) focusModelCandidate(activeCandidate);
+      else {
+        playbackWindowRef.current = null;
+        pauseAllPlayers();
+      }
+      return;
+    }
+    if (activeReviewRally) focusReviewRally(activeReviewRally);
+    else {
+      playbackWindowRef.current = null;
+      pauseAllPlayers();
+    }
+  }, [activeCandidate, activeReviewRally, focusModelCandidate, focusReviewRally, pauseAllPlayers]);
+
+  const setCandidateBoundaryFromPlayhead = useCallback((edge: "start" | "end") => {
+    if (!activeCandidate) return;
+    setCandidateDraft((current) => ({ ...current, [edge === "start" ? "startMs" : "endMs"]: Math.round(currentTimeMs) }));
+    setCandidateError(null);
+  }, [activeCandidate, currentTimeMs]);
+
+  const saveCandidateDecision = useCallback(async (decision: "accepted" | "corrected" | "rejected") => {
+    if (!activeCandidate || !candidateSummary || candidateSummary.status !== "available") return;
+    const start = candidateDraft.startMs ?? activeCandidate.start_ms;
+    const end = candidateDraft.endMs ?? activeCandidate.end_ms;
+    if (decision === "corrected" && end - start < 500) {
+      setCandidateError("修正后的结束时间必须晚于开始且至少持续 0.5 秒");
+      return;
+    }
+    setCandidateSaving(true);
+    setCandidateError(null);
+    try {
+      const decisionRequest = {
+        decision,
+        expected_revision: candidateSummary.revision,
+        ...(decision === "corrected" ? { start_ms: Math.round(start), end_ms: Math.round(end) } : {}),
+        ...(candidateSummary.artifact_version ? { artifact_version: candidateSummary.artifact_version } : {}),
+      };
+      await decideMatchStateCandidate(takeId, activeCandidate.candidate_id, decisionRequest);
+      const refreshed = await getMatchStateCandidates(takeId);
+      setCandidateSummary(refreshed);
+      setCandidateDraft({});
+      setActiveCandidateId(refreshed.candidates.find((item) => item.status === "unreviewed")?.candidate_id ?? activeCandidate.candidate_id);
+      await refreshBoundaryReview();
+    } catch (error) {
+      if (isAnalysisApiError(error) && error.status === 409) {
+        // Keep the user's draft visible while replacing only the server
+        // snapshot.  A stale tab must never silently resubmit old boundaries.
+        try {
+          const refreshed = await getMatchStateCandidates(takeId);
+          setCandidateSummary(refreshed);
+          setCandidateError("候选状态已更新，请确认当前草稿后再提交");
+        } catch {
+          setCandidateError("候选状态已更新，请刷新后再提交");
+        }
+        return;
+      }
+      setCandidateError(error instanceof Error ? error.message : "候选复核保存失败");
+    } finally {
+      setCandidateSaving(false);
+    }
+  }, [activeCandidate, candidateDraft.endMs, candidateDraft.startMs, candidateSummary, refreshBoundaryReview, takeId]);
 
   const beginNewRally = useCallback(() => {
     playbackWindowRef.current = null;
@@ -437,8 +559,9 @@ export function SegmentManagerPage({
         setOrdinalStartInput(String(seg.ordinal));
         setOrdinalError(null);
       }
-      // 选中只定位，不自动开始播放；播放必须由用户主动点击播放器或“播放前后 3 秒”。
-      focusReviewRally(seg);
+      // 选择人工边界时直接播放该回合本身，到有效结束边界自动暂停；
+      // 若需要查看边界外上下文，使用控制面板中的“播放前后 3 秒”。
+      focusReviewRally(seg, "segment");
     } else {
       setCurrentTimeMs(start);
       setPlaybackMode("segment");
@@ -806,7 +929,7 @@ export function SegmentManagerPage({
           >
             <ListChecks size={16} /> {reviewMode ? "退出边界复核" : "有效回合复核"}
           </button>
-          {reviewMode && (
+          {reviewMode && reviewFocus === "manual" && (
             <>
               <button
                 className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold transition disabled:opacity-50 ${ordinalEditorOpen ? "border-[#2F80ED] bg-[#EFF6FF] text-[#2563EB]" : "border-[#2F80ED] text-[#2563EB] hover:bg-[#EFF6FF]"}`}
@@ -846,13 +969,54 @@ export function SegmentManagerPage({
         </div>
       </div>
 
-      {reviewMode && reviewSummary && (
-        <div className="grid gap-2 rounded-2xl border border-[#B7E4C7] bg-[#F0FDF4] p-4 sm:grid-cols-5">
-          <ReviewMetric label="全部回合" value={reviewSummary.total_count} />
-          <ReviewMetric label="待复核" value={reviewSummary.pending_count} tone="pending" />
-          <ReviewMetric label="确认不变" value={reviewSummary.confirmed_count} tone="confirmed" />
-          <ReviewMetric label="已修正" value={reviewSummary.corrected_count} tone="corrected" />
-          <ReviewMetric label="已排除" value={reviewSummary.excluded_count} tone="excluded" />
+      {reviewMode && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-black tracking-wide text-slate-500">回合复核工作区</p>
+              <h3 className="mt-1 text-base font-black text-[#14241B]">先选择要复核的数据来源</h3>
+              <p className="mt-1 text-xs text-slate-500">模型候选是自动推理结果；人工边界是已有标注。两者分开展示，避免混淆。</p>
+            </div>
+            <div className="flex rounded-xl bg-slate-100 p-1" role="tablist" aria-label="回合复核工作区">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={reviewFocus === "model"}
+                onClick={() => handleReviewFocusChange("model")}
+                disabled={candidateSummary?.status !== "available" || candidateSummary.candidates.length === 0}
+                className={`rounded-lg px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${reviewFocus === "model" ? "bg-violet-600 text-white shadow-sm" : "text-slate-600 hover:bg-white"}`}
+              >
+                模型候选
+                <span className="ml-1 rounded-full bg-white/20 px-1.5 py-0.5 tabular-nums">{candidateSummary?.candidates.length ?? 0}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={reviewFocus === "manual"}
+                onClick={() => handleReviewFocusChange("manual")}
+                className={`rounded-lg px-3 py-2 text-xs font-black transition ${reviewFocus === "manual" ? "bg-amber-500 text-white shadow-sm" : "text-slate-600 hover:bg-white"}`}
+              >
+                人工边界
+                <span className="ml-1 rounded-full bg-black/10 px-1.5 py-0.5 tabular-nums">{reviewSummary?.total_count ?? 0}</span>
+              </button>
+            </div>
+          </div>
+
+          {reviewFocus === "model" && candidateSummary?.status === "available" ? (
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              <ReviewMetric label="模型候选" value={candidateSummary.candidates.length} tone="model" />
+              <ReviewMetric label="待复核" value={candidateSummary.candidates.filter((candidate) => candidate.status === "unreviewed").length} tone="pending" />
+              <ReviewMetric label="unknown 窗口" value={Math.round((candidateSummary.unknown_rate ?? 0) * 1000) / 10} suffix="%" tone="model" />
+            </div>
+          ) : reviewSummary ? (
+            <div className="mt-4 grid gap-2 sm:grid-cols-5">
+              <ReviewMetric label="全部回合" value={reviewSummary.total_count} />
+              <ReviewMetric label="待复核" value={reviewSummary.pending_count} tone="pending" />
+              <ReviewMetric label="确认不变" value={reviewSummary.confirmed_count} tone="confirmed" />
+              <ReviewMetric label="已修正" value={reviewSummary.corrected_count} tone="corrected" />
+              <ReviewMetric label="已排除" value={reviewSummary.excluded_count} tone="excluded" />
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -897,7 +1061,7 @@ export function SegmentManagerPage({
           )}
         </div>
 
-        {reviewMode && ordinalEditorOpen && activeReviewRally ? (
+        {reviewMode && reviewFocus === "manual" && ordinalEditorOpen && activeReviewRally ? (
           <RallyOrdinalControls
             segment={activeReviewRally}
             value={ordinalStartInput}
@@ -908,7 +1072,7 @@ export function SegmentManagerPage({
             onWholeTake={() => void applyRallyOrdinals("whole_take")}
             onCancel={cancelOrdinalEditor}
           />
-        ) : reviewMode && newRallyDraft ? (
+        ) : reviewMode && reviewFocus === "manual" && newRallyDraft ? (
           <NewRallyControls
             draft={newRallyDraft}
             currentTimeMs={currentTimeMs}
@@ -919,13 +1083,13 @@ export function SegmentManagerPage({
             onCreate={() => void createNewRally()}
             onCancel={cancelNewRally}
           />
-        ) : reviewMode && activeReviewRally ? (
+        ) : reviewMode && reviewFocus === "manual" && activeReviewRally ? (
           <BoundaryReviewControls
             segment={activeReviewRally}
             draft={boundaryDrafts[activeReviewRally.id]}
             currentTimeMs={currentTimeMs}
             saving={boundarySavingId === activeReviewRally.id}
-            onPlayContext={() => focusReviewRally(activeReviewRally, true)}
+            onPlayContext={() => focusReviewRally(activeReviewRally, "context")}
             onSetStart={() => setActiveBoundaryFromPlayhead("start")}
             onSetEnd={() => setActiveBoundaryFromPlayhead("end")}
             onConfirm={confirmActiveReview}
@@ -934,8 +1098,36 @@ export function SegmentManagerPage({
           />
         ) : null}
 
-        {/* Segment list */}
+        {reviewMode && reviewFocus === "model" && candidateSummary && (
+          <ModelCandidateReviewPanel
+            summary={candidateSummary}
+            activeCandidate={activeCandidate}
+            draft={candidateDraft}
+            currentTimeMs={currentTimeMs}
+            saving={candidateSaving}
+            error={candidateError}
+            onSelect={(candidate) => focusModelCandidate(candidate, true)}
+            onPlay={(candidate) => focusModelCandidate(candidate, true)}
+            onSetStart={() => setCandidateBoundaryFromPlayhead("start")}
+            onSetEnd={() => setCandidateBoundaryFromPlayhead("end")}
+            onAccept={() => void saveCandidateDecision("accepted")}
+            onCorrect={() => void saveCandidateDecision("corrected")}
+            onReject={() => void saveCandidateDecision("rejected")}
+          />
+        )}
+
+        {/* Manual segment list: kept out of the model workspace so the two sources stay visually separate. */}
+        {(!reviewMode || reviewFocus === "manual") && (
         <div className={`rounded-2xl border border-[#DDE9D6] bg-white p-4 overflow-y-auto ${reviewMode ? "max-h-[420px]" : "max-h-[500px]"}`}>
+          {reviewMode && (
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-black text-[#14241B]">人工边界队列</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">已有人工标注的回合，用于复核、修正或补录。</p>
+              </div>
+              <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700">{filteredSegments.length} 条显示</span>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 mb-3">
             {(reviewMode ? (["sampled", "pending", "reviewed", "excluded", "all"] as ReviewQueueFilter[]) : (["all", "set", "game", "rally"] as FilterType[])).map(f => (
               <button
@@ -989,7 +1181,7 @@ export function SegmentManagerPage({
               ) : (
                 <span
                   className="flex-1 font-medium text-[#14241B] text-xs truncate"
-                  title={reviewMode ? "点击播放边界前后 3 秒" : "单击播放；双击编辑标签"}
+                  title={reviewMode ? "点击从该回合起点播放，到终点自动暂停" : "单击播放；双击编辑标签"}
                   onClick={(e) => reviewMode ? undefined : handleLabelClick(e, seg)}
                   onDoubleClick={(e) => reviewMode ? undefined : handleLabelDoubleClick(e, seg)}
                 >
@@ -1026,6 +1218,7 @@ export function SegmentManagerPage({
             </button>
           )}
         </div>
+        )}
       </div>
 
       {invalidSegments.length > 0 && (
@@ -1035,18 +1228,29 @@ export function SegmentManagerPage({
       )}
 
       {/* Timeline */}
-      <EditableSegmentTimeline
-        segments={segments}
-        events={events}
-        totalDurationMs={timelineTotalMs}
-        currentTimeMs={currentTimeMs}
-        activeSegmentId={activeSegmentId}
-        savingSegmentId={boundarySavingId}
-        reviewMode={reviewMode}
-        onSeek={handleTimelineSeek}
-        onSegmentClick={handleTimelineSegmentClick}
-        onBoundaryChange={handleBoundaryChange}
-      />
+      <div className={reviewMode ? "space-y-2" : ""}>
+        {reviewMode && <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          <div>
+            <p className="text-xs font-black text-[#14241B]">证据时间线</p>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              {reviewMode && reviewFocus === "model" ? "人工边界作为参考底稿；模型候选请在上方模型工作区复核。" : reviewMode ? "当前播放头与人工边界队列联动。" : "已保存的盘、局、分与事件。"}
+            </p>
+          </div>
+          {reviewMode && <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${reviewFocus === "model" ? "bg-violet-50 text-violet-700" : "bg-amber-50 text-amber-700"}`}>{reviewFocus === "model" ? "人工边界 · 参考" : "人工边界 · 编辑"}</span>}
+        </div>}
+        <EditableSegmentTimeline
+          segments={segments}
+          events={events}
+          totalDurationMs={timelineTotalMs}
+          currentTimeMs={currentTimeMs}
+          activeSegmentId={activeSegmentId}
+          savingSegmentId={boundarySavingId}
+          reviewMode={reviewMode}
+          onSeek={handleTimelineSeek}
+          onSegmentClick={handleTimelineSegmentClick}
+          onBoundaryChange={handleBoundaryChange}
+        />
+      </div>
     </div>
   );
 }
@@ -1086,17 +1290,18 @@ function sampleEvenly<T>(values: T[], limit: number): T[] {
   return Array.from(indexes).sort((a, b) => a - b).map((index) => values[index]);
 }
 
-function ReviewMetric({ label, value, tone = "default" }: { label: string; value: number; tone?: "default" | "pending" | "confirmed" | "corrected" | "excluded" }) {
+function ReviewMetric({ label, value, suffix = "", tone = "default" }: { label: string; value: number | string; suffix?: string; tone?: "default" | "pending" | "confirmed" | "corrected" | "excluded" | "model" }) {
   const colors = {
     default: "text-[#14241B]",
     pending: "text-[#D97706]",
     confirmed: "text-[#168A34]",
     corrected: "text-[#2563EB]",
     excluded: "text-[#DC2626]",
+    model: "text-violet-700",
   };
   return (
     <div className="rounded-xl bg-white/80 px-3 py-2 text-center">
-      <div className={`text-lg font-black tabular-nums ${colors[tone]}`}>{value}</div>
+      <div className={`text-lg font-black tabular-nums ${colors[tone]}`}>{value}{suffix && <span className="ml-0.5 text-sm">{suffix}</span>}</div>
       <div className="text-[11px] text-slate-500">{label}</div>
     </div>
   );
@@ -1236,6 +1441,92 @@ function NewRallyControls({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ModelCandidateReviewPanel({
+  summary,
+  activeCandidate,
+  draft,
+  currentTimeMs,
+  saving,
+  error,
+  onSelect,
+  onPlay,
+  onSetStart,
+  onSetEnd,
+  onAccept,
+  onCorrect,
+  onReject,
+}: {
+  summary: MatchStateCandidateReviewSummary;
+  activeCandidate: MatchStateCandidateSegment | null;
+  draft: BoundaryDraft;
+  currentTimeMs: number;
+  saving: boolean;
+  error: string | null;
+  onSelect: (candidate: MatchStateCandidateSegment) => void;
+  onPlay: (candidate: MatchStateCandidateSegment) => void;
+  onSetStart: () => void;
+  onSetEnd: () => void;
+  onAccept: () => void;
+  onCorrect: () => void;
+  onReject: () => void;
+}) {
+  if (summary.status === "unavailable") {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500" data-testid="model-candidate-unavailable">
+        <span className="font-bold text-slate-700">模型候选不可用</span>（{summary.reason ?? "无可用 artifact"}），现有人工复核流程仍可正常使用。
+      </div>
+    );
+  }
+  const pending = summary.candidates.filter((candidate) => candidate.status === "unreviewed").length;
+  const start = draft.startMs ?? activeCandidate?.start_ms ?? 0;
+  const end = draft.endMs ?? activeCandidate?.end_ms ?? start;
+  const alreadyReviewed = activeCandidate ? activeCandidate.status !== "unreviewed" : true;
+  return (
+    <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4" data-testid="model-candidate-review">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-black text-violet-900">模型候选回合</h3>
+          <p className="mt-0.5 text-[11px] text-violet-700">
+            {summary.model?.model_version ?? "unknown model"} · {summary.candidates.length} 条 · 待复核 {pending} · unknown {((summary.unknown_rate ?? 0) * 100).toFixed(1)}%
+          </p>
+        </div>
+        <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-violet-700">revision {summary.revision}</span>
+      </div>
+      <div className="mt-3 flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+        {summary.candidates.map((candidate) => (
+          <button
+            key={candidate.candidate_id}
+            type="button"
+            onClick={() => onSelect(candidate)}
+            className={`rounded-lg border px-2 py-1 text-[10px] font-bold ${activeCandidate?.candidate_id === candidate.candidate_id ? "border-violet-500 bg-white text-violet-900" : "border-violet-100 bg-violet-100/60 text-violet-600"}`}
+            title={`${formatPreciseMs(candidate.start_ms)} → ${formatPreciseMs(candidate.end_ms)}，置信度 ${(candidate.confidence * 100).toFixed(1)}%`}
+          >
+            #{candidate.segment_index} · {candidate.status === "unreviewed" ? "待复核" : candidate.status}
+          </button>
+        ))}
+      </div>
+      {activeCandidate && (
+        <div className="mt-3 rounded-xl border border-violet-100 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="font-bold text-slate-700">候选 #{activeCandidate.segment_index}：{formatPreciseMs(start)} → {formatPreciseMs(end)}</span>
+            <span className="text-slate-500">置信度 {(activeCandidate.confidence * 100).toFixed(1)}% · 播放头 {formatPreciseMs(currentTimeMs)}</span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button className="quiet-button px-3 py-1.5 text-xs" type="button" onClick={() => onPlay(activeCandidate)} title="从候选起点播放，到候选终点自动暂停"><Play size={13} className="mr-1 inline" />播放候选回合</button>
+            <button className="quiet-button px-3 py-1.5 text-xs" type="button" disabled={saving || alreadyReviewed} onClick={onSetStart}>当前帧设开始</button>
+            <button className="quiet-button px-3 py-1.5 text-xs" type="button" disabled={saving || alreadyReviewed} onClick={onSetEnd}>当前帧设结束</button>
+            <button className="rounded-lg bg-[#168A34] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40" type="button" disabled={saving || alreadyReviewed} onClick={onAccept}>接受原边界</button>
+            <button className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40" type="button" disabled={saving || alreadyReviewed || (draft.startMs == null && draft.endMs == null)} onClick={onCorrect}>保存修正</button>
+            <button className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-bold text-red-600 disabled:opacity-40" type="button" disabled={saving || alreadyReviewed} onClick={onReject}>拒绝候选</button>
+          </div>
+          {alreadyReviewed && <p className="mt-2 text-[11px] font-bold text-slate-500">该候选已复核：{activeCandidate.status}，决定和 provenance 已保留。</p>}
+          {error && <p className="mt-2 text-[11px] font-bold text-red-600">{error}</p>}
+        </div>
+      )}
     </div>
   );
 }

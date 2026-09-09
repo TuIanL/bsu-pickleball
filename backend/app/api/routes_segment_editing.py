@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.database import get_db
 from app.models.capture_segment import CaptureSegment, EditStatus, SegmentType
-from app.schemas.segment_creation import RallyCreateRequest
+from app.schemas.match_state_candidate import MatchStateCandidateDecisionRequest
 from app.schemas.segment_boundary_review import BOUNDARY_REVIEW_SCHEMA_VERSION, BoundaryReviewRequest
+from app.schemas.segment_creation import RallyCreateRequest
 from app.schemas.segment_ordinal import RALLY_ORDINAL_UPDATE_SCHEMA_VERSION, RallyOrdinalUpdateRequest
-from app.services import analysis_batch_service, segment_edit_service
+from app.services import analysis_batch_service, match_state_candidate_service, segment_edit_service
 from app.services.capture_segment_service import get_segment
 from app.services.capture_take_service import get_capture_take
 
@@ -263,6 +269,66 @@ def get_boundary_review(capture_take_id: str, db: Session = Depends(get_db)):
         "suppressed_duplicate_count": len(suppressed_duplicate_ids),
         "suppressed_duplicate_segment_ids": suppressed_duplicate_ids,
         "segments": items,
+    }
+
+
+@router2.get("/{capture_take_id}/match-state-candidates")
+def get_match_state_candidates(capture_take_id: str, db: Session = Depends(get_db)):
+    """Return learned candidates independently from the authoritative segment timeline."""
+    if get_capture_take(db, capture_take_id) is None:
+        raise HTTPException(404, "CaptureTake 不存在")
+    root = get_settings().resolved_match_state_candidate_dir
+    return match_state_candidate_service.get_candidate_review(root, capture_take_id, db)
+
+
+@router2.post("/{capture_take_id}/match-state-candidates/{candidate_id}/decision")
+def decide_match_state_candidate(
+    capture_take_id: str,
+    candidate_id: str,
+    request: MatchStateCandidateDecisionRequest,
+    db: Session = Depends(get_db),
+):
+    """Accept/correct into the official timeline, or reject while retaining an audit record."""
+    take = get_capture_take(db, capture_take_id)
+    if take is None:
+        raise HTTPException(404, "CaptureTake 不存在")
+    if not request.artifact_version or "request_id" not in request.model_fields_set:
+        raise HTTPException(422, "artifact_version and request_id are required")
+    try:
+        record, segment = match_state_candidate_service.decide_candidate(
+            db,
+            root=get_settings().resolved_match_state_candidate_dir,
+            capture_take_id=capture_take_id,
+            candidate_id=candidate_id,
+            request=request,
+            take_duration_ms=take.duration_ms,
+            export_sidecar=False,
+        )
+        db.commit()
+        try:
+            match_state_candidate_service.export_review_record(
+                get_settings().resolved_match_state_candidate_dir,
+                capture_take_id,
+                record,
+                db=db,
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            # SQLite is authoritative; a later export can rebuild the sidecar.
+            logging.getLogger(__name__).warning("Candidate review export failed for %s", capture_take_id, exc_info=True)
+    except RuntimeError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(409, "candidate decision transaction failed") from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "schema_version": "match-state-candidate-review.v1",
+        "capture_take_id": capture_take_id,
+        "record": record,
+        "segment": _seg_dict(segment) if segment is not None else None,
     }
 
 

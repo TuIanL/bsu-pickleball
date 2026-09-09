@@ -29,6 +29,7 @@ import type {
 import {
   listCameras,
   createCamera,
+  isAnalysisApiError,
   deleteCamera,
   probeCamera,
   startRecording,
@@ -315,19 +316,28 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   }, [activeSession, loadData]);
 
   const handleRegisterCamera = async () => {
-    if (!newCamera.camera_id || !newCamera.name || !newCamera.stream_url) {
+    const cameraId = newCamera.camera_id.trim();
+    if (!cameraId || !newCamera.name.trim() || !newCamera.stream_url.trim()) {
       setError("请填写摄像头 ID、名称和流地址");
+      return;
+    }
+    const hasUnsafeCharacter = Array.from(cameraId).some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 0x20 || code === 0x7f || character === "/" || character === "\\";
+    });
+    if (cameraId === "." || cameraId === ".." || hasUnsafeCharacter) {
+      setError("摄像头 ID 只能使用安全文件名字符，不能包含路径分隔符或控制字符");
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      await createCamera(newCamera);
+      await createCamera({ ...newCamera, camera_id: cameraId, name: newCamera.name.trim(), stream_url: newCamera.stream_url.trim() });
       setNewCamera({ camera_id: "", name: "", stream_url: "", protocol: "rtsp", username: "", password: "" });
       setShowRegisterModal(false);
       setRefreshKey((k) => k + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "注册失败");
+      setError(isAnalysisApiError(e) && e.status === 409 ? "该摄像头 ID 已存在，请换一个 ID" : e instanceof Error ? e.message : "注册失败");
     } finally {
       setLoading(false);
     }
@@ -408,7 +418,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       await deleteCamera(cameraId);
       setRefreshKey((k) => k + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "删除失败");
+      setError(isAnalysisApiError(e) && e.status === 409 ? "摄像头正在录制或为内置虚拟设备，暂不能删除" : e instanceof Error ? e.message : "删除失败");
     }
   };
 

@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PICKLEBALL_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("PICKLEBALL_DATABASE_PATH", str(tmp_path / "data" / "test.sqlite3"))
+    monkeypatch.setenv("PICKLEBALL_CAMERAS_DIR", str(tmp_path / "data" / "cameras"))
     config.get_settings.cache_clear()
     reset_database_state()
     init_db()

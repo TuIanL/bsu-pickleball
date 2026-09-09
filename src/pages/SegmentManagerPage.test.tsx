@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   createRallySegment: vi.fn(),
   getCaptureTake: vi.fn(),
   getBoundaryReview: vi.fn(),
+  getMatchStateCandidates: vi.fn(),
+  decideMatchStateCandidate: vi.fn(),
   listSegments: vi.fn(),
   listTimelineEvents: vi.fn(),
   getVideoStreamUrl: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock("../services/analysisClient", () => ({
   createRallySegment: mocks.createRallySegment,
   getCaptureTake: mocks.getCaptureTake,
   getBoundaryReview: mocks.getBoundaryReview,
+  getMatchStateCandidates: mocks.getMatchStateCandidates,
+  decideMatchStateCandidate: mocks.decideMatchStateCandidate,
   listSegments: mocks.listSegments,
   listTimelineEvents: mocks.listTimelineEvents,
   getVideoStreamUrl: mocks.getVideoStreamUrl,
@@ -63,6 +67,14 @@ describe("SegmentManagerPage 视频源解析", () => {
     mocks.getVideoStreamUrl.mockImplementation((id?: string) => (id ? `/api/videos/${id}/stream` : ""));
     mocks.listSegments.mockResolvedValue([]);
     mocks.getBoundaryReview.mockResolvedValue(emptyBoundaryReview());
+    mocks.getMatchStateCandidates.mockResolvedValue({
+      schema_version: "match-state-candidate-review.v1",
+      status: "unavailable",
+      reason: "candidate_artifact_missing",
+      capture_take_id: "ct_1",
+      revision: 0,
+      candidates: [],
+    });
     mocks.listTimelineEvents.mockResolvedValue([]);
   });
 
@@ -267,17 +279,29 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     pause.mockRestore();
   });
 
-  it("复核队列中选中回合只定位，不自动播放", async () => {
+  it("复核队列中选择回合从有效起点播放，并在有效终点自动暂停", async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
-    const row = (await screen.findByTitle("点击播放边界前后 3 秒")).parentElement!;
+    const row = (await screen.findByTitle("点击从该回合起点播放，到终点自动暂停")).parentElement!;
+    const video = document.querySelector("video")!;
+    Object.defineProperty(video, "duration", { configurable: true, value: 10 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(video);
     fireEvent.click(row);
 
-    expect(play).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(video.currentTime).toBe(1);
     expect(row.className).toContain("border-[#2F80ED]");
+
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 5 });
+    fireEvent.timeUpdate(video);
+    expect(pause).toHaveBeenCalled();
+
     play.mockRestore();
+    pause.mockRestore();
   });
 
   it("边界倒置的回合仍可选中，并可通过当前帧重新修正结束时间", async () => {
@@ -303,7 +327,7 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
 
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
     fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
-    const row = await screen.findByTitle("点击播放边界前后 3 秒");
+    const row = await screen.findByTitle("点击从该回合起点播放，到终点自动暂停");
     fireEvent.click(row.parentElement!);
     await waitFor(() => expect(screen.getByTestId("active-boundary-review").textContent).toContain("正在修改：第 8 分"));
 
@@ -343,7 +367,7 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
     fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
 
-    const rows = await screen.findAllByTitle("点击播放边界前后 3 秒");
+    const rows = await screen.findAllByTitle("点击从该回合起点播放，到终点自动暂停");
     fireEvent.click(rows[1].parentElement!);
     await waitFor(() => expect(screen.getByTestId("active-boundary-review").textContent).toContain("正在修改：第 2 分"));
 
@@ -356,7 +380,7 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     fireEvent.click(screen.getByRole("button", { name: "下一待复核" }));
     await waitFor(() => expect(screen.getByTestId("active-boundary-review").textContent).toContain("正在修改：第 1 分"));
 
-    fireEvent.click((await screen.findAllByTitle("点击播放边界前后 3 秒"))[1].parentElement!);
+    fireEvent.click((await screen.findAllByTitle("点击从该回合起点播放，到终点自动暂停"))[1].parentElement!);
     await waitFor(() => expect(screen.getByTestId("active-boundary-review").textContent).toContain("正在修改：第 2 分"));
     fireEvent.click(screen.getByRole("button", { name: /确认并下一条/ }));
     await waitFor(() => expect(screen.getByTestId("active-boundary-review").textContent).toContain("正在修改：第 1 分"));
@@ -440,7 +464,7 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
 
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
     fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
-    const rows = await screen.findAllByTitle("点击播放边界前后 3 秒");
+    const rows = await screen.findAllByTitle("点击从该回合起点播放，到终点自动暂停");
     fireEvent.click(rows[1].parentElement!);
     fireEvent.click(await screen.findByRole("button", { name: "调整分序号" }));
 
@@ -470,7 +494,72 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     expect(reviewCall).not.toHaveBeenCalled();
     expect(await screen.findByText("起点已标定，仍待标定结束时间；当前回合不会算作复核完成。")).toBeTruthy();
     expect((screen.getByRole("button", { name: "确认并下一条" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((await screen.findByTitle("点击播放边界前后 3 秒")).parentElement?.textContent).toContain("起点已标");
+    expect((await screen.findByTitle("点击从该回合起点播放，到终点自动暂停")).parentElement?.textContent).toContain("起点已标");
+  });
+
+  it("在现有复核工作台展示并接受模型候选", async () => {
+    const available = {
+      schema_version: "match-state-candidate-review.v1",
+      status: "available",
+      capture_take_id: "ct_1",
+      revision: 0,
+      model: { model_version: "rgb_structured_fusion_v1" },
+      unknown_rate: 0.12,
+      candidates: [{
+        candidate_id: "candidate_0001", segment_index: 1, start_ms: 1000, end_ms: 5000,
+        duration_ms: 4000, confidence: 0.93, evidence_window_count: 48, status: "unreviewed",
+      }],
+    };
+    mocks.getMatchStateCandidates.mockResolvedValue(available);
+    mocks.decideMatchStateCandidate.mockResolvedValue({
+      schema_version: "match-state-candidate-review.v1", capture_take_id: "ct_1",
+      record: { candidate_id: "candidate_0001", decision: "accepted" }, segment: null,
+    });
+
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
+    expect(await screen.findByTestId("model-candidate-review")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "接受原边界" }));
+
+    await waitFor(() => expect(mocks.decideMatchStateCandidate).toHaveBeenCalledWith("ct_1", "candidate_0001", {
+      decision: "accepted",
+      expected_revision: 0,
+    }));
+  });
+
+  it("模型候选播放从候选起点开始，并在候选终点自动暂停", async () => {
+    mocks.getMatchStateCandidates.mockResolvedValue({
+      schema_version: "match-state-candidate-review.v1",
+      status: "available",
+      capture_take_id: "ct_1",
+      revision: 0,
+      model: { model_version: "rgb_only_v1" },
+      unknown_rate: 0.01,
+      candidates: [{
+        candidate_id: "candidate-1", segment_index: 1, start_ms: 1000, end_ms: 5000,
+        duration_ms: 4000, confidence: 0.99, evidence_window_count: 8, status: "unreviewed",
+      }],
+    });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
+    await screen.findByTestId("model-candidate-review");
+
+    const video = document.querySelector("video")!;
+    Object.defineProperty(video, "duration", { configurable: true, value: 10 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(video);
+    fireEvent.click(screen.getByRole("button", { name: "#1 · 待复核" }));
+    expect(video.currentTime).toBe(1);
+    expect(play).toHaveBeenCalledTimes(1);
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 5 });
+    fireEvent.timeUpdate(video);
+    expect(pause).toHaveBeenCalled();
+
+    play.mockRestore();
+    pause.mockRestore();
   });
 });
 

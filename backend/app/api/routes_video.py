@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 # FastAPI 核心组件
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 # 导入"视频"相关的数据模型（Schema，规定接口接收/返回的数据长什么样）
 from app.schemas.video import (
@@ -37,9 +37,9 @@ from app.schemas.video import (
 
 # 导入真正干活的"视频服务"对象 video_service（逻辑在 services 层，不在路由层）
 # UnsupportedVideoError 是我们自定义的异常：当上传的文件不是受支持的视频格式时抛出
-from app.services.video_service import UnsupportedVideoError, video_service
 from app.services.dual_camera_sync import read_frame_timing_sidecar, summarize_frame_timing_sidecar
 from app.services.multiview_acceptance import materialize_registered_video_timing
+from app.services.video_service import EmptyUploadError, UnsupportedVideoError, UploadSizeExceededError, video_service
 
 # 创建一个路由表：
 # - prefix="/api/videos" 表示本文件里所有接口的路径都以 /api/videos 开头
@@ -77,7 +77,9 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
     try:
         # 调用业务层保存文件。这一步在文件格式不支持时会抛出 UnsupportedVideoError
         video = await video_service.save_upload(file)
-    except UnsupportedVideoError as exc:
+    except UploadSizeExceededError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except (UnsupportedVideoError, EmptyUploadError) as exc:
         # 文件格式不支持：返回 HTTP 400（请求有误），并把具体错误原因告诉前端
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -235,6 +237,7 @@ def materialize_video_timing(video_id: str) -> VideoTimingMaterializeResponse:
 # 定义一个"播放视频流"的接口
 # GET /api/videos/{video_id}/stream：返回视频文件本身，浏览器可直接播放
 @router.get("/{video_id}/stream")
+@router.head("/{video_id}/stream")
 def stream_video(video_id: str, request: Request) -> StreamingResponse:
     """
     浏览器可播放的源视频流
@@ -257,9 +260,18 @@ def stream_video(video_id: str, request: Request) -> StreamingResponse:
     from app.camera.ffmpeg_utils import resolve_browser_stream_path
 
     path = resolve_browser_stream_path(path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Video file not found")
     filename = path.name
-    if path.suffix.lower() in (".mp4",):
-        media_type = "video/mp4"
+    media_type = {
+        ".mp4": "video/mp4",
+        ".m4v": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska",
+        ".ts": "video/mp2t",
+    }.get(path.suffix.lower(), "application/octet-stream")
 
     file_size = path.stat().st_size
     range_header = request.headers.get("range")
@@ -283,23 +295,18 @@ def stream_video(video_id: str, request: Request) -> StreamingResponse:
         "Content-Disposition": _inline_content_disposition(filename),
     }
 
-    if range_header:
-        # 解析 Bytes Range，例如 bytes=0-1023
-        try:
-            unit, range_spec = range_header.split("=", 1)
-            if unit.strip().lower() != "bytes":
-                raise ValueError("Only bytes ranges are supported")
-            start_str, end_str = range_spec.split("-", 1)
-            start = int(start_str) if start_str.strip() else 0
-            end = int(end_str) + 1 if end_str.strip() else file_size
-            end = min(end, file_size)
-            if start < 0 or start >= file_size or start >= end:
-                raise ValueError("Invalid byte range")
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid Range header: {exc}") from exc
-
+    try:
+        byte_range = parse_byte_range(range_header, file_size)
+    except _UnsatisfiableRangeError:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}", "Accept-Ranges": "bytes"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Range header: {exc}") from exc
+    if byte_range is not None:
+        start, end = byte_range
         headers["Content-Range"] = f"bytes {start}-{end - 1}/{file_size}"
         headers["Content-Length"] = str(end - start)
+        if request.method == "HEAD":
+            return Response(status_code=206, media_type=media_type, headers=headers)
         return StreamingResponse(
             _file_iterator(start, end),
             status_code=206,
@@ -308,12 +315,52 @@ def stream_video(video_id: str, request: Request) -> StreamingResponse:
         )
 
     headers["Content-Length"] = str(file_size)
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type=media_type, headers=headers)
     return StreamingResponse(
         _file_iterator(0, file_size),
         status_code=200,
         media_type=media_type,
         headers=headers,
     )
+
+
+class _UnsatisfiableRangeError(Exception):
+    """Internal marker for a syntactically valid but unsatisfiable range."""
+
+
+def parse_byte_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """Return a half-open interval; legal multipart ranges use a full response."""
+    import re
+
+    if not header:
+        return None
+    if not header.startswith("bytes="):
+        raise ValueError("Only bytes ranges are supported")
+    parts = header[6:].split(",")
+    intervals = []
+    for part in parts:
+        match = re.fullmatch(r"([0-9]*)-([0-9]*)", part.strip())
+        if not match or not any(match.groups()):
+            raise ValueError("Invalid byte range")
+        left, right = match.groups()
+        intervals.append((left, right))
+    if len(intervals) > 1:
+        return None
+    left, right = intervals[0]
+    if size == 0:
+        raise _UnsatisfiableRangeError
+    if left:
+        start = int(left)
+        end = min(int(right) + 1, size) if right else size
+        if start >= size or end <= start:
+            raise _UnsatisfiableRangeError
+    else:
+        suffix = int(right)
+        if suffix == 0:
+            raise _UnsatisfiableRangeError
+        start, end = max(0, size - suffix), size
+    return start, end
 
 
 @router.get("/{video_id}/poster")

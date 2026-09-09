@@ -88,7 +88,10 @@ def test_legacy_json_import_is_idempotent_and_does_not_overwrite_control_plane(t
         analysisMode="real",
     )
     storage.write_json_atomic(storage.job_json_path(old_job.id), old_job.model_dump(mode="json"))
-    imported = JobStore(storage).get(old_job.id)
+    restarted_store = JobStore(storage)
+    assert restarted_store.get(old_job.id) is None
+    assert restarted_store.import_legacy_jobs() == 1
+    imported = restarted_store.get(old_job.id)
     assert imported is not None
     assert imported.canonicalStatus == "running"
     assert imported.workerHeartbeatAt is None

@@ -11,7 +11,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.camera.identifiers import validate_camera_id
 from app.camera.models import CameraInfo
+from app.core.config import get_settings
 from app.services.storage_service import StorageService
 
 # 全局内存缓存：camera_id -> CameraInfo
@@ -37,11 +39,18 @@ class CameraRegistry:
     @property
     def cameras_dir(self) -> Path:
         # 摄像头配置存放目录
-        return Path("data/cameras")
+        root = get_settings().resolved_cameras_dir.resolve(strict=False)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     def _camera_path(self, camera_id: str) -> Path:
         # 拼出某个摄像头的 JSON 文件路径
-        return self.cameras_dir / f"{camera_id}.json"
+        safe_id = validate_camera_id(camera_id)
+        root = self.cameras_dir
+        candidate = (root / f"{safe_id}.json").resolve(strict=False)
+        if candidate.parent != root:
+            raise ValueError("camera path escapes configured cameras directory")
+        return candidate
 
     def create(
         self,
@@ -53,6 +62,7 @@ class CameraRegistry:
         password: str | None = None,
     ) -> CameraInfo:
         # 构造一条摄像头记录，写入磁盘并放入内存缓存
+        camera_id = validate_camera_id(camera_id)
         camera = CameraInfo(
             camera_id=camera_id,
             name=name,
@@ -62,24 +72,34 @@ class CameraRegistry:
             password=password,
             created_at=datetime.now(UTC),
         )
-        self._storage.write_json(self._camera_path(camera_id), camera.model_dump(mode="json"))
+        path = self._camera_path(camera_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import json
+
+        with path.open("x", encoding="utf-8") as handle:
+            json.dump(camera.model_dump(mode="json"), handle, ensure_ascii=False, indent=2)
         CAMERAS[camera_id] = camera
         return camera
 
     def get(self, camera_id: str) -> CameraInfo | None:
         if camera_id == VIRTUAL_CAMERA_ID:
             return _virtual_camera()
-        # 先查内存缓存，命中直接返回
-        cached = CAMERAS.get(camera_id)
-        if cached is not None:
-            return cached
-
-        # 缓存未命中再读磁盘
-        path = self._camera_path(camera_id)
+        try:
+            camera_id = validate_camera_id(camera_id)
+        except ValueError:
+            return None
+        # Resolve on every read so configuration-root changes and symlinks cannot
+        # reuse an earlier cached credential-bearing registration.
+        try:
+            path = self._camera_path(camera_id)
+        except ValueError:
+            return None
         if not path.exists():
             return None
 
         camera = CameraInfo.model_validate(self._storage.read_json(path))
+        if camera.camera_id != camera_id:
+            return None
         CAMERAS[camera_id] = camera
         return camera
 
@@ -88,8 +108,16 @@ class CameraRegistry:
         # 遍历目录下所有 .json，逐个解析成摄像头对象
         for path in sorted(self.cameras_dir.glob("*.json")) if self.cameras_dir.exists() else []:
             try:
-                data = self._storage.read_json(path)
+                # Resolve the discovered entry before opening it.  A symlink
+                # placed inside the configured directory must not make the
+                # registry read arbitrary files elsewhere.
+                safe_path = self._camera_path(path.stem)
+                if safe_path != path.resolve(strict=False):
+                    continue
+                data = self._storage.read_json(safe_path)
                 camera = CameraInfo.model_validate(data)
+                if camera.camera_id != path.stem:
+                    continue
                 CAMERAS[camera.camera_id] = camera
                 result.append(camera)
             except Exception:
@@ -101,19 +129,43 @@ class CameraRegistry:
 
     def delete(self, camera_id: str) -> bool:
         # 从内存和磁盘都删除
-        path = self._camera_path(camera_id)
+        if camera_id == VIRTUAL_CAMERA_ID:
+            return False
+        try:
+            path = self._camera_path(camera_id)
+        except ValueError:
+            return False
         CAMERAS.pop(camera_id, None)
         return self._storage.delete_path(path)
 
     def update(self, camera_id: str, new_camera_id: str, name: str) -> CameraInfo | None:
+        try:
+            camera_id = validate_camera_id(camera_id)
+            new_camera_id = validate_camera_id(new_camera_id)
+        except ValueError:
+            return None
         camera = self.get(camera_id)
         if camera is None:
             return None
 
         updated = camera.model_copy(update={"camera_id": new_camera_id, "name": name})
         if new_camera_id != camera_id:
-            self._storage.delete_path(self._camera_path(camera_id))
-        self._storage.write_json(self._camera_path(new_camera_id), updated.model_dump(mode="json"))
+            new_path = self._camera_path(new_camera_id)
+            if new_path.exists():
+                raise FileExistsError(f"camera {new_camera_id} already exists")
+            import json
+
+            # Publish the new record before removing the old one.  A failed
+            # write therefore leaves the original registration usable.
+            with new_path.open("x", encoding="utf-8") as handle:
+                json.dump(updated.model_dump(mode="json"), handle, ensure_ascii=False, indent=2)
+            try:
+                self._storage.delete_path(self._camera_path(camera_id))
+            except Exception:
+                self._storage.delete_path(new_path)
+                raise
+        else:
+            self._storage.write_json(self._camera_path(new_camera_id), updated.model_dump(mode="json"))
         CAMERAS.pop(camera_id, None)
         CAMERAS[new_camera_id] = updated
         return updated

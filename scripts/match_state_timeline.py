@@ -120,14 +120,26 @@ def decode_state_timeline(
             float(decoded[cursor].get("state_probabilities", {}).get("rally_active", 0.0))
             for cursor in range(index, end + 1)
         ]
+        segment_index = len(segments) + 1
         segments.append(
             {
-                "segment_index": len(segments) + 1,
+                "candidate_id": f"candidate_{segment_index:04d}",
+                "segment_index": segment_index,
                 "start_ms": round(start_ms, 3),
                 "end_ms": round(end_ms, 3),
                 "duration_ms": round(end_ms - start_ms, 3),
                 "confidence": round(sum(probabilities) / max(len(probabilities), 1), 6),
                 "evidence_window_count": end - index + 1,
+                "boundary_evidence": {
+                    "window_index_start": index,
+                    "window_index_end": end,
+                    "first_active_center_ms": decoded[index]["center_ms"],
+                    "last_active_center_ms": decoded[end]["center_ms"],
+                    "first_active_probability": round(probabilities[0], 6),
+                    "last_active_probability": round(probabilities[-1], 6),
+                    "first_coverage": decoded[index]["coverage"],
+                    "last_coverage": decoded[end]["coverage"],
+                },
                 "status": "unreviewed",
             }
         )
@@ -137,13 +149,13 @@ def decode_state_timeline(
 
 
 def _match_segments(
-    predicted: list[dict[str, Any]], ground_truth: list[dict[str, Any]]
+    predicted: list[dict[str, Any]], ground_truth: list[dict[str, Any]], minimum_iou: float
 ) -> list[tuple[int, int, float]]:
     candidates = [
         (iou, prediction_index, target_index)
         for prediction_index, prediction in enumerate(predicted)
         for target_index, target in enumerate(ground_truth)
-        if (iou := _iou(prediction, target)) > 0.0
+        if (iou := _iou(prediction, target)) >= minimum_iou
     ]
     matches: list[tuple[int, int, float]] = []
     used_predictions: set[int] = set()
@@ -162,10 +174,11 @@ def evaluate_rally_segments(
     ground_truth: list[dict[str, Any]],
     *,
     boundary_tolerances_ms: tuple[int, ...] = (250, 500, 1000),
+    minimum_match_iou: float = 0.5,
 ) -> dict[str, Any]:
     """计算回合 IoU、边界 MAE、漏检和误检。"""
 
-    matches = _match_segments(predicted, ground_truth)
+    matches = _match_segments(predicted, ground_truth, minimum_match_iou)
     matched_predictions = {item[0] for item in matches}
     matched_targets = {item[1] for item in matches}
     pairs = []
@@ -195,6 +208,7 @@ def evaluate_rally_segments(
         "matched_count": len(matches),
         "missed_count": len(ground_truth) - len(matched_targets),
         "false_positive_count": len(predicted) - len(matched_predictions),
+        "minimum_match_iou": minimum_match_iou,
         "precision": len(matches) / max(len(predicted), 1),
         "recall": len(matches) / max(len(ground_truth), 1),
         "mean_iou": sum(item["iou"] for item in pairs) / max(len(pairs), 1),

@@ -2,6 +2,10 @@
 
 Place local YOLO11, RTMPose26, or future model checkpoints here during development.
 
+`MODEL_MANIFEST.json` records expected SHA-256 values and provenance for the
+checked-in configuration/assets. The runtime never downloads an unknown model;
+verify a local checkpoint against the manifest before enabling model mode.
+
 Model weights are intentionally ignored by git because they are large, machine-specific, and may have separate license constraints.
 
 ## Pickleball Ball and Multi-target Models

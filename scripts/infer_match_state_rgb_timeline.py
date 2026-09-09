@@ -89,6 +89,19 @@ def ground_truth_for_take(take: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: item["start_ms"])
 
 
+def rgb_late_fusion_inference(model: torch.nn.Module, batch: torch.Tensor) -> torch.Tensor:
+    """在推理阶段合并双机位，避免逐机位串行调用 3D 骨干网络。"""
+    if not hasattr(model, "encoder") or not hasattr(model, "head"):
+        return model(batch)
+    # [B, camera, time, channel, height, width] -> [B*camera, channel, time, height, width]
+    batch_size, camera_count = batch.shape[:2]
+    views = batch.permute(0, 1, 3, 2, 4, 5).reshape(
+        batch_size * camera_count, batch.shape[3], batch.shape[2], batch.shape[4], batch.shape[5]
+    )
+    logits = model.head(model.encoder(views))
+    return logits.reshape(batch_size, camera_count, -1).mean(dim=1)
+
+
 def run_take(
     *,
     model: torch.nn.Module,
@@ -100,6 +113,7 @@ def run_take(
     frame_count: int,
     model_frame_count: int,
     stride_ms: int,
+    batch_size: int,
     device: torch.device,
     max_windows: int | None = None,
 ) -> dict[str, Any]:
@@ -109,7 +123,29 @@ def run_take(
         if media.get("logical_uri") in cache_entries
     ]
     windows: list[dict[str, Any]] = []
+    pending_inputs: list[torch.Tensor] = []
+    pending_metadata: list[dict[str, Any]] = []
     started = time.time()
+
+    def flush_batch() -> None:
+        if not pending_inputs:
+            return
+        batch = torch.cat(pending_inputs, dim=0).to(device)
+        values = F.softmax(rgb_late_fusion_inference(model, batch), dim=-1).detach().cpu().tolist()
+        for metadata, probabilities in zip(pending_metadata, values, strict=True):
+            windows.append(
+                {
+                    **metadata,
+                    "state_probabilities": {
+                        "rally_active": float(probabilities[0]),
+                        "non_play": float(probabilities[1]),
+                    },
+                    "insufficient_evidence": False,
+                }
+            )
+        pending_inputs.clear()
+        pending_metadata.clear()
+
     with torch.inference_mode():
         for window_index, center_ms in enumerate(range(0, int(take["duration_ms"]) + 1, stride_ms)):
             if max_windows is not None and window_index >= max_windows:
@@ -124,26 +160,48 @@ def run_take(
                 model_frame_count=model_frame_count,
             )
             if inputs is None:
-                probabilities = {"rally_active": 0.0, "non_play": 0.0}
-                insufficient = True
+                flush_batch()
+                windows.append(
+                    {
+                        "schema_version": "match_state_rgb_timeline_window.v1",
+                        "center_ms": center_ms,
+                        "requested_start_ms": center_ms - clip_duration_ms * 0.5,
+                        "requested_end_ms": center_ms + clip_duration_ms * 0.5,
+                        "state_probabilities": {"rally_active": 0.0, "non_play": 0.0},
+                        "coverage": coverage,
+                        "view_count": len(view_meta),
+                        "view_mask": {item["camera_role"]: True for item in view_meta},
+                        "insufficient_evidence": True,
+                    }
+                )
             else:
-                logits = model(inputs.to(device))
-                values = F.softmax(logits[0], dim=-1).detach().cpu().tolist()
-                probabilities = {"rally_active": float(values[0]), "non_play": float(values[1])}
-                insufficient = False
-            windows.append(
-                {
-                    "schema_version": "match_state_rgb_timeline_window.v1",
-                    "center_ms": center_ms,
-                    "requested_start_ms": center_ms - clip_duration_ms * 0.5,
-                    "requested_end_ms": center_ms + clip_duration_ms * 0.5,
-                    "state_probabilities": probabilities,
-                    "coverage": coverage,
-                    "view_count": len(view_meta),
-                    "view_mask": {item["camera_role"]: True for item in view_meta},
-                    "insufficient_evidence": insufficient,
-                }
-            )
+                pending_inputs.append(inputs)
+                pending_metadata.append(
+                    {
+                        "schema_version": "match_state_rgb_timeline_window.v1",
+                        "center_ms": center_ms,
+                        "requested_start_ms": center_ms - clip_duration_ms * 0.5,
+                        "requested_end_ms": center_ms + clip_duration_ms * 0.5,
+                        "coverage": coverage,
+                        "view_count": len(view_meta),
+                        "view_mask": {item["camera_role"]: True for item in view_meta},
+                    }
+                )
+                if len(pending_inputs) >= batch_size:
+                    flush_batch()
+            if (window_index + 1) % 100 == 0:
+                print(
+                    json.dumps(
+                        {
+                            "source_session_id": take["source_session_id"],
+                            "windows_processed": window_index + 1,
+                            "elapsed_seconds": round(time.time() - started, 1),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+        flush_batch()
     decoded = decode_state_timeline(
         windows,
         minimum_confidence=float(thresholds.get("minimum_confidence", 0.65)),
@@ -183,11 +241,12 @@ def main() -> int:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument("--stride-ms", type=int, default=500)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--only-session")
     parser.add_argument("--max-windows", type=int, help="仅处理每场前 N 个窗口，用于 CPU/路径 smoke")
     args = parser.parse_args()
-    if args.stride_ms <= 0 or (args.max_windows is not None and args.max_windows <= 0):
-        raise SystemExit("stride-ms 和 max-windows 必须为正数")
+    if args.stride_ms <= 0 or args.batch_size <= 0 or (args.max_windows is not None and args.max_windows <= 0):
+        raise SystemExit("stride-ms、batch-size 和 max-windows 必须为正数")
     package_check = validate_package(args.package_dir, strict=True)
     if package_check["status"] != "passed":
         raise SystemExit(json.dumps(package_check, ensure_ascii=False, indent=2))
@@ -223,6 +282,7 @@ def main() -> int:
             frame_count=int(temporal["frame_count"]),
             model_frame_count=int(temporal["encoder_frame_count"]),
             stride_ms=args.stride_ms,
+            batch_size=args.batch_size,
             device=device,
             max_windows=args.max_windows,
         )

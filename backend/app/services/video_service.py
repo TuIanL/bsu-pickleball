@@ -10,12 +10,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import UploadFile
 
+from app.core.config import get_settings
 from app.schemas.video import VideoMetadata
 from app.services.cover_poster import generate_poster
 from app.services.storage_service import StorageService
@@ -29,6 +32,17 @@ VIDEOS: dict[str, VideoMetadata] = {}
 class UnsupportedVideoError(ValueError):
     # 自定义异常：用于表示"视频格式不支持"。继承自 ValueError，方便上层捕获。
     pass
+
+
+class UploadSizeExceededError(ValueError):
+    """Raised when an upload exceeds the configured byte limit."""
+
+
+class EmptyUploadError(ValueError):
+    """Raised when an upload contains no media bytes."""
+
+
+_POSTER_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pickleball-poster")
 
 
 class VideoService:
@@ -52,13 +66,26 @@ class VideoService:
         # 3) 生成一个唯一的 video_id，拼出目标文件路径
         video_id = f"video-{uuid4().hex[:10]}"
         destination = self.storage.uploads_dir / f"{video_id}{suffix}"
+        temporary = destination.with_name(f".{destination.name}.part")
         size = 0
 
-        # 4) 以二进制写模式打开目标文件，按 1MB 一块从上传流里读，边读边写（避免一次性加载到内存）
-        with destination.open("wb") as output:
-            while chunk := await upload.read(1024 * 1024):
-                size += len(chunk)
-                output.write(chunk)
+        try:
+            # 4) 以临时文件流式接收，达到上限立即清理，避免失败内容进入正式目录。
+            with temporary.open("wb") as output:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > get_settings().max_upload_bytes:
+                        raise UploadSizeExceededError(
+                            f"upload exceeds {get_settings().max_upload_bytes} bytes"
+                        )
+                    output.write(chunk)
+            if size == 0:
+                raise EmptyUploadError("uploaded video is empty")
+            temporary.replace(destination)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
+            raise
 
         # 5) 组装元数据对象（记录 id、原始文件名、类型、大小、路径、上传时间）
         metadata = VideoMetadata(
@@ -69,14 +96,20 @@ class VideoService:
             path=str(destination),
             uploaded_at=datetime.now(UTC),
         )
-        # 6) 写入内存缓存 + 落盘 JSON
-        VIDEOS[video_id] = metadata
-        self.storage.write_json(
-            self.storage.video_metadata_path(video_id),
-            metadata.model_dump(mode="json"),
-        )
+        # 6) 写入内存缓存 + 落盘 JSON.  If registration fails, remove the
+        # media file as well so a partial upload never becomes an orphan.
+        metadata_path = self.storage.video_metadata_path(video_id)
+        try:
+            VIDEOS[video_id] = metadata
+            self.storage.write_json(metadata_path, metadata.model_dump(mode="json"))
+        except Exception:
+            VIDEOS.pop(video_id, None)
+            metadata_path.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
+            raise
         # 7) 预生成封面 poster（非阻断：失败仅告警，不影响上传）
-        generate_poster(destination)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_POSTER_EXECUTOR, generate_poster, destination)
         return metadata
 
     def register_recording(
@@ -106,7 +139,7 @@ class VideoService:
             metadata.model_dump(mode="json"),
         )
         # 预生成封面 poster（非阻断：失败仅告警，不影响录制登记）
-        generate_poster(Path(file_path))
+        _POSTER_EXECUTOR.submit(generate_poster, Path(file_path))
         return video_id
 
     def get_video(self, video_id: str) -> VideoMetadata | None:

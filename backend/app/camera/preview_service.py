@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator
+from urllib.parse import urlsplit, urlunsplit
 
 import cv2
 
@@ -26,6 +27,16 @@ DEFAULT_PREVIEW_FPS = 5.0
 
 # JPEG 编码质量（0-100）。85 在清晰度和带宽之间取得平衡。
 DEFAULT_JPEG_QUALITY = 85
+
+
+def _redact_stream_url(stream_url: str) -> str:
+    try:
+        parsed = urlsplit(stream_url)
+        if parsed.username is None and parsed.password is None:
+            return stream_url
+        return urlunsplit((parsed.scheme, parsed.hostname or "", parsed.path, parsed.query, parsed.fragment))
+    except ValueError:
+        return stream_url.rsplit("@", 1)[-1] if "@" in stream_url else stream_url
 
 
 def _build_auth_stream_url(
@@ -102,7 +113,7 @@ def preview_frames(
 
     if not cap.isOpened():
         cap.release()
-        raise RuntimeError(f"无法打开摄像头流: {stream_url}")
+        raise RuntimeError(f"无法打开摄像头流: {_redact_stream_url(stream_url)}")
 
     frame_interval = 1.0 / max(fps, 0.1)  # 防止除零
     last_frame_time = 0.0

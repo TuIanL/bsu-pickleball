@@ -1,0 +1,42 @@
+name: quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11.11
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install FFmpeg and OpenSpec
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+          npm install --global @fission-ai/openspec@1.2.0
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --require-hashes -r backend/requirements-py311.lock
+          python -m pip install --no-deps -e 'backend[dev]'
+      - name: Frontend quality gates
+        run: |
+          npm run build
+          npm test -- --pool=threads --maxWorkers=2
+          npm run lint
+      - name: Backend quality gates
+        run: python -m pytest -q
+        working-directory: backend
+      - name: OpenSpec validation
+        run: openspec validate harden-project-reliability-and-delivery --strict

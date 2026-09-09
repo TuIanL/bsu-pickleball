@@ -1,33 +1,62 @@
-import { lazy, Suspense, useMemo } from "react";
+import { Component, lazy, Suspense, useMemo, type ReactNode } from "react";
 import type { AnalysisJobSummary } from "../types/report";
 import type { RouteState, NavigateFn } from "./navigationTypes";
-import { LandingPage } from "../pages/LandingPage";
-import { CaptureHomePage } from "../pages/CaptureHomePage";
-import { CaptureWizardPage } from "../pages/CaptureWizardPage";
-import CaptureConsolePage from "../pages/CaptureConsolePage";
-import { SegmentManagerPage } from "../pages/SegmentManagerPage";
-import { ScoringCalibrationWorkbenchPage } from "../pages/ScoringCalibrationWorkbenchPage";
-import { RecordingWorkspacePage } from "../pages/RecordingWorkspacePage";
-import { RecordingAnalyzePage } from "../pages/RecordingAnalyzePage";
-import { MultiViewAnalysisSetupPage } from "../pages/MultiViewAnalysisSetupPage";
-import { SyncCalibrationWorkbenchPage } from "../pages/SyncCalibrationWorkbenchPage";
-import { HardwarePage } from "../pages/HardwarePage";
-import { TrainingPage } from "../pages/TrainingPage";
-import { CameraHubPage } from "../pages/CameraHubPage";
-import { AnalysisJobPage } from "../pages/AnalysisJobPage";
-import { AnalysisDetailsPage } from "../pages/AnalysisDetailsPage";
-import { VisionPage } from "../pages/VisionPage";
-import { ReportPage } from "../pages/ReportPage";
-import { NewAnalysisPage } from "../pages/NewAnalysisPage";
-import { AnalysisTasksPage } from "../pages/AnalysisTasksPage";
-import { LibraryPage } from "../pages/LibraryPage";
-import { LibraryItemWorkspace } from "../components/library/LibraryItemWorkspace";
-import { MultiviewObservabilityPage } from "../pages/MultiviewObservabilityPage";
-import { ShowcaseDisplayPage } from "../pages/ShowcaseDisplayPage";
+const LandingPage = lazy(() => import("../pages/LandingPage").then((m) => ({ default: m.LandingPage })));
+const CaptureHomePage = lazy(() => import("../pages/CaptureHomePage").then((m) => ({ default: m.CaptureHomePage })));
+const CaptureWizardPage = lazy(() => import("../pages/CaptureWizardPage").then((m) => ({ default: m.CaptureWizardPage })));
+const CaptureConsolePage = lazy(() => import("../pages/CaptureConsolePage"));
+const SegmentManagerPage = lazy(() => import("../pages/SegmentManagerPage").then((m) => ({ default: m.SegmentManagerPage })));
+const ScoringCalibrationWorkbenchPage = lazy(() => import("../pages/ScoringCalibrationWorkbenchPage").then((m) => ({ default: m.ScoringCalibrationWorkbenchPage })));
+const RecordingWorkspacePage = lazy(() => import("../pages/RecordingWorkspacePage").then((m) => ({ default: m.RecordingWorkspacePage })));
+const RecordingAnalyzePage = lazy(() => import("../pages/RecordingAnalyzePage").then((m) => ({ default: m.RecordingAnalyzePage })));
+const MultiViewAnalysisSetupPage = lazy(() => import("../pages/MultiViewAnalysisSetupPage").then((m) => ({ default: m.MultiViewAnalysisSetupPage })));
+const SyncCalibrationWorkbenchPage = lazy(() => import("../pages/SyncCalibrationWorkbenchPage").then((m) => ({ default: m.SyncCalibrationWorkbenchPage })));
+const HardwarePage = lazy(() => import("../pages/HardwarePage").then((m) => ({ default: m.HardwarePage })));
+const TrainingPage = lazy(() => import("../pages/TrainingPage").then((m) => ({ default: m.TrainingPage })));
+const CameraHubPage = lazy(() => import("../pages/CameraHubPage").then((m) => ({ default: m.CameraHubPage })));
+const AnalysisJobPage = lazy(() => import("../pages/AnalysisJobPage").then((m) => ({ default: m.AnalysisJobPage })));
+const AnalysisDetailsPage = lazy(() => import("../pages/AnalysisDetailsPage").then((m) => ({ default: m.AnalysisDetailsPage })));
+const VisionPage = lazy(() => import("../pages/VisionPage").then((m) => ({ default: m.VisionPage })));
+const ReportPage = lazy(() => import("../pages/ReportPage").then((m) => ({ default: m.ReportPage })));
+const NewAnalysisPage = lazy(() => import("../pages/NewAnalysisPage").then((m) => ({ default: m.NewAnalysisPage })));
+const AnalysisTasksPage = lazy(() => import("../pages/AnalysisTasksPage").then((m) => ({ default: m.AnalysisTasksPage })));
+const LibraryPage = lazy(() => import("../pages/LibraryPage").then((m) => ({ default: m.LibraryPage })));
+const LibraryItemWorkspace = lazy(() => import("../components/library/LibraryItemWorkspace").then((m) => ({ default: m.LibraryItemWorkspace })));
+const MultiviewObservabilityPage = lazy(() => import("../pages/MultiviewObservabilityPage").then((m) => ({ default: m.MultiviewObservabilityPage })));
+const ShowcaseDisplayPage = lazy(() => import("../pages/ShowcaseDisplayPage").then((m) => ({ default: m.ShowcaseDisplayPage })));
 
 const BallTrajectoryPage = lazy(() =>
   import("../pages/BallTrajectoryPage").then((module) => ({ default: module.BallTrajectoryPage })),
 );
+
+class RouteChunkBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="grid min-h-[60vh] place-items-center px-6 text-center text-sm text-[#667085]">
+          <div>
+            <p className="font-bold text-[#14241B]">页面加载失败</p>
+            <p className="mt-2">请重试；当前地址和查询参数会保留。</p>
+            <button
+              type="button"
+              className="mt-4 rounded-lg bg-[#14241B] px-4 py-2 text-xs font-bold text-white"
+              onClick={() => window.location.reload()}
+            >
+              重试或刷新
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface AppRouterProps {
   route: RouteState;
@@ -36,7 +65,7 @@ interface AppRouterProps {
 }
 
 export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
-  return useMemo(() => {
+  const page = useMemo(() => {
     switch (route.name) {
       case "upload":
         return <NewAnalysisPage onNavigate={onNavigate} />;
@@ -108,4 +137,11 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <LandingPage onNavigate={onNavigate} />;
     }
   }, [onNavigate, route, recentJob]);
+  return (
+    <RouteChunkBoundary key={`${route.name}:${"jobId" in route ? route.jobId : ""}`}>
+      <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[#667085]">正在加载页面…</div>}>
+        {page}
+      </Suspense>
+    </RouteChunkBoundary>
+  );
 }

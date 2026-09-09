@@ -15,6 +15,9 @@
     "rgb_clip_schema": "match_state_rgb_clip.v1",
     "group_split_schema": "match_state_group_split.v1",
     "structured_cache_schema": "match_state_structured_feature_cache.v1",
+    "canonical_sync_feature_schema": "match_state_canonical_sync_feature.v2",
+    "structured_sequence_manifest_schema": "match_state_structured_sequence_manifest.v1",
+    "structured_sequence_schema": "match_state_structured_sequence.v1",
     "group_unit": "capture_take_id",
     "required_sync_status": "passed",
     "required_quality_labels": ["high_confidence", "uncertain", "excluded"],
@@ -54,13 +57,15 @@
       "id": "structured_pose_ball_v1",
       "description": "四名球员骨架、球检测/轨迹和质量 mask。",
       "modalities": ["pose", "ball", "quality"],
-      "requires_structured_cache": true
+      "requires_structured_cache": true,
+      "requires_structured_sequence_manifest": true
     },
     {
       "id": "rgb_structured_fusion_v1",
       "description": "RGB 与骨架/球路的晚融合时序模型。",
       "modalities": ["rgb", "pose", "ball", "quality"],
-      "requires_structured_cache": true
+      "requires_structured_cache": true,
+      "requires_structured_sequence_manifest": true
     }
   ],
   "model": {

@@ -177,6 +177,19 @@ def validate_package(package_dir: Path, schema_path: Path | None = None, strict:
             value = provenance.get(key)
             if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
                 errors.append(f"provenance.{key} 不是合法 SHA-256")
+        for key in (
+            "structured_sequence_manifest_sha256",
+            "structured_tensor_manifest_sha256",
+            "rgb_checkpoint_sha256",
+            "structured_checkpoint_sha256",
+        ):
+            value = provenance.get(key)
+            if value is not None and (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(char not in "0123456789abcdef" for char in value)
+            ):
+                errors.append(f"provenance.{key} 不是合法 SHA-256")
 
     report = {
         "schema_version": "match_state_model_package_integrity.v1",

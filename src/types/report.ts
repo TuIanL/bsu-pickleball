@@ -719,6 +719,65 @@ export interface BoundaryReviewRequest {
   note?: string;
 }
 
+export interface MatchStateCandidateSegment {
+  candidate_id: string;
+  segment_index: number;
+  start_ms: number;
+  end_ms: number;
+  duration_ms: number;
+  confidence: number;
+  evidence_window_count: number;
+  boundary_evidence?: Record<string, number>;
+  status: "unreviewed" | "accepted" | "corrected" | "rejected";
+  review?: MatchStateCandidateReviewRecord | null;
+}
+
+export interface MatchStateCandidateReviewRecord {
+  revision: number;
+  artifact_version?: string;
+  candidate_id: string;
+  decision: "accepted" | "corrected" | "rejected";
+  original_start_ms: number;
+  original_end_ms: number;
+  reviewed_start_ms: number;
+  reviewed_end_ms: number;
+  note?: string | null;
+  operation_id?: string | null;
+  output_segment_id?: string | null;
+  reviewed_at: string;
+  provenance?: Record<string, unknown>;
+}
+
+export interface MatchStateCandidateReviewSummary {
+  schema_version: "match-state-candidate-review.v1" | string;
+  status: "available" | "unavailable";
+  reason?: string | null;
+  capture_take_id: string;
+  source_session_id?: string;
+  revision: number;
+  artifact_version?: string;
+  model?: {
+    package_id?: string;
+    model_name?: string;
+    model_version?: string;
+    modalities?: string[];
+  };
+  source_provenance?: Record<string, unknown>;
+  decoder?: Record<string, unknown>;
+  unknown_rate?: number;
+  candidates: MatchStateCandidateSegment[];
+}
+
+export interface MatchStateCandidateDecisionRequest {
+  decision: "accepted" | "corrected" | "rejected";
+  expected_revision: number;
+  artifact_version?: string;
+  request_id?: string;
+  start_ms?: number;
+  end_ms?: number;
+  note?: string;
+}
+
 export interface RallyOrdinalUpdateRequest {
   mode: "from_anchor" | "whole_take";
   anchor_segment_id?: string;

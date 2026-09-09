@@ -7,7 +7,6 @@ import { resolveLibraryItemByRef } from "../../services/libraryAdapter";
 import { getAnalysisRuntimeSnapshot, subscribeAnalysisRuntime, unwatchAnalysisJob, watchAnalysisJob } from "../../services/analysisRuntimeStore";
 import { SourceVideoContent } from "./SourceVideoContent";
 import { computeLibraryViewCapabilities, resolveViewCapability, type LibraryView } from "./viewCapabilities";
-import { VisionPage } from "../../pages/VisionPage";
 import { libraryAnalysisEntryPoints, libraryAnalysisPathFor, libraryItemOverviewPath } from "../../services/libraryAnalysisRouting";
 import { buildAnalysisProgressPath } from "../../app/navigationContext";
 import { deleteAnalysisJob, cancelAnalysisJob } from "../../services/analysisClient";
@@ -32,6 +31,7 @@ const MultiviewObservabilityView = lazy(() =>
 const AnalysisDetailsView = lazy(() =>
   import("../../pages/AnalysisDetailsPage").then((m) => ({ default: m.AnalysisDetailsPage })),
 );
+const VisionView = lazy(() => import("../../pages/VisionPage").then((m) => ({ default: m.VisionPage })));
 
 const VIEW_TABS: { key: LibraryView; label: string }[] = [
   { key: "overview", label: "概览" },
@@ -317,7 +317,9 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
 
         {effectiveView === "analysis" && (
           selectedJobId ? (
-            <VisionPage key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} recentJob={null} embedded onSelectView={goView} />
+            <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载分析视图…</div>}>
+              <VisionView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} recentJob={null} embedded onSelectView={goView} />
+            </Suspense>
           ) : (
             <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">暂无可用分析结果</div>
           )

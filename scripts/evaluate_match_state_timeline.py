@@ -105,7 +105,7 @@ def main() -> int:
             continue
         timeline = load_json(timeline_path)
         windows = timeline.get("windows", [])
-        predicted = timeline.get("segments", [])
+        predicted = timeline.get("candidate_segments", timeline.get("segments", []))
         evaluation = evaluate_timeline(windows, predicted, ground_truth_for_take(take))
         per_take.append(
             {"capture_take_id": take["capture_take_id"], "source_session_id": take["source_session_id"], **evaluation}

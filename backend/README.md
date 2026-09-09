@@ -6,7 +6,7 @@ The backend is intentionally local-first. It uses a lightweight durable job stor
 
 ## Tech Stack
 
-- Python 3.10+
+- Python 3.11（基础验证基线）
 - FastAPI and Pydantic
 - NumPy, Pandas, OpenCV
 - Ultralytics YOLO for person-box overlays in real uploaded-video jobs
@@ -19,9 +19,9 @@ The backend is intentionally local-first. It uses a lightweight durable job stor
 
 ```bash
 cd backend
-python3.10 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 ```
 
 For editable package installs:
@@ -30,14 +30,14 @@ For editable package installs:
 pip install -e ".[dev]"
 ```
 
-For true RTMPose skeleton validation, use a Python 3.10+ environment and install
+For true RTMPose skeleton validation, use the Python 3.11 environment and install
 the optional pose runtime after the base backend dependencies. Choose the
 PyTorch package that matches your machine first, then install MMCV with MIM so
 the wheel matches your PyTorch/CUDA platform:
 
 ```bash
 cd backend
-python3.10 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[dev,vision,pose]"
@@ -60,7 +60,7 @@ PY
 
 ## Run
 
-For daily local development, start both the RTMPose-enabled backend and the
+For daily local development, start the model-free base backend, worker and
 frontend with one command from the repository root:
 
 ```bash
@@ -78,9 +78,9 @@ npm run app:stop
 On macOS, you can also double-click `start-pickleball.command` and
 `stop-pickleball.command` in the repository root.
 
-The startup command enables pose inference when the repository-local model assets are discovered and sets
-`TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` for the trusted OpenMMLab RTMPose
-checkpoint stored under `models/rtmpose/`.
+The startup command leaves model inference disabled by default. Set model flags
+explicitly after installing optional dependencies and placing trusted local
+weights; the script preflights those files before starting any process.
 
 For manual backend-only debugging, run:
 
@@ -94,8 +94,8 @@ The frontend can use:
 VITE_ANALYSIS_API_URL=http://localhost:8000 npm run dev
 ```
 
-YOLO person detection is enabled by default for calibrated uploaded videos. To force the
-model-free degraded path, start the backend with:
+YOLO person detection is opt-in for calibrated uploaded videos. The model-free
+path is the default; the explicit switch remains:
 
 ```bash
 PICKLEBALL_ENABLE_MODEL_INFERENCE=false uvicorn app.main:app --reload

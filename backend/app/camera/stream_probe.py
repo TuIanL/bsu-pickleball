@@ -99,7 +99,7 @@ def _probe_sync(
             camera_id=camera_id,
             online=False,
             detected_at=datetime.now(UTC),
-            error_message=str(exc),
+            error_message=f"Camera probe failed ({type(exc).__name__})",
         )
     finally:
         # 无论成功失败，都释放摄像头资源

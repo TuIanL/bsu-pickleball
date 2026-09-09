@@ -72,6 +72,10 @@
         "rgb_clip_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "group_split_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "structured_feature_profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "structured_sequence_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "structured_tensor_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "rgb_checkpoint_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "structured_checkpoint_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "code_revision": {"type": "string", "minLength": 1},
         "config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
       }

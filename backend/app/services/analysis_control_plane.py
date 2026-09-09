@@ -13,7 +13,6 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-
 PayloadMutator = Callable[[dict[str, Any]], dict[str, Any] | None]
 PayloadSelector = Callable[[dict[str, Any]], bool]
 
@@ -66,6 +65,10 @@ class AnalysisControlPlane:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS ix_analysis_jobs_heartbeat "
                 "ON analysis_jobs (canonical_status, worker_heartbeat_at)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS analysis_control_meta "
+                "(meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)"
             )
 
     @staticmethod
@@ -176,6 +179,17 @@ class AnalysisControlPlane:
             row = connection.execute("SELECT * FROM analysis_jobs WHERE job_id = ?", (job_id,)).fetchone()
         return self._payload_from_row(row) if row is not None else None
 
+    def get_cancel_state(self, job_id: str) -> tuple[str | None, str | None]:
+        """Read only the fields needed by a hot-path cancellation check."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT canonical_status, cancel_requested_at FROM analysis_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None, None
+        return row["canonical_status"], row["cancel_requested_at"]
+
     def list(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -246,9 +260,45 @@ class AnalysisControlPlane:
             connection.execute("COMMIT")
             return cursor.rowcount == 1
 
-    def import_legacy(self, payloads: Iterable[dict[str, Any]]) -> int:
-        imported = 0
-        for payload in payloads:
-            if self.insert_if_missing(payload):
-                imported += 1
-        return imported
+    def legacy_import_complete(self) -> bool:
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT 1 FROM analysis_control_meta WHERE meta_key = 'legacy_jobs_v1'"
+            ).fetchone() is not None
+
+    def import_legacy(self, payloads: Iterable[dict[str, Any]], *, force: bool = False) -> int:
+        """Import legacy snapshots once, or explicitly reconcile with force.
+
+        The marker and inserts share one transaction, so concurrent API/worker
+        startup cannot both scan and import the same legacy directory.
+        """
+        payloads = list(payloads)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not force and connection.execute(
+                "SELECT 1 FROM analysis_control_meta WHERE meta_key = 'legacy_jobs_v1'"
+            ).fetchone():
+                connection.execute("COMMIT")
+                return 0
+            # Only an explicit force import reconciles files arriving after startup.
+            imported = 0
+            for payload in payloads:
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO analysis_jobs (
+                        job_id, canonical_status, priority, created_at, queued_at, updated_at,
+                        worker_id, worker_pid, worker_run_id, claimed_at, worker_heartbeat_at,
+                        last_progress_at, attempt, cancel_requested_at, interrupted_at,
+                        interruption_code, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._columns(payload),
+                )
+                imported += int(cursor.rowcount == 1)
+            connection.execute(
+                "INSERT INTO analysis_control_meta(meta_key, meta_value) VALUES (?, ?) "
+                "ON CONFLICT(meta_key) DO UPDATE SET meta_value=excluded.meta_value",
+                ("legacy_jobs_v1", "completed"),
+            )
+            connection.execute("COMMIT")
+            return imported

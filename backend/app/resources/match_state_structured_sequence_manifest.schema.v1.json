@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_structured_sequence_manifest.v1",
+  "title": "Match State Structured Sequence Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "sequence_file",
+    "sequence_count",
+    "config",
+    "input_contract",
+    "identity",
+    "sequence_file_sha256",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": {"const": "match_state_structured_sequence_manifest.v1"},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "sequence_file": {"type": "string", "minLength": 1},
+    "sequence_count": {"type": "integer", "minimum": 0},
+    "config": {
+      "type": "object",
+      "required": [
+        "window_duration_ms",
+        "sampling_fps",
+        "frame_count",
+        "stride_frames",
+        "strict_authoritative_only",
+        "include_uncertain_windows",
+        "padding_policy"
+      ],
+      "properties": {
+        "window_duration_ms": {"type": "integer", "exclusiveMinimum": 0},
+        "sampling_fps": {"type": "number", "exclusiveMinimum": 0},
+        "frame_count": {"const": 48},
+        "stride_frames": {"const": 6},
+        "strict_authoritative_only": {"const": true},
+        "include_uncertain_windows": {"const": true},
+        "padding_policy": {"const": "exclude_from_strict_sequence_manifest"}
+      }
+    },
+    "input_contract": {
+      "type": "object",
+      "required": ["modalities", "views", "source_record_schema", "pose", "ball", "court_line", "quality"]
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "dataset_manifest_id",
+        "dataset_manifest_sha256",
+        "label_profile_sha256",
+        "group_split_id",
+        "group_split_sha256",
+        "canonical_feature_manifest_id",
+        "canonical_feature_manifest_sha256",
+        "builder_sha256",
+        "config"
+      ]
+    },
+    "sequence_file_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "integrity": {
+      "type": "object",
+      "required": ["status", "source_hashes_verified", "strict_gate"],
+      "properties": {
+        "status": {"const": "passed"},
+        "source_hashes_verified": {"type": "boolean"},
+        "strict_gate": {"const": "all 48 records and both views authoritative"}
+      }
+    }
+  }
+}

@@ -12,7 +12,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.camera.identifiers import validate_camera_id
 
 
 # 摄像头信息：登记后在系统里保存的一条摄像头记录
@@ -25,6 +27,11 @@ class CameraInfo(BaseModel):
     password: str | None = None  # 登录密码（可选，属敏感信息）
     created_at: datetime  # 创建时间（UTC）
 
+    @field_validator("camera_id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return validate_camera_id(value)
+
 
 # 创建摄像头的请求：前端提交"新增摄像头"时携带的数据
 class CameraCreateRequest(BaseModel):
@@ -35,10 +42,20 @@ class CameraCreateRequest(BaseModel):
     username: str | None = None
     password: str | None = None
 
+    @field_validator("camera_id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return validate_camera_id(value)
+
 
 class CameraUpdateRequest(BaseModel):
     camera_id: str
     name: str
+
+    @field_validator("camera_id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return validate_camera_id(value)
 
 
 # 删除摄像头的响应：只返回是否删除成功

@@ -39,8 +39,11 @@ class Settings(BaseModel):
     outputs_dir: Path = Path("data/outputs")  # 分析结果输出目录
     calibrations_dir: Path = Path("data/calibrations")  # 标定文件目录
     recordings_dir: Path = Path("data/recordings")  # 录制视频目录
+    match_state_candidate_dir: Path = Path("data/match_state_candidates")  # 模型候选时间线（不覆盖人工时间线）
     cameras_dir: Path = Path("data/cameras")  # 摄像头配置目录
     tmp_dir: Path = Path("data/tmp")  # 临时文件目录
+    static_test_frames_dir: Path = Path("data/test_frames")  # 测试生成帧目录
+    max_upload_bytes: int = Field(default=20 * 1024 * 1024 * 1024, gt=0)  # 单个上传视频的大小上限（默认 20 GiB）
     capture_min_free_space_bytes: int = 1024 * 1024 * 1024  # 录制开始前至少保留 1 GiB 空间
     model_dir: Path = Path("../models")  # 模型权重所在目录（相对项目根）
 
@@ -50,7 +53,7 @@ class Settings(BaseModel):
     detector_device: str | None = None  # 推理设备（None=自动/CPU；或 "cuda:0" 等 GPU）
 
     # ---- 姿态（Pose）推理 ----
-    enable_model_inference: bool = True  # 是否启用模型推理（总开关）
+    enable_model_inference: bool = False  # 是否启用模型推理（总开关）
     enable_pose_inference: bool = False  # 是否启用姿态（关键点）推理
     rtmpose_config_path: str | None = None  # RTMPose 配置文件路径
     rtmpose_checkpoint_path: str | None = None  # RTMPose 权重文件路径
@@ -240,12 +243,33 @@ class Settings(BaseModel):
         return self.resolve_path(self.recordings_dir)
 
     @property
+    def resolved_match_state_candidate_dir(self) -> Path:
+        if self.match_state_candidate_dir.is_absolute():
+            return self.match_state_candidate_dir
+
+        # The local runtime starts uvicorn from ``backend/``, while the
+        # generated candidate artifacts intentionally live in the repository
+        # level ``data/match_state_candidates`` directory.  Prefer that
+        # repository-level location when it exists, and retain the original
+        # cwd-relative behavior as a fallback for deployments that keep all
+        # data below the backend directory.
+        repository_root = Path(__file__).resolve().parents[3]
+        repository_candidate_dir = repository_root / self.match_state_candidate_dir
+        if repository_candidate_dir.exists():
+            return repository_candidate_dir
+        return self.resolve_path(self.match_state_candidate_dir)
+
+    @property
     def resolved_cameras_dir(self) -> Path:
         return self.resolve_path(self.cameras_dir)
 
     @property
     def resolved_tmp_dir(self) -> Path:
         return self.resolve_path(self.tmp_dir)
+
+    @property
+    def resolved_static_test_frames_dir(self) -> Path:
+        return self.resolve_path(self.static_test_frames_dir)
 
     def ensure_data_dirs(self) -> None:
         # 确保各个数据目录都存在（不存在就创建，已存在也不报错）
@@ -255,7 +279,9 @@ class Settings(BaseModel):
             self.resolved_calibrations_dir,
             self.resolved_tmp_dir,
             self.resolved_recordings_dir,
+            self.resolved_match_state_candidate_dir,
             self.resolved_cameras_dir,
+            self.resolved_static_test_frames_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -315,13 +341,18 @@ def get_settings() -> Settings:
         outputs_dir=Path(os.getenv("PICKLEBALL_OUTPUTS_DIR", "data/outputs")),
         calibrations_dir=Path(os.getenv("PICKLEBALL_CALIBRATIONS_DIR", "data/calibrations")),
         recordings_dir=Path(os.getenv("PICKLEBALL_RECORDINGS_DIR", "data/recordings")),
+        match_state_candidate_dir=Path(
+            os.getenv("PICKLEBALL_MATCH_STATE_CANDIDATE_DIR", "data/match_state_candidates")
+        ),
         cameras_dir=Path(os.getenv("PICKLEBALL_CAMERAS_DIR", "data/cameras")),
         tmp_dir=Path(os.getenv("PICKLEBALL_TMP_DIR", "data/tmp")),
+        static_test_frames_dir=Path(os.getenv("PICKLEBALL_STATIC_TEST_FRAMES_DIR", "data/test_frames")),
+        max_upload_bytes=int(os.getenv("PICKLEBALL_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024 * 1024))),
         model_dir=model_dir,
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
         detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.15")),
         detector_device=os.getenv("PICKLEBALL_DETECTOR_DEVICE") or None,
-        enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "true").lower() in {"1", "true", "yes"},
+        enable_model_inference=os.getenv("PICKLEBALL_ENABLE_MODEL_INFERENCE", "false").lower() in {"1", "true", "yes"},
         # 姿态推理开关：显式设了环境变量就用它；否则根据配置文件/权重是否齐全自动判断
         enable_pose_inference=_env_bool(pose_inference_env)
         if pose_inference_env is not None

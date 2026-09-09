@@ -20,12 +20,15 @@ from app.core.config import Settings
 _ISOLATION_ENV_KEYS = (
     "PICKLEBALL_DATA_DIR",
     "PICKLEBALL_DATABASE_PATH",
+    "PICKLEBALL_ANALYSIS_CONTROL_DATABASE_PATH",
     "PICKLEBALL_UPLOADS_DIR",
     "PICKLEBALL_OUTPUTS_DIR",
     "PICKLEBALL_CALIBRATIONS_DIR",
     "PICKLEBALL_RECORDINGS_DIR",
+    "PICKLEBALL_MATCH_STATE_CANDIDATE_DIR",
     "PICKLEBALL_CAMERAS_DIR",
     "PICKLEBALL_TMP_DIR",
+    "PICKLEBALL_STATIC_TEST_FRAMES_DIR",
     "PICKLEBALL_MODEL_DIR",
 )
 
@@ -39,12 +42,15 @@ def pytest_configure(config: pytest.Config) -> None:
     paths = {
         "PICKLEBALL_DATA_DIR": root / "data",
         "PICKLEBALL_DATABASE_PATH": root / "data" / "app.sqlite3",
+        "PICKLEBALL_ANALYSIS_CONTROL_DATABASE_PATH": root / "data" / "analysis_control.sqlite3",
         "PICKLEBALL_UPLOADS_DIR": root / "data" / "uploads",
         "PICKLEBALL_OUTPUTS_DIR": root / "data" / "outputs",
         "PICKLEBALL_CALIBRATIONS_DIR": root / "data" / "calibrations",
         "PICKLEBALL_RECORDINGS_DIR": root / "data" / "recordings",
+        "PICKLEBALL_MATCH_STATE_CANDIDATE_DIR": root / "data" / "match_state_candidates",
         "PICKLEBALL_CAMERAS_DIR": root / "data" / "cameras",
         "PICKLEBALL_TMP_DIR": root / "data" / "tmp",
+        "PICKLEBALL_STATIC_TEST_FRAMES_DIR": root / "data" / "test_frames",
         "PICKLEBALL_MODEL_DIR": root / "models",
     }
     for key, value in paths.items():
@@ -108,8 +114,10 @@ def isolated_settings(tmp_path: Path) -> Settings:
         outputs_dir=data_dir / "outputs",
         calibrations_dir=data_dir / "calibrations",
         recordings_dir=data_dir / "recordings",
+        match_state_candidate_dir=data_dir / "match_state_candidates",
         cameras_dir=data_dir / "cameras",
         tmp_dir=data_dir / "tmp",
+        static_test_frames_dir=data_dir / "test_frames",
         model_dir=tmp_path / "models",
     )
 

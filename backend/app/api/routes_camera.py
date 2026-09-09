@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit, urlunsplit
+
 from fastapi import APIRouter, HTTPException
 from starlette.responses import StreamingResponse
 
@@ -40,8 +42,29 @@ def _sanitize(camera: CameraInfo) -> CameraInfo:
     # 如果存在 password 字段，就把它替换成星号
     if data.get("password"):
         data["password"] = "***"
+    data["stream_url"] = _sanitize_stream_url(str(data.get("stream_url") or ""))
     # 用脱敏后的数据重新构建 CameraInfo 对象并返回
     return CameraInfo.model_validate(data)
+
+
+def _sanitize_stream_url(stream_url: str) -> str:
+    """Remove URL userinfo before a camera record crosses the API boundary."""
+    try:
+        parsed = urlsplit(stream_url)
+        if not parsed.username and not parsed.password:
+            return stream_url
+        hostname = parsed.hostname or ""
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        netloc = hostname
+        if parsed.port is not None:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except ValueError:
+        # Malformed URLs are still safe to expose only after removing a likely
+        # userinfo prefix; the probe/recorder will perform the authoritative
+        # connection validation.
+        return stream_url.rsplit("@", 1)[-1] if "@" in stream_url else stream_url
 
 
 @router.get("", response_model=list[CameraInfo])
@@ -66,14 +89,17 @@ def create_camera(payload: CameraCreateRequest) -> CameraInfo:
     if payload.camera_id == VIRTUAL_CAMERA_ID or camera_registry.exists(payload.camera_id):
         raise HTTPException(status_code=409, detail=f"摄像头 {payload.camera_id} 已存在，请先删除再重新注册")
     # 把摄像头信息写入登记中心
-    camera = camera_registry.create(
-        camera_id=payload.camera_id,
-        name=payload.name,
-        stream_url=payload.stream_url,
-        protocol=payload.protocol,
-        username=payload.username,
-        password=payload.password,
-    )
+    try:
+        camera = camera_registry.create(
+            camera_id=payload.camera_id,
+            name=payload.name,
+            stream_url=payload.stream_url,
+            protocol=payload.protocol,
+            username=payload.username,
+            password=payload.password,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail="摄像头已存在，请先删除再重新注册") from exc
     # 返回时同样脱敏
     return _sanitize(camera)
 
@@ -98,7 +124,10 @@ def update_camera(camera_id: str, payload: CameraUpdateRequest) -> CameraInfo:
     ):
         raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 正在录制中，无法修改")
 
-    updated = camera_registry.update(camera_id, payload.camera_id.strip(), payload.name.strip())
+    try:
+        updated = camera_registry.update(camera_id, payload.camera_id.strip(), payload.name.strip())
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=f"摄像头 {payload.camera_id} 已存在") from exc
     if updated is None:
         raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
     return _sanitize(updated)

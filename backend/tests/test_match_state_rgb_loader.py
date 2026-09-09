@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.train_match_state_rgb import experiment_id_for_manifest, sample_timestamp_ms  # noqa: E402
+from scripts.match_state_rgb_sampling import experiment_id_for_manifest, sample_timestamp_ms  # noqa: E402
 
 
 def test_rgb_loader_uses_per_view_mapped_time_and_rate():

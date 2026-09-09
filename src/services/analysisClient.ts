@@ -32,6 +32,9 @@ import type {
   CaptureSegmentSummary,
   BoundaryReviewRequest,
   BoundaryReviewSummary,
+  MatchStateCandidateDecisionRequest,
+  MatchStateCandidateReviewRecord,
+  MatchStateCandidateReviewSummary,
   RallyOrdinalUpdateRequest,
   RallyOrdinalUpdateResponse,
   AnalysisBatchCreateResponse,
@@ -76,6 +79,7 @@ import type { CalibrationReadResponse } from "../types/videoCourtOverlay";
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
 const RECENT_JOB_KEY = "pre-pickleball-recent-analysis-job";
+const candidateRequestIds = new Map<string, string>();
 export const RECENT_ANALYSIS_JOB_EVENT = "pre-pickleball-recent-analysis-job-change";
 
 export interface VidatPackage {
@@ -1942,6 +1946,25 @@ export async function reviewSegmentBoundary(
   return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/boundary-review`, {
     method: "POST",
     body: JSON.stringify(request),
+  });
+}
+
+export async function getMatchStateCandidates(takeId: string): Promise<MatchStateCandidateReviewSummary> {
+  return requestJson<MatchStateCandidateReviewSummary>(`/api/capture-takes/${takeId}/match-state-candidates`);
+}
+
+export async function decideMatchStateCandidate(
+  takeId: string,
+  candidateId: string,
+  request: MatchStateCandidateDecisionRequest,
+): Promise<{ schema_version: string; capture_take_id: string; record: MatchStateCandidateReviewRecord; segment: CaptureSegmentSummary | null }> {
+  const requestKey = `${takeId}|${candidateId}|${JSON.stringify(request)}`;
+  const requestId = request.request_id ?? candidateRequestIds.get(requestKey)
+    ?? `candidate-review-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+  if (!request.request_id) candidateRequestIds.set(requestKey, requestId);
+  return requestJson(`/api/capture-takes/${takeId}/match-state-candidates/${encodeURIComponent(candidateId)}/decision`, {
+    method: "POST",
+    body: JSON.stringify({ ...request, request_id: requestId }),
   });
 }
 

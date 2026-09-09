@@ -104,6 +104,7 @@ def create_manual_rally(
     end_ms: int,
     label: str = "",
     take_duration_ms: int | None = None,
+    provenance: dict | None = None,
 ) -> CaptureSegment:
     """从复核工作台补录一条完整的、尚未确认的 rally。"""
 
@@ -178,10 +179,42 @@ def create_manual_rally(
             "ordinal": ordinal,
             "label": created_label,
             "renumbered_ordinals": renumbered,
+            "provenance": provenance,
         },
     )
     db.flush()
     return segment
+
+
+def record_candidate_rejection(
+    db: Session,
+    *,
+    capture_take_id: str,
+    candidate_id: str,
+    provenance: dict,
+    note: str | None = None,
+) -> str:
+    """Record a rejected learned candidate without mutating the authoritative timeline."""
+
+    operation_id = _gen_id(_OP_PREFIX)
+    _create_op(
+        db,
+        operation_id,
+        capture_take_id,
+        EditOperationType.boundary_correction,
+        [],
+        [],
+        {
+            "schema_version": "match-state-candidate-review.v1",
+            "operation": "learned_candidate_rejected",
+            "candidate_id": candidate_id,
+            "decision": "rejected",
+            "note": note or None,
+            "provenance": provenance,
+        },
+    )
+    db.flush()
+    return operation_id
 
 
 def renumber_rally_ordinals(

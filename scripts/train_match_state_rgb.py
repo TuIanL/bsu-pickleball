@@ -18,6 +18,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.match_state_rgb_sampling import experiment_id_for_manifest, sample_timestamp_ms
+except ModuleNotFoundError:  # direct python scripts/train_match_state_rgb.py entry
+    from match_state_rgb_sampling import experiment_id_for_manifest, sample_timestamp_ms
+
 import numpy as np
 import torch
 from torch import Tensor, nn
@@ -68,10 +73,6 @@ def read_clips(rgb_manifest_path: Path) -> list[dict[str, Any]]:
     return clips
 
 
-def experiment_id_for_manifest(rgb_manifest: dict[str, Any]) -> str:
-    if rgb_manifest.get("schema_version") == "match_state_rgb_canonical_sync_manifest.v2":
-        return "rgb_only_v2_canonical_sync"
-    return "rgb_only_v1"
 
 
 def frame_path(entry: dict[str, Any], timestamp_ms: float, fps: float) -> Path:
@@ -81,11 +82,6 @@ def frame_path(entry: dict[str, Any], timestamp_ms: float, fps: float) -> Path:
     return Path(entry["frame_dir"]) / f"{frame_index:06d}.jpg"
 
 
-def sample_timestamp_ms(clip: dict[str, Any], view: dict[str, Any], offset: int, fps: float) -> float:
-    """将 canonical clip 内的采样偏移映射到当前 view 的本地 RGB cache 时间。"""
-    start_ms = float(view.get("mapped_start_ms", clip["requested_start_ms"]))
-    rate = float(view.get("canonical_to_local_rate", 1.0))
-    return start_ms + offset * 1000.0 / fps * rate
 
 
 class RGBClipDataset(Dataset[tuple[Tensor, Tensor]]):

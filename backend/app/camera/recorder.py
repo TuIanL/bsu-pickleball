@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import subprocess
 import threading
 from collections.abc import Callable
@@ -33,6 +34,12 @@ def _build_video_filter(fps: int, resolution: str) -> str:
             filters.append(f"scale={width}:{height}")
     filters.append("format=yuv420p")
     return ",".join(filters)
+
+
+def _redact_command(command: list[str]) -> str:
+    """Keep recorder diagnostics useful without logging URL userinfo."""
+    text = " ".join(command)
+    return re.sub(r"(://)[^/@\s]+@", r"\1***@", text)
 
 
 class Recorder:
@@ -125,7 +132,7 @@ class Recorder:
                 str(output_path),
             ]
 
-        logger.info("启动 FFmpeg 录制: %s", " ".join(cmd))
+        logger.info("启动 FFmpeg 录制: %s", _redact_command(cmd))
 
         self._stop_requested = False
         self._cancel_requested = False

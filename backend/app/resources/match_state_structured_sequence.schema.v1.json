@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "match_state_structured_sequence.v1",
+  "title": "Match State Structured Sequence",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "sequence_id",
+    "dataset_manifest_id",
+    "canonical_feature_manifest_id",
+    "capture_take_id",
+    "source_session_id",
+    "split",
+    "timebase",
+    "canonical_start_ms",
+    "canonical_end_ms",
+    "center_timestamp_ms",
+    "window_duration_ms",
+    "sampling_fps",
+    "record_count",
+    "source",
+    "strict_gate",
+    "label",
+    "quality_summary"
+  ],
+  "properties": {
+    "schema_version": {"const": "match_state_structured_sequence.v1"},
+    "sequence_id": {"type": "string", "minLength": 1},
+    "dataset_manifest_id": {"type": "string", "minLength": 1},
+    "canonical_feature_manifest_id": {"type": "string", "minLength": 1},
+    "capture_take_id": {"type": "string", "minLength": 1},
+    "source_session_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["train", "validation", "test"]},
+    "timebase": {"const": "reference_camera_source_pts"},
+    "canonical_start_ms": {"type": "number", "minimum": 0},
+    "canonical_end_ms": {"type": "number", "exclusiveMinimum": 0},
+    "last_observed_timestamp_ms": {"type": "number", "minimum": 0},
+    "center_timestamp_ms": {"type": "number", "minimum": 0},
+    "window_duration_ms": {"const": 4000},
+    "sampling_fps": {"const": 12},
+    "record_count": {"const": 48},
+    "source": {
+      "type": "object",
+      "required": [
+        "feature_file",
+        "feature_sha256",
+        "feature_size_bytes",
+        "record_start_index",
+        "record_end_index",
+        "line_start",
+        "line_end",
+        "byte_offset_start",
+        "byte_offset_end",
+        "sync_revision"
+      ],
+      "properties": {
+        "feature_file": {"type": "string", "minLength": 1},
+        "feature_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "feature_size_bytes": {"type": "integer", "minimum": 0},
+        "record_start_index": {"type": "integer", "minimum": 0},
+        "record_end_index": {"type": "integer", "minimum": 0},
+        "line_start": {"type": "integer", "minimum": 1},
+        "line_end": {"type": "integer", "minimum": 1},
+        "byte_offset_start": {"type": "integer", "minimum": 0},
+        "byte_offset_end": {"type": "integer", "minimum": 0},
+        "sync_revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "strict_gate": {
+      "type": "object",
+      "required": ["authoritative_joint_eligible", "authoritative_record_count", "sync_status_counts"],
+      "properties": {
+        "authoritative_joint_eligible": {"const": true},
+        "authoritative_record_count": {"const": 48},
+        "sync_status_counts": {"const": {"authoritative": 48}}
+      }
+    },
+    "label": {
+      "type": "object",
+      "required": [
+        "center_label",
+        "center_quality",
+        "center_loss_mask",
+        "timeline_labels",
+        "timeline_label_counts",
+        "uncertain_radius_ms"
+      ],
+      "properties": {
+        "center_label": {"enum": ["rally_active", "non_play", "uncertain"]},
+        "center_quality": {"enum": ["high_confidence", "uncertain", "excluded"]},
+        "center_loss_mask": {"type": "integer", "enum": [0, 1]},
+        "timeline_labels": {"type": "array", "minItems": 48, "maxItems": 48},
+        "timeline_label_counts": {"type": "object"},
+        "uncertain_radius_ms": {"type": "integer", "minimum": 0}
+      }
+    },
+    "quality_summary": {"type": "object", "required": ["frame_count", "views"]}
+  }
+}

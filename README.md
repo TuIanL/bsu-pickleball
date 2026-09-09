@@ -20,7 +20,7 @@
 | 层级 | 技术 |
 |------|------|
 | 前端 | React 19, TypeScript 5.9, Vite 7, Tailwind CSS 4, D3.js（热力图/散点图）, lucide-react（图标） |
-| 后端 | Python 3.13+, FastAPI, Uvicorn, SQLAlchemy 2（SQLite）, Pydantic 2 |
+| 后端 | Python 3.11, FastAPI, Uvicorn, SQLAlchemy 2（SQLite）, Pydantic 2 |
 | 视觉算法 | OpenCV 4.10+, YOLO11（人体检测）, RTMPose26（姿态估计）, 单应性矩阵（球场投影） |
 | 测试 | Vitest（前端）, pytest + httpx（后端） |
 
@@ -29,7 +29,7 @@
 ### 环境要求
 
 - **前端**：Node.js >= 20，npm >= 10
-- **后端**：Python >= 3.13，pip，FFmpeg（录制功能需要）
+- **后端**：Python 3.11，pip，FFmpeg（录制功能需要）
 
 ### 安装
 
@@ -41,12 +41,12 @@ cd pre-pickleball
 npm install
 
 # 安装后端依赖
-python3.13 -m venv backend/.venv
+python3.11 -m venv backend/.venv
 source backend/.venv/bin/activate
-pip install -r backend/requirements.txt
+python -m pip install -e "backend[dev]"
 
 # 安装模型权重文件到 models/ 目录
-#   - YOLO11n: models/yolo11n.pt（自动下载）
+#   - YOLO11n: models/yolo11n.pt（显式模型模式使用，不自动下载）
 #   - RTMPose: models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth
 #   - 球场线分割（可选）: models/court-line/best.pt
 ```
@@ -79,7 +79,8 @@ macOS 用户也可使用根目录的便捷脚本双击启动/停止：
 |----------|------|--------|
 | `PICKLEBALL_BACKEND_PORT` | 后端端口 | 8000 |
 | `PICKLEBALL_DATA_DIR` | 数据目录 | data |
-| `PICKLEBALL_ENABLE_POSE_INFERENCE` | 启用姿态推理 | 自动检测模型是否存在 |
+| `PICKLEBALL_ENABLE_MODEL_INFERENCE` | 启用 YOLO/模型推理 | false |
+| `PICKLEBALL_ENABLE_POSE_INFERENCE` | 启用姿态推理 | false |
 | `PICKLEBALL_ANALYSIS_WORKER_MODE` | Worker 模式：`external` / `embedded` | external（本地脚本） |
 | `PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS` | Worker 心跳间隔 | 5 |
 | `PICKLEBALL_ANALYSIS_WORKER_HEARTBEAT_TIMEOUT_SECONDS` | 任务失联判定阈值 | 30 |
@@ -92,6 +93,10 @@ macOS 用户也可使用根目录的便捷脚本双击启动/停止：
 不会重启 Worker。若 Worker 进程异常退出，服务重启或下一次任务查询会将超过 heartbeat
 阈值的 `processing` 任务标记为“任务失联”，前端会停止轮询并提供“重新分析”入口。
 
+基础模式不需要 YOLO、RTMPose 或场线权重，模型能力会明确显示为不可用。需要真实模型时，
+先在 `models/` 放入可信的本地权重，再显式设置模型开关；启动脚本会先检查依赖和权重，
+失败时不会启动进程。后端基础依赖可按 `backend/requirements-py311.lock` 重建。
+
 ### 构建
 
 ```bash
@@ -103,7 +108,8 @@ npm run preview   # 预览构建产物
 
 ```bash
 npm test                                # 前端测试（vitest）
-cd backend && python -m pytest          # 后端测试（pytest）
+cd backend && python -m pytest -q       # 后端基础测试（pytest）
+openspec validate harden-project-reliability-and-delivery --strict
 ```
 
 ## 项目结构
@@ -275,6 +281,6 @@ Worker 执行视觉分析：
 
 - 生产环境启动后端时建议**不带 `--reload`**，或使用 `--reload-exclude` 排除 `data/`、`.venv/`、模型文件，避免分析任务写盘触发不必要的重载。
 - 数据库为本地 SQLite（`data/app.sqlite3`），多实例部署需注意读写冲突。
-- RTMPose26 姿态推理为可选项，默认根据模型文件是否存在自动判断；球模型同样支持自动发现，缺失时只报告不可用状态。如需强制开关，设置 `PICKLEBALL_ENABLE_POSE_INFERENCE=true/false` 或 `PICKLEBALL_ENABLE_BALL_DETECTION=true/false`。
+- RTMPose26 姿态推理为显式可选项，基础模式不会因模型文件存在而自动启用；设置 `PICKLEBALL_ENABLE_POSE_INFERENCE=true` 前请准备可信本地权重。
 - 后端 pytest 使用临时数据库、上传/输出/录制/模型目录，不读取或修改默认运行数据库；完整质量门禁为 `npm run build`、`npm test`、`npm run lint` 和 `cd backend && python -m pytest -q`。
 - FFmpeg 为录制功能必需依赖，纯视频分析不需要。

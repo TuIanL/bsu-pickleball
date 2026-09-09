@@ -1883,17 +1883,6 @@ class AnalysisPipeline:
         debug_writer: ProjectionDebugWriter | None = None
         debug_minimap: MinimapVisualizer | None = None
         debug_overlay: ProjectionDebugOverlayWriter | None = None
-        debug_path = self.storage.outputs_dir / job_id / "projection_debug.jsonl"
-        debug_writer = ProjectionDebugWriter(debug_path)
-        debug_writer.open()
-        debug_minimap = MinimapVisualizer()
-        debug_overlay_path = self.storage.outputs_dir / job_id / "projection_debug_overlay.mp4"
-        debug_overlay = ProjectionDebugOverlayWriter(
-            debug_overlay_path,
-            fps=fps,
-            width=frame_width,
-            height=frame_height,
-        )
 
         last_processed_frame_index: int | None = None
         last_processed_timestamp: float | None = None
@@ -2009,6 +1998,16 @@ class AnalysisPipeline:
         decoded_range = window_metadata.get("decoded_range") if clip_applied else None
 
         try:
+            if self.settings.enable_projection_debug_jsonl:
+                debug_path = self.storage.outputs_dir / job_id / "projection_debug.jsonl"
+                debug_writer = ProjectionDebugWriter(debug_path)
+                debug_writer.open()
+                debug_minimap = MinimapVisualizer()
+            if self.settings.enable_projection_debug_overlay:
+                debug_overlay = ProjectionDebugOverlayWriter(
+                    self.storage.outputs_dir / job_id / "projection_debug_overlay.mp4",
+                    fps=fps, width=frame_width, height=frame_height,
+                )
             while True:
                 self._check_cancelled(cancellation_token)
                 ok, frame = capture.read()
@@ -2151,16 +2150,20 @@ class AnalysisPipeline:
                         frame_count or "unknown",
                     )
 
-                if debug_overlay is not None and frame_positions:
+                if debug_overlay is not None:
                     debug_overlay.write_frame(frame, frame_index, frame_positions)
 
                 frame_index += 1
         finally:
-            capture.release()
-            if debug_writer is not None:
-                debug_writer.close()
-            if debug_overlay is not None:
-                debug_overlay.close()
+            try:
+                capture.release()
+            finally:
+                try:
+                    if debug_writer is not None:
+                        debug_writer.close()
+                finally:
+                    if debug_overlay is not None:
+                        debug_overlay.close()
         court_view_state.finish(last_processed_frame_index, last_processed_timestamp)
 
         # 结束阶段快照：session 累积的 tracking 产物 + 诊断 + selector 状态

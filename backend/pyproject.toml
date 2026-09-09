@@ -1,15 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["resources/*.json"]
+
 [project]
 name = "pre-pickleball-backend"
 version = "0.1.0"
 description = "Lightweight backend foundation for pickleball visual analysis."
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 dependencies = [
   "fastapi>=0.115.0",
   "numpy>=1.26.0,<2.0",
+  "scipy>=1.11.0",
   "opencv-python>=4.10.0,<4.13.0",
   "pandas>=2.2.0",
   "pydantic>=2.8.0",
   "python-multipart>=0.0.9",
+  "sqlalchemy>=2.0.0",
+  "alembic>=1.13.0",
   "uvicorn[standard]>=0.30.0",
 ]
 
@@ -31,4 +44,4 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", ".."]

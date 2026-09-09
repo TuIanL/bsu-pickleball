@@ -105,6 +105,10 @@ v2 对齐层不覆盖旧的 `cache/aligned-features-v1`。每个 canonical tick 
 
 本轮准备阶段已实际完成并封口：7 场共 53,142 条 12 FPS canonical 记录，34,768 条 joint authoritative、18,370 条 extrapolated、4 条尾部 unavailable；全量 verifier 通过，source selection 最大误差 8.333ms、feature selection 最大误差 50.0ms。旧 v1 cache 与 RGB baseline 保持原样，v2 仅作为新的可回滚输入层。
 
+结构化模型的首个训练输入继续使用独立的 sequence manifest：每个窗口为 4 秒、12 FPS、48 个 canonical feature records，步长为 6 个时间点（0.5 秒）。manifest 只保存 `feature_file + record_start_index + record_count` 引用，不复制骨架、球路或场地特征；窗口内 48 个记录和两个机位必须全部为 `authoritative_joint_eligible=true` 才能进入严格联合样本。边界附近的 `uncertain` 仍写入窗口的中心标签、逐时间点标签和 loss mask，但不会作为普通硬分类样本参与训练。manifest 同时保存源 JSONL SHA-256、同步 revision、CaptureTake split、球缺失语义、场地投影不可用状态和每视角质量覆盖率，便于后续结构化 baseline 与融合模型共享同一输入契约。
+
+该 sequence manifest 已在远端无卡节点完成全量生成和 source-range 校验：7 个 CaptureTake 共 5,739 个严格窗口，其中 5,401 个中心高可信、338 个中心不确定；中心标签为 `rally_active` 1,804、`non_play` 3,597、`uncertain` 338。主切分为 train 3,837、validation 1,116、test 786；每个窗口固定 48/48 条 authoritative 记录，7 个源 JSONL 的 hash、行号、byte offset 和 canonical 起止时间全部通过校验。该结果只作为结构化 baseline 的输入索引，不改变旧 v1 cache、RGB baseline 或人工时间线。
+
 远端 RTX 2080 Ti 冒烟门禁已通过：真实回合时段双机位各 24 帧均识别四人并输出 4×26 关键点，短片段轨迹 ID 稳定为 1–4，双摄采样时间差约 15–22ms；球候选置信度中位数约 0.52/0.56。全量结构化提取以版本化模型/配置 SHA-256 作为缓存身份后台执行，完成前任务 2.3 保持未勾选，且不得启动训练。
 
 首次全量任务在 RTX 2080 Ti 上中断于第一个机位，只产生未封口的 `frames.jsonl.partial`/`court-line.jsonl.partial`，没有任何 `summary.json: status=complete` 缓存，因此不能作为可复用特征。迁移至 RTX 4090 后，14 个媒体文件共 4,751,770,876 字节均与 immutable manifest 的逐文件尺寸一致；提取脚本、配置及 YOLO11x、pickleball ball、court-line、RTMPose ONNX 权重 SHA-256 均与首次运行一致。旧 partial 被保留到 `cache/interrupted-2080ti-structured-v1`，新任务在标准 `cache/structured-v1` 中完成了 14/14 个机位的原子缓存；最终共 106,296 条 12 FPS 结构化帧记录、106,269 条 pose usable 记录、94,223 条 ball observed 记录和 153 条场线记录，所有 JSONL 均可解析且计数与 summary 一致。最后一个机位从 418 条 partial 记录安全续跑完成，未启动训练。
@@ -112,6 +116,18 @@ v2 对齐层不覆盖旧的 `cache/aligned-features-v1`。每个 canonical tick 
 训练阶段先固定 `match_state_training_profile.v1` 和 `match_state_model_package.v1`。本地 `scripts/match_state_experiment.py` 只提供 metadata 校验和远程任务打包，不解码视频、不做本地训练；它在训练前强制校验数据/标签/结构化特征 schema、RGB 清单哈希、7/7 双摄同步通过、按 `capture_take_id` 的无泄漏切分和三组实验矩阵。当前已生成 `match-state-training-job-2026-07-20.v1`，job id 为 `msj_6dde8bf78e635b3864ca`；训练配置固定随机种子 20260720、4 秒窗口、12 FPS/48 帧、uncertain 区间 mask 和远程 CUDA 执行策略。模型包要求权重、训练配置、评估报告及完整数据/代码 provenance，模型不可用时保留现有分析流程。
 
 RGB-only baseline 已在 RTX 4090 上完成完整训练。训练使用双摄共享 R3D-18 预训练编码器和晚融合，前 3 个 epoch 冻结视觉骨干，第 4 个 epoch 起解冻，并在验证集连续 7 个 epoch 不再提升后自然 early stopping；最佳 checkpoint 为第 15 个 epoch。固定切分包含 train/validation/test=5925/1321/1108 个 high-confidence 窗口；验证集最佳 macro-F1=0.9799，测试集 accuracy=0.9711、macro-F1=0.9651。测试集 `rally_active` precision=0.9840、recall=0.9194、F1=0.9506，`non_play` precision=0.9660、recall=0.9935、F1=0.9796，混淆矩阵为 `[[308,27],[5,768]]`。模型、测试报告和 provenance 已写入版本化运行目录。该结果说明纯 RGB 双摄输入已经能作为第一版基线，但由于当前只有 7 场且测试按整场分组，后续仍需用骨架/球路、融合和 leave-one-take-out 实验验证跨场次稳定性；不直接替换人工候选时间线。
+
+结构化骨架/球路 baseline 随后在同一 RTX 4090 和固定 take split 上完成。为避免每个 epoch 重复解析 canonical JSONL，先将 7 场共 53,142 条记录编码为可复用数值张量缓存；玩家使用共享 encoder 与集合池化以避免依赖不稳定的 track/player ID，双摄视图晚融合后由 4 层 dilated TCN 输出 48 个逐时点状态，并以 uncertain loss mask 训练。任务在第 16 个 epoch 按 patience=7 自然 early stopping，最佳 checkpoint 为第 9 个 epoch；验证 center macro-F1=0.9605，测试 center macro-F1=0.9430、timeline macro-F1=0.9345。测试 `rally_active` center precision=0.8929、recall=0.9479，说明结构化输入比旧 RGB baseline 更偏向保持回合召回，但 precision 较低，适合作为融合模型的互补证据。模型包已通过 strict artifact checksum 校验并可在 CPU 加载。
+
+RGB+结构化融合模型使用 canonical RGB v2 与 5,739 个 authoritative 结构化窗口的一一配对输入，从已验证的 RGB-only 与 structured checkpoint 初始化；前三个 epoch 冻结 RGB backbone，之后只以 0.1 倍学习率微调 R3D-18 `layer4`。训练在第 10 个 epoch 按 patience=7 自然 early stopping，最佳 checkpoint 为第 3 个 epoch；验证 center macro-F1=0.9759，测试 center macro-F1=0.9563、timeline macro-F1=0.9456。测试 `rally_active` center precision=0.9602、recall=0.9147；融合相对 structured-only 显著提高 precision，但牺牲部分 recall，后续候选时间线解码应通过置信度、迟滞和最短时长参数在验证集上完成平衡，不能使用测试集选阈值。融合模型包已通过 strict checksum 校验并可在 CPU 加载。
+
+三路模型已按 validation-only 72 组参数网格选择解码阈值，并用 IoU≥0.5 的一对一匹配重新评估 7 场完整时间线。RGB-only v1 的 evidence coverage=99.68%，257/257 个人工回合全部匹配，2 个误检，precision/recall=0.9923/1.0000，mean IoU=0.9092，起止 MAE=215/261ms。Structured 和 fusion 受 strict authoritative 有效区间限制，完整视频 unknown 比例分别为 35.39%/35.06%；融合方案在有证据候选上 precision=0.9771、mean IoU=0.8979，但全时间线 recall=0.6654。因此当前不能将后两者的全时间线 recall 直接解读为架构劣化；消融报告同时呈现 center 分类能力与输入覆盖率。7 折 leave-one-take-out 已作为最终架构稳健性门禁完成，并单独报告跨场次结果。
+
+最终融合架构已完成 CaptureTake 级 7 折 leave-one-take-out。每折循环选择 1 场测试、下一场验证、其余 5 场训练，并从头训练 RGB、结构化和融合三组权重，未复用可能见过留出场次的任务 checkpoint。7 折 center macro-F1 宏平均为 0.96695、样本加权为 0.96694；center accuracy 为 0.97064/0.97056，rally precision 为 0.95089/0.95402，rally recall 为 0.96231/0.95922，timeline macro-F1 为 0.95449/0.95415。逐折 center macro-F1 范围 0.95635–0.97933，说明固定 5/1/1 切分上的结论没有依赖单一测试场次。校验器确认 7 个测试 CaptureTake 唯一、每折严格 5/1/1，21 个模型包和 63 个包内 artifact 的 split provenance、大小与 SHA-256 全部通过；报告归档于 `artifacts/rgb-structured-fusion-loo-20260903`。
+
+模型输出以 `match_state_candidate_timeline.v1` 独立 artifact 发布，包含窗口概率、unknown/覆盖状态、稳定 candidate ID、边界窗口证据、validation-only 解码参数、模型包以及数据/同步/特征 manifest 哈希。现有边界复核工作台以独立面板读取候选；接受或修正后才创建 `manual` rally，拒绝只写审计，原候选文件与人工时间线均不被覆盖。复核 sidecar 以乐观 revision 防止并发覆盖，导出器将 accepted/corrected 记录生成下一版数据集输入，rejected 只作为负例/审计证据。候选缺失、schema 错误或输入证据不足时返回 `unavailable/unknown`，人工时间线及旧流程继续可用。
+
+最终回归门禁中，前端全量 85 个测试文件、670 项测试全部通过；比赛状态候选、人工回流、模型包、结构化序列和时序特征相关后端定向测试 20/20 通过。后端全量为 1457 passed、1 skipped、1 failed，唯一失败是既有 `test_step_emits_disjoint_candidate_detections_under_lock_only` 中测试替身 `StubLockManager` 缺少生产代码现在读取的 `slots` 属性；该测试和 player tracking 身份 epoch 逻辑不属于本变更范围，因此保留真实门禁记录而不篡改无关功能。
 
 ## Risks / Trade-offs
 
