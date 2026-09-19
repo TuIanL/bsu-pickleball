@@ -46,6 +46,10 @@ class AnalysisArtifacts(BaseModel):
     """
 
     result_json_path: str | None = None
+    match_state_segmentation_json_path: str | None = None
+    match_state_segmentation_url: str | None = None
+    match_state_segmentation_status: str | None = None
+    match_state_segmentation_detail: str | None = None
     tracking_result_json_path: str | None = None
     tracking_overlay_json_path: str | None = None
     tracking_overlay_url: str | None = None

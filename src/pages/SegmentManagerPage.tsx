@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw, Tags, BadgeCheck, Ban, Crosshair, ListChecks, StepForward } from "lucide-react";
-import type { BoundaryReviewSummary, CaptureSegmentSummary, CaptureTakeSummary, MatchStateCandidateReviewSummary, MatchStateCandidateSegment, SessionTimelineEvent } from "../types/report";
+import type { BoundaryReviewSummary, CaptureSegmentSummary, CaptureTakeSummary, FormalSegmentationSummary, MatchStateCandidateReviewSummary, MatchStateCandidateSegment, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn } from "../app/navigationTypes";
-import { createRallySegment, decideMatchStateCandidate, getBoundaryReview, getCaptureTake, getMatchStateCandidates, isAnalysisApiError, listSegments, patchSegment, reviewSegmentBoundary, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl, renumberRallyOrdinals } from "../services/analysisClient";
+import { createRallySegment, decideMatchStateCandidate, getBoundaryReview, getCaptureTake, getFormalSegmentationSummary, getMatchStateCandidates, isAnalysisApiError, listSegments, patchSegment, reviewSegmentBoundary, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl, renumberRallyOrdinals } from "../services/analysisClient";
 import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
 import { EditableSegmentTimeline } from "../components/EditableSegmentTimeline";
 
@@ -25,6 +25,7 @@ export function SegmentManagerPage({
 }) {
   const [take, setTake] = useState<CaptureTakeSummary | null>(null);
   const [segments, setSegments] = useState<CaptureSegmentSummary[]>([]);
+  const [segmentationSummary, setSegmentationSummary] = useState<FormalSegmentationSummary | null>(null);
   const [events, setEvents] = useState<SessionTimelineEvent[]>([]);
   const [filter, setFilter] = useState<FilterType>("rally");
   const [reviewMode, setReviewMode] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mode") === "boundary-review");
@@ -74,7 +75,7 @@ export function SegmentManagerPage({
   const activeVideoUrl = trackOptions[activeVideoIndex]?.url ?? "";
 
   const loadData = useCallback(async () => {
-    // 四个数据源相互独立：take 详情（渲染必需）、segments、边界复核、timeline-events，
+    // 五个数据源相互独立：take 详情（渲染必需）、segments、正式切分摘要、边界复核、timeline-events，
     // 各自独立兜底，任一失败不得让整页永久停在「加载中...」。
     let takeFailed = false;
     let loadedSegments: CaptureSegmentSummary[] = [];
@@ -88,17 +89,28 @@ export function SegmentManagerPage({
     try {
       loadedSegments = await listSegments(takeId);
     } catch { /* 片段列表缺失仅降级为空列表 */ }
+    if (!reviewMode) {
+      try {
+        setSegmentationSummary(await getFormalSegmentationSummary(takeId));
+      } catch {
+        setSegmentationSummary(null);
+      }
+    } else {
+      setSegmentationSummary(null);
+    }
     try {
-      loadedReview = await getBoundaryReview(takeId);
-      setReviewSummary(loadedReview);
+      if (reviewMode) {
+        loadedReview = await getBoundaryReview(takeId);
+        setReviewSummary(loadedReview);
+      }
     } catch { /* 旧后端仍可使用普通片段管理 */ }
-    setSegments(mergeBoundaryReviewSegments(loadedSegments ?? [], loadedReview?.segments ?? []));
+    setSegments(reviewMode ? mergeBoundaryReviewSegments(loadedSegments ?? [], loadedReview?.segments ?? []) : loadedSegments);
     try {
       const evts = await listTimelineEvents(fieldSessionId, { capture_take_id: takeId });
       setEvents(evts ?? []);
     } catch { /* 时间轴事件缺失不影响片段列表与播放 */ }
     if (takeFailed) setLoadError(true);
-  }, [takeId, fieldSessionId]);
+  }, [takeId, fieldSessionId, reviewMode]);
 
   useEffect(() => {
     // Load the selected CaptureTake and its derived timeline data.
@@ -166,6 +178,19 @@ export function SegmentManagerPage({
     const active = segments.filter(s => s.edit_status === "active");
     return filter === "all" ? active : active.filter(s => s.segment_type === filter);
   }, [filter, reviewMode, reviewQueue, segments]);
+
+  const manualSegments = useMemo(
+    () => filteredSegments.filter((segment) => segment.source !== "algorithm" && !segment.segmentation_run_id),
+    [filteredSegments],
+  );
+  const modelSegments = useMemo(
+    () => {
+      const currentRunId = segmentationSummary?.run_id;
+      if (!currentRunId) return [];
+      return filteredSegments.filter((segment) => segment.segmentation_run_id === currentRunId);
+    },
+    [filteredSegments, segmentationSummary?.run_id],
+  );
 
   const activeReviewRally = reviewQueue.find((segment) => segment.id === activeSegmentId) ?? reviewQueue[0];
 
@@ -922,13 +947,13 @@ export function SegmentManagerPage({
           {saveStatus === "saving" && <span className="text-xs text-[#E8A838]">保存中...</span>}
           {saveStatus === "saved" && <span className="text-xs text-[#22C55E]">已保存</span>}
           {saveStatus === "error" && <span className="text-xs text-[#EF4444]">保存失败</span>}
-          <button
+          {reviewMode && <button
             className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold transition ${reviewMode ? "border-[#168A34] bg-[#F0FDF4] text-[#168A34]" : "border-[#168A34] text-[#168A34] hover:bg-[#F0FDF4]"}`}
             onClick={toggleBoundaryReviewMode}
             type="button"
           >
             <ListChecks size={16} /> {reviewMode ? "退出边界复核" : "有效回合复核"}
-          </button>
+          </button>}
           {reviewMode && reviewFocus === "manual" && (
             <>
               <button
@@ -949,23 +974,9 @@ export function SegmentManagerPage({
               </button>
             </>
           )}
-          {!reviewMode && (
-            <>
-              <button
-                className="green-button inline-flex items-center gap-2 px-4 py-2 text-sm"
-                disabled={selectedIds.size === 0}
-                onClick={handleCreateAnalysis}
-              >
-                <Play size={16} /> 创建分析 ({selectedIds.size})
-              </button>
-              <button
-                className="inline-flex items-center gap-2 rounded-lg border border-[#2F80ED] px-3 py-2 text-sm font-bold text-[#2F80ED] hover:bg-[#EFF6FF] transition"
-                onClick={() => onNavigate(`/capture/${fieldSessionId}/takes/${takeId}/scoring-calibration`)}
-              >
-                <Tags size={16} /> 评分校准
-              </button>
-            </>
-          )}
+          {/* Production segment browsing is intentionally read-only.  The
+              boundary-review URL remains the isolated QA entry point for
+              editing and candidate decisions. */}
         </div>
       </div>
 
@@ -1148,7 +1159,35 @@ export function SegmentManagerPage({
             ))}
           </div>
 
-          {filteredSegments.map(seg => (
+          {!reviewMode && (
+            <div className="mb-3 border-b border-violet-100 pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-black text-violet-700">自动回合切分（只读）</h3>
+                {segmentationSummary?.status === "succeeded" || segmentationSummary?.status === "valid_no_rallies" ? (
+                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">正式结果</span>
+                ) : segmentationSummary?.status && segmentationSummary.status !== "unavailable" ? (
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">{formatSegmentationStatus(segmentationSummary.status)}</span>
+                ) : null}
+              </div>
+              {segmentationSummary && segmentationSummary.status !== "unavailable" ? (
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                  <span>模型 {segmentationSummary.model_version ?? segmentationSummary.model_package_id ?? "未知版本"}</span>
+                  <span>生成于 {formatGeneratedAt(segmentationSummary.generated_at)}</span>
+                  <span>{segmentationSummary.segment_count} 个回合</span>
+                  {segmentationSummary.detail && !["succeeded", "valid_no_rallies"].includes(segmentationSummary.status) && (
+                    <span className="text-amber-700">{segmentationSummary.detail}</span>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-1 text-[11px] text-slate-400">尚未生成正式模型结果。</p>
+              )}
+            </div>
+          )}
+          {!reviewMode && modelSegments.map((seg) => (
+            <ReadOnlyModelSegmentRow key={seg.id} segment={seg} active={activeSegmentId === seg.id} onClick={() => handleSegmentClick(seg)} />
+          ))}
+          {!reviewMode && manualSegments.length > 0 && <h3 className="mb-2 mt-3 text-xs font-black text-amber-700">拍摄阶段人工标记</h3>}
+          {(reviewMode ? filteredSegments : manualSegments).map(seg => (
             <div
               key={seg.id}
               className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer text-sm border mb-1 transition ${
@@ -1160,34 +1199,12 @@ export function SegmentManagerPage({
               }`}
               onClick={() => handleSegmentClick(seg)}
             >
-              {!reviewMode && (
-                <input
-                  type="checkbox"
-                  className="size-3.5 accent-[#22C55E] shrink-0"
-                  checked={selectedIds.has(seg.id)}
-                  onChange={(e) => { e.stopPropagation(); toggleSelect(seg.id); }}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              )}
-              {!reviewMode && editingLabel === seg.id ? (
-                <input
-                  className="flex-1 text-xs border rounded px-1"
-                  defaultValue={seg.label}
-                  onBlur={(e) => handleSaveLabel(seg, e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleSaveLabel(seg, (e.target as HTMLInputElement).value); }}
-                  autoFocus
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <span
-                  className="flex-1 font-medium text-[#14241B] text-xs truncate"
-                  title={reviewMode ? "点击从该回合起点播放，到终点自动暂停" : "单击播放；双击编辑标签"}
-                  onClick={(e) => reviewMode ? undefined : handleLabelClick(e, seg)}
-                  onDoubleClick={(e) => reviewMode ? undefined : handleLabelDoubleClick(e, seg)}
-                >
-                  {seg.label}
-                </span>
-              )}
+              <span
+                className="flex-1 font-medium text-[#14241B] text-xs truncate"
+                title={reviewMode ? "点击从该回合起点播放，到终点自动暂停" : "点击播放该片段"}
+              >
+                {seg.label}
+              </span>
               {reviewMode && <BoundaryReviewBadge status={seg.boundary_review_status ?? "pending"} />}
               {reviewMode && boundaryDrafts[seg.id]?.startMs != null && boundaryDrafts[seg.id]?.endMs == null && (
                 <span className="rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-bold text-orange-700">起点已标</span>
@@ -1195,28 +1212,12 @@ export function SegmentManagerPage({
               <span className="text-[10px] text-slate-400 tabular-nums shrink-0">
                 {formatMs(seg.effective_start_ms ?? seg.start_ms)}→{seg.effective_end_ms != null ? formatMs(seg.effective_end_ms) : "?"}
               </span>
-              <div className="flex gap-0.5 shrink-0">
-                {!reviewMode && seg.segment_type === "rally" && (
-                  <>
-                    <button className="p-0.5 hover:bg-slate-200 rounded" title="拆分" onClick={(e) => { e.stopPropagation(); handleSplit(seg); }}><Scissors size={12} /></button>
-                    {selectedIds.size === 2 && selectedIds.has(seg.id) && (
-                      <button className="p-0.5 hover:bg-slate-200 rounded text-[#22C55E]" title="合并选中" onClick={(e) => { e.stopPropagation(); handleMerge(); }}><Combine size={12} /></button>
-                    )}
-                  </>
-                )}
-                {!reviewMode && <button className="p-0.5 hover:bg-slate-200 rounded" title="归档" onClick={(e) => { e.stopPropagation(); handleArchive(seg); }}><Archive size={12} /></button>}
-                {seg.edit_status === "archived" && (
-                  <button className="p-0.5 hover:bg-slate-200 rounded text-[#22C55E]" title="恢复" onClick={(e) => { e.stopPropagation(); handleRestore(seg); }}><RotateCcw size={12} /></button>
-                )}
-              </div>
+              {reviewMode && seg.edit_status === "archived" && (
+                <span className="text-[10px] font-bold text-slate-400">已归档</span>
+              )}
             </div>
           ))}
 
-          {!reviewMode && selectedIds.size === 2 && filter === "rally" && (
-            <button className="w-full mt-2 text-xs bg-[#22C55E]/10 border border-[#22C55E] text-[#22C55E] rounded-lg py-1.5 font-bold hover:bg-[#22C55E]/20 transition" onClick={handleMerge}>
-              <Combine size={14} className="inline mr-1" /> 合并选中的 2 个 Rally
-            </button>
-          )}
         </div>
         )}
       </div>
@@ -1270,6 +1271,27 @@ function formatPreciseMs(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
+function formatGeneratedAt(value: string | null): string {
+  if (!value) return "未知时间";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" });
+}
+
+function formatSegmentationStatus(status: string): string {
+  return {
+    running: "切分中",
+    low_evidence: "证据不足",
+    input_unavailable: "输入不可用",
+    sync_unavailable: "同步不可用",
+    model_unavailable: "模型不可用",
+    inference_failed: "推理失败",
+    failed: "切分失败",
+    canceled: "已取消",
+    interrupted: "已中断",
+  }[status] ?? status;
+}
+
 function mergeBoundaryReviewSegments(
   base: CaptureSegmentSummary[],
   reviewed: CaptureSegmentSummary[],
@@ -1288,6 +1310,30 @@ function sampleEvenly<T>(values: T[], limit: number): T[] {
   if (limit <= 1) return [values[0]];
   const indexes = new Set(Array.from({ length: limit }, (_, index) => Math.round(index * (values.length - 1) / (limit - 1))));
   return Array.from(indexes).sort((a, b) => a - b).map((index) => values[index]);
+}
+
+function ReadOnlyModelSegmentRow({
+  segment,
+  active,
+  onClick,
+}: {
+  segment: CaptureSegmentSummary;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`mb-1 flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-sm transition ${active ? "border-[#2F80ED] bg-[#EFF6FF] ring-1 ring-[#2F80ED]/30" : "border-transparent hover:bg-slate-50"}`}
+      onClick={onClick}
+      title="模型自动结果为只读；如需 QA 复核请使用内部 boundary-review 模式"
+    >
+      <span className="flex-1 truncate text-xs font-medium text-[#14241B]">{segment.label}</span>
+      <span className="shrink-0 text-[10px] tabular-nums text-slate-400">
+        {formatMs(segment.effective_start_ms ?? segment.start_ms)}→{segment.effective_end_ms != null ? formatMs(segment.effective_end_ms) : "?"}
+      </span>
+    </button>
+  );
 }
 
 function ReviewMetric({ label, value, suffix = "", tone = "default" }: { label: string; value: number | string; suffix?: string; tone?: "default" | "pending" | "confirmed" | "corrected" | "excluded" | "model" }) {

@@ -45,7 +45,28 @@ def _load_structured_viz(storage, job_id: str) -> dict | None:
 
 
 def _resolve_windows(storage, job: AnalysisJobSummary, result: AnalysisPipelineResult):
-    """解析有效时间窗口（clip / manual timeline / 回退），返回 (windows, source)。"""
+    """解析有效时间窗口（formal plan / clip / manual timeline）。"""
+    if storage is not None and job.windowPlanHash and job.segmentationRunId:
+        try:
+            from app.vision.pickleball_game_analysis.effective_time_windows import resolve_effective_windows
+
+            path = storage.formal_segmentation_artifact_path(
+                job.parentJobId or job.id,
+                getattr(job.metadata, "capture_take_id", None),
+                create_root=False,
+            )
+            payload = storage.read_json(path) if path.is_file() else None
+            plan = payload.get("window_plan") if isinstance(payload, dict) else None
+            if isinstance(plan, dict) and plan.get("plan_hash") == job.windowPlanHash:
+                return resolve_effective_windows(
+                    analysis_window_plan=plan.get("windows", []),
+                    window_plan_bound=True,
+                ), "formal_plan"
+        except Exception:  # corrupted optional artifact should remain diagnosable elsewhere
+            logger.warning("formal segmentation window plan 读取失败（job=%s）", job.id)
+        # A bound formal job must never fall back to a later mutable timeline
+        # when its immutable artifact is unavailable or has the wrong hash.
+        return [], "formal_plan_unavailable"
     analysis_window = result.analysis_window or {}
     clip_start = analysis_window.get("clip_start_ms")
     clip_end = analysis_window.get("clip_end_ms")

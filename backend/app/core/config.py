@@ -46,6 +46,13 @@ class Settings(BaseModel):
     max_upload_bytes: int = Field(default=20 * 1024 * 1024 * 1024, gt=0)  # 单个上传视频的大小上限（默认 20 GiB）
     capture_min_free_space_bytes: int = 1024 * 1024 * 1024  # 录制开始前至少保留 1 GiB 空间
     model_dir: Path = Path("../models")  # 模型权重所在目录（相对项目根）
+    # 正式比赛状态切分模型包。与 match_state_candidate_dir 隔离，避免把
+    # 训练/候选资产误当作生产输入。
+    match_state_segmentation_package_dir: Path = Path("models/match_state")
+    match_state_segmentation_device: str = "cpu"
+    match_state_segmentation_batch_size: int = Field(default=8, ge=1, le=256)
+    match_state_segmentation_required_profile: str = "match_default"
+    match_state_segmentation_enabled: bool = False
 
     # ---- 人体检测模型 ----
     default_detector_model: str = "yolo11n.pt"  # 默认人体检测模型文件名
@@ -349,6 +356,19 @@ def get_settings() -> Settings:
         static_test_frames_dir=Path(os.getenv("PICKLEBALL_STATIC_TEST_FRAMES_DIR", "data/test_frames")),
         max_upload_bytes=int(os.getenv("PICKLEBALL_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024 * 1024))),
         model_dir=model_dir,
+        match_state_segmentation_package_dir=Path(
+            os.getenv("PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR", "models/match_state")
+        ),
+        match_state_segmentation_device=os.getenv("PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE", "cpu"),
+        match_state_segmentation_batch_size=max(
+            1, int(os.getenv("PICKLEBALL_MATCH_STATE_SEGMENTATION_BATCH_SIZE", "8"))
+        ),
+        match_state_segmentation_required_profile=os.getenv(
+            "PICKLEBALL_MATCH_STATE_SEGMENTATION_REQUIRED_PROFILE", "match_default"
+        ),
+        match_state_segmentation_enabled=_env_bool(
+            os.getenv("PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED", "false")
+        ),
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
         detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.15")),
         detector_device=os.getenv("PICKLEBALL_DETECTOR_DEVICE") or None,

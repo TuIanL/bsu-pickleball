@@ -296,8 +296,12 @@ def assemble_evidence(job: AnalysisJobSummary, inputs: AssemblerInputs) -> Evide
         )
 
     # ── 4. rally 窗口证据（全局，manual_timeline / clip）──
-    if inputs.effective_windows:
-        window_provenance = "manual_timeline" if inputs.window_source == "manual_timeline" else "pipeline_metric"
+    if inputs.effective_windows is not None:
+        window_provenance = (
+            "formal_segmentation_plan"
+            if inputs.window_source == "formal_plan"
+            else "manual_timeline" if inputs.window_source == "manual_timeline" else "pipeline_metric"
+        )
         for index, window in enumerate(inputs.effective_windows):
             evidence.append(
                 PerformanceEvidence(
@@ -307,7 +311,11 @@ def assemble_evidence(job: AnalysisJobSummary, inputs: AssemblerInputs) -> Evide
                     metric="rally_window",
                     start_ms=_window_start_ms(window),
                     end_ms=_window_end_ms(window),
-                    source_artifacts=["timeline-events"] if window_provenance == "manual_timeline" else ["result"],
+                    source_artifacts=(
+                        ["match_state_segmentation"]
+                        if window_provenance == "formal_segmentation_plan"
+                        else ["timeline-events"] if window_provenance == "manual_timeline" else ["result"]
+                    ),
                     provenance=window_provenance,
                 )
             )
@@ -343,7 +351,7 @@ def assemble_evidence(job: AnalysisJobSummary, inputs: AssemblerInputs) -> Evide
         )
 
     # ── 6. data quality ──
-    rally_count = len(inputs.effective_windows) if inputs.effective_windows else None
+    rally_count = len(inputs.effective_windows) if inputs.effective_windows is not None else None
     coverage = _trajectory_coverage(zone_players)
     dimensions = _dimension_availability(result, match_format, zone_players, inputs)
     data_quality = PerformanceDataQuality(
@@ -417,8 +425,8 @@ def _dimension_availability(
         ),
         DimensionAvailability(
             dimension="rally_consistency",
-            status="available" if inputs.effective_windows else "insufficient_data",
-            detail=None if inputs.effective_windows else "无人工时间线 rally 窗口",
+            status="available" if inputs.effective_windows is not None else "insufficient_data",
+            detail=None if inputs.effective_windows is not None else "无可用 rally 窗口",
         ),
         DimensionAvailability(
             dimension="transition_decision",

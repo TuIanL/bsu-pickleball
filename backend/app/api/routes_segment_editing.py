@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.database import get_db
-from app.models.capture_segment import CaptureSegment, EditStatus, SegmentType
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentType
+from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
 from app.schemas.match_state_candidate import MatchStateCandidateDecisionRequest
 from app.schemas.segment_boundary_review import BOUNDARY_REVIEW_SCHEMA_VERSION, BoundaryReviewRequest
 from app.schemas.segment_creation import RallyCreateRequest
@@ -168,6 +169,92 @@ def delete_segment(segment_id: str, db: Session = Depends(get_db)):
 # ── AnalysisBatch ──
 
 router2 = APIRouter(prefix="/api/capture-takes", tags=["analysis-batches"])
+
+
+@router2.get("/{capture_take_id}/formal-segmentation-summary")
+def get_formal_segmentation_summary(capture_take_id: str, db: Session = Depends(get_db)):
+    """Return the product-facing summary for the latest formal segmentation run.
+
+    Candidate/QA artifacts deliberately do not participate in this response.
+    The endpoint is stable for old takes without a formal run: it returns an
+    ``unavailable`` summary instead of making the segment page fail to render.
+    """
+    if get_capture_take(db, capture_take_id) is None:
+        raise HTTPException(404, "CaptureTake 不存在")
+    runs = (
+        db.query(MatchStateSegmentationRun)
+        .filter(MatchStateSegmentationRun.capture_take_id == capture_take_id)
+        .order_by(
+            MatchStateSegmentationRun.finished_at.desc(),
+            MatchStateSegmentationRun.started_at.desc(),
+        )
+        .all()
+    )
+    if not runs:
+        return {
+            "capture_take_id": capture_take_id,
+            "status": "unavailable",
+            "run_id": None,
+            "model_package_id": None,
+            "model_version": None,
+            "generated_at": None,
+            "segment_count": 0,
+            "window_plan_hash": None,
+            "artifact_available": False,
+            "detail": "formal_segmentation_not_run",
+        }
+
+    # A failed retry deliberately does not supersede the last published run.
+    # The product summary therefore follows the active successful publication,
+    # so the segment page keeps showing the preserved automatic rallies while
+    # the failed retry remains auditable through its AnalysisJob/Run record.
+    active_statuses = {
+        MatchStateSegmentationRunStatus.succeeded,
+        MatchStateSegmentationRunStatus.valid_no_rallies,
+    }
+    run = next((candidate for candidate in runs if candidate.status in active_statuses), runs[0])
+
+    count = 0
+    if run.status in active_statuses:
+        count = (
+            db.query(CaptureSegment)
+            .filter(
+                CaptureSegment.capture_take_id == capture_take_id,
+                CaptureSegment.segmentation_run_id == run.id,
+                CaptureSegment.source == SegmentSource.algorithm,
+                CaptureSegment.edit_status == EditStatus.active,
+            )
+            .count()
+        )
+    artifact_available = bool(run.artifact_path)
+    if run.artifact_path:
+        try:
+            from app.services.storage_service import StorageService
+
+            artifact_available = StorageService().formal_segmentation_artifact_path(
+                run.planning_job_id, capture_take_id, create_root=False
+            ).is_file()
+        except (OSError, ValueError):
+            artifact_available = False
+    detail = None
+    try:
+        diagnostics = json.loads(run.diagnostics_json or "{}")
+        if isinstance(diagnostics, dict):
+            detail = diagnostics.get("detail") or diagnostics.get("message") or diagnostics.get("reason")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        detail = None
+    return {
+        "capture_take_id": capture_take_id,
+        "status": run.status.value if hasattr(run.status, "value") else str(run.status),
+        "run_id": run.id,
+        "model_package_id": run.model_package_id,
+        "model_version": run.model_package_version,
+        "generated_at": run.finished_at.isoformat() if run.finished_at else None,
+        "segment_count": count if run.status in active_statuses else 0,
+        "window_plan_hash": run.window_plan_hash,
+        "artifact_available": artifact_available,
+        "detail": detail,
+    }
 
 
 @router2.post("/{capture_take_id}/segments")
@@ -426,6 +513,7 @@ def _seg_dict(seg) -> dict:
         else getattr(seg, "edit_status", "active"),
         "status": seg.status.value if hasattr(seg.status, "value") else seg.status,
         "source": seg.source.value if hasattr(seg.source, "value") else seg.source,
+        "segmentation_run_id": getattr(seg, "segmentation_run_id", None),
         "is_highlight": seg.is_highlight,
     }
 

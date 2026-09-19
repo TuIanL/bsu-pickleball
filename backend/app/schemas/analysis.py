@@ -32,11 +32,13 @@ AnalysisMode = Literal["demo", "real", "limited"]
 AnalysisKind = Literal["single_view", "multiview"]
 # 任务可见性：public 对用户可见；internal 为双摄 Source Job，默认不进入任务列表
 Visibility = Literal["public", "internal"]
+JobRole = Literal["analysis", "segmentation_prerequisite"]
 # 任务分析范围：full = 完整单摄流水线；perception = 仅感知（预留，P0.5 不实现）
 AnalysisScope = Literal["full", "perception"]
 # 多视角编排状态（独立于 canonicalStatus 的编排维度）
 AnalysisOrchestrationStatus = Literal[
     "none",  # 普通 single_view
+    "waiting_segmentation",  # Parent 等内部正式回合切分前置任务
     "waiting_sources",  # Parent 等 child
     "fallback_ready",  # child 不完整，可单摄降级
     "fusion_ready",  # 两 child 完成，可 fusion
@@ -204,6 +206,8 @@ class AnalysisJobCreate(BaseModel):
     # 任务类型与双摄编排负载（analysisKind=multiview 时必带 multiview，且 metadata.capture_take_id 必须存在）
     analysisKind: AnalysisKind = "single_view"
     multiview: MultiViewCreateRequest | None = None
+    # 正式双摄切分策略；None 表示沿用后端 profile 配置，旧请求保持兼容。
+    segmentationRequired: bool | None = None
 
 
 class SourceJobRef(BaseModel):
@@ -279,15 +283,25 @@ class AnalysisJobSummary(BaseModel):
     # 编排字段（历史 job 缺省兼容）
     analysisKind: AnalysisKind = "single_view"
     visibility: Visibility = "public"
+    jobRole: JobRole = "analysis"
     parentJobId: str | None = None
     analysisScope: AnalysisScope | None = None
     orchestrationStatus: AnalysisOrchestrationStatus = "none"
+    segmentationRequired: bool = False
+    segmentationPrerequisiteJobId: str | None = None
+    segmentationRunId: str | None = None
+    windowPlanHash: str | None = None
+    segmentationStatus: str | None = None
+    segmentationErrorCode: str | None = None
+    segmentationArtifactRef: str | None = None
     fusionRunId: str | None = None
     # 执行模式:late_fusion_v1(P0 现状,2 child → FusionRun)| joint_tracking_v2(直接 runnable → ViewRun A/B)
     executionMode: Literal["late_fusion_v1", "joint_tracking_v2"] = "late_fusion_v1"
     debugTraceEnabled: bool = False
     # joint_tracking_v2 的持久化输入(无 child,重启后据此重建 JointRun);元素为 JointViewInput 序列化 dict
     jointViewInputs: list[dict[str, object]] = Field(default_factory=list)
+    # 创建时冻结的 CaptureTake view 描述，供 segmentation 成功后创建 late child。
+    multiviewViews: list[dict[str, object]] = Field(default_factory=list)
     # joint_tracking_v2 的运行标识(不复用 fusionRunId;late 仅用 fusionRunId)
     jointRunId: str | None = None
     # Parent 对 owned child 的所有权映射（数组）

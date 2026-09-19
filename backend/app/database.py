@@ -147,6 +147,54 @@ def _ensure_vidat_provenance_columns(engine: Engine) -> None:
                     connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
 
 
+def _ensure_match_state_segmentation_columns(engine: Engine) -> None:
+    """为未运行 Alembic 的本地 SQLite 数据库补齐正式切分表/外键列。"""
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        if not inspector.has_table("match_state_segmentation_runs"):
+            connection.execute(
+                text(
+                    """CREATE TABLE match_state_segmentation_runs (
+                    id VARCHAR(80) PRIMARY KEY,
+                    capture_take_id VARCHAR(64) NOT NULL REFERENCES capture_takes(id) ON DELETE RESTRICT,
+                    planning_job_id VARCHAR(128) NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'running',
+                    profile VARCHAR(64) NOT NULL DEFAULT 'match_default',
+                    model_package_id VARCHAR(128), model_package_version VARCHAR(128),
+                    package_sha256 VARCHAR(64), weights_sha256 VARCHAR(64), decoder_sha256 VARCHAR(64),
+                    input_fingerprint VARCHAR(128), sync_calibration_revision INTEGER,
+                    timing_authority VARCHAR(32), artifact_path VARCHAR(1024), artifact_sha256 VARCHAR(64),
+                    window_plan_hash VARCHAR(64), unknown_rate FLOAT, segment_count INTEGER NOT NULL DEFAULT 0,
+                    diagnostics_json TEXT NOT NULL DEFAULT '{}', plan_json TEXT NOT NULL DEFAULT '{}',
+                    supersedes_run_id VARCHAR(80), started_at DATETIME NOT NULL, finished_at DATETIME
+                    )"""
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX idx_segmentation_run_take_status ON match_state_segmentation_runs(capture_take_id, status)")
+            )
+        if inspector.has_table("capture_segments"):
+            columns = {column["name"] for column in inspect(engine).get_columns("capture_segments")}
+            if "segmentation_run_id" not in columns:
+                connection.execute(
+                    text("ALTER TABLE capture_segments ADD COLUMN segmentation_run_id VARCHAR(80)")
+                )
+            segment_indexes = {index["name"] for index in inspect(engine).get_indexes("capture_segments")}
+            if "ix_capture_segments_segmentation_run_id" not in segment_indexes:
+                connection.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_capture_segments_segmentation_run_id ON capture_segments(segmentation_run_id)")
+                )
+        run_indexes = {index["name"] for index in inspect(engine).get_indexes("match_state_segmentation_runs")} if inspect(engine).has_table("match_state_segmentation_runs") else set()
+        if "idx_segmentation_run_take_status" not in run_indexes:
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_segmentation_run_take_status ON match_state_segmentation_runs(capture_take_id, status)")
+            )
+        if "idx_segmentation_run_planning_job" not in run_indexes:
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_segmentation_run_planning_job ON match_state_segmentation_runs(planning_job_id)")
+            )
+
+
 def init_db() -> None:
     """应用启动时调用：确保所有 ORM 表存在。"""
     # 导入所有模型以触发 Base.metadata 注册
@@ -161,6 +209,7 @@ def init_db() -> None:
     import app.models.live_coding_state  # noqa: F401
     import app.models.media_fragment  # noqa: F401
     import app.models.match_state_candidate  # noqa: F401
+    import app.models.match_state_segmentation  # noqa: F401
     import app.models.segment_edit_operation  # noqa: F401
     import app.models.scoring_calibration_annotation  # noqa: F401
     import app.models.timeline_event  # noqa: F401
@@ -178,6 +227,7 @@ def init_db() -> None:
                 text("ALTER TABLE field_sessions ADD COLUMN display_mode VARCHAR(16) NOT NULL DEFAULT 'standard'")
             )
     _ensure_vidat_provenance_columns(engine)
+    _ensure_match_state_segmentation_columns(engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
     lcs_columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
     with engine.begin() as connection:

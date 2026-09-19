@@ -445,6 +445,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         // 双摄协同分析的正式展示链路统一走 canonical joint；Debug Replay 只是
         // 在同一条链路上额外保留四联诊断回放，不再决定是否启用球路分析。
         executionMode: "joint_tracking_v2",
+        // 正式比赛分析必须先生成并绑定模型回合窗口计划。
+        segmentationRequired: true,
         debugTraceEnabled: debugReplayEnabled,
         sceneCalibrationMode: "metric",
         sceneCalibrationRevision: publishedScene.revision,

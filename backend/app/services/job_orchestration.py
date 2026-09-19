@@ -19,6 +19,7 @@ import os
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -149,6 +150,116 @@ def stage_details_for(mode: ProgressMode, stage_id: str) -> tuple[str, str]:
         return STAGE_DETAILS.get(stage_id, (stage_id, ""))
 
 
+def _formal_segmentation_provenance(payload: AnalysisJobCreate) -> dict[str, object]:
+    """Resolve immutable formal-segmentation inputs for task deduplication.
+
+    Creation must remain possible when the deployment forgot to install the
+    package: the resulting prerequisite will fail with ``model_unavailable``.
+    We therefore record a deterministic unavailable marker instead of making
+    task creation itself depend on optional runtime files.
+    """
+    settings = get_settings()
+    package_root = Path(settings.match_state_segmentation_package_dir).expanduser()
+    manifest_path = package_root / "model_package.json"
+    package_sha256: str | None = None
+    decoder_sha256: str | None = None
+    weights_sha256: str | None = None
+    try:
+        from app.vision.match_state.package import load_production_package
+
+        package = load_production_package(
+            package_root,
+            required_profile=settings.match_state_segmentation_required_profile,
+        )
+        package_sha256 = package.package_sha256
+        decoder_sha256 = package.decoder_sha256
+        weights_sha256 = package.weights_sha256
+    except Exception:
+        try:
+            package_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        except OSError:
+            package_sha256 = None
+        # If the manifest is present but weights are not, a new weights file
+        # must still change the signature once the package is deployed.
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            artifacts = manifest.get("artifacts", {}) if isinstance(manifest, dict) else {}
+            weights_name = artifacts.get("weights") if isinstance(artifacts, dict) else None
+            if isinstance(weights_name, str):
+                weights_path = package_root / weights_name
+                if weights_path.is_file():
+                    weights_sha256 = hashlib.sha256(weights_path.read_bytes()).hexdigest()
+            decoder_name = artifacts.get("decoder") if isinstance(artifacts, dict) else None
+            decoder_path = package_root / decoder_name if isinstance(decoder_name, str) else None
+            if decoder_path is not None and decoder_path.is_file():
+                decoder_sha256 = hashlib.sha256(decoder_path.read_bytes()).hexdigest()
+            elif isinstance(manifest, dict) and isinstance(manifest.get("thresholds"), dict):
+                decoder_sha256 = _stable_hash(manifest["thresholds"])
+        except (OSError, ValueError, json.JSONDecodeError, TypeError):
+            pass
+    return {
+        "packageSha256": package_sha256 or "unavailable",
+        "weightsSha256": weights_sha256 or "unavailable",
+        "decoderSha256": decoder_sha256 or "unavailable",
+        "requiredProfile": settings.match_state_segmentation_required_profile,
+    }
+
+
+def _capture_take_input_fingerprint(payload: AnalysisJobCreate) -> str | None:
+    """Create a stable take-scoped fingerprint without reading training data."""
+    if not payload.metadata.capture_take_id:
+        return None
+    views = []
+    if payload.multiview:
+        views = [
+            {
+                "viewId": view.viewId,
+                "cameraId": view.cameraId,
+                "videoId": view.videoId,
+                "calibrationId": view.calibrationId,
+            }
+            for view in payload.multiview.views
+        ]
+    take_revision: int | None = None
+    try:
+        from app.database import get_session_factory
+        from app.models.capture_take import CaptureTake
+
+        db = get_session_factory()()
+        try:
+            take = db.get(CaptureTake, payload.metadata.capture_take_id)
+            take_revision = int(take.revision) if take is not None else None
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return _stable_hash({
+        "captureTakeId": payload.metadata.capture_take_id,
+        "takeRevision": take_revision,
+        "videoId": payload.videoId,
+        "views": views,
+        "clipStartMs": payload.clipStartMs,
+        "clipEndMs": payload.clipEndMs,
+    })
+
+
+def _capture_take_sync_revision(payload: AnalysisJobCreate) -> int | None:
+    if not payload.metadata.capture_take_id:
+        return None
+    try:
+        from app.database import get_session_factory
+        from app.services.sync_anchor_service import SyncAnchorAssetService
+
+        db = get_session_factory()()
+        try:
+            status = SyncAnchorAssetService(db).status(payload.metadata.capture_take_id, require_manual=False)
+            return int(status.revision) if status.revision is not None else None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
 def normalize_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
     # 统一化一个任务：保证 canonicalStatus / status / displayStatus 三者一致。
     canonical = job.canonicalStatus or display_to_canonical_status(job.status)
@@ -159,7 +270,9 @@ def normalize_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
     payload["canonicalStatus"] = canonical
     payload["status"] = display
     payload["displayStatus"] = display
-    mode = resolve_progress_mode(payload.get("analysisKind"), payload.get("executionMode"))
+    mode = resolve_progress_mode(
+        payload.get("analysisKind"), payload.get("executionMode"), bool(payload.get("segmentationRequired"))
+    )
     normalized_stages = normalize_stage_snapshot(job.stages, mode)
     if canonical == "succeeded":
         normalized_stages = [
@@ -303,6 +416,15 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         config_payload["sceneCalibrationMode"] = payload.multiview.sceneCalibrationMode
         config_payload["sceneCalibrationRevision"] = payload.multiview.sceneCalibrationRevision
         config_payload["sceneViewIds"] = sorted(payload.multiview.sceneViewIds)
+        config_payload["segmentationRequired"] = bool(
+            payload.segmentationRequired
+            if payload.segmentationRequired is not None
+            else settings.match_state_segmentation_enabled
+        )
+        if config_payload["segmentationRequired"]:
+            config_payload.update(_formal_segmentation_provenance(payload))
+            config_payload["segmentationDevice"] = settings.match_state_segmentation_device
+            config_payload["captureTakeInputFingerprint"] = _capture_take_input_fingerprint(payload)
     input_payload = {
         "videoId": payload.videoId,
         "calibrationId": payload.calibrationId,
@@ -318,6 +440,11 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         "sceneCalibrationRevision": payload.multiview.sceneCalibrationRevision if payload.multiview else None,
         "sceneViewIds": sorted(payload.multiview.sceneViewIds) if payload.multiview else [],
     }
+    if payload.multiview and config_payload.get("segmentationRequired"):
+        input_payload["captureTakeInputFingerprint"] = _capture_take_input_fingerprint(payload)
+        # Sync revision is resolved from the CaptureTake anchor service when
+        # available.  Keeping an explicit null preserves old/imported takes.
+        input_payload["syncCalibrationRevision"] = _capture_take_sync_revision(payload)
     return _stable_hash(input_payload), _stable_hash(config_payload)
 
 
@@ -390,6 +517,7 @@ class JobStore:
         progress_mode = resolve_progress_mode(
             payload.analysisKind,
             payload.multiview.executionMode if payload.multiview else None,
+            bool(payload.segmentationRequired if payload.segmentationRequired is not None else settings.match_state_segmentation_enabled),
         )
         initial_stage = "queue" if progress_mode == "single_view" else stage_ids(progress_mode)[0]
         job = AnalysisJobSummary(
@@ -429,7 +557,17 @@ class JobStore:
             clipEndMs=payload.clipEndMs,
             analysisKind=payload.analysisKind,
             executionMode=payload.multiview.executionMode if payload.multiview else "late_fusion_v1",
-            orchestrationStatus="waiting_sources" if payload.analysisKind == "multiview" else "none",
+            segmentationRequired=bool(
+                payload.segmentationRequired
+                if payload.segmentationRequired is not None
+                else (payload.analysisKind == "multiview" and settings.match_state_segmentation_enabled)
+            ),
+            orchestrationStatus=(
+                "waiting_segmentation"
+                if payload.analysisKind == "multiview"
+                and bool(payload.segmentationRequired if payload.segmentationRequired is not None else settings.match_state_segmentation_enabled)
+                else "waiting_sources" if payload.analysisKind == "multiview" else "none"
+            ),
             debugTraceEnabled=bool(payload.multiview.debugTraceEnabled) if payload.multiview else False,
             sceneCalibrationRevision=(
                 payload.multiview.sceneCalibrationRevision
@@ -516,6 +654,8 @@ class JobStore:
     def is_runnable(self, job: AnalysisJobSummary) -> bool:
         if job.canonicalStatus != "queued":
             return False
+        if job.jobRole == "segmentation_prerequisite":
+            return job.orchestrationStatus in {"none", "waiting_segmentation"}
         if job.analysisKind == "single_view":
             return True
         if job.analysisKind == "multiview":
@@ -547,7 +687,7 @@ class JobStore:
         self, job: AnalysisJobSummary, worker_id: str, worker_run_id: str | None = None
     ) -> AnalysisJobSummary:
         now = utc_now()
-        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         claim_stage_id = "video-read" if mode == "single_view" else stage_ids(mode)[0]
         claim_label, claim_detail = stage_details_for(mode, claim_stage_id)
         payload = job.model_dump(mode="json")
@@ -632,7 +772,7 @@ class JobStore:
             return job, "terminal"
         now = utc_now()
         if job.canonicalStatus == "queued":
-            mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+            mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
             label, _detail = stage_details_for(mode, job.stage)
             canceled_stages = merge_stage_progress(
                 job.stages,
@@ -666,7 +806,7 @@ class JobStore:
         return updated or self.get(job_id), "requested"
 
     def mark_stage(self, job: AnalysisJobSummary, stage: AnalysisStage) -> AnalysisJobSummary:
-        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         stages = merge_stage_progress(job.stages, stage, mode=mode)
         progress = compute_progress_from_stages(
             stages,
@@ -705,7 +845,7 @@ class JobStore:
         return updated or self.get(job.id) or job
 
     def mark_succeeded(self, job: AnalysisJobSummary, stages: list[AnalysisStage]) -> AnalysisJobSummary:
-        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         report_id = stage_ids(mode)[-1]
         report_label, report_detail = stage_details_for(mode, report_id)
         report_stage = AnalysisStage(
@@ -727,7 +867,7 @@ class JobStore:
         error_code: str | None = None,
         internal_message: str | None = None,
     ) -> AnalysisJobSummary:
-        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         return self._terminal_job(
             job,
             "failed",
@@ -740,7 +880,7 @@ class JobStore:
         )
 
     def mark_canceled(self, job: AnalysisJobSummary, *, message: str = "任务已取消") -> AnalysisJobSummary:
-        mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+        mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         label, _detail = stage_details_for(mode, job.stage)
         canceled_stage = AnalysisStage(
             id=job.stage,
@@ -1071,6 +1211,7 @@ class AnalysisWorkerRuntime:
             executor = resolve_executor(
                 job.analysisKind, self.store, self.pipeline_factory,
                 execution_mode=getattr(job, "executionMode", None),
+                job_role=getattr(job, "jobRole", None),
             )
             return executor.execute(job, token, progress_callback)
 
@@ -1091,7 +1232,7 @@ class AnalysisWorkerRuntime:
                     if latest.stage not in RETRYABLE_STAGE_IDS or retry_attempts >= self.settings.job_max_retries:
                         raise
                     retry_attempts += 1
-                    retry_mode = resolve_progress_mode(latest.analysisKind, latest.executionMode)
+                    retry_mode = resolve_progress_mode(latest.analysisKind, latest.executionMode, latest.segmentationRequired)
                     retry_label, _detail = stage_details_for(retry_mode, latest.stage)
                     retry_stage = AnalysisStage(
                         id=latest.stage,
@@ -1108,7 +1249,7 @@ class AnalysisWorkerRuntime:
             if token.is_cancel_requested():
                 self._cleanup_tmp(job.id)
                 return self._notify_terminal(self.store.mark_canceled(latest))
-            progress_mode = resolve_progress_mode(job.analysisKind, job.executionMode)
+            progress_mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
             stages = analysis_stages_from_pipeline(result, mode=progress_mode)
             if result.status == "completed":
                 latest = self.store.mark_succeeded(latest, stages)
@@ -1125,7 +1266,7 @@ class AnalysisWorkerRuntime:
             return self._notify_terminal(self.store.mark_canceled(latest))
         except StageTimeoutError as exc:
             logger.warning("Analysis job %s timed out at stage %s", job.id, latest.stage)
-            mode = resolve_progress_mode(latest.analysisKind, latest.executionMode)
+            mode = resolve_progress_mode(latest.analysisKind, latest.executionMode, latest.segmentationRequired)
             timeout_label, _detail = stage_details_for(mode, latest.stage)
             timed_out_stage = AnalysisStage(
                 id=latest.stage,
@@ -1151,7 +1292,7 @@ class AnalysisWorkerRuntime:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Analysis job %s failed in worker", job.id)
-            mode = resolve_progress_mode(latest.analysisKind, latest.executionMode)
+            mode = resolve_progress_mode(latest.analysisKind, latest.executionMode, latest.segmentationRequired)
             failed_label, _detail = stage_details_for(mode, latest.stage)
             failed_stage = AnalysisStage(
                 id=latest.stage,

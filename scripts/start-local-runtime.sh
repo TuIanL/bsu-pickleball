@@ -93,6 +93,17 @@ raise SystemExit(0 if torch.cuda.is_available() else 1)
 PY
 }
 
+python_has_mps() {
+  "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
+try:
+    import torch
+except Exception:
+    raise SystemExit(1)
+backend = getattr(torch.backends, "mps", None)
+raise SystemExit(0 if backend is not None and backend.is_available() else 1)
+PY
+}
+
 ensure_port_available() {
   local name="$1"
   local port="$2"
@@ -209,6 +220,25 @@ PICKLEBALL_MAX_UPLOAD_BYTES="${PICKLEBALL_MAX_UPLOAD_BYTES:-$((20 * 1024 * 1024 
 PICKLEBALL_MODEL_DIR="${PICKLEBALL_MODEL_DIR:-$REPO_ROOT/models}"
 PICKLEBALL_DEFAULT_DETECTOR_MODEL="${PICKLEBALL_DEFAULT_DETECTOR_MODEL:-yolo11n.pt}"
 PICKLEBALL_MATCH_STATE_CANDIDATE_DIR="${PICKLEBALL_MATCH_STATE_CANDIDATE_DIR:-$REPO_ROOT/data/match_state_candidates}"
+PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR="${PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR:-$REPO_ROOT/models/match_state}"
+PICKLEBALL_MATCH_STATE_SEGMENTATION_REQUIRED_PROFILE="${PICKLEBALL_MATCH_STATE_SEGMENTATION_REQUIRED_PROFILE:-match_default}"
+PICKLEBALL_MATCH_STATE_SEGMENTATION_BATCH_SIZE="${PICKLEBALL_MATCH_STATE_SEGMENTATION_BATCH_SIZE:-8}"
+if [[ -z "${PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED+x}" ]]; then
+  if [[ -f "$PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR/model_package.json" ]]; then
+    PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED="true"
+  else
+    PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED="false"
+  fi
+fi
+if [[ -z "${PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE+x}" ]]; then
+  if python_has_cuda; then
+    PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE="cuda:0"
+  elif python_has_mps; then
+    PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE="mps"
+  else
+    PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE="cpu"
+  fi
+fi
 
 # CORS 白名单：默认允许 localhost / 127.0.0.1，并自动把本机局域网 IP 加进去，
 # 否则通过局域网 IP 访问前端时浏览器预检被拒（表现为 fetch "Failed to fetch"）。
@@ -257,6 +287,25 @@ for entry in manifest.get("models", []):
 PY
 fi
 
+if [[ "$PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED" == "true" || "$PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED" == "1" || "$PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED" == "yes" ]]; then
+  [[ -f "$PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR/model_package.json" ]] || die "Formal match-state package not found at $PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR"
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/verify_match_state_model_package.py" \
+    --package-dir "$PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR" \
+    --schema "$BACKEND_DIR/app/resources/match_state_model_package.schema.v1.json" \
+    --strict >/dev/null || die "Formal match-state package validation failed"
+  "$PYTHON_BIN" - <<'PY' || die "Formal match-state runtime dependencies are not installed."
+import importlib.util
+missing = [name for name in ("torch", "torchvision", "cv2", "numpy") if importlib.util.find_spec(name) is None]
+raise SystemExit(1 if missing else 0)
+PY
+  case "$PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE" in
+    cuda:*) python_has_cuda || die "Configured match-state device $PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE is unavailable" ;;
+    mps) python_has_mps || die "Configured match-state device mps is unavailable" ;;
+    cpu) : ;;
+    *) die "Unsupported match-state device: $PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE" ;;
+  esac
+fi
+
 if [[ -n "$PICKLEBALL_COURT_LINE_MODEL_PATH" ]]; then
   [[ -f "$PICKLEBALL_COURT_LINE_MODEL_PATH" ]] || die "Court-line model not found at $PICKLEBALL_COURT_LINE_MODEL_PATH"
 fi
@@ -271,6 +320,9 @@ say "Analysis worker mode: $PICKLEBALL_ANALYSIS_WORKER_MODE"
 say "Court-line model: $PICKLEBALL_COURT_LINE_MODEL_PATH"
 say "Court-line device: $PICKLEBALL_COURT_LINE_DEVICE"
 say "RTMPose device:    $PICKLEBALL_RTMPOSE_DEVICE"
+say "Match-state package: $PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR"
+say "Match-state enabled: $PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED"
+say "Match-state device:  $PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE"
 
 (
   cd "$BACKEND_DIR"
@@ -286,6 +338,11 @@ say "RTMPose device:    $PICKLEBALL_RTMPOSE_DEVICE"
   export PICKLEBALL_MODEL_DIR
   export PICKLEBALL_DEFAULT_DETECTOR_MODEL
   export PICKLEBALL_MATCH_STATE_CANDIDATE_DIR
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_REQUIRED_PROFILE
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_BATCH_SIZE
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE
   export PICKLEBALL_COURT_LINE_MODEL_PATH
   export PICKLEBALL_COURT_LINE_DEVICE
   export PICKLEBALL_RTMPOSE_CONFIG_PATH
@@ -310,6 +367,11 @@ echo "$!" > "$BACKEND_PID_FILE"
   export PICKLEBALL_MAX_UPLOAD_BYTES
   export PICKLEBALL_MODEL_DIR
   export PICKLEBALL_DEFAULT_DETECTOR_MODEL
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_REQUIRED_PROFILE
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_BATCH_SIZE
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED
+  export PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE
   export PICKLEBALL_COURT_LINE_MODEL_PATH
   export PICKLEBALL_COURT_LINE_DEVICE
   export PICKLEBALL_RTMPOSE_CONFIG_PATH

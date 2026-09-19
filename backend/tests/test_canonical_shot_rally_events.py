@@ -158,6 +158,57 @@ def test_composer_uses_authoritative_rally_boundaries_and_stable_ordinals(monkey
     )
 
 
+def test_composer_prefers_bound_formal_window_plan_over_legacy_timeline(monkeypatch) -> None:
+    monkeypatch.setattr(
+        composer,
+        "_load_rally_boundaries",
+        lambda _capture_take_id: (
+            [{"rally_id": "manual-rally", "ordinal": 1, "start_ms": 0, "end_ms": 5000}],
+            [],
+        ),
+    )
+    payload = _payload(
+        [_segment("flight-1", "shot-001", "hit-1", 2.0)],
+        event_times={"hit-1": 2.0},
+    )
+    events = composer.build_shot_rally_events(
+        job_id="job-formal-plan",
+        video_id="video-1",
+        match_format="doubles",
+        reconstructed_payload=payload,
+        capture_take_id="take-formal",
+        formal_window_plan=[
+            {"segment_id": "seg-formal-1", "ordinal": 1, "start_ms": 1500, "end_ms": 2500}
+        ],
+    )
+    assert [rally.rally_id for rally in events.rallies] == ["seg-formal-1"]
+    assert events.rallies[0].provenance == "formal_segmentation_plan"
+    assert events.shots[0].rally_id == "seg-formal-1"
+    assert events.provenance["rally_authority"] == "formal_segmentation_plan"
+
+
+def test_formal_empty_window_plan_is_not_replaced_by_manual_timeline(monkeypatch) -> None:
+    monkeypatch.setattr(
+        composer,
+        "_load_rally_boundaries",
+        lambda _capture_take_id: (
+            [{"rally_id": "manual-rally", "ordinal": 1, "start_ms": 0, "end_ms": 5000}],
+            [],
+        ),
+    )
+    payload = _payload([], event_times={})
+    events = composer.build_shot_rally_events(
+        job_id="job-formal-empty",
+        video_id="video-1",
+        match_format="doubles",
+        reconstructed_payload=payload,
+        capture_take_id="take-formal",
+        formal_window_plan=[],
+    )
+    assert events.rallies == []
+    assert events.provenance["rally_authority"] == "formal_segmentation_plan"
+
+
 def test_metric_snapshot_does_not_turn_zero_denominator_into_zero_rate(monkeypatch) -> None:
     monkeypatch.setattr(composer, "_load_rally_boundaries", lambda _capture_take_id: ([], []))
     events = composer.build_shot_rally_events(

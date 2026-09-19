@@ -40,6 +40,49 @@ Detector adapters should normalize model output into `player` and `ball`
 records today. `paddle` remains a supported direction for later adapters, but it
 is not required for the current pipeline activation.
 
+## Formal Match-State Segmentation Package
+
+The production `match_default` package is a self-contained directory under
+`models/match_state/` (or a deployment path supplied by
+`PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR`). It must contain a signed
+`model_package.json`, the referenced `weights` file, and SHA-256 entries for
+every referenced artifact. The loader rejects path traversal, missing files,
+schema/task mismatches, and checksum failures before a job can run.
+
+Recommended rollout:
+
+```bash
+PICKLEBALL_MATCH_STATE_SEGMENTATION_PACKAGE_DIR=../models/match_state \
+PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED=true \
+PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE=cpu
+```
+
+The package cache key is `(package_sha256, device)`; changing either value
+automatically loads a fresh model. A missing/corrupt package is reported as
+`model_unavailable`; missing synchronized samples as `input_unavailable`; a
+low-coverage synchronized stream as `low_evidence`. Formal segmentation never
+reads training manifests or ground-truth labels at runtime. See the
+`match_state_segmentation.v1` artifact returned by the Parent job for the
+frozen window plan, state timeline, model identity, input fingerprint and
+diagnostics.
+
+For a package that contains raw model weights, declare its inference adapter in
+`model_package.json` so the Worker does not mistake frame addresses for model
+probabilities:
+
+```json
+"runtime": {
+  "entrypoint": "app.vision.match_state.torch_adapter:load_model",
+  "adapter_version": "torch-r3d18-v1"
+}
+```
+
+The adapter receives the verified package and device, and must expose
+`predict_samples(samples)` returning canonical `state_probabilities`. A
+package without an adapter is still valid for replaying a signed probability
+sidecar, but raw synchronized samples fail explicitly with
+`model_unavailable`.
+
 ## RTMPose26 Validation Assets
 
 The first supported skeleton model is OpenMMLab RTMPose Body8-Halpe26 with 26

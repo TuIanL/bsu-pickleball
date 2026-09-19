@@ -78,7 +78,7 @@ def _demo_settings():
 def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
     # Worker 完成回调：保存基础结果 → canonical 事实层 → normalized metrics → insights → 生成报告。
     # post-pipeline 组合失败只影响可选 artifact，不影响主视觉结果；demo 不生成真实事件。
-    if result.status == "completed" and job.analysisMode != "demo":
+    if result.status == "completed" and job.analysisMode != "demo" and job.jobRole != "segmentation_prerequisite":
         from app.services.canonical_shot_rally_events import generate_and_persist_canonical_events
 
         result, events, snapshot = generate_and_persist_canonical_events(job, result, storage=_STORAGE)

@@ -102,6 +102,16 @@ class StorageService:
     def _job_artifact_root(self, job_id: str) -> Path:
         return self._capture_job_roots.get(job_id, self.outputs_dir / job_id)
 
+    def formal_segmentation_artifact_path(
+        self, job_id: str, capture_take_id: str | None = None, *, create_root: bool = True
+    ) -> Path:
+        """Deterministic formal artifact location; candidate namespace is never used."""
+        root = self.resolve_capture_job_root(job_id, capture_take_id) if capture_take_id else self._job_artifact_root(job_id)
+        root = root or (self.outputs_dir / job_id)
+        if create_root:
+            root.mkdir(parents=True, exist_ok=True)
+        return root / "match_state_segmentation.json"
+
     def logical_artifact_reference(self, job_id: str, path: str | Path | None) -> str | None:
         """Return a stable logical reference without exposing a local absolute path."""
         if path is None:

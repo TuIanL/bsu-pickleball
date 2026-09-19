@@ -68,12 +68,29 @@ from app.services.multiview_observability import (
     structured_error,
 )
 from app.services.storage_service import StorageService
+from app.services.formal_segmentation_service import get_bound_formal_artifact
 
 # 定义路由表，前缀 /api/analysis
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 # 存储服务对象，用于定位各类分析产物（artifact）在磁盘上的路径
 _STORAGE = StorageService()
 _MULTIVIEW_OBSERVABILITY = MultiviewObservabilityProjector(_STORAGE)
+
+
+@router.get("/jobs/{job_id}/artifacts/match-state-segmentation")
+def read_formal_segmentation_artifact(job_id: str):
+    """Read only the artifact bound to this Parent; never fall back to QA candidates."""
+    job = get_mock_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Formal segmentation artifact unavailable")
+    artifact = get_bound_formal_artifact(
+        _STORAGE, job_id=job_id, capture_take_id=job.metadata.capture_take_id
+    )
+    if artifact is None or not job.segmentationRunId:
+        raise HTTPException(status_code=404, detail="Formal segmentation artifact unavailable")
+    if artifact.get("run_id") != job.segmentationRunId:
+        raise HTTPException(status_code=404, detail="Formal segmentation artifact is not bound to this job")
+    return artifact
 
 
 def _multiview_error(status_code: int, code: str, message: str, job_id: str) -> JSONResponse:

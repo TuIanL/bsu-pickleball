@@ -5,7 +5,8 @@ import json
 from fastapi import HTTPException
 
 from app.api import routes_segment_editing
-from app.models.capture_segment import EditStatus
+from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentStatus, SegmentType
+from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
 from app.models.segment_edit_operation import EditOperationType, SegmentEditOperation
 from app.schemas.field_session import FieldSessionCreate
 from app.schemas.segment_boundary_review import BoundaryReviewDecision, BoundaryReviewRequest
@@ -196,6 +197,47 @@ def test_create_manual_rally_inserts_by_time_and_audits(isolated_database):
     summary = routes_segment_editing.get_boundary_review(take.id, db)
     assert summary["total_count"] == 3
     assert summary["pending_count"] == 3
+    db.close()
+
+
+def test_formal_segmentation_summary_exposes_only_published_algorithm_run(isolated_database):
+    db = isolated_database()
+    take, _ = _take_and_rally(db)
+    run = MatchStateSegmentationRun(
+        id="seg-summary",
+        capture_take_id=take.id,
+        planning_job_id="job-summary",
+        status=MatchStateSegmentationRunStatus.succeeded,
+        profile="match_default",
+        model_package_id="match-state",
+        model_package_version="v2026.09",
+        window_plan_hash="plan-summary",
+        segment_count=1,
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        CaptureSegment(
+            id="auto-summary",
+            capture_take_id=take.id,
+            segment_type=SegmentType.rally,
+            ordinal=1,
+            label="第1分",
+            start_ms=1000,
+            end_ms=2000,
+            status=SegmentStatus.inferred,
+            source=SegmentSource.algorithm,
+            edit_status=EditStatus.active,
+            segmentation_run_id=run.id,
+        )
+    )
+    db.commit()
+
+    summary = routes_segment_editing.get_formal_segmentation_summary(take.id, db)
+    assert summary["status"] == "succeeded"
+    assert summary["model_version"] == "v2026.09"
+    assert summary["segment_count"] == 1
+    assert summary["window_plan_hash"] == "plan-summary"
     db.close()
 
 

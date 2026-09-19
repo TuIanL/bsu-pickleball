@@ -317,6 +317,9 @@ def create_package(
     dataset_manifest = load_json(args.dataset_manifest)
     structured_profile = load_json(args.structured_profile)
     config_sha = sha256_file(args.training_profile)
+    model_input_size = profile.get("model", {}).get("rgb_encoder", {}).get("input_size", [224, 224])
+    if not isinstance(model_input_size, (list, tuple)) or len(model_input_size) != 2:
+        model_input_size = [224, 224]
     provenance = {
         "dataset_manifest_sha256": sha256_file(args.dataset_manifest),
         "rgb_clip_manifest_sha256": sha256_file(args.rgb_manifest),
@@ -347,7 +350,15 @@ def create_package(
         "input_contract": {
             "modalities": ["rgb"],
             "sampling_fps": profile["temporal_input"]["sampling_fps"],
+            "timeline_stride_ms": int(profile["temporal_input"].get("timeline_stride_ms", 500)),
             "clip_duration_ms": profile["temporal_input"]["clip_duration_ms"],
+            "encoder_frame_count": profile["temporal_input"]["encoder_frame_count"],
+            "height": int(model_input_size[0]),
+            "width": int(model_input_size[1]),
+            "normalization": {
+                "mean": [0.43216, 0.394666, 0.37645],
+                "std": [0.22803, 0.22145, 0.216989],
+            },
             "feature_schema": "match_state_rgb_frame_cache.v1",
         },
         "thresholds": profile["inference"],
@@ -358,7 +369,13 @@ def create_package(
             "evaluation_report": "evaluation_report.json",
             "checksums": artifact_checksums,
         },
-        "runtime": {"status": "ready", "device": args.device, "fallback": "preserve_existing_analysis"},
+        "runtime": {
+            "status": "ready",
+            "device": args.device,
+            "fallback": "preserve_existing_analysis",
+            "entrypoint": "app.vision.match_state.torch_adapter:load_model",
+            "adapter_version": "torch-r3d18-v1",
+        },
         "source_dataset_manifest_id": dataset_manifest.get("manifest_id"),
         "source_rgb_manifest_id": rgb_manifest.get("manifest_id"),
         "structured_feature_profile_schema": structured_profile.get("schema_version"),

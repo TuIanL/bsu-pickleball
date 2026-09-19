@@ -2,6 +2,17 @@
   "schema_version": "pickleball-model-manifest.v1",
   "generated_at": "2026-09-06",
   "verification": "sha256",
+  "formal_packages": [
+    {
+      "id": "match-state-segmentation",
+      "path": "match_state",
+      "required_profile": "match_default",
+      "runtime": "backend.app.vision.match_state",
+      "verification": "model_package.json plus referenced SHA-256 checksums",
+      "optional": true,
+      "source": "Validated RGB match-state temporal segmentation package; deploy before enabling required policy"
+    }
+  ],
   "models": [
     {
       "id": "rtmpose-body8-halpe26-config",

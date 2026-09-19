@@ -1,0 +1,20 @@
+{
+  "$id": "match_state_segmentation.v1",
+  "type": "object",
+  "required": ["schema_version", "planning_job_id", "capture_take_id", "run_id", "status", "model", "input_provenance", "decoder", "state_summary", "state_timeline", "algorithm_segments", "window_plan"],
+  "properties": {
+    "schema_version": {"const": "match_state_segmentation.v1"},
+    "planning_job_id": {"type": "string", "minLength": 1},
+    "capture_take_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["succeeded", "valid_no_rallies"]},
+    "model": {"type": "object"},
+    "input_provenance": {"type": "object"},
+    "decoder": {"type": "object"},
+    "state_summary": {"type": "object"},
+    "state_timeline": {"type": "array"},
+    "algorithm_segments": {"type": "array"},
+    "window_plan": {"type": "object", "required": ["run_id", "windows", "plan_hash"]}
+  },
+  "additionalProperties": false
+}

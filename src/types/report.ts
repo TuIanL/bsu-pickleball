@@ -674,6 +674,20 @@ export interface CaptureTakeSummary {
   video_ids?: string[];
 }
 
+/** 普通片段页使用的正式回合切分运行摘要（不暴露候选/QA 状态）。 */
+export interface FormalSegmentationSummary {
+  capture_take_id: string;
+  status: string;
+  run_id: string | null;
+  model_package_id: string | null;
+  model_version: string | null;
+  generated_at: string | null;
+  segment_count: number;
+  window_plan_hash: string | null;
+  artifact_available: boolean;
+  detail?: string | null;
+}
+
 export interface CaptureSegmentSummary {
   id: string;
   capture_take_id?: string;
@@ -691,6 +705,7 @@ export interface CaptureSegmentSummary {
   edit_status: "active" | "superseded" | "archived";
   status: "open" | "closed" | "inferred" | "corrected";
   source: string;
+  segmentation_run_id?: string | null;
   is_highlight: boolean;
   parent_segment_id?: string;
   boundary_review_status?: "pending" | "confirmed" | "corrected" | "excluded";
@@ -698,6 +713,25 @@ export interface CaptureSegmentSummary {
   boundary_reviewed_at?: string | null;
   boundary_review_operation_id?: string | null;
   created_by_operation_id?: string | null;
+}
+
+export interface MatchStateSegmentationArtifactSummary {
+  schema_version?: string;
+  planning_job_id: string;
+  capture_take_id: string;
+  run_id: string;
+  status: string;
+  model?: Record<string, unknown>;
+  input_provenance?: Record<string, unknown>;
+  decoder?: Record<string, unknown>;
+  state_summary?: Record<string, unknown>;
+  state_timeline?: Array<Record<string, unknown>>;
+  algorithm_segments: Array<Record<string, unknown>>;
+  window_plan: {
+    run_id: string;
+    plan_hash: string;
+    windows: Array<{ segment_id: string; start_ms: number; end_ms: number }>;
+  };
 }
 
 export interface BoundaryReviewSummary {
@@ -915,6 +949,7 @@ export interface AnalysisJobSummary {
   canonicalFrameId?: string | null;
   /** 可见性：internal = 双摄 Source Job，默认不进任务列表 */
   visibility?: "public" | "internal";
+  jobRole?: "analysis" | "segmentation_prerequisite";
   /** internal Source Job 的 Parent 引用 */
   parentJobId?: string | null;
   /** 分析范围：child 恒 full；Parent 不适用 */
@@ -922,6 +957,7 @@ export interface AnalysisJobSummary {
   /** 多视角编排状态（独立于 canonicalStatus） */
   orchestrationStatus?:
     | "none"
+    | "waiting_segmentation"
     | "waiting_sources"
     | "fallback_ready"
     | "fusion_ready"
@@ -930,6 +966,13 @@ export interface AnalysisJobSummary {
     | "joint_ready"
     | "joint_tracking"
     | "completed";
+  segmentationRequired?: boolean;
+  segmentationPrerequisiteJobId?: string | null;
+  segmentationRunId?: string | null;
+  windowPlanHash?: string | null;
+  segmentationStatus?: string | null;
+  segmentationErrorCode?: string | null;
+  segmentationArtifactRef?: string | null;
   /** 融合 Run 标识（执行融合前持久化） */
   fusionRunId?: string | null;
   /** Parent 对 owned child 的所有权映射（数组） */
@@ -955,6 +998,7 @@ export interface AnalysisJobSummary {
     sourceTimestampRate?: number | null;
     sourceTimestampMappingStatus?: "available" | "degraded" | "unavailable" | null;
   }>;
+  multiviewViews?: Array<Record<string, unknown>>;
   /** 双摄任务各机位子进度 */
   sceneCalibrationRevision?: number | null;
   sceneCalibrationMode?: "metric" | "approximate";

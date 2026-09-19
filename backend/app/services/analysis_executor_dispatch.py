@@ -48,6 +48,11 @@ from app.vision.multiview.sync import (
     validate_sync_authority,
 )
 from app.vision.multiview.view_input import MultiViewViewInput
+from app.vision.match_state import MatchStateSegmentationRuntime, SegmentationInput
+from app.vision.match_state.media_sampler import RGBMediaSamplingConfig, iter_capture_take_media, sample_capture_take_media
+from app.vision.match_state.package import load_production_package
+from app.vision.match_state.package import ModelPackageError
+from app.services.formal_segmentation_service import persist_segmentation_failure, persist_segmentation_result
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +85,36 @@ def _resolve_analysis_dir(
     if root is None:
         return None
     return root.parent if root.parent.exists() else root.parent
+
+
+def _load_bound_window_plan(storage: StorageService, job: AnalysisJobSummary) -> list[dict[str, object]] | None:
+    """Load only the immutable plan referenced by a child/Parent job."""
+    if not job.windowPlanHash or not job.segmentationRunId:
+        return None
+    owner_id = job.parentJobId or job.id
+    path = storage.formal_segmentation_artifact_path(
+        owner_id,
+        getattr(job.metadata, "capture_take_id", None),
+        create_root=False,
+    )
+    if not path.is_file():
+        return None
+    try:
+        payload = storage.read_json(path)
+    except Exception:
+        return None
+    plan = payload.get("window_plan") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("run_id") != job.segmentationRunId
+        or not isinstance(plan, dict)
+        or plan.get("run_id") != job.segmentationRunId
+        or plan.get("plan_hash") != job.windowPlanHash
+        or not isinstance(plan.get("windows"), list)
+    ):
+        return None
+    windows = plan.get("windows")
+    return [dict(item) for item in windows if isinstance(item, dict)] if isinstance(windows, list) else []
 
 
 class SingleViewAnalysisExecutor:
@@ -125,6 +160,12 @@ class SingleViewAnalysisExecutor:
         match_context = build_match_context(
             job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
         )
+        bound_plan = _load_bound_window_plan(StorageService(), job)
+        if job.segmentationRunId and job.windowPlanHash and bound_plan is None:
+            # Formal children are bound to an immutable artifact.  A missing,
+            # corrupt, or mismatched plan must never silently widen analysis to
+            # the full video or to a mutable legacy timeline.
+            raise RuntimeError("formal segmentation window plan unavailable or hash mismatch")
         run_kwargs = {
             "job_id": job.id,
             "video_id": payload.videoId,
@@ -135,9 +176,13 @@ class SingleViewAnalysisExecutor:
             "match_context": match_context,
             "progress_callback": progress_callback,
             "cancellation_token": token,
-            "clip_start_ms": payload.clipStartMs,
-            "clip_end_ms": payload.clipEndMs,
+            # A formal plan is an analysis-time gate, not a set of independent
+            # clips: keep one continuous decode so tracker identity survives
+            # rally boundaries.  Legacy jobs retain their explicit clip.
+            "clip_start_ms": None if bound_plan is not None else payload.clipStartMs,
+            "clip_end_ms": None if bound_plan is not None else payload.clipEndMs,
             "capture_take_id": job.metadata.capture_take_id,
+            "analysis_window_plan": bound_plan,
         }
         signature = inspect.signature(pipeline.run)
         accepts_kwargs = any(
@@ -146,6 +191,232 @@ class SingleViewAnalysisExecutor:
         if not accepts_kwargs:
             run_kwargs = {key: value for key, value in run_kwargs.items() if key in signature.parameters}
         return pipeline.run(**run_kwargs)
+
+
+class SegmentationPrerequisiteExecutor:
+    """Parent-owned formal segmentation prerequisite.
+
+    Media decoding/model adapters are deliberately injected at the runtime
+    boundary.  If a deployment has not installed the signed package or a
+    synchronized sample sidecar, this executor returns a stable failure and
+    never starts a visual child.
+    """
+
+    def __init__(self, store) -> None:
+        self.store = store
+
+    def execute(self, job: AnalysisJobSummary, token, progress_callback: Callable[[object], None]) -> AnalysisPipelineResult:
+        from datetime import UTC, datetime
+        from app.core.config import get_settings
+        from app.schemas.metrics import PerformanceMetrics
+        from app.schemas.pipeline import AnalysisArtifacts
+
+        now = datetime.now(UTC)
+        storage = StorageService()
+        progress_callback(PipelineStageResult(id="segment", label="回合自动切分", status="active", detail="正在自动切分比赛回合", progress=10, started_at=now, public_message="正在自动切分比赛回合"))
+        settings = get_settings()
+        # Formal production flow always samples the authoritative CaptureTake
+        # media.  Candidate timelines/JSON replay sidecars are intentionally
+        # not consulted here; they remain an isolated QA concern.
+        # Keep CaptureTake RGB frames as a one-shot stream.  The runtime
+        # performs inference in small batches and only retains probabilities.
+        sample_factory = lambda: _iter_capture_take_media_samples(
+            job,
+            package_dir=str(settings.match_state_segmentation_package_dir),
+        )
+        source = SegmentationInput(
+            capture_take_id=job.metadata.capture_take_id or "",
+            planning_job_id=job.parentJobId or job.id,
+            samples=(),
+            sample_factory=sample_factory,
+            input_fingerprint=job.inputSignature or job.id,
+            sync_calibration_revision=job.syncCalibrationRevision,
+            timing_authority="source_pts",
+            coverage=1.0,
+        )
+        result = MatchStateSegmentationRuntime().run(
+            source,
+            package_dir=str(settings.match_state_segmentation_package_dir),
+            device=settings.match_state_segmentation_device,
+            required_profile=settings.match_state_segmentation_required_profile,
+        )
+        parent = self.store.get(job.parentJobId) if job.parentJobId else None
+        artifact_path = None
+        if result.artifact is not None:
+            try:
+                from app.database import get_session_factory
+                db = get_session_factory()()
+                try:
+                    persist_segmentation_result(db, artifact=result.artifact, storage=storage)
+                    db.commit()
+                finally:
+                    db.close()
+            except Exception as exc:  # persistence failure is an inference failure
+                result = result.__class__("inference_failed", None, "inference_failed", f"切分结果发布失败: {exc}")
+            if result.artifact is not None:
+                artifact_path = storage.formal_segmentation_artifact_path(
+                    result.artifact.planning_job_id,
+                    result.artifact.capture_take_id,
+                    create_root=False,
+                )
+        else:
+            # Keep model/input/sync failures auditable without superseding any
+            # previously published automatic segments for this CaptureTake.
+            if source.capture_take_id:
+                try:
+                    from app.database import get_session_factory
+
+                    db = get_session_factory()()
+                    try:
+                        persist_segmentation_failure(
+                            db,
+                            planning_job_id=job.parentJobId or job.id,
+                            capture_take_id=source.capture_take_id,
+                            status=result.status,
+                            profile=settings.match_state_segmentation_required_profile,
+                            input_fingerprint=source.input_fingerprint,
+                            sync_calibration_revision=source.sync_calibration_revision,
+                            timing_authority=source.timing_authority,
+                            diagnostics={"error_code": result.error_code, "detail": result.detail},
+                        )
+                        db.commit()
+                    finally:
+                        db.close()
+                except Exception:
+                    logger.exception("Unable to persist formal segmentation failure for %s", source.capture_take_id)
+        if parent is not None:
+            updates: dict[str, object] = {
+                "segmentationStatus": result.status,
+                "segmentationErrorCode": result.error_code,
+            }
+            if result.artifact is not None:
+                updates.update(
+                    {
+                        "segmentationRunId": result.artifact.run_id,
+                        "windowPlanHash": result.artifact.window_plan.plan_hash,
+                        "segmentationArtifactRef": storage.logical_artifact_reference(job.parentJobId or job.id, storage.formal_segmentation_artifact_path(job.parentJobId or job.id, parent.metadata.capture_take_id)),
+                    }
+                )
+            self.store.update(parent.id, **updates)
+        status = "completed" if result.artifact is not None else "failed"
+        detail = "自动回合切分完成" if result.artifact is not None else (result.detail or "自动回合切分失败")
+        progress_callback(PipelineStageResult(id="segment", label="回合自动切分", status="done" if result.artifact is not None else "failed", detail=detail, progress=100 if result.artifact is not None else 0, started_at=now, finished_at=datetime.now(UTC), error_code=result.error_code, public_message=detail))
+        metrics = PerformanceMetrics(distances=[], speeds=[], kitchen_dwell=[], doubles_spacing=[], heatmap={"rows": 1, "cols": 1, "cells": []})
+        artifacts = AnalysisArtifacts(
+            match_state_segmentation_json_path=(
+                storage.logical_artifact_reference(result.artifact.planning_job_id, artifact_path)
+                if result.artifact is not None and artifact_path is not None
+                else None
+            ),
+            match_state_segmentation_status=result.status,
+            match_state_segmentation_detail=detail,
+        )
+        pipeline_result = AnalysisPipelineResult(
+            job_id=job.id,
+            status=status,
+            generated_at=datetime.now(UTC),
+            stages=[PipelineStageResult(id="segment", label="回合自动切分", status="done" if result.artifact is not None else "failed", detail=detail, progress=100 if result.artifact is not None else 0, error_code=result.error_code, public_message=detail)],
+            metrics=metrics,
+            artifacts=artifacts,
+            message=detail,
+        )
+        storage.write_json(storage.output_json_path(job.id), pipeline_result.model_dump(mode="json"))
+        return pipeline_result
+
+
+def _load_capture_take_media_samples(job: AnalysisJobSummary, *, package_dir: str) -> list[dict[str, object]]:
+    """Build model inputs directly from the authoritative CaptureTake media.
+
+    This is the production path; the JSON sidecar above is only a deterministic
+    replay/CPU smoke input.  Any missing track, PTS authority or calibration is
+    represented as low evidence so the Runtime can classify it explicitly.
+    """
+    return list(_iter_capture_take_media_samples(job, package_dir=package_dir))
+
+
+def _iter_capture_take_media_samples(job: AnalysisJobSummary, *, package_dir: str):
+    """Yield authoritative CaptureTake RGB rows without retaining them."""
+    capture_take_id = job.metadata.capture_take_id
+    if not capture_take_id:
+        return
+    try:
+        from app.database import get_session_factory
+        from app.models.capture_take import CaptureTake
+        from app.models.capture_track import CaptureTrack
+        from app.services.frame_timing_provider import FrameTimingProvider
+        from app.services.video_service import video_service
+        from app.vision.multiview.sync import load_sync_calibration
+
+        db = get_session_factory()()
+        try:
+            take = db.get(CaptureTake, capture_take_id)
+            tracks = db.query(CaptureTrack).filter(CaptureTrack.capture_take_id == capture_take_id).all()
+            if take is None:
+                return
+            by_slot = {getattr(track.slot, "value", str(track.slot)): track for track in tracks}
+            cam_1 = by_slot.get("cam_1")
+            cam_2 = by_slot.get("cam_2")
+            if cam_1 is None or cam_2 is None:
+                yield {"center_ms": 0, "coverage": 0.0, "input_unavailable": True}
+                return
+            ref_video = video_service.get_available_video(cam_1.video_id)
+            sec_video = video_service.get_available_video(cam_2.video_id)
+            if ref_video is None or sec_video is None:
+                yield {"center_ms": 0, "coverage": 0.0, "input_unavailable": True}
+                return
+            import cv2
+
+            ref_probe = cv2.VideoCapture(ref_video.path)
+            sec_probe = cv2.VideoCapture(sec_video.path)
+            try:
+                ref_count = int(ref_probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                sec_count = int(sec_probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                ref_fps = float(ref_probe.get(cv2.CAP_PROP_FPS) or 0.0)
+                sec_fps = float(sec_probe.get(cv2.CAP_PROP_FPS) or 0.0)
+            finally:
+                ref_probe.release()
+                sec_probe.release()
+            ref_timing = FrameTimingProvider.from_media(
+                ref_video.path, frame_count=ref_count, fps=ref_fps or 30.0, allow_nominal_fallback=False
+            )
+            sec_timing = FrameTimingProvider.from_media(
+                sec_video.path, frame_count=sec_count, fps=sec_fps or 30.0, allow_nominal_fallback=False
+            )
+            if not ref_timing.frames or not sec_timing.frames:
+                yield {"center_ms": 0, "coverage": 0.0, "input_unavailable": True}
+                return
+            take_dir = take.session_dir or take.storage_root
+            sync = load_sync_calibration(take_dir) if take_dir else None
+            revision = job.syncCalibrationRevision
+            if sync is None or revision is None:
+                yield {"center_ms": 0, "coverage": 0.0, "sync_unavailable": True}
+                return
+            mapping = sync.mapping_for(cam_2.camera_id)
+            if mapping is None:
+                yield {"center_ms": 0, "coverage": 0.0, "sync_unavailable": True}
+                return
+            package = load_production_package(package_dir, required_profile="match_default")
+            config = RGBMediaSamplingConfig.from_contract(package.input_contract)
+            duration_ms = int(take.duration_ms or ref_timing.duration_seconds * 1000)
+            yield from iter_capture_take_media(
+                reference_media_path=ref_video.path,
+                secondary_media_path=sec_video.path,
+                reference_timing=ref_timing,
+                secondary_timing=sec_timing,
+                sync_calibration=mapping,
+                start_ms=0,
+                end_ms=max(1, duration_ms),
+                sync_calibration_revision=int(revision),
+                config=config,
+            )
+        finally:
+            db.close()
+    except ModelPackageError as exc:
+        logger.warning("Formal model package unavailable while preparing media samples: %s", exc)
+        yield {"center_ms": 0, "coverage": 0.0, "model_unavailable": True, "detail": str(exc)}
+    except Exception as exc:  # runtime will surface a stable unavailable status
+        logger.warning("Unable to sample CaptureTake media for segmentation: %s", exc)
+        yield {"center_ms": 0, "coverage": 0.0, "input_unavailable": True}
 
 
 class MultiViewAnalysisExecutor:
@@ -552,8 +823,11 @@ def resolve_executor(
     store,
     pipeline_factory: Callable[..., object],
     execution_mode: str | None = None,
+    job_role: str | None = None,
 ) -> AnalysisJobExecutor:
     """按 analysisKind 选择执行体(single_view / multiview);multiview 再按 executionMode 分发。"""
+    if job_role == "segmentation_prerequisite":
+        return SegmentationPrerequisiteExecutor(store)
     if analysis_kind == "single_view":
         return SingleViewAnalysisExecutor(store, pipeline_factory)
     if analysis_kind == "multiview":

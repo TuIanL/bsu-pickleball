@@ -3,7 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import sys
+from pathlib import Path
 from typing import Any
+
+try:
+    from app.vision.match_state.decoder import decode_state_timeline_result as _formal_decode_state_timeline
+except ModuleNotFoundError:
+    # Keep the command runnable directly from a checkout while sharing the
+    # production implementation whenever the backend package is available.
+    _backend_root = Path(__file__).resolve().parents[1] / "backend"
+    if str(_backend_root) not in sys.path:
+        sys.path.insert(0, str(_backend_root))
+    try:
+        from app.vision.match_state.decoder import decode_state_timeline_result as _formal_decode_state_timeline
+    except ModuleNotFoundError:
+        _formal_decode_state_timeline = None
 
 STATE_CLASSES = ("rally_active", "non_play", "unknown")
 
@@ -146,6 +161,14 @@ def decode_state_timeline(
         index = end + 1
     unknown_rate = sum(item["state"] == "unknown" for item in decoded) / max(len(decoded), 1)
     return {"windows": decoded, "segments": segments, "unknown_rate": round(unknown_rate, 6), "step_ms": step_ms}
+
+
+# The legacy function above remains as a compatibility fallback for an
+# isolated script checkout. In the repository it is replaced by the exact
+# decoder used by formal analysis, keeping candidate and production results
+# byte-for-byte equivalent for the same input and thresholds.
+if _formal_decode_state_timeline is not None:
+    decode_state_timeline = _formal_decode_state_timeline
 
 
 def _match_segments(

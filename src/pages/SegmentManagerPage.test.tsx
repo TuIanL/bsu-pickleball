@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createRallySegment: vi.fn(),
   getCaptureTake: vi.fn(),
+  getFormalSegmentationSummary: vi.fn(),
   getBoundaryReview: vi.fn(),
   getMatchStateCandidates: vi.fn(),
   decideMatchStateCandidate: vi.fn(),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../services/analysisClient", () => ({
   createRallySegment: mocks.createRallySegment,
   getCaptureTake: mocks.getCaptureTake,
+  getFormalSegmentationSummary: mocks.getFormalSegmentationSummary,
   getBoundaryReview: mocks.getBoundaryReview,
   getMatchStateCandidates: mocks.getMatchStateCandidates,
   decideMatchStateCandidate: mocks.decideMatchStateCandidate,
@@ -59,6 +61,14 @@ function makeTake(overrides: Record<string, unknown> = {}) {
 
 const onNavigate = vi.fn();
 
+beforeEach(() => {
+  window.history.pushState({}, "", "/");
+});
+
+function enableBoundaryReviewMode() {
+  window.history.pushState({}, "", "/capture/fs_1/takes/ct_1?mode=boundary-review");
+}
+
 describe("SegmentManagerPage 视频源解析", () => {
   afterEach(() => cleanup());
 
@@ -82,6 +92,11 @@ describe("SegmentManagerPage 视频源解析", () => {
     mocks.getCaptureTake.mockResolvedValue(
       makeTake({ source_session_id: "rec_20260717_105958_e15240", video_ids: ["video-single-a"] }),
     );
+    mocks.getFormalSegmentationSummary.mockResolvedValue({
+      capture_take_id: "ct_1", status: "unavailable", run_id: null, model_package_id: null,
+      model_version: null, generated_at: null, segment_count: 0, window_plan_hash: null,
+      artifact_available: false,
+    });
 
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
 
@@ -134,6 +149,11 @@ describe("SegmentManagerPage 数据加载独立兜底", () => {
     vi.clearAllMocks();
     mocks.getVideoStreamUrl.mockImplementation((id?: string) => (id ? `/api/videos/${id}/stream` : ""));
     mocks.listSegments.mockResolvedValue([]);
+    mocks.getFormalSegmentationSummary.mockResolvedValue({
+      capture_take_id: "ct_1", status: "unavailable", run_id: null, model_package_id: null,
+      model_version: null, generated_at: null, segment_count: 0, window_plan_hash: null,
+      artifact_available: false,
+    });
     mocks.getBoundaryReview.mockResolvedValue(emptyBoundaryReview());
     mocks.listTimelineEvents.mockResolvedValue([]);
   });
@@ -157,8 +177,9 @@ describe("SegmentManagerPage 数据加载独立兜底", () => {
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
 
     await waitFor(() => {
-      expect(screen.getByText("创建分析 (0)")).toBeTruthy();
+      expect(document.querySelector("video")?.getAttribute("src")).toBe("/api/videos/video-a/stream");
     });
+    expect(screen.queryByText(/创建分析/)).toBeNull();
     expect(screen.queryByText("片段数据加载失败，请重试")).toBeNull();
     const video = document.querySelector("video");
     await waitFor(() => expect(video?.getAttribute("src")).toBe("/api/videos/video-a/stream"));
@@ -179,9 +200,14 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
       {
         id: "rally-1", segment_type: "rally", ordinal: 1, label: "第1分", start_ms: 1000, end_ms: 5000,
         effective_start_ms: 1000, effective_end_ms: 5000, edit_version: 2, edit_status: "active", status: "closed",
-        source: "algorithm", is_highlight: false,
+        source: "algorithm", segmentation_run_id: "seg_run_1", is_highlight: false,
       },
     ]);
+    mocks.getFormalSegmentationSummary.mockResolvedValue({
+      capture_take_id: "ct_1", status: "succeeded", run_id: "seg_run_1", model_package_id: "match_state_v1",
+      model_version: "rgb_structured_fusion_v1", generated_at: "2026-07-17T10:01:00Z", segment_count: 1,
+      window_plan_hash: "abc", artifact_available: true,
+    });
     mocks.listTimelineEvents.mockResolvedValue([{ id: "event-1", event_type: "rally_start", timestamp_ms: 1200 }]);
     mocks.getBoundaryReview.mockResolvedValue({
       ...emptyBoundaryReview(),
@@ -195,29 +221,38 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     });
   });
 
-  it("点击片段开始播放并同步高亮，选择框不触发播放", async () => {
+  it("生产片段页只读展示模型结果，不渲染编辑和批量分析动作", async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
 
-    const label = await screen.findByTitle("单击播放；双击编辑标签");
-    const row = label.parentElement!;
+    const row = await screen.findByTitle("模型自动结果为只读；如需 QA 复核请使用内部 boundary-review 模式");
     fireEvent.click(row);
     expect(play).toHaveBeenCalledTimes(1);
     expect(row.className).toContain("border-[#2F80ED]");
     expect(document.querySelector('[data-playback-mode="segment"]')).toBeTruthy();
-
-    play.mockClear();
-    fireEvent.click(row.querySelector("input")!);
-    expect(play).not.toHaveBeenCalled();
+    expect(row.querySelector("input")).toBeNull();
+    expect(screen.queryByTitle("拆分")).toBeNull();
+    expect(screen.queryByTitle("归档")).toBeNull();
+    expect(screen.queryByText(/创建分析/)).toBeNull();
+    expect(mocks.patchSegment).not.toHaveBeenCalled();
+    expect(mocks.createAnalysisBatch).not.toHaveBeenCalled();
   });
 
-  it("双击标签只进入编辑，不启动片段播放", async () => {
+  it("生产片段页在自动回合区域展示正式运行摘要一次", async () => {
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
+
+    expect(await screen.findByText("模型 rgb_structured_fusion_v1")).toBeTruthy();
+    expect(screen.getByText("1 个回合")).toBeTruthy();
+    expect(screen.getAllByText("正式结果")).toHaveLength(1);
+  });
+
+  it("生产片段页双击标签也不会打开编辑器", async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
 
-    const label = await screen.findByTitle("单击播放；双击编辑标签");
+    const label = (await screen.findByTitle("模型自动结果为只读；如需 QA 复核请使用内部 boundary-review 模式")).querySelector("span")!;
     fireEvent.doubleClick(label);
-    expect(screen.getByDisplayValue("第1分")).toBeTruthy();
+    expect(screen.queryByDisplayValue("第1分")).toBeNull();
     expect(play).not.toHaveBeenCalled();
   });
 
@@ -233,9 +268,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
       boundary_review_status: "confirmed",
     });
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     expect(await screen.findByText("有效回合边界复核")).toBeTruthy();
     expect(document.querySelectorAll("video")).toHaveLength(2);
     const activeBoundaryReview = await screen.findByTestId("active-boundary-review");
@@ -259,9 +293,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     await waitFor(() => expect(document.querySelectorAll("video")).toHaveLength(2));
     play.mockClear();
     pause.mockClear();
@@ -282,9 +315,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
   it("复核队列中选择回合从有效起点播放，并在有效终点自动暂停", async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     const row = (await screen.findByTitle("点击从该回合起点播放，到终点自动暂停")).parentElement!;
     const video = document.querySelector("video")!;
     Object.defineProperty(video, "duration", { configurable: true, value: 10 });
@@ -325,8 +357,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
       .mockResolvedValueOnce({ ...emptyBoundaryReview(), total_count: 1, corrected_count: 1, segments: [repairedRally] });
     mocks.reviewSegmentBoundary.mockResolvedValue(repairedRally);
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     const row = await screen.findByTitle("点击从该回合起点播放，到终点自动暂停");
     fireEvent.click(row.parentElement!);
     await waitFor(() => expect(screen.getByTestId("active-boundary-review").textContent).toContain("正在修改：第 8 分"));
@@ -364,8 +396,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     });
     mocks.reviewSegmentBoundary.mockResolvedValue({ ...rallyTwo, boundary_review_status: "confirmed" });
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
 
     const rows = await screen.findAllByTitle("点击从该回合起点播放，到终点自动暂停");
     fireEvent.click(rows[1].parentElement!);
@@ -415,12 +447,16 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     mocks.getBoundaryReview.mockResolvedValueOnce(initialReview).mockResolvedValueOnce(afterCreateReview);
     mocks.createRallySegment.mockResolvedValue(createdRally);
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
-    fireEvent.click(screen.getByRole("button", { name: "新增漏记回合" }));
+    fireEvent.click(await screen.findByRole("button", { name: "新增漏记回合" }));
     expect(screen.getByTestId("new-rally-draft").textContent).toContain("正在补录一个漏记的有效回合");
 
-    const video = document.querySelector("video")!;
+    const video = await waitFor(() => {
+      const value = document.querySelector("video");
+      expect(value).toBeTruthy();
+      return value as HTMLVideoElement;
+    });
     Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 6 });
     fireEvent.timeUpdate(video);
     fireEvent.click(screen.getByRole("button", { name: "当前帧设为新增开始" }));
@@ -462,8 +498,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
       segments: [rallyOne, renumberedRallyTwo],
     });
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     const rows = await screen.findAllByTitle("点击从该回合起点播放，到终点自动暂停");
     fireEvent.click(rows[1].parentElement!);
     fireEvent.click(await screen.findByRole("button", { name: "调整分序号" }));
@@ -483,10 +519,13 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
 
   it("只标定开始时间时保持待复核，不提交完整复核决定", async () => {
     const reviewCall = mocks.reviewSegmentBoundary;
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
-    const video = document.querySelector("video")!;
+    const video = await waitFor(() => {
+      const value = document.querySelector("video");
+      expect(value).toBeTruthy();
+      return value as HTMLVideoElement;
+    });
     Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 2 });
     fireEvent.timeUpdate(video);
     fireEvent.click(await screen.findByRole("button", { name: "当前帧设为开始" }));
@@ -516,8 +555,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
       record: { candidate_id: "candidate_0001", decision: "accepted" }, segment: null,
     });
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     expect(await screen.findByTestId("model-candidate-review")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "接受原边界" }));
 
@@ -543,8 +582,8 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
 
+    enableBoundaryReviewMode();
     render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: /有效回合复核/ }));
     await screen.findByTestId("model-candidate-review");
 
     const video = document.querySelector("video")!;

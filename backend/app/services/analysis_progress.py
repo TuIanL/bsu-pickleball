@@ -12,7 +12,10 @@ from typing import Literal, Mapping, Sequence
 
 from app.schemas.analysis import AnalysisStage, AnalysisStageStatus
 
-ProgressMode = Literal["single_view", "late_fusion_v1", "joint_tracking_v2"]
+ProgressMode = Literal[
+    "single_view", "late_fusion_v1", "joint_tracking_v2",
+    "late_fusion_v1_formal", "joint_tracking_v2_formal",
+]
 
 
 @dataclass(frozen=True)
@@ -57,10 +60,22 @@ JOINT_TRACKING_STAGE_DEFINITIONS: tuple[StageDefinition, ...] = (
     StageDefinition("multiview-report", "报告生成", "生成 Parent 报告", 8),
 )
 
+FORMAL_LATE_FUSION_STAGE_DEFINITIONS: tuple[StageDefinition, ...] = (
+    StageDefinition("segment", "回合自动切分", "生成并冻结正式回合窗口计划", 10),
+    *LATE_FUSION_STAGE_DEFINITIONS,
+)
+
+FORMAL_JOINT_TRACKING_STAGE_DEFINITIONS: tuple[StageDefinition, ...] = (
+    StageDefinition("segment", "回合自动切分", "生成并冻结正式回合窗口计划", 10),
+    *JOINT_TRACKING_STAGE_DEFINITIONS,
+)
+
 STAGE_GRAPHS: Mapping[ProgressMode, tuple[StageDefinition, ...]] = {
     "single_view": SINGLE_VIEW_STAGE_DEFINITIONS,
     "late_fusion_v1": LATE_FUSION_STAGE_DEFINITIONS,
     "joint_tracking_v2": JOINT_TRACKING_STAGE_DEFINITIONS,
+    "late_fusion_v1_formal": FORMAL_LATE_FUSION_STAGE_DEFINITIONS,
+    "joint_tracking_v2_formal": FORMAL_JOINT_TRACKING_STAGE_DEFINITIONS,
 }
 
 
@@ -71,12 +86,13 @@ class StageTransitionError(ValueError):
 def resolve_progress_mode(
     analysis_kind: str | None = None,
     execution_mode: str | None = None,
+    segmentation_required: bool = False,
 ) -> ProgressMode:
     if analysis_kind != "multiview":
         return "single_view"
     if execution_mode == "joint_tracking_v2":
-        return "joint_tracking_v2"
-    return "late_fusion_v1"
+        return "joint_tracking_v2_formal" if segmentation_required else "joint_tracking_v2"
+    return "late_fusion_v1_formal" if segmentation_required else "late_fusion_v1"
 
 
 def stage_definitions(mode: ProgressMode) -> tuple[StageDefinition, ...]:

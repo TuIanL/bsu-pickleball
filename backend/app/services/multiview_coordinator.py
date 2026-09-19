@@ -555,6 +555,130 @@ class MultiViewAnalysisCoordinator:
             logger.warning("clip 换算到视图 %s 失败: %s", view_id, exc)
             raise ValueError(f"analysis window mapping failed for view {view_id}: {exc}") from exc
 
+    @staticmethod
+    def _view_dicts(mv) -> list[dict[str, object]]:
+        """Freeze the requested CaptureTake views on the Parent.
+
+        The segmentation prerequisite may finish after a process restart, so
+        child creation must not depend on the original HTTP request object.
+        """
+        return [view.model_dump(mode="json") for view in mv.views]
+
+    @staticmethod
+    def _build_joint_inputs(mv, take_dir: str | None) -> list[dict[str, object]]:
+        """Build restart-safe joint inputs from the frozen view contract."""
+        sync_manifest = load_sync_calibration(take_dir) if take_dir else None
+        inputs: list[dict[str, object]] = []
+        for view in mv.views:
+            mapping = (
+                sync_manifest.mapping_for(view.cameraId or view.viewId)
+                if sync_manifest is not None and view.viewId != mv.referenceViewId
+                else None
+            )
+            inputs.append(
+                {
+                    "cameraSlot": view.viewId,
+                    "captureTrackId": "",
+                    "cameraId": view.cameraId or view.viewId,
+                    "videoId": view.videoId,
+                    "calibrationId": view.calibrationId,
+                    "courtOrientation": view.courtOrientation,
+                    "imageWidth": view.imageWidth,
+                    "imageHeight": view.imageHeight,
+                    "sceneCalibrationRevision": mv.sceneCalibrationRevision,
+                    "sceneCalibrationMode": mv.sceneCalibrationMode,
+                    "sourceTimestampOffsetMs": 0.0 if view.viewId == mv.referenceViewId else float(getattr(mapping, "offset_ms", 0.0)),
+                    "sourceTimestampRate": 1.0 if view.viewId == mv.referenceViewId else float(getattr(mapping, "rate", 1.0)),
+                    "sourceTimestampMappingStatus": "available" if view.viewId == mv.referenceViewId or mapping is not None else "unavailable",
+                }
+            )
+        return inputs
+
+    def _create_late_children_after_segmentation(
+        self,
+        parent: AnalysisJobSummary,
+    ) -> AnalysisJobSummary:
+        """Create late-fusion children exactly once after a valid plan exists."""
+        if parent.sourceJobs:
+            return parent
+        if parent.canonicalStatus in TERMINAL_STATUSES:
+            return parent
+        if not parent.multiviewViews:
+            raise ValueError(f"Parent {parent.id} has no frozen multiview view contract")
+
+        from app.schemas.analysis import MultiViewViewPayload
+
+        views = [MultiViewViewPayload.model_validate(item) for item in parent.multiviewViews]
+        take_dir = _check_capture_take_dir(parent.metadata.capture_take_id)
+        refs: list[SourceJobRef] = []
+        created_children: dict[str, AnalysisJobSummary] = {}
+        for view in views:
+            child_metadata = parent.metadata.model_copy(
+                update={
+                    "fileName": f"{parent.metadata.capture_take_id}_{view.viewId}.mp4",
+                    "camera_slot": view.viewId,
+                    "camera_id": view.cameraId or view.viewId,
+                }
+            )
+            child_start, child_end = parent.clipStartMs, parent.clipEndMs
+            if view.viewId != parent.referenceViewId and take_dir and child_start is not None:
+                child_start, child_end = self._map_clip_to_view(
+                    take_dir,
+                    view.cameraId or view.viewId,
+                    child_start,
+                    child_end,
+                    strict=True,
+                )
+            child_payload = AnalysisJobCreate(
+                metadata=child_metadata,
+                videoId=view.videoId,
+                calibrationId=view.calibrationId,
+                frameStride=parent.frameStride,
+                sourceFps=parent.sourceFps or parent.metadata.sourceFps,
+                priority=parent.priority,
+                clipStartMs=child_start,
+                clipEndMs=child_end,
+                enableModelInference=parent.enableModelInference,
+                enablePoseInference=parent.enablePoseInference,
+                analysisKind="single_view",
+                segmentationRequired=False,
+            )
+            child = self.store.create_job(child_payload)
+            child = self.store.update(
+                child.id,
+                parentJobId=parent.id,
+                visibility="internal",
+                analysisScope="full",
+                segmentationRunId=parent.segmentationRunId,
+                windowPlanHash=parent.windowPlanHash,
+                segmentationStatus=parent.segmentationStatus,
+            ) or child
+            created_children[view.viewId] = child
+            refs.append(
+                SourceJobRef(
+                    cameraSlot=view.viewId,
+                    jobId=child.id,
+                    cameraId=view.cameraId or view.viewId,
+                    courtOrientation=view.courtOrientation,
+                )
+            )
+
+        view_runs = {
+            ref.cameraSlot: ViewRunSummary(status="queued", stage="queue", progress=10)
+            for ref in refs
+        }
+        updates: dict[str, object] = {
+            "sourceJobs": refs,
+            "orchestrationStatus": "waiting_sources",
+            "viewRuns": view_runs,
+        }
+        reference_child = created_children.get(parent.referenceViewId or "")
+        if reference_child is not None:
+            updates["videoId"] = reference_child.videoId
+            updates["calibrationId"] = reference_child.calibrationId
+        updated = self.store.update(parent.id, **updates)
+        return updated or parent
+
     def create_multiview_job(self, payload: AnalysisJobCreate) -> AnalysisJobSummary:
         """创建 1 个 public Parent + 每个 view 一个 dedicated internal child。"""
         payload = _restore_existing_canonical_input(
@@ -645,6 +769,7 @@ class MultiViewAnalysisCoordinator:
             enableModelInference=payload.enableModelInference,
             enablePoseInference=payload.enablePoseInference,
             multiview=mv,
+            segmentationRequired=payload.segmentationRequired,
         )
         parent = self.store.create_job(parent_payload)
 
@@ -661,48 +786,61 @@ class MultiViewAnalysisCoordinator:
             },
         )
 
-        # joint_tracking_v2:不创建 AnalysisJob children,直接持久化 jointViewInputs → joint_ready
+        frozen_views = self._view_dicts(mv)
+        # Formal flow: the Parent owns a queued prerequisite.  The Parent is
+        # intentionally not runnable until that job publishes an immutable plan.
+        if parent.segmentationRequired:
+            joint_inputs = (
+                self._build_joint_inputs(mv, take_dir)
+                if mv.executionMode == "joint_tracking_v2"
+                else []
+            )
+            prerequisite_payload = AnalysisJobCreate(
+                metadata=payload.metadata,
+                videoId=reference_view.videoId,
+                calibrationId=reference_view.calibrationId,
+                analysisKind="multiview",
+                clipStartMs=clip_start_ms,
+                clipEndMs=clip_end_ms,
+                frameStride=payload.frameStride,
+                sourceFps=payload.sourceFps or payload.metadata.sourceFps,
+                priority=payload.priority,
+                enableModelInference=payload.enableModelInference,
+                enablePoseInference=payload.enablePoseInference,
+                multiview=mv,
+                segmentationRequired=True,
+            )
+            prerequisite = self.store.create_job(prerequisite_payload)
+            prerequisite = self.store.update(
+                prerequisite.id,
+                parentJobId=parent.id,
+                visibility="internal",
+                analysisScope="perception",
+                jobRole="segmentation_prerequisite",
+                orchestrationStatus="none",
+                syncCalibrationRevision=sync_calibration_revision,
+            ) or prerequisite
+            parent_updates: dict[str, object] = {
+                "multiviewViews": frozen_views,
+                "jointViewInputs": joint_inputs,
+                "segmentationPrerequisiteJobId": prerequisite.id,
+                "orchestrationStatus": "waiting_segmentation",
+                "referenceViewId": mv.referenceViewId,
+                "canonicalFrameId": canonical_frame.frame_id,
+                "syncCalibrationRevision": sync_calibration_revision,
+                "sceneCalibrationRevision": mv.sceneCalibrationRevision,
+                "sceneCalibrationMode": mv.sceneCalibrationMode,
+                "sceneCalibrationStatus": "ready" if mv.sceneCalibrationMode == "metric" else "missing",
+                "sourceJobs": [],
+            }
+            parent = self.store.update(parent.id, **parent_updates) or parent
+            logger.info("创建正式双摄 Parent %s → segmentation prerequisite %s", parent.id, prerequisite.id)
+            return parent
+
+        # joint_tracking_v2（legacy/non-formal）:不创建 AnalysisJob children,
+        # 直接持久化 jointViewInputs → joint_ready。
         if mv.executionMode == "joint_tracking_v2":
-            sync_manifest = load_sync_calibration(take_dir) if take_dir else None
-            joint_inputs = [
-                {
-                    "cameraSlot": view.viewId,
-                    "captureTrackId": "",
-                    "cameraId": view.cameraId or view.viewId,
-                    "videoId": view.videoId,
-                    "calibrationId": view.calibrationId,
-                    "courtOrientation": view.courtOrientation,
-                    "imageWidth": view.imageWidth,
-                    "imageHeight": view.imageHeight,
-                    "sceneCalibrationRevision": mv.sceneCalibrationRevision,
-                    "sceneCalibrationMode": mv.sceneCalibrationMode,
-                    # canonical reference time → this view source media time.
-                    "sourceTimestampOffsetMs": (
-                        0.0
-                        if view.viewId == mv.referenceViewId
-                        else float(getattr(sync_manifest.mapping_for(view.cameraId or view.viewId), "offset_ms", 0.0))
-                        if sync_manifest is not None and sync_manifest.mapping_for(view.cameraId or view.viewId) is not None
-                        else 0.0
-                    ),
-                    "sourceTimestampRate": (
-                        1.0
-                        if view.viewId == mv.referenceViewId
-                        else float(getattr(sync_manifest.mapping_for(view.cameraId or view.viewId), "rate", 1.0))
-                        if sync_manifest is not None and sync_manifest.mapping_for(view.cameraId or view.viewId) is not None
-                        else 1.0
-                    ),
-                    "sourceTimestampMappingStatus": (
-                        "available"
-                        if view.viewId == mv.referenceViewId
-                        or (
-                            sync_manifest is not None
-                            and sync_manifest.mapping_for(view.cameraId or view.viewId) is not None
-                        )
-                        else "unavailable"
-                    ),
-                }
-                for view in mv.views
-            ]
+            joint_inputs = self._build_joint_inputs(mv, take_dir)
             joint_view_runs = {
                 view.viewId: ViewRunSummary(status="queued", stage="queue", progress=10) for view in mv.views
             }
@@ -844,10 +982,55 @@ class MultiViewAnalysisCoordinator:
     ) -> AnalysisJobSummary:
         """把 late-fusion child 实时状态投影到 Parent 顶层阶段（只读）。"""
         runs = view_runs or self.live_view_runs(parent)
+        mode = resolve_progress_mode(
+            parent.analysisKind,
+            parent.executionMode,
+            parent.segmentationRequired,
+        )
+        if parent.segmentationRequired and parent.orchestrationStatus == "waiting_segmentation":
+            prerequisite = (
+                self.store.get(parent.segmentationPrerequisiteJobId)
+                if parent.segmentationPrerequisiteJobId
+                else None
+            )
+            status = prerequisite.canonicalStatus if prerequisite is not None else "missing"
+            if status == "running":
+                segment_status, segment_progress = "active", prerequisite.progress
+            elif status == "succeeded":
+                segment_status, segment_progress = "done", 100
+            elif status in {"failed", "canceled", "interrupted"}:
+                segment_status, segment_progress = "failed", 100
+            else:
+                segment_status, segment_progress = "pending", 0
+            label, detail = stage_details_for(mode, "segment")
+            segment_stage = AnalysisStage(
+                id="segment",
+                label=label,
+                status=segment_status,
+                detail=(
+                    prerequisite.publicErrorMessage or prerequisite.errorMessage
+                    if prerequisite is not None and segment_status == "failed"
+                    else detail
+                ),
+                progress=segment_progress,
+                errorCode=prerequisite.errorCode if prerequisite is not None and segment_status == "failed" else None,
+            )
+            stages = merge_stage_progress(parent.stages, segment_stage, mode=mode)
+            return parent.model_copy(
+                update={
+                    "stages": stages,
+                    "stage": current_stage_from_stages(stages, fallback="segment"),
+                    "progress": compute_progress_from_stages(
+                        stages,
+                        mode=mode,
+                        previous_progress=parent.progress,
+                    ),
+                    "viewRuns": runs or None,
+                }
+            )
         if parent.executionMode == "joint_tracking_v2":
             return parent.model_copy(update={"viewRuns": runs or None})
 
-        mode = resolve_progress_mode(parent.analysisKind, parent.executionMode)
         stages = merge_stage_progress(
             parent.stages,
             AnalysisStage(
@@ -895,6 +1078,8 @@ class MultiViewAnalysisCoordinator:
     def _advance_parent(self, parent: AnalysisJobSummary) -> AnalysisJobSummary | None:
         """根据 child 终态推进 Parent 的 orchestrationStatus（幂等）。"""
         if parent.analysisKind != "multiview" or parent.canonicalStatus != "queued":
+            return None
+        if parent.orchestrationStatus == "waiting_segmentation":
             return None
         if parent.orchestrationStatus in {"fusing", "composing"}:
             return None  # 已进入执行，不再重推进
@@ -951,19 +1136,150 @@ class MultiViewAnalysisCoordinator:
         return parent
 
     def on_job_terminal(self, job: AnalysisJobSummary) -> None:
-        """任一 job 进入终态时调用：若为 child，推进其 Parent。"""
+        """任一 job 进入终态时调用：推进切分前置或 source Parent。"""
         if not job.parentJobId:
+            return
+        if job.jobRole == "segmentation_prerequisite":
+            self.on_segmentation_terminal(job)
             return
         parent = self.store.get(job.parentJobId)
         if parent is None or parent.canonicalStatus in TERMINAL_STATUSES:
             return
         self._advance_parent(parent)
 
+    def on_segmentation_terminal(self, job: AnalysisJobSummary) -> None:
+        """Apply the deterministic segmentation result to its Parent once."""
+        if job.jobRole != "segmentation_prerequisite" or not job.parentJobId:
+            return
+        parent = self.store.get(job.parentJobId)
+        if parent is None or parent.canonicalStatus in TERMINAL_STATUSES:
+            return
+        if parent.segmentationPrerequisiteJobId and parent.segmentationPrerequisiteJobId != job.id:
+            return
+        mode = resolve_progress_mode(parent.analysisKind, parent.executionMode, True)
+        accepted = {"succeeded", "valid_no_rallies"}
+        segmentation_status = parent.segmentationStatus or (
+            "succeeded" if job.canonicalStatus == "succeeded" else None
+        )
+        if job.canonicalStatus == "succeeded" and segmentation_status in accepted:
+            if not parent.segmentationRunId or not parent.windowPlanHash:
+                # A terminal prerequisite without both immutable references is
+                # not a publishable formal result.  Do not release joint
+                # execution or create late-fusion children on an unbound plan.
+                label, detail = stage_details_for(mode, "segment")
+                failed_stages = merge_stage_progress(
+                    parent.stages,
+                    AnalysisStage(
+                        id="segment",
+                        label=label,
+                        status="failed",
+                        detail="自动切分结果缺少不可变窗口计划引用。",
+                        progress=100,
+                        errorCode="ANALYSIS_SEGMENTATION_PUBLISH_FAILED",
+                        publicMessage="自动切分结果缺少不可变窗口计划引用，无法继续双摄分析。",
+                    ),
+                    mode=mode,
+                )
+                self.store.mark_failed(
+                    parent,
+                    stages=failed_stages,
+                    message="自动切分结果缺少不可变窗口计划引用，无法继续双摄分析。",
+                    error_code="ANALYSIS_SEGMENTATION_PUBLISH_FAILED",
+                    internal_message=detail,
+                )
+                return
+            label, detail = stage_details_for(mode, "segment")
+            stages = merge_stage_progress(
+                parent.stages,
+                AnalysisStage(
+                    id="segment",
+                    label=label,
+                    status="done",
+                    detail=("未检测到有效回合，继续生成空计划" if segmentation_status == "valid_no_rallies" else detail),
+                    progress=100,
+                ),
+                mode=mode,
+            )
+            updates: dict[str, object] = {
+                "stages": stages,
+                "stage": "segment",
+                "progress": compute_progress_from_stages(stages, mode=mode, previous_progress=parent.progress),
+            }
+            try:
+                if parent.executionMode == "joint_tracking_v2":
+                    updates["orchestrationStatus"] = "joint_ready"
+                    updates["viewRuns"] = {
+                        str(item.get("cameraSlot")): ViewRunSummary(status="queued", stage="queue", progress=10)
+                        for item in parent.jointViewInputs
+                        if item.get("cameraSlot")
+                    }
+                    self.store.update(parent.id, **updates)
+                else:
+                    updated = self.store.update(parent.id, **updates) or parent
+                    self._create_late_children_after_segmentation(updated)
+            except Exception as exc:  # child creation is part of the prerequisite boundary
+                logger.exception("Unable to continue Parent %s after segmentation", parent.id)
+                self.store.mark_failed(
+                    parent,
+                    stages=stages,
+                    message="自动切分已完成，但双摄分析子任务创建失败。",
+                    error_code="ANALYSIS_SEGMENTATION_PUBLISH_FAILED",
+                    internal_message=str(exc),
+                )
+            return
+
+        # Every non-success terminal result is intentionally surfaced on the
+        # public Parent; no visual source child is created in this branch.
+        label, detail = stage_details_for(mode, "segment")
+        code = job.errorCode or parent.segmentationErrorCode or "ANALYSIS_SEGMENTATION_FAILED"
+        message = job.publicErrorMessage or job.errorMessage or "自动回合切分失败，无法继续双摄分析。"
+        failed_stages = merge_stage_progress(
+            parent.stages,
+            AnalysisStage(
+                id="segment",
+                label=label,
+                status="failed" if job.canonicalStatus != "canceled" else "canceled",
+                detail=message or detail,
+                progress=100,
+                errorCode=code,
+                publicMessage=message,
+            ),
+            mode=mode,
+        )
+        if job.canonicalStatus == "canceled":
+            self.store.mark_canceled(parent, message=message)
+        elif job.canonicalStatus == "interrupted":
+            self.store.mark_interrupted(parent, reason="segmentation_interrupted", message=message)
+        else:
+            self.store.mark_failed(
+                parent,
+                stages=failed_stages,
+                message=message,
+                error_code=code,
+                internal_message=job.internalErrorMessage,
+            )
+
     def reconcile_all(self) -> int:
-        """启动对账：扫描 multiview 非终态 Parent，按 child 终态推进。"""
+        """启动对账：恢复切分前置和 source child 的依赖推进。"""
         advanced = 0
         for job in self.store.list():
+            if job.jobRole == "segmentation_prerequisite" and job.canonicalStatus in TERMINAL_STATUSES:
+                parent_before = self.store.get(job.parentJobId) if job.parentJobId else None
+                self.on_segmentation_terminal(job)
+                parent_after = self.store.get(job.parentJobId) if job.parentJobId else None
+                if parent_before is not None and parent_after is not None and parent_before.orchestrationStatus != parent_after.orchestrationStatus:
+                    advanced += 1
+                continue
             if job.analysisKind != "multiview" or job.canonicalStatus in TERMINAL_STATUSES:
+                continue
+            if job.orchestrationStatus == "waiting_segmentation":
+                prerequisite = self.store.get(job.segmentationPrerequisiteJobId) if job.segmentationPrerequisiteJobId else None
+                if prerequisite is not None and prerequisite.canonicalStatus in TERMINAL_STATUSES:
+                    before = job.orchestrationStatus
+                    self.on_segmentation_terminal(prerequisite)
+                    current = self.store.get(job.id)
+                    if current is not None and current.orchestrationStatus != before:
+                        advanced += 1
                 continue
             before = job.orchestrationStatus
             updated = self._advance_parent(job)
@@ -977,15 +1293,19 @@ class MultiViewAnalysisCoordinator:
 
     def cancel_cascade(self, parent: AnalysisJobSummary) -> None:
         """取消 Parent 时级联取消 owned 非终态 children。"""
-        for ref in parent.sourceJobs:
-            child = self.store.get(ref.jobId)
+        child_ids = self.owned_child_ids(parent)
+        for child_id in child_ids:
+            child = self.store.get(child_id)
             if child is None or child.canonicalStatus in TERMINAL_STATUSES:
                 continue
             self.store.cancel(child.id)
-        logger.info("取消 Parent %s 及其非终态 children", parent.id)
+        logger.info("取消 Parent %s 及其非终态 children/prerequisite", parent.id)
 
     def owned_child_ids(self, parent: AnalysisJobSummary) -> list[str]:
-        return [ref.jobId for ref in parent.sourceJobs]
+        ids = [ref.jobId for ref in parent.sourceJobs]
+        if parent.segmentationPrerequisiteJobId and parent.segmentationPrerequisiteJobId not in ids:
+            ids.insert(0, parent.segmentationPrerequisiteJobId)
+        return ids
 
     def delete_cascade(self, parent: AnalysisJobSummary) -> list[AnalysisDeleteResult]:
         """删除 Parent 及其 owned child 分析产物 + fusion run 产物；不碰录制资产。"""

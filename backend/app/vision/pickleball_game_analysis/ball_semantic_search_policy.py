@@ -839,12 +839,13 @@ class SemanticTimelineProvider:
         clip_start_ms: int | None = None,
         clip_end_ms: int | None = None,
         video_duration_ms: int | None = None,
+        effective_windows: Sequence[tuple[float, float]] | None = None,
         config: BallSemanticPolicyConfig | None = None,
     ) -> "SemanticTimelineProvider":
         """从现有 CaptureTake 时间线构造 provider；数据库不可用时 fail-open。"""
 
         if not capture_take_id:
-            return cls(config=config)
+            return cls(effective_windows=effective_windows, config=config)
         try:
             from app.database import get_session_factory
             from app.services.capture_take_service import get_capture_take
@@ -855,7 +856,7 @@ class SemanticTimelineProvider:
             try:
                 take = get_capture_take(db, capture_take_id)
                 if take is None:
-                    return cls(config=config)
+                    return cls(effective_windows=effective_windows, config=config)
                 events = list_timeline_events(
                     db,
                     take.field_session_id,
@@ -863,7 +864,7 @@ class SemanticTimelineProvider:
                 )
             finally:
                 db.close()
-            windows = resolve_effective_windows(
+            windows = effective_windows if effective_windows is not None else resolve_effective_windows(
                 clip_start_ms=clip_start_ms,
                 clip_end_ms=clip_end_ms,
                 capture_take_id=capture_take_id,
@@ -872,7 +873,7 @@ class SemanticTimelineProvider:
             return cls(events, effective_windows=windows, config=config)
         except Exception:
             # 语义 provider 不能成为球员/球体主链的硬依赖。
-            return cls(config=config)
+            return cls(effective_windows=effective_windows, config=config)
 
     def reset(self) -> None:
         self.state_machine.reset()

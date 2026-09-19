@@ -42,6 +42,8 @@ import type {
   FusedManifest,
   ShowcaseRuntimeStatus,
   PlayerDisplayDiagnosticsResponse,
+  MatchStateSegmentationArtifactSummary,
+  FormalSegmentationSummary,
 } from "../types/report";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 import type {
@@ -585,6 +587,7 @@ interface AnalysisJobRequest {
   /** 任务级推理开关：YOLO 人体检测 / RTMPose 姿态识别（不传则后端沿用全局配置） */
   enableModelInference?: boolean;
   enablePoseInference?: boolean;
+  segmentationRequired?: boolean;
 }
 
 export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
@@ -774,6 +777,8 @@ export interface MultiviewAnalysisJobRequest {
   /** 分析窗口（take 公共时间轴 ms；缺省整场）。secondary 由后端经 sync 换算到自身时间轴。 */
   clipStartMs?: number;
   clipEndMs?: number;
+  /** Formal match-state segmentation prerequisite; omitted uses backend policy. */
+  segmentationRequired?: boolean;
 }
 
 /**
@@ -798,6 +803,7 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
         sceneViewIds: request.sceneViewIds,
         canonicalFrame: request.canonicalFrame,
       },
+      segmentationRequired: request.segmentationRequired,
     }),
     method: "POST",
   }));
@@ -808,6 +814,22 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
 export async function getFusedManifest(jobId: string): Promise<FusedManifest | null> {
   try {
     return await requestJson<FusedManifest>(`/api/analysis/jobs/${jobId}/artifacts/fused-manifest`);
+  } catch (error) {
+    if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** Read the immutable formal segmentation artifact bound to a Parent job. */
+export async function getFormalSegmentationArtifact(
+  jobId: string,
+): Promise<MatchStateSegmentationArtifactSummary | null> {
+  try {
+    return await requestJson<MatchStateSegmentationArtifactSummary>(
+      `/api/analysis/jobs/${jobId}/artifacts/match-state-segmentation`,
+    );
   } catch (error) {
     if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
       return null;
@@ -1486,6 +1508,13 @@ export async function deleteTimelineEvent(eventId: string): Promise<void> {
 
 export async function getCaptureTake(takeId: string): Promise<CaptureTakeSummary> {
   return requestJson<CaptureTakeSummary>(`/api/capture-takes/${takeId}`);
+}
+
+/** Read the current published formal segmentation run for the production segment page. */
+export async function getFormalSegmentationSummary(takeId: string): Promise<FormalSegmentationSummary> {
+  return requestJson<FormalSegmentationSummary>(
+    `/api/capture-takes/${encodeURIComponent(takeId)}/formal-segmentation-summary`,
+  );
 }
 
 export async function getMetricCourtSceneDraft(takeId: string): Promise<MetricCourtSceneCalibration | null> {

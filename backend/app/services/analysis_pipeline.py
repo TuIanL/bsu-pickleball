@@ -17,7 +17,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from math import hypot
@@ -444,6 +444,7 @@ class AnalysisPipeline:
         clip_start_ms: int | None = None,
         clip_end_ms: int | None = None,
         capture_take_id: str | None = None,
+        analysis_window_plan: Sequence[dict[str, Any]] | None = None,
     ) -> AnalysisPipelineResult:
         # 流水线主入口。根据"有没有视频 / 有没有标定"分三条路径：
         #   A) 有视频 + 有标定 → 跑真实跟踪（最完整）
@@ -588,6 +589,7 @@ class AnalysisPipeline:
                     cancellation_token=cancellation_token,
                     clip_start_ms=clip_start_ms,
                     clip_end_ms=clip_end_ms,
+                    analysis_window_plan=analysis_window_plan,
                 )
             except Exception as exc:
                 # 跟踪阶段抛异常 → 整个任务失败
@@ -996,6 +998,7 @@ class AnalysisPipeline:
             clip_start_ms=clip_start_ms,
             clip_end_ms=clip_end_ms,
             capture_take_id=capture_take_id,
+            analysis_window_plan=analysis_window_plan,
         )
         visualization_stage = self._stage(
             "visualization",
@@ -1549,6 +1552,7 @@ class AnalysisPipeline:
         clip_start_ms: int | None = None,
         clip_end_ms: int | None = None,
         capture_take_id: str | None = None,
+        analysis_window_plan: Sequence[dict[str, Any]] | None = None,
     ) -> _VisualizationArtifactFields:
         enabled_overlay = bool(self.settings.enable_analysis_overlay_video)
         enabled_positions = bool(self.settings.enable_position_visualizations)
@@ -1580,8 +1584,10 @@ class AnalysisPipeline:
 
         if enabled_positions:
             try:
-                # 0. 解析比赛有效时间（KCR 分母）：clip 区间 > 时间线 rally 净时间 > 总时长回退
+                # 0. 解析比赛有效时间（KCR 分母）：正式 plan > clip > legacy timeline
                 effective_windows = resolve_effective_windows(
+                    analysis_window_plan=analysis_window_plan,
+                    window_plan_bound=analysis_window_plan is not None,
                     clip_start_ms=clip_start_ms,
                     clip_end_ms=clip_end_ms,
                     capture_take_id=capture_take_id,
@@ -1760,6 +1766,7 @@ class AnalysisPipeline:
         cancellation_token: CancellationToken | None = None,
         clip_start_ms: int | None = None,
         clip_end_ms: int | None = None,
+        analysis_window_plan: Sequence[dict[str, Any]] | None = None,
     ) -> _TrackingRunOutput:
         # 真正的"逐帧跟踪"循环（只在 路径A 调用）。
         try:
@@ -1955,12 +1962,21 @@ class AnalysisPipeline:
             conflict_penalty=float(getattr(self.settings, "ball_semantic_conflict_penalty", 0.25)),
             boundary_eval_enabled=bool(getattr(self.settings, "ball_semantic_boundary_eval_enabled", True)),
         )
+        semantic_effective_windows = (
+            resolve_effective_windows(
+                analysis_window_plan=analysis_window_plan,
+                window_plan_bound=True,
+            )
+            if analysis_window_plan is not None
+            else None
+        )
         semantic_provider = (
             SemanticTimelineProvider.from_capture_take(
                 capture_take_id,
                 clip_start_ms=clip_start_ms,
                 clip_end_ms=clip_end_ms,
                 video_duration_ms=video_duration_ms,
+                effective_windows=semantic_effective_windows,
                 config=semantic_config,
             )
             if bool(getattr(self.settings, "enable_ball_semantic_policy", True))

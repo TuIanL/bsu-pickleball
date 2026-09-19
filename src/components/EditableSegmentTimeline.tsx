@@ -60,6 +60,7 @@ export function EditableSegmentTimeline({
   const handlePointerDown = useCallback((e: React.PointerEvent, seg: CaptureSegmentSummary, handle: "left" | "right") => {
     e.stopPropagation();
     e.preventDefault();
+    if (!reviewMode) return;
     if (savingSegmentId || seg.edit_status !== "active" || seg.status === "open") return;
     const start = seg.effective_start_ms ?? seg.start_ms;
     const end = seg.effective_end_ms ?? seg.end_ms;
@@ -75,7 +76,7 @@ export function EditableSegmentTimeline({
       expectedVersion: seg.edit_version,
     });
     dragStartRef.current = { pointerId: e.pointerId, pointerX: e.clientX, segStart: start, segEnd: end };
-  }, [savingSegmentId]);
+  }, [reviewMode, savingSegmentId]);
 
   const seekFromPointer = useCallback((clientX: number) => {
     const timeline = timelineRef.current;
@@ -212,7 +213,7 @@ export function EditableSegmentTimeline({
                         if (!isSuperseded) onSegmentClick?.(seg.id, s);
                       }}
                     >
-                      {!isSuperseded && !isArchived && !isOpen && (
+                      {reviewMode && !isSuperseded && !isArchived && !isOpen && (
                         <>
                           <div
                             className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-black/20 z-10"

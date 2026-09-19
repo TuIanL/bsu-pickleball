@@ -290,6 +290,7 @@ def _build_canonical_ball_processor(
     runtimes: Mapping[str, JointViewRuntime],
     calibrations: Mapping[str, object],
     take_dir: Path | None = None,
+    formal_window_plan: list[dict[str, object]] | None = None,
 ):
     """构造共享 canonical tick 的球 detector/tracker；模型或几何不可用时返回降级处理器。"""
     from app.vision.multiview.ball_stereo.canonical_runner import CanonicalBallStereoProcessor
@@ -415,12 +416,26 @@ def _build_canonical_ball_processor(
         conflict_penalty=float(getattr(settings, "ball_semantic_conflict_penalty", 0.25)),
         boundary_eval_enabled=bool(getattr(settings, "ball_semantic_boundary_eval_enabled", True)),
     )
-    semantic_provider = (
-        SemanticTimelineProvider.from_capture_take(take_id, config=semantic_config)
-        if bool(getattr(settings, "enable_ball_semantic_policy", True))
-        and semantic_config.semantic_timeline_enabled
-        else None
-    )
+    semantic_effective_windows = None
+    if formal_window_plan is not None:
+        from app.vision.pickleball_game_analysis.effective_time_windows import resolve_effective_windows
+
+        semantic_effective_windows = resolve_effective_windows(
+            analysis_window_plan=formal_window_plan,
+            window_plan_bound=True,
+        )
+    if bool(getattr(settings, "enable_ball_semantic_policy", True)) and semantic_config.semantic_timeline_enabled:
+        semantic_provider = (
+            SemanticTimelineProvider.from_capture_take(take_id, config=semantic_config)
+            if formal_window_plan is None
+            else SemanticTimelineProvider.from_capture_take(
+                take_id,
+                effective_windows=semantic_effective_windows,
+                config=semantic_config,
+            )
+        )
+    else:
+        semantic_provider = None
     metric_scene_ready = (
         scene_calibration is not None
         and getattr(scene_calibration, "status", None) == "ready"
@@ -638,17 +653,46 @@ class MultiViewJointExecutor:
                 fps=fps,
                 allow_nominal_fallback=False,
             )
+            formal_plan = None
+            formal_plan_bound = bool(parent.windowPlanHash and parent.segmentationRunId)
+            if formal_plan_bound:
+                plan_path = storage.formal_segmentation_artifact_path(
+                    parent.id,
+                    capture_take_id,
+                    create_root=False,
+                )
+                try:
+                    plan_payload = storage.read_json(plan_path) if plan_path.is_file() else None
+                    plan = plan_payload.get("window_plan") if isinstance(plan_payload, dict) else None
+                    if (
+                        isinstance(plan_payload, dict)
+                        and plan_payload.get("run_id") == parent.segmentationRunId
+                        and isinstance(plan, dict)
+                        and plan.get("run_id") == parent.segmentationRunId
+                        and plan.get("plan_hash") == parent.windowPlanHash
+                        and isinstance(plan.get("windows"), list)
+                    ):
+                        formal_plan = [item for item in plan["windows"] if isinstance(item, dict)]
+                except Exception:
+                    formal_plan = None
+            if formal_plan_bound and formal_plan is None:
+                raise RuntimeError("formal segmentation window plan unavailable or hash mismatch")
             window = resolve_analysis_window(
                 source_duration_ms=int(reference_timing_provider.duration_seconds * 1000),
                 source_frame_count=frame_count,
                 fps=fps,
-                clip_start_ms=parent.clipStartMs,
-                clip_end_ms=parent.clipEndMs,
+                # Formal segmentation gates metric eligibility while joint
+                # tracking still decodes one continuous stream.
+                clip_start_ms=None if formal_plan is not None else parent.clipStartMs,
+                clip_end_ms=None if formal_plan is not None else parent.clipEndMs,
                 pre_roll_ms=getattr(settings, "pre_roll_ms", 1500),
                 post_roll_ms=getattr(settings, "post_roll_ms", 500),
                 timing_provider=reference_timing_provider,
             )
             window_metadata = window.metadata()
+            if formal_plan is not None:
+                window_metadata["window_plan"] = formal_plan
+                window_metadata["window_plan_hash"] = parent.windowPlanHash
 
             match_ctx = build_match_context(
                 parent.metadata.matchFormat if hasattr(parent.metadata, "matchFormat") else None
@@ -797,6 +841,7 @@ class MultiViewJointExecutor:
                 runtimes=runtimes,
                 calibrations=calibrations,
                 take_dir=take_dir,
+                formal_window_plan=formal_plan,
             )
             run = MultiViewJointRun(
                 run_id=run_id, capture_take_id=capture_take_id, reference_view_id=reference_view_id,

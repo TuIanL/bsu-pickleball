@@ -40,7 +40,20 @@
       "properties": {
         "modalities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "sampling_fps": {"type": "number", "exclusiveMinimum": 0},
+        "timeline_stride_ms": {"type": "integer", "exclusiveMinimum": 0},
         "clip_duration_ms": {"type": "integer", "exclusiveMinimum": 0},
+        "encoder_frame_count": {"type": "integer", "exclusiveMinimum": 0},
+        "height": {"type": "integer", "exclusiveMinimum": 0},
+        "width": {"type": "integer", "exclusiveMinimum": 0},
+        "normalization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mean", "std"],
+          "properties": {
+            "mean": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3},
+            "std": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3}
+          }
+        },
         "feature_schema": {"type": "string", "minLength": 1}
       }
     },
@@ -112,7 +125,10 @@
       "properties": {
         "status": {"enum": ["ready", "unavailable", "insufficient_evidence"]},
         "device": {"type": "string", "minLength": 1},
-        "fallback": {"const": "preserve_existing_analysis"}
+        "fallback": {"const": "preserve_existing_analysis"},
+        "entrypoint": {"type": "string", "minLength": 1},
+        "adapter_version": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1}
       }
     }
   }

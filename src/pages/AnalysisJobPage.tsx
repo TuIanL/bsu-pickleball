@@ -359,6 +359,11 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
                   <strong className="text-xl font-black text-[#168A34]">{job.progress}%</strong>
                 </div>
               </div>
+              {job.segmentationRequired && job.orchestrationStatus === "waiting_segmentation" ? (
+                <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-800">
+                  正在自动切分比赛回合；完成后会自动进入双摄分析。无需人工复核。
+                </p>
+              ) : null}
               <div className="mt-2 h-1.5 rounded-full bg-[#DFEADA]">
                 <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
               </div>

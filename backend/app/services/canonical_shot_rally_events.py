@@ -185,6 +185,62 @@ def _load_rally_boundaries(capture_take_id: str | None) -> tuple[list[dict[str, 
     return boundaries, warnings
 
 
+def _formal_boundaries_from_plan(plan: Any) -> list[dict[str, Any]]:
+    """Convert a job-bound immutable window plan to event-compatible boundaries.
+
+    Formal analysis must never query the mutable CaptureTake timeline after its
+    prerequisite has succeeded.  Keeping this conversion at the composition
+    boundary lets the existing Shot/Rally schema consume the exact same
+    half-open windows without changing legacy/manual callers.
+    """
+    if hasattr(plan, "windows"):
+        plan = plan.windows
+    if not isinstance(plan, (list, tuple)):
+        return []
+    boundaries: list[dict[str, Any]] = []
+    for index, item in enumerate(plan, start=1):
+        if not isinstance(item, dict):
+            continue
+        try:
+            start_ms = int(round(float(item.get("start_ms", item.get("startMs")))))
+            end_ms = int(round(float(item.get("end_ms", item.get("endMs")))))
+        except (TypeError, ValueError):
+            continue
+        if start_ms < 0 or end_ms <= start_ms:
+            continue
+        ordinal = int(item.get("ordinal", index))
+        segment_id = str(item.get("segment_id") or f"rally-{ordinal:04d}")
+        boundaries.append(
+            {
+                "rally_id": segment_id,
+                "ordinal": ordinal,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "source": "formal_segmentation_plan",
+            }
+        )
+    return sorted(boundaries, key=lambda item: (item["start_ms"], item["ordinal"], item["rally_id"]))
+
+
+def _load_bound_formal_boundaries(job: AnalysisJobSummary, storage: StorageService) -> tuple[list[dict[str, Any]], list[str]] | None:
+    """Read only the artifact identified by this job's run and plan hash."""
+    if not job.segmentationRunId or not job.windowPlanHash:
+        return None
+    owner_id = job.parentJobId or job.id
+    path = storage.formal_segmentation_artifact_path(
+        owner_id,
+        job.metadata.capture_take_id,
+        create_root=False,
+    )
+    payload = _read_json(path)
+    plan = payload.get("window_plan") if payload else None
+    if not isinstance(plan, dict) or plan.get("plan_hash") != job.windowPlanHash:
+        return None
+    if payload.get("run_id") != job.segmentationRunId:
+        return None
+    return _formal_boundaries_from_plan(plan.get("windows", [])), ["已使用任务绑定的正式回合窗口计划"]
+
+
 def _rally_for_timestamp(timestamp_ms: int | None, boundaries: list[dict[str, Any]]) -> dict[str, Any] | None:
     if timestamp_ms is None:
         return None
@@ -317,6 +373,7 @@ def build_shot_rally_events(
     reconstructed_payload: dict[str, Any] | None,
     serve_payload: dict[str, Any] | None = None,
     capture_take_id: str | None = None,
+    formal_window_plan: Any | None = None,
     generated_at: str | None = None,
 ) -> ShotRallyEventsArtifact:
     generated_at = generated_at or datetime.now(UTC).isoformat()
@@ -343,7 +400,11 @@ def build_shot_rally_events(
         )
 
     players = _canonical_players(reconstructed_payload)
-    boundaries, warnings = _load_rally_boundaries(capture_take_id)
+    if formal_window_plan is not None:
+        boundaries = _formal_boundaries_from_plan(formal_window_plan)
+        warnings = ["已使用任务绑定的正式回合窗口计划"]
+    else:
+        boundaries, warnings = _load_rally_boundaries(capture_take_id)
     raw_events = {
         str(item.get("event_id")): item
         for item in (reconstructed_payload.get("events") or [])
@@ -397,14 +458,26 @@ def build_shot_rally_events(
                 start_ms=boundary["start_ms"],
                 end_ms=boundary["end_ms"],
                 shot_ids=shot_ids,
-                source_artifacts=["timeline-events"],
-                provenance="manual_timeline",
+                source_artifacts=[
+                    "match_state_segmentation"
+                    if boundary.get("source") == "formal_segmentation_plan"
+                    else "timeline-events"
+                ],
+                provenance=(
+                    "formal_segmentation_plan"
+                    if boundary.get("source") == "formal_segmentation_plan"
+                    else "manual_timeline"
+                ),
                 evidence_windows=[
                     EvidenceWindow(
                         id=f"{boundary['rally_id']}:window",
                         start_ms=boundary["start_ms"],
                         end_ms=boundary["end_ms"],
-                        source_artifact="timeline-events",
+                        source_artifact=(
+                            "match_state_segmentation"
+                            if boundary.get("source") == "formal_segmentation_plan"
+                            else "timeline-events"
+                        ),
                     )
                 ],
             )
@@ -447,7 +520,11 @@ def build_shot_rally_events(
         source_artifacts=source_artifacts,
         provenance={
             "shot_authority": "reconstructed_ball_trajectory.v2",
-            "rally_authority": "manual_timeline" if boundaries else "unavailable",
+            "rally_authority": (
+                "formal_segmentation_plan"
+                if formal_window_plan is not None
+                else "manual_timeline" if boundaries else "unavailable"
+            ),
             "time_conversion": "timestamp_sec_to_ms_once_at_composition_boundary",
         },
     )
@@ -744,6 +821,7 @@ def generate_and_persist_canonical_events(
     reconstructed = _read_json(storage.reconstructed_ball_trajectory_json_path(job.id))
     serve = _read_json(storage.serve_events_json_path(job.id))
     try:
+        formal_boundaries = _load_bound_formal_boundaries(job, storage)
         events = build_shot_rally_events(
             job_id=job.id,
             video_id=result.video_id,
@@ -751,6 +829,7 @@ def generate_and_persist_canonical_events(
             reconstructed_payload=reconstructed,
             serve_payload=serve,
             capture_take_id=job.metadata.capture_take_id,
+            formal_window_plan=formal_boundaries[0] if formal_boundaries is not None else None,
             generated_at=generated_at,
         )
         snapshot = build_metric_snapshot(events, match_format=job.metadata.matchFormat, generated_at=generated_at)

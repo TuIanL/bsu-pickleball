@@ -1,8 +1,9 @@
 """比赛有效时间（KCR 分母）三层解析。
 
-- ① job 携带 clip 区间（来自 rally 片段分析）→ 单一窗口；
-- ② 关联录制单元存在时间线 rally 事件 → 窗口并集（排除 non-play/暂停/换边）；
-- ③ 两者皆无 → None（调用方回退为该球员轨迹总时长）。
+- ① 任务绑定的不可变窗口计划（包括合法空计划）；
+- ② job 携带 clip 区间（来自 rally 片段分析）→ 单一窗口；
+- ③ 关联录制单元存在时间线 rally 事件 → 窗口并集；
+- ④ 两者皆无 → None（遗留任务回退为该球员轨迹总时长）。
 
 纯函数（rally_windows_from_events / resolve_effective_windows）不依赖 DB，可独立测试；
 DB 访问封装在 _rally_windows_from_capture_take 内（惰性导入，避免模块导入期硬依赖）。
@@ -75,8 +76,36 @@ def resolve_effective_windows(
     capture_take_id: str | None = None,
     *,
     video_duration_ms: int | None = None,
+    analysis_window_plan: Sequence[dict[str, Any]] | Any | None = None,
+    window_plan_bound: bool = False,
 ) -> list[tuple[float, float]] | None:
-    """三层解析比赛有效时间窗口（秒，半开区间）。返回 None 表示无比赛数据，调用方回退总时长。"""
+    """Resolve effective windows (seconds, half-open intervals).
+
+    ``window_plan_bound`` distinguishes a formally bound empty plan from a
+    legacy task with no rally data.  Once a plan is supplied, no dynamic
+    CaptureTake query or full-video fallback is permitted.
+    """
+    if analysis_window_plan is not None or window_plan_bound:
+        raw_plan = analysis_window_plan
+        if hasattr(raw_plan, "windows"):
+            raw_plan = raw_plan.windows
+        windows: list[tuple[float, float]] = []
+        for item in raw_plan or ():
+            if isinstance(item, dict):
+                start_ms = item.get("start_ms", item.get("startMs"))
+                end_ms = item.get("end_ms", item.get("endMs"))
+            else:
+                try:
+                    start_ms, end_ms = item
+                except (TypeError, ValueError):
+                    continue
+                start_ms, end_ms = float(start_ms) * 1000.0, float(end_ms) * 1000.0
+            if start_ms is None or end_ms is None:
+                continue
+            start_ms, end_ms = float(start_ms), float(end_ms)
+            if end_ms > start_ms:
+                windows.append((start_ms / 1000.0, end_ms / 1000.0))
+        return _merge_windows(windows)
     if clip_start_ms is not None and clip_end_ms is not None and clip_end_ms > clip_start_ms:
         return [(clip_start_ms / 1000.0, clip_end_ms / 1000.0)]
     if capture_take_id:
@@ -84,6 +113,17 @@ def resolve_effective_windows(
         if windows:
             return windows
     return None
+
+
+def _merge_windows(windows: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    normalized = sorted((float(start), float(end)) for start, end in windows if end > start)
+    merged: list[tuple[float, float]] = []
+    for start, end in normalized:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def _rally_windows_from_capture_take(

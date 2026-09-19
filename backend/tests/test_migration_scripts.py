@@ -88,7 +88,7 @@ def test_schema_backup_upgrade_repeat_and_restore(tmp_path):
     command.upgrade(cfg, 'head')
     command.upgrade(cfg, 'head')
     with sqlite3.connect(database) as db:
-        assert db.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '3d4e5f6a7b8c'
+        assert db.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '4e5f6a7b8c9d'
         assert db.execute('SELECT value FROM migration_sentinel').fetchone()[0] == 'retain original data'
     command.downgrade(cfg, '2c3d4e5f6a7b')
     with sqlite3.connect(backup) as source, sqlite3.connect(database) as target:

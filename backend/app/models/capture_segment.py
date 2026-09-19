@@ -102,6 +102,10 @@ class CaptureSegment(Base):
     is_highlight: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # 是否为高亮片段
     annotation_package_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     vidat_import_audit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # 正式模型切分运行的来源；人工/现场片段保持为空。
+    segmentation_run_id: Mapped[str | None] = mapped_column(
+        String(80), ForeignKey("match_state_segmentation_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
