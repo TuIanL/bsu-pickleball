@@ -1,7 +1,8 @@
 # metric-court-scene-calibration Specification
 
 ## Purpose
-TBD - created by archiving change add-net-assisted-metric-court-scene-calibration. Update Purpose after archive.
+
+定义采集任务级的球场场景标定资产：人工球网标注与草稿微调、标准球网高度 profile、场景标定质量门与固定机位适用范围，以及标定来源、自动建议扩展点与场景不确定度可追溯。
 ## Requirements
 ### Requirement: 采集任务级场景标定资产
 

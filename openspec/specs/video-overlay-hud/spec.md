@@ -1,7 +1,8 @@
 # video-overlay-hud Specification
 
 ## Purpose
-TBD - created by archiving change redesign-video-analysis-overlay. Update Purpose after archive.
+
+定义视频叠加 HUD：比例正确且视频友好的球场 HUD 与球员轨迹、可解释的速度摘要、球的图像轨迹/平面投影/弹跳候选、图层独立控制与按 evidence_type 区分的样式、小地图方向与拍摄方向一致，以及渲染器消费 display_state 作为几何展示权威。
 ## Requirements
 ### Requirement: 比例正确且视频友好的球场 HUD
 

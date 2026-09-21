@@ -1,8 +1,8 @@
 # device-drawer Specification
 
 ## Purpose
-TBD - created by syncing change redesign-product-entry-and-capture-console.
 
+定义设备抽屉：设备状态区、按机位槽位的摄像头选择，以及双摄槽位选择的持久化。
 ## Requirements
 ### Requirement: 设备状态区
 

@@ -1,7 +1,8 @@
 # library-item-workspace Specification
 
 ## Purpose
-TBD - created by archiving change reframe-library-and-match-workspace. Update Purpose after archive.
+
+定义素材统一工作区 LibraryItemWorkspace：按素材状态门控 view、概览与历史分析版本的查看和实时进度，并强制 selected Job 的素材归属校验与按 Job 自身确定的结果边界。
 ## Requirements
 ### Requirement: LibraryItemWorkspace 作为一个素材的统一工作区
 

@@ -1003,6 +1003,8 @@ export interface AnalysisJobSummary {
   sceneCalibrationRevision?: number | null;
   sceneCalibrationMode?: "metric" | "approximate";
   sceneCalibrationStatus?: "ready" | "degraded" | "invalidated" | "missing";
+  /** 本任务实际采用的新/旧分析流程。 */
+  rallyContextMode?: "new" | "legacy";
   viewRuns?: Record<string, { status: string; stage: string; progress: number }> | null;
 }
 
@@ -1994,6 +1996,11 @@ export interface AnalysisPipelineResult {
     metric_snapshot_url?: string;
     metric_snapshot_status?: string;
     metric_snapshot_detail?: string;
+    kitchen_arrival_json_path?: string;
+    kitchen_arrival_url?: string;
+    kitchen_arrival_status?: string;
+    kitchen_arrival_detail?: string;
+    kitchen_arrival_card_enabled?: boolean;
     normalized_metrics_json_path?: string;
     normalized_metrics_url?: string;
     normalized_metrics_status?: string;

@@ -50,6 +50,7 @@ import type {
   MetricSnapshotArtifact,
   ShotRallyEventsArtifact,
 } from "../types/shotRallyEvents";
+import type { KitchenArrivalArtifact } from "../types/kitchenArrival";
 import type { NormalizedMetricArtifact } from "../types/metricNormalization";
 import type {
   MultiviewObservabilitySummary,
@@ -77,6 +78,11 @@ import type {
   MetricCourtSceneValidationResponse,
 } from "../types/metricCourtScene";
 import type { CalibrationReadResponse } from "../types/videoCourtOverlay";
+import type {
+  BootstrapBindingAudit,
+  PlayerBootstrapResult,
+  RosterConfirmationRequest,
+} from "../types/rallyContext";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
@@ -588,6 +594,13 @@ interface AnalysisJobRequest {
   enableModelInference?: boolean;
   enablePoseInference?: boolean;
   segmentationRequired?: boolean;
+  /** 任务级分析流程：默认新流程；false 明确选择旧流程兼容模式。 */
+  useRallyContext?: boolean;
+  /**
+   * 分析前名册/端位确认（P1–P4、Team A/B、初始端位）。
+   * 不传或 skipped=true 时，后端照常创建普通分析，只把依赖正式身份的消费者标记为 unavailable。
+   */
+  rosterConfirmation?: RosterConfirmationRequest;
 }
 
 export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
@@ -710,6 +723,8 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
         camera_slot: request.cameraSlot,
         enableModelInference: request.enableModelInference,
         enablePoseInference: request.enablePoseInference,
+        useRallyContext: request.useRallyContext,
+        rosterConfirmation: request.rosterConfirmation,
       }),
       method: "POST",
     }));
@@ -779,6 +794,8 @@ export interface MultiviewAnalysisJobRequest {
   clipEndMs?: number;
   /** Formal match-state segmentation prerequisite; omitted uses backend policy. */
   segmentationRequired?: boolean;
+  /** 任务级分析流程：默认新流程；false 明确选择旧流程兼容模式。 */
+  useRallyContext?: boolean;
 }
 
 /**
@@ -804,6 +821,7 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
         canonicalFrame: request.canonicalFrame,
       },
       segmentationRequired: request.segmentationRequired,
+      useRallyContext: request.useRallyContext,
     }),
     method: "POST",
   }));
@@ -1142,6 +1160,19 @@ export async function getMetricSnapshot(
   }
 }
 
+export async function getKitchenArrival(
+  result: AnalysisPipelineResult,
+): Promise<KitchenArrivalArtifact | null> {
+  const path = result.artifacts.kitchen_arrival_url;
+  if (!path) return null;
+  try {
+    return await requestJson<KitchenArrivalArtifact>(path);
+  } catch (error) {
+    if (error instanceof AnalysisApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 export async function getNormalizedMetrics(
   result: AnalysisPipelineResult,
 ): Promise<NormalizedMetricArtifact | null> {
@@ -1183,6 +1214,36 @@ export async function getStructuredVizData(jobId: string): Promise<StructuredVis
 export async function getPlayerRenderTrajectory(jobId: string): Promise<RawPlayerRenderTrajectory | null> {
   try {
     return await requestJson<RawPlayerRenderTrajectory>(`/api/analysis/jobs/${jobId}/artifacts/player-render-trajectories`);
+  } catch (error: unknown) {
+    if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * 受限 player bootstrap：返回参考帧时间点、P1–P4 候选、身份锚点与质量诊断。
+ * 优先消费已有产物；首次分析仅运行轻量首段预检，**不启动完整 Pipeline**。
+ * 拿不到候选时返回 unavailable 且 skippable=true。
+ */
+export async function getPlayerBootstrap(params: {
+  captureTakeId?: string | null;
+  videoId?: string | null;
+  matchFormat?: string | null;
+}): Promise<PlayerBootstrapResult> {
+  const query = new URLSearchParams();
+  if (params.captureTakeId) query.set("captureTakeId", params.captureTakeId);
+  if (params.videoId) query.set("videoId", params.videoId);
+  if (params.matchFormat) query.set("matchFormat", params.matchFormat);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return requestJson<PlayerBootstrapResult>(`/api/analysis/players/bootstrap${suffix}`);
+}
+
+/** 读取 bootstrap anchor → 正式 canonical Player 的绑定审计产物（缺失时返回 null）。 */
+export async function getBootstrapBindingAudit(jobId: string): Promise<BootstrapBindingAudit | null> {
+  try {
+    return await requestJson<BootstrapBindingAudit>(`/api/analysis/jobs/${jobId}/artifacts/bootstrap-binding-audit`);
   } catch (error: unknown) {
     if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
       return null;

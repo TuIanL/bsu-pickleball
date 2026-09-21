@@ -1,7 +1,8 @@
 # match-state-dataset-audit Specification
 
 ## Purpose
-TBD - created by archiving change learned-match-state-segmentation. Update Purpose after archive.
+
+定义比赛状态数据集的审计能力：双摄视频资产盘点、标注覆盖与时间基准审计、不确定区间生成、数据切分防泄漏与可复现审计报告，并提供补录漏记回合与修正 rally 序号的工作台。
 ## Requirements
 ### Requirement: 双摄视频资产盘点
 

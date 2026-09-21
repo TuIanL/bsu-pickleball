@@ -1,7 +1,8 @@
 # video-analysis-job-flow Specification
 
 ## Purpose
-TBD - created by archiving change add-analysis-workflow-backend-foundation. Update Purpose after archive.
+
+定义视频分析任务的主流程：上传入口与表单状态、任务创建与状态页、结果路由与取消、校准交接与自动标定建议、算法结果与原始 pipeline 产物消费、结构化错误诊断与阶段化进度，以及 court-view/ROI 阶段记录和按任务的推理开关。
 ## Requirements
 ### Requirement: New video analysis entry
 The system SHALL provide a user-facing entry point for starting a new pickleball video analysis.

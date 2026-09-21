@@ -1,7 +1,8 @@
 # sync-recording-task-listing Specification
 
 ## Purpose
-TBD - created by syncing change refine-dual-camera-ui-and-listings.
+
+定义双摄录制与分析任务的列表呈现：双摄录制卡片与分组网格布局、任务操作保留来源上下文、SyncRecording 收敛为单一 LibraryItem 及其 ownership 契约，A/B 单摄分析下沉。
 ## Requirements
 ### Requirement: 双摄录制卡片
 

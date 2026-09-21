@@ -74,6 +74,22 @@ export interface CanonicalRallyEvent {
   provenance: string;
   confidence?: number | null;
   evidence_windows: CanonicalEvidenceWindow[];
+  context?: {
+    rally_id: string;
+    context_set_id?: string | null;
+    context_hash?: string | null;
+    binding_method: "direct_segment_link" | "direct_start_event_link" | "unique_temporal_match" | "unavailable";
+    status: "available" | "partial" | "unavailable";
+    unavailable_reason?: string | null;
+    server_team?: "A" | "B" | null;
+    score_a_before?: number | null;
+    score_b_before?: number | null;
+    team_a_end?: string | null;
+    team_b_end?: string | null;
+    team_a_players: string[];
+    team_b_players: string[];
+    diagnostics: string[];
+  } | null;
 }
 
 export interface ShotRallyEventsArtifact {
@@ -115,7 +131,7 @@ export interface MetricSnapshotEntry {
   confidence?: number | null;
   provenance: string;
   evidence_ids: string[];
-  calculation_version: "product_reference_v1";
+  calculation_version: "product_reference_v1" | "kitchen-arrival-reference.v1";
 }
 
 export interface MetricSnapshotArtifact {

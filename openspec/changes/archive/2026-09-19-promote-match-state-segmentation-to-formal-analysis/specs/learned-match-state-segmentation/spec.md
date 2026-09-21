@@ -24,7 +24,7 @@
 - **THEN** 系统 SHALL 创建 SegmentationRun 和正式 artifact，而不是读写 candidate review sidecar
 - **AND** candidate 的 accept/correct/reject 状态 SHALL 不改变该 Parent 的窗口计划
 
-### Requirement: 模型包可复现和可按 profile 降级
+### Requirement: 模型包可复现和可降级
 
 模型发布 package SHALL 包含权重、标签映射、采样配置、clip 配置、特征 schema、归一化参数、阈值、训练数据版本和评估报告。QA 候选 Runtime 缺少模型或输入时 SHALL 保持现有人工/规则流程可用；正式双摄 `match_default` Runtime 缺少模型或输入时 SHALL 以可解释的 prerequisite 失败结束，不得将无切分计划的整场分析伪装为同等结果。工程或单摄 profile 必须明确报告 optional/not_applicable 状态。
 

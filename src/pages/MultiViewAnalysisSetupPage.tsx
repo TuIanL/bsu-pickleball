@@ -10,6 +10,7 @@ import {
   type NetAnnotationDraft,
 } from "../components/platform/NetProfileCalibrator";
 import { PageFrame } from "../components/PageFrame";
+import { AnalysisFlowSelector, type AnalysisFlowMode } from "../components/platform/AnalysisFlowSelector";
 import {
   createMultiviewAnalysisJob,
   getCaptureTake,
@@ -143,8 +144,13 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   // 窗口默认结束点由录制时长决定；在录制时长加载前不伪造 60 秒默认值。
   const [clipEndSec, setClipEndSec] = useState<number | null>(null);
   const [debugReplayEnabled, setDebugReplayEnabled] = useState(false);
+  const [analysisFlow, setAnalysisFlow] = useState<AnalysisFlowMode>("new");
   const [syncAnchorStatus, setSyncAnchorStatus] = useState<SyncAnchorStatus | null>(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
+
+  const handleAnalysisFlowChange = (next: AnalysisFlowMode) => {
+    setAnalysisFlow(next);
+  };
 
   // 路由带 `?session=`（录制卡片传入），缺失时回退到 take.source_session_id 反查
   const routeSessionId = new URLSearchParams(window.location.search).get("session");
@@ -447,6 +453,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         executionMode: "joint_tracking_v2",
         // 正式比赛分析必须先生成并绑定模型回合窗口计划。
         segmentationRequired: true,
+        useRallyContext: analysisFlow === "new",
         debugTraceEnabled: debugReplayEnabled,
         sceneCalibrationMode: "metric",
         sceneCalibrationRevision: publishedScene.revision,
@@ -651,6 +658,9 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                 </span>
               </span>
             </label>
+            <div className="mt-4">
+              <AnalysisFlowSelector value={analysisFlow} onChange={handleAnalysisFlowChange} />
+            </div>
             {!videosReady && (
               <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4 text-sm text-[#B91C1C]">
                 双摄素材尚未全部就绪，无法开始协同分析。请确认双机位视频已合并完成。

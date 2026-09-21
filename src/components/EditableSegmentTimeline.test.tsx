@@ -52,6 +52,7 @@ describe("EditableSegmentTimeline 联动与拖拽", () => {
         events={[]}
         totalDurationMs={10000}
         currentTimeMs={0}
+        reviewMode
         onSeek={vi.fn()}
         onBoundaryChange={onBoundaryChange}
       />,

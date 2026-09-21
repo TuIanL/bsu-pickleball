@@ -1,7 +1,8 @@
 # sync-anchor-workflow Specification
 
 ## Purpose
-TBD - created by archiving change integrate-sync-anchor-preflight. Update Purpose after archive.
+
+定义 CaptureTake 级同步锚点工作流：锚点状态与内置草稿生命周期、系统内提交/拟合/确认、跨分析复用与 provenance 失效、锚点版本审计与诊断导出，以及工作台 timing 缺失时的恢复路径。
 ## Requirements
 ### Requirement: CaptureTake 级同步锚点状态
 

@@ -1,7 +1,8 @@
 # multiview-display-view-switching Specification
 
 ## Purpose
-TBD - created by archiving change decouple-multiview-display-view-from-canonical-frame. Update Purpose after archive.
+
+定义双摄展示机位的切换语义：默认机位与当前展示机位分离、展示视角使用统一 canonical 时间、Player 身份在视角切换中保持稳定，并保证球员、球路与小地图使用正确坐标空间。
 ## Requirements
 ### Requirement: 默认展示机位与当前展示机位分离
 

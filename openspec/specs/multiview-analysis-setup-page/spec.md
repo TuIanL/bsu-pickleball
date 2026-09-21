@@ -1,7 +1,8 @@
 # multiview-analysis-setup-page Specification
 
 ## Purpose
-TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orchestration. Update Purpose after archive.
+
+定义双摄分析创建向导（MultiViewAnalysisSetupPage）的四阶段流程：双摄主 CTA、CourtOrientation 产品化确认、一致的业务退出与步骤回退、允许修正已完成的标定，并清理 cameraAngle 的错误映射。
 ## Requirements
 ### Requirement: 双摄主 CTA
 

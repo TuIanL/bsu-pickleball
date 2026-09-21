@@ -9,6 +9,7 @@ from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource
 from app.models.capture_take import CaptureMode, CaptureTake, CaptureTakeStatus, SourceSessionType
 from app.models.field_session import CaptureMode as FieldCaptureMode, FieldSession, FieldSessionStatus, MatchFormat
 from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
+from app.core.config import Settings
 from app.services.formal_segmentation_service import persist_segmentation_result
 from app.services.job_orchestration import JobStore
 from app.services.multiview_coordinator import MultiViewAnalysisCoordinator
@@ -422,7 +423,16 @@ def _formal_payload():
 def _patched_coordinator(monkeypatch, tmp_path):
     import app.services.multiview_coordinator as mc
 
-    storage = StorageService()
+    # 每个编排用例使用独立的持久化目录；签名去重现在是有意跨调用
+    # 生效的，不能让不同测试共享默认 jobs 目录而互相复用 Parent。
+    storage = StorageService(
+        Settings(
+            uploads_dir=tmp_path / "uploads",
+            outputs_dir=tmp_path / "outputs",
+            calibrations_dir=tmp_path / "calibrations",
+            tmp_dir=tmp_path / "tmp",
+        )
+    )
     monkeypatch.setattr(mc, "preflight_multiview", lambda payload, **kwargs: mc.PreflightResult(ok=True))
     monkeypatch.setattr(mc, "_check_capture_take_dir", lambda _take_id: str(tmp_path / "take"))
     (tmp_path / "take").mkdir()

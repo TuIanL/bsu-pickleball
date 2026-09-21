@@ -1,8 +1,8 @@
 # frontend-capture-session-adapter Specification
 
 ## Purpose
-TBD - created by syncing change unify-single-dual-capture-controller.
 
+定义前端采集会话适配器：以 UnifiedCaptureSession 作为统一内部表示，CaptureTrackRuntime.trackId 可为空，NormalizedCaptureStopResult 的 captureTakeId 必填。
 ## Requirements
 
 ### Requirement: UnifiedCaptureSession 统一内部表示

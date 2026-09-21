@@ -1,7 +1,8 @@
 # showcase-live-overlay Specification
 
 ## Purpose
-TBD - created by archiving change showcase-mode-live-overlay. Update Purpose after archive.
+
+定义展示模式的实时旁路：独立生命周期、双路人体框实时叠加、有界低延迟帧处理，以及可选的球点与短轨迹和展示运行状态。
 ## Requirements
 ### Requirement: 展示模式实时旁路生命周期
 

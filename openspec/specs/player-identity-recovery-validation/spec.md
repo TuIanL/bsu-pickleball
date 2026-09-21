@@ -1,7 +1,8 @@
 # player-identity-recovery-validation Specification
 
 ## Purpose
-TBD - created by archiving change fix-player-identity-recovery. Update Purpose after archive.
+
+定义球员身份恢复的真实验收方法：真实视频回归必须创建新的分析任务、以身份稳定性为验收对象，并可与旧任务对照结果。
 ## Requirements
 ### Requirement: 真实视频回归必须创建新的分析任务
 

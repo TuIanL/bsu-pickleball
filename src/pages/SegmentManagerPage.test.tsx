@@ -602,6 +602,368 @@ describe("SegmentManagerPage 片段回放与交互同步", () => {
   });
 });
 
+describe("SegmentManagerPage 自动回合回放提示", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const autoRallyFixtures = [
+    {
+      id: "auto-1", segment_type: "rally", ordinal: 1, label: "第1回合", start_ms: 1000, end_ms: 5000,
+      effective_start_ms: 1000, effective_end_ms: 5000, edit_version: 1, edit_status: "active", status: "inferred",
+      source: "algorithm", segmentation_run_id: "seg_run_1", is_highlight: false,
+    },
+    {
+      id: "auto-2", segment_type: "rally", ordinal: 2, label: "第2回合", start_ms: 7000, end_ms: 9000,
+      effective_start_ms: 7000, effective_end_ms: 9000, edit_version: 1, edit_status: "active", status: "inferred",
+      source: "algorithm", segmentation_run_id: "seg_run_1", is_highlight: false,
+    },
+    {
+      id: "manual-1", segment_type: "rally", ordinal: 3, label: "人工标记回合", start_ms: 9500, end_ms: 10500,
+      effective_start_ms: 9500, effective_end_ms: 10500, edit_version: 1, edit_status: "active", status: "closed",
+      source: "manual", segmentation_run_id: null, is_highlight: false,
+    },
+  ];
+
+  const succeededSummary = {
+    capture_take_id: "ct_1", status: "succeeded", run_id: "seg_run_1", model_package_id: "match_state_v1",
+    model_version: "rgb_structured_fusion_v1", generated_at: "2026-07-17T10:01:00Z", segment_count: 2,
+    window_plan_hash: "abc", artifact_available: true,
+  };
+
+  function primePage(segments: unknown[] = autoRallyFixtures, summary: unknown = succeededSummary) {
+    mocks.getVideoStreamUrl.mockImplementation((id?: string) => (id ? `/api/videos/${id}/stream` : ""));
+    mocks.getCaptureTake.mockResolvedValue(makeTake({ video_ids: ["video-a"], duration_ms: 12000 }));
+    mocks.listSegments.mockResolvedValue(segments);
+    mocks.getFormalSegmentationSummary.mockResolvedValue(summary);
+    mocks.listTimelineEvents.mockResolvedValue([]);
+    mocks.getBoundaryReview.mockResolvedValue(emptyBoundaryReview());
+    mocks.getMatchStateCandidates.mockResolvedValue({
+      schema_version: "match-state-candidate-review.v1",
+      status: "unavailable",
+      reason: "candidate_artifact_missing",
+      capture_take_id: "ct_1",
+      revision: 0,
+      candidates: [],
+    });
+  }
+
+  async function renderAndLoadVideo() {
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
+    await waitFor(() => expect(mocks.getVideoStreamUrl).toHaveBeenCalledWith("video-a"));
+    const video = document.querySelector("video")!;
+    await waitFor(() => expect(video.getAttribute("src")).toBe("/api/videos/video-a/stream"));
+    Object.defineProperty(video, "duration", { configurable: true, value: 12 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(video);
+    return video;
+  }
+
+  function seekTo(video: Element, seconds: number) {
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: seconds });
+    fireEvent.timeUpdate(video);
+  }
+
+  const cueElement = () => document.querySelector("[data-auto-rally-cue]");
+  const modelRows = () => screen.queryAllByTitle("模型自动结果为只读；如需 QA 复核请使用内部 boundary-review 模式");
+
+  it("播放头进入不同自动回合时中央提示序号随之变化，人工片段不触发", async () => {
+    primePage();
+    const video = await renderAndLoadVideo();
+    await waitFor(() => expect(screen.getByText("2 个回合")).toBeTruthy());
+
+    seekTo(video, 2);
+    expect(cueElement()?.textContent).toContain("第1回合");
+    expect(cueElement()?.getAttribute("data-auto-rally-cue")).toBe("visible");
+
+    seekTo(video, 8);
+    expect(cueElement()?.textContent).toContain("第2回合");
+
+    // 人工标记区间（9.5s–10.5s）不属于自动回合：不显示中央提示
+    seekTo(video, 10);
+    expect(cueElement()).toBeNull();
+
+    // 回合之间的间歇同样不显示
+    seekTo(video, 6);
+    expect(cueElement()).toBeNull();
+
+    // 只读回放约束：整个过程不发起任何写操作
+    expect(mocks.patchSegment).not.toHaveBeenCalled();
+    expect(mocks.reviewSegmentBoundary).not.toHaveBeenCalled();
+    expect(mocks.createAnalysisBatch).not.toHaveBeenCalled();
+  });
+
+  it("进度条区间配色覆盖全部自动回合，且不随列表筛选器变化", async () => {
+    primePage();
+    await renderAndLoadVideo();
+    await waitFor(() => expect(screen.getByText("2 个回合")).toBeTruthy());
+
+    expect(document.querySelector("[data-auto-rally-bands]")).toBeTruthy();
+    const bandSnapshot = () =>
+      [...document.querySelectorAll<HTMLElement>("[data-auto-rally-band]")]
+        .map((el) => `${el.dataset.autoRallyBand}:${el.style.left}/${el.style.width}`);
+    const before = bandSnapshot();
+    expect(before).toHaveLength(2);
+    expect(modelRows()).toHaveLength(2);
+
+    // 切到「盘」筛选：模型列表被过滤清空，但进度条配色不受影响
+    fireEvent.click(screen.getByRole("button", { name: "盘" }));
+    expect(modelRows()).toHaveLength(0);
+    expect(bandSnapshot()).toEqual(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "全部" }));
+    expect(modelRows()).toHaveLength(2);
+    expect(bandSnapshot()).toEqual(before);
+  });
+
+  it("无正式切分结果时不显示中央提示也不启用配色", async () => {
+    primePage(autoRallyFixtures, {
+      capture_take_id: "ct_1", status: "unavailable", run_id: null, model_package_id: null,
+      model_version: null, generated_at: null, segment_count: 0, window_plan_hash: null,
+      artifact_available: false,
+    });
+    const video = await renderAndLoadVideo();
+    // 人工行渲染即代表 segments 已应用（summary 与 segments 在同一次批处理中提交）
+    await waitFor(() => expect(screen.getByTitle("点击播放该片段")).toBeTruthy());
+
+    expect(modelRows()).toHaveLength(0);
+    expect(document.querySelector("[data-auto-rally-bands]")).toBeNull();
+    expect(screen.getByRole("slider", { name: "视频播放进度" }).className).toContain("accent-[#22C55E]");
+
+    seekTo(video, 2);
+    expect(cueElement()).toBeNull();
+  });
+
+  it("边界复核隔离模式不启用回放提示，且复核流程不受影响", async () => {
+    primePage();
+    mocks.getBoundaryReview.mockResolvedValue({
+      ...emptyBoundaryReview(),
+      total_count: 1,
+      pending_count: 1,
+      segments: [{
+        id: "auto-1", segment_type: "rally", ordinal: 1, label: "第1回合", start_ms: 1000, end_ms: 5000,
+        effective_start_ms: 1000, effective_end_ms: 5000, edit_version: 1, edit_status: "active", status: "inferred",
+        source: "algorithm", is_highlight: false, boundary_review_status: "pending",
+      }],
+    });
+    mocks.getCaptureTake.mockResolvedValue(makeTake({
+      capture_mode: "dual",
+      video_ids: ["video-a", "video-b"],
+      duration_ms: 12000,
+    }));
+
+    enableBoundaryReviewMode();
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
+    await waitFor(() => expect(document.querySelectorAll("video")).toHaveLength(2));
+    expect(await screen.findByTestId("active-boundary-review")).toBeTruthy();
+
+    // 两个机位都不携带回放提示数据
+    expect(document.querySelectorAll("[data-auto-rally-bands]")).toHaveLength(0);
+
+    const videos = document.querySelectorAll("video");
+    seekTo(videos[0], 2);
+    seekTo(videos[1], 2);
+    expect(document.querySelectorAll("[data-auto-rally-cue]")).toHaveLength(0);
+    expect(mocks.patchSegment).not.toHaveBeenCalled();
+  });
+
+  it("双摄复核下两个播放器各自独立持有全屏容器与控件", async () => {
+    primePage();
+    mocks.getCaptureTake.mockResolvedValue(makeTake({
+      capture_mode: "dual",
+      video_ids: ["video-a", "video-b"],
+      duration_ms: 12000,
+    }));
+
+    enableBoundaryReviewMode();
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
+    await waitFor(() => expect(document.querySelectorAll("video")).toHaveLength(2));
+
+    // 每个播放器一个独立的全屏容器，不共享状态
+    const containers = document.querySelectorAll("[data-fullscreen]");
+    expect(containers).toHaveLength(2);
+    expect(containers[0]).not.toBe(containers[1]);
+    expect(containers[0].getAttribute("data-fullscreen")).toBe("false");
+    expect(containers[1].getAttribute("data-fullscreen")).toBe("false");
+
+    // 每个播放器各有一个全屏控件与一个静音控件（本环境不支持全屏 → 全屏控件禁用）
+    const fullscreenButtons = screen.getAllByRole("button", { name: "全屏播放" }) as HTMLButtonElement[];
+    expect(fullscreenButtons).toHaveLength(2);
+    expect(fullscreenButtons.every((button) => button.disabled)).toBe(true);
+    expect(screen.getAllByRole("button", { name: "静音视频" })).toHaveLength(2);
+  });
+});
+
+describe("SegmentManagerPage 自动跳过非比赛时间", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  // 三个区间：auto-1（1–2s）、人工补录（3–4s）、auto-2（5–7s）。2–5s 与 7s 之后是回合间隙。
+  const skipFixtures = [
+    {
+      id: "auto-1", segment_type: "rally", ordinal: 1, label: "第1回合", start_ms: 1000, end_ms: 2000,
+      effective_start_ms: 1000, effective_end_ms: 2000, edit_version: 1, edit_status: "active", status: "inferred",
+      source: "algorithm", segmentation_run_id: "seg_run_1", is_highlight: false,
+    },
+    {
+      id: "manual-1", segment_type: "rally", ordinal: 2, label: "人工补录", start_ms: 3000, end_ms: 4000,
+      effective_start_ms: 3000, effective_end_ms: 4000, edit_version: 1, edit_status: "active", status: "closed",
+      source: "manual", segmentation_run_id: null, is_highlight: false,
+    },
+    {
+      id: "auto-2", segment_type: "rally", ordinal: 3, label: "第3回合", start_ms: 5000, end_ms: 7000,
+      effective_start_ms: 5000, effective_end_ms: 7000, edit_version: 1, edit_status: "active", status: "inferred",
+      source: "algorithm", segmentation_run_id: "seg_run_1", is_highlight: false,
+    },
+  ];
+
+  function primePageForSkip(segments: unknown[] = skipFixtures, summary: unknown = {
+    capture_take_id: "ct_1", status: "succeeded", run_id: "seg_run_1", model_package_id: "match_state_v1",
+    model_version: "rgb_structured_fusion_v1", generated_at: "2026-07-17T10:01:00Z", segment_count: 2,
+    window_plan_hash: "abc", artifact_available: true,
+  }) {
+    mocks.getVideoStreamUrl.mockImplementation((id?: string) => (id ? `/api/videos/${id}/stream` : ""));
+    mocks.getCaptureTake.mockResolvedValue(makeTake({ video_ids: ["video-a"], duration_ms: 8000 }));
+    mocks.listSegments.mockResolvedValue(segments);
+    mocks.getFormalSegmentationSummary.mockResolvedValue(summary);
+    mocks.listTimelineEvents.mockResolvedValue([]);
+    mocks.getBoundaryReview.mockResolvedValue(emptyBoundaryReview());
+    mocks.getMatchStateCandidates.mockResolvedValue({
+      schema_version: "match-state-candidate-review.v1",
+      status: "unavailable",
+      reason: "candidate_artifact_missing",
+      capture_take_id: "ct_1",
+      revision: 0,
+      candidates: [],
+    });
+  }
+
+  async function renderAndReady() {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} embedded />);
+    await waitFor(() => expect(mocks.getVideoStreamUrl).toHaveBeenCalledWith("video-a"));
+    const video = document.querySelector("video")!;
+    await waitFor(() => expect(video.getAttribute("src")).toBe("/api/videos/video-a/stream"));
+    Object.defineProperty(video, "duration", { configurable: true, value: 8 });
+    fireEvent.loadedMetadata(video);
+    return { play, pause, video };
+  }
+
+  function seekTo(video: Element, seconds: number) {
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: seconds });
+    fireEvent.timeUpdate(video);
+  }
+
+  const modelRows = () => screen.getAllByTitle("模型自动结果为只读；如需 QA 复核请使用内部 boundary-review 模式");
+  const skipButton = () => screen.getByRole("button", { name: "自动跳过" }) as HTMLButtonElement;
+  const playbackMode = () => document.querySelector("[data-playback-mode]")?.getAttribute("data-playback-mode");
+
+  it("默认开启：区间自然播完后自动续播到下一个回合并跳过中间内容", async () => {
+    primePageForSkip();
+    const { play, video } = await renderAndReady();
+
+    await waitFor(() => expect(modelRows()).toHaveLength(2));
+    const rows = modelRows();
+    fireEvent.click(rows[0]);                                    // auto-1：1000–2000
+    expect(video.currentTime).toBe(1);
+
+    seekTo(video, 2);                                            // 自然播到终点
+
+    expect(video.currentTime).toBe(5);                           // 跳过 2–5s，续播 auto-2 起点
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(playbackMode()).toBe("segment");
+    expect(mocks.patchSegment).not.toHaveBeenCalled();
+  });
+
+  it("末段播完后停在终点，不循环回第一个区间", async () => {
+    primePageForSkip();
+    const { play, video } = await renderAndReady();
+
+    await waitFor(() => expect(modelRows()).toHaveLength(2));
+    fireEvent.click(modelRows()[1]);                             // auto-2：5000–7000（最后一个区间）
+    seekTo(video, 7);
+
+    expect(video.currentTime).toBe(7);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(playbackMode()).toBe("idle");
+  });
+
+  it("关闭开关后回到「播到终点自动暂停」的既有行为", async () => {
+    primePageForSkip();
+    const { play, video } = await renderAndReady();
+
+    await waitFor(() => expect(modelRows()).toHaveLength(2));
+    fireEvent.click(skipButton());
+    expect(skipButton().getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(modelRows()[0]);
+    seekTo(video, 2);
+
+    expect(video.currentTime).toBe(2);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(playbackMode()).toBe("idle");
+  });
+
+  it("拖动进度条中断当前区间，不触发续播", async () => {
+    primePageForSkip();
+    const { play, video } = await renderAndReady();
+
+    await waitFor(() => expect(modelRows()).toHaveLength(2));
+    fireEvent.click(modelRows()[0]);                             // auto-1：1000–2000
+    // 拖到 3s（人工补录区间内）：seekVideo 视为中断，链路停止
+    fireEvent.change(screen.getByRole("slider", { name: "视频播放进度" }), { target: { value: "3000" } });
+    expect(playbackMode()).toBe("idle");
+
+    // 之后时间推进到 5s：窗口已清，不存在「播完」判定，不续播
+    seekTo(video, 5);
+    expect(video.currentTime).toBe(5);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(playbackMode()).toBe("idle");
+  });
+
+  it("人工片段播完后续播其后的第一个自动回合", async () => {
+    primePageForSkip();
+    const { video } = await renderAndReady();
+
+    await waitFor(() => expect(screen.getByTitle("点击播放该片段")).toBeTruthy());
+    fireEvent.click(screen.getByTitle("点击播放该片段"));          // 人工补录：3000–4000
+    seekTo(video, 4);
+
+    // 起点 ≥ 4000 的第一个 algorithm 回合是 auto-2（5–7s），证明没有按下标递推
+    expect(video.currentTime).toBe(5);
+    expect(playbackMode()).toBe("segment");
+  });
+
+  it("无正式切分结果时开关禁用并给出原因；复核隔离模式下不出现", async () => {
+    primePageForSkip([], {
+      capture_take_id: "ct_1", status: "unavailable", run_id: null, model_package_id: null,
+      model_version: null, generated_at: null, segment_count: 0, window_plan_hash: null,
+      artifact_available: false,
+    });
+    await renderAndReady();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "自动跳过" })).toBeTruthy());
+    expect(skipButton().disabled).toBe(true);
+    expect(skipButton().title).toBe("无正式切分结果");
+    expect(playbackMode()).toBe("idle");
+
+    // 复核隔离模式：开关不出现，复核流程不受影响
+    cleanup();
+    vi.restoreAllMocks();
+    primePageForSkip();
+    mocks.getCaptureTake.mockResolvedValue(makeTake({ capture_mode: "dual", video_ids: ["video-a", "video-b"], duration_ms: 12000 }));
+    enableBoundaryReviewMode();
+    render(<SegmentManagerPage fieldSessionId="fs_1" takeId="ct_1" onNavigate={onNavigate} />);
+    await waitFor(() => expect(document.querySelectorAll("video")).toHaveLength(2));
+    expect(screen.queryByRole("button", { name: "自动跳过" })).toBeNull();
+    expect(await screen.findByTestId("active-boundary-review")).toBeTruthy();
+  });
+});
+
 function emptyBoundaryReview() {
   return {
     schema_version: "match-state-boundary-review.v1",

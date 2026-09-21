@@ -1,7 +1,8 @@
 # codebase-quality-gates Specification
 
 ## Purpose
-TBD - created by archiving change stabilize-codebase-and-remove-legacy-debt. Update Purpose after archive.
+
+定义前后端质量门禁命令的可通过条件，并把后端测试与本地运行数据隔离。
 ## Requirements
 ### Requirement: 前端质量命令可通过
 

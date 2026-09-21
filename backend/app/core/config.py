@@ -119,6 +119,21 @@ class Settings(BaseModel):
     ball_semantic_conflict_penalty: float = 0.25
     ball_semantic_boundary_eval_enabled: bool = True
 
+    # ---- 分析名册与分析回合上下文（feature gate）----
+    # 新分析流程默认开启；调用方仍可通过任务级 useRallyContext=false 选择旧流程，
+    # 或用环境变量关闭新流程作为部署级回滚开关。
+    rally_context_enabled: bool = True
+    # 厨房线到位产物/卡片的独立 kill switch；默认仅双打任务计算。
+    kitchen_arrival_enabled: bool = True
+    # 卡片发布开关与计算开关分离：可以保留 artifact 供审计而暂时不在前端展示。
+    kitchen_arrival_card_enabled: bool = True
+    kitchen_arrival_band_m: float = 0.75
+    kitchen_arrival_stable_ms: int = 500
+    kitchen_arrival_min_detected_support_ms: int = 250
+    kitchen_arrival_min_coverage_ratio: float = 0.80
+    kitchen_arrival_max_gap_ms: int = 500
+    kitchen_arrival_min_sample_count: int = 3
+
     # ---- 可视化输出 ----
     enable_analysis_overlay_video: bool = False  # 是否生成分析叠加视频（骨架已由前端 SVG 实时渲染）
     enable_position_visualizations: bool = True  # 是否生成位置可视化图
@@ -368,6 +383,29 @@ def get_settings() -> Settings:
         ),
         match_state_segmentation_enabled=_env_bool(
             os.getenv("PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED", "false")
+        ),
+        # Rally Context 默认开启；部署可通过 PICKLEBALL_RALLY_CONTEXT_ENABLED=false
+        # 关闭，任务级 useRallyContext 仍可覆盖本次任务的选择。
+        rally_context_enabled=_env_bool(
+            os.getenv("PICKLEBALL_RALLY_CONTEXT_ENABLED", "true")
+        ),
+        kitchen_arrival_enabled=_env_bool(
+            os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_ENABLED", "true")
+        ),
+        kitchen_arrival_card_enabled=_env_bool(
+            os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_CARD_ENABLED", "true")
+        ),
+        kitchen_arrival_band_m=float(os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_BAND_M", "0.75")),
+        kitchen_arrival_stable_ms=max(1, int(os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_STABLE_MS", "500"))),
+        kitchen_arrival_min_detected_support_ms=max(
+            1, int(os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_MIN_DETECTED_SUPPORT_MS", "250"))
+        ),
+        kitchen_arrival_min_coverage_ratio=min(
+            1.0, max(0.01, float(os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_MIN_COVERAGE_RATIO", "0.80")))
+        ),
+        kitchen_arrival_max_gap_ms=max(1, int(os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_MAX_GAP_MS", "500"))),
+        kitchen_arrival_min_sample_count=max(
+            1, int(os.getenv("PICKLEBALL_KITCHEN_ARRIVAL_MIN_SAMPLE_COUNT", "3"))
         ),
         default_detector_model=os.getenv("PICKLEBALL_DEFAULT_DETECTOR_MODEL", "yolo11n.pt"),
         detector_confidence=float(os.getenv("PICKLEBALL_DETECTOR_CONFIDENCE", "0.15")),
@@ -670,6 +708,21 @@ def get_settings() -> Settings:
     # 构造完成后，确保各数据目录都已存在
     settings.ensure_data_dirs()
     return settings
+
+
+def rally_context_enabled_for(payload: object | None = None) -> bool:
+    """Resolve the effective analysis flow for one task.
+
+    ``None`` keeps API/worker callers compatible with the deployment default;
+    an explicit task value chooses legacy/new while the deployment gate is on.
+    """
+    settings = get_settings()
+    # The deployment flag remains a hard kill switch.  The task-level value
+    # only chooses between new/legacy while the consumer is enabled.
+    if not settings.rally_context_enabled:
+        return False
+    override = getattr(payload, "useRallyContext", None) if payload is not None else None
+    return bool(override) if override is not None else True
 
 
 # 把字符串环境变量解析成布尔值（"1"/"true"/"yes" 视为真，其余为假）

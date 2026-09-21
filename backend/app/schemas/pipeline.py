@@ -116,6 +116,13 @@ class AnalysisArtifacts(BaseModel):
     metric_snapshot_url: str | None = None
     metric_snapshot_status: str | None = None
     metric_snapshot_detail: str | None = None
+    # kitchen-arrival.v1（冻结上下文驱动的发球队厨房线到位事实）
+    kitchen_arrival_json_path: str | None = None
+    kitchen_arrival_url: str | None = None
+    kitchen_arrival_status: str | None = None
+    kitchen_arrival_detail: str | None = None
+    # 与产物计算开关分离：false 时前端不加载/不展示卡片，但 artifact 可保留。
+    kitchen_arrival_card_enabled: bool | None = None
     # normalized-metric-snapshot.v1（描述性指标的规范化与评分资格中间层）
     normalized_metrics_json_path: str | None = None
     normalized_metrics_url: str | None = None

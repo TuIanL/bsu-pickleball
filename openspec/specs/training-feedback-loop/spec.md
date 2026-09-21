@@ -1,7 +1,8 @@
 # training-feedback-loop Specification
 
 ## Purpose
-TBD - created by archiving change build-digital-interaction-platform. Update Purpose after archive.
+
+定义训练反馈闭环：个性化诊断与可执行的改进建议、学习—练习—评估循环、教学内容占位与进步叙事，并提供独立的训练建议页。
 ## Requirements
 ### Requirement: Personalized diagnosis
 

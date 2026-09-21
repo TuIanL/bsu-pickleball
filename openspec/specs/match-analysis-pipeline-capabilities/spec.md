@@ -1,7 +1,8 @@
 # match-analysis-pipeline-capabilities Specification
 
 ## Purpose
-TBD - created by archiving change activate-match-analysis-pipeline-capabilities. Update Purpose after archive.
+
+定义比赛分析能力的可配置激活与状态可复盘：事实 artifact 优先于语义结论、球分析严格模式与阶段进度、指标状态区分「不适用」与「未识别到」，并把 matchFormat 纳入任务签名。
 ## Requirements
 ### Requirement: 可配置激活比赛分析能力
 系统 SHALL 通过配置和依赖检查激活新增比赛分析能力，而不是把历史 MVP 边界作为永久禁用规则。系统 SHALL 额外支持 `PICKLEBALL_BALL_ANALYSIS_STRICT` 配置（默认 `false`）控制球分析失败是否升级为 pipeline 失败。

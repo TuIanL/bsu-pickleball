@@ -1,7 +1,8 @@
 # dual-view-3d-segment-reconstruction Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-3d-ball-reconstruction. Update Purpose after archive.
+
+定义飞行段的双视角 3D 曲线重建：段级优化消费全部同段观测、高度由双摄约束而非先验弧线给出，并按场景标定质量分层输出可用状态与平均球速。
 ## Requirements
 ### Requirement: 整段双视角重投影约束的 3D 曲线优化
 系统 SHALL 对每个独立飞行段（`FlightSegment`，由 hit/bounce/loss/serve reset 边界切分）分别求解低维参数化曲线；系统 MUST NOT 把完整分析窗口或多个飞行段合并为一条 3D 曲线。只有满足双摄资格的段才执行 3D 优化，其余段 SHALL 进入显式混合降级。

@@ -1,7 +1,8 @@
 # multiview-ball-analysis-display Specification
 
 ## Purpose
-TBD - created by archiving change integrate-multiview-ball-analysis-display. Update Purpose after archive.
+
+定义双摄球路分析的展示契约：统一时间轴与共享观测、可追溯的时间与单位语义、分级可用状态与可审计诊断，以及按展示机位选择 image-space path 的球路呈现，且球分析失败不得破坏球员分析。
 ## Requirements
 ### Requirement: 双摄球路分析使用统一时间轴与共享观测
 joint 模式的球路分析 SHALL 从 `CanonicalAnalysisClock` 产生的 `SynchronizedFrameBundle` 读取双摄帧，并在同一 canonical tick 上完成候选生成、跨视角关联、三角测量与轨迹更新。生产链路 MUST 复用每个视角每个 tick 的候选结果，MUST NOT 为 stereo 分析再次独立运行 detector。跨视角关联 SHALL 经过时间、重投影、3D 球场范围、运动连续性和歧义 margin 质量门；未通过质量门的 pair 只能作为诊断，不能成为权威双摄观测。

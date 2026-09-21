@@ -1,7 +1,8 @@
 # pose-estimation-engine Specification
 
 ## Purpose
-TBD - created by archiving change add-yolo-rtmpose-video-overlays. Update Purpose after archive.
+
+定义姿态估计引擎：RTMPose 模型配置、逐帧姿态推理与结果序列化，以及骨架叠加层的语义。
 ## Requirements
 ### Requirement: RTMPose model configuration
 The backend SHALL provide a pose estimation engine that can load a configured RTMPose runtime, model config, and checkpoint or exported model for real uploaded-video analysis jobs, and SHALL run it for eligible real jobs when pose inference is enabled and the assets are available.

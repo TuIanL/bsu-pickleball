@@ -1,7 +1,8 @@
 # player-tracking-engine Specification
 
 ## Purpose
-TBD - created by archiving change implement-player-tracking-engine. Update Purpose after archive.
+
+定义固定机位下的球员跟踪引擎：人体检测与多目标跟踪、脚点估计与球场投影、跟踪结果序列化与叠加产物、主球员选择与多目标兼容、ROI 与空间门控、track 关联与缺失槽位补检，以及依据 effective FPS 的时间计算。
 ## Requirements
 ### Requirement: Person detection for fixed-camera frames
 The backend SHALL provide a Player Tracking Engine detector that reads decoded video frames, runs an optional Ultralytics YOLO person model, filters detections to `person` class only, applies a configurable confidence threshold, and emits normalized detection records.

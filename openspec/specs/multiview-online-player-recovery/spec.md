@@ -1,7 +1,8 @@
 # multiview-online-player-recovery Specification
 
 ## Purpose
-TBD - created by archiving change make-p1-cross-view-player-recovery-operational. Update Purpose after archive.
+
+定义在线球员恢复的证据链与计数语义：recovery opportunity 判定与 fast path 同步、诊断完整性、recovery episode 与成功语义，并将 same-tick 恢复单独计数。
 ## Requirements
 ### Requirement: 在线恢复证据链
 `joint_tracking_v2` SHALL 仅在 target view 从自身当前 source frame 的真实像素中重新获得 formal local player observation 后，声明一次 online recovery。该 observation SHALL 可追溯 donor view、guidance、target source frame、local player identity 与 identity epoch、source track、pre-gate residual 与 assigned global player。当 recovery 针对 `confirmed AND cross_view_anchored` 的 global player 时，assigned global SHALL 为 guidance 指定的 `expected_global_player_id`，除非几何不可行或 pre-gate 拒绝（此时记录 reject / unresolved，SHALL NOT 转投其他 global）。同 tick 的 base formal observation 正常走普通关联，stale guidance SHALL NOT 覆盖 base evidence（base 优先语义与 `base_recovered` 保持一致）。recovery opportunity 的判定 SHALL 支持 available-miss fast path：目标 binding 因 `consecutive_available_misses >= 1` 触发的 guidance 生成的 recovery 机会 SHALL 与 weak/lost 触发的机会同等计入，但 episode 建立与 success 语义 SHALL 不变。

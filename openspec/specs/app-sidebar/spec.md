@@ -1,7 +1,8 @@
 # app-sidebar Specification
 
 ## Purpose
-TBD - created by archiving change add-app-sidebar-and-active-capture-presence. Update Purpose after archive.
+
+定义全局侧边栏的一级导航与状态展示：Library-first 的工作台路由收敛、当前录制状态块与时钟校准。
 ## Requirements
 ### Requirement: 全局侧边栏导航
 

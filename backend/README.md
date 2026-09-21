@@ -94,6 +94,17 @@ The frontend can use:
 VITE_ANALYSIS_API_URL=http://localhost:8000 npm run dev
 ```
 
+厨房线到位率的产物计算和卡片发布是两个独立开关：
+
+```bash
+# 后端不计算 kitchen-arrival.v1（会写出 skipped artifact）
+PICKLEBALL_KITCHEN_ARRIVAL_ENABLED=false
+# 保留后端产物，但不在分析页加载/展示卡片
+PICKLEBALL_KITCHEN_ARRIVAL_CARD_ENABLED=false
+# 仅前端构建侧停用卡片（默认 true）
+VITE_KITCHEN_ARRIVAL_CARD_ENABLED=false
+```
+
 YOLO person detection is opt-in for calibrated uploaded videos. The model-free
 path is the default; the explicit switch remains:
 

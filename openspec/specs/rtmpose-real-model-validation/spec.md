@@ -1,7 +1,8 @@
 # rtmpose-real-model-validation Specification
 
 ## Purpose
-TBD - created by archiving change enable-rtmpose-real-model-validation. Update Purpose after archive.
+
+定义 RTMPose 真实模型的接入与验证：可选运行时装配、模型资产与 Halpe26 关键点 schema 契约、单帧验证与完整骨架叠加验证，以及受信 checkpoint 的加载兼容性。
 ## Requirements
 ### Requirement: Optional RTMPose runtime setup
 The backend SHALL provide a documented optional RTMPose runtime setup that can be installed and validated separately from the lightweight API/runtime path.

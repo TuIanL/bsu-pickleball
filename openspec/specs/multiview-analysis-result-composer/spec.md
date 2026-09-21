@@ -1,7 +1,8 @@
 # multiview-analysis-result-composer Specification
 
 ## Purpose
-TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orchestration. Update Purpose after archive.
+
+定义多视角结果装配器的产品出口：以 fused 结果重算位置类指标、继承 reference-view 结果并归一化到 Parent namespace，由 artifact manifest 作为 Parent 唯一产品出口，并覆盖 joint_tracking_v2 的 fused overlay、球立体产物与 global-player-roster 的发布契约。
 ## Requirements
 ### Requirement: 位置类指标基于 fused 重算
 

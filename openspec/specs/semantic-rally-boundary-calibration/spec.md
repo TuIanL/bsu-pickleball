@@ -1,7 +1,8 @@
 # semantic-rally-boundary-calibration Specification
 
 ## Purpose
-TBD - created by archiving change calibrate-semantic-rally-boundaries. Update Purpose after archive.
+
+定义语义回合边界标定：保留来源与新鲜度的语义证据台账、需要稳定佐证的边界裁决与有界显式的活跃回合救援、可重放的边界评估产物，以及不使用在线学习的版本化用例重放。
 ## Requirements
 ### Requirement: Semantic evidence ledger preserves source and freshness
 

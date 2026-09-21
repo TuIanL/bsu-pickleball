@@ -1,8 +1,8 @@
 # calibration-quality-diagnostics Specification
 
 ## Purpose
-TBD - created by syncing change improve-player-court-projection-reliability.
 
+定义标定质量诊断：重投影误差计算、球场比例偏差检测、基线方向校验与 homography 条件数诊断，并输出标定诊断 artifact。
 ## Requirements
 ### Requirement: 标定重投影误差计算
 

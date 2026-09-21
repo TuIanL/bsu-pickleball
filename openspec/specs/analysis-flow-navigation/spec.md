@@ -1,7 +1,8 @@
 # analysis-flow-navigation Specification
 
 ## Purpose
-TBD - created by archiving change unify-analysis-lifecycle-navigation. Update Purpose after archive.
+
+定义分析流程的导航与来源（origin）语义：以 URL 作为 canonical origin carrier，区分稳定结果与瞬时执行（primaryResult / active），统一返回路径、完成去向与侧边栏高亮，并保持工作区的展示机位选择。
 ## Requirements
 ### Requirement: return 是 canonical origin carrier
 

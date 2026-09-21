@@ -1,7 +1,8 @@
 # legacy-analysis-workflow-consolidation Specification
 
 ## Purpose
-TBD - created by archiving change stabilize-codebase-and-remove-legacy-debt. Update Purpose after archive.
+
+定义分析工作流的入口收敛：统一到规范路由并保留旧路由兼容映射，真实 API 失败必须可见，同时保留采集与工程入口。
 ## Requirements
 ### Requirement: 分析任务使用规范路由并兼容历史入口
 

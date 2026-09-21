@@ -1,8 +1,8 @@
 # frontend-capture-runtime Specification
 
 ## Purpose
-TBD - created by syncing change unify-single-dual-capture-controller.
 
+定义前端采集运行时：以判别联合状态替代双状态机、统一从服务器时间派生的 elapsedMs 与 start/stop/cancel 接口、按 session 的轮询与降级、hydration 孤儿检测与兜底清理，且运行时不自接控制 Outbox。
 ## Requirements
 
 ### Requirement: 判别联合状态替代双状态机

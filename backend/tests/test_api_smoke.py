@@ -272,6 +272,29 @@ def test_player_trajectory_artifact_route_returns_json(monkeypatch, tmp_path):
     assert response.json()["court"]["court_unit"] == "m"
 
 
+def test_kitchen_arrival_artifact_route_returns_json(monkeypatch, tmp_path):
+    storage = make_temp_storage(tmp_path)
+    monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)
+    snapshot = snapshot_analysis_state()
+    JOBS.clear()
+    REPORTS.clear()
+    RESULTS.clear()
+
+    job = make_job_summary("job-kitchen-arrival-route", status="completed")
+    JOBS[job.id] = job
+    storage.write_json(
+        storage.kitchen_arrival_json_path(job.id),
+        {"schema_version": "kitchen-arrival.v1", "status": "insufficient_evidence", "players": []},
+    )
+    try:
+        response = client.get(f"/api/analysis/jobs/{job.id}/artifacts/kitchen-arrival")
+    finally:
+        restore_analysis_state(snapshot)
+
+    assert response.status_code == 200
+    assert response.json()["schema_version"] == "kitchen-arrival.v1"
+
+
 def test_serve_events_artifact_route_returns_json(monkeypatch, tmp_path):
     storage = make_temp_storage(tmp_path)
     monkeypatch.setattr("app.api.routes_analysis._STORAGE", storage)

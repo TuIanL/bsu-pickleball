@@ -1,7 +1,8 @@
 # multiview-ball-stereo-evidence Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-3d-ball-reconstruction. Update Purpose after archive.
+
+定义双摄球立体证据的三级候选模型与逐 tick 近似三角测量：跨视角关联的硬门与排序分离、按飞行段组织的不可变 evidence 产物、场景标定质量进入几何质量，并明确单视角缺口仅作预测不作权威。
 ## Requirements
 ### Requirement: 候选证据三级模型，detector 每帧一次
 系统 SHALL 在 joint runtime 中，为每个视角每个 canonical tick 运行一次球 detector，经基础视觉过滤得到 `BallViewCandidate[]`（未经本地 `BallTracker` 唯一选择），并同时供本地 `BallTracker` 与跨视角 Stereo Layer 使用。固定执行序：detect/filter → snapshot 本地 predictor → stereo association → local tracker update。

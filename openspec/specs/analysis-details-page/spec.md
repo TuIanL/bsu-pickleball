@@ -1,7 +1,8 @@
 # analysis-details-page Specification
 
 ## Purpose
-TBD - created by archiving change analysis-task-management-delete-and-details. Update Purpose after archive.
+
+定义分析任务详情页的组成：标准球场平面视图、球员移动轨迹投影的说明与图例筛选、投影点检视与渲染性能约束，以及来源一致的降级与失败状态展示。
 ## Requirements
 ### Requirement: Job-specific analysis details page
 

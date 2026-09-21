@@ -1,7 +1,8 @@
 # multiview-fusion-run Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-player-trajectory-fusion. Update Purpose after archive.
+
+定义双摄运行实体的所有权与生命周期：late_fusion_v1 的 MultiViewFusionRun 与 joint_tracking_v2 的 MultiViewJointRun、jointRunId 持久化与原子 finalize、唯一配对计划消费、job 级与 sample 级 fallback 分离，以及可诊断与可回滚。
 ## Requirements
 ### Requirement: 运行实体所有权
 

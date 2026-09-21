@@ -1,7 +1,8 @@
 # observability-viz-layer Specification
 
 ## Purpose
-TBD - created by archiving change multiview-observability-visualization. Update Purpose after archive.
+
+定义可观测可视化层：三层信息架构与流水线状态灯、健康度评分推导、ECharts 图表组件封装与悬停原因下钻，以及时间范围筛选和视频定位联动。
 ## Requirements
 ### Requirement: 三层信息架构
 

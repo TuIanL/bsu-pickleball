@@ -1,7 +1,8 @@
 # library-analysis-recreate Specification
 
 ## Purpose
-TBD - created by archiving change restore-library-analysis-entrypoints. Update Purpose after archive.
+
+定义已分析素材的「再次分析」入口：入口可见性、创建成功后进入分析进度页，以及概览中对单个历史分析任务的删除与取消。
 ## Requirements
 ### Requirement: 已分析素材提供「再次分析」入口
 

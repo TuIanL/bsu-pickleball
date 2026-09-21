@@ -1,7 +1,8 @@
 # library-analysis-start Specification
 
 ## Purpose
-TBD - created by archiving change restore-library-analysis-entrypoints. Update Purpose after archive.
+
+定义从素材发起的分析创建流程：未分析素材进入分析创建页，并保证创建页与素材工作区的返回路径正确携带。
 ## Requirements
 ### Requirement: 未分析素材进入分析创建页
 

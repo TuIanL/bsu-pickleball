@@ -5,6 +5,9 @@ import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { buildAnalysisProgressPath, taskListPath } from "../app/navigationContext";
 import type { CalibrationPointDraft } from "../components/platform/CourtCornerCalibrator";
 import { CourtCornerCalibrator } from "../components/platform/CourtCornerCalibrator";
+import { AnalysisRosterConfirmation } from "../components/platform/AnalysisRosterConfirmation";
+import { AnalysisFlowSelector, type AnalysisFlowMode } from "../components/platform/AnalysisFlowSelector";
+import type { RosterConfirmationRequest } from "../types/rallyContext";
 import { PageFrame } from "../components/PageFrame";
 import {
   getSyncRecording,
@@ -51,6 +54,19 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<{ title: string; body: string } | null>(null);
+  // 分析前名册/端位确认：随 Job 冻结。默认跳过，不阻塞普通分析。
+  const [rosterConfirmation, setRosterConfirmation] = useState<RosterConfirmationRequest>({
+    skipped: true,
+    entries: [],
+  });
+  const [analysisFlow, setAnalysisFlow] = useState<AnalysisFlowMode>("new");
+
+  const handleAnalysisFlowChange = (next: AnalysisFlowMode) => {
+    setAnalysisFlow(next);
+    if (next === "legacy") {
+      setRosterConfirmation({ skipped: true, entries: [] });
+    }
+  };
 
   // ── Load session ────────────────────────────────────────────────────────
 
@@ -112,7 +128,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           matchDate: session.started_at ? new Date(session.started_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
           matchFormat: session.match_format === "singles" ? "singles" : "doubles",
           cameraAngle,
-          athleteLabel: "球���采集",
+          athleteLabel: "球馆采集",
           level: "大众进阶",
           recording_session_id: sessionId,
           camera_slot: camSlot,
@@ -123,6 +139,8 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
         priority: 0,
         recordingSessionId: sessionId,
         cameraSlot: camSlot,
+        useRallyContext: analysisFlow === "new",
+        rosterConfirmation,
       });
 
       // 统一生命周期：创建成功后进入 Analysis Progress（replace，Back 不回已提交的 Setup）。
@@ -238,6 +256,21 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
             />
           </div>
         </div>
+
+        <AnalysisFlowSelector value={analysisFlow} onChange={handleAnalysisFlowChange} />
+
+        {/* Roster / court-end confirmation（可跳过，不阻塞普通分析） */}
+        {analysisFlow === "new" ? (
+          <AnalysisRosterConfirmation
+            videoId={videoId}
+            matchFormat={session.match_format === "singles" ? "singles" : "doubles"}
+            onChange={setRosterConfirmation}
+          />
+        ) : (
+          <div className="mt-4 rounded-2xl border border-[#F4D8A8] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
+            已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要场地控制画像时，请切回新流程。
+          </div>
+        )}
 
         {/* Calibration */}
         <CourtCornerCalibrator

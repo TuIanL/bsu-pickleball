@@ -1,7 +1,8 @@
 # serve-moment-debug-artifacts Specification
 
 ## Purpose
-TBD - created by archiving change add-serve-moment-context-detector. Update Purpose after archive.
+
+定义发球候选的调试产物：发球候选调试 artifact、候选片段导出与 debug overlay。
 ## Requirements
 ### Requirement: 发球候选调试 artifact
 

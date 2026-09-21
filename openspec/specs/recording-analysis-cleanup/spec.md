@@ -1,7 +1,8 @@
 # recording-analysis-cleanup Specification
 
 ## Purpose
-TBD - created by archiving change delete-analysis-under-sync-recording. Update Purpose after archive.
+
+定义按录制会话批量删除分析任务的语义：活跃分析任务的删除被阻断，并给出明确的删除结果反馈。
 ## Requirements
 ### Requirement: 按录制会话删除分析任务
 

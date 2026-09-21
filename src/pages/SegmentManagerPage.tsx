@@ -3,7 +3,7 @@ import { ArrowLeft, Play, Scissors, Combine, Archive, RotateCcw, Tags, BadgeChec
 import type { BoundaryReviewSummary, CaptureSegmentSummary, CaptureTakeSummary, FormalSegmentationSummary, MatchStateCandidateReviewSummary, MatchStateCandidateSegment, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn } from "../app/navigationTypes";
 import { createRallySegment, decideMatchStateCandidate, getBoundaryReview, getCaptureTake, getFormalSegmentationSummary, getMatchStateCandidates, isAnalysisApiError, listSegments, patchSegment, reviewSegmentBoundary, splitSegment, mergeSegments, archiveSegment, restoreSegment, createAnalysisBatch, listTimelineEvents, getVideoStreamUrl, renumberRallyOrdinals } from "../services/analysisClient";
-import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
+import { SegmentVideoPlayer, type SegmentVideoPlayerHandle, type SegmentPlaybackEndReason } from "../components/SegmentVideoPlayer";
 import { EditableSegmentTimeline } from "../components/EditableSegmentTimeline";
 
 type FilterType = "all" | "set" | "game" | "rally";
@@ -191,6 +191,57 @@ export function SegmentManagerPage({
     },
     [filteredSegments, segmentationSummary?.run_id],
   );
+
+  // 回放提示（中央回合大字 + 进度条区间配色）的唯一数据来源：当前已发布 run 的 active algorithm Rally。
+  // 刻意不复用 modelSegments —— 它建立在被列表筛选器过滤过的 filteredSegments 之上，切换筛选器会让
+  // 进度条配色凭空变化；也不复用 playableSegments —— 它混入人工片段，且按时长升序排序，
+  // 用于查找会优先命中短片段（见 findSegmentAtTime 的调用语境）。
+  const autoRallySegments = useMemo(() => {
+    const currentRunId = segmentationSummary?.run_id;
+    if (!currentRunId) return [];
+    return segments
+      .filter(
+        (segment) =>
+          segment.edit_status === "active"
+          && segment.source === "algorithm"
+          && segment.segmentation_run_id === currentRunId,
+      )
+      .map((segment) => ({
+        id: segment.id,
+        ordinal: segment.ordinal,
+        startMs: segment.effective_start_ms ?? segment.start_ms,
+        // 终点留 null 表示「延伸到媒体末尾」，由播放器按媒体总时长兜底，
+        // 与 findSegmentAtTime 的现有约定一致。
+        endMs: segment.effective_end_ms ?? segment.end_ms ?? null,
+      }))
+      .sort((a, b) => a.startMs - b.startMs);
+  }, [segments, segmentationSummary?.run_id]);
+
+  // 播放头当前所属的自动回合。判定取左闭右开 [起点, 终点)：首尾相接的两个回合在共享边界上
+  // 必须只命中一个，用 <= 会让 find 命中先出现的那个，产生瞬时但可见的错误编号。
+  // cause 告诉播放器这次回合变化是不是自动续播引起的：自动续播受提示合并与最小静默间隔约束，
+  // 用户主动导航永远提示（见 SegmentVideoPlayer 的提示状态机）。
+  // 用 state 而非 ref：useMemo 内不允许读 ref；且续播分支与下一次时间更新分属不同事件批次，
+  // state 在 memo 重算前必然已提交。
+  const [autoAdvancePending, setAutoAdvancePending] = useState(false);
+  const activeAutoRally = useMemo(() => {
+    const hit = autoRallySegments.find((segment) => {
+      const end = segment.endMs ?? durationMs;
+      return end > segment.startMs && currentTimeMs >= segment.startMs && currentTimeMs < end;
+    });
+    return hit
+      ? { id: hit.id, ordinal: hit.ordinal, cause: autoAdvancePending ? ("autoAdvance" as const) : ("user" as const) }
+      : null;
+  }, [autoAdvancePending, autoRallySegments, currentTimeMs, durationMs]);
+
+  // 「自动跳过非比赛时间」开关：默认开启（规格已把「播到终点自动暂停」改成条件式）。
+  // 刻意不持久化：每次进入片段页都回到开启，用户关闭只对当前会话有效。
+  const [autoSkipEnabled, setAutoSkipEnabled] = useState(true);
+  const autoSkipUnavailableReason = autoRallySegments.length === 0
+    ? segmentationSummary?.run_id
+      ? "当前切分结果没有自动回合"
+      : "无正式切分结果"
+    : null;
 
   const activeReviewRally = reviewQueue.find((segment) => segment.id === activeSegmentId) ?? reviewQueue[0];
 
@@ -588,6 +639,10 @@ export function SegmentManagerPage({
       // 若需要查看边界外上下文，使用控制面板中的“播放前后 3 秒”。
       focusReviewRally(seg, "segment");
     } else {
+      // 用户主动进入：清除自动续播来源标记，使中央提示走「用户主动」分支（不受节流）。
+      setAutoAdvancePending(false);
+      // 记录本次播放窗口，供自动续播判定「下一个区间」的起点基准。
+      playbackWindowRef.current = { startMs: start, endMs: rawEnd };
       setCurrentTimeMs(start);
       setPlaybackMode("segment");
       if (rawEnd > start) playerRef.current?.playSegment(start, rawEnd);
@@ -614,6 +669,8 @@ export function SegmentManagerPage({
   };
 
   const handleTimelineSeek = (ms: number) => {
+    // 拖动时间线是用户主动定位：清除自动续播来源标记，使提示走「用户主动」分支。
+    setAutoAdvancePending(false);
     if (reviewMode) {
       playbackWindowRef.current = null;
       pauseAllPlayers();
@@ -631,6 +688,8 @@ export function SegmentManagerPage({
   };
 
   const handleTimelineSegmentClick = (segmentId: string, startMs: number) => {
+    // 点击时间线片段块同样是用户主动进入，清除自动续播来源标记。
+    setAutoAdvancePending(false);
     if (reviewMode) {
       playbackWindowRef.current = null;
       pauseAllPlayers();
@@ -661,11 +720,29 @@ export function SegmentManagerPage({
     setDurationMs(Math.max(0, ms));
   }, []);
 
-  const handleSegmentPlaybackEnd = useCallback(() => {
-    playbackWindowRef.current = null;
-    pauseAllPlayers();
-    setPlaybackMode("idle");
-  }, [pauseAllPlayers]);
+  const handleSegmentPlaybackEnd = useCallback((reason: SegmentPlaybackEndReason) => {
+    // 只有「自然播完」且开关开启才续播；被 seek/逐帧打断的一律回到现状行为。
+    const canContinue = reason === "completed" && autoSkipEnabled && !reviewMode;
+    const windowEndMs = playbackWindowRef.current?.endMs ?? null;
+    // 下一个区间取「起点不早于当前窗口结束时间」的第一个 algorithm 回合，
+    // 不按数组下标递推：用户可能从人工片段出发，下标推进在人工片段上无定义。
+    const next = canContinue && windowEndMs != null
+      ? autoRallySegments.find((segment) => segment.startMs >= windowEndMs)
+      : undefined;
+    if (!next) {
+      playbackWindowRef.current = null;
+      pauseAllPlayers();
+      setPlaybackMode("idle");
+      return;
+    }
+    // 自动续播：直接从下一个回合起点继续，跳过两者之间的全部非比赛时间。
+    // 保持片段播放模式与窗口记录，使连续跳转可以一直进行下去。
+    setAutoAdvancePending(true);
+    const nextEndMs = next.endMs ?? durationMs;
+    playbackWindowRef.current = { startMs: next.startMs, endMs: nextEndMs };
+    setActiveSegmentId(next.id);
+    playerRef.current?.playSegment(next.startMs, nextEndMs);
+  }, [autoRallySegments, autoSkipEnabled, durationMs, pauseAllPlayers, reviewMode]);
 
   const handleSaveLabel = async (seg: CaptureSegmentSummary, label: string) => {
     setSaveStatus("saving");
@@ -1050,6 +1127,15 @@ export function SegmentManagerPage({
               onPlaybackToggle={reviewMode ? handleSynchronizedPlaybackToggle : undefined}
               onSeekRequest={reviewMode ? handleSynchronizedSeek : undefined}
               onFrameStepRequest={reviewMode ? handleSynchronizedFrameStep : undefined}
+              // 回放提示只在普通片段页启用；边界复核隔离模式显式不传，把启用范围表达为调用点意图，
+              // 而不是依赖 reviewMode 下 segmentationSummary 恰好为 null 这一隐式巧合。
+              autoRallyCue={reviewMode ? undefined : activeAutoRally}
+              autoRallyBands={reviewMode ? undefined : autoRallySegments}
+              autoSkip={reviewMode ? undefined : {
+                enabled: autoSkipEnabled,
+                onToggle: setAutoSkipEnabled,
+                disabledReason: autoSkipUnavailableReason,
+              }}
             />
           ) : (
             <div className="grid aspect-video place-items-center rounded-2xl border border-[#DDE9D6] bg-slate-50 text-sm text-[#98A2B3]">

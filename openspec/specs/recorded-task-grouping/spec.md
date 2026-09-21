@@ -1,7 +1,8 @@
 # recorded-task-grouping Specification
 
 ## Purpose
-TBD - created by archiving change group-recorded-tasks-by-field-session. Update Purpose after archive.
+
+定义按采集任务（FieldSession）分组的录制列表：分组卡展现采集上下文并支持展开收起、空采集任务分组与未归类录制兜底、分组排序规则，以及顶部统计保持全量计数。
 ## Requirements
 ### Requirement: 采集任务分组卡展现采集上下文
 系统 SHALL 在每组采集任务的大分组卡头部展示足以辨识该采集任务的上下文信息。

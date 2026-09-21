@@ -1,7 +1,8 @@
 # hardware-fusion-preview Specification
 
 ## Purpose
-TBD - created by archiving change build-digital-interaction-platform. Update Purpose after archive.
+
+定义二期硬件预览页的展示契约：显式的模拟数据标注、传感器指标与甜区可视化，以及视觉与传感器融合的叙事和后续真实数据替换路径，不作为已实现硬件能力呈现。
 ## Requirements
 ### Requirement: Phase-two hardware preview labeling
 

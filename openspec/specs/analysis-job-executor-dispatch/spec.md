@@ -1,7 +1,8 @@
 # analysis-job-executor-dispatch Specification
 
 ## Purpose
-TBD - created by archiving change 2026-08-07-integrate-multiview-analysis-orchestration. Update Purpose after archive.
+
+定义分析任务的执行体分派契约：Executor Protocol 与单摄、多视角执行体的职责边界，取消令牌贯穿长任务，以及执行体遵守分析窗口的取消与失败诊断语义。
 ## Requirements
 ### Requirement: Executor Protocol
 

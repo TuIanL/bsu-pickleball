@@ -1,7 +1,8 @@
 # real-video-frame-extraction Specification
 
 ## Purpose
-TBD - created by archiving change add-real-video-frame-extraction-workflow. Update Purpose after archive.
+
+定义真实球场视频的抽帧工作流：受控采样选项、按来源组织的帧命名、抽帧 manifest，以及与待标注数据集之间的边界。
 ## Requirements
 ### Requirement: Real court video frame extraction workflow
 The system SHALL provide a local developer workflow that extracts annotation-ready still frames from real pickleball court videos without requiring source videos or extracted frames to be committed to version control.

@@ -22,9 +22,29 @@ class AnalysisWindowPlan:
             end_ms = int(item["end_ms"])
             if start_ms < 0 or end_ms <= start_ms:
                 raise ValueError(f"invalid segmentation window: [{start_ms}, {end_ms})")
-            normalized_items.append({"segment_id": str(item["segment_id"]), "start_ms": start_ms, "end_ms": end_ms})
+            normalized = {"segment_id": str(item["segment_id"]), "start_ms": start_ms, "end_ms": end_ms}
+            # 与分析回合上下文的源引用。它们**刻意不参与 plan_hash 计算**：
+            # 计划身份只由其几何窗口决定，这样挂上/去掉源引用都不会让既有任务的
+            # windowPlanHash 失配（历史 artifact 仍按旧算法校验通过）。
+            if item.get("source_rally_segment_id"):
+                normalized["source_rally_segment_id"] = str(item["source_rally_segment_id"])
+            if item.get("source_start_event_id"):
+                normalized["source_start_event_id"] = str(item["source_start_event_id"])
+            if item.get("context_rally_id"):
+                normalized["context_rally_id"] = str(item["context_rally_id"])
+            if item.get("context_hash"):
+                normalized["context_hash"] = str(item["context_hash"])
+            if item.get("binding_method"):
+                normalized["binding_method"] = str(item["binding_method"])
+            if item.get("binding_diagnostics"):
+                normalized["binding_diagnostics"] = [str(value) for value in item["binding_diagnostics"]]
+            normalized_items.append(normalized)
         normalized = tuple(sorted(normalized_items, key=lambda value: (value["start_ms"], value["segment_id"])))
-        payload = {"run_id": run_id, "windows": normalized}
+        hash_material = tuple(
+            {"segment_id": item["segment_id"], "start_ms": item["start_ms"], "end_ms": item["end_ms"]}
+            for item in normalized
+        )
+        payload = {"run_id": run_id, "windows": hash_material}
         digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return cls(run_id, normalized, digest)
 

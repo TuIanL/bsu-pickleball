@@ -1,7 +1,8 @@
 # interactive-performance-report Specification
 
 ## Purpose
-TBD - created by archiving change build-digital-interaction-platform. Update Purpose after archive.
+
+定义以报告为先的绩效报告页：核心指标摘要、球场可视化、响应式布局与算法推导的反馈文案，且不支持的比赛语义保持不可用而不被填补。
 ## Requirements
 ### Requirement: Report-first entry experience
 

@@ -145,6 +145,7 @@ class SingleViewAnalysisExecutor:
             priority=job.priority,
             clipStartMs=getattr(job, "clipStartMs", None),
             clipEndMs=getattr(job, "clipEndMs", None),
+            useRallyContext=(getattr(job, "rallyContextMode", "legacy") == "new"),
         )
         if job.metadata.capture_take_id:
             StorageService.register_capture_job_from_take(job.id, job.metadata.capture_take_id)
@@ -191,6 +192,44 @@ class SingleViewAnalysisExecutor:
         if not accepts_kwargs:
             run_kwargs = {key: value for key, value in run_kwargs.items() if key in signature.parameters}
         return pipeline.run(**run_kwargs)
+
+
+def _attach_source_rally_refs(result, capture_take_id: str, planning_job_id: str):
+    """为 formal window 挂上源 rally 引用与 job-bound 上下文绑定，并重建窗口计划。
+
+    只在唯一匹配时挂引用；歧义一律降级为 unavailable 并记录诊断。这些引用字段
+    不参与 plan_hash 计算，所以重建后的 `plan_hash` 与 runtime 产出的完全一致，
+    Parent 绑定的 `windowPlanHash` 不受影响。
+    """
+    from dataclasses import replace as dataclass_replace
+
+    from app.services.analysis_rally_context_service import (
+        attach_window_context_binding,
+        context_payload,
+        get_context_set,
+    )
+    from app.vision.match_state.artifact import AnalysisWindowPlan
+
+    from app.database import get_session_factory
+
+    db = get_session_factory()()
+    try:
+        context = context_payload(get_context_set(db, planning_job_id))
+        enriched = attach_window_context_binding(
+            db,
+            capture_take_id=capture_take_id,
+            segments=result.artifact.algorithm_segments,
+            context=context,
+        )
+    except Exception:
+        logger.exception("Unable to attach rally-context binding for %s", capture_take_id)
+        return result
+    finally:
+        db.close()
+
+    plan = AnalysisWindowPlan.create(result.artifact.run_id, enriched)
+    artifact = dataclass_replace(result.artifact, algorithm_segments=tuple(enriched), window_plan=plan)
+    return dataclass_replace(result, artifact=artifact)
 
 
 class SegmentationPrerequisiteExecutor:
@@ -240,6 +279,15 @@ class SegmentationPrerequisiteExecutor:
             device=settings.match_state_segmentation_device,
             required_profile=settings.match_state_segmentation_required_profile,
         )
+        # 为 formal window 挂上源 rally 引用与分析回合上下文绑定（direct_segment_link 的材料）。
+        # 引用字段刻意不参与 plan_hash，因此不会改变 Parent 绑定的 windowPlanHash。
+        # feature gate 关闭时完全跳过，formal 切分行为与既有版本逐字一致。
+        if (
+            result.artifact is not None
+            and source.capture_take_id
+            and getattr(job, "rallyContextMode", "legacy") == "new"
+        ):
+            result = _attach_source_rally_refs(result, source.capture_take_id, source.planning_job_id)
         parent = self.store.get(job.parentJobId) if job.parentJobId else None
         artifact_path = None
         if result.artifact is not None:

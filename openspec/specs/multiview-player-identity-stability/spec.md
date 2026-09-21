@@ -1,7 +1,8 @@
 # multiview-player-identity-stability Specification
 
 ## Purpose
-TBD - created by archiving change fix-multiview-player-identity. Update Purpose after archive.
+
+定义多视角球员身份的稳定性契约：team 与槽位语义的单一事实源、身份互换可观测与稳定性回归测试，且修复不得破坏既有契约。
 ## Requirements
 ### Requirement: team 语义与槽位语义单一事实源
 

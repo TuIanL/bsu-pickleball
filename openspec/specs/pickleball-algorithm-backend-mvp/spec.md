@@ -1,7 +1,8 @@
 # pickleball-algorithm-backend-mvp Specification
 
 ## Purpose
-TBD - created by archiving change add-pickleball-algorithm-backend-mvp. Update Purpose after archive.
+
+定义匹克球算法后端 MVP 的模块结构与最小闭环：标准球场几何与人工标定 homography、视频上传存储、球员跟踪与脚点投影接口、移动绩效指标、分析流水线流程与标定叠加预览。
 ## Requirements
 ### Requirement: MVP algorithm backend module structure
 The backend SHALL provide explicit MVP modules for CourtVision Calibration Engine, Player Tracking Engine, Pickleball Performance Engine, and Analysis Pipeline under the existing Python backend package.

@@ -1,7 +1,8 @@
 # browser-playable-merged-video Specification
 
 ## Purpose
-TBD - created by archiving change playable-faststart-merged-video. Update Purpose after archive.
+
+定义双摄合并源视频的浏览器可播版本：产出播放版并由视频流接口优先返回，历史分片素材可回填补齐。
 ## Requirements
 ### Requirement: 双摄合并源视频产出浏览器可播播放版
 

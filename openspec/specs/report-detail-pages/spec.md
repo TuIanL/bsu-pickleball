@@ -1,7 +1,8 @@
 # report-detail-pages Specification
 
 ## Purpose
-TBD - created by archiving change build-layered-visual-analysis-platform. Update Purpose after archive.
+
+定义报告详情页族：分类型的报告页、指标与解读、可视化与训练建议桥接，以及按 Job 的报告数据、报告状态、轻量加载与来源元数据，并把报告收敛为 Workspace 的一个 view。
 ## Requirements
 ### Requirement: Typed report detail pages
 The system SHALL provide focused report pages for supported analysis types.

@@ -1,7 +1,8 @@
 # hybrid-segmented-ball-trajectory-delivery Specification
 
 ## Purpose
-TBD - created by archiving change deliver-hybrid-segmented-ball-trajectories. Update Purpose after archive.
+
+定义以飞行段为单位的球路交付：优先编排飞行段、段级动态主视角与混合分级重建，由同一轨迹事实驱动视频与报告，并统一使用半开时间窗口作为视频片段边界。
 ## Requirements
 ### Requirement: 飞行段优先的球路编排
 系统 SHALL 在重建前按 confirmed hit、confirmed bounce、serve reset、长时间跟踪丢失与流结束边界切分独立 `FlightSegment`，并 SHALL NOT 跨事件边界或跨回合拟合单条球路。

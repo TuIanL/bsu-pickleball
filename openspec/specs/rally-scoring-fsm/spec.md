@@ -3,9 +3,7 @@
 ## Purpose
 
 定义匹克球单打与双打比赛的纯计分 reducer、状态机、事件重放、规则版本和 Vidat 修正行为。
-
 ## Requirements
-
 ### Requirement: 纯计分 reducer 函数
 
 系统 MUST 将单打和双打共用的计分逻辑实现为纯函数 `reduce_scoring_state(state, action)`，同时用于在线实时执行和 undo/rebuild 状态重放，保证两种路径结果一致。
@@ -116,3 +114,12 @@
 - **WHEN** 确认的 Vidat 导入包含有效的 rally 结果变更
 - **THEN** 系统 SHALL 从该 CaptureTake 的语义动作序列重放计分状态
 - **AND** LiveCodingState、TimelineEvent 与报告可见的最终比赛结果 SHALL 与重放结果一致
+
+### Requirement: Rally start 的计分事实封存不扩展 ScoringState
+系统 MUST 在创建有效 `rally_start` 时从当前纯计分 reducer 生成 `RallyScoringSnapshot`。ScoringState SHALL 继续只表示比分、发球权、计分阶段、发球站位和比赛结果，MUST NOT 承担 Team A/B court end 或分析名册。
+
+#### Scenario: 现场回合开始
+- **WHEN** 有效 match 的 `start_next_rally` 被执行
+- **THEN** 系统 SHALL 关联该时点的 server_team、比分和规则版本事实
+- **AND** SHALL 不要求该 CaptureTake 已存在 AnalysisJob 或 AnalysisRosterSnapshot
+

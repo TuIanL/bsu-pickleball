@@ -62,7 +62,7 @@ joint_tracking_v2: waiting_segmentation / joint_ready / joint_tracking / composi
 - **THEN** Coordinator SHALL 创建 child 并将 Parent 推进 `waiting_sources`
 - **AND** 双路 child 完成后 SHALL 推进 `fusion_ready`（与现有融合语义一致）
 
-### Requirement: is_runnable() 按模式和 prerequisite 判定
+### Requirement: is_runnable() 按模式判定
 
 `is_runnable(job)` SHALL 按 role 与 executionMode 判定：segmentation prerequisite 在 `canonicalStatus == queued` 时可被其专用 executor 领取；`single_view` 保持既有规则；`multiview/late` 仅在 `canonicalStatus == queued AND orchestrationStatus ∈ {fusion_ready, fallback_ready}` 时可执行；`multiview/joint` 仅在 `canonicalStatus == queued AND orchestrationStatus == joint_ready` 时可执行。处于 `waiting_segmentation` 的 public Parent SHALL 不可领取。
 

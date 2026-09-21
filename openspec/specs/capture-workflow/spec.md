@@ -1,8 +1,8 @@
 # capture-workflow Specification
 
 ## Purpose
-TBD - created by syncing change redesign-product-entry-and-capture-console.
 
+定义采集工作流：采集任务首页与三步创建向导、采集控制台布局与录制状态机、录制中事件标记与录制完成面板、双摄采集控制台与录制前测试，以及 Outbox 同步与媒体完成正交、以 useCaptureRuntime 替代分散的录制 handler。
 ## Requirements
 ### Requirement: 采集任务首页
 

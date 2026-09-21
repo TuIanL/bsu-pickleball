@@ -1,7 +1,8 @@
 # layered-product-navigation Specification
 
 ## Purpose
-TBD - created by archiving change build-layered-visual-analysis-platform. Update Purpose after archive.
+
+定义分层页面架构与产品导航：报告入口流、分析工作流路由（录制/上传模式与按 Job 路由）、展示就绪的响应式布局，以及 Library-first 的一级导航与首页工作流入口。
 ## Requirements
 ### Requirement: Layered page architecture
 

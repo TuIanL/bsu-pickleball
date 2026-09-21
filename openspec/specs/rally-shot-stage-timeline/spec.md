@@ -1,7 +1,8 @@
 # rally-shot-stage-timeline Specification
 
 ## Purpose
-TBD - created by archiving change add-rally-shot-stage-timeline. Update Purpose after archive.
+
+定义回合—击球阶段时序图：消费 canonical 回合击球事件、保留阶段与归属不确定性的视觉编码、仅表达描述性统计的摘要、Shot 节点的视频证据跳转，以及加载失败不阻塞其他分析内容。
 ## Requirements
 ### Requirement: 时序图必须消费 canonical 回合击球事件
 

@@ -195,6 +195,76 @@ def _ensure_match_state_segmentation_columns(engine: Engine) -> None:
             )
 
 
+def _ensure_rally_context_tables(engine: Engine) -> None:
+    """为未运行 Alembic 的本地 SQLite 数据库补齐分析名册/回合上下文表。"""
+    inspector = inspect(engine)
+    statements = {
+        "rally_scoring_snapshots": """CREATE TABLE rally_scoring_snapshots (
+            id VARCHAR(80) PRIMARY KEY,
+            capture_take_id VARCHAR(64) NOT NULL REFERENCES capture_takes(id) ON DELETE RESTRICT,
+            action_id VARCHAR(64) NOT NULL, event_id VARCHAR(64), rally_id VARCHAR(64),
+            ordinal INTEGER NOT NULL DEFAULT 0, server_team VARCHAR(8),
+            score_a_before INTEGER NOT NULL DEFAULT 0, score_b_before INTEGER NOT NULL DEFAULT 0,
+            games_won_a_before INTEGER NOT NULL DEFAULT 0, games_won_b_before INTEGER NOT NULL DEFAULT 0,
+            scoring_phase VARCHAR(16) NOT NULL DEFAULT 'rally', scoring_ruleset_version VARCHAR(64),
+            action_revision INTEGER NOT NULL DEFAULT 0, start_ms INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1, supersedes_snapshot_id VARCHAR(80),
+            status VARCHAR(16) NOT NULL DEFAULT 'effective',
+            created_at DATETIME NOT NULL, superseded_at DATETIME
+            )""",
+        "court_end_confirmations": """CREATE TABLE court_end_confirmations (
+            id VARCHAR(80) PRIMARY KEY, owner_key VARCHAR(128) NOT NULL,
+            capture_take_id VARCHAR(64), video_id VARCHAR(64),
+            team_a_end VARCHAR(16) NOT NULL, confirmed_at_ms INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1, is_effective BOOLEAN NOT NULL DEFAULT 1,
+            confirmed_by VARCHAR(32) NOT NULL DEFAULT 'manual', job_id VARCHAR(128),
+            created_at DATETIME NOT NULL
+            )""",
+        "analysis_roster_snapshots": """CREATE TABLE analysis_roster_snapshots (
+            id VARCHAR(80) PRIMARY KEY, owner_key VARCHAR(128) NOT NULL,
+            capture_take_id VARCHAR(64), video_id VARCHAR(64), job_id VARCHAR(128),
+            status VARCHAR(32) NOT NULL DEFAULT 'unavailable', unavailable_reason VARCHAR(128),
+            source VARCHAR(32) NOT NULL DEFAULT 'manual', initial_team_a_end VARCHAR(16),
+            entries_json TEXT NOT NULL DEFAULT '[]', roster_hash VARCHAR(64) NOT NULL,
+            confirmed_at DATETIME NOT NULL, created_at DATETIME NOT NULL
+            )""",
+        "analysis_rally_context_sets": """CREATE TABLE analysis_rally_context_sets (
+            id VARCHAR(80) PRIMARY KEY, owner_key VARCHAR(128) NOT NULL, job_id VARCHAR(128) NOT NULL,
+            capture_take_id VARCHAR(64), status VARCHAR(32) NOT NULL DEFAULT 'unavailable',
+            unavailable_reason VARCHAR(128), scoring_hash VARCHAR(64), roster_hash VARCHAR(64),
+            court_end_hash VARCHAR(64), context_set_hash VARCHAR(64) NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}', version INTEGER NOT NULL DEFAULT 1,
+            supersedes_context_set_id VARCHAR(80), created_at DATETIME NOT NULL
+            )""",
+    }
+    index_statements = {
+        "rally_scoring_snapshots": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_scoring_snapshot_action_revision ON rally_scoring_snapshots(capture_take_id, action_id, revision)",
+            "CREATE INDEX IF NOT EXISTS idx_scoring_snapshot_take_rally ON rally_scoring_snapshots(capture_take_id, rally_id)",
+            "CREATE INDEX IF NOT EXISTS idx_scoring_snapshot_take_status ON rally_scoring_snapshots(capture_take_id, status)",
+        ),
+        "court_end_confirmations": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_court_end_owner_revision ON court_end_confirmations(owner_key, revision)",
+            "CREATE INDEX IF NOT EXISTS idx_court_end_owner_effective ON court_end_confirmations(owner_key, is_effective)",
+        ),
+        "analysis_roster_snapshots": (
+            "CREATE INDEX IF NOT EXISTS idx_roster_snapshot_owner ON analysis_roster_snapshots(owner_key, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_roster_snapshot_job ON analysis_roster_snapshots(job_id)",
+        ),
+        "analysis_rally_context_sets": (
+            "CREATE INDEX IF NOT EXISTS idx_rally_context_job ON analysis_rally_context_sets(job_id, version)",
+            "CREATE INDEX IF NOT EXISTS idx_rally_context_owner ON analysis_rally_context_sets(owner_key)",
+        ),
+    }
+    with engine.begin() as connection:
+        for table_name, statement in statements.items():
+            if not inspector.has_table(table_name):
+                connection.execute(text(statement))
+        for statements_for_table in index_statements.values():
+            for statement in statements_for_table:
+                connection.execute(text(statement))
+
+
 def init_db() -> None:
     """应用启动时调用：确保所有 ORM 表存在。"""
     # 导入所有模型以触发 Base.metadata 注册
@@ -210,6 +280,7 @@ def init_db() -> None:
     import app.models.media_fragment  # noqa: F401
     import app.models.match_state_candidate  # noqa: F401
     import app.models.match_state_segmentation  # noqa: F401
+    import app.models.rally_context  # noqa: F401
     import app.models.segment_edit_operation  # noqa: F401
     import app.models.scoring_calibration_annotation  # noqa: F401
     import app.models.timeline_event  # noqa: F401
@@ -228,6 +299,7 @@ def init_db() -> None:
             )
     _ensure_vidat_provenance_columns(engine)
     _ensure_match_state_segmentation_columns(engine)
+    _ensure_rally_context_tables(engine)
     # SQLite 的 create_all 不会为已有表追加列；保持本地历史数据库可用。
     lcs_columns = {column["name"] for column in inspect(engine).get_columns("live_coding_states")}
     with engine.begin() as connection:

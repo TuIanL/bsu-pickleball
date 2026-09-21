@@ -1,7 +1,8 @@
 # four-player-identification-quality Specification
 
 ## Purpose
-TBD - created by archiving change stabilize-four-player-identification. Update Purpose after archive.
+
+定义四人识别的质量产物与验收标准：硬不变量、覆盖与缺口指标、新任务上的真实回归，以及 appearance 贡献的消融可验证性。
 ## Requirements
 ### Requirement: 四人识别质量产物
 系统 SHALL 为真实双打 Job 生成 `four-player-identification-quality.v1`，记录配置阈值、attempted tick 数以及 P1-P4 的 detection/canonical coverage、最长缺口、source track history、reconnect、identity switch、duplicate binding、cross-side、ambiguous 与 quarantined sample 计数。

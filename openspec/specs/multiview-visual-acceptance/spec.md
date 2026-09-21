@@ -1,7 +1,8 @@
 # multiview-visual-acceptance Specification
 
 ## Purpose
-TBD - created by archiving change prepare-authoritative-multiview-acceptance-run. Update Purpose after archive.
+
+定义多视角的权威视觉验收门：visual acceptance gate 与硬不变量、opt-in joint debug trace 及其与业务事实的分离、fused overlay 覆盖率验收，以及 baseline 与定点片段对照和 appearance 开关消融验收。
 ## Requirements
 ### Requirement: Authoritative visual acceptance gate
 

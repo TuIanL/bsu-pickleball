@@ -1,7 +1,8 @@
 # analysis-task-management Specification
 
 ## Purpose
-TBD - created by archiving change rework-video-analysis-task-flow. Update Purpose after archive.
+
+定义分析任务管理页的列表与操作契约：检索、按录制会话与分析模式筛选、排序、批量选择与删除、取消与删除反馈、级联删除与产物清理，以及任务来源上下文的恢复与普通产品流完成后的去向。
 ## Requirements
 ### Requirement: Analysis task list retrieval
 

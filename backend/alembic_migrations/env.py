@@ -17,6 +17,8 @@ import app.models.capture_track  # noqa: F401, E402
 import app.models.field_session  # noqa: F401, E402
 import app.models.live_coding_state  # noqa: F401, E402
 import app.models.match_state_candidate  # noqa: F401, E402
+import app.models.match_state_segmentation  # noqa: F401, E402
+import app.models.rally_context  # noqa: F401, E402
 import app.models.scoring_calibration_annotation  # noqa: F401, E402
 import app.models.timeline_event  # noqa: F401, E402
 import app.models.vidat_annotation  # noqa: F401, E402

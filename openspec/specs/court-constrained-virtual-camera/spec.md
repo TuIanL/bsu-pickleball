@@ -1,7 +1,8 @@
 # court-constrained-virtual-camera Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-3d-ball-reconstruction. Update Purpose after archive.
+
+定义由球场 Homography 解算的近似虚拟相机：双视角落统一 Canonical Court frame、姿态消歧门与球网非共面点 refinement，并显式声明其为估算结果且不做径向畸变校正。
 ## Requirements
 ### Requirement: 由球场 Homography 解算近似虚拟相机
 系统 SHALL 为每台摄像机从现有球场平面 Homography 与球场关键点解算一个 `virtual_camera`（近似 pinhole），无需任何真实相机内参标定。至少 4 个球场角点均应参与求解。求解必须基于 **court→image** 方向的矩阵（`inverse_homography`），而非 image→court 方向的 `CalibrationResult.homography`。

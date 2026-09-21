@@ -350,6 +350,10 @@ class StorageService:
         # 发球候选调试 JSON
         return self._job_artifact_root(job_id) / "serve_debug_candidates.json"
 
+    def bootstrap_binding_audit_json_path(self, job_id: str) -> Path:
+        # bootstrap anchor → 正式 canonical Player 的绑定审计
+        return self._job_artifact_root(job_id) / "bootstrap_binding_audit.json"
+
     def serve_score_series_json_path(self, job_id: str) -> Path:
         # 发球评分时间序列 JSON
         return self._job_artifact_root(job_id) / "serve_score_series.json"
@@ -381,6 +385,10 @@ class StorageService:
     def metric_snapshot_json_path(self, job_id: str) -> Path:
         # metric-snapshot.v1（分母感知描述性指标）
         return self._job_artifact_root(job_id) / "metric_snapshot.json"
+
+    def kitchen_arrival_json_path(self, job_id: str) -> Path:
+        # kitchen-arrival.v1（发球队厨房线到位事实）
+        return self._job_artifact_root(job_id) / "kitchen_arrival.json"
 
     def normalized_metrics_json_path(self, job_id: str) -> Path:
         # normalized-metric-snapshot.v1（规范化指标与评分资格中间层）

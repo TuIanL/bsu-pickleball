@@ -1,7 +1,8 @@
 # multiview-single-view-continuity Specification
 
 ## Purpose
-TBD - created by archiving change fix-multiview-single-view-fallback. Update Purpose after archive.
+
+定义单视图 binding 球员在融合结果中的连续性：stale 门控下的单视图活跃豁免、单视图 sample 的指标资格与质量标注，以及在 fused_diagnostics 中的可观测。
 ## Requirements
 ### Requirement: 单视图 binding 玩家的融合连续性
 

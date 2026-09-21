@@ -1,7 +1,8 @@
 # multiview-progress-state-machine Specification
 
 ## Purpose
-TBD - created by archiving change multiview-progress-state-machine. Update Purpose after archive.
+
+定义双摄顶层阶段图与状态机：按模式区分阶段、顶层状态转换受状态机约束、总进度按阶段权重单调聚合，并保持 A/B 子运行进度与 Parent 阶段一致、状态 API 与前端使用同一顺序。
 ## Requirements
 ### Requirement: 模式化顶层阶段图
 

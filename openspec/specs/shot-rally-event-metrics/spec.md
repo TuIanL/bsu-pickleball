@@ -1,14 +1,14 @@
 # shot-rally-event-metrics Specification
 
 ## Purpose
-TBD - created by archiving change canonical-shot-rally-events. Update Purpose after archive.
+
+定义 canonical 回合/击球事件与指标契约：Rally/Shot 关系与回合内拍序、canonical 球员身份与不确定性保留、shot 事件字段与来源证据、分母感知的指标快照与数据充分度降级，并明确首版指标不等同于技能评分。
 ## Requirements
 ### Requirement: Canonical Rally/Shot artifact envelope
 
-系统 SHALL 为完成或明确降级的分析任务生成可选的 `shot_rally_events.json`，其 schema SHALL 为 `shot-rally-events.v1`，并包含 `job_id`、`video_id`、`status`、`detail`、`generated_at`、`time_unit`、`coordinate_system`、`rallies`、`shots` 和 `diagnostics`。`time_unit` SHALL 为 `ms`；court 坐标单位 SHALL 明确为 `ft`，image 坐标单位 SHALL 明确为 `px`。
+系统 SHALL 为完成或明确降级的分析任务生成可选的 `shot_rally_events.json`，其 schema SHALL 为 `shot-rally-events.v1`，并包含 `job_id`、`video_id`、`status`、`detail`、`generated_at`、`time_unit`、`coordinate_system`、`rallies`、`shots` 和 `diagnostics`。`time_unit` SHALL 为 `ms`；court 坐标单位 SHALL 明确为 `ft`，image 坐标单位 SHALL 明确为 `px`。绑定成功的 canonical Rally SHALL 引用该 Job 冻结的 `AnalysisRallyContextSnapshot`；缺失 context SHALL 显式表达 unavailable，而不得从 `initial_side` 推断正式 Team A/B。
 
 #### Scenario: 事件产物成功生成
-
 - **WHEN** 一个真实 job 已完成，且存在可消费的 rally/shot 输入产物
 - **THEN** 系统 SHALL 写入 `shot_rally_events.json`
 - **AND** `status` SHALL 为 `available`
@@ -16,11 +16,15 @@ TBD - created by archiving change canonical-shot-rally-events. Update Purpose af
 - **AND** `rallies` 与 `shots` SHALL 即使为空也保持数组类型
 
 #### Scenario: 事件源不足
-
 - **WHEN** job 完成但没有足够输入构造可靠事件
 - **THEN** 系统 SHALL 保留 artifact 状态为 `unavailable`、`skipped` 或 `failed`
 - **AND** `detail` SHALL 说明缺少的输入或失败原因
 - **AND** SHALL NOT 用 ball trajectory 或 mock 数据伪造 shot 事件
+
+#### Scenario: Rally 有任务绑定上下文
+- **WHEN** formal Rally 已使用定义优先级绑定有效 AnalysisRallyContextSnapshot
+- **THEN** canonical Rally SHALL 引用冻结的发球队、A/B 端位与 roster identity facts
+- **AND** 后续消费者 SHALL 不再根据 player `initial_side` 建立正式队伍语义
 
 ### Requirement: Rally/Shot 关系与回合内拍序
 
@@ -76,20 +80,24 @@ TBD - created by archiving change canonical-shot-rally-events. Update Purpose af
 
 ### Requirement: Metric Snapshot 分母感知
 
-系统 SHALL 从 canonical 事件产物确定性生成 `metric_snapshot.json`，schema SHALL 为 `metric-snapshot.v1`。每条指标 SHALL 包含 `metric_key`、`subject_id`、`value`、`unit`、`numerator`、`denominator`、`sample_count`、`status`、`confidence`、`provenance`、`evidence_ids` 和 `calculation_version`。比例类指标 MUST 能由 numerator/denominator 审计。
+系统 SHALL 从 canonical 事件产物确定性生成 `metric_snapshot.json`，schema SHALL 为 `metric-snapshot.v1`。每条指标 SHALL 包含 `metric_key`、`subject_id`、`value`、`unit`、`numerator`、`denominator`、`sample_count`、`status`、`confidence`、`provenance`、`evidence_ids` 和 `calculation_version`。比例类指标 MUST 能由 numerator/denominator 审计；非 `available` 状态的比例指标 MUST 将 `value` 置为 null。
 
 #### Scenario: 有效比例指标
-
 - **WHEN** 某球员有 8 次合法发球且总发球机会为 10 次
 - **THEN** Metric Snapshot SHALL 保存 numerator=8、denominator=10、value=0.8 或等价的明确单位表示
 - **AND** SHALL 记录 sample_count=10 和对应的 Shot/Rally evidence IDs
 
 #### Scenario: 分母为零
-
 - **WHEN** 某球员在本场没有发球机会
 - **THEN** 该指标 SHALL 使用 `not_applicable` 或 `insufficient_evidence`
 - **AND** SHALL 将 value 置为 null
 - **AND** MUST NOT 输出 0% 作为合法发球率
+
+#### Scenario: 镜像厨房线到位率
+- **WHEN** `kitchen-arrival.v1` 为某球员完成 raw serving-rally 汇总
+- **THEN** Metric Snapshot SHALL 写入 `metric_key=serving_team_kitchen_line_arrival_rate`、`scope=player`、相同 numerator、denominator、sample_count、status 和 provenance
+- **AND** 在 `insufficient_evidence`、`unavailable` 或 `not_applicable` 时 SHALL 使用 null value
+- **AND** evidence_ids SHALL 只引用真实 context、identity audit、窗口计划或输入 artifact
 
 ### Requirement: 数据充分度与指标降级
 
@@ -132,3 +140,4 @@ TBD - created by archiving change canonical-shot-rally-events. Update Purpose af
 - **WHEN** 报告读取到 `metric-snapshot.v1` 但不存在正式评分 artifact
 - **THEN** 系统 SHALL 展示可用的描述性指标或“评分模型尚未生成”
 - **AND** SHALL NOT 将指标快照直接投影为球员综合分
+

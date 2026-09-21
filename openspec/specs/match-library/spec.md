@@ -1,7 +1,8 @@
 # match-library Specification
 
 ## Purpose
-TBD - created by archiving change reframe-library-and-match-workspace. Update Purpose after archive.
+
+定义比赛库页面作为用户主入口：以 FieldSession 作为采集来源的 Collection / Folder 分组，并展示素材生命周期与最近比赛。
 ## Requirements
 ### Requirement: 比赛库页面作为用户主入口
 

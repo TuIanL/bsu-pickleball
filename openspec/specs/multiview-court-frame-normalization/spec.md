@@ -1,7 +1,8 @@
 # multiview-court-frame-normalization Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-player-trajectory-fusion. Update Purpose after archive.
+
+定义两级球场坐标系与规范化：持久化 CanonicalCourtFrameDefinition 与 CourtOrientation 声明、Canonical Court Normalizer 及 canonical frame 的跨运行复用，支持范围限定为 axis-preserving。
 ## Requirements
 ### Requirement: 两级球场坐标系
 

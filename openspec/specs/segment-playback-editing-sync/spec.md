@@ -1,7 +1,8 @@
 # segment-playback-editing-sync Specification
 
 ## Purpose
-TBD - created by archiving change segment-playback-editing-sync. Update Purpose after archive.
+
+定义片段回放与边界编辑的联动：统一的回放状态、列表/时间线/事件标记联动、有效区间播放与结束自动暂停、边界拖拽的本地草稿与释放提交，以及边界校验与并发保护。
 ## Requirements
 ### Requirement: 统一片段回放状态
 
@@ -44,14 +45,33 @@ TBD - created by archiving change segment-playback-editing-sync. Update Purpose 
 
 ### Requirement: 片段播放完成后自动暂停
 
-系统 SHALL 在片段播放到有效终点时自动暂停，并清除一次性片段播放模式。
+系统 SHALL 在片段自然播放到有效终点时结束本次片段播放并清除一次性片段播放模式；自动跳过开关关闭时 SHALL 自动暂停，开启时 SHALL 续播到下一个比赛时间区间，且没有下一个区间时停在终点。
 
-#### Scenario: 播放到片段终点
+#### Scenario: 关闭自动跳过后播放到片段终点
 
-- **WHEN** 当前时间达到或超过片段有效终点
+- **WHEN** 自动跳过开关关闭，且当前时间达到或超过片段有效终点
 - **THEN** 播放器 SHALL 将时间钳制到有效终点附近
 - **AND** SHALL 自动暂停
 - **AND** 页面 SHALL 保留该片段的选中/高亮状态但标记为未播放
+
+#### Scenario: 开启自动跳过后播放到片段终点
+
+- **WHEN** 自动跳过开关开启，当前时间达到或超过片段有效终点，且其后仍存在 algorithm 回合区间
+- **THEN** 播放器 SHALL 将时间钳制到有效终点附近
+- **AND** SHALL 从下一个区间的起点继续播放，并跳过两者之间的非比赛时间
+- **AND** 页面 SHALL 保持片段播放模式并将选中项更新为新区间
+
+#### Scenario: 开启自动跳过后没有下一个区间
+
+- **WHEN** 自动跳过开关开启，且最后一个 algorithm 回合区间到达有效终点
+- **THEN** 播放器 SHALL 停在终点并自动暂停
+- **AND** MUST NOT 循环回第一个区间
+
+#### Scenario: 被中断的播放不算播完
+
+- **WHEN** 片段播放期间用户拖动播放位置或逐帧越过有效终点，或系统 seek 到别处
+- **THEN** 该次播放 SHALL 被视为被中断
+- **AND** SHALL NOT 触发续播到下一个区间
 
 #### Scenario: 视频先自然结束
 

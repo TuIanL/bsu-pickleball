@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.config import get_settings
+from app.core.config import get_settings, rally_context_enabled_for
 from app.schemas.analysis import (
     ANALYSIS_ERROR_CODES,
     STABLE_ANALYSIS_STAGE_IDS,
@@ -384,7 +384,12 @@ def merge_stage_progress(
         return normalize_stage_snapshot(stages, mode)
 
 
-def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
+def analysis_signature(
+    payload: AnalysisJobCreate,
+    *,
+    roster_hash: str | None = None,
+    context_input_hash: str | None = None,
+) -> tuple[str, str]:
     # 计算任务的"输入签名"和"配置签名"（用于去重：相同输入+相同配置视为同一任务）。
     settings = get_settings()
     config_payload = {
@@ -405,6 +410,9 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         "poseSchema": settings.pose_keypoint_schema,
         # 分析模式由是否提供标定/视频决定
         "analysisMode": "real" if payload.calibrationId else "limited" if payload.videoId else "demo",
+        # The flow is a task-level reproducibility input.  Explicit legacy jobs
+        # must never deduplicate with the default new-flow job.
+        "rallyContextMode": "new" if rally_context_enabled_for(payload) else "legacy",
     }
     # Joint recovery parameters are part of reproducibility/idempotency. Keep the
     # field absent for legacy single-view and late-fusion jobs so their signatures
@@ -445,6 +453,12 @@ def analysis_signature(payload: AnalysisJobCreate) -> tuple[str, str]:
         # Sync revision is resolved from the CaptureTake anchor service when
         # available.  Keeping an explicit null preserves old/imported takes.
         input_payload["syncCalibrationRevision"] = _capture_take_sync_revision(payload)
+    # 声明或消费正式 Team A/B 语义的任务：名册与回合上下文进入输入签名，因此
+    # "相同媒体 + 不同名册/上下文"会被视为不同输入，绝不会复用旧身份/队伍/端位结果。
+    # 字段缺省时不写入，保证 legacy 单摄任务的签名逐字不变。
+    if roster_hash or context_input_hash:
+        input_payload["rosterSnapshotHash"] = roster_hash
+        input_payload["analysisRallyContextInputHash"] = context_input_hash
     return _stable_hash(input_payload), _stable_hash(config_payload)
 
 
@@ -506,10 +520,21 @@ class JobStore:
         return self.control_plane.import_legacy(payloads, force=True)
 
     def create_job(
-        self, payload: AnalysisJobCreate, *, job_id: str | None = None, report_id: str | None = None
+        self,
+        payload: AnalysisJobCreate,
+        *,
+        job_id: str | None = None,
+        report_id: str | None = None,
+        roster_hash: str | None = None,
+        roster_status: str | None = None,
+        context_input_hash: str | None = None,
+        context_set_hash: str | None = None,
+        context_status: str | None = None,
     ) -> AnalysisJobSummary:
         now = utc_now()
-        input_sig, config_sig = analysis_signature(payload)
+        input_sig, config_sig = analysis_signature(
+            payload, roster_hash=roster_hash, context_input_hash=context_input_hash
+        )
         job_id = job_id or f"job-{uuid4().hex[:10]}"
         report_id = report_id or f"PV-{job_id.upper()}"
         mode = "real" if payload.calibrationId else "limited" if payload.videoId else "demo"
@@ -580,6 +605,11 @@ class JobStore:
                 if payload.multiview and payload.multiview.sceneCalibrationMode == "metric"
                 else "missing"
             ),
+            rosterSnapshotHash=roster_hash,
+            rosterStatus=roster_status,
+            analysisRallyContextSetHash=context_set_hash,
+            analysisRallyContextStatus=context_status,
+            rallyContextMode="new" if rally_context_enabled_for(payload) else "legacy",
         )
         return self.save(job)
 
@@ -646,7 +676,7 @@ class JobStore:
             if (
                 job.inputSignature == input_signature
                 and job.configSignature == config_signature
-                and job.canonicalStatus in {"queued", "succeeded"}
+                and job.canonicalStatus in {"queued", "running", "succeeded"}
             ):
                 return job
         return None

@@ -447,10 +447,18 @@ class SessionService:
         # 如果开启了"停止后自动分析"且视频注册成功，则创建分析任务
         job_id = None
         if session.auto_analyze_after_stop and video_id:
-            try:
-                job_id = self._trigger_analysis(session, video_id)
-            except Exception as exc:
-                logger.error("自动创建分析任务失败: %s", exc)
+            # 开启正式 Rally Context consumer 后，自动创建会绕过分析前的
+            # P1–P4/Team A-B/初始端位确认。此时只完成视频登记，把任务交给
+            # RecordingAnalyzePage 的确认入口；feature gate 关闭时保留旧行为。
+            from app.core.config import get_settings
+
+            if get_settings().rally_context_enabled:
+                logger.info("已延迟录制后的自动分析：等待用户完成名册与端位确认")
+            else:
+                try:
+                    job_id = self._trigger_analysis(session, video_id)
+                except Exception as exc:
+                    logger.error("自动创建分析任务失败: %s", exc)
 
         # 更新会话为 completed，并保存
         session = session.model_copy(

@@ -1,7 +1,8 @@
 # bootstrap-slot-completeness Specification
 
 ## Purpose
-TBD - created by archiving change fix-multiview-cam1-bootstrap-4player. Update Purpose after archive.
+
+定义 bootstrap 阶段的四槽位完整性与锁定规则：纵向可判即接纳（x 出界不拒绝）、宁可空槽不误锁，以及 Tracklet 时间窗的四槽位分配。
 ## Requirements
 ### Requirement: 纵向可判即接纳（x 出界不拒绝）
 

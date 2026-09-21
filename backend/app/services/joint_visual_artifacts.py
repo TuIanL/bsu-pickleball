@@ -222,21 +222,41 @@ def build_joint_roster_artifact(
 
     返回 artifacts 字段增量：roster_manifest_json_path / roster_url / roster_status / roster_detail。
     """
+    players: list[dict[str, object]] = []
+    for entry in roster:
+        global_player_id = str(entry.get("global_player_id") or "")
+        direct_player_id = entry.get("player_id")
+        player_id = direct_player_id or roster_map.get(global_player_id)
+        # ``roster_map`` deliberately provides a deterministic slot fallback
+        # for display continuity.  That fallback must never be reused as proof
+        # of a fused global identity by downstream factual metrics.
+        direct_reference_binding = bool(
+            global_player_id
+            and isinstance(direct_player_id, str)
+            and direct_player_id.startswith("Player_")
+        )
+        players.append(
+            {
+                "global_player_id": global_player_id,
+                "player_id": player_id,
+                "label": entry.get("label"),
+                "bindings": entry.get("bindings", {}),
+                "mapping_method": (
+                    "direct_reference_binding" if direct_reference_binding else "slot_fallback"
+                ),
+                "mapping_confirmed": bool(
+                    direct_reference_binding and entry.get("status") == "confirmed"
+                ),
+            }
+        )
+
     payload = {
         "schema_version": "global-player-roster.v1",
         "expected_player_count": expected_player_count,
         "roster_occupied_count": len(roster),
         "confirmed_player_count": sum(1 for r in roster if r.get("status") == "confirmed"),
         "status": status,
-        "players": [
-            {
-                "global_player_id": r["global_player_id"],
-                "player_id": r.get("player_id") or roster_map.get(r["global_player_id"]),
-                "label": r.get("label"),
-                "bindings": r.get("bindings", {}),
-            }
-            for r in roster
-        ],
+        "players": players,
     }
     path = storage.roster_manifest_json_path(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)

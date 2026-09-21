@@ -226,6 +226,9 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
     assert roster_json["players"][0]["global_player_id"] == "global_player_1"
     assert roster_json["players"][0]["player_id"] == "Player_1"
     assert roster_json["players"][0]["label"] == "P1"
+    assert roster_json["players"][0]["mapping_method"] == "direct_reference_binding"
+    # bootstrap 的 display anchor 尚未确认，不能被厨房线指标当作事实身份。
+    assert roster_json["players"][0]["mapping_confirmed"] is False
     assert roster_json["players"][0]["bindings"]["cam_2"]["view_player_id"] == "Player_3"
     # heatmaps URL 已生成（可用与否取决于点数）
     assert result.artifacts.heatmaps_url == "/api/analysis/jobs/job-p/artifacts/position-heatmaps"

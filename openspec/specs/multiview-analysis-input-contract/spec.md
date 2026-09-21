@@ -1,7 +1,8 @@
 # multiview-analysis-input-contract Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-player-trajectory-fusion. Update Purpose after archive.
+
+定义双摄分析的输入契约：MultiViewFusionRun 的输入组合与权威时间同步、Canonical Timeline 与 pairing tolerance 门控、时间有效区间与 Preflight、jointViewInputs 持久化与输入签名，以及场景标定 revision 引用和展示机位不属于分析输入的边界。
 ## Requirements
 ### Requirement: MultiViewFusionRun 输入组合
 

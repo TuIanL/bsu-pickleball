@@ -1,7 +1,8 @@
 # landing-point-authority Specification
 
 ## Purpose
-TBD - created by archiving change add-multiview-3d-ball-reconstruction. Update Purpose after archive.
+
+定义落点的权威来源：以 reference-view bounce 作为最高可信正式指标，且 bounce 事件权威不重写检测器输出。
 ## Requirements
 ### Requirement: 落点权威来源定义（reference-view bounce）
 系统 SHALL 以 **reference-view confirmed bounce** 作为 bounce 事件权威来源（复用现有 BounceDetector，不在本阶段重写），经 canonical clock 定夺 bounce 的 `take_timestamp` 后，在 Cam2 于 ± tolerance 内寻找最近 accepted ball evidence，据此产出落点（不得从 3D 曲线与 `z=0` 交点倒推）。

@@ -1,7 +1,8 @@
 # performance-insights Specification
 
 ## Purpose
-TBD - created by archiving change add-performance-insights-and-feedback-report. Update Purpose after archive.
+
+定义 performance_insights 产物契约：evidence 可追溯与 provenance、数据不足时的适用性降级、版本化规则与确定性再生成，并禁止未校准评分、伪造趋势与 demo 结论进入真实报告。
 ## Requirements
 ### Requirement: performance_insights 产物契约
 

@@ -139,6 +139,33 @@ class ShotEvent(BaseModel):
         return self
 
 
+class RallyContextReference(BaseModel):
+    """canonical Rally 对该 Job 冻结的 `AnalysisRallyContextSnapshot` 的引用。
+
+    正式 Team A/B 语义只能来自这里；`initial_side` 只保留物理半场诊断含义。
+    """
+
+    rally_id: str
+    context_set_id: str | None = None
+    context_hash: str | None = None
+    binding_method: Literal[
+        "direct_segment_link",
+        "direct_start_event_link",
+        "unique_temporal_match",
+        "unavailable",
+    ] = "unavailable"
+    status: Literal["available", "partial", "unavailable"] = "unavailable"
+    unavailable_reason: str | None = None
+    server_team: str | None = None
+    score_a_before: int | None = None
+    score_b_before: int | None = None
+    team_a_end: str | None = None
+    team_b_end: str | None = None
+    team_a_players: list[str] = Field(default_factory=list)
+    team_b_players: list[str] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+
+
 class RallyEvent(BaseModel):
     rally_id: str
     ordinal: int = Field(ge=1)
@@ -149,6 +176,8 @@ class RallyEvent(BaseModel):
     provenance: str
     confidence: float | None = Field(default=None, ge=0, le=1)
     evidence_windows: list[EvidenceWindow] = Field(default_factory=list)
+    # 该 Job 冻结的分析回合上下文引用；缺失即显式 unavailable，不从 initial_side 推断队伍。
+    context: RallyContextReference | None = None
 
     @model_validator(mode="after")
     def validate_time_window(self) -> RallyEvent:
@@ -207,7 +236,7 @@ class MetricSnapshotEntry(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     provenance: str
     evidence_ids: list[str] = Field(default_factory=list)
-    calculation_version: Literal["product_reference_v1"] = "product_reference_v1"
+    calculation_version: Literal["product_reference_v1", "kitchen-arrival-reference.v1"] = "product_reference_v1"
 
     @model_validator(mode="after")
     def validate_status_value(self) -> MetricSnapshotEntry:

@@ -1,7 +1,8 @@
 # library-item-projection Specification
 
 ## Purpose
-TBD - created by archiving change reframe-library-and-match-workspace. Update Purpose after archive.
+
+定义统一的 LibraryItem 投影：与 AnalysisJob identity 分离的资产身份、三轴生命周期状态与 source-specific 状态映射，以及 Primary Analysis Selection 与双摄封面机位流地址。
 ## Requirements
 ### Requirement: 统一 LibraryItem 投影
 

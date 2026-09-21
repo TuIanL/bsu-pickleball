@@ -32,13 +32,16 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 # 不同的响应类型：
 # - FileResponse：返回一个文件（如视频/图片）
 # - JSONResponse：返回 JSON 数据
 # - PlainTextResponse：返回纯文本（如按行存储的 JSONL 文件）
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from sqlalchemy.orm import Session
+
+from app.database import get_db
 
 # 分析相关的数据模型
 from app.schemas.analysis import (
@@ -169,16 +172,19 @@ def _debug_video_response(path: Path, request: Request) -> StreamingResponse:
 
 
 @router.post("/jobs", response_model=AnalysisJobSummary)
-def create_analysis_job_route(payload: AnalysisJobCreate) -> AnalysisJobSummary:
+def create_analysis_job_route(payload: AnalysisJobCreate, db: Session = Depends(get_db)) -> AnalysisJobSummary:
     """
     创建分析任务
 
     前端提交视频 id、标定 id、分析参数后调用本接口。
     双摄任务（analysisKind=multiview）在此创建 1 个 Parent + 2 个内部 child。
     后端会记录任务，并返回它的 id 与初始状态（如 queued 排队中）。
+
+    `rosterConfirmation` 非空时，本接口会在签名与去重之前规划名册/回合上下文，
+    去重通过后再落盘冻结名册与 `AnalysisRallyContextSnapshot`。
     """
     try:
-        return create_analysis_job(payload)
+        return create_analysis_job(payload, db=db)
     except MultiviewPreflightError as exc:
         return JSONResponse(
             status_code=400,
@@ -508,7 +514,9 @@ def read_analysis_artifact(
         "performance-insights",  # performance-insights.v1（表现洞察事实层）
         "shot-rally-events",  # shot-rally-events.v1（canonical Rally/Shot 事实层）
         "metric-snapshot",  # metric-snapshot.v1（分母感知描述性指标）
+        "kitchen-arrival",  # kitchen-arrival.v1（发球队厨房线到位事实）
         "normalized-metrics",  # normalized-metric-snapshot.v1（规范化指标中间层）
+        "bootstrap-binding-audit",  # bootstrap-binding-audit.v1（身份连续性审计）
         "fused-trajectory",  # 多视角融合球员轨迹（Parent 命名空间产物）
         "fusion-diagnostics",  # 多视角融合诊断（融合质量）
         "fused-manifest",  # 多视角产物清单（Parent 唯一产品出口）
@@ -587,8 +595,12 @@ def read_analysis_artifact(
         path = _STORAGE.shot_rally_events_json_path(job_id)
     elif artifact_name == "metric-snapshot":
         path = _STORAGE.metric_snapshot_json_path(job_id)
+    elif artifact_name == "kitchen-arrival":
+        path = _STORAGE.kitchen_arrival_json_path(job_id)
     elif artifact_name == "normalized-metrics":
         path = _STORAGE.normalized_metrics_json_path(job_id)
+    elif artifact_name == "bootstrap-binding-audit":
+        path = _STORAGE.bootstrap_binding_audit_json_path(job_id)
     elif artifact_name == "fused-trajectory":
         path = _STORAGE.fused_trajectory_json_path(job_id)
     elif artifact_name == "fusion-diagnostics":

@@ -1,7 +1,8 @@
 # project-delivery-quality-gates Specification
 
 ## Purpose
-TBD - created by archiving change harden-project-reliability-and-delivery. Update Purpose after archive.
+
+定义项目交付质量门禁：依赖单一声明与可复现安装、隔离且可执行的门禁命令、首屏资源预算，以及能力声明与验收证据一致。
 ## Requirements
 ### Requirement: 依赖单一声明与可复现安装
 

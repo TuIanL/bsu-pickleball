@@ -3,12 +3,114 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.schemas.analysis import AnalysisJobSummary, AnalysisUploadMetadata
 from app.schemas.metrics import Heatmap, PerformanceMetrics
 from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult
 from app.schemas.shot_rally_events import PRODUCT_REFERENCE_V1, MetricSnapshotArtifact, ShotRallyEventsArtifact
 from app.services import canonical_shot_rally_events as composer
+
+
+def test_frozen_trajectory_identity_map_rejects_display_slot_fallback(tmp_path) -> None:
+    """A display-stable roster slot cannot prove a fused global identity."""
+    manifest_path = tmp_path / "roster.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "global-player-roster.v1",
+                "players": [
+                    {
+                        "global_player_id": "global_player_1",
+                        "player_id": "Player_1",
+                        "mapping_method": "slot_fallback",
+                        "mapping_confirmed": True,
+                    },
+                    {
+                        "global_player_id": "global_player_2",
+                        "player_id": "Player_2",
+                        "mapping_method": "direct_reference_binding",
+                        "mapping_confirmed": False,
+                    },
+                    {
+                        "global_player_id": "global_player_3",
+                        "player_id": "Player_3",
+                        "mapping_method": "direct_reference_association",
+                        "mapping_confirmed": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Storage:
+        def roster_manifest_json_path(self, _job_id: str) -> Path:
+            return manifest_path
+
+    roster = {
+        "entries": [
+            {"canonical_player_id": "Player_1"},
+            {"canonical_player_id": "Player_2"},
+            {"canonical_player_id": "Player_3"},
+        ]
+    }
+    assert composer._frozen_trajectory_identity_map(Storage(), "job-1", roster) == {
+        "global_player_3": "Player_3"
+    }
+
+
+def test_multiview_kitchen_trajectory_prefers_parent_fused_artifact(tmp_path) -> None:
+    player_path = tmp_path / "player.json"
+    fused_path = tmp_path / "fused.json"
+    player = {"players": [{"player_id": "Player_1", "samples": [{"timestamp_ms": 0}]}]}
+    fused = {"samples": [{"global_player_id": "global_player_1", "timestamp_seconds": 0.0}]}
+    player_path.write_text(json.dumps(player), encoding="utf-8")
+    fused_path.write_text(json.dumps(fused), encoding="utf-8")
+
+    class Storage:
+        def player_trajectory_json_path(self, _job_id: str) -> Path:
+            return player_path
+
+        def fused_trajectory_json_path(self, _job_id: str) -> Path:
+            return fused_path
+
+    storage = Storage()
+    assert composer._load_kitchen_trajectory(
+        SimpleNamespace(id="parent", analysisKind="multiview"), storage
+    ) == fused
+    assert composer._load_kitchen_trajectory(
+        SimpleNamespace(id="single", analysisKind="single_view"), storage
+    ) == player
+
+
+def test_explicit_new_flow_does_not_fallback_to_initial_side(monkeypatch) -> None:
+    monkeypatch.setattr(
+        composer,
+        "_load_rally_boundaries",
+        lambda _capture_take_id: ([{"rally_id": "rally-0001", "ordinal": 1, "start_ms": 0, "end_ms": 3000}], []),
+    )
+    payload = _payload([_segment("flight-1", "shot-001", "hit-1", 1.0)], event_times={"hit-1": 1.0})
+
+    legacy = composer.build_shot_rally_events(
+        job_id="job-legacy",
+        video_id="video-1",
+        match_format="doubles",
+        reconstructed_payload=payload,
+        capture_take_id="ct-1",
+    )
+    new = composer.build_shot_rally_events(
+        job_id="job-new",
+        video_id="video-1",
+        match_format="doubles",
+        reconstructed_payload=payload,
+        capture_take_id="ct-1",
+        rally_context_mode="new",
+    )
+
+    assert legacy.shots[0].team_id == "team_near"
+    assert new.shots[0].team_id is None
+    assert any("正式 Team A/B 不可用" in item for item in new.shots[0].diagnostics)
 
 
 def _segment(

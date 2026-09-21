@@ -9,9 +9,10 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.performance_insights import ReportPerformanceInsights
+from app.schemas.rally_context import RosterConfirmationRequest
 
 # 比赛制式
 MatchFormat = Literal["singles", "doubles"]
@@ -208,6 +209,11 @@ class AnalysisJobCreate(BaseModel):
     multiview: MultiViewCreateRequest | None = None
     # 正式双摄切分策略；None 表示沿用后端 profile 配置，旧请求保持兼容。
     segmentationRequired: bool | None = None
+    # 分析流程选择：None 沿用全局默认（现在为新流程），False 显式走旧流程。
+    useRallyContext: bool | None = None
+    # 分析前名册/端位确认（P1–P4、Team A/B、初始端位）。None 或 skipped=True 时
+    # 普通分析照常创建，依赖正式身份的消费者读到 unavailable。
+    rosterConfirmation: RosterConfirmationRequest | None = None
 
 
 class SourceJobRef(BaseModel):
@@ -316,8 +322,25 @@ class AnalysisJobSummary(BaseModel):
     sceneCalibrationRevision: int | None = Field(default=None, ge=1)
     sceneCalibrationMode: Literal["metric", "approximate"] = "approximate"
     sceneCalibrationStatus: Literal["ready", "degraded", "invalidated", "missing"] = "missing"
+    # 分析名册与分析回合上下文绑定（历史 job 缺省兼容）。
+    rosterSnapshotHash: str | None = None
+    rosterStatus: str | None = None
+    analysisRallyContextSetHash: str | None = None
+    analysisRallyContextStatus: str | None = None
+    # 任务实际使用的分析流程；历史任务缺省为 legacy，避免误把旧结果标成新流程。
+    rallyContextMode: Literal["new", "legacy"] = "legacy"
     # 双摄任务各机位子进度（cam_1 / cam_2）
     viewRuns: dict[str, ViewRunSummary] | None = None
+
+    @model_validator(mode="after")
+    def infer_context_mode_for_historical_jobs(self) -> "AnalysisJobSummary":
+        """Recognize context jobs written before the explicit mode field existed."""
+        if (
+            "rallyContextMode" not in self.model_fields_set
+            and (self.rosterSnapshotHash is not None or self.analysisRallyContextSetHash is not None)
+        ):
+            self.rallyContextMode = "new"
+        return self
 
 
 # 删除任务的状态

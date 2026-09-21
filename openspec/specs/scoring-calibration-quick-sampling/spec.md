@@ -1,7 +1,8 @@
 # scoring-calibration-quick-sampling Specification
 
 ## Purpose
-TBD - created by archiving change scoring-calibration-quick-sampling. Update Purpose after archive.
+
+定义比分标定的快速采样路径：回合采样队列、持久化算法候选的发现、最小事实的快速判定、快速模式下高级字段可选，以及进度展示与 Gold Set 边界保持。
 ## Requirements
 ### Requirement: Workbench SHALL provide a rally sampling queue
 

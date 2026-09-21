@@ -1,7 +1,8 @@
 # scoring-calibration-annotation-workbench Specification
 
 ## Purpose
-TBD - created by archiving change scoring-calibration-annotation-workbench. Update Purpose after archive.
+
+定义比分标定标注工作台：绑定已登记 CaptureTake、以证据为中心的复核与比分相关击球事实采集、结果与落点语义显式化、算法候选与人工决定分离，以及可版本追溯的标注包、上锁前校验与复核队列和质量摘要。
 ## Requirements
 ### Requirement: Workbench SHALL be bound to a registered CaptureTake
 

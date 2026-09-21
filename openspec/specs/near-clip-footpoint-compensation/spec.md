@@ -1,8 +1,8 @@
 # near-clip-footpoint-compensation Specification
 
 ## Purpose
-TBD - created by syncing change improve-player-court-projection-reliability.
 
+定义近端 bbox 被画面裁切时的脚点补偿：可配置的裁切检测阈值，裁切脚点的坐标保留但标记为低置信度。
 ## Requirements
 ### Requirement: 近端 bbox 裁切检测
 

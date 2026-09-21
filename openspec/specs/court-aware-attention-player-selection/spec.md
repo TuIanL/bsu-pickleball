@@ -1,7 +1,8 @@
 # court-aware-attention-player-selection Specification
 
 ## Purpose
-TBD - created by archiving change add-court-aware-attention-player-selection. Update Purpose after archive.
+
+定义球场感知的目标球员选择：候选评分与窗口级四人组锁定、可选 self-attention selector 的训练样本导出与选择诊断，其中 PrimaryPlayerSelector 降级为建议器。
 ## Requirements
 ### Requirement: 目标球场感知候选评分
 后端 SHALL 基于目标场标定结果为每个候选 player tracklet 计算目标球场归属分，并将该分数用于主球员锁定。

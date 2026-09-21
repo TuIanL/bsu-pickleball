@@ -1,8 +1,8 @@
 # projection-diagnostics Specification
 
 ## Purpose
-TBD - created by syncing change improve-player-court-projection-reliability.
 
+定义投影全链路诊断：JSONL 诊断日志与投影诊断叠加视频。
 ## Requirements
 ### Requirement: 投影全链路 JSONL 诊断日志
 

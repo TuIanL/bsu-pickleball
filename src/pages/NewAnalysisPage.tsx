@@ -8,6 +8,9 @@ import { PageFrame } from "../components/PageFrame";
 import { Field } from "../components/Field";
 import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
 import { CourtCornerCalibrator } from "../components/platform/CourtCornerCalibrator";
+import { AnalysisRosterConfirmation } from "../components/platform/AnalysisRosterConfirmation";
+import { AnalysisFlowSelector, type AnalysisFlowMode } from "../components/platform/AnalysisFlowSelector";
+import type { RosterConfirmationRequest } from "../types/rallyContext";
 import {
   uploadVideo,
   createAnalysisJob,
@@ -46,6 +49,20 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<DiagnosticNotice | null>(null);
+  // 分析前名册/端位确认：随 Job 冻结。默认跳过，用户主动填写才提交名册。
+  const [rosterConfirmation, setRosterConfirmation] = useState<RosterConfirmationRequest>({
+    skipped: true,
+    entries: [],
+  });
+  const [analysisFlow, setAnalysisFlow] = useState<AnalysisFlowMode>("new");
+
+  const handleAnalysisFlowChange = (next: AnalysisFlowMode) => {
+    setAnalysisFlow(next);
+    if (next === "legacy") {
+      // 旧流程不消费名册/端位确认，避免把上一次新流程的选择带入任务。
+      setRosterConfirmation({ skipped: true, entries: [] });
+    }
+  };
 
   // 当 videoId 传入时自动设置，并预填 fps
   useEffect(() => {
@@ -136,6 +153,8 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         useDemoFallback: false,
         enableModelInference,
         enablePoseInference,
+        useRallyContext: analysisFlow === "new",
+        rosterConfirmation,
       });
       rememberAnalysisJob(job);
       // 统一生命周期：创建成功后进入 Analysis Progress（replace，Back 不回已提交的 Setup）。
@@ -252,6 +271,20 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               onComplete={handleCalibrationComplete}
             />
           ) : null}
+
+          <AnalysisFlowSelector value={analysisFlow} onChange={handleAnalysisFlowChange} />
+
+          {analysisFlow === "new" ? (
+            <AnalysisRosterConfirmation
+              videoId={uploadedVideoId ?? videoIdParam}
+              matchFormat={metadata.matchFormat === "singles" ? "singles" : "doubles"}
+              onChange={setRosterConfirmation}
+            />
+          ) : (
+            <div className="mt-4 rounded-2xl border border-[#F4D8A8] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
+              已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要场地控制画像时，请切回新流程。
+            </div>
+          )}
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <Field label="比赛名称">

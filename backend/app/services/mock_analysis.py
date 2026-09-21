@@ -75,6 +75,13 @@ def _demo_settings():
     return get_settings()
 
 
+def _rally_context_requested(payload: AnalysisJobCreate) -> bool:
+    """Resolve the per-job flow choice, falling back to the new global default."""
+    from app.core.config import rally_context_enabled_for
+
+    return rally_context_enabled_for(payload)
+
+
 def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult) -> None:
     # Worker 完成回调：保存基础结果 → canonical 事实层 → normalized metrics → insights → 生成报告。
     # post-pipeline 组合失败只影响可选 artifact，不影响主视觉结果；demo 不生成真实事件。
@@ -182,9 +189,23 @@ def create_mock_job(metadata: AnalysisUploadMetadata) -> AnalysisJobSummary:
     return create_analysis_job(AnalysisJobCreate(metadata=metadata))
 
 
+def _context_kwargs(fields: dict) -> dict:
+    """把落盘后的名册/上下文 hash 透传进 JobStore.create_job，保证签名一致。"""
+    if not fields:
+        return {}
+    return {
+        "roster_hash": fields.get("roster_hash"),
+        "roster_status": fields.get("roster_status"),
+        "context_input_hash": fields.get("context_input_hash"),
+        "context_set_hash": fields.get("context_set_hash"),
+        "context_status": fields.get("context_status"),
+    }
+
+
 def create_analysis_job(
     payload: AnalysisJobCreate,
     background_tasks: BackgroundTasks | None = None,
+    db: Session | None = None,
 ) -> AnalysisJobSummary:
     # 创建分析任务的主函数。根据是否有 videoId 分两种大情况：
     #   - 有 videoId：进入"真实分析"流程（可能排队/后台跑）；
@@ -193,8 +214,20 @@ def create_analysis_job(
     now = utc_now()
 
     if payload.analysisKind == "multiview":
+        multiview_context_plan: dict | None = None
+        if (
+            db is not None
+            and _rally_context_requested(payload)
+            and (payload.rosterConfirmation is not None or payload.metadata.capture_take_id)
+        ):
+            from app.services.analysis_rally_context_service import plan_context_for_job
+
+            multiview_context_plan = plan_context_for_job(db, payload=payload)
         # 双摄协同分析：Coordinator 创建 1 个 public Parent + 2 个 dedicated internal child
-        parent = _get_coordinator().create_multiview_job(payload)
+        parent = _get_coordinator().create_multiview_job(
+            payload,
+            context_plan=multiview_context_plan,
+        )
         with _LOCK:
             JOBS[parent.id] = parent
             for ref in parent.sourceJobs:
@@ -233,25 +266,53 @@ def create_analysis_job(
                 frameStride=payload.frameStride,
                 recordingSessionId=payload.recording_session_id,
                 cameraSlot=payload.camera_slot,
+                rallyContextMode="new" if _rally_context_requested(payload) else "legacy",
             )
             return _save_job(job)
 
+        # 名册/端位确认与 Job-bound 回合上下文：在签名之前规划（纯计算、无副作用），
+        # 使"相同媒体 + 不同名册或上下文"成为不同输入，绝不会复用旧身份/队伍/端位结果。
+        context_plan: dict = {}
+        context_fields: dict = {}
+        if (
+            db is not None
+            and _rally_context_requested(payload)
+            and (payload.rosterConfirmation is not None or payload.metadata.capture_take_id)
+        ):
+            from app.services.analysis_rally_context_service import plan_context_for_job
+
+            context_plan = plan_context_for_job(db, payload=payload)
+
         # 视频存在：先算签名，若要求"不强制新版本"且已有相同任务，则复用之（去重）
-        input_signature, config_signature = analysis_signature(payload)
+        input_signature, config_signature = analysis_signature(
+            payload,
+            roster_hash=context_plan.get("roster_hash"),
+            context_input_hash=context_plan.get("context_input_hash"),
+        )
         if not payload.requestNewVersion:
             existing = _JOB_STORE.find_by_signature(input_signature, config_signature)
             if existing is not None:
                 return existing
 
+        # 去重通过后才落盘名册与上下文，避免为未创建的 Job 留下孤儿记录。
+        if context_plan and db is not None:
+            from app.services.analysis_rally_context_service import persist_context_binding
+
+            planned_job_id = f"job-{uuid4().hex[:10]}"
+            context_fields = persist_context_binding(db, job_id=planned_job_id, plan=context_plan)
+            db.commit()
+        else:
+            planned_job_id = None
+
         if background_tasks is not None and _WORKER is not None and _worker_is_embedded():
             # embedded 兼容模式仍可由 Web 请求触发指定任务；external 模式只入队。
-            job = _JOB_STORE.create_job(payload)
+            job = _JOB_STORE.create_job(payload, job_id=planned_job_id, **_context_kwargs(context_fields))
             with _LOCK:
                 JOBS[job.id] = job
             background_tasks.add_task(run_analysis_job, job.id, payload, job.reportId or f"PV-{job.id.upper()}")
         else:
             # 非 Web 场景（如脚本）：创建任务并通知 Worker；若 Worker 没启用则同步跑一个
-            job = _JOB_STORE.create_job(payload)
+            job = _JOB_STORE.create_job(payload, job_id=planned_job_id, **_context_kwargs(context_fields))
             with _LOCK:
                 JOBS[job.id] = job
             if _WORKER is not None:

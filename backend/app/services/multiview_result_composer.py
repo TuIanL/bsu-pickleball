@@ -286,6 +286,67 @@ def _sample_timestamp_seconds(sample: dict[str, object]) -> float:
     return 0.0
 
 
+def _is_canonical_player_id(value: object) -> bool:
+    """Validate an already-declared canonical Player_N id without inferring it."""
+    if not isinstance(value, str) or not value.startswith("Player_"):
+        return False
+    suffix = value.removeprefix("Player_")
+    return bool(suffix) and suffix.isdecimal()
+
+
+def _late_fusion_direct_roster_entries(diagnostics: dict[str, object]) -> list[dict[str, object]]:
+    """Extract only unambiguous global → reference Player_N associations.
+
+    Late fusion historically exposed no Parent-owned roster manifest.  The
+    association diagnostics are the sole direct record that a fused global id
+    belongs to a reference-view local identity.  A slot number is never
+    manufactured here; duplicate or malformed decisions are excluded so
+    downstream factual metrics can fail closed.
+    """
+    decisions = diagnostics.get("association_decisions")
+    if not isinstance(decisions, list):
+        return []
+
+    candidates: dict[str, set[str]] = {}
+    evidence_by_pair: dict[tuple[str, str], dict[str, object]] = {}
+    canonical_owners: dict[str, set[str]] = {}
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            continue
+        global_id = str(decision.get("global_player_id") or "")
+        player_id = decision.get("reference_view_player_id")
+        if not global_id or not _is_canonical_player_id(player_id):
+            continue
+        canonical_id = str(player_id)
+        candidates.setdefault(global_id, set()).add(canonical_id)
+        canonical_owners.setdefault(canonical_id, set()).add(global_id)
+        evidence_by_pair[(global_id, canonical_id)] = {
+            "reference_view_player_id": canonical_id,
+            "secondary_view_player_id": decision.get("secondary_view_player_id"),
+            "association_confidence": decision.get("confidence"),
+        }
+
+    entries: list[dict[str, object]] = []
+    for global_id, canonical_ids in sorted(candidates.items()):
+        if len(canonical_ids) != 1:
+            continue
+        canonical_id = next(iter(canonical_ids))
+        if len(canonical_owners[canonical_id]) != 1:
+            continue
+        entries.append(
+            {
+                "global_player_id": global_id,
+                "player_id": canonical_id,
+                "label": f"P{canonical_id.removeprefix('Player_')}",
+                "bindings": {},
+                "mapping_method": "direct_reference_association",
+                "mapping_confirmed": True,
+                "mapping_evidence": evidence_by_pair[(global_id, canonical_id)],
+            }
+        )
+    return entries
+
+
 def _copy_tree_if_exists(src: Path, dst: Path) -> bool:
     """复制产物目录（如 serve_clips / position heatmaps 目录）到目标。"""
     if not src.exists():
@@ -620,6 +681,43 @@ class MultiViewResultComposer:
         logger.info("发布 fused 产物到 Parent %s（manifest: %s）", parent_job_id, manifest)
         return manifest
 
+    def _publish_late_fusion_roster_artifact(
+        self,
+        *,
+        parent_job_id: str,
+        diagnostics: dict[str, object],
+        artifacts: AnalysisArtifacts,
+        expected_player_count: int,
+    ) -> None:
+        """Persist a direct identity-only roster for a late-fusion Parent.
+
+        The Parent may inherit a child trajectory, but the kitchen-arrival
+        metric must bind samples through the Parent's fused global ids.  This
+        manifest is purposefully narrower than the UI roster contract: an
+        association is published only when diagnostics directly associate it
+        with a reference ``Player_N``.  Missing/ambiguous associations remain
+        unavailable instead of being assigned a deterministic display slot.
+        """
+        players = _late_fusion_direct_roster_entries(diagnostics)
+        payload: dict[str, object] = {
+            "schema_version": "global-player-roster.v1",
+            "expected_player_count": expected_player_count,
+            "roster_occupied_count": len(players),
+            "confirmed_player_count": len(players),
+            "status": "confirmed" if players else "unavailable",
+            "players": players,
+        }
+        path = self.storage.roster_manifest_json_path(parent_job_id)
+        self.storage.write_json_atomic(path, payload)
+        artifacts.roster_manifest_json_path = str(path)
+        artifacts.roster_url = f"/api/analysis/jobs/{parent_job_id}/artifacts/roster"
+        artifacts.roster_status = "available" if players else "unavailable"
+        artifacts.roster_detail = (
+            f"已发布 {len(players)} 条直接 reference identity 映射"
+            if players
+            else "融合诊断缺少可确认的 global → reference Player_N 映射"
+        )
+
     # ---- 组装 AnalysisPipelineResult -----------------------------------------
 
     def build_pipeline_result(
@@ -652,6 +750,12 @@ class MultiViewResultComposer:
             fused_artifact,
             diagnostics,
             analysis_source,
+        )
+        self._publish_late_fusion_roster_artifact(
+            parent_job_id=job.id,
+            diagnostics=diagnostics,
+            artifacts=artifacts,
+            expected_player_count=match_context.expected_player_count,
         )
         view_a = job.viewRuns.get("cam_1") if job.viewRuns else None
         view_b = job.viewRuns.get("cam_2") if job.viewRuns else None

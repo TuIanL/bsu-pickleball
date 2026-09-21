@@ -33,6 +33,7 @@ from app.services.capture_storage_service import sync_calibration_path
 from app.services.dual_camera_sync import summarize_frame_timing_sidecar
 from app.services.job_orchestration import (
     JobStore,
+    analysis_signature,
     compute_progress_from_stages,
     current_stage_from_stages,
     merge_stage_progress,
@@ -640,6 +641,7 @@ class MultiViewAnalysisCoordinator:
                 clipEndMs=child_end,
                 enableModelInference=parent.enableModelInference,
                 enablePoseInference=parent.enablePoseInference,
+                useRallyContext=(parent.rallyContextMode == "new"),
                 analysisKind="single_view",
                 segmentationRequired=False,
             )
@@ -679,7 +681,12 @@ class MultiViewAnalysisCoordinator:
         updated = self.store.update(parent.id, **updates)
         return updated or parent
 
-    def create_multiview_job(self, payload: AnalysisJobCreate) -> AnalysisJobSummary:
+    def create_multiview_job(
+        self,
+        payload: AnalysisJobCreate,
+        *,
+        context_plan: dict[str, object] | None = None,
+    ) -> AnalysisJobSummary:
         """创建 1 个 public Parent + 每个 view 一个 dedicated internal child。"""
         payload = _restore_existing_canonical_input(
             payload,
@@ -768,10 +775,75 @@ class MultiViewAnalysisCoordinator:
             priority=payload.priority,
             enableModelInference=payload.enableModelInference,
             enablePoseInference=payload.enablePoseInference,
+            useRallyContext=payload.useRallyContext,
+            requestNewVersion=payload.requestNewVersion,
             multiview=mv,
             segmentationRequired=payload.segmentationRequired,
         )
-        parent = self.store.create_job(parent_payload)
+
+        # Parent 也是一个真实的分析提交，必须和 single-view 一样按最终
+        # canonical input + configuration 签名去重。尤其是双摄的 context
+        # hash 要参与签名，否则同一媒体在名册/回合上下文不同时可能错误复用
+        # 旧 Parent。显式 requestNewVersion 仍然允许用户创建新版本。
+        roster_hash = context_plan.get("roster_hash") if context_plan else None
+        context_input_hash = context_plan.get("context_input_hash") if context_plan else None
+        input_signature, config_signature = analysis_signature(
+            parent_payload,
+            roster_hash=roster_hash if isinstance(roster_hash, str) else None,
+            context_input_hash=context_input_hash if isinstance(context_input_hash, str) else None,
+        )
+        if not parent_payload.requestNewVersion:
+            existing = self.store.find_by_signature(input_signature, config_signature)
+            if existing is not None:
+                return existing
+
+        context_kwargs: dict[str, object] = {}
+        if context_plan:
+            context_kwargs = {
+                "roster_hash": context_plan.get("roster_hash"),
+                "context_input_hash": context_plan.get("context_input_hash"),
+                # context_set_hash includes the final Job id.  The Parent id is
+                # allocated by create_job, so it must be written only after the
+                # context row is persisted with that id below.
+                "context_set_hash": None,
+                "context_status": None,
+            }
+        parent = self.store.create_job(parent_payload, **context_kwargs)
+
+        # Parent id 只有在 JobStore 分配后才存在；现在才把预计算的、无副作用
+        # context plan 固化到该 Parent。这样签名先包含 context，持久化又不会
+        # 留下绑定到不存在 Job 的孤儿记录。
+        if context_plan:
+            try:
+                from app.database import get_session_factory
+                from app.services.analysis_rally_context_service import persist_context_binding
+
+                context_db = get_session_factory()()
+                try:
+                    persisted = persist_context_binding(
+                        context_db,
+                        job_id=parent.id,
+                        plan=context_plan,
+                    )
+                    context_db.commit()
+                finally:
+                    context_db.close()
+                parent = self.store.update(
+                    parent.id,
+                    rosterSnapshotHash=persisted.get("roster_hash"),
+                    rosterStatus=persisted.get("roster_status"),
+                    analysisRallyContextSetHash=persisted.get("context_set_hash"),
+                    analysisRallyContextStatus=persisted.get("context_status"),
+                ) or parent
+            except Exception:
+                logger.exception("Unable to persist frozen rally context for multiview Parent %s", parent.id)
+                parent = self.store.update(
+                    parent.id,
+                    rosterSnapshotHash=None,
+                    rosterStatus="unavailable",
+                    analysisRallyContextSetHash=None,
+                    analysisRallyContextStatus="unavailable",
+                ) or parent
 
         frame_payload = mv.canonicalFrame
         canonical_frame = resolve_or_create_canonical_court_frame(
@@ -807,6 +879,7 @@ class MultiViewAnalysisCoordinator:
                 priority=payload.priority,
                 enableModelInference=payload.enableModelInference,
                 enablePoseInference=payload.enablePoseInference,
+                useRallyContext=payload.useRallyContext,
                 multiview=mv,
                 segmentationRequired=True,
             )
@@ -895,6 +968,7 @@ class MultiViewAnalysisCoordinator:
                 clipEndMs=child_clip_end,
                 enableModelInference=payload.enableModelInference,
                 enablePoseInference=payload.enablePoseInference,
+                useRallyContext=payload.useRallyContext,
                 analysisKind="single_view",
             )
             child = self.store.create_job(child_payload)

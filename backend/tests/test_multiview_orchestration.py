@@ -65,10 +65,12 @@ def make_multiview_payload(
     execution_mode: str = "late_fusion_v1",
     scene_mode: str = "approximate",
     scene_revision: int | None = None,
+    request_new_version: bool = False,
 ) -> AnalysisJobCreate:
     return AnalysisJobCreate(
         metadata=make_metadata(capture_take_id=capture_take_id),
         analysisKind="multiview",
+        requestNewVersion=request_new_version,
         multiview=MultiViewCreateRequest(
             referenceViewId="cam_1",
             views=[
@@ -182,6 +184,24 @@ def test_coordinator_creates_parent_and_dedicated_children(monkeypatch, tmp_path
     assert claimed is not None and claimed.visibility == "internal"
 
 
+def test_coordinator_deduplicates_same_parent_signature(monkeypatch, tmp_path):
+    mock_analysis, _ = _coordinator_with_patches(monkeypatch, tmp_path)
+    coord = mock_analysis._get_coordinator()
+    payload = make_multiview_payload()
+
+    first = coord.create_multiview_job(payload)
+    second = coord.create_multiview_job(payload)
+
+    assert second.id == first.id
+    assert len(mock_analysis._JOB_STORE.list()) == 3  # one Parent + two owned children
+
+    new_version = coord.create_multiview_job(
+        payload.model_copy(update={"requestNewVersion": True})
+    )
+    assert new_version.id != first.id
+    assert len(mock_analysis._JOB_STORE.list()) == 6
+
+
 def test_coordinator_parent_inherits_reference_child_video_id(monkeypatch, tmp_path):
     mock_analysis, _ = _coordinator_with_patches(monkeypatch, tmp_path)
     coord = mock_analysis._get_coordinator()
@@ -274,7 +294,7 @@ def test_coordinator_advances_to_fallback_and_failed(monkeypatch, tmp_path):
     assert mock_analysis._JOB_STORE.get(parent.id).orchestrationStatus == "fallback_ready"
 
     # 双路失败 → Parent failed
-    parent2 = coord.create_multiview_job(make_multiview_payload())
+    parent2 = coord.create_multiview_job(make_multiview_payload(request_new_version=True))
     for ref in parent2.sourceJobs:
         child = mock_analysis._JOB_STORE.get(ref.jobId)
         mock_analysis._JOB_STORE.mark_failed(child, stages=child.stages, message="failed")
@@ -282,7 +302,7 @@ def test_coordinator_advances_to_fallback_and_failed(monkeypatch, tmp_path):
     assert mock_analysis._JOB_STORE.get(parent2.id).canonicalStatus == "failed"
 
     # 一路成功 + 一路 Worker 失联仍可确定性降级；双路失联则 Parent 也失联。
-    parent3 = coord.create_multiview_job(make_multiview_payload())
+    parent3 = coord.create_multiview_job(make_multiview_payload(request_new_version=True))
     child_a = mock_analysis._JOB_STORE.get(parent3.sourceJobs[0].jobId)
     child_b = mock_analysis._JOB_STORE.get(parent3.sourceJobs[1].jobId)
     mock_analysis._JOB_STORE.mark_succeeded(child_a, stages=child_a.stages)
@@ -290,7 +310,7 @@ def test_coordinator_advances_to_fallback_and_failed(monkeypatch, tmp_path):
     mock_analysis._get_coordinator().reconcile_all()
     assert mock_analysis._JOB_STORE.get(parent3.id).orchestrationStatus == "fallback_ready"
 
-    parent4 = coord.create_multiview_job(make_multiview_payload())
+    parent4 = coord.create_multiview_job(make_multiview_payload(request_new_version=True))
     for ref in parent4.sourceJobs:
         child = mock_analysis._JOB_STORE.get(ref.jobId)
         mock_analysis._JOB_STORE.mark_interrupted(child)
@@ -678,6 +698,119 @@ def test_composer_publishes_fused_artifacts_with_manifest(tmp_path):
     assert artifacts["fusionDiagnostics"]["url"].startswith("/api/analysis/jobs/job-parent-1/")
     assert "mvf_" not in artifacts["playerTrajectory"]["url"]
     assert loaded["analysis_source"]["mode"] == "multiview_fused"
+
+
+def test_late_fusion_roster_keeps_only_unambiguous_direct_reference_mappings() -> None:
+    from app.services.multiview_result_composer import _late_fusion_direct_roster_entries
+
+    entries = _late_fusion_direct_roster_entries(
+        {
+            "association_decisions": [
+                {
+                    "global_player_id": "global_player_1",
+                    "reference_view_player_id": "Player_1",
+                    "secondary_view_player_id": "Player_3",
+                    "confidence": 0.9,
+                },
+                # Same global id mapped to two identities: never choose by list order.
+                {
+                    "global_player_id": "global_player_2",
+                    "reference_view_player_id": "Player_2",
+                    "secondary_view_player_id": "Player_4",
+                    "confidence": 0.9,
+                },
+                {
+                    "global_player_id": "global_player_2",
+                    "reference_view_player_id": "Player_4",
+                    "secondary_view_player_id": "Player_2",
+                    "confidence": 0.8,
+                },
+                # Same canonical id owned by two globals is equally ambiguous.
+                {
+                    "global_player_id": "global_player_3",
+                    "reference_view_player_id": "Player_1",
+                    "secondary_view_player_id": None,
+                    "confidence": 0.0,
+                },
+                # Local labels outside the frozen Player_N namespace cannot be normalized here.
+                {
+                    "global_player_id": "global_player_4",
+                    "reference_view_player_id": "P4",
+                    "secondary_view_player_id": None,
+                    "confidence": 0.0,
+                },
+            ]
+        }
+    )
+    assert entries == []
+
+    entries = _late_fusion_direct_roster_entries(
+        {
+            "association_decisions": [
+                {
+                    "global_player_id": "global_player_1",
+                    "reference_view_player_id": "Player_1",
+                    "secondary_view_player_id": "Player_3",
+                    "confidence": 0.9,
+                },
+                {
+                    "global_player_id": "global_player_2",
+                    "reference_view_player_id": "Player_2",
+                    "secondary_view_player_id": "Player_4",
+                    "confidence": 0.8,
+                },
+            ]
+        }
+    )
+    assert [(entry["global_player_id"], entry["player_id"]) for entry in entries] == [
+        ("global_player_1", "Player_1"),
+        ("global_player_2", "Player_2"),
+    ]
+    assert all(entry["mapping_confirmed"] is True for entry in entries)
+    assert all(entry["mapping_method"] == "direct_reference_association" for entry in entries)
+
+
+def test_late_fusion_parent_persists_direct_identity_roster(tmp_path) -> None:
+    from app.schemas.pipeline import AnalysisArtifacts
+    from app.services.multiview_result_composer import MultiViewResultComposer
+
+    storage = make_temp_storage(tmp_path)
+    artifacts = AnalysisArtifacts()
+    MultiViewResultComposer(storage)._publish_late_fusion_roster_artifact(
+        parent_job_id="job-parent",
+        diagnostics={
+            "association_decisions": [
+                {
+                    "global_player_id": "global_player_1",
+                    "reference_view_player_id": "Player_1",
+                    "secondary_view_player_id": "Player_3",
+                    "confidence": 0.9,
+                }
+            ]
+        },
+        artifacts=artifacts,
+        expected_player_count=4,
+    )
+
+    roster = storage.read_json(storage.roster_manifest_json_path("job-parent"))
+    assert roster["status"] == "confirmed"
+    assert roster["expected_player_count"] == 4
+    assert roster["players"] == [
+        {
+            "global_player_id": "global_player_1",
+            "player_id": "Player_1",
+            "label": "P1",
+            "bindings": {},
+            "mapping_method": "direct_reference_association",
+            "mapping_confirmed": True,
+            "mapping_evidence": {
+                "reference_view_player_id": "Player_1",
+                "secondary_view_player_id": "Player_3",
+                "association_confidence": 0.9,
+            },
+        }
+    ]
+    assert artifacts.roster_url == "/api/analysis/jobs/job-parent/artifacts/roster"
 
 
 # ---- Task 8.4: fusionRunId 幂等（崩溃后重启复用同一 Run） -------------------------

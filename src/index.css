@@ -338,3 +338,55 @@ button {
 }
 /* 解除占位示例：.pb-vision-theme.has-history .pb-long-term-compare { display:block; } */
 
+/* 片段页自动回合中央提示（SegmentVideoPlayer）：
+   进入新回合时闪现一次，2 秒后由 .auto-rally-cue--visible 移除而淡出。
+   高不透明度字 + 深色描边，保证在明亮画面上仍可读。 */
+.auto-rally-cue {
+  font-size: clamp(28px, 6vw, 64px);
+  font-weight: 900;
+  line-height: 1.1;
+  color: #f1efe8;
+  opacity: 0;
+  transition: opacity 500ms ease;
+  -webkit-text-stroke: 2px rgba(0, 0, 0, 0.55);
+  paint-order: stroke;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+  user-select: none;
+}
+.auto-rally-cue--visible {
+  opacity: 0.9;
+}
+
+/* 片段页播放进度条：接管原生 range 的轨道渲染以承载自动回合区间配色，
+   滑块与拖拽链路由原生 range 自身负责，仅重绘外观。未启用配色时不加此类。 */
+.rally-band-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.rally-band-progress::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+}
+.rally-band-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: #22c55e;
+  border: 2px solid #1a1a2e;
+}
+.rally-band-progress::-moz-range-track {
+  height: 6px;
+  background: transparent;
+}
+.rally-band-progress::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #1a1a2e;
+  border-radius: 50%;
+  background: #22c55e;
+}
+

@@ -1,8 +1,8 @@
 # product-landing Specification
 
 ## Purpose
-TBD - created by syncing change redesign-product-entry-and-capture-console.
 
+定义产品首页：双工作流入口、上传工作流返回比赛库、顶部无导航 Tab，且首页能力卡片为纯展示。
 ## Requirements
 ### Requirement: 双工作流入口首页
 

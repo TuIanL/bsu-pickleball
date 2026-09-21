@@ -3,6 +3,7 @@ import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, Layers, LineChart,
 import type { NavigateFn, AppPath, NavigatePath, ReportType } from "../app/navigationTypes";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, FusedPlayerOverlayArtifact, StructuredVisualizationData, ReconstructedBallTrajectoryArtifact } from "../types/report";
 import type { ShotRallyEventsArtifact } from "../types/shotRallyEvents";
+import type { KitchenArrivalArtifact } from "../types/kitchenArrival";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { RailMeta } from "../components/RailMeta";
@@ -16,15 +17,17 @@ import StructuredHeatmap from "../components/platform/StructuredHeatmap";
 import StructuredScatterPlot from "../components/platform/StructuredScatterPlot";
 import StructuredZoneHeatmap from "../components/platform/StructuredZoneHeatmap";
 import RallyShotTimeline from "../components/platform/RallyShotTimeline";
+import KitchenArrivalCard from "../components/platform/KitchenArrivalCard";
 import { supportedReportTypes } from "../app/router";
 import { taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
 import type { LibraryView } from "../components/library/viewCapabilities";
-import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots, getReconstructedBallTrajectory, getShotRallyEvents } from "../services/analysisClient";
+import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, getAnalysisResult, getVideoStreamUrl, getStructuredVizData, resolveAnalysisAssetUrl, getBallTrajectory, getBounceEvents, getPoseOverlay, getServeEvents, getTrackingOverlay, getFusedPlayerOverlay, getAnalysisOverlayVideoUrl, getPositionHeatmaps, getPositionScatterPlots, getReconstructedBallTrajectory, getShotRallyEvents, getKitchenArrival } from "../services/analysisClient";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles } from "../utils/analysisHelpers";
 import { resolveDisplayViewId, withDisplayViewQuery } from "../utils/multiviewDisplay";
 import { getReportCapability, type ReportCapability } from "../services/reportCapability";
 import { useDisplayViewGeometry, type DisplayViewGeometryInput } from "../hooks/useDisplayViewGeometry";
+import { kitchenArrivalCardEnabled } from "../config/featureFlags";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
@@ -81,6 +84,8 @@ function useVisualAnalysisReport(jobId?: string) {
     result: AnalysisPipelineResult | null;
     shotRallyEvents: ShotRallyEventsArtifact | null;
     shotRallyEventsLoadState: OverlayLoadState;
+    kitchenArrival: KitchenArrivalArtifact | null;
+    kitchenArrivalLoadState: OverlayLoadState;
     scatterManifest: VisualizationManifest | null;
     scatterLoadState: OverlayLoadState;
     serveEvents: ServeEventsArtifact | null;
@@ -119,6 +124,8 @@ function useVisualAnalysisReport(jobId?: string) {
         heatmapsLoadState: OverlayLoadState;
         shotRallyEvents: ShotRallyEventsArtifact | null;
         shotRallyEventsLoadState: OverlayLoadState;
+        kitchenArrival: KitchenArrivalArtifact | null;
+        kitchenArrivalLoadState: OverlayLoadState;
         scatterManifest: VisualizationManifest | null;
         scatterLoadState: OverlayLoadState;
       }>
@@ -146,6 +153,16 @@ function useVisualAnalysisReport(jobId?: string) {
         const shouldLoadHeatmaps = Boolean(pipelineResult?.artifacts.heatmaps_url);
         const shouldLoadScatter = Boolean(pipelineResult?.artifacts.scatter_plots_url);
         const shouldLoadShotRallyEvents = Boolean(pipelineResult?.artifacts.shot_rally_events_url);
+        // Artifact computation and card rollout are separate switches.  A
+        // skipped artifact must not trigger a request or leave a loading
+        // placeholder in the gallery, and operators can hide the card from
+        // the frontend without deleting persisted artifacts.
+        const shouldLoadKitchenArrival = Boolean(
+          kitchenArrivalCardEnabled &&
+            pipelineResult?.artifacts.kitchen_arrival_card_enabled !== false &&
+            pipelineResult?.artifacts.kitchen_arrival_url &&
+            pipelineResult.artifacts.kitchen_arrival_status !== "skipped",
+        );
 
         if (!alive) {
           return;
@@ -170,6 +187,8 @@ function useVisualAnalysisReport(jobId?: string) {
           result: pipelineResult,
           shotRallyEvents: null,
           shotRallyEventsLoadState: shouldLoadShotRallyEvents ? "loading" : "unavailable",
+          kitchenArrival: null,
+          kitchenArrivalLoadState: shouldLoadKitchenArrival ? "loading" : "unavailable",
           scatterManifest: null,
           scatterLoadState: shouldLoadScatter ? "loading" : "unavailable",
           serveEvents: null,
@@ -342,6 +361,19 @@ function useVisualAnalysisReport(jobId?: string) {
               });
             });
         }
+
+        if (pipelineResult && shouldLoadKitchenArrival) {
+          getKitchenArrival(pipelineResult)
+            .then((artifact) => {
+              setOverlayState({
+                kitchenArrival: artifact,
+                kitchenArrivalLoadState: artifact ? artifact.status === "failed" ? "failed" : "available" : "unavailable",
+              });
+            })
+            .catch(() => {
+              setOverlayState({ kitchenArrival: null, kitchenArrivalLoadState: "failed" });
+            });
+        }
       } catch (error) {
         if (alive) {
           setLoadedResult({
@@ -363,6 +395,8 @@ function useVisualAnalysisReport(jobId?: string) {
             result: null,
             shotRallyEvents: null,
             shotRallyEventsLoadState: "unavailable",
+            kitchenArrival: null,
+            kitchenArrivalLoadState: "unavailable",
             scatterManifest: null,
             scatterLoadState: "unavailable",
             serveEvents: null,
@@ -402,6 +436,8 @@ function useVisualAnalysisReport(jobId?: string) {
       result: null,
       shotRallyEvents: null,
       shotRallyEventsLoadState: "idle" as OverlayLoadState,
+      kitchenArrival: null,
+      kitchenArrivalLoadState: "idle" as OverlayLoadState,
       scatterManifest: null,
       scatterLoadState: "idle" as OverlayLoadState,
       serveEvents: null,
@@ -433,6 +469,8 @@ function useVisualAnalysisReport(jobId?: string) {
       result: undefined,
       shotRallyEvents: undefined,
       shotRallyEventsLoadState: "idle" as OverlayLoadState,
+      kitchenArrival: undefined,
+      kitchenArrivalLoadState: "idle" as OverlayLoadState,
       scatterManifest: undefined,
       scatterLoadState: "idle" as OverlayLoadState,
       serveEvents: undefined,
@@ -463,6 +501,8 @@ function useVisualAnalysisReport(jobId?: string) {
     result: loadedResult.result,
     shotRallyEvents: loadedResult.shotRallyEvents,
     shotRallyEventsLoadState: loadedResult.shotRallyEventsLoadState,
+    kitchenArrival: loadedResult.kitchenArrival,
+    kitchenArrivalLoadState: loadedResult.kitchenArrivalLoadState,
     scatterManifest: loadedResult.scatterManifest,
     scatterLoadState: loadedResult.scatterLoadState,
     serveEvents: loadedResult.serveEvents,
@@ -494,6 +534,8 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     result,
     shotRallyEvents,
     shotRallyEventsLoadState,
+    kitchenArrival,
+    kitchenArrivalLoadState,
     scatterManifest,
     scatterLoadState,
     serveEvents,
@@ -806,6 +848,12 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               shotRallyEventsLoadState={shotRallyEventsLoadState}
               shotRallyEventsStatus={result?.artifacts.shot_rally_events_status}
               shotRallyEventsDetail={result?.artifacts.shot_rally_events_detail}
+              kitchenArrival={kitchenArrival ?? null}
+              kitchenArrivalLoadState={kitchenArrivalLoadState}
+              kitchenArrivalStatus={result?.artifacts.kitchen_arrival_status}
+              kitchenArrivalDetail={result?.artifacts.kitchen_arrival_detail}
+              kitchenArrivalCardEnabled={result?.artifacts.kitchen_arrival_card_enabled}
+              isDoubles={job?.metadata.matchFormat === "doubles"}
               jobId={jobId}
               onSeekToMs={handleTimelineSeek}
             />
@@ -943,6 +991,12 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               shotRallyEventsLoadState={shotRallyEventsLoadState}
               shotRallyEventsStatus={result?.artifacts.shot_rally_events_status}
               shotRallyEventsDetail={result?.artifacts.shot_rally_events_detail}
+              kitchenArrival={kitchenArrival ?? null}
+              kitchenArrivalLoadState={kitchenArrivalLoadState}
+              kitchenArrivalStatus={result?.artifacts.kitchen_arrival_status}
+              kitchenArrivalDetail={result?.artifacts.kitchen_arrival_detail}
+              kitchenArrivalCardEnabled={result?.artifacts.kitchen_arrival_card_enabled}
+              isDoubles={job?.metadata.matchFormat === "doubles"}
               jobId={jobId}
               onSeekToMs={handleTimelineSeek}
             />
@@ -1003,6 +1057,12 @@ function VisualizationArtifactGallery({
   shotRallyEventsLoadState,
   shotRallyEventsStatus,
   shotRallyEventsDetail,
+  kitchenArrival,
+  kitchenArrivalLoadState,
+  kitchenArrivalStatus,
+  kitchenArrivalDetail,
+  kitchenArrivalCardEnabled: backendKitchenArrivalCardEnabled,
+  isDoubles,
   jobId,
   onSeekToMs,
 }: {
@@ -1018,6 +1078,12 @@ function VisualizationArtifactGallery({
   shotRallyEventsLoadState: OverlayLoadState;
   shotRallyEventsStatus?: string;
   shotRallyEventsDetail?: string;
+  kitchenArrival: KitchenArrivalArtifact | null;
+  kitchenArrivalLoadState: OverlayLoadState;
+  kitchenArrivalStatus?: string;
+  kitchenArrivalDetail?: string;
+  kitchenArrivalCardEnabled?: boolean;
+  isDoubles?: boolean;
   jobId?: string;
   onSeekToMs?: (timestampMs: number) => void;
 }) {
@@ -1147,6 +1213,18 @@ function VisualizationArtifactGallery({
             status={shotRallyEventsStatus}
           />
         )}
+        {jobId &&
+        isDoubles &&
+        kitchenArrivalCardEnabled &&
+        backendKitchenArrivalCardEnabled !== false &&
+        kitchenArrivalStatus !== "skipped" ? (
+          <KitchenArrivalCard
+            artifact={kitchenArrival}
+            detail={kitchenArrivalDetail}
+            loadState={kitchenArrivalLoadState}
+            status={kitchenArrivalStatus}
+          />
+        ) : null}
       </div>
     </section>
   );

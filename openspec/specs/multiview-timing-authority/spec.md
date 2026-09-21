@@ -1,7 +1,8 @@
 # multiview-timing-authority Specification
 
 ## Purpose
-TBD - created by archiving change harden-multiview-timing-authority. Update Purpose after archive.
+
+定义多视角的 timing authority 分层：结构权威与质量门分离、authoritative joint eligibility 判定与诊断，以及历史登记视频的 sidecar 物化与权威持久化。
 ## Requirements
 ### Requirement: Timing authority 分层
 

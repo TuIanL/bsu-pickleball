@@ -1,7 +1,8 @@
 # source-video-io-reliability Specification
 
 ## Purpose
-TBD - created by archiving change harden-project-reliability-and-delivery. Update Purpose after archive.
+
+定义源视频 I/O 的可靠性契约：正确的 MIME 与文件资源释放、单范围与 HEAD 协议、有界上传和失败清理，以及封面生成不阻塞 API 事件循环。
 ## Requirements
 ### Requirement: 源视频 MIME 与文件资源释放
 

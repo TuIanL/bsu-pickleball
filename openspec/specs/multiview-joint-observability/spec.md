@@ -1,7 +1,8 @@
 # multiview-joint-observability Specification
 
 ## Purpose
-TBD - created by archiving change surface-multiview-joint-observability. Update Purpose after archive.
+
+定义双摄联合运行的可观测层：后端权威投影与独立状态域、执行模式适用性、同步与融合事实、recovery funnel 与 episode 分页筛选，以及 opt-in 的 canonical debug 回放与 per-player 显示诊断入口。
 ## Requirements
 ### Requirement: 后端权威可观测投影
 

@@ -1,7 +1,8 @@
 # multiview-bootstrap-display-backfill Specification
 
 ## Purpose
-TBD - created by archiving change fix-joint-bootstrap-visual-gap. Update Purpose after archive.
+
+定义 bootstrap 阶段的展示数据离线回填能力，使展示层无需在线跟踪即可呈现 bootstrap 结果。
 ## Requirements
 ### Requirement: Bootstrap display 离线展示回填
 系统 SHALL 在 joint_tracking_v2 任务完成后，基于首次 lock 映射（slot 第一次进入 locked 时记录的 `player_id` / `track_id` / `locked_frame_index`），对 bootstrap 窗口内已真实存在的原始 track 观测做 retrospective 展示回填，仅用于展示，MUST NOT 影响 authoritative 身份与指标。

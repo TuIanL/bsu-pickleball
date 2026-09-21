@@ -1,7 +1,8 @@
 # vidat-service-control Specification
 
 ## Purpose
-TBD - created by archiving change vidat-version-management. Update Purpose after archive.
+
+定义本地 Vidat 服务的状态查询与启停控制。
 ## Requirements
 ### Requirement: 本地 Vidat 服务状态
 系统 SHALL 提供当前本地 Vidat 静态服务的可区分状态，包括未运行、由本系统运行、由其他进程占用和状态未知。

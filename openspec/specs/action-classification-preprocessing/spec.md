@@ -1,7 +1,8 @@
 # action-classification-preprocessing Specification
 
 ## Purpose
-TBD - created by archiving change add-action-classification-preprocessing. Update Purpose after archive.
+
+定义动作分类数据集的预处理流水线：统一抽帧、球场 ROI 与光照增强、人体检测与目标球员选择、目标球员 crop 导出、连续帧 clip 构造及质量诊断 manifest，并提供 CLI 批量导出入口。
 ## Requirements
 ### Requirement: 动作分类预处理配置
 系统 SHALL 提供动作分类预处理配置，用于控制输入视频、输出目录、动作标签、目标 FPS、ROI、光照增强、检测阈值、目标选择、bbox 外扩、输出尺寸、clip 长度和滑窗步长。

@@ -1,7 +1,8 @@
 # multiview-analysis-reliability Specification
 
 ## Purpose
-TBD - created by archiving change multiview-reliability-hardening. Update Purpose after archive.
+
+定义多视角分析的可靠性契约：Association 与 Fusion 共享权威 FramePairingPlan、严格同步 authority、真实 effective mode 与多视角可靠性诊断。
 ## Requirements
 ### Requirement: 权威 FramePairingPlan
 

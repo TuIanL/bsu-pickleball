@@ -48,7 +48,64 @@
 
 - [x] 7.1 编写模型包部署与运维说明，明确产物目录、版本升级、校验、设备要求、缓存失效和故障排查方式。
 - [x] 7.2 运行并修复后端迁移、运行时、编排、窗口消费和前端测试套件中的相关回归。
-- [ ] 7.3 使用一组真实双机 Capture Take 执行正式路径冒烟验收，确认无需人工 QA 即可产出自动片段、绑定计划并完成分析。
+- [ ] 7.3 **[DEFERRED TO DEPLOYMENT]** 使用一组真实双机 Capture Take 执行正式路径冒烟验收。本仓库不具备可执行的素材条件（无真实签名模型包、无真实双机 CaptureTake），因此本项**不作为本变更的完成条件**，验收断言见下方《7.3 部署后验收清单》。
 - [x] 7.4 验证模型包缺失、同步不可用、低证据和有效空回合四种场景的最终任务状态、用户提示及可追溯诊断。
 
-> 7.3 待部署真实签名模型包并准备真实双机 Capture Take 后执行；当前仓库仅包含运行时、契约和测试 fixture，不具备可宣称正式冒烟通过的生产素材。
+---
+
+## 7.3 部署后验收清单（deferred to deployment）
+
+### 验收边界：为什么延后
+
+本变更在仓库内可验证的能力边界是**契约与编排正确性**；它**不含**「真实素材端到端冒烟通过」这一声明。两者的分界如下：
+
+| 维度 | 本变更已覆盖（仓库内可验证） | 本变更未覆盖（须部署后验证） |
+| --- | --- | --- |
+| 运行时实现 | 生产 Runtime、同步采样、模型加载缓存、失败分类 —— 由 2.5 单测覆盖 | 真实签名模型包在目标设备上的加载、设备兼容性与批处理配置 |
+| 数据契约 | `MatchStateSegmentationRun`、可空外键、迁移与旧数据兼容 —— 由 1.4 覆盖 | 真实 CaptureTake 上 run / segment / plan 的持久化与替代关系 |
+| 编排状态机 | `waiting_segmentation`、`joint_ready`、child 仅在切分后创建、重试/取消/恢复 —— 由 4.6 端到端状态测试覆盖 | Worker 在真实队列与真实媒体时长下的阶段推进 |
+| 结果策略 | 四场景终态、用户提示、诊断可追溯 —— 由 7.4 在 fixture 上覆盖 | 同一策略在真实模型输出分布下的稳定性 |
+| 前端收敛 | 组件测试确认不渲染/不调用 QA 操作 —— 由 6.5 覆盖 | 真实部署下 `SegmentManagerPage` 的来源分组与只读体验 |
+
+**归档语义**：7.3 保持未勾选，其含义是「未执行」，**不是**「未实现」。在 7.3 关闭之前，不得对外宣称双摄 `match_default` 自动回合切分已生产可用；其状态应表述为「运行时、契约与编排已完成并通过仓库内测试，生产冒烟验收待部署执行」。
+
+### 前置条件
+
+1. 已部署签名模型包（`models/match_state/`，含 package / version / weight SHA-256 与 decoder hash），且 `Settings` 的 package 目录、device、batch size、required profile 指向该包。
+2. 已准备至少一组真实双机 CaptureTake：两路 `CaptureTrack` 可用，同步标定已确认并具有 revision。
+3. 已确认目标设备的运行时依赖（推理后端、CUDA/CPU target）可用。
+
+### 断言清单（逐项记录结论）
+
+**A. 前置阶段进入**
+- A1 新建双摄 `match_default` Parent 后处于 `waiting_segmentation`，不被 Worker 直接领取。
+- A2 internal segmentation job 不出现在普通任务列表。
+- A3 进度阶段图中「回合自动切分」位于 `multiview-input-check` 之前。
+
+**B. 成功路径**
+- B1 Parent 绑定成功 run 的 `segmentation_run_id` 与 `window_plan_hash`。
+- B2 发布的自动回合为 `source=algorithm`、`status=inferred`，且 `segmentation_run_id` 非空。
+- B3 该 CaptureTake 上既有人工片段的 `segmentation_run_id` 仍为 null，边界未被改写。
+- B4 全程无人工 QA 介入，最终报告以该 window plan 作为有效时间依据。
+
+**C. 计划不可变性**
+- C1 分析运行期间对同一 CaptureTake 重跑切分（生成 Run 2）后，运行中的 Job 仍按 Run 1 的范围产出结果。
+- C2 Run 2 成功后旧 algorithm 片段被置为 `superseded`，人工片段不受影响。
+
+**D. 编排分支**
+- D1 `joint_tracking_v2`：切分成功后 Parent 转 `joint_ready`，随后执行联合分析。
+- D2 `late_fusion_v1`：`cam_1` / `cam_2` child 在切分成功后才被创建。
+
+**E. 失败与边界路径**（在真实素材上复核 7.4 已覆盖的策略）
+- E1 移除或篡改模型包 → `model_unavailable`，fail-fast，且无 child 残留。
+- E2 同步未确认 → `sync_unavailable`，fail-fast。
+- E3 证据不足的真实片段 → `low_evidence`，Parent 以质量错误结束。
+- E4 真实无回合片段 → `valid_no_rallies`，发布空 plan 并继续；回合派生指标标记为 `no_active_rallies`，不得回退为整场有效时间。
+
+**F. 前端与可追溯性**
+- F1 `SegmentManagerPage` 自动区只读，展示模型版本、生成时间与回合数，无候选接纳 / 边界编辑 / 边界复核入口。
+- F2 run summary 与 artifact 可读取，含模型身份、输入身份、同步 revision、decoder hash 与窗口计划 hash。
+
+### 验收记录要求
+
+关闭 7.3 时须在部署记录中写明：CaptureTake 标识、run id、`window_plan_hash`、模型包 SHA-256、目标设备与推理后端、A–F 各项结论、未通过项的处置方式。缺任一项不得宣称冒烟通过。

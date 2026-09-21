@@ -1,7 +1,8 @@
 # global-design-token-system Specification
 
 ## Purpose
-TBD - created by archiving change unify-global-design-tokens. Update Purpose after archive.
+
+定义全局设计 Token 层：状态色板统一、报告页收敛到深绿家系、素材库/工作台/侧边栏去硬编码，以及视觉层级与辅助色纪律。
 ## Requirements
 ### Requirement: 全局设计 Token 层
 系统 SHALL 在 `:root` 定义一套全局 CSS 设计 Token，作为当前主产品壳层（Library / Workspace / Capture / Sidebar / PB Vision Report）的唯一颜色来源；Token 命名 SHALL 沿用 `--capture-*` 前缀，且每个 Token SHALL 只保留一份权威定义（原位升级，不重复定义）。

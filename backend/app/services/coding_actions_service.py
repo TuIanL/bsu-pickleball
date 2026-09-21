@@ -16,6 +16,7 @@ from app.services import capture_coding_action_service as coding_svc
 from app.services import capture_segment_service as seg_svc
 from app.services import capture_take_service
 from app.services import live_coding_state_service as state_svc
+from app.services import rally_scoring_service as scoring_svc
 from app.services import timeline_event_service as event_svc
 from app.services.scoring_fsm import (
     HYBRID_21_RULESET,
@@ -191,7 +192,7 @@ def _apply_action(
     elif action == "start_game":
         created_events, updated_segments = _handle_start_game(db, take, state, timestamp_ms, payload)
     elif action == "start_next_rally":
-        created_events, updated_segments = _handle_start_next_rally(db, take, state, timestamp_ms)
+        created_events, updated_segments = _handle_start_next_rally(db, take, state, timestamp_ms, action_record.id)
     elif action == "end_rally":
         created_events, updated_segments = _handle_end_rally(db, take, state, timestamp_ms, "between_rallies")
     elif action == "end_game":
@@ -240,6 +241,14 @@ def _apply_action(
         result_json=result_json,
     )
 
+    # 计分事实发生了变化（改分/撤销/局盘边界）时，按有效 ledger 对账已封存的
+    # RallyScoringSnapshot：来源 action 失效则标记 undone，派生事实变化则追加
+    # 新 revision 并 supersede 旧版本。同事务完成，避免出现半更新状态。
+    if action in scoring_svc.SCORING_FACT_AFFECTING_ACTIONS:
+        scoring_snapshot_changes = scoring_svc.replay_scoring_snapshots(db, take.id)
+    else:
+        scoring_snapshot_changes = []
+
     result = _with_snapshot(
         db,
         take,
@@ -248,6 +257,7 @@ def _apply_action(
             "created_events": created_events,
             "updated_segments": updated_segments,
             "live_state": state_svc.state_to_dict(state),
+            "scoring_snapshot_changes": scoring_snapshot_changes,
         },
     )
 
@@ -465,7 +475,7 @@ def _handle_start_game(
 
 # 处理开始新分：确保 game 与 set 存在（必要时自动创建），关闭 intermission，创建 rally 区间
 def _handle_start_next_rally(
-    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int
+    db: Session, take: CaptureTake, state: LiveCodingState, timestamp_ms: int, action_id: str
 ) -> tuple[list[dict], list[dict]]:
     events: list[dict] = []
     segments: list[dict] = []
@@ -578,6 +588,29 @@ def _handle_start_next_rally(
     )
     events.append(_event_to_dict(event))
     segments.append(_segment_to_dict(seg))
+
+    # 在同一事务内封存"仅含计分事实"的快照：发球队、回合开始前比分、规则版本
+    # 与来源 action/event/revision。此处显式不写入名册或端位 —— 录制期还没有
+    # P1–P4 确认，写入会形成"引用未来对象"的时序矛盾。
+    scoring_svc.create_rally_scoring_snapshot(
+        db,
+        capture_take_id=take.id,
+        action_id=action_id,
+        event_id=event.id,
+        rally_id=seg.id,
+        ordinal=seg.ordinal,
+        scoring_state=ScoringState(
+            server_team=state.server_team,
+            score_a=state.score_a,
+            score_b=state.score_b,
+            games_won_a=state.games_won_a,
+            games_won_b=state.games_won_b,
+            scoring_phase=state.scoring_phase,
+        ),
+        action_revision=take.revision,
+        start_ms=timestamp_ms,
+        scoring_ruleset_version=state.scoring_ruleset_version,
+    )
 
     state_svc.upsert_state(
         db,

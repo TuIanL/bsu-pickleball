@@ -1,7 +1,8 @@
 # library-cover-preview Specification
 
 ## Purpose
-TBD - created by syncing change library-cover-cache-and-navigation-fixes.
+
+定义素材库封面预览：会话内缓存、按来源分派的封面渲染，并优先使用预生成 poster。
 ## Requirements
 ### Requirement: 封面会话内缓存
 

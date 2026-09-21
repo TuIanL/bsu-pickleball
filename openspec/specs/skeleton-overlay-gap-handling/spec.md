@@ -1,8 +1,8 @@
 # skeleton-overlay-gap-handling Specification
 
 ## Purpose
-Define how the frontend pose overlay playback handles gaps in the skeleton data stream, preventing visual freezing when pose frames are absent for extended durations. TBD - created by syncing change fix-skeleton-stutter.
 
+Define how the frontend pose overlay playback handles gaps in the skeleton data stream, preventing visual freezing when pose frames are absent for extended durations.
 ## Requirements
 ### Requirement: Long gap detection threshold
 The frontend overlay player SHALL define a configurable threshold (in frames or seconds) for detecting extended gaps in the pose overlay data stream.

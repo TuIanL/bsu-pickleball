@@ -1,7 +1,8 @@
 # analysis-worker-liveness Specification
 
 ## Purpose
-TBD - created by archiving change externalize-analysis-worker-liveness. Update Purpose after archive.
+
+定义分析 Worker 的存活与执行租约契约：心跳与超时判定、启动期任务恢复、跨进程任务控制面，以及外部 Worker 进程隔离。
 ## Requirements
 ### Requirement: Worker heartbeat and execution lease
 

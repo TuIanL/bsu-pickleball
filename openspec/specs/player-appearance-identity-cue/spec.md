@@ -1,7 +1,8 @@
 # player-appearance-identity-cue Specification
 
 ## Purpose
-TBD - created by archiving change stabilize-four-player-identification. Update Purpose after archive.
+
+定义球员外观身份线索：衣服分区外观描述子与 Tracklet / PlayerSlot 外观模板生命周期，appearance 仅作为受质量控制的软证据，并覆盖跨摄颜色归一化与隐私边界。
 ## Requirements
 ### Requirement: 衣服分区外观描述子
 系统 SHALL 只从 detector-backed 人体 bbox 提取球员外观描述子，分别表示上衣与下装区域的 HSV/Lab 颜色分布、颜色 moments 和可选粗纹理，并携带 bbox clipping、有效像素数、blur、brightness、saturation、occlusion 与综合 quality。系统 SHALL 优先使用 pose 划分 torso/legs；pose 不可用时 SHALL 使用明确版本化的 bbox 相对分区。

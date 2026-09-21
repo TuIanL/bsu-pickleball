@@ -1,7 +1,8 @@
 # python-vision-backend-foundation Specification
 
 ## Purpose
-TBD - created by archiving change add-analysis-workflow-backend-foundation. Update Purpose after archive.
+
+定义 Python 视觉后端的工程基础：分析 API 与报告 schema、算法适配器边界、本地存储约定、轻量冒烟验证与本地 Worker 运行时。
 ## Requirements
 ### Requirement: Python backend project foundation
 The system SHALL include a Python backend project area dedicated to real product video analysis APIs, durable job orchestration, MVP computer-vision algorithms, research-grade execution records, and future model-backed analysis.
