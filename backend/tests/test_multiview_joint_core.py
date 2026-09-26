@@ -490,7 +490,14 @@ def test_joint_run_end_to_end():
         inverse_homography=invert_homography(SCALE_H),
         frame_width=640, frame_height=480,
     )
-    out = run.run(reference_frame_count=6, reference_fps=30.0)
+    transitions = []
+    out = run.run(
+        reference_frame_count=6, reference_fps=30.0,
+        progress_callback=lambda done, total: transitions.append("tracking"),
+        ball_stage_callback=lambda: transitions.append("ball"),
+    )
+    assert transitions[-1] == "ball"
+    assert transitions.count("ball") == 1
     assert out.trajectory["schema_version"] == "fused_player_trajectory.v2"
     assert out.normalized.samples  # 至少一个 global
     assert out.diagnostics["global_player_count"] >= 1

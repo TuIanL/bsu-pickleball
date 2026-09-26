@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +11,7 @@ from app.models.capture_take import CaptureMode, CaptureTake, CaptureTakeStatus,
 from app.models.field_session import CaptureMode as FieldCaptureMode, FieldSession, FieldSessionStatus, MatchFormat
 from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
 from app.core.config import Settings
-from app.services.formal_segmentation_service import persist_segmentation_result
+from app.services.formal_segmentation_service import persist_segmentation_result, publish_reusable_segmentation
 from app.services.job_orchestration import JobStore
 from app.services.multiview_coordinator import MultiViewAnalysisCoordinator
 from app.services.storage_service import StorageService
@@ -328,6 +329,69 @@ def test_publish_failure_can_roll_back_without_touching_previous_run(isolated_da
     assert db.get(CaptureSegment, "auto-rollback-old").edit_status == EditStatus.active
 
 
+def test_successful_segmentation_is_republished_for_compatible_new_parent(isolated_database, tmp_path):
+    db = isolated_database()
+    _create_take(db, tmp_path, take_id="take-reuse")
+    storage = StorageService()
+    StorageService.register_capture_job("job-old", tmp_path / "take")
+    StorageService.register_capture_job("job-new", tmp_path / "take")
+    artifact = build_segmentation_artifact(
+        planning_job_id="job-old", capture_take_id="take-reuse", run_id="run-reuse", status="succeeded",
+        model={"package_id": "pkg", "model_version": "v1", "profile": "match_default"},
+        input_provenance={"input_fingerprint": "old-job-signature", "sync_calibration_revision": 3},
+        decoder={}, state_summary={"unknown_rate": 0.0},
+        segments=({"segment_id": "auto-reuse", "ordinal": 1, "start_ms": 100, "end_ms": 900},),
+    )
+    persist_segmentation_result(
+        db, artifact=artifact, storage=storage,
+        package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+    )
+    db.commit()
+    # Simulate an older run whose job-scoped JSON was cleaned while its
+    # immutable DB plan remained published.
+    storage.formal_segmentation_artifact_path("job-old", "take-reuse", create_root=False).unlink()
+
+    for fingerprint in ("changed-video", "changed-clip", None, ""):
+        assert publish_reusable_segmentation(
+            db, storage=storage, capture_take_id="take-reuse", planning_job_id="job-new",
+            sync_calibration_revision=3, input_fingerprint=fingerprint, profile="match_default",
+            package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+        ) is None
+    assert not storage.formal_segmentation_artifact_path("job-new", "take-reuse", create_root=False).exists()
+
+    run = publish_reusable_segmentation(
+        db, storage=storage, capture_take_id="take-reuse", planning_job_id="job-new",
+        sync_calibration_revision=3, input_fingerprint="old-job-signature", profile="match_default",
+        package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+    )
+
+    assert run is not None and run.id == "run-reuse"
+    reused = storage.read_json(storage.formal_segmentation_artifact_path("job-new", "take-reuse", create_root=False))
+    assert reused["planning_job_id"] == "job-new"
+    assert reused["window_plan"]["plan_hash"] == run.window_plan_hash
+    assert reused["diagnostics"]["reused_from_run_id"] == "run-reuse"
+    assert reused["diagnostics"]["reconstructed_from_persisted_run"] is True
+    # A full-take rerun may change analysis-only request fields while still
+    # using the same immutable take, sync revision and model package.
+    assert publish_reusable_segmentation(
+        db, storage=storage, capture_take_id="take-reuse", planning_job_id="job-full-take",
+        sync_calibration_revision=3, input_fingerprint="new-analysis-signature", profile="match_default",
+        package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+        allow_take_scoped_reuse=True,
+    ).id == "run-reuse"
+    assert publish_reusable_segmentation(
+        db, storage=storage, capture_take_id="take-reuse", planning_job_id="job-wrong-model",
+        sync_calibration_revision=3, input_fingerprint="new-analysis-signature", profile="match_default",
+        package_sha256="different", weights_sha256="weights", decoder_sha256="decoder",
+        allow_take_scoped_reuse=True,
+    ) is None
+    assert publish_reusable_segmentation(
+        db, storage=storage, capture_take_id="take-reuse", planning_job_id="job-mismatch",
+        sync_calibration_revision=4, input_fingerprint="old-job-signature", profile="match_default",
+        package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+    ) is None
+
+
 def test_legacy_job_and_manual_segment_remain_readable_after_schema_extension(isolated_database, tmp_path):
     db = isolated_database()
     _create_take(db, tmp_path, take_id="take-legacy")
@@ -465,6 +529,54 @@ def test_formal_late_fusion_waits_for_segmentation_and_is_idempotent(monkeypatch
     assert len(coordinator.store.get(parent.id).sourceJobs) == 2
 
 
+def test_formal_joint_reuses_compatible_segmentation_without_prerequisite(monkeypatch, tmp_path):
+    coordinator = _patched_coordinator(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "app.services.multiview_coordinator.publish_reusable_segmentation",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="seg-existing", window_plan_hash="plan-existing",
+            status=SimpleNamespace(value="succeeded"),
+        ),
+    )
+    payload = _formal_payload()
+    payload.multiview.executionMode = "joint_tracking_v2"
+
+    parent = coordinator.create_multiview_job(payload)
+
+    assert parent.segmentationPrerequisiteJobId is None
+    assert parent.segmentationRunId == "seg-existing"
+    assert parent.windowPlanHash == "plan-existing"
+    assert parent.segmentationStatus == "succeeded"
+    assert parent.orchestrationStatus == "joint_ready"
+    assert parent.stages[0].status == "done"
+    assert "复用" in parent.stages[0].detail
+    assert coordinator._advance_parent(parent).orchestrationStatus == "joint_ready"
+
+
+def test_reconcile_reuses_plan_for_already_queued_joint_parent(monkeypatch, tmp_path):
+    coordinator = _patched_coordinator(monkeypatch, tmp_path)
+    payload = _formal_payload()
+    payload.multiview.executionMode = "joint_tracking_v2"
+    parent = coordinator.create_multiview_job(payload)
+    prerequisite_id = parent.segmentationPrerequisiteJobId
+    assert prerequisite_id is not None
+
+    monkeypatch.setattr(
+        "app.services.multiview_coordinator.publish_reusable_segmentation",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="seg-existing", window_plan_hash="plan-existing",
+            status=SimpleNamespace(value="succeeded"),
+        ),
+    )
+    assert coordinator.reconcile_all() == 1
+    updated = coordinator.store.get(parent.id)
+    assert updated.orchestrationStatus == "joint_ready"
+    assert updated.segmentationPrerequisiteJobId is None
+    assert updated.segmentationRunId == "seg-existing"
+    assert updated.stages[0].status == "done"
+    assert coordinator.store.get(prerequisite_id).canonicalStatus == "canceled"
+
+
 def test_formal_segmentation_failure_fails_parent_without_children(monkeypatch, tmp_path):
     coordinator = _patched_coordinator(monkeypatch, tmp_path)
     parent = coordinator.create_multiview_job(_formal_payload())
@@ -492,3 +604,20 @@ def test_formal_segmentation_cancel_cascades_to_prerequisite_without_children(mo
     coordinator.cancel_cascade(canceled)
     assert coordinator.store.get(prerequisite.id).canonicalStatus == "canceled"
     assert coordinator.store.get(parent.id).sourceJobs == []
+
+
+def test_reuse_fingerprint_matches_actual_prerequisite_signature(monkeypatch, tmp_path):
+    coordinator = _patched_coordinator(monkeypatch, tmp_path)
+    fingerprints = []
+
+    def no_reusable_run(*_args, **kwargs):
+        fingerprints.append(kwargs["input_fingerprint"])
+        return None
+
+    monkeypatch.setattr(
+        "app.services.multiview_coordinator.publish_reusable_segmentation", no_reusable_run,
+    )
+    parent = coordinator.create_multiview_job(_formal_payload())
+    prerequisite = coordinator.store.get(parent.segmentationPrerequisiteJobId)
+    assert fingerprints == [prerequisite.inputSignature]
+    assert fingerprints[0]

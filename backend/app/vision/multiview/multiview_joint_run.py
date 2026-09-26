@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import time
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -235,6 +237,8 @@ class MultiViewJointRun:
         analysis_window: dict[str, Any] | None = None,
         cancellation_token: CancellationToken | None = None,
         progress_callback: ProgressCallback | None = None,
+        ball_stage_callback: Callable[[], None] | None = None,
+        ball_progress_callback: Callable[[int, str], None] | None = None,
     ) -> MultiViewJointRunOutput:
         """按 reference 分析帧逐 tick 推进;返回 v2 产物 + 诊断。"""
         if reference_fps <= 0:
@@ -450,6 +454,7 @@ class MultiViewJointRun:
             # 阶段 1：每 view prepare（decode 一次 + base/ROI/pre-tick guided/merge，不 update tracker）
             # 阶段 2（barrier 后）：pre-association → same-tick guidance → complete（tracker.update ONCE）
             all_obs: list[JointObservation] = []
+            candidate_obs: list[JointObservation] = []
             view_results: dict[str, Any] = {}
             prepared_by_view: dict[str, Any] = {}
             same_tick_guidance_by_view: dict[str, list[Any]] = {}
@@ -520,6 +525,7 @@ class MultiViewJointRun:
                         self.counter.get(f"{view_id}:recovery_reject_{reason}", 0) + int(count)
                     )
                 all_obs.extend(self._result_to_observations(view_id, result, take_ms))
+                candidate_obs.extend(self._result_to_candidate_observations(view_id, result, take_ms))
                 guided_obs_count = sum(
                     1 for obs in all_obs if obs.view_id == view_id and obs.detection_origin == "guided_roi"
                 )
@@ -547,7 +553,24 @@ class MultiViewJointRun:
                         )
 
             # ---- tick barrier:两路完成后才更新 global ----
-            updates = self.associator.process_tick(all_obs, timestamp_s, self.orientations, tick=tick_number)
+            if isinstance(self.associator, GlobalPlayerAssociator):
+                updates = self.associator.process_tick(
+                    all_obs,
+                    timestamp_s,
+                    self.orientations,
+                    tick=tick_number,
+                    candidate_observations=candidate_obs,
+                    available_views=set(view_results),
+                )
+            else:
+                # Preserve lightweight/legacy associator adapters which do
+                # not implement the separate candidate recovery channel.
+                updates = self.associator.process_tick(
+                    all_obs,
+                    timestamp_s,
+                    self.orientations,
+                    tick=tick_number,
+                )
             self._local_slot_events.extend(
                 dict(event)
                 for event in (getattr(self.associator, "last_tick_local_slot_events", None) or [])
@@ -757,6 +780,7 @@ class MultiViewJointRun:
                                     "source_track_id": update.observation.track_id,
                                     "local_identity_epoch": update.observation.local_identity_epoch,
                                     "detection_origin": update.observation.detection_origin,
+                                    "tracking_status": update.observation.tracking_status,
                                     "tentative": update.tentative,
                                 }
                                 for update in identity_updates
@@ -902,6 +926,7 @@ class MultiViewJointRun:
             else:
                 per_view_appearance[view_id] = {}
                 per_view_roi_recovery[view_id] = {}
+        candidate_recovery_snapshot = getattr(self.associator, "recovery_diagnostics", None)
         diagnostics = {
             "run_id": self.run_id,
             "schema_version": trajectory["schema_version"],
@@ -929,6 +954,11 @@ class MultiViewJointRun:
             "recovery_funnel": dict(self.recovery_funnel),
             "roi_recovery": {"per_view": per_view_roi_recovery},
             "association_counters": dict(getattr(self.associator, "diagnostics", {})),
+            "candidate_recovery": (
+                candidate_recovery_snapshot()
+                if callable(candidate_recovery_snapshot)
+                else {"enabled": False, "availability": "unsupported_associator"}
+            ),
             "local_slot_rebind_events": list(self._local_slot_events),
             "appearance": {
                 "association": self.associator.appearance_diagnostics(),
@@ -1059,8 +1089,22 @@ class MultiViewJointRun:
                 self.counter.get("player_display_diagnostics_failed", 0) + 1
             )
         ball_analysis = None
+        if ball_stage_callback is not None:
+            ball_stage_callback()
         if self.ball_processor is not None:
-            ball_analysis = self.ball_processor.finish()
+            last_cancel_check = float("-inf")
+
+            def check_ball_cancellation() -> None:
+                nonlocal last_cancel_check
+                now = time.monotonic()
+                if cancellation_token is not None and now - last_cancel_check >= 0.1:
+                    cancellation_token.raise_if_cancelled()
+                    last_cancel_check = now
+
+            ball_analysis = self.ball_processor.finish(
+                progress_callback=ball_progress_callback,
+                cancellation_check=check_ball_cancellation,
+            )
         return MultiViewJointRunOutput(
             trajectory=trajectory,
             normalized=NormalizedFusedTrajectory(
@@ -1606,6 +1650,90 @@ class MultiViewJointRun:
                 )
             )
         return obs
+
+    @staticmethod
+    def _result_to_candidate_observations(
+        view_id: str,
+        result: Any,
+        take_ms: float,
+    ) -> list[JointObservation]:
+        """保留 lock_only 之外的真实场内 track，作为独立恢复证据。"""
+        candidate_positions = getattr(result, "candidate_positions", None)
+        positions = candidate_positions or getattr(result, "frame_positions", [])
+        positions_by_track = {
+            int(pos.track_id): pos
+            for pos in positions
+        }
+        lineage_by_track = getattr(result, "candidate_tracklet_lineage_by_track", {}) or {}
+        candidates: list[JointObservation] = []
+        for detection in getattr(result, "candidate_detections", []) or []:
+            raw_track_id = getattr(detection, "track_id", None)
+            if raw_track_id is None:
+                continue
+            try:
+                track_id = int(raw_track_id)
+            except (TypeError, ValueError):
+                continue
+            position = positions_by_track.get(track_id)
+            if (
+                position is None
+                or position.court_position is None
+                or not bool(getattr(position, "valid", False))
+                or not bool(getattr(position, "is_inside_court", False))
+                or getattr(position, "projection_status", None) != "inside_court"
+            ):
+                continue
+            # Guided detections have an expected-global safety contract. Keep
+            # them on the formal guided path instead of treating them as an
+            # unanchored candidate that could be matched to another player.
+            if getattr(result, "observation_origin_by_track", {}).get(track_id, "base") != "base":
+                continue
+            bbox = list(position.bbox)
+            candidate_lineage = lineage_by_track.get(track_id) or f"unlocked_track:{track_id}"
+            candidates.append(
+                JointObservation(
+                    view_id=view_id,
+                    source_frame_index=int(getattr(result, "frame_index", 0)),
+                    take_timestamp_ms=(
+                        result.mapped_take_timestamp_ms
+                        if getattr(result, "mapped_take_timestamp_ms", None) is not None
+                        else take_ms
+                    ),
+                    local_x_ft=float(position.court_position[0]),
+                    local_y_ft=float(position.court_position[1]),
+                    view_player_id="",
+                    tracklet_lineage_id=f"{view_id}:{candidate_lineage}",
+                    track_id=track_id,
+                    confidence=float(getattr(detection, "confidence", position.confidence) or 0.0),
+                    projection_confidence=position.projection_confidence,
+                    detection_origin="base",
+                    bbox=bbox,
+                    image_footpoint=tuple(position.image_footpoint),
+                    intrinsic_quality=view_intrinsic_quality(
+                        IntrinsicFeatures(
+                            detector_confidence=float(
+                                getattr(detection, "confidence", position.confidence) or 0.0
+                            ),
+                            bbox_height_px=float(bbox[3] - bbox[1]),
+                            frame_height_px=float(getattr(detection, "source_height", 0) or 0) or None,
+                            projection_confidence=position.projection_confidence,
+                            footpoint_method=position.footpoint_method,
+                            tracking_status="unmatched",
+                        )
+                    ),
+                    source_timestamp_ms=getattr(result, "source_timestamp_ms", None),
+                    mapped_take_timestamp_ms=(
+                        result.mapped_take_timestamp_ms
+                        if getattr(result, "mapped_take_timestamp_ms", None) is not None
+                        else take_ms
+                    ),
+                    selection_error_ms=getattr(result, "selection_error_ms", None),
+                    timing_authority=getattr(result, "timing_authority", "missing"),
+                    sync_quality=getattr(result, "sync_quality", "unknown"),
+                    tracking_status="candidate",
+                )
+            )
+        return candidates
 
 
 # ---- Global Roster 公开映射辅助（stabilize-joint-global-player-roster）----

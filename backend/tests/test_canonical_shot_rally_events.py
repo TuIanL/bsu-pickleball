@@ -162,6 +162,18 @@ def _payload(segments: list[dict], *, event_times: dict[str, float]) -> dict:
     }
 
 
+def test_shot_contact_uses_chronological_segment_not_lexical_id() -> None:
+    payload = _payload([
+        _segment("flight-10", "shot-1", "bounce-1", 2.0),
+        _segment("flight-9", "shot-1", "hit-1", 1.0),
+    ], event_times={"hit-1": 1.0, "bounce-1": 2.0})
+    artifact = composer.build_shot_rally_events(
+        job_id="job-test", video_id="video-test", match_format="doubles",
+        reconstructed_payload=payload,
+    )
+    assert artifact.shots[0].contact_ms == 1000
+
+
 def test_composer_deduplicates_segments_and_preserves_uncertainty() -> None:
     payload = _payload(
         [
@@ -371,6 +383,15 @@ class _FakeStorage:
     def shot_rally_events_json_path(self, job_id: str) -> Path:
         return self.root / job_id / "shot_rally_events.json"
 
+    def shot_landings_json_path(self, job_id: str) -> Path:
+        return self.root / job_id / "shot_landings.json"
+
+    def player_render_trajectory_path(self, job_id: str) -> Path:
+        return self.root / job_id / "player_render_trajectory.json"
+
+    def fused_trajectory_json_path(self, job_id: str) -> Path:
+        return self.root / job_id / "fused_player_trajectory.json"
+
     def metric_snapshot_json_path(self, job_id: str) -> Path:
         return self.root / job_id / "metric_snapshot.json"
 
@@ -447,3 +468,74 @@ def test_generate_and_persist_updates_result_artifacts_without_blocking_pipeline
         json.loads(storage.output_json_path(job.id).read_text())
     )
     assert persisted.job_id == job.id
+
+
+def _landing_publish_fixture(kind: str = "single_view") -> tuple[AnalysisJobSummary, AnalysisPipelineResult]:
+    job = AnalysisJobSummary(
+        id=f"job-landing-{kind}", status="completed", canonicalStatus="succeeded",
+        displayStatus="completed", stage="report", progress=100,
+        createdAt="2026-09-21T00:00:00+00:00", updatedAt="2026-09-21T00:00:00+00:00",
+        metadata=AnalysisUploadMetadata(fileName="match.mp4", matchTitle="Landing", venue="Court",
+            matchDate="2026-09-21", matchFormat="singles", cameraAngle="elevated", athleteLabel="Player 1", level="MVP"),
+        stages=[], analysisMode="real", analysisKind=kind, videoId="video-landing", calibrationId="cal-1",
+    )
+    result = AnalysisPipelineResult(
+        job_id=job.id, video_id=job.videoId, calibration_id=job.calibrationId, status="completed",
+        generated_at=datetime(2026, 9, 21, tzinfo=UTC), stages=[], tracks=[],
+        metrics=PerformanceMetrics(distances=[], speeds=[], kitchen_dwell=[], doubles_spacing=[], heatmap=Heatmap(rows=1, cols=1, cells=[])),
+        artifacts=AnalysisArtifacts(), message="completed",
+    )
+    return job, result
+
+
+def test_landing_publication_single_multiview_empty_and_missing_input(tmp_path: Path) -> None:
+    for kind, trajectory_method in (("single_view", "player_render_trajectory_path"), ("multiview", "fused_trajectory_json_path")):
+        storage = _FakeStorage(tmp_path / kind)
+        job, result = _landing_publish_fixture(kind)
+        storage.write_json(getattr(storage, trajectory_method)(job.id), {"samples": []})
+        updated, _events, _snapshot = composer.generate_and_persist_canonical_events(job, result, storage=storage)
+        assert updated.status == "completed"
+        assert updated.artifacts.shot_landings_status == "unavailable"
+        assert updated.artifacts.shot_landings_url
+        payload = json.loads(storage.shot_landings_json_path(job.id).read_text())
+        assert payload["landings"] == []
+        assert payload["schema_version"] == "shot-landings.v1"
+
+
+def test_landing_composer_exception_does_not_fail_pipeline(tmp_path: Path, monkeypatch) -> None:
+    storage = _FakeStorage(tmp_path)
+    job, result = _landing_publish_fixture()
+    storage.write_json(storage.reconstructed_ball_trajectory_json_path(job.id), _payload([], event_times={}))
+    monkeypatch.setattr(composer, "build_shot_landings", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("landing boom")))
+
+    updated, events, _snapshot = composer.generate_and_persist_canonical_events(job, result, storage=storage)
+
+    assert updated.status == "completed"
+    assert events.status == "available"
+    assert updated.artifacts.shot_landings_status == "failed"
+    assert "landing boom" in (updated.artifacts.shot_landings_detail or "")
+    assert updated.artifacts.shot_landings_json_path is None
+    assert updated.artifacts.shot_landings_url is None
+
+
+def test_landing_trajectory_maps_confirmed_global_identity_without_mutating_artifact(tmp_path):
+    from app.services.shot_landings import hitter_side_at_contact
+    fused_path = tmp_path / "fused.json"
+    fused = {"samples": [
+        {"global_player_id": "global_player_2", "take_timestamp_ms": 1000,
+         "x_ft": 5, "y_ft": 8, "metric_eligible": True},
+        {"global_player_id": "global_player_1", "take_timestamp_ms": 1000,
+         "x_ft": 5, "y_ft": 35, "metric_eligible": True},
+        {"global_player_id": "global_player_2", "take_timestamp_ms": 1100,
+         "x_ft": 5, "y_ft": 35, "metric_eligible": False},
+        {"global_player_id": "global_player_2", "take_timestamp_ms": 1200,
+         "x_ft": 5, "y_ft": 35, "metric_eligible": True, "identity_status": "quarantined"},
+    ]}
+    fused_path.write_text(json.dumps(fused), encoding="utf-8")
+    storage = SimpleNamespace(fused_trajectory_json_path=lambda _: fused_path)
+    job = SimpleNamespace(id="job-landing", analysisKind="multiview")
+    payload = composer._load_landing_trajectory(job, storage, {"global_player_2": "Player_1"})
+    assert len(payload["samples"]) == 1
+    assert hitter_side_at_contact(payload, "Player_1", 1000) == "near"
+    assert composer._load_landing_trajectory(job, storage)["samples"] == []
+    assert json.loads(fused_path.read_text()) == fused

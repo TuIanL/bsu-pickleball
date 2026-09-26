@@ -218,6 +218,7 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
     assert result.artifacts.four_player_identification_quality_url == "/api/analysis/jobs/job-p/artifacts/four-player-identification-quality"
     # 公开轨迹身份为 canonical Player_N（非 global_player_）
     assert {t.track_id for t in result.tracks} == {"Player_1"}
+    assert {d.track_id for d in result.metrics.distances} == {"Player_1"}
     assert result.observed_player_count == 1
     roster_json = storage.read_json(storage.roster_manifest_json_path("job-p"))
     assert roster_json["schema_version"] == "global-player-roster.v1"
@@ -239,6 +240,15 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
     stage_ids = {s.id: s.status for s in result.stages}
     assert stage_ids["multiview-view-a"] == "done"
     assert stage_ids["multiview-view-b"] == "done"
+
+    joint_output.normalized.samples.clear()
+    joint_output.trajectory["samples"] = []
+    empty = composer.compose_joint_result(
+        job=job, joint_output=joint_output, reference_view_id="cam_1", message="ok",
+    )
+    assert empty.status == "failed"
+    assert next(stage for stage in empty.stages if stage.id == "multiview-joint").status == "failed"
+    assert "未生成有效轨迹" in empty.message
 
 
 # ---- fused player overlay（add-multiview-fused-player-overlay）---------------

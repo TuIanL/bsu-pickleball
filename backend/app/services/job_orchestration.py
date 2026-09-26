@@ -1134,6 +1134,9 @@ class AnalysisWorkerRuntime:
         self._thread = threading.Thread(target=self._loop, name=self.worker_id, daemon=True)
         self._thread.start()
 
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def stop(self, timeout: float = 5.0) -> None:
         # 停止后台线程。
         self._stop_event.set()
@@ -1282,10 +1285,13 @@ class AnalysisWorkerRuntime:
             progress_mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
             stages = analysis_stages_from_pipeline(result, mode=progress_mode)
             if result.status == "completed":
-                latest = self.store.mark_succeeded(latest, stages)
-                self._notify_terminal(latest)
+                # Publish reports and derived artifacts before exposing success.
                 self.on_completed(latest, result)
-                return latest
+                if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
+                    raise WorkerLeaseLostError(f"Worker lease lost for job {job.id}")
+                token.raise_if_cancelled()
+                latest = self.store.mark_succeeded(latest, stages)
+                return self._notify_terminal(latest)
             self._cleanup_tmp(job.id)
             return self._notify_terminal(self.store.mark_failed(latest, stages=stages, message=result.message))
         except WorkerLeaseLostError as exc:

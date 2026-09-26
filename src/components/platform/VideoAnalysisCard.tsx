@@ -18,6 +18,7 @@ import type {
 import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 import { CourtMinimap } from "./CourtMinimap";
 import { formatPlayerId } from "../../utils/analysisHelpers";
+import { serveRallyStripEnabled } from "../../config/featureFlags";
 import {
   resolveDisplayGeometry,
   resolveEffectiveDisplayState,
@@ -556,15 +557,23 @@ function RealVideoOverlay({
     [ballTrajectory, canonicalTime, hybridBallPathSegments, reconstructedBallTrajectory],
   );
   const ballSamples = useMemo(() => ballPathSegments.flat(), [ballPathSegments]);
-  const allBounceMarkers = useMemo(() => resolveBounceMarkers(bounceEvents), [bounceEvents]);
+  const allBounceMarkers = useMemo(() => {
+    if (!reconstructedBallTrajectory) return resolveBounceMarkers(bounceEvents);
+    const viewId = resolveHybridRenderViewId(reconstructedBallTrajectory, trajectoryViewId);
+    return (reconstructedBallTrajectory.events ?? [])
+      .filter((event) => event.event_type === "bounce" && finiteImagePoint(event.image_xy)
+        && (event.diagnostics?.view_id ?? reconstructedBallTrajectory.reference_view_id) === viewId)
+      .map((event) => ({ ...event, image_xy: event.image_xy!, confidence: event.confidence ?? 0,
+        detection_method: "formal_bounce" }));
+  }, [bounceEvents, reconstructedBallTrajectory, trajectoryViewId]);
   const visibleBounceMarkers = useMemo(
     () => resolveVisibleBounceMarkers(allBounceMarkers, canonicalTime),
     [allBounceMarkers, canonicalTime]
   );
   const ballCount = ballSamples.length;
   const boxesAvailable = useFusedOverlay
-    ? Boolean(selectedFusedOverlay?.frames.length)
-    : Boolean(targetTrackingOverlay?.frames.length);
+    ? Boolean(selectedFusedOverlay?.frames.some((frame) => frame.players.length > 0))
+    : Boolean(targetTrackingOverlay?.frames.some((frame) => frame.detections.length > 0));
   const skeletonAvailable = Boolean(poseOverlay?.frames.length);
   const ballAvailable = hasUsableHybridBallSamples(reconstructedBallTrajectory, trajectoryViewId) || hasUsableBallSamples(ballTrajectory);
   const bounceAvailable = Boolean(allBounceMarkers.length);
@@ -578,7 +587,9 @@ function RealVideoOverlay({
   );
   const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   const trackingDetail = useFusedOverlay
-    ? layerDetail(fusedPlayerOverlayLoadState, selectedFusedOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
+    ? !boxesAvailable && selectedFusedOverlay?.frames.length
+      ? "该产物只有时间帧记录，没有可用人物框；需要重新计算人物跟踪。"
+      : layerDetail(fusedPlayerOverlayLoadState, selectedFusedOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
     : layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
   const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
   const ballDetail = layerDetail(
@@ -1262,7 +1273,7 @@ function RealVideoOverlay({
           <div className="mt-2 h-1 rounded-full bg-white/15">
             <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${progress}%` }} />
           </div>
-            {serveEventsLoadState !== "idle" ? (
+            {serveRallyStripEnabled && serveEventsLoadState !== "idle" ? (
               <p className="mt-2 text-[0.68rem] font-semibold text-slate-300">
                 发球候选：{serveMarkers.length ? `${serveMarkers.length} 个候选` : statusCopy(serveStatus, serveDetail)}
               </p>
@@ -1275,14 +1286,16 @@ function RealVideoOverlay({
           </div>
         </div>
       </div>
-      <ServeRallyStrip
-        currentTime={canonicalTime}
-        loadState={serveEventsLoadState}
-        markers={serveMarkers}
-        onSeek={seekToServeMarker}
-        status={serveStatus}
-        statusDetail={serveDetail}
-      />
+      {serveRallyStripEnabled ? (
+        <ServeRallyStrip
+          currentTime={canonicalTime}
+          loadState={serveEventsLoadState}
+          markers={serveMarkers}
+          onSeek={seekToServeMarker}
+          status={serveStatus}
+          statusDetail={serveDetail}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1481,7 +1494,8 @@ export function hasUsableHybridBallSamples(
     if (segment.status === "unavailable" || segment.reconstruction_mode === "unavailable") return false;
     if (segment.display_eligible === false) return false;
     if (segment.end_endpoint?.outcome_classification === "environment_outlier") return false;
-    if (segment.video_overlay?.available === false) return false;
+    if (segment.video_overlay?.available === false
+      && (!segment.video_overlay.render_view_id || segment.video_overlay.render_view_id === renderViewId)) return false;
     return (segment.image_paths_by_view?.[renderViewId] ?? []).some((sample) => finiteImagePoint(sample.image_xy));
   });
 }
@@ -1508,7 +1522,8 @@ export function resolveHybridBallPathSegments(
     if (segment.status === "unavailable" || segment.reconstruction_mode === "unavailable") continue;
     if (segment.display_eligible === false) continue;
     if (segment.end_endpoint?.outcome_classification === "environment_outlier") continue;
-    if (segment.video_overlay?.available === false) continue;
+    if (segment.video_overlay?.available === false
+      && (!segment.video_overlay.render_view_id || segment.video_overlay.render_view_id === renderViewId)) continue;
     const path = (segment.image_paths_by_view?.[renderViewId] ?? [])
       .filter((sample) => finiteImagePoint(sample.image_xy) && Number.isFinite(sample.timestamp_sec))
       .sort((left, right) => left.timestamp_sec - right.timestamp_sec);

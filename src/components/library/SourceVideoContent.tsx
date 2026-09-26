@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { getVideoStreamUrl } from "../../services/analysisClient";
 
 /**
  * 上传视频（upload）的视频 view 内容：直接经 `GET /api/videos/{videoId}/stream` 播放源视频。
  * 只负责「播放源视频」这一个职责，不含页面级导航/标题骨架。
  */
-export function SourceVideoContent({ videoId, onNavigate }: { videoId?: string; onNavigate?: (path: string) => void }) {
+export function SourceVideoContent({ videoId, onNavigate, seekToMs }: { videoId?: string; onNavigate?: (path: string) => void; seekToMs?: number }) {
   const [failed, setFailed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const src = getVideoStreamUrl(videoId);
 
   void onNavigate;
@@ -30,12 +31,14 @@ export function SourceVideoContent({ videoId, onNavigate }: { videoId?: string; 
   return (
     <div className="overflow-hidden rounded-2xl border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--capture-surface-video,#24302b)]">
       <video
+        ref={videoRef}
         key={src}
         controls
         playsInline
         preload="metadata"
         className="aspect-video w-full"
         onError={() => setFailed(true)}
+        onLoadedMetadata={() => { if (videoRef.current && seekToMs != null) videoRef.current.currentTime = Math.max(0, seekToMs / 1000); }}
       >
         <source src={src} />
         当前浏览器不支持 HTML5 视频播放。

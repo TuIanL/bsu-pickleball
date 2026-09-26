@@ -514,11 +514,15 @@ class MultiViewResultComposer:
         self,
         fused_artifact: dict[str, object],
         match_context,
+        *,
+        roster_map: dict[str, str] | None = None,
+        metric_tracks: list[ProjectedTrackPoint] | None = None,
     ) -> PerformanceMetrics:
         """用 fused + metric_eligible 重算位置类指标（不复用 child local-frame 指标）。"""
-        metric_tracks = standard_court_metric_points(
-            self.fused_to_projected_tracks(fused_artifact, eligible_only=True)
-        )
+        if metric_tracks is None:
+            metric_tracks = standard_court_metric_points(
+                self.fused_to_projected_tracks(fused_artifact, eligible_only=True, roster_map=roster_map)
+            )
         ctx = match_context or build_match_context(None)
         statuses: dict[str, MetricStatus] = {}
         if ctx.enable_doubles_spacing:
@@ -801,6 +805,7 @@ class MultiViewResultComposer:
         artifacts: AnalysisArtifacts,
         roster_map: dict[str, str] | None = None,
         roster_entries: list[dict[str, object]] | None = None,
+        metric_tracks: list[ProjectedTrackPoint] | None = None,
     ) -> None:
         """joint 模式产出前端视觉层产物（2026-08-13 修复：此前 artifacts 全空）。
 
@@ -859,9 +864,10 @@ class MultiViewResultComposer:
                 artifacts.tracking_overlay_detail = f"joint tracking overlay 生成失败：{exc}"
 
         # 2) heatmaps / scatter / structured data：从 fused metric-eligible 轨迹生成（canonical Player_N）
-        metric_tracks = standard_court_metric_points(
-            self.fused_to_projected_tracks(fused_artifact, eligible_only=True, roster_map=roster_map)
-        )
+        if metric_tracks is None:
+            metric_tracks = standard_court_metric_points(
+                self.fused_to_projected_tracks(fused_artifact, eligible_only=True, roster_map=roster_map)
+            )
         viz_fields = build_joint_position_visualizations(
             storage=self.storage,
             job_id=job.id,
@@ -994,6 +1000,9 @@ class MultiViewResultComposer:
             "reconstructed_ball_trajectory.v4",
         }:
             _write_immutable_ball_artifact(self.storage, v3_path, v3)
+            from app.services.ball_playback_artifact import playback_path, playback_payload
+
+            self.storage.write_json_atomic(playback_path(v3_path), playback_payload(v3))
             artifacts.reconstructed_ball_trajectory_json_path = str(v3_path)
             artifacts.reconstructed_ball_trajectory_url = (
                 f"/api/analysis/jobs/{job.id}/artifacts/reconstructed-ball-trajectory"
@@ -1142,8 +1151,9 @@ class MultiViewResultComposer:
                 frames=reference_view.frames,
                 status=reference_view.status,
                 detail=(
-                    f"已生成 {len(reference_view.frames)} 帧 fused overlay（{expected_player_count} 名 canonical 球员，"
-                    f"包含 {len(view_payloads)} 个展示视角；来源 F0/F1 evidence + roster + view geometry）"
+                    f"已生成 {len(reference_view.frames)} 帧双摄叠加数据，包含 {len(view_payloads)} 个展示视角"
+                    if reference_view.status == "available"
+                    else "没有检测到可用球员；空叠加帧不代表人物识别成功"
                 ),
                 diagnostics={
                     "view_ids": view_ids,
@@ -1374,7 +1384,10 @@ class MultiViewResultComposer:
             else []
         )
         roster_map = _build_roster_map(roster_entries)
-        metrics = self.recompute_metrics(synthetic, match_context)
+        metric_tracks = standard_court_metric_points(
+            self.fused_to_projected_tracks(synthetic, eligible_only=True, roster_map=roster_map)
+        )
+        metrics = self.recompute_metrics(synthetic, match_context, roster_map=roster_map, metric_tracks=metric_tracks)
         tracks = self.fused_to_projected_tracks(synthetic, roster_map=roster_map)  # track_id = Player_N
         artifacts = AnalysisArtifacts()
         artifacts.analysis_window = joint_output.diagnostics.get("analysis_window")
@@ -1389,6 +1402,7 @@ class MultiViewResultComposer:
             artifacts=artifacts,
             roster_map=roster_map,
             roster_entries=roster_entries,
+            metric_tracks=metric_tracks,
         )
         ball_status, ball_detail = self._publish_joint_ball_artifacts(
             job=job,
@@ -1432,17 +1446,22 @@ class MultiViewResultComposer:
             ball_analysis_status=ball_status,
             ball_analysis_detail=ball_detail,
         )
+        if not tracks:
+            for stage in stages:
+                if stage.id == "multiview-joint":
+                    stage.status = "failed"
+                    stage.detail = "未生成有效球员轨迹，请检查人物模型与标定；已有球路产物保留"
         return AnalysisPipelineResult(
             job_id=job.id,
             video_id=video_id,
             calibration_id=job.calibrationId,
-            status="completed",
+            status="completed" if tracks else "failed",
             generated_at=datetime.now(UTC),
             stages=stages,
             tracks=tracks,
             metrics=metrics,
             artifacts=artifacts,
-            message=message,
+            message=message if tracks else "人物跟踪未生成有效轨迹，分析未通过验收；已有球路产物保留。",
             match_context=match_context,
             observed_player_count=len({t.track_id for t in tracks if t.track_id}),
             analysis_window=artifacts.analysis_window,

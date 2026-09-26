@@ -18,6 +18,7 @@ from typing import Any
 from app.schemas.analysis import AnalysisJobSummary
 from app.schemas.kitchen_arrival import KitchenArrivalArtifact
 from app.schemas.pipeline import AnalysisPipelineResult
+from app.schemas.shot_landings import ShotLandingsArtifact
 from app.schemas.shot_rally_events import (
     PRODUCT_REFERENCE_V1,
     CanonicalPlayer,
@@ -37,6 +38,7 @@ from app.services.kitchen_arrival_service import (
     build_kitchen_arrival_artifact,
     configured_kitchen_arrival_reference,
 )
+from app.services.shot_landings import ORIENTATION_PROFILE, PROJECT12_PROFILE, build_shot_landings
 from app.services.storage_service import StorageService
 
 logger = logging.getLogger(__name__)
@@ -59,9 +61,15 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _read_storage_artifact(storage: StorageService, method_name: str, job_id: str) -> dict[str, Any] | None:
+def _read_storage_artifact(storage: StorageService, method_name: str, job_id: str, cache: dict | None = None) -> dict[str, Any] | None:
+    key = (job_id, method_name)
+    if cache is not None and key in cache:
+        return cache[key]
     method = getattr(storage, method_name, None)
-    return _read_json(method(job_id)) if callable(method) else None
+    payload = _read_json(method(job_id)) if callable(method) else None
+    if cache is not None:
+        cache[key] = payload
+    return payload
 
 
 def _frozen_trajectory_identity_map(
@@ -120,6 +128,7 @@ def _has_trajectory_samples(payload: dict[str, Any] | None) -> bool:
 def _load_kitchen_trajectory(
     job: AnalysisJobSummary,
     storage: StorageService,
+    cache: dict | None = None,
 ) -> dict[str, Any] | None:
     """Choose the authoritative trajectory for kitchen arrival.
 
@@ -136,10 +145,37 @@ def _load_kitchen_trajectory(
         else ("player_trajectory_json_path", "fused_trajectory_json_path")
     )
     for method_name in methods:
-        payload = _read_storage_artifact(storage, method_name, job.id)
+        payload = _read_storage_artifact(storage, method_name, job.id, cache)
         if _has_trajectory_samples(payload):
             return payload
     return None
+
+
+def _load_landing_trajectory(
+    job: AnalysisJobSummary,
+    storage: StorageService,
+    identity_map: dict[str, str] | None = None,
+    cache: dict | None = None,
+) -> dict[str, Any] | None:
+    """Load only the frozen trajectory contract allowed for landing orientation."""
+    method_name = (
+        "fused_trajectory_json_path"
+        if getattr(job, "analysisKind", "single_view") == "multiview"
+        else "player_render_trajectory_path"
+    )
+    payload = _read_storage_artifact(storage, method_name, job.id, cache)
+    if payload is None or method_name != "fused_trajectory_json_path":
+        return payload
+    # Fused global ids are not canonical player ids. Only confirmed roster
+    # bindings may supply identity; display slot fallbacks are not evidence.
+    mapping = identity_map or {}
+    return {**payload, "samples": [
+        {**sample, "player_id": mapping[str(sample.get("global_player_id"))]}
+        for sample in payload.get("samples", [])
+        if isinstance(sample, dict) and str(sample.get("global_player_id")) in mapping
+        and sample.get("metric_eligible") is True
+        and sample.get("identity_status", "confirmed_observed") in {"confirmed_observed", "confirmed_recovered", "interpolated"}
+    ]}
 
 
 def _timestamp_ms(value: Any) -> int | None:
@@ -400,7 +436,16 @@ def _build_shot(
     contexts_by_rally: dict[str, RallyContextReference] | None = None,
     rally_context_mode: str = "legacy",
 ) -> ShotEvent:
-    ordered = sorted(segments, key=lambda item: str(item.get("segment_id") or ""))
+    def segment_order(item: dict[str, Any]) -> tuple[float, str]:
+        event = raw_events.get(str(item.get("start_event_id") or ""), {})
+        times = [event.get("timestamp_sec")] + [
+            sample.get("timestamp_sec") for sample in (item.get("samples") or [])
+            if isinstance(sample, dict)
+        ]
+        valid = [value for value in (_timestamp_ms(t) for t in times) if value is not None]
+        return (min(valid) if valid else float("inf"), str(item.get("segment_id") or ""))
+
+    ordered = sorted(segments, key=segment_order)
     first = ordered[0]
     all_samples = [
         sample
@@ -1017,10 +1062,13 @@ def _artifact_updates(
     kitchen_status: str,
     kitchen_detail: str,
     kitchen_card_enabled: bool,
+    landings_status: str,
+    landings_detail: str,
 ) -> AnalysisPipelineResult:
     events_path = storage.shot_rally_events_json_path(result.job_id)
     metrics_path = storage.metric_snapshot_json_path(result.job_id)
     kitchen_path = _kitchen_path(storage, result.job_id)
+    landings_path = storage.shot_landings_json_path(result.job_id)
     artifacts = result.artifacts.model_copy(
         update={
             "shot_rally_events_json_path": str(events_path) if events_path.exists() else None,
@@ -1031,6 +1079,14 @@ def _artifact_updates(
             ),
             "shot_rally_events_status": events_status,
             "shot_rally_events_detail": events_detail,
+            "shot_landings_json_path": str(landings_path) if landings_path.exists() else None,
+            "shot_landings_url": (
+                f"/api/analysis/jobs/{result.job_id}/artifacts/shot-landings"
+                if landings_path.exists()
+                else None
+            ),
+            "shot_landings_status": landings_status,
+            "shot_landings_detail": landings_detail,
             "metric_snapshot_json_path": str(metrics_path) if metrics_path.exists() else None,
             "metric_snapshot_url": (
                 f"/api/analysis/jobs/{result.job_id}/artifacts/metric-snapshot"
@@ -1162,7 +1218,7 @@ def generate_and_persist_canonical_events(
     generated_at = datetime.now(UTC).isoformat()
     kitchen_reference = configured_kitchen_arrival_reference()
     reconstructed = _read_json(storage.reconstructed_ball_trajectory_json_path(job.id))
-    trajectory_payload = _load_kitchen_trajectory(job, storage)
+    artifact_cache: dict = {}
     serve = _read_json(storage.serve_events_json_path(job.id))
     kitchen_artifact = KitchenArrivalArtifact(
         job_id=job.id,
@@ -1171,6 +1227,15 @@ def generate_and_persist_canonical_events(
         detail="厨房线到位产物尚未计算",
         generated_at=generated_at,
         reference=kitchen_reference,
+    )
+    landings_artifact = ShotLandingsArtifact(
+        job_id=job.id,
+        video_id=result.video_id,
+        status="unavailable",
+        detail="落点产物尚未计算",
+        generated_at=generated_at,
+        normalization_profile=ORIENTATION_PROFILE.model_copy(deep=True),
+        zone_profiles={"paper_6": None, "project_12": PROJECT12_PROFILE.model_copy(deep=True)},
     )
     try:
         from app.core.config import get_settings
@@ -1214,6 +1279,38 @@ def generate_and_persist_canonical_events(
             rally_context_mode=rally_context_mode,
             generated_at=generated_at,
         )
+        try:
+            landings_artifact = build_shot_landings(
+                job_id=job.id,
+                video_id=result.video_id,
+                shot_events=events,
+                reconstructed_payload=reconstructed,
+                player_trajectory_payload=_load_landing_trajectory(
+                    job, storage,
+                    trajectory_identity_map if rally_context_mode == "new" else _frozen_trajectory_identity_map(
+                        storage, job.id, {"entries": [
+                            {"canonical_player_id": player.player_id} for player in events.players
+                        ]},
+                    ),
+                    cache=artifact_cache,
+                ),
+                generated_at=generated_at,
+            )
+            storage.write_json(
+                storage.shot_landings_json_path(job.id),
+                landings_artifact.model_dump(mode="json"),
+            )
+        except Exception as exc:  # noqa: BLE001 - optional artifact must not fail the pipeline
+            logger.exception("shot landing artifact generation failed for %s", job.id)
+            landings_artifact = ShotLandingsArtifact(
+                job_id=job.id,
+                video_id=result.video_id,
+                status="failed",
+                detail=f"Shot Landing 组合失败：{exc}",
+                generated_at=generated_at,
+                normalization_profile=ORIENTATION_PROFILE.model_copy(deep=True),
+                zone_profiles={"paper_6": None, "project_12": PROJECT12_PROFILE.model_copy(deep=True)},
+            )
         if kitchen_enabled:
             kitchen_artifact = build_kitchen_arrival_artifact(
                 job_id=job.id,
@@ -1222,7 +1319,7 @@ def generate_and_persist_canonical_events(
                 rallies=rally_contexts if formal_boundaries is not None and formal_boundaries[0] else [],
                 roster=roster,
                 binding_audit=binding_audit,
-                trajectory_payload=trajectory_payload,
+                trajectory_payload=_load_kitchen_trajectory(job, storage, artifact_cache),
                 trajectory_identity_map=trajectory_identity_map,
                 reference=kitchen_reference,
                 generated_at=generated_at,
@@ -1299,6 +1396,8 @@ def generate_and_persist_canonical_events(
             kitchen_status=kitchen_artifact.status,
             kitchen_detail=kitchen_artifact.detail,
             kitchen_card_enabled=kitchen_card_enabled,
+            landings_status=landings_artifact.status,
+            landings_detail=landings_artifact.detail,
         )
     )
     storage.write_json(storage.output_json_path(job.id), updated.model_dump(mode="json"))

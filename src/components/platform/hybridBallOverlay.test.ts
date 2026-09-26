@@ -39,6 +39,17 @@ function artifact(): ReconstructedBallTrajectoryArtifact {
 }
 
 describe("hybrid video ball overlay", () => {
+  it("does not apply the reference-view availability flag to another native view", () => {
+    const value = artifact();
+    const segment = value.segments[0];
+    segment.video_overlay = { render_view_id: "cam_b", available: false };
+    expect(hasUsableHybridBallSamples(value, "cam_a")).toBe(true);
+    expect(resolveHybridBallPathSegments(value, 1.25, "cam_a")).toHaveLength(1);
+    segment.video_overlay.render_view_id = "cam_a";
+    expect(hasUsableHybridBallSamples(value, "cam_a")).toBe(false);
+    expect(resolveHybridBallPathSegments(value, 1.25, "cam_a")).toEqual([]);
+  });
+
   it("uses only the requested view and clips the trail to playback time", () => {
     const value = artifact();
     expect(hasUsableHybridBallSamples(value, "cam_a")).toBe(true);

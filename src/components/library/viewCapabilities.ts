@@ -14,7 +14,7 @@ import type { AnalysisPipelineResult } from "../../types/report";
 import type { LibraryAnalysisJobView } from "../../services/libraryAdapter";
 import { getReportCapability } from "../../services/reportCapability";
 
-export type LibraryView = "overview" | "video" | "analysis" | "trajectory" | "report" | "segments" | "technical";
+export type LibraryView = "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "segments" | "technical";
 
 export type CapabilityState = "available" | "unavailable" | "loading";
 
@@ -22,6 +22,7 @@ export interface LibraryViewCapabilities {
   video: CapabilityState;
   analysis: CapabilityState;
   trajectory: CapabilityState;
+  landing: CapabilityState;
   report: CapabilityState;
   segments: CapabilityState;
   technical: CapabilityState;
@@ -66,6 +67,7 @@ export function computeLibraryViewCapabilities(
           selected.manifest?.artifacts.ball_trajectory_url),
       )
     : legacyResult;
+  const landingReady = selected ? Boolean(manifestReady && selected.manifest?.artifacts.shot_landings_url) : false;
   const reportCapability = selected
     ? getReportCapability({
       job: selectedJob,
@@ -83,6 +85,7 @@ export function computeLibraryViewCapabilities(
     video: canPlayVideo ? "available" : "unavailable",
     analysis: manifestPending ? "loading" : manifestReady ? "available" : "unavailable",
     trajectory: manifestPending ? "loading" : trajectoryReady ? "available" : "unavailable",
+    landing: manifestPending ? "loading" : landingReady ? "available" : "unavailable",
     report: reportCapability.state,
     segments: hasTake ? "available" : "unavailable",
     technical: hasSelection && (completed || terminalDiagnostic) ? "available" : "unavailable",
@@ -104,6 +107,7 @@ export function computeLibraryViewCapabilities(
         : "分析失败，未生成结果";
     reasons.analysis = msg;
     reasons.trajectory = msg;
+    reasons.landing = msg;
     reasons.report = msg;
   } else if (selected && !manifestPending && !manifestReady) {
     const msg = "该历史任务没有可读取的分析产物";
@@ -111,6 +115,7 @@ export function computeLibraryViewCapabilities(
     reasons.report = msg;
   }
   if (selected && completed && !manifestPending && !trajectoryReady) reasons.trajectory = "该历史任务未生成可用球路";
+  if (selected && completed && !manifestPending && !landingReady) reasons.landing = "该历史任务未生成可用落点";
   if (!hasTake) reasons.segments = "该素材没有可管理的片段数据";
 
   return resultCaps;

@@ -51,6 +51,7 @@ import type {
   ShotRallyEventsArtifact,
 } from "../types/shotRallyEvents";
 import type { KitchenArrivalArtifact } from "../types/kitchenArrival";
+import { isShotLandingsArtifact, type ShotLandingsArtifact } from "../types/shotLandings";
 import type { NormalizedMetricArtifact } from "../types/metricNormalization";
 import type {
   MultiviewObservabilitySummary,
@@ -431,6 +432,10 @@ function toApiUrl(path: string): string {
   return /^https?:\/\//.test(path) ? path : `${API_BASE_URL}${path}`;
 }
 
+export function resolveAnalysisApiUrl(path: string): string {
+  return toApiUrl(path);
+}
+
 function stringifyBackendDetail(detail: unknown): string | undefined {
   if (detail == null) {
     return undefined;
@@ -796,6 +801,8 @@ export interface MultiviewAnalysisJobRequest {
   segmentationRequired?: boolean;
   /** 任务级分析流程：默认新流程；false 明确选择旧流程兼容模式。 */
   useRallyContext?: boolean;
+  /** 创建双摄任务时冻结的 P1–P4、Team A/B 与初始端位确认。 */
+  rosterConfirmation?: RosterConfirmationRequest;
 }
 
 /**
@@ -822,6 +829,7 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
       },
       segmentationRequired: request.segmentationRequired,
       useRallyContext: request.useRallyContext,
+      rosterConfirmation: request.rosterConfirmation,
     }),
     method: "POST",
   }));
@@ -1147,6 +1155,21 @@ export async function getShotRallyEvents(
   }
 }
 
+export async function getShotLandings(
+  result: AnalysisPipelineResult,
+): Promise<ShotLandingsArtifact | null> {
+  const path = result.artifacts.shot_landings_url;
+  if (!path) return null;
+  try {
+    const payload = await requestJson<unknown>(path);
+    if (!isShotLandingsArtifact(payload)) throw new Error("Invalid shot-landings.v1 payload");
+    return payload;
+  } catch (error) {
+    if (error instanceof AnalysisApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 export async function getMetricSnapshot(
   result: AnalysisPipelineResult,
 ): Promise<MetricSnapshotArtifact | null> {
@@ -1237,7 +1260,13 @@ export async function getPlayerBootstrap(params: {
   if (params.videoId) query.set("videoId", params.videoId);
   if (params.matchFormat) query.set("matchFormat", params.matchFormat);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return requestJson<PlayerBootstrapResult>(`/api/analysis/players/bootstrap${suffix}`);
+  const result = await requestJson<PlayerBootstrapResult>(`/api/analysis/players/bootstrap${suffix}`);
+  return {
+    ...result,
+    reference_frame_url: result.reference_frame_url
+      ? resolveAnalysisApiUrl(result.reference_frame_url)
+      : null,
+  };
 }
 
 /** 读取 bootstrap anchor → 正式 canonical Player 的绑定审计产物（缺失时返回 null）。 */

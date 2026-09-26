@@ -324,6 +324,7 @@ def test_ball_budget_timeout_degrades_ball_stage_without_raising(monkeypatch):
 
 def test_finish_reconstructs_independent_event_segments_instead_of_one_full_window():
     processor, _, _ = _processor()
+    progress = []
     processor.add_serve_reset_event(
         TrajectoryEvent("hit-4", TrajectoryEventType.HIT, 4, 4 / 30.0, confidence=0.9)
     )
@@ -333,7 +334,8 @@ def test_finish_reconstructs_independent_event_segments_instead_of_one_full_wind
     for tick in range(12):
         processor.process_tick(tick_id=tick, bundle=_bundle_at(tick))
 
-    result = processor.finish()
+    result = processor.finish(progress_callback=lambda value, detail: progress.append((value, detail)))
+    assert [value for value, _ in progress] == [5, 15, 60, 90]
     segment_ids = [segment["segment_id"] for segment in result.v3_trajectory["segments"]]
     assert segment_ids == ["flight-1", "flight-2", "flight-3"]
     assert result.v3_trajectory["reference_view_id"] == "cam_1"
@@ -348,6 +350,12 @@ def test_finish_reconstructs_independent_event_segments_instead_of_one_full_wind
     assert windows[0]["end_event_id"] == "hit-4"
     assert windows[1]["start_event_id"] == "hit-4"
     assert windows[1]["end_event_id"] == "bounce-8"
+    published = result.v3_trajectory["segments"]
+    assert published[0]["shot_id"] is None
+    assert published[1]["shot_id"] == published[2]["shot_id"] == "shot-001"
+    assert published[1]["start_event_id"] == "hit-4"
+    assert published[1]["end_event_id"] == "bounce-8"
+    assert published[1]["end_event_type"] == "bounce"
     assert windows[0]["primary_view_id"] in {"cam_1", "cam_2"}
     assert set(windows[0]["view_metrics"]["cam_1"]) >= {
         "observation_coverage",
@@ -365,6 +373,26 @@ def test_finish_reconstructs_independent_event_segments_instead_of_one_full_wind
     assert all(observation["segment_id"] is not None for observation in evidence["observations"])
     assert all(pairing["segment_id"] is not None for pairing in evidence["pairings"])
     assert all(measurement["segment_id"] is not None for measurement in evidence["measurements"])
+
+
+def test_bounce_ground_projection_replaces_frozen_event_and_rotates_secondary(monkeypatch):
+    import app.vision.multiview.ball_stereo.canonical_runner as module
+    processor, _, _ = _processor()
+    processor.trajectory_points_by_view = {"cam_2": []}
+    processor.runtimes = {"cam_2": SimpleNamespace(
+        homography=np.diag([0.1, 0.1, 1.0]),
+        view_input=SimpleNamespace(court_orientation="rotate_180"),
+    )}
+    bounce = TrajectoryEvent("bounce-1", TrajectoryEventType.BOUNCE, 10, 1.0, image_xy=(50, 100))
+    hit = TrajectoryEvent("hit-1", TrajectoryEventType.HIT, 5, 0.5, image_xy=(50, 100))
+    monkeypatch.setattr(module.BallContactEventDetector, "detect", lambda *a, **kw: [])
+    monkeypatch.setattr(module.BounceDetector, "detect", lambda *a, **kw: [])
+    monkeypatch.setattr(module.BallEventResolver, "prefilter", lambda *a, **kw: [])
+    monkeypatch.setattr(module.BallEventResolver, "finalize", lambda *a, **kw: [hit, bounce])
+    events, _ = processor._resolve_events()
+    assert events[1].court_xy == (15.0, 34.0)
+    assert events[0].court_xy is None
+    assert bounce.court_xy is None
 
 
 def test_cross_view_duplicate_event_ids_are_disambiguated_without_changing_timestamps():

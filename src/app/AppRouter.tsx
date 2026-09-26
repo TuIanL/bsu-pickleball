@@ -126,7 +126,7 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
           <LibraryItemWorkspace
             kind={route.kind}
             sourceId={route.sourceId}
-            view={route.view as "overview" | "video" | "analysis" | "trajectory" | "report" | "segments" | "technical"}
+            view={route.view as "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "segments" | "technical"}
             onNavigate={onNavigate}
           />
         );

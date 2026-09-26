@@ -9,9 +9,9 @@ export function loadAnalysisResultManifest(jobId: string): Promise<AnalysisPipel
   if (existing) return existing;
   const request = getAnalysisResult(jobId)
     .then((value) => (isPipelineResult(value) ? value : null))
-    .catch((error) => {
-      cache.delete(jobId);
-      throw error;
+    .finally(() => {
+      // Deduplicate concurrent readers without retaining stale manifests.
+      if (cache.get(jobId) === request) cache.delete(jobId);
     });
   cache.set(jobId, request);
   return request;

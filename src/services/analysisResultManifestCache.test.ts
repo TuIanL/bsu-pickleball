@@ -39,3 +39,14 @@ describe("analysis result manifest cache", () => {
     expect(getAnalysisResult).toHaveBeenCalledTimes(2);
   });
 });
+
+it("reloads after a missing or previously completed manifest", async () => {
+  clearAnalysisResultManifestCache();
+  vi.mocked(getAnalysisResult).mockReset();
+  vi.mocked(getAnalysisResult).mockResolvedValueOnce(null).mockResolvedValueOnce({
+    job_id: "fresh", metrics: {}, artifacts: { shot_landings_status: "available" },
+  } as never);
+  expect(await loadAnalysisResultManifest("fresh")).toBeNull();
+  expect(await loadAnalysisResultManifest("fresh")).toMatchObject({ job_id: "fresh" });
+  expect(getAnalysisResult).toHaveBeenCalledTimes(2);
+});

@@ -8,6 +8,7 @@ import {
   getStructuredVizData,
   getMultiviewBallStereoEvidence,
   getShotRallyEvents,
+  getShotLandings,
   getSyncAnchorExportUrl,
   getSyncAnchorStatus,
   listAnalysisJobs,
@@ -156,6 +157,24 @@ describe("analysis job compatibility", () => {
     const result = { artifacts: { shot_rally_events_url: "/api/analysis/jobs/job-bad/artifacts/shot-rally-events" } } as never;
 
     await expect(getShotRallyEvents(result)).rejects.toBeTruthy();
+  });
+
+  it("loads, validates, and handles missing shot landing artifacts", async () => {
+    const result = { artifacts: { shot_landings_url: "/api/analysis/jobs/job-landing/artifacts/shot-landings" } } as never;
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      schema_version: "shot-landings.v1", job_id: "job-landing", status: "available", detail: "ok",
+      generated_at: "2026-09-21T00:00:00Z", normalization_profile: { profile_id: "landing-orientation.v1", parameters: {} },
+      zone_profiles: {}, landings: [], summary: { shot_count: 0 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    await expect(getShotLandings(result)).resolves.toMatchObject({ schema_version: "shot-landings.v1" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("missing", { status: 404 }));
+    await expect(getShotLandings(result)).resolves.toBeNull();
+    await expect(getShotLandings({ artifacts: {} } as never)).resolves.toBeNull();
+  });
+
+  it("rejects a malformed shot landing payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ schema_version: "shot-landings.v1" }), { status: 200, headers: { "content-type": "application/json" } }));
+    await expect(getShotLandings({ artifacts: { shot_landings_url: "/bad" } } as never)).rejects.toThrow("Invalid shot-landings.v1 payload");
   });
 
   it("preserves HTTP errors instead of reading unrelated local jobs", async () => {

@@ -689,6 +689,10 @@ def start_analysis_worker(*, force: bool = False) -> None:
         _WORKER_STARTED = True
 
 
+def analysis_worker_thread_alive() -> bool:
+    return _WORKER is not None and _WORKER.is_running()
+
+
 def stop_analysis_worker() -> None:
     # 停止后台分析 Worker。
     global _WORKER_STARTED

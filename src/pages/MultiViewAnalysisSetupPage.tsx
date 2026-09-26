@@ -11,6 +11,8 @@ import {
 } from "../components/platform/NetProfileCalibrator";
 import { PageFrame } from "../components/PageFrame";
 import { AnalysisFlowSelector, type AnalysisFlowMode } from "../components/platform/AnalysisFlowSelector";
+import { AnalysisRosterConfirmation } from "../components/platform/AnalysisRosterConfirmation";
+import type { RosterConfirmationRequest } from "../types/rallyContext";
 import {
   createMultiviewAnalysisJob,
   getCaptureTake,
@@ -89,7 +91,7 @@ const STEP_LABELS: Array<{ n: number; label: string }> = [
   { n: 3, label: "B 球场" },
   { n: 4, label: "A 球网" },
   { n: 5, label: "B 球网" },
-  { n: 6, label: "确认" },
+  { n: 6, label: "名册与确认" },
 ];
 
 function StepBar({ step }: { step: SetupStep }) {
@@ -145,11 +147,18 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   const [clipEndSec, setClipEndSec] = useState<number | null>(null);
   const [debugReplayEnabled, setDebugReplayEnabled] = useState(false);
   const [analysisFlow, setAnalysisFlow] = useState<AnalysisFlowMode>("new");
+  const [rosterConfirmation, setRosterConfirmation] = useState<RosterConfirmationRequest>({
+    skipped: false,
+    entries: [],
+  });
   const [syncAnchorStatus, setSyncAnchorStatus] = useState<SyncAnchorStatus | null>(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
 
   const handleAnalysisFlowChange = (next: AnalysisFlowMode) => {
     setAnalysisFlow(next);
+    setRosterConfirmation(next === "legacy"
+      ? { skipped: true, entries: [] }
+      : { skipped: false, entries: [] });
   };
 
   // 路由带 `?session=`（录制卡片传入），缺失时回退到 take.source_session_id 反查
@@ -247,6 +256,14 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
     && Boolean(syncAnchorStatus?.analysis_allowed)
     && !debugReplayNeedsManualSync;
   const allReady = videosReady && syncReady;
+  const expectedRosterCount = session?.match_format === "singles" ? 2 : 4;
+  const rosterConfirmationComplete = analysisFlow !== "new"
+    || rosterConfirmation.skipped
+    || (
+      rosterConfirmation.entries.length === expectedRosterCount
+      && rosterConfirmation.entries.every((entry) => entry.anchor_bbox?.length === 4)
+      && Boolean(rosterConfirmation.initial_team_a_end)
+    );
   const takeStatusNote = !videosReady
     ? "视频未就绪"
     : takeCompleted
@@ -454,6 +471,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
         // 正式比赛分析必须先生成并绑定模型回合窗口计划。
         segmentationRequired: true,
         useRallyContext: analysisFlow === "new",
+        rosterConfirmation,
         debugTraceEnabled: debugReplayEnabled,
         sceneCalibrationMode: "metric",
         sceneCalibrationRevision: publishedScene.revision,
@@ -813,6 +831,25 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
               <InfoRow label="录制时长" value={session.duration_sec != null ? `${Math.round(session.duration_sec)} 秒` : "—"} />
             </div>
 
+            {analysisFlow === "new" ? (
+              <>
+                <p className="mb-3 rounded-xl border border-[#DDE9D6] bg-[#F5FAF1] p-3 text-xs leading-5 text-slate-600">
+                  要计算“发球队 · 网前到位率”，请在下方确认球员、Team A/B 和初始端位；也可以明确跳过并继续普通分析。
+                </p>
+                <AnalysisRosterConfirmation
+                  captureTakeId={captureTakeId}
+                  videoId={videoIdA}
+                  videoIdB={videoIdB}
+                  matchFormat={session.match_format === "singles" ? "singles" : "doubles"}
+                  onChange={setRosterConfirmation}
+                />
+              </>
+            ) : (
+              <div className="mb-5 rounded-2xl border border-[#F4D8A8] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]">
+                已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要发球队网前到位率时，请切回新流程并确认名册。
+              </div>
+            )}
+
             {/* CourtOrientation 产品化确认：端 A/B，而非算法枚举 */}
             <div className="mb-5 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
               <div className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-[#168A34]">机位朝向</div>
@@ -863,7 +900,15 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
               </button>
               <button
                 className="green-button px-5 py-2 text-sm disabled:opacity-40"
-                disabled={!calibrationA || !calibrationB || !netAnnotationA || !netAnnotationB || !clipWindowValid || isSubmitting}
+                disabled={
+                  !calibrationA
+                  || !calibrationB
+                  || !netAnnotationA
+                  || !netAnnotationB
+                  || !clipWindowValid
+                  || !rosterConfirmationComplete
+                  || isSubmitting
+                }
                 onClick={handleStart}
                 type="button"
               >

@@ -60,6 +60,7 @@ EvidenceProvenance = Literal[
     "pipeline_metric",
     "structured_visualization",
     "manual_timeline",
+    "formal_segmentation_plan",
     "fused_multiview",
     "reference_view",
     "derived_rule",

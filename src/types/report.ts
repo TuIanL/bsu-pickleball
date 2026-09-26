@@ -1992,6 +1992,10 @@ export interface AnalysisPipelineResult {
     shot_rally_events_url?: string;
     shot_rally_events_status?: string;
     shot_rally_events_detail?: string;
+    shot_landings_json_path?: string;
+    shot_landings_url?: string;
+    shot_landings_status?: string;
+    shot_landings_detail?: string;
     metric_snapshot_json_path?: string;
     metric_snapshot_url?: string;
     metric_snapshot_status?: string;

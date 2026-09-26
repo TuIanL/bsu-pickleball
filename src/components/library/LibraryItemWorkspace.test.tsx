@@ -27,6 +27,7 @@ vi.mock("../../pages/VisionPage", () => ({
   ),
 }));
 vi.mock("../../pages/BallTrajectoryPage", () => ({ BallTrajectoryPage: ({ jobId }: { jobId: string }) => <div>trajectory:{jobId}</div> }));
+vi.mock("../../pages/LandingAnalysisPage", () => ({ LandingAnalysisPage: ({ jobId, videoPath, onNavigate }: { jobId: string; videoPath: (timeMs: number) => string; onNavigate: (path: string, options: { replace: boolean }) => void }) => <div>landing:{jobId}<button onClick={() => onNavigate(videoPath(3800), { replace: true })}>landing-video</button></div> }));
 vi.mock("../report/ReportContent", () => ({ ReportContent: ({ jobId }: { jobId: string }) => <div>report:{jobId}</div> }));
 vi.mock("../../pages/MultiviewObservabilityPage", () => ({ MultiviewObservabilityPage: ({ jobId }: { jobId: string }) => <div>multiview-technical:{jobId}</div> }));
 vi.mock("../../pages/AnalysisDetailsPage", () => ({ AnalysisDetailsPage: ({ jobId }: { jobId: string }) => <div>single-technical:{jobId}</div> }));
@@ -241,6 +242,25 @@ describe("LibraryItemWorkspace 分析入口", () => {
     expect(onNavigate.mock.calls.at(-1)?.[0]).toContain("t=9");
   });
 
+  it("落点视图保留历史 completed Job，不被正在分析的新任务覆盖", async () => {
+    window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=landing&analysisJob=old&t=9");
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" }, sourceType: "sync_recording",
+      activeAnalysisJobId: "running", primaryAnalysisJobId: "old", primaryResultAnalysisJobId: "old",
+      analysisJobs: [
+        { id: "running", status: "processing", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" },
+        { id: "old", status: "completed", analysisKind: "multiview", createdAt: "2026-08-02T00:00:00Z" },
+      ],
+    }));
+    vi.mocked(getAnalysisResult).mockResolvedValue({ job_id: "old", status: "completed", metrics: {}, artifacts: { shot_landings_url: "/old/landing.json" } } as never);
+    const onNavigate = vi.fn();
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="landing" onNavigate={onNavigate} />);
+    expect(await screen.findByText("landing:old")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "landing-video" }));
+    expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/view=video.*analysisJob=old|analysisJob=old.*view=video/), { replace: true });
+    expect(onNavigate.mock.calls.at(-1)?.[0]).toContain("t=3800");
+  });
+
   it("刷新恢复 displayView，并在嵌入式 Tab 跳转中保留机位参数", async () => {
     window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=analysis&analysisJob=old&displayView=cam_2");
     const target = item({
@@ -252,6 +272,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       analysisJobs: [{ id: "old", status: "completed", analysisKind: "multiview", createdAt: "2026-08-02T00:00:00Z" }],
     });
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
+    vi.mocked(getAnalysisResult).mockResolvedValue({ job_id: "old", status: "completed", metrics: {}, artifacts: { ball_trajectory_url: "/old/ball.json" } } as never);
     const onNavigate = vi.fn();
     render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
 

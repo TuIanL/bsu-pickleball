@@ -146,7 +146,8 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
     expect(await screen.findByText("读取失败")).toBeTruthy();
     expect(screen.getByText("视频分析结果")).toBeTruthy();
     expect(screen.getByTestId("video-analysis-card")).toBeTruthy();
-    expect(screen.getByText("分析完成")).toBeTruthy();
+    expect(screen.getByText("处理结束 · 人物结果缺失")).toBeTruthy();
+    expect(screen.getByText(/不能从空产物恢复/)).toBeTruthy();
     expect(screen.getAllByText("位置热力图").length).toBeGreaterThan(0);
     expect(screen.getAllByText("位置散点图").length).toBeGreaterThan(0);
     expect(screen.getByText("区域空间热力图")).toBeTruthy();

@@ -17,6 +17,121 @@ from app.services.storage_service import StorageService
 from app.vision.match_state.artifact import SegmentationArtifact
 
 
+ACTIVE_SEGMENTATION_STATUSES = {
+    MatchStateSegmentationRunStatus.succeeded,
+    MatchStateSegmentationRunStatus.valid_no_rallies,
+}
+
+
+def publish_reusable_segmentation(
+    db: Session,
+    *,
+    storage: StorageService,
+    capture_take_id: str,
+    planning_job_id: str,
+    sync_calibration_revision: int | None,
+    input_fingerprint: str | None,
+    profile: str,
+    package_sha256: str | None,
+    weights_sha256: str | None,
+    decoder_sha256: str | None,
+    allow_take_scoped_reuse: bool = False,
+) -> MatchStateSegmentationRun | None:
+    """Bind the latest compatible immutable plan to a new analysis Parent.
+
+    The historical run remains the authority. A job-scoped copy is published
+    because downstream readers intentionally resolve artifacts inside the
+    selected Parent namespace.
+    """
+    if not input_fingerprint:
+        return None
+    query = db.query(MatchStateSegmentationRun).filter(
+        MatchStateSegmentationRun.capture_take_id == capture_take_id,
+        MatchStateSegmentationRun.status.in_(ACTIVE_SEGMENTATION_STATUSES),
+    )
+    if not allow_take_scoped_reuse:
+        query = query.filter(MatchStateSegmentationRun.input_fingerprint == input_fingerprint)
+    candidates = query.order_by(MatchStateSegmentationRun.finished_at.desc()).all()
+    # Prefer an exact historical request. Older full-take jobs included display
+    # metadata and analysis-only settings in this fingerprint, so identical
+    # footage can legitimately have a different request fingerprint today.
+    candidates.sort(key=lambda run: run.input_fingerprint != input_fingerprint)
+    expected_hashes = (package_sha256, weights_sha256, decoder_sha256)
+    for run in candidates:
+        if run.profile != profile or run.sync_calibration_revision != sync_calibration_revision:
+            continue
+        if run.input_fingerprint != input_fingerprint and not allow_take_scoped_reuse:
+            continue
+        actual_hashes = (run.package_sha256, run.weights_sha256, run.decoder_sha256)
+        if run.input_fingerprint != input_fingerprint and any(
+            not value or value == "unavailable" for value in (*expected_hashes, *actual_hashes)
+        ):
+            continue
+        if any(expected is not None and expected != "unavailable" and expected != actual for expected, actual in zip(expected_hashes, actual_hashes, strict=True)):
+            continue
+        source_path = storage.formal_segmentation_artifact_path(
+            run.planning_job_id, capture_take_id, create_root=False
+        )
+        payload: dict[str, Any] | None = None
+        if source_path.is_file():
+            try:
+                loaded = storage.read_json(source_path)
+                payload = loaded if isinstance(loaded, dict) else None
+            except (OSError, ValueError, json.JSONDecodeError):
+                payload = None
+        # Older successful runs may outlive their job-scoped artifact file.
+        # The DB row intentionally retains the immutable window plan, hashes,
+        # and provenance needed to republish a read-only binding.
+        if payload is None:
+            try:
+                stored_plan = json.loads(run.plan_json or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                stored_plan = None
+            if not isinstance(stored_plan, dict) or stored_plan.get("plan_hash") != run.window_plan_hash:
+                continue
+            payload = {
+                "schema_version": "match_state_segmentation.v1",
+                "planning_job_id": planning_job_id,
+                "capture_take_id": capture_take_id,
+                "run_id": run.id,
+                "status": run.status.value,
+                "model": {
+                    "package_id": run.model_package_id,
+                    "model_version": run.model_package_version,
+                    "profile": run.profile,
+                    "package_sha256": run.package_sha256,
+                    "weights_sha256": run.weights_sha256,
+                    "decoder_sha256": run.decoder_sha256,
+                },
+                "input_provenance": {
+                    "input_fingerprint": run.input_fingerprint,
+                    "sync_calibration_revision": run.sync_calibration_revision,
+                    "timing_authority": run.timing_authority,
+                },
+                "decoder": {},
+                "state_summary": {"unknown_rate": run.unknown_rate},
+                "state_timeline": [],
+                "algorithm_segments": [],
+                "window_plan": stored_plan,
+                "diagnostics": {"reconstructed_from_persisted_run": True},
+            }
+        plan = payload.get("window_plan") if isinstance(payload, dict) else None
+        if not isinstance(plan, dict) or plan.get("plan_hash") != run.window_plan_hash:
+            continue
+        reused = dict(payload)
+        reused["planning_job_id"] = planning_job_id
+        diagnostics = reused.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        reused["diagnostics"] = {**diagnostics, "reused_from_run_id": run.id, "reused_from_job_id": run.planning_job_id}
+        storage.write_json_atomic(
+            storage.formal_segmentation_artifact_path(planning_job_id, capture_take_id),
+            reused,
+        )
+        return run
+    return None
+
+
 def _run_id() -> str:
     return f"seg_{uuid4().hex[:16]}"
 

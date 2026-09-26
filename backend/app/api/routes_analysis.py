@@ -513,6 +513,7 @@ def read_analysis_artifact(
         "player-render-trajectories",  # 渲染轨迹（逐帧坐标，仅用于小地图）
         "performance-insights",  # performance-insights.v1（表现洞察事实层）
         "shot-rally-events",  # shot-rally-events.v1（canonical Rally/Shot 事实层）
+        "shot-landings",  # shot-landings.v1（canonical Shot 落点事实层）
         "metric-snapshot",  # metric-snapshot.v1（分母感知描述性指标）
         "kitchen-arrival",  # kitchen-arrival.v1（发球队厨房线到位事实）
         "normalized-metrics",  # normalized-metric-snapshot.v1（规范化指标中间层）
@@ -593,6 +594,8 @@ def read_analysis_artifact(
         path = _STORAGE.performance_insights_json_path(job_id)
     elif artifact_name == "shot-rally-events":
         path = _STORAGE.shot_rally_events_json_path(job_id)
+    elif artifact_name == "shot-landings":
+        path = _STORAGE.shot_landings_json_path(job_id)
     elif artifact_name == "metric-snapshot":
         path = _STORAGE.metric_snapshot_json_path(job_id)
     elif artifact_name == "kitchen-arrival":
@@ -661,7 +664,22 @@ def read_analysis_artifact(
     if artifact_name == "detections":
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="application/x-ndjson")
     # 3) 其余都是 JSON 文件 → 读取后以 JSON 形式返回
-    return JSONResponse(_json_compatible(_STORAGE.read_json(path)))
+    if artifact_name == "reconstructed-ball-trajectory":
+        from app.services.ball_playback_artifact import playback_path
+
+        compact_path = playback_path(path)
+        if compact_path.is_file() and compact_path.stat().st_mtime_ns >= path.stat().st_mtime_ns:
+            return FileResponse(compact_path, media_type="application/json")
+    payload = _STORAGE.read_json(path)
+    if artifact_name == "reconstructed-ball-trajectory" and isinstance(payload, dict):
+        # The immutable artifact retains per-tick forensic diagnostics (hundreds
+        # of MB for a full match). Playback needs the complete paths/events, not
+        # candidate filtering histories duplicated in diagnostics.
+        payload = {**payload, "diagnostics": {
+            key: value for key, value in (payload.get("diagnostics") or {}).items()
+            if key in {"counters", "failure_reason", "pipeline", "quality_gate_version", "overall_status"}
+        }}
+    return JSONResponse(_json_compatible(payload))
 
 
 @router.get("/jobs/{job_id}/artifacts/position-visualization-images/{kind}/{file_name}", response_model=None)

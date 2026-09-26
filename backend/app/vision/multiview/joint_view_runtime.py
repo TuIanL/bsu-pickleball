@@ -32,6 +32,7 @@ class JointViewRuntime:
     court_view_scorer: Any | None = None
     court_view_state: Any | None = None
     counters: dict[str, int] = field(default_factory=dict)
+    _next_source_frame: int | None = field(default=None, init=False, repr=False)
 
     @property
     def view_id(self) -> str:
@@ -50,10 +51,22 @@ class JointViewRuntime:
         # 毫秒语义下 set(400) 实际定位到 400ms 处（60fps 时 ≈帧 25），导致检测跑在错误帧上、
         # 检测框每 ~5-8 tick 才变化一次（2026-08-13 定位的 joint 解帧 bug）。
         try:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, source_frame_index)
+            # Sequential stride decoding avoids seeking into an H.264 GOP on
+            # every tick. Random-access refinement still uses an exact seek.
+            if (self._next_source_frame is not None
+                    and 0 <= source_frame_index - self._next_source_frame <= 8
+                    and callable(getattr(cap, "grab", None))):
+                for _ in range(source_frame_index - self._next_source_frame):
+                    if not cap.grab():
+                        self._next_source_frame = None
+                        return None
+            else:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, source_frame_index)
             ok, frame = cap.read()
+            self._next_source_frame = source_frame_index + 1 if ok else None
             return frame if ok else None
         except Exception:
+            self._next_source_frame = None
             return None
 
     def step(

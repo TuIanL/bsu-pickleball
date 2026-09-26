@@ -337,7 +337,7 @@ export function parseLocation(pathname: string, search: string): RouteState {
   if (route.name === "library-item") {
     const params = new URLSearchParams(search);
     const rawView = params.get("view");
-    const validViews = ["overview", "video", "analysis", "trajectory", "report", "segments", "technical"];
+    const validViews = ["overview", "video", "analysis", "trajectory", "landing", "report", "segments", "technical"];
     const view = rawView && validViews.includes(rawView) ? rawView : "overview";
     return { ...route, view };
   }

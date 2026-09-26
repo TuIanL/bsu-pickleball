@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from collections.abc import Mapping
@@ -61,13 +62,48 @@ from app.vision.multiview.debug_trace import (
     build_joint_debug_manifest,
     write_joint_debug_trace,
 )
-from app.vision.player_tracking_engine.person_detector import EmptyPersonDetector, PersonDetector
+from app.vision.player_tracking_engine.person_detector import PersonDetector
 from app.vision.player_tracking_engine.view_tracking_session import (
     build_view_tracking_config,
     build_view_tracking_session,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _publish_joint_serve_candidates(*, job, result, runtime, storage, fps, frame_count) -> None:
+    """Reuse the tracking-only serve detector; candidates are not confirmed serves."""
+    from app.schemas.tracking import TrackingResult
+    from app.vision.events.serve_start_detector import ServeStartDetector
+
+    detector = ServeStartDetector()
+    try:
+        snapshot = runtime.tracking_session.snapshot()
+        count = len(snapshot.overlay_frames)
+        tracking = TrackingResult(
+            video_id=job.videoId, fps=fps, frame_count=frame_count,
+            processed_frame_count=count, frame_stride=job.frameStride,
+            overlay_frames=snapshot.overlay_frames,
+        )
+        trajectory = runtime.tracking_session.build_player_trajectory_artifact(
+            job_id=job.id, video_id=job.videoId, fps=fps, frame_count=frame_count,
+            processed_frame_count=count, frame_stride=job.frameStride,
+        )
+        artifact = detector.detect(
+            job_id=job.id, video_id=job.videoId, tracking=tracking,
+            player_trajectories=trajectory, pose_frames=[],
+        )
+    except Exception as exc:  # Optional navigation must not invalidate tracking.
+        logger.warning("joint serve candidate detection failed: %s", exc)
+        artifact = detector.unavailable(
+            job_id=job.id, video_id=job.videoId, detail=f"发球候选检测失败：{exc}",
+        )
+    path = storage.serve_events_json_path(job.id)
+    storage.write_json_atomic(path, artifact.model_dump(mode="json"))
+    result.artifacts.serve_events_json_path = str(path)
+    result.artifacts.serve_events_url = f"/api/analysis/jobs/{job.id}/artifacts/serve-events"
+    result.artifacts.serve_events_status = artifact.status
+    result.artifacts.serve_events_detail = artifact.detail
 
 
 def _recovered_to_dict(r: RecoveredViewObservation) -> dict[str, object]:
@@ -516,81 +552,6 @@ class JointViewInput:
     court_orientation: object | None = None
 
 
-def _run_joint_ball_post_stage(parent, storage, videos: Mapping[str, object], view_inputs) -> None:
-    """joint 模式球 3D 后置阶段（非阻塞，绝不影响权威结果）。
-
-    复用 real_data_runner 的球链：对两路已解析的视频+标定跑球 3D，写入 evidence v1 + v3。
-    窗口严格按 parent 的公共时间轴取；未指定窗口时覆盖参考视频全长。
-    球链失败仅告警，不破坏球员结果。
-    """
-    try:
-        from app.vision.multiview.ball_stereo.real_data_runner import ViewConfig, run_real_data
-
-        if get_settings().ball_model_path is None:
-            return
-        if len(view_inputs) < 2:
-            return
-
-        def _view_config(vi):
-            orientation = getattr(vi.court_orientation, "value", None) or vi.court_orientation or "identity"
-            return ViewConfig(
-                video_path=str(videos[vi.camera_slot].path),
-                calibration_path=str(storage.calibration_json_path(vi.calibration_id)),
-                orientation=str(orientation),
-                camera_id=vi.camera_id or vi.camera_slot,
-            )
-
-        cam1 = _view_config(view_inputs[0])
-        cam2 = _view_config(view_inputs[1])
-        scene_calibration = None
-        if getattr(parent, "sceneCalibrationRevision", None):
-            try:
-                from app.database import get_session_factory
-                from app.models.capture_take import CaptureTake
-                from app.services.metric_court_scene_service import MetricCourtSceneService
-
-                db = get_session_factory()()
-                try:
-                    take = db.query(CaptureTake).filter(CaptureTake.id == parent.metadata.capture_take_id).first()
-                    if take is not None and take.session_dir:
-                        scene_calibration = MetricCourtSceneService(storage).get_revision(
-                            take.session_dir,
-                            int(parent.sceneCalibrationRevision),
-                        )
-                finally:
-                    db.close()
-            except (FileNotFoundError, ValueError, OSError) as exc:
-                logger.warning("metric scene revision unavailable for real-data ball runner: %s", exc)
-        import cv2
-
-        reference_video = videos[view_inputs[0].camera_slot]
-        probe = cv2.VideoCapture(str(reference_video.path))
-        try:
-            source_fps = float(probe.get(cv2.CAP_PROP_FPS) or 30.0)
-            source_frame_count = int(probe.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        finally:
-            probe.release()
-        source_duration_s = source_frame_count / source_fps if source_frame_count > 0 and source_fps > 0 else 0.0
-        start_s = float(parent.clipStartMs or 0) / 1000.0
-        end_s = (
-            float(parent.clipEndMs) / 1000.0
-            if parent.clipEndMs is not None
-            else source_duration_s
-        )
-        if end_s <= start_s:
-            logger.warning("joint ball post-stage skipped: invalid effective window [%ss, %ss)", start_s, end_s)
-            return
-        run_real_data(
-            cam1=cam1, cam2=cam2,
-            window_start_s=start_s, window_end_s=end_s, frame_stride=2,
-            take_id=parent.metadata.capture_take_id or "",
-            job_id=parent.id, write_evidence_to_job=True,
-            scene_calibration=scene_calibration,
-        )
-        logger.info("joint ball post-stage wrote evidence + v3 for job %s", parent.id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("joint ball post-stage failed (non-blocking): %s", exc)
-
 
 class MultiViewJointExecutor:
     """joint_tracking_v2 执行体:同步解码 + MultiViewJointRun + joint compose。"""
@@ -606,6 +567,8 @@ class MultiViewJointExecutor:
         capture_take_id = parent.metadata.capture_take_id
         captures: dict[str, object] = {}
         try:
+            if not settings.enable_model_inference:
+                raise RuntimeError("人物模型推理未启用，无法执行正式双摄分析。请启用 PICKLEBALL_ENABLE_MODEL_INFERENCE 后重试。")
             # 1) 幂等持久化 jointRunId(先于打开视频/模型),失败重试复用
             run_id = parent.jointRunId or f"mvr_{uuid4().hex[:12]}"
             if not parent.jointRunId:
@@ -729,14 +692,10 @@ class MultiViewJointExecutor:
                     else None
                 )
                 roi = compute_expanded_detection_roi(None, view_width, view_height)
-                detector = (
-                    PersonDetector(
+                detector = PersonDetector(
                         model_path=settings.default_detector_model,
                         conf_threshold=settings.detector_confidence,
                         device=settings.detector_device,
-                    )
-                    if settings.enable_model_inference
-                    else EmptyPersonDetector()
                 )
                 session_config = replace(
                     config,
@@ -864,10 +823,30 @@ class MultiViewJointExecutor:
                 ball_processor=ball_processor,
             )
 
+            # Report prerequisite completion before the first joint progress event.
+            if progress_callback is not None:
+                now = datetime.now(UTC)
+                if formal_plan is not None:
+                    progress_callback(PipelineStageResult(
+                        id="segment", label="回合自动切分", status="done", progress=100,
+                        detail="已加载冻结的正式回合窗口计划", started_at=now, finished_at=now,
+                    ))
+                progress_callback(PipelineStageResult(
+                    id="multiview-input-check", label="素材与同步检查", status="done", progress=100,
+                    detail="双视频、标定、同步与人物推理配置检查通过", started_at=now, finished_at=now,
+                ))
+
             # 5) 长任务执行(每 tick cancellation + 进度)
+            last_progress_at = float("-inf")
+
             def on_progress(done: int, total: int) -> None:
+                nonlocal last_progress_at
                 if progress_callback is None:
                     return
+                tick_time = time.monotonic()
+                if done < total and tick_time - last_progress_at < 0.5:
+                    return
+                last_progress_at = tick_time
                 now = datetime.now(UTC).isoformat()
                 progress = min(95, max(5, int(done / max(1, total) * 95)))
                 # joint 模式没有 dedicated child；把同一 canonical tick 进度投影到
@@ -894,6 +873,30 @@ class MultiViewJointExecutor:
                     )
                 )
 
+            def on_ball_stage() -> None:
+                self.store.update(parent.id, orchestrationStatus="joint_ball_analysis")
+                if progress_callback is None:
+                    return
+                now = datetime.now(UTC)
+                progress_callback(PipelineStageResult(
+                    id="multiview-joint", label="双摄协同跟踪", status="done", progress=100,
+                    detail="双摄协同跟踪完成", started_at=now, finished_at=now,
+                ))
+                progress_callback(PipelineStageResult(
+                    id="multiview-ball-analysis", label="双摄球路分析", status="active", progress=1,
+                    detail="正在解析击球事件并重建分段球路", started_at=now,
+                ))
+
+            def on_ball_progress(progress: int, detail: str) -> None:
+                if progress_callback is None:
+                    return
+                now = datetime.now(UTC)
+                progress_callback(PipelineStageResult(
+                    id="multiview-ball-analysis", label="双摄球路分析", status="active",
+                    progress=max(1, min(99, progress)), detail=detail, started_at=now,
+                    public_message=detail,
+                ))
+
             out = run.run(
                 reference_fps=fps, frame_stride=parent.frameStride,
                 reference_frame_start=window.decoded_start_frame,
@@ -902,23 +905,11 @@ class MultiViewJointExecutor:
                 metric_frame_end=window.requested_end_frame if window.enabled else frame_count,
                 analysis_window=window_metadata,
                 cancellation_token=token, progress_callback=on_progress,
+                ball_stage_callback=on_ball_stage, ball_progress_callback=on_ball_progress,
             )
             # joint tick 已结束；从这一刻起单独公开球路阶段，保证状态机不会把
             # future stage 点亮在 multiview-joint 仍 active 时。
             now = datetime.now(UTC)
-            if progress_callback is not None:
-                progress_callback(
-                    PipelineStageResult(
-                        id="multiview-joint",
-                        label="双摄协同跟踪",
-                        status="done",
-                        detail="双摄协同跟踪完成，已生成共享 canonical 球候选输入",
-                        started_at=now,
-                        finished_at=now,
-                        progress=100,
-                        public_message="双摄协同跟踪完成",
-                    )
-                )
             self.store.update(parent.id, orchestrationStatus="joint_ball_analysis")
             ball_output = getattr(out, "ball_analysis", None)
             ball_status = str(getattr(ball_output, "status", "unavailable"))
@@ -1167,6 +1158,10 @@ class MultiViewJointExecutor:
                     else "双摄分析完成，但副摄证据不可用或覆盖不足，结果按降级模式展示。"
                 ), refinement=refinement, ball_analysis=getattr(out, "ball_analysis", None),
             )
+            _publish_joint_serve_candidates(
+                job=parent, result=result, runtime=runtimes[reference_view_id],
+                storage=storage, fps=fps, frame_count=frame_count,
+            )
             result = storage.publicize_pipeline_result(result)
             storage.write_json(storage.output_json_path(parent.id), result.model_dump(mode="json"))
 
@@ -1194,7 +1189,7 @@ class MultiViewJointExecutor:
                     )
                 except Exception as exc:  # noqa: BLE001 - debug is opt-in and non-blocking
                     logger.warning("joint debug replay render failed: %s", exc)
-            self.store.update(parent.id, orchestrationStatus="completed")
+            self.store.update(parent.id, orchestrationStatus="completed" if result.status == "completed" else "failed")
             logger.info(
                 "joint run 完成 run=%s globals=%s degraded=%s",
                 run_id, out.diagnostics.get("global_player_count"), out.diagnostics.get("degraded"),

@@ -73,6 +73,18 @@ class PipelineFunnelCounters(BaseModel):
     bbox_footpoint_inconsistency_count: int = Field(default=0, ge=0)
 
 
+class CandidateRecoveryQuality(BaseModel):
+    available: bool = False
+    enabled: bool = False
+    detail: str | None = None
+    minimum_consecutive_ticks: int | None = Field(default=None, ge=1)
+    maximum_step_ft: float | None = Field(default=None, ge=0.0)
+    unique_match_margin_ft: float | None = Field(default=None, ge=0.0)
+    evidence_ttl_ticks: int | None = Field(default=None, ge=1)
+    pending_evidence_count: int | None = Field(default=None, ge=0)
+    counters: dict[str, int] = Field(default_factory=dict)
+
+
 class FourPlayerIdentificationQuality(BaseModel):
     schema_version: Literal["four-player-identification-quality.v1"] = QUALITY_SCHEMA_VERSION
     job_id: str
@@ -87,6 +99,9 @@ class FourPlayerIdentificationQuality(BaseModel):
     confirmed_roster_count: int = Field(default=0, ge=0, le=4)
     players: dict[str, PlayerIdentificationSummary] = Field(default_factory=dict)
     funnel: PipelineFunnelCounters = Field(default_factory=PipelineFunnelCounters)
+    candidate_recovery: CandidateRecoveryQuality = Field(default_factory=CandidateRecoveryQuality)
+    mapping_confirmation_available: bool = False
+    mapping_confirmed_by_player: dict[str, bool | None] = Field(default_factory=dict)
     camera_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
     hard_invariants: dict[str, bool] = Field(default_factory=dict)
     absolute_gates: dict[str, bool] = Field(default_factory=dict)
@@ -142,6 +157,11 @@ def evaluate_quality(artifact: FourPlayerIdentificationQuality) -> FourPlayerIde
             local_reassociation_violations <= thresholds.max_local_slot_reassociation_violations
         ),
     }
+    if artifact.mapping_confirmation_available:
+        hard["canonical_identity_anchors_confirmed"] = (
+            set(artifact.mapping_confirmed_by_player) == set(CANONICAL_PLAYERS)
+            and all(artifact.mapping_confirmed_by_player.get(player_id) is True for player_id in CANONICAL_PLAYERS)
+        )
     absolute: dict[str, bool] = {}
     for player_id in CANONICAL_PLAYERS:
         player = artifact.players[player_id]
@@ -262,6 +282,16 @@ def build_quality_from_joint_artifacts(
         for item in roster_players
         if item.get("global_player_id") and item.get("player_id") in CANONICAL_PLAYERS
     }
+    mapping_confirmation_available = any(
+        isinstance(item, dict) and "mapping_confirmed" in item
+        for item in roster_players
+    )
+    mapping_confirmed_by_player = {
+        str(item.get("player_id")): bool(item.get("mapping_confirmed"))
+        for item in roster_players
+        if isinstance(item, dict)
+        and str(item.get("player_id") or "") in CANONICAL_PLAYERS
+    }
     ticks = sorted({float(sample.get("timestamp_seconds") or 0.0) for sample in samples})
     duration = max(ticks) - min(ticks) if len(ticks) > 1 else 0.0
     timestamps: dict[str, list[float]] = defaultdict(list)
@@ -276,7 +306,16 @@ def build_quality_from_joint_artifacts(
             continue
         timestamp = float(sample.get("timestamp_seconds") or 0.0)
         identity_status = str(sample.get("identity_status", "confirmed_observed"))
-        accepted = bool(sample.get("metric_eligible")) and identity_status in accepted_identity_statuses
+        mapping_confirmed = (
+            mapping_confirmed_by_player.get(player_id) is True
+            if mapping_confirmation_available
+            else True
+        )
+        accepted = (
+            bool(sample.get("metric_eligible"))
+            and identity_status in accepted_identity_statuses
+            and mapping_confirmed
+        )
         if accepted:
             timestamps[player_id].append(timestamp)
         else:
@@ -303,6 +342,8 @@ def build_quality_from_joint_artifacts(
         if isinstance(event, dict) and event.get("reason") == "reassociated"
     ]
     recovery_config = dict((runtime_diagnostics or {}).get("p1_online_recovery_config") or {})
+    candidate_recovery_runtime = dict((runtime_diagnostics or {}).get("candidate_recovery") or {})
+    association_counters = dict((runtime_diagnostics or {}).get("association_counters") or {})
     required_reassociation_frames = int(
         recovery_config.get("association_reassociation_frames") or 5
     )
@@ -432,6 +473,28 @@ def build_quality_from_joint_artifacts(
         duration_seconds=duration,
         confirmed_roster_count=int(roster.get("confirmed_player_count") or 0),
         players=summaries,
+        candidate_recovery=CandidateRecoveryQuality(
+            available="minimum_consecutive_ticks" in candidate_recovery_runtime,
+            enabled=bool(candidate_recovery_runtime.get("enabled", False)),
+            detail=(
+                None
+                if "minimum_consecutive_ticks" in candidate_recovery_runtime
+                else "历史任务未保存 candidate recovery 诊断"
+            ),
+            minimum_consecutive_ticks=candidate_recovery_runtime.get("minimum_consecutive_ticks"),
+            maximum_step_ft=candidate_recovery_runtime.get("maximum_step_ft"),
+            unique_match_margin_ft=candidate_recovery_runtime.get("unique_match_margin_ft"),
+            evidence_ttl_ticks=candidate_recovery_runtime.get("evidence_ttl_ticks"),
+            pending_evidence_count=candidate_recovery_runtime.get("pending_evidence_count"),
+            counters={
+                key: int(value)
+                for key, value in association_counters.items()
+                if str(key).startswith("unmatched_recovery_")
+                and isinstance(value, (int, float))
+            },
+        ),
+        mapping_confirmation_available=mapping_confirmation_available,
+        mapping_confirmed_by_player=mapping_confirmed_by_player,
         funnel=PipelineFunnelCounters(
             attempted_ticks=attempted,
             base_detection_ticks=sum(len(values) for values in detection_ticks.values()),

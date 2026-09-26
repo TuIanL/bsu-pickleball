@@ -382,6 +382,10 @@ class StorageService:
         # shot-rally-events.v1（canonical Rally/Shot 事实层）
         return self._job_artifact_root(job_id) / "shot_rally_events.json"
 
+    def shot_landings_json_path(self, job_id: str) -> Path:
+        # shot-landings.v1（canonical Shot 的首次正式落点事实）
+        return self._job_artifact_root(job_id) / "shot_landings.json"
+
     def metric_snapshot_json_path(self, job_id: str) -> Path:
         # metric-snapshot.v1（分母感知描述性指标）
         return self._job_artifact_root(job_id) / "metric_snapshot.json"

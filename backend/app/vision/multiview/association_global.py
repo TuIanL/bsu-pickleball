@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.vision.multiview.association import min_cost_matching
 from app.vision.multiview.camera_color_profile import (
@@ -158,6 +158,7 @@ class GlobalPlayerAssociator:
         appearance_ambiguity_margin: float = 0.08,
         appearance_mode: str = "enabled",
         reassociation_ambiguity_margin_ft: float = 0.5,
+        candidate_recovery_margin_ft: float = 2.0,
     ) -> None:
         self.registry = registry
         self.max_association_distance_ft = max_association_distance_ft
@@ -179,6 +180,7 @@ class GlobalPlayerAssociator:
             raise ValueError(f"unsupported appearance mode: {appearance_mode}")
         self.appearance_mode = appearance_mode
         self.reassociation_ambiguity_margin_ft = max(0.0, reassociation_ambiguity_margin_ft)
+        self.candidate_recovery_margin_ft = max(0.0, candidate_recovery_margin_ft)
         self.diagnostics: dict[str, int] = {}
         # 只读决策可观测：最近一次 process_tick 的 per-observation 决策记录
         self.last_tick_decisions: list[AssociationDecision] = []
@@ -197,6 +199,10 @@ class GlobalPlayerAssociator:
         # track-id fragmentation and lets a new epoch prove which incumbent it
         # is challenging before the slot is released.
         self._local_slot_history: dict[tuple[str, str], dict[str, object]] = {}
+        # Active-roster recovery evidence is deliberately separate from formal
+        # slot mappings. A candidate can update a confirmed global only after
+        # repeated, unique, cross-view-supported geometry agreement.
+        self._pending_recovery: dict[tuple[str, str, int, bool], dict[str, object]] = {}
         self._appearance_galleries: dict[str, dict[str, AppearanceTemplateGallery]] = defaultdict(dict)
         self._appearance_pairs: dict[tuple[str, str], deque[tuple[PlayerAppearanceDescriptor, PlayerAppearanceDescriptor]]] = defaultdict(lambda: deque(maxlen=48))
         self._camera_color_profiles: dict[tuple[str, str], CameraColorProfile] = {}
@@ -418,6 +424,8 @@ class GlobalPlayerAssociator:
         timestamp_s: float,
         orientation_by_view: Mapping[str, CourtOrientation],
         tick: int | None = None,
+        candidate_observations: list[JointObservation] | None = None,
+        available_views: set[str] | None = None,
     ) -> list[AssociationUpdate]:
         """把两路观测分配到 roster global states;返回关联更新。
 
@@ -427,7 +435,10 @@ class GlobalPlayerAssociator:
         - 弱历史绑定（(view,pid)）→ 需重新证明（可含 stale 玩家）；
         - roster 未满（BOOTSTRAPPING）→ 候选池（candidate_N）；roster 已满（ROSTER_ACTIVE）→ unresolved。
         """
-        tick = tick if tick is not None else (max((o.source_frame_index for o in observations), default=0))
+        candidate_observations = list(candidate_observations or [])
+        tick = tick if tick is not None else (
+            max((o.source_frame_index for o in [*observations, *candidate_observations]), default=0)
+        )
         # 只读决策可观测：每 tick 重置，供 display diagnostics 消费
         self.last_tick_decisions = []
         self.last_tick_local_slot_events = []
@@ -451,10 +462,36 @@ class GlobalPlayerAssociator:
                     obs.local_x_ft, obs.local_y_ft, orientation_by_view.get(obs.view_id)
                 )
                 obs.canonical_x_ft, obs.canonical_y_ft = cx, cy
+        for obs in candidate_observations:
+            if obs.canonical_x_ft is None:
+                cx, cy = local_to_canonical(
+                    obs.local_x_ft, obs.local_y_ft, orientation_by_view.get(obs.view_id)
+                )
+                obs.canonical_x_ft, obs.canonical_y_ft = cx, cy
 
         predictions = self.registry.predict_all(timestamp_s)
         updates: list[AssociationUpdate] = []
         assigned_obs: set[int] = set()  # id(obs)
+        recovery_observations: list[JointObservation] = []
+
+        # Once a track becomes formal, it no longer contributes through its
+        # unlocked-candidate key. This prevents stale candidate evidence from
+        # surviving a lock/identity transition.
+        formal_track_keys = {
+            (obs.view_id, int(obs.track_id)) for obs in observations if obs.track_id is not None
+        }
+        for key in list(self._pending_recovery):
+            view_id, lineage_key, _epoch, is_candidate = key
+            if available_views is not None and view_id not in available_views:
+                # A skipped/degraded view does not break candidate continuity
+                # or consume the recovery TTL.
+                self._pending_recovery[key]["last_tick"] = tick
+                continue
+            if is_candidate and any(
+                view_id == formal_view and lineage_key.endswith(f":{formal_track_id}")
+                for formal_view, formal_track_id in formal_track_keys
+            ):
+                self._pending_recovery.pop(key, None)
 
         # 2) guided 强约束：guided_roi + expected_global 的观测只尝试 expected（D7 / tasks 5.2）
         for obs in observations:
@@ -811,7 +848,8 @@ class GlobalPlayerAssociator:
             # 4c) 候选池（roster 未满） / unresolved（roster 已满）
             if self.registry.roster_state == "ROSTER_ACTIVE" or len(self.registry.players) >= self.registry.expected_player_count:
                 self.diagnostics["unresolved_no_slot"] = self.diagnostics.get("unresolved_no_slot", 0) + 1
-                self._record_decision(obs, "rejected", reason="unresolved_no_slot")
+                recovery_observations.append(obs)
+                self._record_decision(obs, "pending", reason="unresolved_recovery_evidence")
                 continue
             cid = self.registry.find_or_create_candidate(
                 view_id=obs.view_id,
@@ -834,6 +872,62 @@ class GlobalPlayerAssociator:
             )
             self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
             self._record_decision(obs, "candidate", reason="candidate_admitted")
+
+        # Candidate tracks are admitted to the roster candidate pool only
+        # while it is still being built. Once full, they enter a separate
+        # recovery ledger and can target existing globals only.
+        roster_full = (
+            self.registry.roster_state == "ROSTER_ACTIVE"
+            or len(self.registry.players) >= self.registry.expected_player_count
+        )
+        for obs in candidate_observations:
+            if obs.track_id is not None and (obs.view_id, int(obs.track_id)) in formal_track_keys:
+                continue
+            if not roster_full:
+                cid = self.registry.find_or_create_candidate(
+                    view_id=obs.view_id,
+                    view_player_id=self.observation_key(obs),
+                    identity_epoch=obs.local_identity_epoch,
+                    canonical_x_ft=obs.canonical_x_ft or 0.0,
+                    canonical_y_ft=obs.canonical_y_ft or 0.0,
+                    tick=tick,
+                    local_track_id=obs.track_id,
+                )
+                self.registry.note_candidate_observation(
+                    cid,
+                    view_id=obs.view_id,
+                    view_player_id=self.observation_key(obs),
+                    identity_epoch=obs.local_identity_epoch,
+                    canonical_x_ft=obs.canonical_x_ft or 0.0,
+                    canonical_y_ft=obs.canonical_y_ft or 0.0,
+                    tick=tick,
+                    local_track_id=obs.track_id,
+                )
+                self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
+                self._record_decision(obs, "candidate", reason="candidate_admitted")
+            else:
+                recovery_observations.append(obs)
+
+        if recovery_observations:
+            self._recover_from_unmatched_evidence(
+                recovery_observations,
+                timestamp_s=timestamp_s,
+                tick=tick,
+                predictions=predictions,
+                updates=updates,
+            )
+        if available_views is not None:
+            active_recovery_keys = {self._recovery_key(obs) for obs in recovery_observations}
+            absent_keys = [
+                key
+                for key in self._pending_recovery
+                if key[0] in available_views and key not in active_recovery_keys
+            ]
+            for key in absent_keys:
+                self._pending_recovery.pop(key, None)
+                self.diagnostics["unmatched_recovery_track_absent"] = (
+                    self.diagnostics.get("unmatched_recovery_track_absent", 0) + 1
+                )
 
         # 5) 候选晋升（D2 / tasks 2.3）+ 候选过期
         for cid in list(self.registry.candidates):
@@ -873,6 +967,7 @@ class GlobalPlayerAssociator:
                             )
                         )
         self.registry.expire_candidates(tick)
+        self._expire_pending_recovery(tick)
 
         self._update_appearance_models(updates)
 
@@ -881,6 +976,292 @@ class GlobalPlayerAssociator:
             event.setdefault("timestamp_ms", float(timestamp_s) * 1000.0)
 
         return updates
+
+    def _recovery_key(self, obs: JointObservation) -> tuple[str, str, int, bool]:
+        is_candidate = obs.tracking_status == "candidate"
+        local_key = (
+            obs.tracklet_lineage_id or str(obs.track_id)
+            if is_candidate
+            else self.observation_key(obs)
+        )
+        return (obs.view_id, str(local_key), int(obs.local_identity_epoch), is_candidate)
+
+    def _record_recovery_evidence(self, obs: JointObservation, tick: int) -> dict[str, object]:
+        key = self._recovery_key(obs)
+        current_xy = (float(obs.canonical_x_ft or 0.0), float(obs.canonical_y_ft or 0.0))
+        previous = self._pending_recovery.get(key)
+        consecutive = False
+        if previous is not None and int(previous.get("last_tick", -1)) == tick - 1:
+            previous_xy = previous.get("last_xy")
+            if isinstance(previous_xy, tuple) and _dist(current_xy, previous_xy) <= max(
+                2.0 * self.base_gate_ft, self.reanchor_max_step_ft
+            ):
+                consecutive = True
+        hit_count = int(previous.get("hit_count", 0)) + 1 if consecutive and previous else 1
+        entry: dict[str, object] = {
+            "first_tick": int(previous.get("first_tick", tick)) if consecutive and previous else tick,
+            "last_tick": tick,
+            "hit_count": hit_count,
+            "last_xy": current_xy,
+            "observation": obs,
+            "candidate": obs.tracking_status == "candidate",
+            "recovered_global_id": (
+                previous.get("recovered_global_id") if consecutive and previous else None
+            ),
+        }
+        self._pending_recovery[key] = entry
+        self.diagnostics["unmatched_recovery_evidence_seen"] = (
+            self.diagnostics.get("unmatched_recovery_evidence_seen", 0) + 1
+        )
+        if hit_count < max(3, self.reanchor_frames):
+            self.diagnostics["unmatched_recovery_pending"] = (
+                self.diagnostics.get("unmatched_recovery_pending", 0) + 1
+            )
+        return entry
+
+    def _recover_from_unmatched_evidence(
+        self,
+        observations: list[JointObservation],
+        *,
+        timestamp_s: float,
+        tick: int,
+        predictions: Mapping[str, tuple[float, float, float]],
+        updates: list[AssociationUpdate],
+    ) -> None:
+        """Accumulate unmatched evidence and attach only stable, unique tracks to existing globals."""
+        current_entries: dict[tuple[str, str, int, bool], dict[str, object]] = {}
+        min_ticks = max(3, self.reanchor_frames)
+        for obs in observations:
+            if obs.canonical_x_ft is None or obs.canonical_y_ft is None:
+                self.diagnostics["unmatched_recovery_rejected_projection"] = (
+                    self.diagnostics.get("unmatched_recovery_rejected_projection", 0) + 1
+                )
+                continue
+            key = self._recovery_key(obs)
+            entry = self._record_recovery_evidence(obs, tick)
+            current_entries[key] = entry
+            if int(entry["hit_count"]) < min_ticks:
+                self._record_decision(obs, "pending", reason="unmatched_recovery_stability")
+
+        # Only a formal, non-quarantined observation from the other camera in
+        # this tick can support a recovered identity. This keeps stale-only
+        # geometry from assigning a candidate to the wrong doubles player.
+        supported_globals_by_view: dict[str, dict[str, tuple[float, float]]] = defaultdict(dict)
+        occupied_globals_by_view: dict[str, set[str]] = defaultdict(set)
+        for update in updates:
+            if update.quarantined:
+                continue
+            occupied_globals_by_view[update.view_id].add(update.global_id)
+            if not update.tentative:
+                supported_globals_by_view[update.view_id][update.global_id] = (
+                    float(update.observation.canonical_x_ft or 0.0),
+                    float(update.observation.canonical_y_ft or 0.0),
+                )
+
+        stable_entries = [
+            (key, entry)
+            for key, entry in current_entries.items()
+            if int(entry.get("hit_count", 0)) >= min_ticks
+            and int(entry.get("last_tick", -1)) == tick
+        ]
+        if not stable_entries:
+            return
+
+        by_view: dict[str, list[tuple[tuple[str, str, int, bool], dict[str, object]]]] = defaultdict(list)
+        for item in stable_entries:
+            obs = item[1].get("observation")
+            if isinstance(obs, JointObservation):
+                by_view[obs.view_id].append(item)
+
+        for view_id, entries in by_view.items():
+            options_by_key: dict[str, dict[str, float]] = {}
+            feasible_by_key: dict[str, dict[str, float]] = {}
+            observation_by_match_key: dict[str, JointObservation] = {}
+            entry_by_match_key: dict[str, tuple[tuple[str, str, int, bool], dict[str, object]]] = {}
+            for recovery_key, entry in entries:
+                obs = entry.get("observation")
+                if not isinstance(obs, JointObservation):
+                    continue
+                incumbent = self._incumbent_for_slot(obs) if obs.view_player_id else None
+                match_key = f"{self.observation_key(obs)}@{obs.local_identity_epoch}"
+                residuals: dict[str, float] = {}
+                normalized: dict[str, float] = {}
+                for gid, state in self.registry.players.items():
+                    if state.roster_status not in ("provisional", "confirmed"):
+                        continue
+                    if gid in occupied_globals_by_view.get(view_id, set()):
+                        continue
+                    other_positions = [
+                        positions[gid]
+                        for other_view, positions in supported_globals_by_view.items()
+                        if other_view != view_id and gid in positions
+                    ]
+                    if not other_positions:
+                        continue
+                    if incumbent is not None and gid != incumbent:
+                        continue
+                    binding = state.view_bindings.get(view_id)
+                    if binding is not None and binding.visibility == "observed":
+                        continue
+                    pinned_global = entry.get("recovered_global_id")
+                    if pinned_global and gid != pinned_global:
+                        continue
+                    residual = min(
+                        _dist(
+                            (obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0),
+                            support_position,
+                        )
+                        for support_position in other_positions
+                    )
+                    gate = min(
+                        self._pair_gate_ft(obs, gid, predictions)
+                        if gid in predictions
+                        else self.max_association_distance_ft,
+                        self.max_association_distance_ft,
+                    )
+                    if residual <= gate:
+                        residuals[gid] = residual
+                        normalized[gid] = residual / max(gate, 1e-3)
+                if not residuals:
+                    self.diagnostics["unmatched_recovery_rejected_geometry"] = (
+                        self.diagnostics.get("unmatched_recovery_rejected_geometry", 0) + 1
+                    )
+                    self._record_decision(obs, "pending", reason="unmatched_recovery_no_eligible_global")
+                    continue
+                ordered = sorted(residuals.items(), key=lambda item: item[1])
+                if len(ordered) > 1 and ordered[1][1] - ordered[0][1] < self.candidate_recovery_margin_ft:
+                    self.diagnostics["unmatched_recovery_ambiguous"] = (
+                        self.diagnostics.get("unmatched_recovery_ambiguous", 0) + 1
+                    )
+                    self._record_decision(obs, "pending", reason="unmatched_recovery_ambiguous")
+                    continue
+                options_by_key[match_key] = residuals
+                feasible_by_key[match_key] = normalized
+                observation_by_match_key[match_key] = obs
+                entry_by_match_key[match_key] = (recovery_key, entry)
+
+            if not options_by_key:
+                continue
+            pairs = min_cost_matching(
+                list(options_by_key),
+                sorted({gid for options in options_by_key.values() for gid in options}),
+                options_by_key,
+                feasibility_cost=feasible_by_key,
+                max_feasibility_cost=1.0,
+            )
+            for match_key, gid in pairs:
+                obs = observation_by_match_key[match_key]
+                recovery_key, entry = entry_by_match_key[match_key]
+                is_candidate = bool(entry.get("candidate"))
+                if is_candidate:
+                    # Candidate recovery contributes a real measurement but
+                    # never writes a synthetic Player_N binding into the roster.
+                    state = self.registry.players.get(gid)
+                    if state is not None:
+                        previous_binding = state.view_bindings.get(view_id)
+                        if previous_binding is None:
+                            recovered_binding = ViewBinding(
+                                view_player_id=None,
+                                local_identity_epoch=0,
+                                tracklet_lineage_id=obs.tracklet_lineage_id,
+                                track_id=obs.track_id,
+                                last_seen_take_timestamp_ms=obs.take_timestamp_ms,
+                                last_source_frame_index=obs.source_frame_index,
+                                quality=obs.intrinsic_quality or obs.confidence,
+                                visibility="observed",
+                                tracking_status="candidate",
+                                observation_origin="base",
+                            )
+                        else:
+                            recovered_binding = replace(
+                                previous_binding,
+                                track_id=obs.track_id,
+                                last_seen_take_timestamp_ms=obs.take_timestamp_ms,
+                                last_source_frame_index=obs.source_frame_index,
+                                quality=obs.intrinsic_quality or obs.confidence,
+                                visibility="observed",
+                                tracking_status="candidate",
+                                observation_origin="base",
+                            )
+                        self.registry.set_binding(
+                            gid,
+                            view_id,
+                            recovered_binding,
+                            obs.take_timestamp_ms,
+                        )
+                    updates.append(
+                        AssociationUpdate(
+                            gid,
+                            obs.view_id,
+                            obs,
+                            1.0 / (1.0 + options_by_key[match_key][gid]),
+                        )
+                    )
+                elif not self._accept_pair(
+                    obs,
+                    gid,
+                    feasible_by_key[match_key][gid],
+                    updates,
+                ):
+                    self.diagnostics["unmatched_recovery_rejected_slot_conflict"] = (
+                        self.diagnostics.get("unmatched_recovery_rejected_slot_conflict", 0) + 1
+                    )
+                    self._record_decision(obs, "rejected", global_id=gid, reason="reference_slot_conflict")
+                    continue
+                entry["recovered_global_id"] = gid
+                self.diagnostics["unmatched_recovery_accepted"] = (
+                    self.diagnostics.get("unmatched_recovery_accepted", 0) + 1
+                )
+                self._record_decision(
+                    obs,
+                    "assigned",
+                    global_id=gid,
+                    reason="candidate_recovered" if is_candidate else "unresolved_recovered",
+                )
+                if not is_candidate:
+                    self._pending_recovery.pop(recovery_key, None)
+
+    def _expire_pending_recovery(self, tick: int) -> None:
+        ttl = max(1, int(self.registry.candidate_expire_ticks))
+        stale = [
+            key
+            for key, entry in self._pending_recovery.items()
+            if tick - int(entry.get("last_tick", tick)) > ttl
+        ]
+        for key in stale:
+            self._pending_recovery.pop(key, None)
+            self.diagnostics["unmatched_recovery_expired"] = (
+                self.diagnostics.get("unmatched_recovery_expired", 0) + 1
+            )
+        # A defensive cap keeps malformed/noisy sources from growing the job-local ledger.
+        max_entries = max(128, ttl * 8)
+        if len(self._pending_recovery) > max_entries:
+            oldest = sorted(
+                self._pending_recovery.items(),
+                key=lambda item: int(item[1].get("last_tick", 0)),
+            )[: len(self._pending_recovery) - max_entries]
+            for key, _entry in oldest:
+                self._pending_recovery.pop(key, None)
+                self.diagnostics["unmatched_recovery_expired"] = (
+                    self.diagnostics.get("unmatched_recovery_expired", 0) + 1
+                )
+
+    def recovery_diagnostics(self) -> dict[str, object]:
+        counter_prefixes = ("unmatched_recovery_",)
+        counters = {
+            key: value
+            for key, value in self.diagnostics.items()
+            if key.startswith(counter_prefixes)
+        }
+        return {
+            "enabled": True,
+            "minimum_consecutive_ticks": max(3, self.reanchor_frames),
+            "maximum_step_ft": max(2.0 * self.base_gate_ft, self.reanchor_max_step_ft),
+            "unique_match_margin_ft": self.candidate_recovery_margin_ft,
+            "evidence_ttl_ticks": max(1, int(self.registry.candidate_expire_ticks)),
+            "pending_evidence_count": len(self._pending_recovery),
+            "counters": counters,
+        }
 
     def _evaluate_reanchor(
         self,

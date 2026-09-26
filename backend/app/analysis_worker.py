@@ -12,7 +12,12 @@ import time
 
 from app.core.logging import configure_logging
 from app.database import init_db
-from app.services.mock_analysis import recover_zombie_jobs, start_analysis_worker, stop_analysis_worker
+from app.services.mock_analysis import (
+    analysis_worker_thread_alive,
+    recover_zombie_jobs,
+    start_analysis_worker,
+    stop_analysis_worker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,9 @@ def main() -> None:
     try:
         while not stopping:
             time.sleep(0.5)
+            if not stopping and not analysis_worker_thread_alive():
+                logger.warning("analysis-worker thread stopped; restarting queue polling")
+                start_analysis_worker(force=True)
     finally:
         logger.info("analysis-worker stopping")
         stop_analysis_worker()

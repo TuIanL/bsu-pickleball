@@ -1,0 +1,7 @@
+# serve.sh 运行期产生的本地隧道状态文件，不应入库
+.tunnel.pid
+.tunnel.log
+
+# 实例连接配置（地址/端口/用户名/密钥路径）属于环境信息，不入库。
+# 新环境请复制 remote.env.example 为 remote.env 后填写。
+remote.env

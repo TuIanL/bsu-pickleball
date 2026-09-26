@@ -39,6 +39,7 @@ from app.services.job_orchestration import (
     merge_stage_progress,
     stage_details_for,
 )
+from app.services.formal_segmentation_service import publish_reusable_segmentation
 from app.services.analysis_progress import resolve_progress_mode
 from app.services.multiview_acceptance import (
     repair_capture_track_video_indices,
@@ -883,6 +884,76 @@ class MultiViewAnalysisCoordinator:
                 multiview=mv,
                 segmentationRequired=True,
             )
+            reused_run = None
+            try:
+                from app.core.config import get_settings
+                from app.database import get_session_factory
+                from app.services.job_orchestration import _formal_segmentation_provenance
+
+                provenance = _formal_segmentation_provenance(payload)
+                reuse_db = get_session_factory()()
+                try:
+                    reused_run = publish_reusable_segmentation(
+                        reuse_db,
+                        storage=self.storage,
+                        capture_take_id=payload.metadata.capture_take_id or "",
+                        planning_job_id=parent.id,
+                        input_fingerprint=analysis_signature(prerequisite_payload)[0],
+                        sync_calibration_revision=sync_calibration_revision,
+                        profile=get_settings().match_state_segmentation_required_profile,
+                        package_sha256=str(provenance.get("packageSha256") or "unavailable"),
+                        weights_sha256=str(provenance.get("weightsSha256") or "unavailable"),
+                        decoder_sha256=str(provenance.get("decoderSha256") or "unavailable"),
+                        allow_take_scoped_reuse=clip_start_ms is None and clip_end_ms is None,
+                    )
+                finally:
+                    reuse_db.close()
+            except Exception:
+                logger.exception("Unable to inspect reusable segmentation for Parent %s", parent.id)
+            if reused_run is not None:
+                mode = resolve_progress_mode(parent.analysisKind, parent.executionMode, True)
+                label, detail = stage_details_for(mode, "segment")
+                stages = merge_stage_progress(
+                    parent.stages,
+                    AnalysisStage(id="segment", label=label, status="done", detail="已复用冻结的回合窗口计划", progress=100),
+                    mode=mode,
+                )
+                updates: dict[str, object] = {
+                    "multiviewViews": frozen_views,
+                    "jointViewInputs": joint_inputs,
+                    "segmentationPrerequisiteJobId": None,
+                    "segmentationRunId": reused_run.id,
+                    "windowPlanHash": reused_run.window_plan_hash,
+                    "segmentationStatus": reused_run.status.value,
+                    "segmentationArtifactRef": self.storage.logical_artifact_reference(
+                        parent.id,
+                        self.storage.formal_segmentation_artifact_path(parent.id, payload.metadata.capture_take_id),
+                    ),
+                    "stages": stages,
+                    "stage": "segment",
+                    "progress": compute_progress_from_stages(stages, mode=mode, previous_progress=parent.progress),
+                    "referenceViewId": mv.referenceViewId,
+                    "canonicalFrameId": canonical_frame.frame_id,
+                    "syncCalibrationRevision": sync_calibration_revision,
+                    "sceneCalibrationRevision": mv.sceneCalibrationRevision,
+                    "sceneCalibrationMode": mv.sceneCalibrationMode,
+                    "sceneCalibrationStatus": "ready" if mv.sceneCalibrationMode == "metric" else "missing",
+                    "sourceJobs": [],
+                }
+                if mv.executionMode == "joint_tracking_v2":
+                    updates["orchestrationStatus"] = "joint_ready"
+                    updates["viewRuns"] = {
+                        str(item.get("cameraSlot")): ViewRunSummary(status="queued", stage="queue", progress=10)
+                        for item in joint_inputs if item.get("cameraSlot")
+                    }
+                    parent = self.store.update(parent.id, **updates) or parent
+                else:
+                    updates["orchestrationStatus"] = "waiting_sources"
+                    parent = self.store.update(parent.id, **updates) or parent
+                    self._create_late_children_after_segmentation(parent)
+                    parent = self.store.get(parent.id) or parent
+                logger.info("复用正式回合切分 %s → Parent %s", reused_run.id, parent.id)
+                return parent
             prerequisite = self.store.create_job(prerequisite_payload)
             prerequisite = self.store.update(
                 prerequisite.id,
@@ -1153,6 +1224,10 @@ class MultiViewAnalysisCoordinator:
         """根据 child 终态推进 Parent 的 orchestrationStatus（幂等）。"""
         if parent.analysisKind != "multiview" or parent.canonicalStatus != "queued":
             return None
+        if parent.executionMode == "joint_tracking_v2":
+            # Joint jobs have no Source children; an empty child list is not a
+            # failed late-fusion run. The worker claims them via joint_ready.
+            return parent
         if parent.orchestrationStatus == "waiting_segmentation":
             return None
         if parent.orchestrationStatus in {"fusing", "composing"}:
@@ -1227,6 +1302,8 @@ class MultiViewAnalysisCoordinator:
             return
         parent = self.store.get(job.parentJobId)
         if parent is None or parent.canonicalStatus in TERMINAL_STATUSES:
+            return
+        if parent.orchestrationStatus != "waiting_segmentation":
             return
         if parent.segmentationPrerequisiteJobId and parent.segmentationPrerequisiteJobId != job.id:
             return
@@ -1348,6 +1425,9 @@ class MultiViewAnalysisCoordinator:
                 continue
             if job.orchestrationStatus == "waiting_segmentation":
                 prerequisite = self.store.get(job.segmentationPrerequisiteJobId) if job.segmentationPrerequisiteJobId else None
+                if prerequisite is not None and prerequisite.canonicalStatus == "queued" and self._reuse_waiting_segmentation(job, prerequisite):
+                    advanced += 1
+                    continue
                 if prerequisite is not None and prerequisite.canonicalStatus in TERMINAL_STATUSES:
                     before = job.orchestrationStatus
                     self.on_segmentation_terminal(prerequisite)
@@ -1362,6 +1442,78 @@ class MultiViewAnalysisCoordinator:
         if advanced:
             logger.info("启动对账推进了 %s 个双摄 Parent", advanced)
         return advanced
+
+    def _reuse_waiting_segmentation(self, parent: AnalysisJobSummary, prerequisite: AnalysisJobSummary) -> bool:
+        """Release a queued full-take Parent when a compatible plan already exists."""
+        take_id = parent.metadata.capture_take_id
+        if not take_id or parent.clipStartMs is not None or parent.clipEndMs is not None:
+            return False
+        if not prerequisite.inputSignature:
+            return False
+        try:
+            from app.core.config import get_settings
+            from app.database import get_session_factory
+            from app.services.job_orchestration import _formal_segmentation_provenance
+
+            settings = get_settings()
+            provenance = _formal_segmentation_provenance(AnalysisJobCreate(metadata=parent.metadata))
+            db = get_session_factory()()
+            try:
+                run = publish_reusable_segmentation(
+                    db,
+                    storage=self.storage,
+                    capture_take_id=take_id,
+                    planning_job_id=parent.id,
+                    input_fingerprint=prerequisite.inputSignature,
+                    sync_calibration_revision=parent.syncCalibrationRevision,
+                    profile=settings.match_state_segmentation_required_profile,
+                    package_sha256=str(provenance.get("packageSha256") or "unavailable"),
+                    weights_sha256=str(provenance.get("weightsSha256") or "unavailable"),
+                    decoder_sha256=str(provenance.get("decoderSha256") or "unavailable"),
+                    allow_take_scoped_reuse=True,
+                )
+            finally:
+                db.close()
+            if run is None:
+                return False
+            _, outcome = self.store.cancel(prerequisite.id)
+            if outcome != "canceled":
+                return False
+            mode = resolve_progress_mode(parent.analysisKind, parent.executionMode, True)
+            label, _ = stage_details_for(mode, "segment")
+            stages = merge_stage_progress(
+                parent.stages,
+                AnalysisStage(id="segment", label=label, status="done", detail="已复用冻结的回合窗口计划", progress=100),
+                mode=mode,
+            )
+            updates: dict[str, object] = {
+                "segmentationPrerequisiteJobId": None,
+                "segmentationRunId": run.id,
+                "windowPlanHash": run.window_plan_hash,
+                "segmentationStatus": run.status.value,
+                "segmentationArtifactRef": self.storage.logical_artifact_reference(
+                    parent.id, self.storage.formal_segmentation_artifact_path(parent.id, take_id)
+                ),
+                "stages": stages,
+                "stage": "segment",
+                "progress": compute_progress_from_stages(stages, mode=mode, previous_progress=parent.progress),
+                "orchestrationStatus": "joint_ready" if parent.executionMode == "joint_tracking_v2" else "waiting_sources",
+            }
+            if parent.executionMode == "joint_tracking_v2":
+                updates["viewRuns"] = {
+                    str(item.get("cameraSlot")): ViewRunSummary(status="queued", stage="queue", progress=10)
+                    for item in parent.jointViewInputs if item.get("cameraSlot")
+                }
+            updated = self.store.update(parent.id, **updates)
+            if updated is None:
+                return False
+            if parent.executionMode != "joint_tracking_v2":
+                self._create_late_children_after_segmentation(updated)
+            logger.info("复用正式回合切分 %s → 已排队 Parent %s", run.id, parent.id)
+            return True
+        except Exception:
+            logger.exception("Unable to reuse segmentation for queued Parent %s", parent.id)
+            return False
 
     # ---- 取消 / 删除级联 ------------------------------------------------------
 

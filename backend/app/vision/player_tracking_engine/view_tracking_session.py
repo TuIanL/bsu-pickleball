@@ -166,6 +166,8 @@ class ViewFrameResult:
     appearance_summary: dict[str, Any] = field(default_factory=dict)
     appearance_by_track: dict[int, PlayerAppearanceDescriptor] = field(default_factory=dict)
     roi_recovery_summary: dict[str, Any] = field(default_factory=dict)
+    candidate_positions: list[PlayerFramePosition] = field(default_factory=list)
+    candidate_tracklet_lineage_by_track: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -751,6 +753,13 @@ class ViewTrackingSession:
             render_raw_by_track=render_raw_by_track,
             player_motion_pixels=player_motion_pixels,
             candidate_detections=candidate_detections,
+            candidate_positions=[
+                pos for pos in frame_positions if int(pos.track_id) in candidate_track_ids
+            ],
+            candidate_tracklet_lineage_by_track={
+                int(track_id): f"unlocked_track:{track_id}"
+                for track_id in candidate_track_ids
+            },
             local_identity_by_track={int(k): v for k, v in player_by_track.items() if int(k) in surviving_track_ids},
             local_identity_epoch_by_track=identity_epoch_by_track,
             local_tracklet_lineage_by_track=tracklet_lineage_by_track,

@@ -86,3 +86,27 @@ def test_get_frame_mapping_source_unchanged():
     assert runtime.get_frame(5) is frames[5]
     assert runtime.get_frame(6) is frames[6]
     assert runtime.get_frame(99) is None
+
+
+def test_sequential_stride_reads_exact_frames_without_repeated_seek():
+    class Capture(_FakeCapture):
+        cursor = 0
+
+        def set(self, prop_id, value):
+            super().set(prop_id, value)
+            self.cursor = value
+            return True
+
+        def grab(self):
+            self.cursor += 1
+            return True
+
+        def read(self):
+            frame = self.cursor
+            self.cursor += 1
+            return True, frame
+
+    cap = Capture()
+    runtime = _make_runtime(cap)
+    assert [runtime.get_frame(i) for i in (400, 402, 404, 401, 403)] == [400, 402, 404, 401, 403]
+    assert cap.set_calls == [(cv2.CAP_PROP_POS_FRAMES, 400), (cv2.CAP_PROP_POS_FRAMES, 401)]

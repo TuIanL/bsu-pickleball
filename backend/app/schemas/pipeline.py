@@ -112,6 +112,10 @@ class AnalysisArtifacts(BaseModel):
     shot_rally_events_url: str | None = None
     shot_rally_events_status: str | None = None
     shot_rally_events_detail: str | None = None
+    shot_landings_json_path: str | None = None
+    shot_landings_url: str | None = None
+    shot_landings_status: str | None = None
+    shot_landings_detail: str | None = None
     metric_snapshot_json_path: str | None = None
     metric_snapshot_url: str | None = None
     metric_snapshot_status: str | None = None

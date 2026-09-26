@@ -76,7 +76,16 @@ describe("LibraryViewCapabilities", () => {
     expect(caps.analysis).toBe("available");
     expect(caps.report).toBe("unavailable");
     expect(caps.trajectory).toBe("unavailable");
+    expect(caps.landing).toBe("unavailable");
     expect(caps.reasons?.trajectory).toContain("未生成可用球路");
+  });
+
+  it("落点与球路使用彼此独立的 capability", () => {
+    const job = { id: "complete", status: "completed", createdAt: "2026-08-01", analysisKind: "single_view" } as const;
+    const landingOnly = { job_id: "complete", metrics: {}, artifacts: { shot_landings_url: "/landing" } } as unknown as AnalysisPipelineResult;
+    expect(computeLibraryViewCapabilities(item({}), { job, manifest: landingOnly, manifestState: "loaded" })).toMatchObject({ landing: "available", trajectory: "unavailable" });
+    const trajectoryOnly = { job_id: "complete", metrics: {}, artifacts: { ball_trajectory_url: "/ball" } } as unknown as AnalysisPipelineResult;
+    expect(computeLibraryViewCapabilities(item({}), { job, manifest: trajectoryOnly, manifestState: "loaded" })).toMatchObject({ landing: "unavailable", trajectory: "available" });
   });
 
   it("有效 canonical 场地轨迹可开放报告，即使区域统计尚未生成", () => {

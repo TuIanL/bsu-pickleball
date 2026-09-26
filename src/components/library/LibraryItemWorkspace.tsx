@@ -16,6 +16,9 @@ import { analysisJobFromSearch, buildLibraryWorkspacePath, resolveSelectedAnalys
 const BallTrajectoryView = lazy(() =>
   import("../../pages/BallTrajectoryPage").then((m) => ({ default: m.BallTrajectoryPage })),
 );
+const LandingAnalysisView = lazy(() =>
+  import("../../pages/LandingAnalysisPage").then((m) => ({ default: m.LandingAnalysisPage })),
+);
 const ReportContentView = lazy(() =>
   import("../report/ReportContent").then((m) => ({ default: m.ReportContent })),
 );
@@ -38,6 +41,7 @@ const VIEW_TABS: { key: LibraryView; label: string }[] = [
   { key: "video", label: "视频" },
   { key: "analysis", label: "数据分析" },
   { key: "trajectory", label: "球路" },
+  { key: "landing", label: "落点" },
   { key: "report", label: "报告" },
   { key: "segments", label: "片段" },
   { key: "technical", label: "技术详情" },
@@ -247,7 +251,7 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
             {VIEW_TABS.map((tab) => {
               // P1C：素材层面结果类 view 依据 capability 门控，缺产物时不可点。
               // video 例外：availability 不可用时不禁用（内容区给出明确不可用提示）。
-              const lockable = ["analysis", "trajectory", "report", "segments", "technical"].includes(tab.key);
+              const lockable = ["analysis", "trajectory", "landing", "report", "segments", "technical"].includes(tab.key);
               const locked = Boolean(caps && lockable && caps[tab.key as Exclude<LibraryView, "overview">] !== "available");
               const lockReason = locked ? caps?.reasons?.[tab.key] : undefined;
               return (
@@ -305,7 +309,7 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
           item.availabilityState === "unavailable" ? (
             <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">视频暂不可用</div>
           ) : item.ref.kind === "upload" ? (
-            <SourceVideoContent videoId={item.ref.sourceId} />
+            <SourceVideoContent videoId={item.ref.sourceId} seekToMs={Number(new URLSearchParams(currentSearch).get("t")) || undefined} />
           ) : item.ref.kind === "recording" || item.ref.kind === "sync_recording" ? (
             <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载视频回放…</div>}>
               <RecordingWorkspaceView sessionId={item.ref.sourceId} onNavigate={onNavigate} embedded />
@@ -333,6 +337,14 @@ export function LibraryItemWorkspace({ kind, sourceId, view, onNavigate }: Libra
           ) : (
             <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">暂无可用球路</div>
           )
+        )}
+
+        {effectiveView === "landing" && (
+          selectedJobId ? (
+            <Suspense fallback={<div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">正在加载落点视图…</div>}>
+              <LandingAnalysisView key={selectedJobId} jobId={selectedJobId} onNavigate={onNavigate} embedded videoPath={(timeMs) => buildLibraryWorkspacePath(ref, { view: "video", analysisJobId: selectedJobId, search: currentSearch, time: timeMs })} />
+            </Suspense>
+          ) : <div className="grid place-items-center py-24 text-sm text-[var(--capture-text-muted,#8f9d96)]">暂无可用落点</div>
         )}
 
         {effectiveView === "report" && (

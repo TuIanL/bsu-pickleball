@@ -12,6 +12,8 @@ V1 不用 az=-g（避免理想抛物线支配视觉证据）。
 from __future__ import annotations
 
 import math
+from functools import lru_cache
+from typing import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -99,6 +101,14 @@ def _clamped_knots(n_controls: int, degree: int) -> np.ndarray:
     return np.asarray([0.0] * repetitions + inner + [1.0] * repetitions, dtype=float)
 
 
+@lru_cache(maxsize=8192)
+def _spline_basis(t: float, n_control: int, degree: int) -> np.ndarray:
+    knots = _clamped_knots(n_control, degree)
+    basis = np.array([_b_spline_basis(t, knots, degree, i) for i in range(n_control)])
+    basis.flags.writeable = False
+    return basis
+
+
 class CubicSpline3D:
     """均匀 clamped cubic B-spline：(X,Y,Z) 由 control points（n×3）决定，t∈[0,1]。"""
 
@@ -112,7 +122,7 @@ class CubicSpline3D:
             return self.control[0].copy()
         if t >= 1.0:
             return self.control[-1].copy()
-        basis = np.array([_b_spline_basis(t, self.knots, self.degree, i) for i in range(len(self.control))])
+        basis = _spline_basis(t, len(self.control), self.degree)
         return basis @ self.control
 
     def evaluate_many(self, ts: np.ndarray) -> np.ndarray:
@@ -138,11 +148,11 @@ def _residuals(params: np.ndarray, n_control: int, obs: list[Observation],
             h = o.projection @ np.array([xyz[0], xyz[1], xyz[2], 1.0])
             w = float(h[2])
             if abs(w) < 1e-9:
-                res.append(50.0)
+                res.extend((50.0, 50.0))
                 continue
             pu, pv = h[0] / w, h[1] / w
         except Exception:
-            res.append(50.0)
+            res.extend((50.0, 50.0))
             continue
         res.append(pu - o.u)
         res.append(pv - o.v)
@@ -175,7 +185,7 @@ def _residuals(params: np.ndarray, n_control: int, obs: list[Observation],
     heights = spline.evaluate_many(np.linspace(0, 1, 24))[:, 2]
     res.append(w_plaus * max(0.0, float(np.max(heights)) - max_height_ft))
     path_len = 0.0
-    seq = spline.evaluate_many(ts)
+    seq = pts
     for i in range(1, len(seq)):
         path_len += float(np.linalg.norm(seq[i] - seq[i - 1]))
     speed = path_len / max(t_span, 1e-6)
@@ -229,6 +239,7 @@ def reconstruct_segment(
     w_plaus: float = 0.1,
     min_observations: int = 2,
     stereo_measurements: list[BallStereoMeasurement] | None = None,
+    cancellation_check: Callable[[], None] | None = None,
 ) -> Reconstructed3DSegment:
     """对一段观测拟合估算 3D 曲线，返回采样与质量诊断。
 
@@ -317,9 +328,21 @@ def reconstruct_segment(
     if bounce_end:
         params0[-1] = 0.0
 
+    interruption: Exception | None = None
+
+    def checked_residuals(*args):
+        nonlocal interruption
+        if cancellation_check is not None:
+            try:
+                cancellation_check()
+            except Exception as exc:
+                interruption = exc
+                raise
+        return _residuals(*args)
+
     try:
         result = least_squares(
-            _residuals,
+            checked_residuals,
             params0,
             args=(n_control, observations, landing_xy, bounce_end, w_smooth, w_anchor, w_bounce,
                   w_zneg, w_plaus, max_height_ft, max_speed_ft_s, t_span, t_norm_min, t_span),
@@ -328,6 +351,8 @@ def reconstruct_segment(
             bounds=(lower, upper),
         )
     except Exception:
+        if interruption is not None:
+            raise interruption
         if landing_xy is not None:
             baseline.status = LANDING_ONLY
         return baseline

@@ -357,3 +357,39 @@ def test_external_mode_does_not_start_embedded_worker(monkeypatch):
     mock_analysis.start_analysis_worker(force=True)
     assert started == ["started"]
     get_settings.cache_clear()
+
+
+def test_success_is_published_after_completion_artifacts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.schemas.metrics import Heatmap, PerformanceMetrics
+    from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult
+
+    store = JobStore(make_storage(tmp_path))
+    job = store.claim(make_job(store).id, "worker-publish")
+    result = AnalysisPipelineResult(
+        job_id=job.id, video_id=job.videoId, status="completed", generated_at=datetime.now(UTC),
+        stages=[], tracks=[], artifacts=AnalysisArtifacts(), message="done",
+        metrics=PerformanceMetrics(distances=[], speeds=[], kitchen_dwell=[], doubles_spacing=[],
+                                   heatmap=Heatmap(rows=1, cols=1, cells=[])),
+    )
+    monkeypatch.setattr("app.services.analysis_executor_dispatch.resolve_executor",
+                        lambda *args, **kwargs: SimpleNamespace(execute=lambda *args: result))
+    events = []
+
+    def publish(current, result):
+        assert store.get(current.id).canonicalStatus == "running"
+        events.append("artifacts")
+
+    runtime = AnalysisWorkerRuntime(
+        store, pipeline_factory=lambda: None, on_completed=publish,
+        on_terminal=lambda current: events.append(current.canonicalStatus),
+    )
+    final = runtime._execute_pipeline(job, threading.Event())
+    assert final.canonicalStatus == "succeeded"
+    assert events == ["artifacts", "succeeded"]
+
+    # Publishing errors must not leave a falsely successful terminal job.
+    job = store.claim(make_job(store).id, "worker-publish")
+    runtime.on_completed = lambda *args: (_ for _ in ()).throw(OSError("disk full"))
+    final = runtime._execute_pipeline(job, threading.Event())
+    assert final.canonicalStatus == "failed"

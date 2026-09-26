@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_left, bisect_right
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 
@@ -39,6 +40,9 @@ from app.vision.pickleball_game_analysis.ball_contact_event_detector import (
 )
 from app.vision.pickleball_game_analysis.ball_event_resolver import BallEventResolver
 from app.vision.pickleball_game_analysis.ball_flight_segmenter import BallFlightSegmenter
+from app.vision.pickleball_game_analysis.ball_shot_assembler import BallShotAssembler
+from app.vision.pickleball_game_analysis.ball_hit_player_attributor import BallHitPlayerAttributor
+from app.vision.pickleball_game_analysis.player_attribution_context import build_player_attribution_context
 from app.vision.pickleball_game_analysis.bounce_detector import BounceDetector, BounceDetectorConfig
 from app.vision.pickleball_game_analysis.reconstruction_schemas import (
     ReconstructionConfig,
@@ -764,9 +768,41 @@ class CanonicalBallStereoProcessor:
             )
             hit_candidates = contact_detector.detect(points, fps=self.effective_fps, frame_stride=1)
             bounce_events = BounceDetector(BounceDetectorConfig(fps=self.effective_fps)).detect(points)
-            events = BallEventResolver().resolve(hit_candidates, bounce_events, fps=self.effective_fps)
-            for event in events:
+            resolver = BallEventResolver()
+            candidates = resolver.prefilter(hit_candidates, bounce_events, fps=self.effective_fps)
+            attributions = {}
+            runtime = self.runtimes.get(view_id)
+            session = getattr(runtime, "tracking_session", None)
+            # Only the reference view owns canonical Player_N identity. Never
+            # relabel a secondary view's local slots as canonical players.
+            if view_id == self.reference_view_id and callable(getattr(session, "build_player_trajectory_artifact", None)):
+                player_artifact = session.build_player_trajectory_artifact(
+                    job_id=self.job_id, video_id=None, fps=self.source_fps,
+                    frame_count=len(points) * self.frame_stride,
+                    processed_frame_count=len(points), frame_stride=self.frame_stride,
+                )
+                context = build_player_attribution_context(
+                    player_trajectories=player_artifact, fps=self.source_fps, frame_stride=self.frame_stride,
+                )
+                attributions = BallHitPlayerAttributor().attribute(candidates, context)
+            events = resolver.finalize(candidates, bounce_events, attributions=attributions)
+            for event_index, event in enumerate(events):
                 event.diagnostics["view_id"] = view_id
+                # A bounce is a ground event: its image point can use the
+                # calibrated ground homography even when 3-D height is unavailable.
+                # Airborne hits must never receive this ground projection.
+                runtime = self.runtimes.get(view_id)
+                homography = getattr(runtime, "homography", None)
+                if event.event_type.value == "bounce" and event.image_xy is not None and homography is not None:
+                    point = np.asarray(homography, dtype=float) @ np.array([*event.image_xy, 1.0])
+                    if np.isfinite(point).all() and abs(point[2]) > 1e-9:
+                        x, y = (point[:2] / point[2]).tolist()
+                        if getattr(getattr(runtime, "view_input", None), "court_orientation", None) == "rotate_180":
+                            x, y = 20.0 - x, 44.0 - y
+                        events[event_index] = replace(
+                            event, court_xy=(x, y),
+                            diagnostics={**event.diagnostics, "court_coordinate_source": "calibrated_ground_homography"},
+                        )
             all_events.extend(events)
             diagnostics["views"][view_id] = {
                 "hit_candidates": len(hit_candidates),
@@ -836,13 +872,27 @@ class CanonicalBallStereoProcessor:
         self._disabled = True
         self._failure_reason = reason
 
-    def finish(self) -> CanonicalBallAnalysisOutput:
+    def finish(
+        self,
+        progress_callback: Callable[[int, str], None] | None = None,
+        cancellation_check: Callable[[], None] | None = None,
+    ) -> CanonicalBallAnalysisOutput:
+        def report(progress: int, detail: str) -> None:
+            if progress_callback is not None:
+                progress_callback(progress, detail)
+
+        report(5, "正在解析击球与弹跳事件")
         observations = sorted(self.observations, key=lambda item: (item.t_sec, item.cam_index))
+        observation_times = [item.t_sec for item in observations]
+        measurements = sorted(self.measurements, key=lambda item: item.take_timestamp_ms)
+        measurement_times = [item.take_timestamp_ms / 1000.0 for item in measurements]
         canonical_points = self._canonical_points()
         events, event_diagnostics = self._resolve_events()
         flights = BallFlightSegmenter(
             ReconstructionConfig(long_loss_gap_frames=max(3, int(round(self.effective_fps * 0.4))))
         ).segment(canonical_points, events)
+        BallShotAssembler().assemble(flights, {event.event_id: event for event in events})
+        report(15, f"已解析 {len(events)} 个事件和 {len(flights)} 个飞行段")
         segments: list[Reconstructed3DSegment] = []
         metrics_by_segment: dict[str, Any] = {}
         duration_by_segment: dict[str, float] = {}
@@ -851,18 +901,16 @@ class CanonicalBallStereoProcessor:
         previous_primary_view_id: str | None = None
         if not self._failure_reason:
             for flight in flights:
+                if cancellation_check is not None:
+                    cancellation_check()
                 flight_points = [canonical_points[index] for index in flight.point_indices]
                 start_sec = flight_points[0].timestamp_sec
                 end_sec = flight_points[-1].timestamp_sec
-                segment_observations = [
-                    observation
-                    for observation in observations
-                    if start_sec - 1e-6 <= observation.t_sec <= end_sec + 1e-6
+                segment_observations = observations[
+                    bisect_left(observation_times, start_sec - 1e-6):bisect_right(observation_times, end_sec + 1e-6)
                 ]
-                segment_measurements = [
-                    measurement
-                    for measurement in self.measurements
-                    if start_sec - 1e-6 <= measurement.take_timestamp_ms / 1000.0 <= end_sec + 1e-6
+                segment_measurements = measurements[
+                    bisect_left(measurement_times, start_sec - 1e-6):bisect_right(measurement_times, end_sec + 1e-6)
                 ]
                 segment = reconstruct_segment(
                     segment_id=flight.segment_id,
@@ -870,6 +918,7 @@ class CanonicalBallStereoProcessor:
                     max_control_points=8,
                     bounce_end=flight.end_event_type is not None and flight.end_event_type.value == "bounce",
                     stereo_measurements=segment_measurements,
+                    cancellation_check=cancellation_check,
                 )
                 if self.metric_validity == "metric_multiview":
                     segment.samples = [
@@ -924,6 +973,7 @@ class CanonicalBallStereoProcessor:
                         },
                     }
                 )
+        report(60, f"已重建 {len(segments)} 个球路分段")
         v3 = build_v3_trajectory(
             job_id=self.job_id,
             take_id=self.take_id,
@@ -938,6 +988,7 @@ class CanonicalBallStereoProcessor:
         )
         v3["events"] = [event_to_payload(event) for event in events]
         base_segments = {segment["segment_id"]: segment for segment in v3.get("segments") or []}
+        reconstructed_by_id = {segment.segment_id: segment for segment in segments}
         if self.hybrid_enabled:
             # build_v3_trajectory serializes optimizer samples on a segment-local
             # clock. Hybrid consumers use absolute source-video seconds.
@@ -960,7 +1011,7 @@ class CanonicalBallStereoProcessor:
                     events_by_id=events_by_id,
                     main_view=main_view,
                     projections=self.projections,
-                    reconstructed_3d=next(segment for segment in segments if segment.segment_id == flight.segment_id),
+                    reconstructed_3d=reconstructed_by_id[flight.segment_id],
                     stereo_measurements=segment_measurements,
                     base_3d_payload=base_segments.get(flight.segment_id),
                 )
@@ -1019,6 +1070,20 @@ class CanonicalBallStereoProcessor:
                 if any(segment["display_level"] in {"high", "medium"} for segment in displayable)
                 else "unavailable"
             )
+        report(90, "正在整理球路质量与证据产物")
+        # Carry the authoritative event/Shot links through both v3 and v4 serialization.
+        flights_by_id = {flight.segment_id: flight for flight in flights}
+        for payload in v3.get("segments", []):
+            flight = flights_by_id.get(payload.get("segment_id"))
+            if flight is None:
+                continue
+            for name in ("shot_id", "hitter_player_id", "hitter_render_slot", "ownership_status",
+                         "ownership_confidence", "ownership_source_event_id", "start_event_id", "end_event_id",
+                         "boundary_reason"):
+                payload[name] = getattr(flight, name)
+            payload["start_event_type"] = flight.start_event_type.value if flight.start_event_type else None
+            payload["end_event_type"] = flight.end_event_type.value if flight.end_event_type else None
+
         detail = self._failure_reason or {
             "FULL_ESTIMATED_3D": "双摄三维球路分析完成",
             "PARTIAL_3D": "双摄三维球路部分可用",
@@ -1117,15 +1182,15 @@ class CanonicalBallStereoProcessor:
                 frame_stride=self.frame_stride,
                 timestamp_provenance={"timestamp_unit": "canonical_take_ms"},
             )
+        window_ends = [window["end_sec"] + 1e-6 for window in segment_windows]
+
         def segment_id_for_time(timestamp_sec: float) -> str | None:
-            return next(
-                (
-                    window["segment_id"]
-                    for window in segment_windows
-                    if window["start_sec"] - 1e-6 <= timestamp_sec <= window["end_sec"] + 1e-6
-                ),
-                None,
-            )
+            index = bisect_left(window_ends, timestamp_sec)
+            if index < len(segment_windows):
+                window = segment_windows[index]
+                if window["start_sec"] - 1e-6 <= timestamp_sec:
+                    return window["segment_id"]
+            return None
 
         segmented_measurements = [
             replace(

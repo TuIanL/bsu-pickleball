@@ -567,13 +567,14 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     return {
       id: viewId,
       label: viewId === "cam_1" ? "A 机位" : viewId === "cam_2" ? "B 机位" : viewId,
-      available: hasVideo && mappingAvailable && hasProjection,
+      // Video/ball playback must not depend on the optional player layer.
+      available: hasVideo && mappingAvailable,
       reason: !hasVideo
         ? "该机位没有可播放视频。"
         : !mappingAvailable
           ? "该机位没有可用的 canonical→媒体时间映射。"
           : !hasProjection
-            ? "该机位没有生成对应的 Player overlay，请重新运行双摄分析。"
+            ? "该机位没有可用人物叠加；视频及已生成的球路仍可查看。"
             : undefined,
     };
   });
@@ -1346,6 +1347,8 @@ function AnalysisStatusRail({
     },
   ];
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
+  const completedWithoutPlayers = job?.status === "completed" && job.analysisMode !== "demo"
+    && result != null && result.tracks.length === 0;
   const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
   const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
   const taskReturnPath = taskListPathForJob(job);
@@ -1356,12 +1359,17 @@ function AnalysisStatusRail({
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务状态</p>
-            <h2 className="mt-2 text-xl font-black text-[#14241B]">{job ? analysisStatusMeta(job.status).label : "样例分析"}</h2>
+            <h2 className="mt-2 text-xl font-black text-[#14241B]">{completedWithoutPlayers ? "处理结束 · 人物结果缺失" : job ? analysisStatusMeta(job.status).label : "样例分析"}</h2>
           </div>
           <span className="grid size-10 place-items-center rounded-2xl bg-[#22C55E]/12 text-[#168A34]">
             <BadgeCheck size={19} aria-hidden="true" />
           </span>
         </div>
+        {completedWithoutPlayers ? (
+          <p className="mt-3 text-sm text-amber-800" role="status">
+            此历史任务没有生成有效人物轨迹，人物热力图与运动报告不可用；已生成的球路、回合及落点可独立查看。修复后需要重新计算人物分析，不能从空产物恢复。
+          </p>
+        ) : null}
         {job ? (
           <>
             <div className="mt-4 h-2 rounded-full bg-[#DFEADA]">
