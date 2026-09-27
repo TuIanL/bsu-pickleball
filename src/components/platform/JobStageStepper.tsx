@@ -94,8 +94,8 @@ export function JobStageStepper({
                     stage.status === "pending"
                       ? "bg-[#DCE5D6]"
                       : stage.status === "failed"
-                        ? "bg-[#FF4D4F]/60"
-                        : "bg-[#22C55E]/50"
+                        ? "bg-[var(--ui-danger-solid)]/60"
+                        : "bg-[var(--ui-brand-solid)]/50"
                   }`}
                 />
               ) : null}
@@ -117,7 +117,7 @@ export function JobStageStepper({
                 <div
                   className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-[0.7rem] font-bold transition-colors sm:px-2.5 ${
                     isTarget
-                      ? "scale-110 border-[#FF9500]/50 bg-[#FF9500]/12 text-[#A45A00] shadow-[0_0_16px_rgba(255,149,0,0.25)] stage-pulse"
+                      ? "scale-110 border-[var(--ui-stage)]/50 bg-[var(--ui-stage)]/12 text-[var(--ui-warning)] shadow-[0_0_16px_rgba(255,149,0,0.25)] stage-pulse"
                       : stageCapusuleClass(stage.status)
                   }`}
                   data-stage-active={isTarget ? "true" : undefined}
@@ -145,11 +145,11 @@ function stageDotClass(status: AnalysisStage["status"]): string {
   switch (status) {
     case "done":
     case "partial":
-      return "bg-[#22C55E]";
+      return "bg-[var(--ui-brand-solid)]";
     case "active":
-      return "bg-[#FF9500] stage-pulse";
+      return "bg-[var(--ui-stage)] stage-pulse";
     case "failed":
-      return "bg-[#FF4D4F]";
+      return "bg-[var(--ui-danger-solid)]";
     case "canceled":
       return "bg-slate-500";
     case "skipped":
@@ -164,18 +164,18 @@ function stageCapusuleClass(status: AnalysisStage["status"]): string {
   switch (status) {
     case "done":
     case "partial":
-      return "border-[#22C55E]/35 bg-[#22C55E]/10 text-[#168A34]";
+      return "border-[var(--ui-brand)]/35 bg-[var(--ui-brand-solid)]/10 text-[var(--ui-brand-deep)]";
     case "active":
-      return "border-[#FF9500]/50 bg-[#FF9500]/12 text-[#A45A00] stage-pulse";
+      return "border-[var(--ui-stage)]/50 bg-[var(--ui-stage)]/12 text-[var(--ui-warning)] stage-pulse";
     case "failed":
-      return "border-[#FF4D4F]/40 bg-[#FF4D4F]/10 text-[#C92A2A]";
+      return "border-[var(--ui-danger-strong)]/40 bg-[var(--ui-danger-solid)]/10 text-[var(--ui-danger)]";
     case "canceled":
       return "border-slate-400/40 bg-slate-100 text-slate-600";
     case "skipped":
     case "unavailable":
       return "border-slate-300/60 bg-slate-50 text-slate-400";
     default:
-      return "border-[#DDE9D6] bg-white/70 text-slate-400";
+      return "border-[var(--ui-border)] bg-[var(--ui-surface)]/70 text-slate-400";
   }
 }
 

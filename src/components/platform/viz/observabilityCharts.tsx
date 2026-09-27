@@ -10,7 +10,7 @@ const COUNT_COLORS = [VIZ_PALETTE.green, VIZ_PALETTE.blue, VIZ_PALETTE.teal, VIZ
 /** 在图表可用时渲染，否则显示占位说明（避免空坐标系）。 */
 function ChartOrPlaceholder({ available, reason, children }: { available: boolean; reason?: string; children: React.ReactNode }) {
   if (!available) {
-    return <p className="rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F7FBF5] p-4 text-sm leading-6 text-slate-600">{reason ?? "该分域暂无可用数据。"}</p>;
+    return <p className="rounded-2xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-subtle)] p-4 text-sm leading-6 text-slate-600">{reason ?? "该分域暂无可用数据。"}</p>;
   }
   return <>{children}</>;
 }
@@ -64,12 +64,12 @@ export function SyncAuthorityChart({ data, availability }: { data: SyncObservabi
     <ChartOrPlaceholder available={availability === "available" || availability === "partial"} reason="缺少时序证据，无法绘制视角对比图。">
       <div className="grid gap-2 sm:grid-cols-2">
         {views.map((view) => (
-          <div className="flex items-center justify-between rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm" key={view}>
+          <div className="flex items-center justify-between rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm" key={view}>
             <span className="text-slate-500">{view} authority</span>
-            <strong className="text-[#14241B]">{authority[view] ?? "-"}</strong>
+            <strong className="text-[var(--ui-ink)]">{authority[view] ?? "-"}</strong>
           </div>
         ))}
-        {views.length === 0 ? <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm text-slate-500">无每视角权威数据</div> : null}
+        {views.length === 0 ? <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm text-slate-500">无每视角权威数据</div> : null}
       </div>
       {option ? <div className="mt-3"><EChart ariaLabel="双视角时长对比柱状图" height={200} option={option} testId="sync-authority-chart" /></div> : null}
       {data.sync_quality ? <p className="mt-2 text-xs text-slate-500">同步质量：{data.sync_quality} · 参考机位：{referenceView ?? "-"}</p> : null}
@@ -127,9 +127,9 @@ export function FusionQualityChart({ data, availability }: { data: FusionObserva
   return (
     <ChartOrPlaceholder available={availability === "available" || availability === "partial"} reason="缺少融合统计，无法绘制质量图。">
       <div className="grid gap-2 sm:grid-cols-3">
-        <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm"><span className="text-slate-500">有效多视角比例</span><strong className="mt-1 block text-[#14241B]">{ratio == null ? "-" : `${Math.round(ratio * 100)}%`}</strong></div>
-        <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm"><span className="text-slate-500">指标可用样本</span><strong className="mt-1 block text-[#14241B]">{data.metric_eligible_count ?? "-"}</strong></div>
-        <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm"><span className="text-slate-500">总样本</span><strong className="mt-1 block text-[#14241B]">{data.sample_count ?? "-"}</strong></div>
+        <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm"><span className="text-slate-500">有效多视角比例</span><strong className="mt-1 block text-[var(--ui-ink)]">{ratio == null ? "-" : `${Math.round(ratio * 100)}%`}</strong></div>
+        <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm"><span className="text-slate-500">指标可用样本</span><strong className="mt-1 block text-[var(--ui-ink)]">{data.metric_eligible_count ?? "-"}</strong></div>
+        <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm"><span className="text-slate-500">总样本</span><strong className="mt-1 block text-[var(--ui-ink)]">{data.sample_count ?? "-"}</strong></div>
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {ratioOption ? <EChart ariaLabel="有效多视角比例环形图" height={190} option={ratioOption} testId="fusion-ratio-chart" /> : null}
@@ -199,7 +199,7 @@ export function RecoveryFunnelChart({ funnel, availability, opportunityOverride 
     <ChartOrPlaceholder available={availability === "available" || availability === "partial"} reason="缺少恢复漏斗统计。">
       <div className="grid gap-2 sm:grid-cols-3">
         {[["恢复机会", entries[0]?.value ?? funnel?.recovery_opportunity_count ?? "-"], ["引导成功", funnel?.guided_recovery_success_count ?? "-"], ["基础自恢复", funnel?.base_recovered_count ?? "-"], ["全局保持", funnel?.guided_expected_global_preserved_count ?? "-"]].map(([label, value]) => (
-          <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm" key={String(label)}><span className="text-slate-500">{label}</span><strong className="mt-1 block text-[#14241B]">{String(value)}</strong></div>
+          <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm" key={String(label)}><span className="text-slate-500">{label}</span><strong className="mt-1 block text-[var(--ui-ink)]">{String(value)}</strong></div>
         ))}
       </div>
       {option ? <div className="mt-3"><EChart ariaLabel="跨视角恢复漏斗图" height={240} option={option} testId="recovery-funnel-chart" /></div> : null}
@@ -236,8 +236,8 @@ export function RefinementGateChart({ data, availability }: { data: RefinementOb
   return (
     <ChartOrPlaceholder available={availability === "available" || availability === "partial"} reason="缺少精修门控事实。">
       <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm"><span className="text-slate-500">精修执行</span><strong className="mt-1 block text-[#14241B]">{EXECUTION_LABELS[String(data.execution_status ?? "")] ?? data.execution_status ?? "-"}</strong></div>
-        <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5 text-sm"><span className="text-slate-500">发布决策</span><strong className="mt-1 block text-[#14241B]">{PUBLICATION_LABELS[String(data.publication_decision ?? "")] ?? data.publication_decision ?? "-"}</strong></div>
+        <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm"><span className="text-slate-500">精修执行</span><strong className="mt-1 block text-[var(--ui-ink)]">{EXECUTION_LABELS[String(data.execution_status ?? "")] ?? data.execution_status ?? "-"}</strong></div>
+        <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5 text-sm"><span className="text-slate-500">发布决策</span><strong className="mt-1 block text-[var(--ui-ink)]">{PUBLICATION_LABELS[String(data.publication_decision ?? "")] ?? data.publication_decision ?? "-"}</strong></div>
       </div>
       <div className="mt-4 flex items-center gap-1" data-testid="refinement-gate-steps">
         {steps.map((step, index) => (
@@ -250,7 +250,7 @@ export function RefinementGateChart({ data, availability }: { data: RefinementOb
           </div>
         ))}
       </div>
-      <p className="mt-3 text-xs font-semibold text-[#14241B]">最终产品来源：<strong>{publishedF1 ? "F1" : data.final_source === "first_pass_f0" ? "F0" : String(data.final_source ?? "-")}</strong></p>
+      <p className="mt-3 text-xs font-semibold text-[var(--ui-ink)]">最终产品来源：<strong>{publishedF1 ? "F1" : data.final_source === "first_pass_f0" ? "F0" : String(data.final_source ?? "-")}</strong></p>
       {data.safety_gate?.reason ? <p className="mt-2 rounded-xl border border-[#F6D79A] bg-[#FFF9ED] px-3 py-2 text-sm leading-6 text-[#8B5A17]">安全门说明：{data.safety_gate.reason}</p> : null}
     </ChartOrPlaceholder>
   );

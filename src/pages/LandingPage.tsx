@@ -23,11 +23,11 @@ export function LandingPage({ onNavigate }: { onNavigate: NavigateFn }) {
       {/* Hero 区 */}
       <section className="grid min-h-[calc(100vh-8rem)] gap-8 lg:grid-cols-[0.92fr_1.08fr] lg:items-center">
         <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#22C55E]/35 bg-[#22C55E]/15 px-4 py-2 text-sm font-bold text-[#168A34]">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--ui-brand)]/35 bg-[var(--ui-brand-solid)]/15 px-4 py-2 text-sm font-bold text-[var(--ui-brand-deep)]">
             <Sparkles size={16} aria-hidden="true" />
             智能比赛分析 · 真实产品与科研平台
           </div>
-          <h1 className="mt-7 max-w-4xl text-5xl font-black leading-[0.98] text-[#14241B] sm:text-6xl xl:text-7xl">
+          <h1 className="mt-7 max-w-4xl text-5xl font-black leading-[0.98] text-[var(--ui-ink)] sm:text-6xl xl:text-7xl">
             把每一场匹克球比赛，转化为可执行的训练洞察
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
@@ -53,8 +53,8 @@ export function LandingPage({ onNavigate }: { onNavigate: NavigateFn }) {
               ["82", "表现评分"],
               ["2", "报告类型"],
             ].map(([value, label]) => (
-              <div className="rounded-2xl border border-[#DDE9D6] bg-white/80 p-4 shadow-sm" key={label}>
-                <strong className="block text-3xl font-black text-[#168A34]">{value}</strong>
+              <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 p-4 shadow-sm" key={label}>
+                <strong className="block text-3xl font-black text-[var(--ui-brand-deep)]">{value}</strong>
                 <span className="mt-1 block text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{label}</span>
               </div>
             ))}
@@ -63,7 +63,7 @@ export function LandingPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
         {/* 右侧视频分析卡片 */}
         <div className="relative">
-          <div className="absolute -inset-4 rounded-[2.5rem] bg-[#22C55E]/10 blur-3xl" />
+          <div className="absolute -inset-4 rounded-[2.5rem] bg-[var(--ui-brand-solid)]/10 blur-3xl" />
           <div className="relative">
             <VideoAnalysisCard
               compact
@@ -79,30 +79,30 @@ export function LandingPage({ onNavigate }: { onNavigate: NavigateFn }) {
       {/* 能力介绍卡片（纯展示，无跳转） */}
       <section className="mt-12 grid gap-4 md:grid-cols-3">
         <div className="sport-card p-6 text-left">
-          <div className="mb-3 grid size-10 place-items-center rounded-xl bg-[#22C55E]/12 text-[#168A34]">
+          <div className="mb-3 grid size-10 place-items-center rounded-xl bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]">
             <Upload size={20} aria-hidden="true" />
           </div>
-          <strong className="block text-lg font-black text-[#14241B]">视频上传分析</strong>
+          <strong className="block text-lg font-black text-[var(--ui-ink)]">视频上传分析</strong>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             上传已有比赛视频，系统自动完成人员检测、姿态识别、轨迹追踪，生成移动指标、热力图和表现报告。
           </p>
         </div>
 
         <div className="sport-card p-6 text-left">
-          <div className="mb-3 grid size-10 place-items-center rounded-xl bg-[#2F80ED]/12 text-[#2F80ED]">
+          <div className="mb-3 grid size-10 place-items-center rounded-xl bg-[var(--ui-info-solid)]/12 text-[var(--ui-info)]">
             <Camera size={20} aria-hidden="true" />
           </div>
-          <strong className="block text-lg font-black text-[#14241B]">球场现场采集</strong>
+          <strong className="block text-lg font-black text-[var(--ui-ink)]">球场现场采集</strong>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             连接网络摄像头，在球场边完成录制、场边事件标记和现场分析，每次采集都会形成可追踪的任务记录。
           </p>
         </div>
 
         <div className="sport-card p-6 text-left">
-          <div className="mb-3 grid size-10 place-items-center rounded-xl bg-[#FF9500]/12 text-[#FF9500]">
+          <div className="mb-3 grid size-10 place-items-center rounded-xl bg-[var(--ui-stage)]/12 text-[var(--ui-stage)]">
             <Zap size={20} aria-hidden="true" />
           </div>
-          <strong className="block text-lg font-black text-[#14241B]">训练结果沉淀</strong>
+          <strong className="block text-lg font-black text-[var(--ui-ink)]">训练结果沉淀</strong>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             每次分析都会保留完整的执行记录和产物，支撑赛后复盘、阶段对比和后续科研产出。
           </p>

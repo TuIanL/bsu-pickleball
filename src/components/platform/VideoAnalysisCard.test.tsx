@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { VideoAnalysisCard } from "./VideoAnalysisCard";
 import { resolvePlayerIdentityHue } from "../../utils/overlayPresentation";
@@ -65,6 +65,52 @@ function makeTrackOverlay(
 }
 
 describe("VideoAnalysisCard detection labels", () => {
+  it("keeps the optional rally controls absent for existing call sites", () => {
+    const { container } = render(
+      <VideoAnalysisCard labels={emptyLabels} match={match} players={emptyPlayers} timeline={emptyTimeline} videoSrc="/test.mp4" />,
+    );
+    expect(container.querySelector("[data-auto-rally-cue]")).toBeNull();
+    expect(container.querySelector("[data-auto-rally-bands]")).toBeNull();
+    expect(container.querySelector(".rally-band-progress")).toBeNull();
+    expect(container.querySelector('button[aria-label="自动跳过非比赛时间"]')).toBeNull();
+  });
+
+  it("maps a selected rally's canonical start to the displayed video's source time", async () => {
+    const currentTimeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "currentTime");
+    const durationDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "duration");
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    let sourceTimeSeconds = 0;
+    Object.defineProperty(HTMLMediaElement.prototype, "currentTime", {
+      configurable: true,
+      get: () => sourceTimeSeconds,
+      set: (value: number) => { sourceTimeSeconds = value; },
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 20 });
+
+    try {
+      render(
+        <VideoAnalysisCard
+          labels={emptyLabels}
+          match={match}
+          players={emptyPlayers}
+          timeline={emptyTimeline}
+          videoSrc="/test.mp4"
+          displayTimeMapping={{ offsetMs: 36, rate: 0.5 }}
+          autoRallySegments={[{ id: "rally-1", ordinal: 1, startMs: 1000, endMs: 3000 }]}
+          rallyNavigationRequest={{ requestId: 1, rally: { id: "rally-1", ordinal: 1, startMs: 1000, endMs: 3000 } }}
+        />,
+      );
+      await waitFor(() => expect(sourceTimeSeconds).toBeCloseTo(0.536, 3));
+      expect(playSpy).toHaveBeenCalled();
+    } finally {
+      if (currentTimeDescriptor) Object.defineProperty(HTMLMediaElement.prototype, "currentTime", currentTimeDescriptor);
+      else Reflect.deleteProperty(HTMLMediaElement.prototype, "currentTime");
+      if (durationDescriptor) Object.defineProperty(HTMLMediaElement.prototype, "duration", durationDescriptor);
+      else Reflect.deleteProperty(HTMLMediaElement.prototype, "duration");
+      playSpy.mockRestore();
+    }
+  });
+
   it("renders canonical P1..P4 for detections with player_id", () => {
     const overlay = makeTrackOverlay([
       { player_id: "Player_1" },

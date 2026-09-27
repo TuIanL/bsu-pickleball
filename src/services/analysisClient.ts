@@ -30,15 +30,6 @@ import type {
   LiveCodingState,
   CaptureTakeSummary,
   CaptureSegmentSummary,
-  BoundaryReviewRequest,
-  BoundaryReviewSummary,
-  MatchStateCandidateDecisionRequest,
-  MatchStateCandidateReviewRecord,
-  MatchStateCandidateReviewSummary,
-  RallyOrdinalUpdateRequest,
-  RallyOrdinalUpdateResponse,
-  AnalysisBatchCreateResponse,
-  AnalysisBatchDetail,
   FusedManifest,
   ShowcaseRuntimeStatus,
   PlayerDisplayDiagnosticsResponse,
@@ -79,16 +70,16 @@ import type {
   MetricCourtSceneValidationResponse,
 } from "../types/metricCourtScene";
 import type { CalibrationReadResponse } from "../types/videoCourtOverlay";
-import type {
-  BootstrapBindingAudit,
-  PlayerBootstrapResult,
-  RosterConfirmationRequest,
+import {
+  isBootstrapV2,
+  type BootstrapBindingAudit,
+  type PlayerBootstrapResponse,
+  type RosterConfirmationRequest,
 } from "../types/rallyContext";
 
 const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
 const RECENT_JOB_KEY = "pre-pickleball-recent-analysis-job";
-const candidateRequestIds = new Map<string, string>();
 export const RECENT_ANALYSIS_JOB_EVENT = "pre-pickleball-recent-analysis-job-change";
 
 export interface VidatPackage {
@@ -1246,21 +1237,50 @@ export async function getPlayerRenderTrajectory(jobId: string): Promise<RawPlaye
 }
 
 /**
- * 受限 player bootstrap：返回参考帧时间点、P1–P4 候选、身份锚点与质量诊断。
- * 优先消费已有产物；首次分析仅运行轻量首段预检，**不启动完整 Pipeline**。
- * 拿不到候选时返回 unavailable 且 skippable=true。
+ * 受限 player bootstrap（v2 契约）：按所选片段做有界多窗口预检，返回
+ * P1–P4 候选、可核对画面与质量诊断。**不启动完整 Pipeline**。
+ *
+ * 拿不到候选时返回 `unavailable`/`insufficient_candidates` 且 `skippable=true`；
+ * 遇到尚未升级的后端会回落到 v1 响应，由确认页降级渲染。
  */
 export async function getPlayerBootstrap(params: {
   captureTakeId?: string | null;
   videoId?: string | null;
+  videoIdB?: string | null;
   matchFormat?: string | null;
-}): Promise<PlayerBootstrapResult> {
+  clipStartMs?: number | null;
+  clipEndMs?: number | null;
+  contract?: "v1" | "v2";
+}): Promise<PlayerBootstrapResponse> {
   const query = new URLSearchParams();
   if (params.captureTakeId) query.set("captureTakeId", params.captureTakeId);
   if (params.videoId) query.set("videoId", params.videoId);
+  if (params.videoIdB) query.set("videoIdB", params.videoIdB);
   if (params.matchFormat) query.set("matchFormat", params.matchFormat);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  const result = await requestJson<PlayerBootstrapResult>(`/api/analysis/players/bootstrap${suffix}`);
+  if (params.clipStartMs != null) query.set("clipStartMs", String(Math.max(0, Math.round(params.clipStartMs))));
+  if (params.clipEndMs != null) query.set("clipEndMs", String(Math.max(0, Math.round(params.clipEndMs))));
+  query.set("contract", params.contract ?? "v2");
+  const result = await requestJson<PlayerBootstrapResponse>(
+    `/api/analysis/players/bootstrap?${query.toString()}`,
+  );
+  if (isBootstrapV2(result)) {
+    return {
+      ...result,
+      reference_frame: result.reference_frame
+        ? {
+            ...result.reference_frame,
+            frame_url: result.reference_frame.frame_url
+              ? resolveAnalysisApiUrl(result.reference_frame.frame_url)
+              : null,
+          }
+        : null,
+      candidates: result.candidates.map((candidate) => ({
+        ...candidate,
+        frame_url: candidate.frame_url ? resolveAnalysisApiUrl(candidate.frame_url) : null,
+        crop_url: candidate.crop_url ? resolveAnalysisApiUrl(candidate.crop_url) : null,
+      })),
+    };
+  }
   return {
     ...result,
     reference_frame_url: result.reference_frame_url
@@ -1756,26 +1776,6 @@ export async function listSegments(
   return requestJson<CaptureSegmentSummary[]>(`/api/capture-takes/${takeId}/segments${q ? `?${q}` : ""}`);
 }
 
-export async function createRallySegment(
-  takeId: string,
-  request: { start_ms: number; end_ms: number; label?: string },
-): Promise<CaptureSegmentSummary> {
-  return requestJson<CaptureSegmentSummary>(`/api/capture-takes/${takeId}/segments`, {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-
-export async function renumberRallyOrdinals(
-  takeId: string,
-  request: RallyOrdinalUpdateRequest,
-): Promise<RallyOrdinalUpdateResponse> {
-  return requestJson<RallyOrdinalUpdateResponse>(`/api/capture-takes/${takeId}/rally-ordinals`, {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-
 // ── Scoring calibration annotation API ──
 
 export function listScoringCalibrationPackages(takeId: string): Promise<ScoringCalibrationPackage[]> {
@@ -2037,109 +2037,6 @@ export async function getCaptureTakeRuntimeStatus(
       : null,
     updatedAt: raw.updated_at,
   };
-}
-
-// ── Segment Editing API ──
-
-export async function patchSegment(
-  segmentId: string,
-  patch: Record<string, unknown>,
-): Promise<CaptureSegmentSummary> {
-  const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(patch)) {
-    if (v !== undefined && v !== null) sp.set(k, String(v));
-  }
-  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}?${sp.toString()}`, {
-    method: "PATCH",
-  });
-}
-
-export async function getBoundaryReview(takeId: string): Promise<BoundaryReviewSummary> {
-  return requestJson<BoundaryReviewSummary>(`/api/capture-takes/${takeId}/boundary-review`);
-}
-
-export async function reviewSegmentBoundary(
-  segmentId: string,
-  request: BoundaryReviewRequest,
-): Promise<CaptureSegmentSummary> {
-  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/boundary-review`, {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-
-export async function getMatchStateCandidates(takeId: string): Promise<MatchStateCandidateReviewSummary> {
-  return requestJson<MatchStateCandidateReviewSummary>(`/api/capture-takes/${takeId}/match-state-candidates`);
-}
-
-export async function decideMatchStateCandidate(
-  takeId: string,
-  candidateId: string,
-  request: MatchStateCandidateDecisionRequest,
-): Promise<{ schema_version: string; capture_take_id: string; record: MatchStateCandidateReviewRecord; segment: CaptureSegmentSummary | null }> {
-  const requestKey = `${takeId}|${candidateId}|${JSON.stringify(request)}`;
-  const requestId = request.request_id ?? candidateRequestIds.get(requestKey)
-    ?? `candidate-review-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
-  if (!request.request_id) candidateRequestIds.set(requestKey, requestId);
-  return requestJson(`/api/capture-takes/${takeId}/match-state-candidates/${encodeURIComponent(candidateId)}/decision`, {
-    method: "POST",
-    body: JSON.stringify({ ...request, request_id: requestId }),
-  });
-}
-
-export async function resetSegmentBoundary(segmentId: string): Promise<CaptureSegmentSummary> {
-  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/reset-boundary-correction`, {
-    method: "POST",
-  });
-}
-
-export async function splitSegment(segmentId: string, splitMs: number): Promise<{ segments: CaptureSegmentSummary[] }> {
-  return requestJson<{ segments: CaptureSegmentSummary[] }>(`/api/capture-segments/${segmentId}/split?split_ms=${splitMs}`, {
-    method: "POST",
-  });
-}
-
-export async function mergeSegments(segmentIds: [string, string]): Promise<CaptureSegmentSummary> {
-  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/merge`, {
-    method: "POST",
-    body: JSON.stringify(segmentIds),
-  });
-}
-
-export async function archiveSegment(segmentId: string): Promise<CaptureSegmentSummary> {
-  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/archive`, {
-    method: "POST",
-  });
-}
-
-export async function restoreSegment(segmentId: string): Promise<CaptureSegmentSummary> {
-  return requestJson<CaptureSegmentSummary>(`/api/capture-segments/${segmentId}/restore`, {
-    method: "POST",
-  });
-}
-
-export async function deleteSegment(segmentId: string): Promise<void> {
-  await requestVoid(`/api/capture-segments/${segmentId}`, { method: "DELETE" });
-}
-
-// ── AnalysisBatch API ──
-
-export async function createAnalysisBatch(
-  takeId: string,
-  segmentIds: string[],
-  analysisProfile?: string,
-): Promise<AnalysisBatchCreateResponse> {
-  return requestJson<AnalysisBatchCreateResponse>(`/api/capture-takes/${takeId}/analysis-batches`, {
-    method: "POST",
-    body: JSON.stringify({
-      segment_ids: segmentIds,
-      analysis_profile: analysisProfile ?? "match_default",
-    }),
-  });
-}
-
-export async function getAnalysisBatch(takeId: string, batchId: string): Promise<AnalysisBatchDetail> {
-  return requestJson<AnalysisBatchDetail>(`/api/capture-takes/${takeId}/analysis-batches/${batchId}`);
 }
 
 export { demoAnalysisReport };

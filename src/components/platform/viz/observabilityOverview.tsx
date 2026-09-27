@@ -78,24 +78,24 @@ export function L1OverviewBar({ summary, onStageClick }: { summary: MultiviewObs
     <section className="sport-card p-5 sm:p-6" data-testid="l1-overview-bar">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-[#168A34]">OVERVIEW</p>
-          <h2 className="mt-1 text-lg font-black text-[#14241B]">运行概览</h2>
+          <p className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-[var(--ui-brand-deep)]">OVERVIEW</p>
+          <h2 className="mt-1 text-lg font-black text-[var(--ui-ink)]">运行概览</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600" data-testid="overview-conclusion">{health.conclusion}</p>
           <p className="mt-1 text-xs text-slate-400">健康度由前端基于后端已发布事实汇总，不重新计算算法结论。</p>
         </div>
-        <div className="flex shrink-0 flex-col items-center rounded-2xl border border-[#DDE9D6] bg-[#F7FBF5] px-5 py-3" data-testid="health-score">
+        <div className="flex shrink-0 flex-col items-center rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-subtle)] px-5 py-3" data-testid="health-score">
           <span className="text-4xl font-black leading-none" style={{ color: scoreTone }}>{health.score}</span>
           <span className="mt-1 text-xs font-bold text-slate-500">健康度 / 100</span>
         </div>
       </div>
 
-      <div className="mt-5 grid gap-px overflow-hidden rounded-2xl border border-[#DDE9D6] bg-[#DDE9D6] sm:grid-cols-4">
+      <div className="mt-5 grid gap-px overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[#DDE9D6] sm:grid-cols-4">
         {STAGE_META.map((stage) => {
           const section = summary.sections[stage.id];
           const t = tone(section.availability);
           return (
             <button
-              className="bg-white p-4 text-left transition-colors hover:bg-[#F7FBF5]"
+              className="bg-[var(--ui-surface)] p-4 text-left transition-colors hover:bg-[var(--ui-surface-subtle)]"
               data-testid={`pipeline-stage-${stage.id}`}
               key={stage.id}
               onClick={() => onStageClick?.(stage.id)}
@@ -105,7 +105,7 @@ export function L1OverviewBar({ summary, onStageClick }: { summary: MultiviewObs
                 <span className="text-xs font-black tracking-[0.14em] text-slate-500">{stage.label}</span>
                 <span className="inline-flex h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: t.dot }} aria-hidden="true" />
               </div>
-              <p className="mt-2 break-words text-sm font-bold text-[#14241B]">{stageKeyNumber(stage.id, summary)}</p>
+              <p className="mt-2 break-words text-sm font-bold text-[var(--ui-ink)]">{stageKeyNumber(stage.id, summary)}</p>
               <p className="mt-1 truncate text-xs font-semibold" style={{ color: t.text }}>{section.status}</p>
             </button>
           );

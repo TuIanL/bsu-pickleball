@@ -286,7 +286,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
         <div className="p-6 lg:p-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
-              className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+              className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[var(--ui-brand-deep)]"
               onClick={() => onNavigate(backPath)}
               type="button"
             >
@@ -295,11 +295,11 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             </button>
             <div className="flex flex-wrap items-center gap-2">
               <span className={`rounded-full px-3 py-1 text-xs font-black ${statusMeta.className}`}>{statusMeta.label}</span>
-              <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+              <span className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 px-3 py-1 text-xs font-bold text-slate-500">
                 {analysisModeLabel(job.analysisMode)}
               </span>
               {isMultiview ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-[#168A34]/25 bg-[#EAF7EE] px-3 py-1 text-xs font-black text-[#168A34]">
+                <span className="inline-flex items-center gap-1 rounded-full border border-[var(--ui-brand-deep)]/25 bg-[var(--ui-surface-mint-soft)] px-3 py-1 text-xs font-black text-[var(--ui-brand-deep)]">
                   <Layers size={12} aria-hidden="true" />
                   双摄协同
                 </span>
@@ -307,7 +307,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
             </div>
           </div>
 
-          <h1 className="mt-5 text-4xl font-black text-[#14241B] sm:text-5xl">{statusCopy[job.status]}</h1>
+          <h1 className="mt-5 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">{statusCopy[job.status]}</h1>
           <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
             {libraryItem?.displayTitle ?? job.metadata.matchTitle} · {job.metadata.fileName} · {job.metadata.venue} · 任务 ID：{job.id}
           </p>
@@ -339,14 +339,14 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               captureResultPath={captureResultPath}
             />
           ) : (
-            <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4 sm:p-5">
+            <div className="mt-6 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4 sm:p-5">
               <JobStageStepper stages={job.stages} ariaLabel="分析阶段进度" />
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-                <p className="min-w-0 flex-1 text-sm font-semibold leading-6 text-[#14241B]">
+                <p className="min-w-0 flex-1 text-sm font-semibold leading-6 text-[var(--ui-ink)]">
                   {currentStage ? (
                     <>
-                      <span className={`mr-1.5 inline-block size-2 rounded-full align-middle ${currentStage.status === "failed" ? "bg-[#FF4D4F]" : "bg-[#FF9500]"}`} />
+                      <span className={`mr-1.5 inline-block size-2 rounded-full align-middle ${currentStage.status === "failed" ? "bg-[var(--ui-danger-solid)]" : "bg-[var(--ui-stage)]"}`} />
                       {currentStage.label}
                       {currentStage.detail ? <span className="text-slate-600"> · {currentStage.detail}</span> : null}
                     </>
@@ -356,7 +356,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
                 </p>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">整体进度</span>
-                  <strong className="text-xl font-black text-[#168A34]">{job.progress}%</strong>
+                  <strong className="text-xl font-black text-[var(--ui-brand-deep)]">{job.progress}%</strong>
                 </div>
               </div>
               {job.segmentationRequired && job.orchestrationStatus === "waiting_segmentation" ? (
@@ -364,23 +364,23 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
                   正在自动切分比赛回合；完成后会自动进入双摄分析。无需人工复核。
                 </p>
               ) : null}
-              <div className="mt-2 h-1.5 rounded-full bg-[#DFEADA]">
-                <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+              <div className="mt-2 h-1.5 rounded-full bg-[var(--ui-surface-track-green)]">
+                <span className="block h-full rounded-full bg-[var(--ui-brand-solid)]" style={{ width: `${job.progress}%` }} />
               </div>
 
               {isMultiview && visibleViewRuns ? (
                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
                   {Object.entries(visibleViewRuns).map(([view, run]) => (
-                    <div className="rounded-xl border border-[#DDE9D6] bg-white/80 p-2.5" key={view}>
+                    <div className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 p-2.5" key={view}>
                       <div className="flex items-center justify-between text-xs font-bold">
-                        <span className="inline-flex items-center gap-1.5 text-[#14241B]">
+                        <span className="inline-flex items-center gap-1.5 text-[var(--ui-ink)]">
                           <Camera size={12} aria-hidden="true" />
                           {VIEW_LABELS[view] ?? view}
                         </span>
                         <span className="text-slate-500">{run.progress}%</span>
                       </div>
-                      <div className="mt-1.5 h-1 rounded-full bg-[#DFEADA]">
-                        <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${run.progress}%` }} />
+                      <div className="mt-1.5 h-1 rounded-full bg-[var(--ui-surface-track-green)]">
+                        <span className="block h-full rounded-full bg-[var(--ui-brand-solid)]" style={{ width: `${run.progress}%` }} />
                       </div>
                       <p className="mt-1 truncate text-[0.68rem] font-semibold text-slate-500">{run.stage}</p>
                     </div>
@@ -390,7 +390,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
 
               {canCancel ? (
                 <div className="mt-4 flex justify-end">
-                  <button className="quiet-button px-3 py-2 text-sm text-[#A45A00]" disabled={isCanceling} onClick={handleCancel} type="button">
+                  <button className="quiet-button px-3 py-2 text-sm text-[var(--ui-warning)]" disabled={isCanceling} onClick={handleCancel} type="button">
                     {isCanceling ? "取消中…" : "取消任务"}
                   </button>
                 </div>
@@ -404,10 +404,10 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
         <section className="mt-6 sport-card border-l-4 border-l-[#168A34] p-5 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
-              <Layers size={20} className="mt-0.5 shrink-0 text-[#168A34]" aria-hidden="true" />
+              <Layers size={20} className="mt-0.5 shrink-0 text-[var(--ui-brand-deep)]" aria-hidden="true" />
               <div className="min-w-0">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">双摄协同分析</p>
-                <h2 className="mt-1 text-lg font-black text-[#14241B]">同步、融合、恢复与精修已集中到协同详情页</h2>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">双摄协同分析</p>
+                <h2 className="mt-1 text-lg font-black text-[var(--ui-ink)]">同步、融合、恢复与精修已集中到协同详情页</h2>
                 <p className="mt-1 text-sm leading-6 text-slate-600">任务页保留轻量摘要；完整状态由后端 observability summary 统一投影。</p>
               </div>
             </div>
@@ -431,7 +431,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
       <section className="mt-6 sport-card p-5 sm:p-6">
         <details className="group">
           <summary className="flex cursor-pointer list-none items-center justify-between">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务信息</p>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">任务信息</p>
             <span className="text-xs font-bold text-slate-400 transition group-open:rotate-180">▾</span>
           </summary>
           <div className="mt-5 grid gap-3 text-sm">
@@ -461,9 +461,9 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               ["标定 ID", job.calibrationId ?? "无"],
               ["创建时间", new Date(job.createdAt).toLocaleString()],
             ].map(([label, value]) => (
-              <div className="flex justify-between gap-4 rounded-2xl bg-[#F5FAF1] p-3" key={label}>
+              <div className="flex justify-between gap-4 rounded-2xl bg-[var(--ui-surface-soft)] p-3" key={label}>
                 <span className="text-slate-500">{label}</span>
-                <strong className="text-right text-[#14241B]">{value}</strong>
+                <strong className="text-right text-[var(--ui-ink)]">{value}</strong>
               </div>
             ))}
           </div>
@@ -565,11 +565,11 @@ function TerminalSummary({
   captureResultPath: string | null;
 }) {
   return (
-    <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4 sm:p-5">
+    <div className="mt-6 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4 sm:p-5">
       {isCompleted ? (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-sm font-bold text-[#168A34]">
+            <p className="text-sm font-bold text-[var(--ui-brand-deep)]">
               {`${completedStageCount}/${job.stages.length || 1} 阶段完成`}
               {totalDurationMs > 0 ? <span className="font-semibold text-slate-500"> · 总耗时 {formatDurationMs(totalDurationMs)}</span> : null}
             </p>
@@ -632,7 +632,7 @@ function TerminalSummary({
       ) : isInterrupted ? (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-sm font-bold text-[#A45A00]">任务失联 · 已保留最后进度</p>
+            <p className="text-sm font-bold text-[var(--ui-warning)]">任务失联 · 已保留最后进度</p>
             <p className="mt-1 text-sm leading-6 text-slate-600">
               {job.publicErrorMessage ?? "Worker 在规定时间内没有心跳，可以重新分析。"}
               {job.workerHeartbeatAt ? ` 最后心跳：${formatDateTime(job.workerHeartbeatAt)}。` : ""}
@@ -651,7 +651,7 @@ function TerminalSummary({
       ) : (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className={`text-sm font-bold ${isFailed ? "text-[#C92A2A]" : "text-slate-600"}`}>
+            <p className={`text-sm font-bold ${isFailed ? "text-[var(--ui-danger)]" : "text-slate-600"}`}>
               {isFailed
                 ? `失败阶段：${currentStage?.label ?? job.stage}`
                 : `任务已取消${job.canceledAt ? ` · ${formatDateTime(job.canceledAt)}` : ""}`}

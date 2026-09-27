@@ -31,7 +31,6 @@ const routeMeta = {
   captureHome: { shellMode: "standard", navigationSection: "capture" },
   captureNew: { shellMode: "standard", navigationSection: "capture" },
   captureConsole: { shellMode: "capture", navigationSection: "capture" },
-  segmentManager: { shellMode: "standard", navigationSection: "capture" },
   scoringCalibration: { shellMode: "standard", navigationSection: "capture" },
   recordingWorkspace: { shellMode: "standard", navigationSection: "videos" },
   "new-analysis": { shellMode: "standard", navigationSection: "analysis" },
@@ -111,12 +110,12 @@ export function parsePath(pathname: string): RouteState {
 
   const captureConsoleMatch = pathname.match(/^\/capture\/(.+)$/);
 
-  const segmentManagerMatch = captureConsoleMatch
+  const legacySegmentsMatch = captureConsoleMatch
     ? captureConsoleMatch[1].match(/^(.+)\/takes\/(.+)\/segments$/)
     : null;
-  if (segmentManagerMatch) {
-    const [, fieldSessionId, takeId] = segmentManagerMatch;
-    return { name: "segmentManager", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, fieldSessionId, takeId, ...routeMeta.segmentManager };
+  if (legacySegmentsMatch) {
+    const [, fieldSessionId, takeId] = legacySegmentsMatch;
+    return { name: "legacy-segments-redirect", path: `/capture/${fieldSessionId}/takes/${takeId}/segments`, takeId, shellMode: "standard", navigationSection: "capture" };
   }
 
   const scoringCalibrationMatch = captureConsoleMatch
@@ -337,7 +336,7 @@ export function parseLocation(pathname: string, search: string): RouteState {
   if (route.name === "library-item") {
     const params = new URLSearchParams(search);
     const rawView = params.get("view");
-    const validViews = ["overview", "video", "analysis", "trajectory", "landing", "report", "segments", "technical"];
+    const validViews = ["overview", "video", "analysis", "trajectory", "landing", "report", "technical"];
     const view = rawView && validViews.includes(rawView) ? rawView : "overview";
     return { ...route, view };
   }

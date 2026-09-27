@@ -98,24 +98,24 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView 
           <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.42fr] lg:p-8">
             <div>
               <button
-                className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+                className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[var(--ui-brand-deep)]"
                 onClick={() => onNavigate(returnPath)}
                 type="button"
               >
                 <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
                 返回任务管理
               </button>
-              <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+              <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
                 <LineChart size={16} aria-hidden="true" />
                 分析详情
               </p>
-              <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">{displayTitle ?? job.metadata.matchTitle}</h1>
+              <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">{displayTitle ?? job.metadata.matchTitle}</h1>
               <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
                 当前页面保留任务元数据、算法状态和标准匹克球场二维平面图。坐标转换和人员位移捕捉完成后，会在同一张 20 x 44 ft 球场上投影可视化。
               </p>
             </div>
-            <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
-              <span className="text-sm font-bold text-[#168A34]">状态摘要</span>
+            <div className="rounded-3xl border border-[var(--ui-brand)]/25 bg-[var(--ui-brand-solid)]/10 p-6">
+              <span className="text-sm font-bold text-[var(--ui-brand-deep)]">状态摘要</span>
               <strong className="mt-4 block text-4xl font-black text-[#13A12C]">{analysisStatusMeta(job.status).label}</strong>
               <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
                 {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
@@ -133,7 +133,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView 
         <StandardCourtPlan tracks={result?.tracks ?? []} />
         <aside className="grid gap-5">
           <article className="sport-card p-5">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务元数据</p>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">任务元数据</p>
             <dl className="mt-4 grid gap-2 text-sm">
               <RailMeta label="视频文件" value={job.metadata.fileName} />
               <RailMeta label="比赛日期" value={job.metadata.matchDate} />
@@ -147,7 +147,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView 
           </article>
 
           <article className="sport-card p-5">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">投影准备</p>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">投影准备</p>
             <div className="mt-4 grid gap-3">
               <ProjectionReadiness label="四角标定" ready={Boolean(job.calibrationId)} body={job.calibrationId ?? "缺少标定时无法进行真实坐标投影"} />
               <ProjectionReadiness label="球员轨迹" ready={hasProjection} body={hasProjection ? `${trackCount} 个标准球场坐标点` : "尚未生成可用人员位移轨迹"} />
@@ -156,7 +156,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView 
           </article>
 
           <article className="sport-card p-5">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">分析范围</p>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">分析范围</p>
             <dl className="mt-4 grid gap-2 text-sm">
               <RailMeta
                 label="请求窗口"
@@ -220,15 +220,15 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
     <article className="sport-card p-5 sm:p-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">标准球场二维平面图</p>
-          <h2 className="mt-2 text-2xl font-black text-[#14241B]">20 ft x 44 ft 投影底图</h2>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">标准球场二维平面图</p>
+          <h2 className="mt-2 text-2xl font-black text-[var(--ui-ink)]">20 ft x 44 ft 投影底图</h2>
         </div>
-        <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-black text-slate-500">
+        <span className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 px-3 py-1 text-xs font-black text-slate-500">
           坐标系：x 0-20 · y 0-44
         </span>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+      <div className="mt-4 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
         <p className="text-sm font-semibold leading-6 text-slate-600">
           圆点表示算法估计的球员脚点，经过标定投影到标准场地坐标；它们不是球的落点、击球点或人工标注事件。
           轨迹编号来自视觉跟踪器，代表一段检测到的移动轨迹，不等同于确认的球员姓名。
@@ -236,7 +236,7 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
       </div>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(260px,420px)_minmax(0,1fr)]">
-        <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+        <div className="rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
           <svg className="mx-auto block aspect-[28/60] max-h-[760px] w-full max-w-[420px]" viewBox="-4 -8 28 60" role="img" aria-label="标准匹克球球场二维平面图（含跟踪缓冲区）">
             <rect x="-4" y="-8" width="28" height="60" rx="0.2" fill="#F0F4EE" stroke="#BCCFBB" strokeWidth="0.12" strokeDasharray="0.6 0.3" />
             <rect x="0" y="0" width="20" height="44" rx="0.2" fill="#DDEFE2" stroke="#173321" strokeWidth="0.24" />
@@ -280,17 +280,17 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
             )}
           </svg>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs font-black text-slate-500">
-            <span className="rounded-2xl bg-white/80 px-2 py-2">起点：空心圆</span>
-            <span className="rounded-2xl bg-white/80 px-2 py-2">最新：实心圆</span>
-            <span className="rounded-2xl bg-white/80 px-2 py-2">中间：小点</span>
+            <span className="rounded-2xl bg-[var(--ui-surface)]/80 px-2 py-2">起点：空心圆</span>
+            <span className="rounded-2xl bg-[var(--ui-surface)]/80 px-2 py-2">最新：实心圆</span>
+            <span className="rounded-2xl bg-[var(--ui-surface)]/80 px-2 py-2">中间：小点</span>
           </div>
         </div>
 
         <div className="grid content-start gap-4">
-          <div className="grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/78 p-4">
+          <div className="grid gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/78 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">轨迹图例</p>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">轨迹图例</p>
                 <p className="mt-1 text-sm font-semibold text-slate-500">
                   {trackSummaries.length} 条轨迹 · {tracks.length} 个原始投影点 · 当前绘制 {renderedPointCount} 个采样点
                 </p>
@@ -315,8 +315,8 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
                 <button
                   className={`rounded-2xl border p-4 text-left transition ${
                     selectedTrackId === summary.trackId
-                      ? "border-[#168A34] bg-[#22C55E]/12 shadow-sm"
-                      : "border-[#DDE9D6] bg-white/80 hover:border-[#22C55E]/60"
+                      ? "border-[var(--ui-brand-deep)] bg-[var(--ui-brand-solid)]/12 shadow-sm"
+                      : "border-[var(--ui-border)] bg-[var(--ui-surface)]/80 hover:border-[var(--ui-brand)]/60"
                   }`}
                   key={summary.trackId}
                   onClick={() => setSelectedTrackId(selectedTrackId === summary.trackId ? null : summary.trackId)}
@@ -324,16 +324,16 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <span className="inline-flex items-center gap-2 text-base font-black text-[#14241B]">
+                      <span className="inline-flex items-center gap-2 text-base font-black text-[var(--ui-ink)]">
                         <span className="size-3 rounded-full" style={{ backgroundColor: summary.color }} />
                         {summary.label}
                       </span>
                       <p className="mt-1 text-xs font-semibold text-slate-500">身份：{formatPlayerId(summary.trackId) || "—"}</p>
                     </div>
                     {summary.isShortFragment ? (
-                      <span className="shrink-0 rounded-full bg-[#FF9500]/12 px-2.5 py-1 text-xs font-black text-[#A45A00]">短片段</span>
+                      <span className="shrink-0 rounded-full bg-[var(--ui-stage)]/12 px-2.5 py-1 text-xs font-black text-[var(--ui-warning)]">短片段</span>
                     ) : (
-                      <span className="shrink-0 rounded-full bg-[#22C55E]/14 px-2.5 py-1 text-xs font-black text-[#168A34]">主要</span>
+                      <span className="shrink-0 rounded-full bg-[var(--ui-brand-solid)]/14 px-2.5 py-1 text-xs font-black text-[var(--ui-brand-deep)]">主要</span>
                     )}
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-600">
@@ -346,16 +346,16 @@ export function StandardCourtPlan({ tracks }: { tracks: AnalysisPipelineResult["
               ))}
             </div>
           ) : (
-            <div className="rounded-3xl border border-dashed border-[#DDE9D6] bg-white/72 p-5">
-              <p className="text-sm font-black text-[#14241B]">没有可解释的轨迹点</p>
+            <div className="rounded-3xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface)]/72 p-5">
+              <p className="text-sm font-black text-[var(--ui-ink)]">没有可解释的轨迹点</p>
               <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
                 当前任务可能缺少标定、未检测到球员脚点，或后端没有生成标准场地坐标。
               </p>
             </div>
           )}
 
-          <div className="rounded-3xl border border-[#DDE9D6] bg-white/78 p-4">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">点位检查</p>
+          <div className="rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/78 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">点位检查</p>
             {inspectedPoint ? (
               <dl className="mt-3 grid gap-2 text-sm">
                 <RailMeta label="轨迹" value={`${inspectedPoint.summary.label} · ${formatPlayerId(inspectedPoint.summary.trackId) || "—"}`} />

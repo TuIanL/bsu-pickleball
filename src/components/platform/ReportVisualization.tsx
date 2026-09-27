@@ -57,29 +57,29 @@ export function ReportVisualization({
     <section className="sport-card p-5 sm:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">
+          <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
             <Icon size={15} aria-hidden="true" />
             {definition.eyebrow}
           </p>
-          <h2 className="mt-2 text-2xl font-black text-[#14241B]">核心可视化</h2>
+          <h2 className="mt-2 text-2xl font-black text-[var(--ui-ink)]">核心可视化</h2>
         </div>
         <p className="max-w-2xl text-sm leading-6 text-slate-600">{definition.summary}</p>
       </div>
 
       <div className="mt-6 grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="relative rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+        <div className="relative rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
           {definition.visualization === "diagnosis" ? (
             <div className="grid gap-3">
               {diagnoses.map((diagnosis) => (
-                <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={diagnosis.id}>
+                <article className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4" key={diagnosis.id}>
                   <div className="flex items-center justify-between gap-3">
-                    <strong className="text-[#14241B]">{diagnosis.issue}</strong>
-                    <span className="rounded-full border border-[#FF9500]/30 bg-[#FF9500]/12 px-2 py-1 text-xs font-black text-[#A45A00]">
+                    <strong className="text-[var(--ui-ink)]">{diagnosis.issue}</strong>
+                    <span className="rounded-full border border-[var(--ui-stage)]/30 bg-[var(--ui-stage)]/12 px-2 py-1 text-xs font-black text-[var(--ui-warning)]">
                       {diagnosis.severity}
                     </span>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-slate-600">{diagnosis.evidence}</p>
-                  <p className="mt-3 rounded-2xl bg-[#22C55E]/12 p-3 text-sm font-semibold leading-6 text-[#168A34]">
+                  <p className="mt-3 rounded-2xl bg-[var(--ui-brand-solid)]/12 p-3 text-sm font-semibold leading-6 text-[var(--ui-brand-deep)]">
                     {diagnosis.suggestion}
                   </p>
                 </article>
@@ -147,21 +147,21 @@ export function ReportVisualization({
                   </text>
                 ) : null}
               </svg>
-              <div className="absolute bottom-6 right-6 rounded-xl border border-[#DDE9D6] bg-white/90 px-3 py-2 text-xs shadow-sm">
+              <div className="absolute bottom-6 right-6 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/90 px-3 py-2 text-xs shadow-sm">
                 <div className="flex items-center gap-2">
                   <span className="inline-block h-2.5 w-5 rounded-full bg-gradient-to-r from-[#86EFAC] to-[#16A34A]" />
-                  <span className="font-semibold text-[#14241B]">轨迹路径</span>
+                  <span className="font-semibold text-[var(--ui-ink)]">轨迹路径</span>
                 </div>
                 <div className="mt-1 flex items-center gap-2">
                   <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#D9FF3F] border border-[#16A34A]" />
                   <span className="text-slate-600">终点</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#22C55E]" />
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[var(--ui-brand-solid)]" />
                   <span className="text-slate-600">路径点</span>
                 </div>
-                <div className="border-t border-[#DDE9D6] mt-1.5 pt-1.5">
-                  <span className="inline-block h-1 w-5 rounded border-t border-dashed border-[#22C55E] mr-1.5 align-middle" />
+                <div className="border-t border-[var(--ui-border)] mt-1.5 pt-1.5">
+                  <span className="inline-block h-1 w-5 rounded border-t border-dashed border-[var(--ui-brand)] mr-1.5 align-middle" />
                   <span className="text-slate-600">厨房线</span>
                 </div>
               </div>
@@ -171,8 +171,8 @@ export function ReportVisualization({
 
         <div className="grid gap-3">
           {definition.insights.map((insight) => (
-            <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={insight.id}>
-              <strong className="text-[#14241B]">{insight.title}</strong>
+            <article className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4" key={insight.id}>
+              <strong className="text-[var(--ui-ink)]">{insight.title}</strong>
               <p className="mt-2 text-sm leading-6 text-slate-600">{insight.body}</p>
             </article>
           ))}

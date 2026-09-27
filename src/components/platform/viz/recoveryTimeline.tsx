@@ -102,7 +102,7 @@ export function RecoveryTimeline({ episodes, onSeek, debugAvailable }: RecoveryT
 
   if (episodes.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F7FBF5] p-4 text-sm leading-6 text-slate-600">
+      <div className="rounded-2xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-subtle)] p-4 text-sm leading-6 text-slate-600">
         当前没有可展示的恢复事件时间线数据。
       </div>
     );

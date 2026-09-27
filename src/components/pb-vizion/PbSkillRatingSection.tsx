@@ -54,7 +54,7 @@ export default function PbSkillRatingSection() {
           return (
             <div
               key={key}
-              className="rounded-xl p-4 border border-dashed bg-white"
+              className="rounded-xl p-4 border border-dashed bg-[var(--ui-surface)]"
             >
               <div className="font-bold text-sm text-[var(--pb-text-secondary,#6b7280)]">
                 {meta.label}

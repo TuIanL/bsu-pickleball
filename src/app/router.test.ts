@@ -15,13 +15,12 @@ describe("parsePath", () => {
     // captureConsole (dynamic sessionId)
     { pathname: "/capture/fs-1", expected: { name: "captureConsole", path: "/capture/fs-1", sessionId: "fs-1", shellMode: "capture", navigationSection: "capture" } },
     { pathname: "/capture/fs-1/analyze", expected: { name: "recording-analyze", path: "/capture/fs-1/analyze", sessionId: "fs-1", shellMode: "standard", navigationSection: "analysis" } },
-    // Segment manager
+    // Legacy segment URL redirects through the capture take to its Library analysis workspace.
     {
       pathname: "/capture/fs-1/takes/take-1/segments",
       expected: {
-        name: "segmentManager",
+        name: "legacy-segments-redirect",
         path: "/capture/fs-1/takes/take-1/segments",
-        fieldSessionId: "fs-1",
         takeId: "take-1",
         shellMode: "standard",
         navigationSection: "capture",
@@ -135,6 +134,17 @@ describe("parseLocation", () => {
     expect(parseLocation("/library/upload/v1", "")).toMatchObject({
       name: "library-item",
       view: "overview",
+    });
+    expect(parseLocation("/library/sync_recording/sync-1", "?view=segments")).toMatchObject({
+      name: "library-item",
+      view: "overview",
+    });
+  });
+
+  it("legacy segments URL discards boundary-review mode during redirect routing", () => {
+    expect(parseLocation("/capture/fs-1/takes/take-1/segments", "?mode=boundary-review")).toMatchObject({
+      name: "legacy-segments-redirect",
+      takeId: "take-1",
     });
   });
 

@@ -20,9 +20,9 @@ const dimensionStatusLabel: Record<DimensionStatus, string> = {
 };
 
 const dimensionStatusClass: Record<DimensionStatus, string> = {
-  strength: "border-[#22C55E]/40 bg-[#22C55E]/10 text-[#15803D]",
-  stable: "border-[#22C55E]/30 bg-white text-slate-700",
-  needs_improvement: "border-[#FF9500]/40 bg-[#FF9500]/10 text-[#B45309]",
+  strength: "border-[var(--ui-brand)]/40 bg-[var(--ui-brand-solid)]/10 text-[var(--ui-success-deep)]",
+  stable: "border-[var(--ui-brand)]/30 bg-[var(--ui-surface)] text-slate-700",
+  needs_improvement: "border-[var(--ui-stage)]/40 bg-[var(--ui-stage)]/10 text-[var(--ui-warning-deep)]",
   insufficient_evidence: "border-slate-200 bg-slate-50 text-slate-500",
   not_applicable: "border-slate-200 bg-slate-50 text-slate-400",
   unsupported: "border-slate-200 bg-slate-50 text-slate-400",
@@ -36,9 +36,9 @@ const assessmentLabel: Record<FindingAssessment, string> = {
 };
 
 const assessmentClass: Record<FindingAssessment, string> = {
-  strength: "bg-[#22C55E]/15 text-[#15803D]",
-  stable: "bg-[#22C55E]/10 text-[#166534]",
-  needs_improvement: "bg-[#FF9500]/15 text-[#B45309]",
+  strength: "bg-[var(--ui-brand-solid)]/15 text-[var(--ui-success-deep)]",
+  stable: "bg-[var(--ui-brand-solid)]/10 text-[var(--ui-success-text-deep)]",
+  needs_improvement: "bg-[var(--ui-stage)]/15 text-[var(--ui-warning-deep)]",
   insufficient_evidence: "bg-slate-100 text-slate-500",
 };
 
@@ -150,8 +150,8 @@ export function PerformanceInsightsPanel({
             <button
               className={`rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
                 selectedSubject === subject.id
-                  ? "border-[#168A34] bg-[#22C55E]/15 text-[#15803D]"
-                  : "border-slate-200 bg-white text-slate-600 hover:border-[#22C55E]/50"
+                  ? "border-[var(--ui-brand-deep)] bg-[var(--ui-brand-solid)]/15 text-[var(--ui-success-deep)]"
+                  : "border-slate-200 bg-[var(--ui-surface)] text-slate-600 hover:border-[var(--ui-brand)]/50"
               }`}
               key={subject.id}
               onClick={() => setSelectedSubject(subject.id)}
@@ -174,7 +174,7 @@ export function PerformanceInsightsPanel({
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-bold">{dimension.label}</span>
-                <span className="rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-black">
+                <span className="rounded-full bg-[var(--ui-surface)]/70 px-2 py-0.5 text-[11px] font-black">
                   {dimensionStatusLabel[dimension.status]}
                 </span>
               </div>
@@ -197,7 +197,7 @@ export function PerformanceInsightsPanel({
             </p>
           ) : (
             subjectFindings.map((finding) => (
-              <article className="rounded-2xl border border-slate-200 bg-white p-5" key={finding.id}>
+              <article className="rounded-2xl border border-slate-200 bg-[var(--ui-surface)] p-5" key={finding.id}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-black ${assessmentClass[finding.assessment]}`}>
                     {assessmentLabel[finding.assessment]}
@@ -209,7 +209,7 @@ export function PerformanceInsightsPanel({
                     {priorityLabel[finding.priority]} · {confidenceLabel[finding.confidence]}
                   </span>
                 </div>
-                <h4 className="mt-2.5 text-base font-bold text-[#14241B]">{finding.title}</h4>
+                <h4 className="mt-2.5 text-base font-bold text-[var(--ui-ink)]">{finding.title}</h4>
                 <p className="mt-1.5 text-sm leading-6 text-slate-600">{finding.diagnosis}</p>
                 <p className="mt-1 text-xs leading-5 text-slate-400">{finding.impact}</p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -219,7 +219,7 @@ export function PerformanceInsightsPanel({
                   {finding.evidence_windows.length > 0 && jobId ? (
                     finding.evidence_windows.slice(0, 3).map((window, index) => (
                       <button
-                        className="inline-flex items-center gap-1.5 rounded-full border border-[#2F80ED]/40 bg-[#2F80ED]/10 px-3 py-1 text-[11px] font-bold text-[#1D4ED8] transition hover:bg-[#2F80ED]/20"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/10 px-3 py-1 text-[11px] font-bold text-[#1D4ED8] transition hover:bg-[var(--ui-info-solid)]/20"
                         key={`${finding.id}-window-${index}`}
                         onClick={() =>
                           onNavigate(
@@ -250,7 +250,7 @@ export function PerformanceInsightsPanel({
 
       {/* ── 算法候选事实（独立区，不进入 findings）── */}
       {insights.candidate_facts.length > 0 ? (
-        <section className="rounded-2xl border border-dashed border-[#2F80ED]/40 bg-[#2F80ED]/5 p-5">
+        <section className="rounded-2xl border border-dashed border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/5 p-5">
           <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-[#1D4ED8]">算法候选事实</h3>
           <ul className="mt-3 flex flex-col gap-1.5">
             {insights.candidate_facts.map((fact) => (
@@ -275,17 +275,17 @@ export function PerformanceInsightsPanel({
             </p>
           ) : (
             subjectRecommendations.map((recommendation) => (
-              <article className="rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/5 p-5" key={recommendation.id}>
-                <h4 className="text-base font-bold text-[#14241B]">{recommendation.title}</h4>
+              <article className="rounded-2xl border border-[var(--ui-brand)]/30 bg-[var(--ui-brand-solid)]/5 p-5" key={recommendation.id}>
+                <h4 className="text-base font-bold text-[var(--ui-ink)]">{recommendation.title}</h4>
                 <p className="mt-1.5 text-sm leading-6 text-slate-600">{recommendation.detail}</p>
                 <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-xl bg-white/80 p-3">
+                  <div className="rounded-xl bg-[var(--ui-surface)]/80 p-3">
                     <dt className="text-[11px] font-bold uppercase tracking-wider text-slate-400">本次 baseline</dt>
                     <dd className="mt-1 font-semibold text-slate-700">{recommendation.baseline}</dd>
                   </div>
-                  <div className="rounded-xl bg-white/80 p-3">
+                  <div className="rounded-xl bg-[var(--ui-surface)]/80 p-3">
                     <dt className="text-[11px] font-bold uppercase tracking-wider text-slate-400">下一次目标</dt>
-                    <dd className="mt-1 font-semibold text-[#15803D]">{recommendation.next_target}</dd>
+                    <dd className="mt-1 font-semibold text-[var(--ui-success-deep)]">{recommendation.next_target}</dd>
                   </div>
                 </dl>
               </article>
@@ -312,12 +312,12 @@ function SummaryCard({
   detail?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      <div className="flex items-center gap-2 text-[#168A34]">
+    <div className="rounded-2xl border border-slate-200 bg-[var(--ui-surface)] p-5">
+      <div className="flex items-center gap-2 text-[var(--ui-brand-deep)]">
         {icon}
         <span className="text-[11px] font-bold uppercase tracking-[0.16em]">{label}</span>
       </div>
-      <p className="mt-2.5 line-clamp-2 text-lg font-black text-[#14241B]">{value}</p>
+      <p className="mt-2.5 line-clamp-2 text-lg font-black text-[var(--ui-ink)]">{value}</p>
       {detail ? <p className="mt-1 text-xs leading-5 text-slate-500">{detail}</p> : null}
     </div>
   );

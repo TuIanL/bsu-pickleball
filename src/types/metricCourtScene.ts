@@ -138,3 +138,38 @@ export function buildStandardNetProfile(confirmed = false): NetProfile {
     ],
   };
 }
+
+/**
+ * 按模式与两端/中心高度构造球网顶部 profile。
+ *
+ * 双摄向导把球网高度收敛为**一份共享**取值（同一张球网只有一个高度模型），
+ * 因此构造放在领域层，供向导页在顶层统一构造后再分发给两路标注器。
+ */
+export function buildNetProfile(
+  mode: "standard" | "measured",
+  endpointCm: number,
+  centerCm: number,
+  confirmed: boolean,
+): NetProfile {
+  const controls = buildStandardNetProfile(confirmed).control_points.map((point) => {
+    const cm = point.id === "center" ? centerCm : endpointCm;
+    const world: ScenePoint3D = { ...point.world, z: cm / 30.48 };
+    return {
+      ...point,
+      world,
+      provenance: (mode === "standard" ? "manual" : "manual_verified") as SceneCalibrationSource,
+      confirmed,
+    };
+  });
+  return {
+    profile_type: mode,
+    height_source: mode === "standard" ? "standard" : "measured",
+    coordinate_units: "feet",
+    control_points: controls,
+    sampled_top_profile: [],
+    post_world_points: [
+      { x: -1, y: 22, z: endpointCm / 30.48 },
+      { x: 21, y: 22, z: endpointCm / 30.48 },
+    ],
+  };
+}

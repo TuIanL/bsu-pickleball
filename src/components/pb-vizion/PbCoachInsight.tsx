@@ -53,7 +53,7 @@ export default function PbCoachInsight() {
         </div>
 
         {hasEvidence ? (
-          <h3 className="text-xl font-black leading-snug text-[#14241B]">
+          <h3 className="text-xl font-black leading-snug text-[var(--ui-ink)]">
             {suggestion}
           </h3>
         ) : (

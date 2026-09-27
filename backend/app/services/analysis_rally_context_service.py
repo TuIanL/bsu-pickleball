@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import json
+import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import hypot
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 from uuid import uuid4
 from urllib.parse import quote
 
@@ -28,12 +30,19 @@ from app.models.capture_segment import CaptureSegment
 from app.models.rally_context import AnalysisRallyContextSet, AnalysisRosterSnapshot
 from app.schemas.rally_context import (
     REASON_AMBIGUOUS_TEMPORAL_MATCH,
+    REASON_BINDING_AMBIGUOUS_MATCH,
+    REASON_BINDING_CONFLICTING_SLOTS,
+    REASON_BINDING_INSUFFICIENT_EVIDENCE,
+    REASON_BINDING_NO_ANCHOR_EVIDENCE,
+    REASON_BINDING_NO_FORMAL_OBSERVATION,
+    REASON_BINDING_OUTSIDE_TIME_WINDOW,
     REASON_BOOTSTRAP_BINDING_FAILED,
     REASON_BOOTSTRAP_BINDING_PARTIAL,
     REASON_NO_CAPTURE_TAKE,
     REASON_NO_SCORING_SNAPSHOTS,
     REASON_NO_TEMPORAL_CANDIDATE,
     REASON_ROSTER_INSUFFICIENT_CANDIDATES,
+    REASON_ROSTER_INVALID_ENTRIES,
     REASON_ROSTER_NOT_CONFIRMED,
     REASON_ROSTER_SKIPPED_BY_USER,
     AnalysisRallyContextRally,
@@ -42,14 +51,25 @@ from app.schemas.rally_context import (
     AnalysisRosterSnapshotPayload,
     BootstrapBindingAuditEntry,
     BootstrapBindingAuditPayload,
+    BootstrapBindingEvidence,
     ContextBinding,
     PlayerBootstrapCandidate,
+    PlayerBootstrapCandidateV2,
     PlayerBootstrapQualityDiagnostic,
     PlayerBootstrapResult,
+    PlayerBootstrapResultV2,
     RosterConfirmationRequest,
 )
 from app.services import court_end_projection_service as court_end_svc
 from app.services import rally_scoring_service as scoring_svc
+from app.services.player_bootstrap_preflight import (
+    BootstrapPreflightConfig,
+    bootstrap_cache_key,
+    cached_preflight,
+    run_bootstrap_preflight,
+)
+
+logger = logging.getLogger(__name__)
 
 _ID_PREFIX_ROSTER = "ars"
 _ID_PREFIX_CONTEXT = "arc"
@@ -67,6 +87,8 @@ DIAG_BOOTSTRAP_VIDEO_UNAVAILABLE = "bootstrap_video_unavailable"
 DIAG_BOOTSTRAP_MODEL_DISABLED = "bootstrap_model_inference_disabled"
 DIAG_BOOTSTRAP_DETECTOR_UNAVAILABLE = "bootstrap_detector_unavailable"
 DIAG_BOOTSTRAP_NO_DETECTIONS = "bootstrap_no_detections"
+# 单摄上传路径没有 CaptureTake：不是错误，但要显式声明缺了标定/双摄证据。
+DIAG_BOOTSTRAP_NO_CAPTURE_TAKE = "bootstrap_no_capture_take_context"
 DIAG_ROSTER_SKIPPED = "roster_confirmation_skipped"
 DIAG_COURT_END_NOT_CONFIRMED = "court_end_not_confirmed"
 DIAG_NO_FORMAL_WINDOWS = "no_formal_windows"
@@ -219,13 +241,28 @@ def build_player_bootstrap(
     )
 
 
-def _bootstrap_reference_frame_url(video_id: str | None, timestamp_ms: int) -> str | None:
+def _bootstrap_reference_frame_url(
+    video_id: str | None,
+    timestamp_ms: int,
+    bbox: Iterable[float] | None = None,
+) -> str | None:
+    """受控取帧接口的 URL。
+
+    带上 `bbox` 时后端只返回该框的裁剪图（人物候选画面）；画面本身不写任何产物，
+    也不把 base64 塞进 API JSON —— 时间/机位由 `videoId` + `timestampMs` 唯一确定，
+    因此"候选画面"与"它的时间、机位"天然一致。
+    """
     if not video_id:
         return None
-    return (
+    url = (
         "/api/analysis/players/bootstrap/frame?"
         f"videoId={quote(video_id, safe='')}&timestampMs={max(0, int(timestamp_ms))}"
     )
+    if bbox is not None:
+        values = [float(value) for value in bbox][:4]
+        if len(values) == 4 and all(value == value for value in values):
+            url += "&bbox=" + quote(",".join(f"{value:.2f}" for value in values), safe=",")
+    return url
 
 
 def _bootstrap_from_video(
@@ -421,6 +458,253 @@ def _bootstrap_from_video(
     )
 
 
+def _resolve_clip_range(
+    *,
+    clip_start_ms: int | None,
+    clip_end_ms: int | None,
+    frame_source: Any,
+) -> tuple[int, int]:
+    """把"所选片段"规范成 (start_ms, end_ms)；缺末端时按视频时长兜底。"""
+    start = max(0, int(clip_start_ms or 0))
+    if clip_end_ms is not None and int(clip_end_ms) > start:
+        return start, int(clip_end_ms)
+    fps = float(getattr(frame_source, "fps", 0.0) or 0.0)
+    frame_count = int(getattr(frame_source, "frame_count", 0) or 0)
+    if fps > 0 and frame_count > 0:
+        duration_ms = int(frame_count / fps * 1000)
+        if duration_ms > start:
+            return start, duration_ms
+    # 无法读出时长时给出一个保守的 60 秒窗口，仍然只在片段内采样。
+    return start, start + 60_000
+
+
+def build_player_bootstrap_v2(
+    db: Session,
+    *,
+    capture_take_id: str | None = None,
+    video_id: str | None = None,
+    video_id_b: str | None = None,
+    match_format: str | None = "doubles",
+    clip_start_ms: int | None = None,
+    clip_end_ms: int | None = None,
+    storage: Any | None = None,
+) -> PlayerBootstrapResultV2:
+    """自动候选预检（v2 契约）。失败一律降级为可解释的 unavailable，绝不阻塞分析创建。"""
+    owner = owner_key_for(capture_take_id, video_id)
+    expected = expected_player_count(match_format)
+    consumers_enabled = _consumers_enabled()
+    base: dict[str, Any] = {
+        "owner_key": owner,
+        "capture_take_id": capture_take_id,
+        "video_id": video_id,
+        "video_id_b": video_id_b,
+        "match_format": match_format,
+        "expected_player_count": expected,
+        "clip_start_ms": max(0, int(clip_start_ms or 0)),
+        "clip_end_ms": int(clip_end_ms) if clip_end_ms is not None else None,
+        "consumers_enabled": consumers_enabled,
+    }
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.enable_model_inference:
+        return PlayerBootstrapResultV2(
+            status="unavailable",
+            unavailable_reason=DIAG_BOOTSTRAP_MODEL_DISABLED,
+            diagnostics=[
+                PlayerBootstrapQualityDiagnostic(
+                    code=DIAG_BOOTSTRAP_MODEL_DISABLED,
+                    detail="当前部署未开启人体模型推理，无法自动生成候选；可手工指定或跳过",
+                    severity="warning",
+                )
+            ],
+            **base,
+        )
+
+    from app.services.player_bootstrap_preflight_runtime import (
+        Cv2ViewFrameSource,
+        PreflightRuntimeContext,
+        attach_video_paths,
+        build_appearance_extractor,
+        build_calibration_signature,
+        build_court_projector,
+        build_video_signature,
+        resolve_preflight_context,
+    )
+
+    context = resolve_preflight_context(
+        db, capture_take_id=capture_take_id, video_id=video_id, video_id_b=video_id_b
+    ) if capture_take_id else PreflightRuntimeContext(
+        views=[],  # 无 capture_take 时无法解析标定/同步；下方按单机位预检处理
+    )
+    diagnostics = list(context.diagnostics)
+
+    if not context.views:
+        # 单摄上传路径：没有 CaptureTake，也就没有标定与同步。用调用方给的 video_id
+        # 直接建一个机位，诚实声明"缺少球场与双摄证据"。
+        from app.services.player_bootstrap_preflight_runtime import PreflightViewContext
+
+        context.views = [
+            PreflightViewContext(view_id="cam_1", video_id=video_id, fps=25.0, frame_count=0)
+        ]
+        if video_id_b:
+            context.views.append(
+                PreflightViewContext(view_id="cam_2", video_id=video_id_b, fps=25.0, frame_count=0)
+            )
+        diagnostics.append(
+            PlayerBootstrapQualityDiagnostic(
+                code=DIAG_BOOTSTRAP_NO_CAPTURE_TAKE,
+                detail="缺少录制场次，预检只能按单机位画面连续性给候选，没有球场与双摄证据",
+                severity="info",
+            )
+        )
+
+    from app.services.video_service import video_service
+
+    attach_video_paths(context, video_service)
+    usable_views = [view for view in context.views if view.video_path is not None]
+    if not usable_views:
+        return PlayerBootstrapResultV2(
+            status="unavailable",
+            unavailable_reason=DIAG_BOOTSTRAP_VIDEO_UNAVAILABLE,
+            diagnostics=diagnostics
+            + [
+                PlayerBootstrapQualityDiagnostic(
+                    code=DIAG_BOOTSTRAP_VIDEO_UNAVAILABLE,
+                    detail="源视频不可读，无法生成候选画面；可手工指定或跳过",
+                    severity="warning",
+                )
+            ],
+            **base,
+        )
+
+    frame_source = Cv2ViewFrameSource(usable_views)
+    try:
+        start_ms, end_ms = _resolve_clip_range(
+            clip_start_ms=clip_start_ms, clip_end_ms=clip_end_ms, frame_source=frame_source
+        )
+        base["clip_start_ms"] = start_ms
+        base["clip_end_ms"] = end_ms
+
+        preflight_config = BootstrapPreflightConfig()
+        video_signature = build_video_signature(usable_views[0].video_path)
+        secondary_signature = (
+            build_video_signature(usable_views[1].video_path) if len(usable_views) > 1 else ""
+        )
+        cache_key = bootstrap_cache_key(
+            video_signature=video_signature,
+            secondary_signature=secondary_signature,
+            clip_start_ms=start_ms,
+            clip_end_ms=end_ms,
+            match_format=match_format,
+            sync_signature=(
+                str(context.sync_quality or "none") + ":" + ",".join(
+                    f"{view.camera_id}:{view.sync_offset_seconds:.9f}:{view.sync_rate:.12f}"
+                    for view in usable_views
+                )
+            ),
+            calibration_signature=build_calibration_signature(
+                None, [view.calibration_id or "" for view in usable_views]
+            ),
+            model_version=str(settings.default_detector_model),
+            config=preflight_config,
+        )
+
+        preflight = cached_preflight(cache_key)
+        if preflight is None:
+            try:
+                from app.vision.player_tracking_engine.person_detector import PersonDetector
+
+                detector: Any = PersonDetector(
+                    model_path=settings.default_detector_model,
+                    conf_threshold=settings.detector_confidence,
+                    device=settings.detector_device,
+                )
+            except Exception as exc:  # noqa: BLE001 - 检测器不可用必须降级而非抛错
+                return PlayerBootstrapResultV2(
+                    status="unavailable",
+                    unavailable_reason=DIAG_BOOTSTRAP_DETECTOR_UNAVAILABLE,
+                    diagnostics=diagnostics
+                    + [
+                        PlayerBootstrapQualityDiagnostic(
+                            code=DIAG_BOOTSTRAP_DETECTOR_UNAVAILABLE,
+                            detail=f"人体检测器不可用（{exc}）；可手工指定或跳过",
+                            severity="warning",
+                        )
+                    ],
+                    **base,
+                )
+
+            projectors = {
+                view.view_id: build_court_projector(
+                    calibration_id=view.calibration_id, court_orientation=view.court_orientation
+                )
+                for view in usable_views
+            }
+            appearance_extractor = build_appearance_extractor()
+
+            preflight = run_bootstrap_preflight(
+                frame_source=frame_source,
+                detector=detector,
+                view_ids=[view.view_id for view in usable_views],
+                clip_start_ms=start_ms,
+                clip_end_ms=end_ms,
+                expected_player_count=expected,
+                config=preflight_config,
+                court_projector_for=lambda view_id: projectors.get(view_id),
+                appearance_extractor_for=lambda _view_id: appearance_extractor,
+                sync_trusted=context.sync_trusted,
+                multiview_reason=context.sync_reason,
+                cache_key=cache_key,
+                match_format=match_format,
+            )
+    finally:
+        frame_source.release()
+
+    video_id_by_view = {view.view_id: view.video_id for view in usable_views}
+    # 片段范围以**引擎实际生效**的值为准：引擎会按媒体长度收窄，避免响应里
+    # 报出一个越界的范围，让使用者误以为预检真的在那些时刻采样过。
+    base["clip_start_ms"] = preflight.clip_start_ms
+    base["clip_end_ms"] = preflight.clip_end_ms
+    candidates = [
+        candidate.model_copy(
+            update={
+                "frame_url": _bootstrap_reference_frame_url(
+                    video_id_by_view.get(candidate.view_id), candidate.timestamp_ms
+                ),
+                "crop_url": _bootstrap_reference_frame_url(
+                    video_id_by_view.get(candidate.view_id), candidate.timestamp_ms, candidate.bbox
+                ),
+            }
+        )
+        for candidate in preflight.candidates
+    ]
+    reference_frame = preflight.reference_frame
+    if reference_frame is not None:
+        reference_frame = reference_frame.model_copy(
+            update={
+                "frame_url": _bootstrap_reference_frame_url(
+                    video_id_by_view.get(reference_frame.view_id), reference_frame.timestamp_ms
+                )
+            }
+        )
+
+    return PlayerBootstrapResultV2(
+        status=preflight.status,  # type: ignore[arg-type]
+        unavailable_reason=preflight.unavailable_reason,
+        bootstrap_run_id=f"bootstrap_{preflight.cache_key[:12]}",
+        bootstrap_model_version=str(settings.default_detector_model),
+        bootstrap_cache_key=preflight.cache_key,
+        views=[view.view_id for view in usable_views],
+        multiview_used=preflight.multiview_used,
+        sampled_frame_count=preflight.sampled_frame_count,
+        reference_frame=reference_frame,
+        candidates=candidates,
+        diagnostics=diagnostics + list(preflight.diagnostics),
+        **base,
+    )
+
+
 def _candidates_from_trajectory(trajectory: dict[str, Any] | None) -> list[PlayerBootstrapCandidate]:
     if not isinstance(trajectory, dict):
         return []
@@ -533,6 +817,33 @@ def _roster_payload_of(row: AnalysisRosterSnapshot) -> AnalysisRosterSnapshotPay
     )
 
 
+def _roster_entry_issues(
+    entries: list[AnalysisRosterConfirmationEntry], expected: int
+) -> list[str]:
+    """校验提交名册的槽位数量、候选唯一性与来源完整性。
+
+    这些是**结构**问题，不是"候选不够幸运"：一个槽位重复、同一候选占两个 P 槽，
+    或缺少来源机位/锚点的名册，后续的身份绑定根本无法核验，因此必须 fail closed。
+    """
+    issues: list[str] = []
+    slots = [entry.canonical_player_id for entry in entries]
+    if len(set(slots)) != len(slots):
+        issues.append("duplicate_slots")
+    candidate_ids = [entry.candidate_id for entry in entries if entry.candidate_id]
+    if len(set(candidate_ids)) != len(candidate_ids):
+        issues.append("duplicate_candidates")
+    if len(entries) > expected:
+        issues.append("too_many_entries")
+    for index, entry in enumerate(entries):
+        if not entry.source_view_id:
+            issues.append(f"entry_{index}_missing_source_view")
+        if not entry.anchor_bbox and not entry.anchor_court_xy:
+            issues.append(f"entry_{index}_missing_anchor")
+        if int(entry.anchor_timestamp_ms or 0) <= 0:
+            issues.append(f"entry_{index}_missing_anchor_timestamp")
+    return issues
+
+
 def _build_roster_payload(
     *,
     capture_take_id: str | None,
@@ -540,16 +851,20 @@ def _build_roster_payload(
     request: RosterConfirmationRequest,
     match_format: str | None = "doubles",
 ) -> AnalysisRosterSnapshotPayload:
-    """构造名册快照的纯结果（不写库）。跳过与候选不足都显式降级。"""
+    """构造名册快照的纯结果（不写库）。跳过、候选不足与结构不合法都显式降级。"""
     owner = owner_key_for(capture_take_id, video_id)
     expected = expected_player_count(match_format)
 
+    issues = _roster_entry_issues(request.entries, expected) if request.entries else []
     if request.skipped:
         status, reason, source = "skipped", REASON_ROSTER_SKIPPED_BY_USER, "skipped"
     elif not request.entries:
         status, reason, source = "unavailable", REASON_ROSTER_NOT_CONFIRMED, "bootstrap_default"
     elif len(request.entries) < expected:
         status, reason, source = "insufficient_candidates", REASON_ROSTER_INSUFFICIENT_CANDIDATES, "manual"
+    elif issues:
+        logger.warning("提交的名册结构不合法，降级为 insufficient_candidates：%s", "; ".join(issues))
+        status, reason, source = "insufficient_candidates", REASON_ROSTER_INVALID_ENTRIES, "manual"
     else:
         status, reason, source = "available", None, "manual"
 
@@ -983,116 +1298,533 @@ def context_set_hash_for_job(db: Session, job_id: str) -> str | None:
 
 # ── 5. bootstrap → 正式身份的可审计绑定 ──
 
+# 锚点匹配的时间容差：只接受"临近同一时刻"的正式观测。
+#
+# 刻意取小值（500ms）：球员以 ~6ft/s 移动，2 秒窗口内会位移约 12ft，
+# 那样"位置相符"就失去了证明力，会退化成"全片宽松位置匹配"。
+# 500ms 足以覆盖抽帧步长与 30/60fps 的时间取整误差。
+DEFAULT_ANCHOR_TIME_TOLERANCE_MS = 500
+# 球场坐标容差（ft）。与上面的时间窗口一致：500ms 内最多移动约 3ft。
+DEFAULT_ANCHOR_COURT_TOLERANCE_FT = 3.0
+# bbox 匹配的 IoU 门槛。
+DEFAULT_ANCHOR_MIN_BBOX_IOU = 0.30
+# 综合证据分门槛与"两个正式球员难分伯仲"的歧义余量。
+DEFAULT_ANCHOR_MIN_SCORE = 0.45
+DEFAULT_ANCHOR_AMBIGUITY_MARGIN = 0.12
+
+_METERS_TO_FEET = 3.280839895
+
+
+@dataclass(frozen=True)
+class _FormalObservation:
+    """正式产物里的一次球员观测（已统一到 canonical 球场坐标 / 毫秒时间）。"""
+
+    label: str  # 正式 canonical Player_N
+    global_id: str | None
+    view_id: str | None
+    timestamp_ms: int | None
+    bbox: list[float] | None
+    court_ft: tuple[float, float] | None
+    multiview: bool
+
+
+def _foot_point(bbox: list[float] | None) -> tuple[float, float] | None:
+    if not bbox or len(bbox) < 4:
+        return None
+    x1, y1, x2, y2 = [float(value) for value in bbox[:4]]
+    return ((x1 + x2) / 2.0, y2)
+
+
+def _iou(left: Sequence[float], right: Sequence[float]) -> float:
+    lx1, ly1, lx2, ly2 = [float(value) for value in left[:4]]
+    rx1, ry1, rx2, ry2 = [float(value) for value in right[:4]]
+    inter_x1, inter_y1 = max(lx1, rx1), max(ly1, ry1)
+    inter_x2, inter_y2 = min(lx2, rx2), min(ly2, ry2)
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    union = (lx2 - lx1) * (ly2 - ly1) + (rx2 - rx1) * (ry2 - ry1) - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _manifest_label_map(manifest: dict[str, Any] | None) -> dict[str, str]:
+    """`global-player-roster.v1` 的 global_player_id → Player_N 标签表。
+
+    这里**只取标签**，不取 `mapping_confirmed`：正式身份是否成立由本次审计的
+    同时刻证据决定，不能把名册产物里的确认位当作锚点绑定的依据。
+    """
+    if not isinstance(manifest, dict):
+        return {}
+    if manifest.get("schema_version") not in (None, "global-player-roster.v1"):
+        return {}
+    mapping: dict[str, str] = {}
+    for entry in manifest.get("players") or []:
+        if not isinstance(entry, dict):
+            continue
+        global_id = str(entry.get("global_player_id") or "")
+        label = str(entry.get("player_id") or "")
+        if global_id and label.startswith("Player_"):
+            mapping[global_id] = label
+    return mapping
+
+
+def _formal_observations(
+    payload: dict[str, Any] | None,
+    manifest: dict[str, Any] | None,
+) -> list[_FormalObservation]:
+    """从正式产物提取 (球员, 机位, 时刻, bbox, 球场坐标) 观测，并统一单位与时间基准。
+
+    支持两种产物形态：
+
+    - **多视角融合** (`fused_player_trajectory.v*`)：`samples[].global_player_id`
+      + `take_timestamp_ms` + 顶层 canonical `x_ft`/`y_ft` + 逐机位 `view_observations`
+      （逐机位坐标是 local 帧，**不能**直接当 canonical 用，因此这里不用它做位置比较）；
+    - **单视角** (`players_trajectory.json` v1)：`players` 是 `Player_N → 观测列表` 的映射，
+      观测含 `bbox` 与以**米**为单位的 `court_x`/`court_y`，这里统一换算成 ft。
+
+    产物里没有的字段一律留空，不猜测、不用占位值。
+    """
+    if not isinstance(payload, dict):
+        return []
+    label_by_global = _manifest_label_map(manifest)
+    observations: list[_FormalObservation] = []
+
+    samples = payload.get("samples")
+    if isinstance(samples, list) and samples:
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            global_id = sample.get("global_player_id")
+            label = None
+            if isinstance(global_id, str) and global_id:
+                label = label_by_global.get(global_id)
+            if label is None:
+                player_id = sample.get("player_id")
+                if isinstance(player_id, str) and player_id.startswith("Player_"):
+                    label = player_id
+            if label is None:
+                # 无法命名成 canonical Player_N 的观测不能作为正式身份证据。
+                continue
+            timestamp_ms = _sample_timestamp_ms(sample)
+            court_ft = None
+            if sample.get("x_ft") is not None and sample.get("y_ft") is not None:
+                court_ft = (float(sample["x_ft"]), float(sample["y_ft"]))
+            bbox = sample.get("bbox")
+            bbox_values = (
+                [float(value) for value in bbox] if isinstance(bbox, list) and len(bbox) == 4 else None
+            )
+            view_observations = sample.get("view_observations")
+            if isinstance(view_observations, dict) and view_observations:
+                available_views = [
+                    (str(key), detail)
+                    for key, detail in sorted(view_observations.items())
+                    if isinstance(detail, dict) and detail.get("view_status") == "available"
+                ]
+                # 每个机位保留自己的源时间。双摄的 canonical tick 不能直接拿来
+                # 比 B 机位锚点的源 PTS；两机位同时可见也不能省略机位门槛。
+                for view_id, detail in available_views:
+                    source_ms = detail.get("source_timestamp_ms")
+                    try:
+                        view_timestamp_ms = int(round(float(source_ms))) if source_ms is not None else timestamp_ms
+                    except (TypeError, ValueError):
+                        view_timestamp_ms = timestamp_ms
+                    observations.append(
+                        _FormalObservation(
+                            label=label,
+                            global_id=str(global_id) if global_id else None,
+                            view_id=view_id,
+                            timestamp_ms=view_timestamp_ms,
+                            bbox=_bbox_of(detail),
+                            court_ft=court_ft,
+                            multiview=len(available_views) >= 2,
+                        )
+                    )
+                continue
+            observations.append(
+                _FormalObservation(
+                    label=label,
+                    global_id=str(global_id) if global_id else None,
+                    view_id=None,
+                    timestamp_ms=timestamp_ms,
+                    bbox=bbox_values,
+                    court_ft=court_ft,
+                    multiview=False,
+                )
+            )
+        return observations
+
+    # 单视角 v1：players 是 {Player_N: [观测]}；同时兼容 [{"player_id": ...}] 形态。
+    players = payload.get("players") or payload.get("player_roster") or []
+    if isinstance(players, dict):
+        for label, items in players.items():
+            if not isinstance(label, str) or not label.startswith("Player_"):
+                continue
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                observations.append(
+                    _FormalObservation(
+                        label=label,
+                        global_id=None,
+                        view_id=None,
+                        timestamp_ms=_sample_timestamp_ms(item),
+                        bbox=_bbox_of(item),
+                        court_ft=_court_ft_of(item),
+                        multiview=False,
+                    )
+                )
+        return observations
+
+    if isinstance(players, list):
+        labels = {
+            str(item.get("player_id")): str(item.get("player_id"))
+            for item in players
+            if isinstance(item, dict) and str(item.get("player_id") or "").startswith("Player_")
+        }
+        for label in labels.values():
+            observations.append(
+                _FormalObservation(
+                    label=label,
+                    global_id=None,
+                    view_id=None,
+                    timestamp_ms=None,
+                    bbox=None,
+                    court_ft=None,
+                    multiview=False,
+                )
+            )
+        for sample in payload.get("samples") or []:
+            if not isinstance(sample, dict):
+                continue
+            label = sample.get("player_id")
+            if not isinstance(label, str) or not label.startswith("Player_"):
+                continue
+            observations.append(
+                _FormalObservation(
+                    label=label,
+                    global_id=None,
+                    view_id=None,
+                    timestamp_ms=_sample_timestamp_ms(sample),
+                    bbox=_bbox_of(sample),
+                    court_ft=_court_ft_of(sample),
+                    multiview=False,
+                )
+            )
+    return observations
+
+
+def _sample_timestamp_ms(sample: dict[str, Any]) -> int | None:
+    """统一时间基准到毫秒。产物里没有时间时返回 None（不猜）。"""
+    take_ms = sample.get("take_timestamp_ms")
+    if take_ms is not None:
+        try:
+            return int(round(float(take_ms)))
+        except (TypeError, ValueError):
+            pass
+    seconds = sample.get("timestamp_seconds")
+    if seconds is not None:
+        try:
+            return int(round(float(seconds) * 1000))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _bbox_of(sample: dict[str, Any]) -> list[float] | None:
+    bbox = sample.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4 and all(_is_number(value) for value in bbox):
+        return [float(value) for value in bbox]
+    return None
+
+
+def _court_ft_of(sample: dict[str, Any]) -> tuple[float, float] | None:
+    """读取球场坐标并统一到 ft。
+
+    单视角 v1 产物写的是**米**（`court_unit: "m"`）；多视角写的是 ft。
+    依据 `court_unit` 判定，缺字段时按该产物形态的既有约定处理。
+    """
+    if sample.get("court_x") is not None and sample.get("court_y") is not None:
+        unit = str(sample.get("court_unit") or "m")
+        factor = _METERS_TO_FEET if unit.startswith("m") else 1.0
+        try:
+            return (float(sample["court_x"]) * factor, float(sample["court_y"]) * factor)
+        except (TypeError, ValueError):
+            return None
+    if sample.get("x_ft") is not None and sample.get("y_ft") is not None:
+        try:
+            return (float(sample["x_ft"]), float(sample["y_ft"]))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _is_number(value: Any) -> bool:
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
 
 def build_bootstrap_binding_audit(
     *,
     job_id: str,
     roster: AnalysisRosterSnapshotPayload | None,
     formal_roster_payload: dict[str, Any] | None,
-    position_tolerance_ft: float = 32.0,
+    formal_roster_manifest: dict[str, Any] | None = None,
+    anchor_time_tolerance_ms: int = DEFAULT_ANCHOR_TIME_TOLERANCE_MS,
+    court_tolerance_ft: float = DEFAULT_ANCHOR_COURT_TOLERANCE_FT,
+    min_bbox_iou: float = DEFAULT_ANCHOR_MIN_BBOX_IOU,
+    min_score: float = DEFAULT_ANCHOR_MIN_SCORE,
+    ambiguity_margin: float = DEFAULT_ANCHOR_AMBIGUITY_MARGIN,
 ) -> BootstrapBindingAuditPayload | None:
     """为每个确认条目产出一条绑定结论；绑定不成立时明确 unavailable，不静默改编号。
 
-    判定顺序：
+    判定规则（**刻意严格**）：
 
-    1. 正式 roster 里不存在该 canonical player → `unavailable`（confirmed=False）。
-    2. 存在且 anchor 有球场坐标、正式产物里能找到容差内的同 id 观测 → `anchor_reacquire`。
-    3. 存在但缺少位置锚点证据 → `unavailable`（不把编号/时间连续性当作身份确认）。
+    1. 条目必须有锚点（时间 + 机位，且至少一种几何证据可用），否则
+       `anchor_evidence_missing`。
+    2. 正式产物里必须存在**同一机位、同一时间窗口内**的观测；否则
+       `outside_time_window` / `no_formal_observation`。
+    3. 同时刻候选中必须有唯一一个通过几何门槛（bbox IoU 或球场距离）或可信双摄佐证；
+       多个候选难分伯仲 → `ambiguous_match`。
+    4. 一对一指派：同一正式 Player 被两个槽位竞争 → `conflicting_slots`，两个槽位都不确认。
+
+    **不再使用**的确认路径：仅凭 `Player_N` 字符串相同、或全片任意时刻位置相近。
+    正式轨迹 ID 本身不会被改写；未确认的槽位在下游按不可用降级。
     """
     if roster is None or roster.status != "available":
         return None
 
-    payload = formal_roster_payload or {}
-    # 正式 roster 的字段名随产物而异：`player_roster`（reconstructed v2 报告）与
-    # `players`（global-player-roster / render trajectory）都要接受。
-    formal_entries = payload.get("players") or payload.get("player_roster") or []
-    formal_players = {
-        str(item.get("player_id")): item
-        for item in formal_entries
-        if isinstance(item, dict) and item.get("player_id")
-    }
-    formal_positions: dict[str, list[tuple[float, float]]] = {}
-    for sample in payload.get("samples") or []:
-        if not isinstance(sample, dict):
+    observations = _formal_observations(formal_roster_payload, formal_roster_manifest)
+    by_label: dict[str, list[_FormalObservation]] = {}
+    for observation in observations:
+        by_label.setdefault(observation.label, []).append(observation)
+
+    # 先算出每个 (槽位, 正式球员) 的候选证据，再做一对一指派。
+    scored: dict[tuple[int, str], tuple[float, BootstrapBindingEvidence]] = {}
+    slot_diagnostics: dict[int, str] = {}
+    ambiguous_evidence: dict[int, BootstrapBindingEvidence] = {}
+    artifact_has_timeline = any(
+        observation.timestamp_ms is not None
+        for observations in by_label.values()
+        for observation in observations
+    )
+    for slot_index, entry in enumerate(roster.entries):
+        anchor_ms = int(entry.anchor_timestamp_ms or 0)
+        anchor_bbox = entry.anchor_bbox
+        anchor_court = entry.anchor_court_xy
+        has_anchor = bool(entry.source_view_id) and (anchor_bbox or anchor_court)
+        if not has_anchor:
+            slot_diagnostics[slot_index] = REASON_BINDING_NO_ANCHOR_EVIDENCE
             continue
-        player_id = sample.get("player_id")
-        if not isinstance(player_id, str) or sample.get("x_ft") is None or sample.get("y_ft") is None:
+        if anchor_ms <= 0:
+            slot_diagnostics[slot_index] = REASON_BINDING_NO_ANCHOR_EVIDENCE
             continue
-        formal_positions.setdefault(player_id, []).append((float(sample["x_ft"]), float(sample["y_ft"])))
+        best_for_slot: list[tuple[float, str, BootstrapBindingEvidence]] = []
+        # 记录"通过了时间门槛"的正式球员：用来区分"锚点时刻根本没有观测"与
+        # "有观测但几何/双摄证据不足"，两者对操作者含义完全不同。
+        time_gate_labels: set[str] = set()
+        for label, label_observations in by_label.items():
+            best: tuple[float, BootstrapBindingEvidence] | None = None
+            for observation in label_observations:
+                if observation.timestamp_ms is None:
+                    continue
+                delta_ms = abs(observation.timestamp_ms - anchor_ms)
+                if delta_ms > anchor_time_tolerance_ms:
+                    continue
+                time_gate_labels.add(label)
+                # 同机位：正式产物没有机位信息时（单视角）不设机位门槛，
+                # 但会在证据里标明 view_id 缺失，供人工判断。
+                if observation.view_id is not None and entry.source_view_id is not None:
+                    if observation.view_id != entry.source_view_id:
+                        continue
+                time_score = max(0.0, 1.0 - delta_ms / max(1, anchor_time_tolerance_ms))
+                view_known = observation.view_id is not None and entry.source_view_id is not None
+                view_score = 1.0 if view_known else 0.6
+
+                iou: float | None = None
+                if anchor_bbox and observation.bbox:
+                    iou = _iou(anchor_bbox, observation.bbox)
+                    if iou < min_bbox_iou:
+                        continue
+                court_distance: float | None = None
+                if anchor_court and len(anchor_court) == 2 and observation.court_ft:
+                    court_distance = hypot(
+                        anchor_court[0] - observation.court_ft[0],
+                        anchor_court[1] - observation.court_ft[1],
+                    )
+                    if court_distance > court_tolerance_ft:
+                        continue
+                multiview = observation.multiview or None
+                if iou is None and court_distance is None and multiview is None:
+                    # 只有"同时间 + 同机位"，没有任何几何或双摄证据：不足以确认身份。
+                    continue
+
+                components = [time_score, view_score]
+                if iou is not None:
+                    components.append(iou)
+                if court_distance is not None:
+                    components.append(max(0.0, 1.0 - court_distance / max(1e-6, court_tolerance_ft)))
+                if multiview is not None:
+                    components.append(1.0)
+                score = sum(components) / len(components)
+                evidence = BootstrapBindingEvidence(
+                    view_id=observation.view_id or entry.source_view_id,
+                    time_delta_ms=int(delta_ms),
+                    bbox_iou=round(iou, 4) if iou is not None else None,
+                    bbox_center_distance_px=(
+                        round(
+                            hypot(
+                                ((anchor_bbox[0] + anchor_bbox[2]) / 2.0)
+                                - ((observation.bbox[0] + observation.bbox[2]) / 2.0),
+                                ((anchor_bbox[1] + anchor_bbox[3]) / 2.0)
+                                - ((observation.bbox[1] + observation.bbox[3]) / 2.0),
+                            ),
+                            2,
+                        )
+                        if anchor_bbox and observation.bbox
+                        else None
+                    ),
+                    court_distance_ft=(
+                        round(court_distance, 3) if court_distance is not None else None
+                    ),
+                    multiview_corroborated=bool(multiview) if multiview is not None else None,
+                )
+                if score >= min_score and (best is None or score > best[0]):
+                    best = (score, evidence)
+            if best is not None:
+                best_for_slot.append((best[0], label, best[1]))
+        best_for_slot.sort(key=lambda item: (-item[0], item[1]))
+        if not best_for_slot:
+            if time_gate_labels:
+                # 锚点时刻确有正式观测，但没有一个通过几何/双摄证据门槛。
+                slot_diagnostics[slot_index] = REASON_BINDING_INSUFFICIENT_EVIDENCE
+            elif artifact_has_timeline:
+                slot_diagnostics[slot_index] = REASON_BINDING_OUTSIDE_TIME_WINDOW
+            else:
+                slot_diagnostics[slot_index] = REASON_BINDING_NO_FORMAL_OBSERVATION
+            continue
+        if len(best_for_slot) > 1 and best_for_slot[0][0] - best_for_slot[1][0] < ambiguity_margin:
+            slot_diagnostics[slot_index] = REASON_BINDING_AMBIGUOUS_MATCH
+            # 歧义仍然保留证据供人工核对，但**不**进入可指派集合：
+            # 既然两个候选难分伯仲，这就不是一个唯一匹配，不能被后续贪心
+            # 指派当成确定结果。
+            ambiguous_evidence[slot_index] = best_for_slot[0][2]
+            continue
+        scored[(slot_index, best_for_slot[0][1])] = (best_for_slot[0][0], best_for_slot[0][2])
+
+    # 一对一贪心指派：按证据分降序，槽位与正式球员各自只能用一次。
+    assignments: dict[int, tuple[str, float, BootstrapBindingEvidence]] = {}
+    taken_labels: set[str] = set()
+    conflicts: dict[str, int] = {}
+    for (slot_index, label), (score, evidence) in sorted(
+        scored.items(), key=lambda item: (-item[1][0], item[0][0], item[0][1])
+    ):
+        if slot_index in assignments:
+            continue
+        if label in taken_labels:
+            conflicts[label] = conflicts.get(label, 1) + 1
+            continue
+        assignments[slot_index] = (label, score, evidence)
+        taken_labels.add(label)
 
     entries: list[BootstrapBindingAuditEntry] = []
-    for entry in roster.entries:
-        player_id = entry.canonical_player_id
+    for slot_index, entry in enumerate(roster.entries):
         base = {
-            "canonical_player_id": player_id,
+            "canonical_player_id": entry.canonical_player_id,
+            "slot_index": entry.slot_index if entry.slot_index is not None else slot_index,
+            "candidate_id": entry.candidate_id,
             "bootstrap_run_id": entry.bootstrap_run_id,
             "source_view_id": entry.source_view_id,
             "anchor_timestamp_ms": entry.anchor_timestamp_ms,
+            "anchor_bbox": entry.anchor_bbox,
             "anchor_court_xy": entry.anchor_court_xy,
         }
-        if player_id not in formal_players:
-            entries.append(
-                BootstrapBindingAuditEntry(
-                    method="unavailable",
-                    confirmed=False,
-                    reason=REASON_BOOTSTRAP_BINDING_FAILED,
-                    **base,
-                )
-            )
-            continue
-        anchor_xy = entry.anchor_court_xy
-        positions = formal_positions.get(player_id) or []
-        if anchor_xy and len(anchor_xy) == 2 and positions:
-            nearest = min(
-                (abs(x - anchor_xy[0]) ** 2 + abs(y - anchor_xy[1]) ** 2) ** 0.5 for x, y in positions
-            )
-            if nearest <= position_tolerance_ft:
+        assignment = assignments.get(slot_index)
+        if assignment is not None:
+            label, score, evidence = assignment
+            competing = sum(1 for _, other in scored if other == label)
+            if competing > 1:
+                # 同一个正式球员被多个槽位竞争：两个槽位都不确认，也不静默换号。
                 entries.append(
                     BootstrapBindingAuditEntry(
-                        formal_canonical_player_id=player_id,
-                        method="anchor_reacquire",
-                        confidence=entry.bootstrap_confidence,
-                        confirmed=True,
-                        reason=f"锚点在容差内重新捕获（最近距离 {nearest:.1f}ft）",
+                        method="unavailable",
+                        confirmed=False,
+                        confidence=round(score, 4),
+                        reason=REASON_BINDING_CONFLICTING_SLOTS,
+                        evidence=evidence.model_copy(update={"competing_slots": competing}),
                         **base,
                     )
                 )
                 continue
             entries.append(
                 BootstrapBindingAuditEntry(
-                    formal_canonical_player_id=player_id,
-                    method="temporal_fallback",
-                    confidence=entry.bootstrap_confidence,
-                    confirmed=False,
-                    reason=f"锚点位置失配（最近距离 {nearest:.1f}ft），拒绝静默换绑",
+                    formal_canonical_player_id=label,
+                    method=(
+                        "anchor_simultaneous_multiview"
+                        if evidence.multiview_corroborated
+                        else "anchor_simultaneous_match"
+                    ),
+                    confidence=round(score, 4),
+                    confirmed=True,
+                    reason=(
+                        f"锚点时刻同机位唯一匹配（Δt={evidence.time_delta_ms}ms"
+                        + (f"，IoU={evidence.bbox_iou}" if evidence.bbox_iou is not None else "")
+                        + (
+                            f"，球场距离={evidence.court_distance_ft}ft"
+                            if evidence.court_distance_ft is not None
+                            else ""
+                        )
+                        + "）"
+                    ),
+                    evidence=evidence,
                     **base,
                 )
             )
             continue
+        reason = slot_diagnostics.get(slot_index)
+        if reason is None:
+            if any(other_label in taken_labels for _, other_label in scored):
+                reason = REASON_BINDING_CONFLICTING_SLOTS
+            else:
+                reason = REASON_BINDING_OUTSIDE_TIME_WINDOW
         entries.append(
             BootstrapBindingAuditEntry(
-                # 没有 anchor_court_xy 就没有足够证据证明 bootstrap 人员和
-                # formal canonical player 是同一人。这里必须 fail closed：
-                # 保留原始 bootstrap 编号供审计，但不确认 formal 身份，
-                # 也不能把 temporal/slot continuity 冒充成正式绑定。
                 method="unavailable",
-                confidence=entry.bootstrap_confidence,
                 confirmed=False,
-                reason=REASON_BOOTSTRAP_BINDING_FAILED,
+                reason=reason,
+                evidence=ambiguous_evidence.get(slot_index, BootstrapBindingEvidence()),
                 **base,
             )
         )
 
+    # 冲突槽位最终都要落成"未确认"，即使贪心指派时已占用了该正式 Player。
+    conflicting_labels = {label for label, count in conflicts.items() if count > 1}
+    if conflicting_labels:
+        entries = [
+            entry.model_copy(
+                update={
+                    "formal_canonical_player_id": None,
+                    "confirmed": False,
+                    "method": "unavailable",
+                    "reason": REASON_BINDING_CONFLICTING_SLOTS,
+                }
+            )
+            if entry.formal_canonical_player_id in conflicting_labels
+            else entry
+            for entry in entries
+        ]
+
     confirmed_count = sum(1 for entry in entries if entry.confirmed)
-    if confirmed_count == len(entries):
-        status = "available"
-        reason = None
+    if not entries:
+        status, reason = "unavailable", REASON_BINDING_INSUFFICIENT_EVIDENCE
+    elif confirmed_count == len(entries):
+        status, reason = "available", None
     elif confirmed_count:
-        status = "partial"
-        reason = REASON_BOOTSTRAP_BINDING_PARTIAL
+        status, reason = "partial", REASON_BOOTSTRAP_BINDING_PARTIAL
     else:
-        status = "unavailable"
-        reason = REASON_BOOTSTRAP_BINDING_FAILED
+        status, reason = "unavailable", REASON_BOOTSTRAP_BINDING_FAILED
 
     return BootstrapBindingAuditPayload(
         job_id=job_id,

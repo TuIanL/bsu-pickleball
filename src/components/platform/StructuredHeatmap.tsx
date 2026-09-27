@@ -20,7 +20,7 @@ export default function StructuredHeatmap({ data, fallbackPngUrl }: StructuredHe
       return (
         <img
           alt="位置热力图"
-          className="aspect-[11/16] w-full bg-white object-contain"
+          className="aspect-[11/16] w-full bg-[var(--ui-surface)] object-contain"
           src={fallbackPngUrl}
         />
       );
@@ -39,7 +39,7 @@ export default function StructuredHeatmap({ data, fallbackPngUrl }: StructuredHe
 function HeatmapCourtBase({ children }: { children: React.ReactNode }) {
   const defs = courtSvgDefs();
   return (
-    <svg viewBox={defs.viewBox} className="w-full bg-white" style={{ aspectRatio: "200/440" }}>
+    <svg viewBox={defs.viewBox} className="w-full bg-[var(--ui-surface)]" style={{ aspectRatio: "200/440" }}>
       <rect
         x={defs.courtOutline.x}
         y={defs.courtOutline.y}
@@ -140,7 +140,7 @@ function PlayerLayersHeatmapSVG({ players }: { players: HeatmapPlayerGrid[] }) {
               className="inline-block h-2.5 w-2.5 rounded-full"
               style={{ backgroundColor: player.color, opacity: visibleLayers.has(player.id) ? 1 : 0.3 }}
             />
-            <span className={visibleLayers.has(player.id) ? "text-[#14241B]" : "text-slate-400 line-through"}>
+            <span className={visibleLayers.has(player.id) ? "text-[var(--ui-ink)]" : "text-slate-400 line-through"}>
               {player.label}
             </span>
           </button>

@@ -29,7 +29,7 @@ function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</span>
-      <span className="text-sm font-semibold text-[#14241B]">{value}</span>
+      <span className="text-sm font-semibold text-[var(--ui-ink)]">{value}</span>
     </div>
   );
 }
@@ -163,9 +163,9 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
     return (
       <PageFrame>
         <div className="mx-auto mt-20 max-w-md text-center">
-          <div className="rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-6">
-            <strong className="text-[#991B1B]">加载失败</strong>
-            <p className="mt-2 text-sm text-[#B91C1C]">{loadError}</p>
+          <div className="rounded-2xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-6">
+            <strong className="text-[var(--ui-danger-deeper)]">加载失败</strong>
+            <p className="mt-2 text-sm text-[var(--ui-danger-deep)]">{loadError}</p>
           </div>
           <button
             className="quiet-button mt-4 px-4 py-2 text-sm"
@@ -183,7 +183,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
     return (
       <PageFrame>
         <div className="mx-auto mt-20 max-w-md text-center">
-          <div className="rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-6">
+          <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-6">
             <p className="text-sm text-slate-500">正在加载录制信息…</p>
           </div>
         </div>
@@ -195,9 +195,9 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
     return (
       <PageFrame>
         <div className="mx-auto mt-20 max-w-md text-center">
-          <div className="rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-6">
-            <strong className="text-[#991B1B]">视频未就绪</strong>
-            <p className="mt-2 text-sm text-[#B91C1C]">
+          <div className="rounded-2xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-6">
+            <strong className="text-[var(--ui-danger-deeper)]">视频未就绪</strong>
+            <p className="mt-2 text-sm text-[var(--ui-danger-deep)]">
               {camSlot === "cam_1" ? "A" : "B"} 机位的视频尚未合并完成。请先在任务管理中合并视频片段。
             </p>
           </div>
@@ -224,11 +224,11 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
             返回录制任务
           </button>
           <div className="flex items-center gap-3">
-          <span className="grid size-10 place-items-center rounded-xl bg-[#22C55E]/15 text-[#168A34]">
+          <span className="grid size-10 place-items-center rounded-xl bg-[var(--ui-brand-solid)]/15 text-[var(--ui-brand-deep)]">
             <Camera size={20} aria-hidden="true" />
           </span>
           <div>
-            <h1 className="text-2xl font-black text-[#14241B]">从录制创建分析任务</h1>
+            <h1 className="text-2xl font-black text-[var(--ui-ink)]">从录制创建分析任务</h1>
             <p className="mt-0.5 text-sm text-slate-500">
               {camSlot === "cam_1" ? "底线 A 机位" : "底线 B 机位"} · 场地信息已锁定
             </p>
@@ -237,10 +237,10 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
         </div>
 
         {/* Read-only metadata banner */}
-        <div className="mb-6 rounded-3xl border border-[#DDE9D6] bg-white/70 p-5">
+        <div className="mb-6 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-5">
           <div className="flex items-center gap-2 mb-4">
-            <Activity size={16} className="text-[#168A34]" aria-hidden="true" />
-            <span className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">
+            <Activity size={16} className="text-[var(--ui-brand-deep)]" aria-hidden="true" />
+            <span className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
               录制信息（只读）
             </span>
           </div>
@@ -267,7 +267,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
             onChange={setRosterConfirmation}
           />
         ) : (
-          <div className="mt-4 rounded-2xl border border-[#F4D8A8] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
+          <div className="mt-4 rounded-2xl border border-[var(--ui-warning-border)] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
             已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要场地控制画像时，请切回新流程。
           </div>
         )}
@@ -283,9 +283,9 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
 
         {/* Submit error */}
         {submitError && (
-          <div className="mt-4 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-4">
-            <strong className="block text-sm text-[#991B1B]">{submitError.title}</strong>
-            <p className="mt-1 text-sm text-[#B91C1C]">{submitError.body}</p>
+          <div className="mt-4 rounded-2xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-4">
+            <strong className="block text-sm text-[var(--ui-danger-deeper)]">{submitError.title}</strong>
+            <p className="mt-1 text-sm text-[var(--ui-danger-deep)]">{submitError.body}</p>
           </div>
         )}
       </section>

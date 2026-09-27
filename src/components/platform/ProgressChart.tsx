@@ -28,8 +28,8 @@ export function ProgressChart({ points }: ProgressChartProps) {
     <section className="sport-card p-5 sm:p-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">进展追踪</p>
-          <h2 className="mt-2 text-2xl font-black text-[#14241B]">最近 5 场表现趋势</h2>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">进展追踪</p>
+          <h2 className="mt-2 text-2xl font-black text-[var(--ui-ink)]">最近 5 场表现趋势</h2>
         </div>
         <p className="max-w-xl text-sm leading-6 text-slate-600">
           当前趋势聚焦移动覆盖、回位效率和网前站位控制。
@@ -37,7 +37,7 @@ export function ProgressChart({ points }: ProgressChartProps) {
       </div>
 
       <div className="mt-6 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+        <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
           <div className="flex h-56 items-end gap-3">
             {points.map((point) => {
               const isHovered = hoveredMatch === point.match;
@@ -48,13 +48,13 @@ export function ProgressChart({ points }: ProgressChartProps) {
                   onMouseEnter={() => setHoveredMatch(point.match)}
                   onMouseLeave={() => { setHoveredMatch(null); setHoveredBar(null); }}
                 >
-                  <div className="flex h-44 w-full items-end justify-center gap-1 rounded-2xl bg-white/75 px-2 py-2">
+                  <div className="flex h-44 w-full items-end justify-center gap-1 rounded-2xl bg-[var(--ui-surface)]/75 px-2 py-2">
                     {(["performance", "thirdShot", "kitchen"] as BarKey[]).map((key) => {
                       const barHovered = isHovered && hoveredBar === key;
                       return (
                         <div key={key} className="relative flex flex-col items-center">
                           {isHovered && (
-                            <span className="absolute -top-5 whitespace-nowrap text-[10px] font-bold text-[#14241B]">
+                            <span className="absolute -top-5 whitespace-nowrap text-[10px] font-bold text-[var(--ui-ink)]">
                               {point[key]}
                             </span>
                           )}
@@ -90,8 +90,8 @@ export function ProgressChart({ points }: ProgressChartProps) {
         <div className="grid gap-3">
           {points.map((point) => (
             <div
-              className={`rounded-2xl border bg-white/75 p-4 transition-all duration-200 ${
-                hoveredMatch === point.match ? "border-[#22C55E] shadow-sm" : "border-[#DDE9D6]"
+              className={`rounded-2xl border bg-[var(--ui-surface)]/75 p-4 transition-all duration-200 ${
+                hoveredMatch === point.match ? "border-[var(--ui-brand)] shadow-sm" : "border-[var(--ui-border)]"
               }`}
               key={point.match}
               onMouseEnter={() => setHoveredMatch(point.match)}
@@ -99,10 +99,10 @@ export function ProgressChart({ points }: ProgressChartProps) {
             >
               <div className="flex items-center justify-between">
                 <strong>{point.match}</strong>
-                <span className="text-sm font-bold text-[#168A34]">{point.performance}</span>
+                <span className="text-sm font-bold text-[var(--ui-brand-deep)]">{point.performance}</span>
               </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#DFEADA]">
-                <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${point.performance}%` }} />
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--ui-surface-track-green)]">
+                <span className="block h-full rounded-full bg-[var(--ui-brand-solid)]" style={{ width: `${point.performance}%` }} />
               </div>
               <p className="mt-2 text-xs text-slate-500">
                 失误 {point.errors}/{maxError} · 回位 {point.thirdShot}% · 网前 {point.kitchen}%

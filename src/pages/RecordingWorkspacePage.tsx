@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ListChecks, Loader2, Tags } from "lucide-react";
+import { ArrowLeft, Loader2, Tags } from "lucide-react";
 import type { RecordingSession, SyncRecordingSession, FieldSession, SessionTimelineEvent } from "../types/report";
 import type { NavigateFn, NavigatePath, TaskListContext } from "../app/navigationTypes";
 import { taskContextFromLocation, taskListPath } from "../app/navigationContext";
@@ -59,15 +59,15 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
 };
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
-  set_start: "text-[#F97316] bg-[#FFF7ED] border-[#F97316]",
-  set_end: "text-[#F97316] bg-[#FFF7ED] border-[#F97316]",
-  game_start: "text-[#3B82F6] bg-[#EFF6FF] border-[#3B82F6]",
-  game_end: "text-[#3B82F6] bg-[#EFF6FF] border-[#3B82F6]",
-  rally_start: "text-[#22C55E] bg-[#F0FDF4] border-[#22C55E]",
+  set_start: "text-[#F97316] bg-[var(--ui-warning-soft)] border-[#F97316]",
+  set_end: "text-[#F97316] bg-[var(--ui-warning-soft)] border-[#F97316]",
+  game_start: "text-[#3B82F6] bg-[var(--ui-info-soft)] border-[#3B82F6]",
+  game_end: "text-[#3B82F6] bg-[var(--ui-info-soft)] border-[#3B82F6]",
+  rally_start: "text-[var(--ui-brand)] bg-[var(--ui-surface-green-50)] border-[var(--ui-brand)]",
   rally_end: "text-slate-500 bg-slate-50 border-slate-300",
   side_change: "text-[#A855F7] bg-[#FAF5FF] border-[#A855F7]",
-  timeout_start: "text-[#F97316] bg-[#FFF7ED] border-[#F97316]",
-  score_update: "text-[#22C55E] bg-[#F0FDF4] border-[#22C55E]",
+  timeout_start: "text-[#F97316] bg-[var(--ui-warning-soft)] border-[#F97316]",
+  score_update: "text-[var(--ui-brand)] bg-[var(--ui-surface-green-50)] border-[var(--ui-brand)]",
   session_note: "text-slate-500 bg-slate-50 border-slate-300",
   add_note: "text-slate-500 bg-slate-50 border-slate-300",
   custom_marker: "text-slate-500 bg-slate-50 border-slate-300",
@@ -329,20 +329,13 @@ export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { se
             <ArrowLeft size={18} />
           </button>
           <div className="min-w-0 flex-1">
-            <h1 className="text-xl font-black text-[#14241B] truncate">{title}</h1>
+            <h1 className="text-xl font-black text-[var(--ui-ink)] truncate">{title}</h1>
             <p className="text-sm text-slate-500 truncate">{subtitle}</p>
           </div>
           {session.field_session_id && session.capture_take_id ? (
             <div className="flex shrink-0 items-center gap-2">
               <button
-                className="inline-flex items-center gap-2 rounded-lg border border-[#168A34] px-3 py-2 text-xs font-bold text-[#168A34] transition hover:bg-[#F0FDF4]"
-                onClick={() => onNavigate(`/capture/${session.field_session_id}/takes/${session.capture_take_id}/segments?mode=boundary-review`)}
-                type="button"
-              >
-                <ListChecks size={15} /> 有效回合复核
-              </button>
-              <button
-                className="inline-flex items-center gap-2 rounded-lg border border-[#2F80ED] px-3 py-2 text-xs font-bold text-[#2F80ED] transition hover:bg-[#EFF6FF]"
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--ui-info)] px-3 py-2 text-xs font-bold text-[var(--ui-info)] transition hover:bg-[var(--ui-info-soft)]"
                 onClick={() => onNavigate(`/capture/${session.field_session_id}/takes/${session.capture_take_id}/scoring-calibration`)}
                 type="button"
               >
@@ -418,8 +411,8 @@ export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { se
 
       {/* MiniTimeline — 有事件或 segment 才显示 */}
       {(timelineEvents.length > 0 || segments.length > 0) && (
-        <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-          <h3 className="text-sm font-black text-[#14241B] mb-3">事件时间线</h3>
+        <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
+          <h3 className="text-sm font-black text-[var(--ui-ink)] mb-3">事件时间线</h3>
           <MiniTimeline
             segments={segments}
             events={timelineEvents}
@@ -440,8 +433,8 @@ export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { se
 
       {/* 事件列表 — 有事件才显示 */}
       {sortedEvents.length > 0 && (
-        <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-          <h3 className="text-sm font-black text-[#14241B] mb-3">
+        <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
+          <h3 className="text-sm font-black text-[var(--ui-ink)] mb-3">
             关键事件
             <span className="ml-2 text-xs font-normal text-slate-400">{sortedEvents.length} 条</span>
           </h3>

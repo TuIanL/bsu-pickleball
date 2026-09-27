@@ -120,10 +120,10 @@ function WorkbenchStatus({
   good?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-[#E4E7EC] bg-white px-3 py-2">
-      {good ? <CheckCircle2 className="shrink-0 text-[#168A34]" size={15} /> : <Clock3 className="shrink-0 text-slate-400" size={15} />}
+    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-[var(--ui-border-neutral)] bg-[var(--ui-surface)] px-3 py-2">
+      {good ? <CheckCircle2 className="shrink-0 text-[var(--ui-brand-deep)]" size={15} /> : <Clock3 className="shrink-0 text-slate-400" size={15} />}
       <span className="truncate text-[11px] font-bold uppercase tracking-[0.1em] text-slate-400">{label}</span>
-      <strong className={good ? "ml-auto text-xs text-[#168A34]" : "ml-auto text-xs text-[#344054]"}>{value}</strong>
+      <strong className={good ? "ml-auto text-xs text-[var(--ui-brand-deep)]" : "ml-auto text-xs text-[var(--ui-neutral-strong)]"}>{value}</strong>
     </div>
   );
 }
@@ -160,16 +160,16 @@ function CameraVideoCard({
   const progress = lastPts > firstPts && frame ? ((frame.pts_seconds - firstPts) / (lastPts - firstPts)) * 100 : 0;
 
   return (
-    <section className={`min-w-0 overflow-hidden rounded-2xl border bg-white shadow-[0_8px_24px_rgba(16,24,40,0.06)] ${selected ? "border-[#22C55E] ring-2 ring-[#22C55E]/15" : "border-[#E4E7EC]"}`}>
+    <section className={`min-w-0 overflow-hidden rounded-2xl border bg-[var(--ui-surface)] shadow-[0_8px_24px_rgba(16,24,40,0.06)] ${selected ? "border-[var(--ui-brand)] ring-2 ring-[var(--ui-brand)]/15" : "border-[var(--ui-border-neutral)]"}`}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF2F0] px-4 py-3">
         <button className="flex min-w-0 items-center gap-3 text-left" onClick={onSelect} type="button">
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#EAF7EE] text-[#168A34]"><Video size={17} aria-hidden="true" /></span>
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--ui-surface-mint-soft)] text-[var(--ui-brand-deep)]"><Video size={17} aria-hidden="true" /></span>
           <span className="min-w-0">
-            <strong className="block truncate text-sm text-[#14241B]">Camera {view.cameraId}</strong>
+            <strong className="block truncate text-sm text-[var(--ui-ink)]">Camera {view.cameraId}</strong>
             <span className="block truncate text-xs text-slate-400">{view.slot} · {view.videoId}</span>
           </span>
         </button>
-        <span className="rounded-full bg-[#EAF7EE] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[#168A34]">source_pts</span>
+        <span className="rounded-full bg-[var(--ui-surface-mint-soft)] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[var(--ui-brand-deep)]">source_pts</span>
       </div>
 
       <div className="bg-[#101828]">
@@ -192,11 +192,11 @@ function CameraVideoCard({
         <div className="flex items-end justify-between gap-3">
           <div>
             <div className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">当前源帧</div>
-            <div className="mt-1 text-2xl font-black tabular-nums text-[#14241B]">{formatFrameLabel(view)}</div>
+            <div className="mt-1 text-2xl font-black tabular-nums text-[var(--ui-ink)]">{formatFrameLabel(view)}</div>
           </div>
           <div className="text-right">
             <div className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">source PTS</div>
-            <div className="mt-1 font-mono text-sm font-bold tabular-nums text-[#168A34]">{formatPts(frame?.pts_seconds)}</div>
+            <div className="mt-1 font-mono text-sm font-bold tabular-nums text-[var(--ui-brand-deep)]">{formatPts(frame?.pts_seconds)}</div>
           </div>
         </div>
 
@@ -211,14 +211,14 @@ function CameraVideoCard({
         />
 
         <div className="flex items-center gap-2">
-          <button aria-label="后退一帧" className="grid size-9 shrink-0 place-items-center rounded-xl border border-[#D0D5DD] text-[#344054] transition hover:border-[#22C55E] hover:text-[#168A34]" onClick={() => onStep(-1)} title="后退一帧" type="button"><ChevronLeft size={17} /></button>
-          <button aria-label={isPlaying ? "暂停视频" : "播放视频"} className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#19B84C] text-white transition hover:bg-[#168A34]" onClick={onTogglePlay} title={isPlaying ? "暂停" : "播放"} type="button">{isPlaying ? <Pause size={16} /> : <Play size={16} />}</button>
-          <button aria-label="前进一帧" className="grid size-9 shrink-0 place-items-center rounded-xl border border-[#D0D5DD] text-[#344054] transition hover:border-[#22C55E] hover:text-[#168A34]" onClick={() => onStep(1)} title="前进一帧" type="button"><ChevronRight size={17} /></button>
+          <button aria-label="后退一帧" className="grid size-9 shrink-0 place-items-center rounded-xl border border-[var(--ui-border-neutral-2)] text-[var(--ui-neutral-strong)] transition hover:border-[var(--ui-brand)] hover:text-[var(--ui-brand-deep)]" onClick={() => onStep(-1)} title="后退一帧" type="button"><ChevronLeft size={17} /></button>
+          <button aria-label={isPlaying ? "暂停视频" : "播放视频"} className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--ui-brand-cta)] text-white transition hover:bg-[var(--ui-brand-solid-deep)]" onClick={onTogglePlay} title={isPlaying ? "暂停" : "播放"} type="button">{isPlaying ? <Pause size={16} /> : <Play size={16} />}</button>
+          <button aria-label="前进一帧" className="grid size-9 shrink-0 place-items-center rounded-xl border border-[var(--ui-border-neutral-2)] text-[var(--ui-neutral-strong)] transition hover:border-[var(--ui-brand)] hover:text-[var(--ui-brand-deep)]" onClick={() => onStep(1)} title="前进一帧" type="button"><ChevronRight size={17} /></button>
           <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-slate-500">
             帧号
             <input
               aria-label={`Camera ${view.cameraId} 帧号`}
-              className="w-24 rounded-lg border border-[#D0D5DD] px-2 py-1.5 text-right font-mono text-xs font-bold text-[#14241B] outline-none focus:border-[#22C55E]"
+              className="w-24 rounded-lg border border-[var(--ui-border-neutral-2)] px-2 py-1.5 text-right font-mono text-xs font-bold text-[var(--ui-ink)] outline-none focus:border-[var(--ui-brand)]"
               max={view.timing.frames[view.timing.frames.length - 1]?.frame_index ?? 0}
               min={view.timing.frames[0]?.frame_index ?? 0}
               onChange={(event) => onFrameInput(Number(event.target.value))}
@@ -232,7 +232,7 @@ function CameraVideoCard({
           <span>{formatDuration(frame?.pts_seconds)} / {formatDuration(lastPts)}</span>
           <span>{view.timing.frame_count.toLocaleString("zh-CN")} 帧 · {view.timing.fps?.toFixed(3) ?? "—"} fps</span>
         </div>
-        <div className="h-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[#19B84C] transition-[width]" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>
+        <div className="h-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[var(--ui-brand-cta)] transition-[width]" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>
       </div>
     </section>
   );
@@ -587,23 +587,23 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
   }, [selectedSlot, selectedView, seekToPosition, toggleViewPlayback]);
 
   if (isLoading) {
-    return <PageFrame><div className="mx-auto mt-20 max-w-md rounded-2xl border border-[#DDE9D6] bg-white p-6 text-center text-sm text-slate-500">正在加载两路视频和 source PTS…</div></PageFrame>;
+    return <PageFrame><div className="mx-auto mt-20 max-w-md rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-6 text-center text-sm text-slate-500">正在加载两路视频和 source PTS…</div></PageFrame>;
   }
 
   if (loadError || !take || !session || views.length !== 2) {
     return (
       <PageFrame>
-        <div className="mx-auto mt-16 max-w-lg rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-6">
-          <div className="flex items-center gap-2 text-sm font-bold text-[#991B1B]"><AlertTriangle size={17} /> 工作台无法打开</div>
-          <p className="mt-3 text-sm leading-6 text-[#B91C1C]">{loadError ?? "双摄 registered video 或 source timing 不完整。"}</p>
+        <div className="mx-auto mt-16 max-w-lg rounded-2xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-6">
+          <div className="flex items-center gap-2 text-sm font-bold text-[var(--ui-danger-deeper)]"><AlertTriangle size={17} /> 工作台无法打开</div>
+          <p className="mt-3 text-sm leading-6 text-[var(--ui-danger-deep)]">{loadError ?? "双摄 registered video 或 source timing 不完整。"}</p>
           {repairError && (
-            <p className="mt-3 rounded-xl border border-[#FCA5A5] bg-[#FEE2E2] p-3 text-sm leading-6 text-[#991B1B]">
+            <p className="mt-3 rounded-xl border border-[var(--ui-danger-border)] bg-[#FEE2E2] p-3 text-sm leading-6 text-[var(--ui-danger-deeper)]">
               修复失败：{repairError}
             </p>
           )}
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
-              className="inline-flex items-center gap-2 rounded-xl bg-[#168A34] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#116B28] disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-xl bg-[var(--ui-brand-solid-deep)] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#116B28] disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleRepairTiming}
               disabled={repairing}
               type="button"
@@ -625,12 +625,12 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
   return (
     <PageFrame>
       <section className="mx-auto max-w-[1380px]">
-        <button className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]" onClick={() => onNavigate(returnTo)} type="button"><ArrowLeft size={16} />返回双摄分析</button>
+        <button className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[var(--ui-brand-deep)]" onClick={() => onNavigate(returnTo)} type="button"><ArrowLeft size={16} />返回双摄分析</button>
 
         <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <div className="mb-2 flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#168A34]"><Link2 size={14} />Manual sync anchors</div>
-            <h1 className="text-3xl font-black tracking-tight text-[#14241B]">双摄同步锚点工作台</h1>
+            <div className="mb-2 flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.16em] text-[var(--ui-brand-deep)]"><Link2 size={14} />Manual sync anchors</div>
+            <h1 className="text-3xl font-black tracking-tight text-[var(--ui-ink)]">双摄同步锚点工作台</h1>
             <p className="mt-2 text-sm text-slate-500">{take.id} · {session.court_name || "未知球场"} · {session.duration_sec != null ? `${Math.round(session.duration_sec)} 秒` : "—"}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -646,10 +646,10 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
           <WorkbenchStatus label="anchors" value={`${coverage?.count ?? 0} / min 3`} good={enoughAnchors} />
         </div>
 
-        <section className="mb-5 rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+        <section className="mb-5 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-black text-[#14241B]">
+              <div className="text-sm font-black text-[var(--ui-ink)]">
                 当前状态：{syncStatus?.state ?? "required"}
               </div>
               <div className="mt-1 text-xs leading-5 text-slate-500">
@@ -663,7 +663,7 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
             )}
           </div>
           {validationIssues.length > 0 && (
-            <div className="mt-3 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-xs leading-5 text-[#991B1B]">
+            <div className="mt-3 rounded-xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-3 text-xs leading-5 text-[var(--ui-danger-deeper)]">
               {validationIssues.map((issue) => <div key={issue}>{issue}</div>)}
             </div>
           )}
@@ -692,20 +692,20 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
         </div>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <section className="min-w-0 rounded-2xl border border-[#DDE9D6] bg-white p-5 shadow-[0_8px_24px_rgba(16,24,40,0.05)]">
+          <section className="min-w-0 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-5 shadow-[0_8px_24px_rgba(16,24,40,0.05)]">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="flex items-center gap-2 text-sm font-black text-[#14241B]"><CircleHelp size={16} className="text-[#168A34]" />记录共同事件</div>
+                <div className="flex items-center gap-2 text-sm font-black text-[var(--ui-ink)]"><CircleHelp size={16} className="text-[var(--ui-brand-deep)]" />记录共同事件</div>
                 <p className="mt-1 text-xs leading-5 text-slate-500">当前两路画面都定位到同一个可见事件后，再保存一行锚点。</p>
               </div>
-              <span className="rounded-full bg-[#F5FAF1] px-3 py-1 text-xs font-bold text-[#168A34]">当前选择：{selectedSlot}</span>
+              <span className="rounded-full bg-[var(--ui-surface-soft)] px-3 py-1 text-xs font-bold text-[var(--ui-brand-deep)]">当前选择：{selectedSlot}</span>
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)_auto]">
               <input className="field-input !rounded-xl !px-3 !py-2.5" onChange={(event) => setEventLabel(event.target.value)} placeholder="事件标签（可选）" value={eventLabel} />
               <input className="field-input !rounded-xl !px-3 !py-2.5" onChange={(event) => setEventNote(event.target.value)} placeholder="备注（可选）" value={eventNote} />
               <button className="green-button !rounded-xl px-4 py-2.5 text-xs" disabled={views.length !== 2} onClick={recordAnchor} type="button"><CheckCircle2 size={15} />记录锚点</button>
             </div>
-            {notice && <div className="mt-3 rounded-xl border border-[#DDE9D6] bg-[#F5FAF1] px-3 py-2 text-xs font-semibold text-[#168A34]">{notice}</div>}
+            {notice && <div className="mt-3 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] px-3 py-2 text-xs font-semibold text-[var(--ui-brand-deep)]">{notice}</div>}
 
             <div className="mt-5 overflow-x-auto rounded-xl border border-[#EAECF0]">
               <table className="w-full min-w-[720px] border-collapse text-left text-xs">
@@ -716,11 +716,11 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
                   {anchors.length === 0 && <tr><td className="px-3 py-8 text-center text-slate-400" colSpan={5}>还没有锚点</td></tr>}
                   {anchors.map((anchor, index) => (
                     <tr className="hover:bg-[#FAFCF9]" key={anchor.id}>
-                      <td className="px-3 py-3"><button className="text-left font-bold text-[#14241B] hover:text-[#168A34]" onClick={() => selectAnchor(anchor)} type="button">{index + 1}. {anchor.label}</button></td>
-                      <td className="px-3 py-3 font-mono tabular-nums text-[#344054]">#{anchor.frameByCamera?.[cameraIds[0]] ?? "—"} · {formatPts(anchor.ptsByCamera?.[cameraIds[0]])}</td>
-                      <td className="px-3 py-3 font-mono tabular-nums text-[#344054]">#{anchor.frameByCamera?.[cameraIds[1]] ?? "—"} · {formatPts(anchor.ptsByCamera?.[cameraIds[1]])}</td>
+                      <td className="px-3 py-3"><button className="text-left font-bold text-[var(--ui-ink)] hover:text-[var(--ui-brand-deep)]" onClick={() => selectAnchor(anchor)} type="button">{index + 1}. {anchor.label}</button></td>
+                      <td className="px-3 py-3 font-mono tabular-nums text-[var(--ui-neutral-strong)]">#{anchor.frameByCamera?.[cameraIds[0]] ?? "—"} · {formatPts(anchor.ptsByCamera?.[cameraIds[0]])}</td>
+                      <td className="px-3 py-3 font-mono tabular-nums text-[var(--ui-neutral-strong)]">#{anchor.frameByCamera?.[cameraIds[1]] ?? "—"} · {formatPts(anchor.ptsByCamera?.[cameraIds[1]])}</td>
                       <td className="max-w-[180px] truncate px-3 py-3 text-slate-500">{anchor.note || "—"}</td>
-                      <td className="px-3 py-3 text-right"><button aria-label={`删除 ${anchor.label}`} className="rounded-lg p-2 text-slate-400 transition hover:bg-[#FEF2F2] hover:text-[#B91C1C]" onClick={() => deleteAnchor(anchor.id)} title="删除锚点" type="button"><Trash2 size={15} /></button></td>
+                      <td className="px-3 py-3 text-right"><button aria-label={`删除 ${anchor.label}`} className="rounded-lg p-2 text-slate-400 transition hover:bg-[var(--ui-danger-soft)] hover:text-[var(--ui-danger-deep)]" onClick={() => deleteAnchor(anchor.id)} title="删除锚点" type="button"><Trash2 size={15} /></button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -729,17 +729,17 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
           </section>
 
           <aside className="space-y-4">
-            <section className="rounded-2xl border border-[#DDE9D6] bg-white p-5 shadow-[0_8px_24px_rgba(16,24,40,0.05)]">
-              <div className="flex items-center gap-2 text-sm font-black text-[#14241B]"><Clock3 size={16} className="text-[#168A34]" />锚点覆盖</div>
+            <section className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-5 shadow-[0_8px_24px_rgba(16,24,40,0.05)]">
+              <div className="flex items-center gap-2 text-sm font-black text-[var(--ui-ink)]"><Clock3 size={16} className="text-[var(--ui-brand-deep)]" />锚点覆盖</div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                {[{ label: "前段", ok: coverage?.hasEarly }, { label: "中段", ok: coverage?.hasMiddle }, { label: "后段", ok: coverage?.hasLate }].map((item) => <div className={`rounded-xl border px-2 py-3 ${item.ok ? "border-[#B7E2C1] bg-[#F5FAF1]" : "border-[#EAECF0] bg-[#F9FAFB]"}`} key={item.label}><div className={`mx-auto mb-1 grid size-5 place-items-center rounded-full ${item.ok ? "bg-[#19B84C] text-white" : "bg-slate-200 text-slate-400"}`}>{item.ok ? <CheckCircle2 size={13} /> : <span className="text-[10px]">·</span>}</div><div className="text-xs font-bold text-slate-500">{item.label}</div></div>)}
+                {[{ label: "前段", ok: coverage?.hasEarly }, { label: "中段", ok: coverage?.hasMiddle }, { label: "后段", ok: coverage?.hasLate }].map((item) => <div className={`rounded-xl border px-2 py-3 ${item.ok ? "border-[#B7E2C1] bg-[var(--ui-surface-soft)]" : "border-[#EAECF0] bg-[#F9FAFB]"}`} key={item.label}><div className={`mx-auto mb-1 grid size-5 place-items-center rounded-full ${item.ok ? "bg-[var(--ui-brand-cta)] text-white" : "bg-slate-200 text-slate-400"}`}>{item.ok ? <CheckCircle2 size={13} /> : <span className="text-[10px]">·</span>}</div><div className="text-xs font-bold text-slate-500">{item.label}</div></div>)}
               </div>
-              <div className="mt-4 space-y-2 text-xs text-slate-500"><div className="flex justify-between"><span>已记录</span><strong className={enoughAnchors ? "text-[#168A34]" : "text-[#A45A00]"}>{coverage?.count ?? 0} 组</strong></div><div className="flex justify-between"><span>参考时间跨度</span><strong className={broadCoverage ? "text-[#168A34]" : "text-[#A45A00]"}>{((coverage?.spanRatio ?? 0) * 100).toFixed(1)}%</strong></div></div>
-              <div className={`mt-4 rounded-xl border px-3 py-3 text-xs leading-5 ${enoughAnchors && broadCoverage ? "border-[#B7E2C1] bg-[#F5FAF1] text-[#168A34]" : "border-[#F4D8A8] bg-[#FDF6E7] text-[#8A5A00]"}`}>{enoughAnchors ? (broadCoverage ? "数量和跨时段覆盖已满足人工输入建议。" : "数量已满足；建议再补一个更靠前或更靠后的事件。") : "至少记录 3 组共同事件后再导出。"}</div>
+              <div className="mt-4 space-y-2 text-xs text-slate-500"><div className="flex justify-between"><span>已记录</span><strong className={enoughAnchors ? "text-[var(--ui-brand-deep)]" : "text-[var(--ui-warning)]"}>{coverage?.count ?? 0} 组</strong></div><div className="flex justify-between"><span>参考时间跨度</span><strong className={broadCoverage ? "text-[var(--ui-brand-deep)]" : "text-[var(--ui-warning)]"}>{((coverage?.spanRatio ?? 0) * 100).toFixed(1)}%</strong></div></div>
+              <div className={`mt-4 rounded-xl border px-3 py-3 text-xs leading-5 ${enoughAnchors && broadCoverage ? "border-[#B7E2C1] bg-[var(--ui-surface-soft)] text-[var(--ui-brand-deep)]" : "border-[var(--ui-warning-border)] bg-[var(--ui-warning-soft-2)] text-[#8A5A00]"}`}>{enoughAnchors ? (broadCoverage ? "数量和跨时段覆盖已满足人工输入建议。" : "数量已满足；建议再补一个更靠前或更靠后的事件。") : "至少记录 3 组共同事件后再导出。"}</div>
             </section>
 
-            <section className="rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1] p-5">
-              <div className="text-sm font-black text-[#14241B]">提交并确认</div>
+            <section className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-5">
+              <div className="text-sm font-black text-[var(--ui-ink)]">提交并确认</div>
               <p className="mt-2 text-xs leading-5 text-slate-500">服务端将重新校验 camera identity、覆盖范围和 residual；确认成功后返回分析向导。</p>
               <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
                 <button className="green-button !rounded-xl px-3 py-2.5 text-xs" disabled={!enoughAnchors || isConfirming} onClick={() => void confirmDraft()} type="button"><CheckCircle2 size={15} />{isConfirming ? "正在确认…" : "提交并确认"}</button>
@@ -747,8 +747,8 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
                 <button className="quiet-button !rounded-xl px-3 py-2.5 text-xs" disabled={!enoughAnchors} onClick={exportAnchors} type="button"><Download size={15} />诊断下载</button>
                 <button className="quiet-button !rounded-xl px-3 py-2.5 text-xs" disabled={!enoughAnchors} onClick={() => void copyAnchors()} type="button"><Copy size={15} />复制 JSON</button>
               </div>
-              <a className="mt-3 block text-xs font-semibold text-[#168A34] underline" href={getSyncAnchorExportUrl(captureTakeId)} target="_blank" rel="noreferrer">打开服务端当前导出</a>
-              <div className="mt-4 rounded-xl border border-[#DDE9D6] bg-white/80 p-3 text-[11px] leading-5 text-slate-500"><code className="break-all font-mono">reference_camera: {referenceCamera}</code><br /><code className="break-all font-mono">cameras: {cameraIds.join(", ")}</code><br /><code className="break-all font-mono">anchors: {anchors.length}</code></div>
+              <a className="mt-3 block text-xs font-semibold text-[var(--ui-brand-deep)] underline" href={getSyncAnchorExportUrl(captureTakeId)} target="_blank" rel="noreferrer">打开服务端当前导出</a>
+              <div className="mt-4 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 p-3 text-[11px] leading-5 text-slate-500"><code className="break-all font-mono">reference_camera: {referenceCamera}</code><br /><code className="break-all font-mono">cameras: {cameraIds.join(", ")}</code><br /><code className="break-all font-mono">anchors: {anchors.length}</code></div>
             </section>
           </aside>
         </div>

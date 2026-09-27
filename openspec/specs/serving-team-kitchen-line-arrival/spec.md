@@ -1,7 +1,7 @@
 # serving-team-kitchen-line-arrival Specification
 
 ## Purpose
-TBD - created by archiving change add-serving-team-kitchen-line-arrival. Update Purpose after archive.
+定义发球队员在发球回合中到达己方厨房线的判定、证据与样本口径，以及相应的汇总产物和指标状态。
 ## Requirements
 ### Requirement: 发球队厨房线到位率的定义与前置输入
 系统 SHALL 为具备 Job-bound `AnalysisRallyContextSnapshot`、confirmed identity audit、formal window binding 与真实轨迹的双打比赛级或正式 Rally 批次级任务计算 `Raw Serving-Rally Arrival`。某球员在其 Team A/B 发球的回合中，当其距该回合己方厨房线的距离不大于 `kitchen-arrival-reference.v1.arrival_band_m`，并稳定不少于 `stable_ms` 时，视为到位；该定义 MUST NOT 等同于进入非截击区。

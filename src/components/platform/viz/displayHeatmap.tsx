@@ -199,7 +199,7 @@ export function DisplayHeatmap({ jobId, onSeek, debugAvailable }: DisplayHeatmap
       {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
       {!error && ticks.length === 0 && !loading ? (
-        <p className="mt-3 rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F7FBF5] p-5 text-sm text-slate-600">该球员没有可用的显示诊断行（窗口内无数据或产物不存在）。</p>
+        <p className="mt-3 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-subtle)] p-5 text-sm text-slate-600">该球员没有可用的显示诊断行（窗口内无数据或产物不存在）。</p>
       ) : null}
 
       {!error && ticks.length > 0 ? (
@@ -217,21 +217,21 @@ export function DisplayHeatmap({ jobId, onSeek, debugAvailable }: DisplayHeatmap
       ) : null}
 
       {selectedTick != null ? (
-        <div className="mt-4 rounded-2xl border border-[#DDE9D6] bg-white" data-testid="tick-detail-panel">
-          <div className="flex items-center justify-between border-b border-[#E7EFE2] px-4 py-2.5">
+        <div className="mt-4 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]" data-testid="tick-detail-panel">
+          <div className="flex items-center justify-between border-b border-[var(--ui-surface-line)] px-4 py-2.5">
             <span className="text-xs font-black tracking-[0.14em] text-slate-500">tick {selectedTick} 详情{selectedRows[0]?.timestamp_ms != null ? ` · ${Math.round(selectedRows[0].timestamp_ms)}ms` : ""}</span>
             <button className="text-xs font-bold text-slate-400 hover:text-slate-600" onClick={() => setSelectedTick(null)} type="button">关闭</button>
           </div>
           <div className="grid gap-x-4 gap-y-1.5 px-4 py-3 sm:grid-cols-2">
             {selectedRows.map((row) => (
-              <div className="rounded-xl bg-[#F7FBF5] px-3 py-2.5" key={`${row.view_id}-${row.canonical_tick}`}>
+              <div className="rounded-xl bg-[var(--ui-surface-subtle)] px-3 py-2.5" key={`${row.view_id}-${row.canonical_tick}`}>
                 <p className="text-xs font-black text-slate-500">{row.view_id}</p>
                 <div className="mt-1.5 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
                   {STAGE_FIELDS.map(([field, label]) => {
                     const value = stageValue(row, field);
                     const display = value === null ? "未触发" : value ? "是" : "否";
                     const emphasized = field === "formal_observation_emitted" || field === "global_associated";
-                    return <div className="flex items-center justify-between gap-2" key={field}><span className="text-slate-500">{label}</span><strong className={emphasized && value ? "text-[#168A34]" : "text-[#14241B]"}>{display}</strong></div>;
+                    return <div className="flex items-center justify-between gap-2" key={field}><span className="text-slate-500">{label}</span><strong className={emphasized && value ? "text-[var(--ui-brand-deep)]" : "text-[var(--ui-ink)]"}>{display}</strong></div>;
                   })}
                 </div>
                 {row.association_reason ? <p className="mt-2 text-xs text-slate-500">关联原因：{row.association_reason}</p> : null}

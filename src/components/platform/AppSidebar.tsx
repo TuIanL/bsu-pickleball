@@ -82,8 +82,8 @@ function ActiveRecordingBlock({
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E5484D] opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#E5484D]" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--capture-status-recording)] opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--capture-status-recording)]" />
             </span>
             <span className="text-xs font-bold text-[var(--capture-text-primary,#182b24)]">
               {isInsane ? "--:--:--" : formatElapsed(elapsedMs)}
@@ -103,12 +103,12 @@ function ActiveRecordingBlock({
       </button>
       {isOrphan && (
         <div className="px-3 pb-3">
-          <div className="flex items-center gap-1.5 text-[#F59E0B] text-[10px] mb-2">
+          <div className="flex items-center gap-1.5 text-[var(--capture-status-warning)] text-[10px] mb-2">
             <AlertTriangle size={12} />
             <span>录制已中断</span>
           </div>
           <button
-            className="w-full flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white bg-[#E5484D] hover:bg-[#D43F44] transition disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white bg-[var(--capture-status-recording)] hover:bg-[var(--capture-status-recording)] transition disabled:opacity-50"
             onClick={handleForceCancel}
             disabled={forceCancelling}
             type="button"

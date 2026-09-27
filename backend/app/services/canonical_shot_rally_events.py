@@ -76,6 +76,7 @@ def _frozen_trajectory_identity_map(
     storage: StorageService,
     job_id: str,
     roster: Any | None,
+    binding_audit: Any | None = None,
 ) -> dict[str, str]:
     """Map fused global ids to frozen canonical Player_N ids.
 
@@ -84,6 +85,12 @@ def _frozen_trajectory_identity_map(
     present in the Job-frozen roster.  Display-only deterministic slot fallback
     is intentionally rejected: it is stable for UI labels but cannot prove that
     a fused trajectory belongs to a frozen person.
+
+    When `binding_audit` is supplied, the mapping is additionally restricted to
+    canonical ids the audit actually confirmed at the user's anchor (same
+    moment, same view).  An unbound slot therefore degrades the metrics that
+    depend on it instead of silently reusing an unverified number.  Legacy-mode
+    jobs (no audit produced) keep the previous behaviour.
     """
     manifest = _read_storage_artifact(storage, "roster_manifest_json_path", job_id) or {}
     if manifest.get("schema_version") != "global-player-roster.v1":
@@ -94,6 +101,9 @@ def _frozen_trajectory_identity_map(
         str(item.get("canonical_player_id") if isinstance(item, dict) else getattr(item, "canonical_player_id", ""))
         for item in (frozen_entries or [])
     }
+    audited_ids: set[str] | None = None
+    if binding_audit is not None:
+        audited_ids = set(binding_audit.p_slot_to_formal_player().values())
     candidates: dict[str, set[str]] = defaultdict(set)
     canonical_owners: dict[str, set[str]] = defaultdict(set)
     for entry in entries:
@@ -104,6 +114,7 @@ def _frozen_trajectory_identity_map(
         if (
             global_id
             and canonical_id in frozen_ids
+            and (audited_ids is None or canonical_id in audited_ids)
             and entry.get("mapping_confirmed") is True
             and entry.get("mapping_method") in _DIRECT_TRAJECTORY_IDENTITY_MAPPING_METHODS
         ):
@@ -1194,7 +1205,10 @@ def _write_bootstrap_binding_audit(
     from app.services.analysis_rally_context_service import build_bootstrap_binding_audit
 
     audit = build_bootstrap_binding_audit(
-        job_id=job.id, roster=roster, formal_roster_payload=formal_payload
+        job_id=job.id,
+        roster=roster,
+        formal_roster_payload=formal_payload,
+        formal_roster_manifest=_read_storage_artifact(storage, "roster_manifest_json_path", job.id),
     )
     if audit is None:
         return None
@@ -1251,9 +1265,11 @@ def generate_and_persist_canonical_events(
         rally_contexts, roster, _context_set_hash = (
             _job_rally_contexts(job) if rally_context_mode == "new" else ([], None, None)
         )
-        trajectory_identity_map = _frozen_trajectory_identity_map(storage, job.id, roster)
+        trajectory_identity_map: dict[str, str] = {}
         # 身份审计必须先于 canonical team 归属生成。若 anchor → formal
         # Player 失败，不能先输出 team_A/team_B 再把失败写成旁路诊断。
+        # 同时它必须先于 trajectory identity map：只有审计确认过的槽位才允许
+        # 把融合轨迹解析成正式 Player_N，未绑定的槽位在下游按不可用降级。
         from app.services.analysis_rally_context_service import build_bootstrap_binding_audit
 
         binding_audit = (
@@ -1261,9 +1277,15 @@ def generate_and_persist_canonical_events(
                 job_id=job.id,
                 roster=roster,
                 formal_roster_payload=reconstructed,
+                formal_roster_manifest=_read_storage_artifact(
+                    storage, "roster_manifest_json_path", job.id
+                ),
             )
             if rally_context_mode == "new"
             else None
+        )
+        trajectory_identity_map = _frozen_trajectory_identity_map(
+            storage, job.id, roster, binding_audit
         )
         if binding_audit is not None and binding_audit.status != "available":
             rally_contexts = []

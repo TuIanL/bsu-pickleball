@@ -30,7 +30,7 @@ export default function PbPlayerSelector() {
                 "rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors " +
                 (active
                   ? "border-[var(--pb-primary,#00FF41)] bg-[var(--pb-primary,#00FF41)]/10 text-[var(--pb-primary,#00FF41)]"
-                  : "border-[var(--pb-card-border,#d1d5db)] bg-white text-[var(--pb-text-primary,#111827)] hover:border-[var(--pb-primary,#00FF41)]")
+                  : "border-[var(--pb-card-border,#d1d5db)] bg-[var(--ui-surface)] text-[var(--pb-text-primary,#111827)] hover:border-[var(--pb-primary,#00FF41)]")
               }
             >
               {s.label || s.id}

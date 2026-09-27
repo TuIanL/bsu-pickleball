@@ -181,7 +181,7 @@ export function PbDrawerExpander() {
       type="button"
       aria-label="展开抽屉"
       onClick={toggleDrawer}
-      className="fixed left-0 top-1/2 -translate-y-1/2 z-40 w-6 h-20 rounded-r-lg border border-l-0 border-[var(--pb-card-border,#e5e7eb)] bg-white/90 backdrop-blur text-[var(--pb-text-secondary,#6b7280)] hover:text-[var(--pb-primary-dark,#197947)] hover:border-[var(--pb-primary,#23985b)] transition-all shadow-sm flex items-center justify-center text-sm font-bold"
+      className="fixed left-0 top-1/2 -translate-y-1/2 z-40 w-6 h-20 rounded-r-lg border border-l-0 border-[var(--pb-card-border,#e5e7eb)] bg-[var(--ui-surface)]/90 backdrop-blur text-[var(--pb-text-secondary,#6b7280)] hover:text-[var(--pb-primary-dark,#197947)] hover:border-[var(--pb-primary,#23985b)] transition-all shadow-sm flex items-center justify-center text-sm font-bold"
     >
       ›
     </button>

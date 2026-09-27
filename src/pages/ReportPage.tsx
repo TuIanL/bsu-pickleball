@@ -246,7 +246,7 @@ export function ReportPage({
       <div className="mb-4 flex justify-end">
         <button
           type="button"
-          className="inline-flex items-center gap-2 rounded-lg border border-[#22C55E]/40 bg-white px-3 py-1.5 text-xs font-semibold text-[#168A34] hover:bg-[#22C55E]/10 transition"
+          className="inline-flex items-center gap-2 rounded-lg border border-[var(--ui-brand)]/40 bg-[var(--ui-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--ui-brand-deep)] hover:bg-[var(--ui-brand-solid)]/10 transition"
           onClick={() => {
             if (typeof window !== "undefined") {
               window.localStorage.removeItem("reportLegacy");
@@ -266,15 +266,15 @@ export function ReportPage({
         <div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.45fr] lg:p-8">
           <div>
             <button
-              className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+              className="mb-6 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[var(--ui-brand-deep)]"
               onClick={() => onNavigate(backPath)}
               type="button"
             >
               <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
               返回视频分析
             </button>
-            <p className="text-sm font-bold uppercase tracking-[0.2em] text-[#168A34]">{definition.eyebrow}</p>
-            <h1 className="mt-3 max-w-4xl text-4xl font-black text-[#14241B] sm:text-5xl">{definition.title}</h1>
+            <p className="text-sm font-bold uppercase tracking-[0.2em] text-[var(--ui-brand-deep)]">{definition.eyebrow}</p>
+            <h1 className="mt-3 max-w-4xl text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">{definition.title}</h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">{definition.summary}</p>
             <p className="mt-3 text-sm font-semibold text-slate-500">
               {analysis.source === "demo"
@@ -282,8 +282,8 @@ export function ReportPage({
                 : `${job?.analysisMode === "limited" ? "有限真实分析" : "真实上传视频"} · ${analysis.metadata.matchTitle} · ${analysis.metadata.fileName} · ${analysis.reportId}`}
             </p>
           </div>
-          <div className="rounded-3xl border border-[#22C55E]/25 bg-[#22C55E]/10 p-6">
-            <span className="text-sm font-bold text-[#168A34]">{definition.heroMetricLabel}</span>
+          <div className="rounded-3xl border border-[var(--ui-brand)]/25 bg-[var(--ui-brand-solid)]/10 p-6">
+            <span className="text-sm font-bold text-[var(--ui-brand-deep)]">{definition.heroMetricLabel}</span>
             <strong className="mt-4 block text-5xl font-black text-[#13A12C]">{definition.heroMetric}</strong>
             <button className="mt-6 green-button w-full" onClick={() => onNavigate("/training")} type="button">
               查看相关训练
@@ -332,8 +332,8 @@ export function ReportPage({
 
       <section className="mt-6 grid gap-4 lg:grid-cols-[0.78fr_1.22fr]">
         <article className="sport-card p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">训练承接</p>
-          <h2 className="mt-2 text-2xl font-black text-[#14241B]">{definition.trainingLink}</h2>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">训练承接</p>
+          <h2 className="mt-2 text-2xl font-black text-[var(--ui-ink)]">{definition.trainingLink}</h2>
           <p className="mt-3 text-sm leading-6 text-slate-600">
             这份报告的价值不止在解释数据，还要把弱项直接转成下一次训练任务。
           </p>

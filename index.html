@@ -8,6 +8,18 @@
       content="瞬境，基于视觉捕捉的匹克球运动表现智能分析平台。"
     />
     <title>瞬境 | 匹克球运动表现智能分析平台</title>
+    <script>
+      // 首帧前恢复主题：仅接受 light / dark，缺失、无效或存储不可用一律回退亮色。
+      // 放在 head 内联执行，避免暗色用户刷新时闪出亮色。
+      (function () {
+        try {
+          var raw = window.localStorage.getItem("pre-pickleball.theme");
+          document.documentElement.dataset.theme = raw === "dark" ? "dark" : "light";
+        } catch (error) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

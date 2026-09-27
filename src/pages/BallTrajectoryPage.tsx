@@ -60,13 +60,13 @@ function shotLabel(shot: EstimatedBallShot): string {
 function ownershipBadge(status: string): { label: string; className: string } | null {
   switch (status) {
     case "confirmed":
-      return { label: "归属确认", className: "bg-[#EAF8F0] text-[#168A34]" };
+      return { label: "归属确认", className: "bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" };
     case "ambiguous":
       return { label: "归属不明", className: "bg-[#FEF6E7] text-[#B54708]" };
     case "unassigned":
-      return { label: "击球者不明", className: "bg-[#F2F4F7] text-[#667085]" };
+      return { label: "击球者不明", className: "bg-[var(--ui-surface-neutral)] text-[var(--ui-text-secondary-alt)]" };
     case "not_applicable":
-      return { label: "无 Shot 上下文", className: "bg-[#F2F4F7] text-[#667085]" };
+      return { label: "无 Shot 上下文", className: "bg-[var(--ui-surface-neutral)] text-[var(--ui-text-secondary-alt)]" };
     default:
       return null;
   }
@@ -212,9 +212,9 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
       <PageFrame>
         <div className="grid min-h-[62vh] place-items-center text-center">
           <div>
-            <Loader2 className="mx-auto animate-spin text-[#168A34]" size={28} aria-hidden="true" />
-            <h1 className="mt-4 text-xl font-bold text-[#182230]">正在构建球路</h1>
-            <p className="mt-2 text-sm text-[#667085]">读取清洗轨迹并生成球路视图…</p>
+            <Loader2 className="mx-auto animate-spin text-[var(--ui-brand-deep)]" size={28} aria-hidden="true" />
+            <h1 className="mt-4 text-xl font-bold text-[var(--ui-ink-alt)]">正在构建球路</h1>
+            <p className="mt-2 text-sm text-[var(--ui-text-secondary-alt)]">读取清洗轨迹并生成球路视图…</p>
           </div>
         </div>
       </PageFrame>
@@ -227,8 +227,8 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
       return (
         <div className="mx-auto grid min-h-[50vh] max-w-xl place-items-center px-6 text-center">
           <div>
-            <h1 className="text-xl font-bold text-[#182230]">{failed ? "球路读取失败" : "暂无可用球路"}</h1>
-            <p className="mt-3 text-sm leading-6 text-[#667085]">
+            <h1 className="text-xl font-bold text-[var(--ui-ink-alt)]">{failed ? "球路读取失败" : "暂无可用球路"}</h1>
+            <p className="mt-3 text-sm leading-6 text-[var(--ui-text-secondary-alt)]">
               {failed ? errorMessage : "当前任务没有足够的有效球场坐标形成连续轨迹。"}
             </p>
             {onSelectView ? (
@@ -244,11 +244,11 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
       <PageFrame>
         <div className="mx-auto grid min-h-[62vh] max-w-xl place-items-center text-center">
           <div>
-            <span className="mx-auto grid size-12 place-items-center rounded-lg bg-[#F2F4F7] text-[#667085]">
+            <span className="mx-auto grid size-12 place-items-center rounded-lg bg-[var(--ui-surface-neutral)] text-[var(--ui-text-secondary-alt)]">
               {failed ? <AlertCircle size={24} aria-hidden="true" /> : <Route size={24} aria-hidden="true" />}
             </span>
-            <h1 className="mt-5 text-2xl font-bold text-[#182230]">{failed ? "球路读取失败" : "暂无可用球路"}</h1>
-            <p className="mt-3 text-sm leading-6 text-[#667085]">
+            <h1 className="mt-5 text-2xl font-bold text-[var(--ui-ink-alt)]">{failed ? "球路读取失败" : "暂无可用球路"}</h1>
+            <p className="mt-3 text-sm leading-6 text-[var(--ui-text-secondary-alt)]">
               {failed
                 ? errorMessage
                 : "当前任务没有足够的有效球场坐标形成连续轨迹。可以返回视觉分析检查球检测、轨迹清洗和场地标定状态。"}
@@ -273,7 +273,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
         <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
             <button
-              className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-[#667085] transition hover:text-[#168A34]"
+              className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-[var(--ui-text-secondary-alt)] transition hover:text-[var(--ui-brand-deep)]"
               onClick={() => onNavigate(visionPath)}
               type="button"
             >
@@ -281,14 +281,14 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
               返回视觉分析
             </button>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-[#98A2B3]">任务 {jobId}</span>
+              <span className="text-xs text-[var(--ui-text-muted-alt)]">任务 {jobId}</span>
             </div>
-            <h1 className="mt-3 text-3xl font-black text-[#182230] sm:text-4xl">球路可视化</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-[#667085]">
+            <h1 className="mt-3 text-3xl font-black text-[var(--ui-ink-alt)] sm:text-4xl">球路可视化</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ui-text-secondary-alt)]">
               {job?.metadata.matchTitle ?? "比赛分析"}
             </p>
           </div>
-          <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[#E4E7EC] py-3 lg:border-y-0 lg:py-0">
+          <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[var(--ui-border-neutral)] py-3 lg:border-y-0 lg:py-0">
             <Metric label="球路（Shot）" value={`${totalShots}`} />
             <Metric label="较高可信" value={`${highConfidenceShots}`} />
             <Metric label="累计时长" value={`${totalDuration.toFixed(1)}s`} />
@@ -305,16 +305,16 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
             <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#FECACA] bg-[#FFF7F7] p-8 text-center">
               <div>
                 <AlertCircle className="mx-auto text-[#D92D20]" size={26} aria-hidden="true" />
-                <h2 className="mt-4 text-lg font-bold text-[#182230]">3D 渲染不可用</h2>
-                <p className="mt-2 max-w-md text-sm leading-6 text-[#667085]">{webGlError}</p>
+                <h2 className="mt-4 text-lg font-bold text-[var(--ui-ink-alt)]">3D 渲染不可用</h2>
+                <p className="mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-secondary-alt)]">{webGlError}</p>
               </div>
             </div>
           ) : v3Artifact?.display_trajectory_status === "unavailable" ? (
             <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#FECACA] bg-[#FFF7F7] p-8 text-center">
               <div>
                 <AlertCircle className="mx-auto text-[#D92D20]" size={24} aria-hidden="true" />
-                <h2 className="mt-4 text-lg font-bold text-[#182230]">双摄球路暂不可用</h2>
-                <p className="mt-2 max-w-md text-sm leading-6 text-[#667085]">{v3Artifact.detail}</p>
+                <h2 className="mt-4 text-lg font-bold text-[var(--ui-ink-alt)]">双摄球路暂不可用</h2>
+                <p className="mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-secondary-alt)]">{v3Artifact.detail}</p>
               </div>
             </div>
           ) : filteredTrajectories.length ? (
@@ -329,27 +329,27 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
           ) : (
             <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#DDE5E0] bg-[#F8FAF9] p-8 text-center">
               <div>
-                <SlidersHorizontal className="mx-auto text-[#667085]" size={24} aria-hidden="true" />
-                <h2 className="mt-4 text-lg font-bold text-[#182230]">筛选后没有球路</h2>
-                <p className="mt-2 text-sm text-[#667085]">切换到“全部轨迹”以查看低可信度或插值较多的结果。</p>
+                <SlidersHorizontal className="mx-auto text-[var(--ui-text-secondary-alt)]" size={24} aria-hidden="true" />
+                <h2 className="mt-4 text-lg font-bold text-[var(--ui-ink-alt)]">筛选后没有球路</h2>
+                <p className="mt-2 text-sm text-[var(--ui-text-secondary-alt)]">切换到“全部轨迹”以查看低可信度或插值较多的结果。</p>
               </div>
             </div>
           )}
         </div>
 
-        <aside className="min-w-0 border-t border-[#E4E7EC] pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
-          <section className="border-b border-[#E4E7EC] pb-4">
+        <aside className="min-w-0 border-t border-[var(--ui-border-neutral)] pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+          <section className="border-b border-[var(--ui-border-neutral)] pb-4">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-bold text-[#182230]">显示设置</h2>
-              <SlidersHorizontal size={16} className="text-[#98A2B3]" aria-hidden="true" />
+              <h2 className="text-sm font-bold text-[var(--ui-ink-alt)]">显示设置</h2>
+              <SlidersHorizontal size={16} className="text-[var(--ui-text-muted-alt)]" aria-hidden="true" />
             </div>
             {roster.length > 0 && (
               <div className="mt-3" aria-label="球员筛选">
-                <div className="grid grid-cols-3 rounded-lg bg-[#F2F4F7] p-1">
+                <div className="grid grid-cols-3 rounded-lg bg-[var(--ui-surface-neutral)] p-1">
                   {["all", ...roster.map((entry) => entry.player_id)].map((playerId) => (
                     <button
                       aria-pressed={playerFilter === playerId}
-                      className={`min-h-9 rounded-md px-1 text-xs font-bold transition ${playerFilter === playerId ? "bg-white text-[#182230] shadow-sm" : "text-[#667085]"}`}
+                      className={`min-h-9 rounded-md px-1 text-xs font-bold transition ${playerFilter === playerId ? "bg-[var(--ui-surface)] text-[var(--ui-ink-alt)] shadow-sm" : "text-[var(--ui-text-secondary-alt)]"}`}
                       key={playerId}
                       onClick={() => setPlayerFilter(playerId)}
                       type="button"
@@ -360,7 +360,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 </div>
                 <button
                   aria-pressed={playerFilter === "unassigned"}
-                  className={`mt-2 min-h-9 w-full rounded-md px-2 text-xs font-bold transition ${playerFilter === "unassigned" ? "bg-[#EAF8F0] text-[#168A34]" : "bg-[#F2F4F7] text-[#667085]"}`}
+                  className={`mt-2 min-h-9 w-full rounded-md px-2 text-xs font-bold transition ${playerFilter === "unassigned" ? "bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" : "bg-[var(--ui-surface-neutral)] text-[var(--ui-text-secondary-alt)]"}`}
                   onClick={() => setPlayerFilter("unassigned")}
                   type="button"
                 >
@@ -368,11 +368,11 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 </button>
               </div>
             )}
-            <div className="mt-3 grid grid-cols-2 rounded-lg bg-[#F2F4F7] p-1" aria-label="轨迹可信度筛选">
+            <div className="mt-3 grid grid-cols-2 rounded-lg bg-[var(--ui-surface-neutral)] p-1" aria-label="轨迹可信度筛选">
               {(["all", "high"] as ConfidenceFilter[]).map((mode) => (
                 <button
                   aria-pressed={filter === mode}
-                  className={`min-h-9 rounded-md px-2 text-xs font-bold transition ${filter === mode ? "bg-white text-[#182230] shadow-sm" : "text-[#667085]"}`}
+                  className={`min-h-9 rounded-md px-2 text-xs font-bold transition ${filter === mode ? "bg-[var(--ui-surface)] text-[var(--ui-ink-alt)] shadow-sm" : "text-[var(--ui-text-secondary-alt)]"}`}
                   key={mode}
                   onClick={() => setFilter(mode)}
                   type="button"
@@ -381,10 +381,10 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 </button>
               ))}
             </div>
-            <label className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold text-[#667085]">
+            <label className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold text-[var(--ui-text-secondary-alt)]">
               场景数量
               <select
-                className="h-9 rounded-md border border-[#D0D5DD] bg-white px-2 text-xs text-[#344054] outline-none focus:border-[#25B86A]"
+                className="h-9 rounded-md border border-[var(--ui-border-neutral-2)] bg-[var(--ui-surface)] px-2 text-xs text-[var(--ui-neutral-strong)] outline-none focus:border-[#25B86A]"
                 onChange={(event) => setDisplayLimit(event.target.value === "all" ? "all" : Number(event.target.value) as 12 | 24 | 48)}
                 value={displayLimit}
               >
@@ -396,9 +396,9 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
             </label>
           </section>
 
-          <section className="border-b border-[#E4E7EC] py-4">
-            <h2 className="text-sm font-bold text-[#182230]">图例</h2>
-            <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-[#667085]">
+          <section className="border-b border-[var(--ui-border-neutral)] py-4">
+            <h2 className="text-sm font-bold text-[var(--ui-ink-alt)]">图例</h2>
+            <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-[var(--ui-text-secondary-alt)]">
               <Legend color="#25B86A" label="近端到远端" />
               <Legend color="#F04438" label="远端到近端" />
               <Legend color="#A7B0AA" label="推算点（虚线）" dash />
@@ -406,10 +406,10 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
           </section>
 
           {selectedShot ? (
-            <section className="border-b border-[#E4E7EC] py-4" aria-live="polite">
+            <section className="border-b border-[var(--ui-border-neutral)] py-4" aria-live="polite">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-bold text-[#182230]">球路 {selectedShot.sequence}</h2>
-                <span className={`rounded-md px-2 py-1 text-[11px] font-bold ${selectedTrajectory?.highConfidence ? "bg-[#EAF8F0] text-[#168A34]" : "bg-[#F2F4F7] text-[#667085]"}`}>
+                <h2 className="text-sm font-bold text-[var(--ui-ink-alt)]">球路 {selectedShot.sequence}</h2>
+                <span className={`rounded-md px-2 py-1 text-[11px] font-bold ${selectedTrajectory?.highConfidence ? "bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" : "bg-[var(--ui-surface-neutral)] text-[var(--ui-text-secondary-alt)]"}`}>
                   {selectedTrajectory?.highConfidence ? "较高可信" : "谨慎参考"}
                 </span>
               </div>
@@ -428,15 +428,15 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
 
           <section className="pt-4">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-sm font-bold text-[#182230]">可见球路</h2>
-              <span className="text-xs text-[#98A2B3]">{filteredShots.length || filteredTrajectories.length}</span>
+              <h2 className="text-sm font-bold text-[var(--ui-ink-alt)]">可见球路</h2>
+              <span className="text-xs text-[var(--ui-text-muted-alt)]">{filteredShots.length || filteredTrajectories.length}</span>
             </div>
             <div className="max-h-64 space-y-1 overflow-y-auto pr-1 xl:max-h-[calc(100vh-620px)] xl:min-h-36">
               {filteredShots.length ? filteredShots.map((shot) => {
                 const badge = ownershipBadge(shot.ownershipStatus);
                 return (
                   <button
-                    className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${shot.shotId === effectiveSelectedShotId ? "bg-[#EAF8F0]" : "hover:bg-[#F7F9F8]"}`}
+                    className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${shot.shotId === effectiveSelectedShotId ? "bg-[var(--ui-surface-mint)]" : "hover:bg-[#F7F9F8]"}`}
                     key={shot.shotId}
                     onClick={() => setSelectedShotId(shot.shotId)}
                     type="button"
@@ -447,8 +447,8 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1">
-                      <strong className="block text-xs text-[#344054]">{shotLabel(shot)}</strong>
-                      <span className="mt-0.5 flex items-center gap-2 text-[11px] text-[#98A2B3]">
+                      <strong className="block text-xs text-[var(--ui-neutral-strong)]">{shotLabel(shot)}</strong>
+                      <span className="mt-0.5 flex items-center gap-2 text-[11px] text-[var(--ui-text-muted-alt)]">
                         {badge ? <em className={`rounded px-1.5 py-0.5 text-[10px] font-bold not-italic ${badge.className}`}>{badge.label}</em> : null}
                         {formatTime(shot.startTimeSeconds)} · {shot.pointCount} 点
                       </span>
@@ -457,7 +457,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 );
               }) : filteredTrajectories.map((trajectory) => (
                 <button
-                  className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${trajectory.id === effectiveSelectedShotId ? "bg-[#EAF8F0]" : "hover:bg-[#F7F9F8]"}`}
+                  className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${trajectory.id === effectiveSelectedShotId ? "bg-[var(--ui-surface-mint)]" : "hover:bg-[#F7F9F8]"}`}
                   key={trajectory.id}
                   onClick={() => setSelectedShotId(trajectory.id)}
                   type="button"
@@ -468,8 +468,8 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                     aria-hidden="true"
                   />
                   <span className="min-w-0 flex-1">
-                    <strong className="block text-xs text-[#344054]">球路 {trajectory.sequence}</strong>
-                    <span className="mt-0.5 block truncate text-[11px] text-[#98A2B3]">
+                    <strong className="block text-xs text-[var(--ui-neutral-strong)]">球路 {trajectory.sequence}</strong>
+                    <span className="mt-0.5 block truncate text-[11px] text-[var(--ui-text-muted-alt)]">
                       {formatTime(trajectory.startTimeSeconds)} · {confidenceLabel(trajectory.averageConfidence)}
                     </span>
                   </span>
@@ -486,8 +486,8 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-lg font-black text-[#182230]">{value}</div>
-      <div className="text-[11px] text-[#98A2B3]">{label}</div>
+      <div className="text-lg font-black text-[var(--ui-ink-alt)]">{value}</div>
+      <div className="text-[11px] text-[var(--ui-text-muted-alt)]">{label}</div>
     </div>
   );
 }
@@ -522,7 +522,7 @@ function Legend({ color, label, dot = false, dash = false, ring = false, diamond
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <dt className="text-[#98A2B3]">{label}</dt>
+      <dt className="text-[var(--ui-text-muted-alt)]">{label}</dt>
       <dd className="text-right font-semibold text-[#475467]">{value}</dd>
     </div>
   );

@@ -34,9 +34,9 @@ export function ScoringCalibrationTimeline({
   const rallies = segments.filter((segment) => segment.segment_type === "rally" && segment.edit_status !== "superseded");
 
   return (
-    <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+    <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-bold text-[#14241B]">标注时间线</h3>
+        <h3 className="text-sm font-bold text-[var(--ui-ink)]">标注时间线</h3>
         <span className="text-[11px] text-slate-400">候选 {candidates.length} · 人工 {annotations.length}</span>
       </div>
       <div
@@ -53,7 +53,7 @@ export function ScoringCalibrationTimeline({
             return (
               <div
                 key={segment.id}
-                className="absolute top-0 h-6 rounded border border-[#22C55E] bg-[#22C55E]/15 text-[9px] font-bold text-[#15803D]"
+                className="absolute top-0 h-6 rounded border border-[var(--ui-brand)] bg-[var(--ui-brand-solid)]/15 text-[9px] font-bold text-[var(--ui-success-deep)]"
                 style={{ left: scale(start), width: `calc(${scale(Math.max(start, end))} - ${scale(start)})` }}
                 title={`${segment.label || `回合 ${segment.ordinal}`} ${formatMs(start)}→${formatMs(end)}`}
               >
@@ -79,7 +79,7 @@ export function ScoringCalibrationTimeline({
             <button
               key={annotation.id}
               type="button"
-              className={`absolute top-0 h-6 w-1.5 rounded ${selectedAnnotationId === annotation.id ? "bg-[#EF4444] ring-2 ring-[#EF4444]/30" : annotation.decision === "unreviewed" ? "bg-[#F59E0B]" : "bg-[#2F80ED]"}`}
+              className={`absolute top-0 h-6 w-1.5 rounded ${selectedAnnotationId === annotation.id ? "bg-[#EF4444] ring-2 ring-[#EF4444]/30" : annotation.decision === "unreviewed" ? "bg-[#F59E0B]" : "bg-[var(--ui-info-solid)]"}`}
               style={{ left: scale(annotation.event_ms) }}
               title={`人工标注 ${formatMs(annotation.event_ms)}`}
               onClick={(event) => { event.stopPropagation(); onSelectAnnotation(annotation); }}

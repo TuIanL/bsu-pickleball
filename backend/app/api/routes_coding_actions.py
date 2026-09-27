@@ -14,7 +14,7 @@ from app.camera.session_service import session_service
 from app.camera.sync_recorder_service import sync_recording_service
 from app.database import get_db
 from app.models.field_session import FieldSession
-from app.api.routes_segment_editing import _seg_dict
+from app.api.segment_serialization import segment_to_api_dict
 from app.schemas.capture_runtime_status import CaptureTakeRuntimeStatus
 from app.schemas.coding_actions import (
     CaptureTakeSummary,
@@ -394,5 +394,6 @@ def list_segments(
 ):
     """列出录制下的所有分段（集/局/回合），可按 segment_type 过滤。"""
     segs = seg_svc.list_segments(db, capture_take_id, segment_type=segment_type)
-    # 复用权威序列化器，暴露 edit_status/edit_version/corrected_*/effective_* 完整契约
-    return [_seg_dict(s) for s in segs]
+    # 复用权威序列化器（共享模块，不再跨路由导入私有 helper），
+    # 暴露 edit_status/edit_version/corrected_*/effective_* 完整契约
+    return [segment_to_api_dict(s) for s in segs]

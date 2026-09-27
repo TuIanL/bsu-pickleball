@@ -24,7 +24,8 @@ export function CaptureWorkspaceHeader({ vm, onStoragePick }: Props) {
         </div>
         <p className="text-sm" style={{ color: "var(--capture-text-secondary)" }}>{vm.statusLabel}</p>
       </div>
-      <div className="flex items-center gap-2">
+      {/* pr-12/sm:pr-14：为壳级固定在右上角的主题切换按钮预留空间，避免遮挡操作 */}
+      <div className="flex items-center gap-2 pr-12 sm:pr-14">
         <span className="text-xs" style={{ color: "var(--capture-text-muted)" }}>{vm.storageSpace}</span>
         {onStoragePick && (
           <button className="p-2 rounded-lg hover:bg-gray-100 transition" onClick={onStoragePick} type="button" aria-label="选择存储位置">

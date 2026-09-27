@@ -1,11 +1,11 @@
-import { Component, lazy, Suspense, useMemo, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AnalysisJobSummary } from "../types/report";
 import type { RouteState, NavigateFn } from "./navigationTypes";
+import { buildLibraryWorkspacePath } from "../services/libraryAnalysisVersion";
 const LandingPage = lazy(() => import("../pages/LandingPage").then((m) => ({ default: m.LandingPage })));
 const CaptureHomePage = lazy(() => import("../pages/CaptureHomePage").then((m) => ({ default: m.CaptureHomePage })));
 const CaptureWizardPage = lazy(() => import("../pages/CaptureWizardPage").then((m) => ({ default: m.CaptureWizardPage })));
 const CaptureConsolePage = lazy(() => import("../pages/CaptureConsolePage"));
-const SegmentManagerPage = lazy(() => import("../pages/SegmentManagerPage").then((m) => ({ default: m.SegmentManagerPage })));
 const ScoringCalibrationWorkbenchPage = lazy(() => import("../pages/ScoringCalibrationWorkbenchPage").then((m) => ({ default: m.ScoringCalibrationWorkbenchPage })));
 const RecordingWorkspacePage = lazy(() => import("../pages/RecordingWorkspacePage").then((m) => ({ default: m.RecordingWorkspacePage })));
 const RecordingAnalyzePage = lazy(() => import("../pages/RecordingAnalyzePage").then((m) => ({ default: m.RecordingAnalyzePage })));
@@ -39,9 +39,9 @@ class RouteChunkBoundary extends Component<{ children: ReactNode }, { error: Err
   render() {
     if (this.state.error) {
       return (
-        <div className="grid min-h-[60vh] place-items-center px-6 text-center text-sm text-[#667085]">
+        <div className="grid min-h-[60vh] place-items-center px-6 text-center text-sm text-[var(--ui-text-secondary-alt)]">
           <div>
-            <p className="font-bold text-[#14241B]">页面加载失败</p>
+            <p className="font-bold text-[var(--ui-ink)]">页面加载失败</p>
             <p className="mt-2">请重试；当前地址和查询参数会保留。</p>
             <button
               type="button"
@@ -75,8 +75,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <CaptureWizardPage onNavigate={onNavigate} />;
       case "captureConsole":
         return <CaptureConsolePage sessionId={route.sessionId} onNavigate={onNavigate} />;
-      case "segmentManager":
-        return <SegmentManagerPage fieldSessionId={route.fieldSessionId} takeId={route.takeId} onNavigate={onNavigate} />;
+      case "legacy-segments-redirect":
+        return <LegacySegmentsRedirect takeId={route.takeId} onNavigate={onNavigate} />;
       case "scoringCalibration":
         return <ScoringCalibrationWorkbenchPage fieldSessionId={route.fieldSessionId} takeId={route.takeId} onNavigate={onNavigate} />;
       case "tasks":
@@ -93,7 +93,7 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
         return <VisionPage jobId={"jobId" in route ? route.jobId : undefined} onNavigate={onNavigate} recentJob={recentJob} seekToMs={"seekToMs" in route ? route.seekToMs : undefined} />;
       case "ball-trajectory":
         return (
-          <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[#667085]">正在加载球路视图…</div>}>
+          <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[var(--ui-text-secondary-alt)]">正在加载球路视图…</div>}>
             <BallTrajectoryPage key={route.jobId} jobId={route.jobId} onNavigate={onNavigate} />
           </Suspense>
         );
@@ -126,7 +126,7 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
           <LibraryItemWorkspace
             kind={route.kind}
             sourceId={route.sourceId}
-            view={route.view as "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "segments" | "technical"}
+            view={route.view as "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "technical"}
             onNavigate={onNavigate}
           />
         );
@@ -139,9 +139,34 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
   }, [onNavigate, route, recentJob]);
   return (
     <RouteChunkBoundary key={`${route.name}:${"jobId" in route ? route.jobId : ""}`}>
-      <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[#667085]">正在加载页面…</div>}>
+      <Suspense fallback={<div className="grid min-h-[60vh] place-items-center text-sm text-[var(--ui-text-secondary-alt)]">正在加载页面…</div>}>
         {page}
       </Suspense>
     </RouteChunkBoundary>
   );
+}
+
+function LegacySegmentsRedirect({ takeId, onNavigate }: { takeId: string; onNavigate: NavigateFn }) {
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void import("../services/analysisClient").then(({ getCaptureTake }) => getCaptureTake(takeId)).then((take) => {
+      if (!alive) return;
+      const kind = take.source_session_type === "sync_recording" ? "sync_recording" : "recording";
+      onNavigate(buildLibraryWorkspacePath({ kind, sourceId: take.source_session_id }, { view: "analysis" }), { replace: true });
+    }).catch(() => {
+      if (alive) setError(true);
+    });
+    return () => { alive = false; };
+  }, [takeId, onNavigate]);
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-20 text-center">
+        <p className="text-sm font-bold text-[var(--ui-ink)]">无法定位这个采集素材</p>
+        <button className="quiet-button mt-4 px-4 py-2" onClick={() => onNavigate("/library", { replace: true })} type="button">返回比赛库</button>
+      </div>
+    );
+  }
+  return <div className="grid min-h-[60vh] place-items-center text-sm text-slate-500">正在打开素材分析视图…</div>;
 }

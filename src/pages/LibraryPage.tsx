@@ -401,13 +401,13 @@ function LibraryGrid({
     <div className="space-y-8">
       {[...grouped.groups.entries()].map(([fieldSessionId, list]) => (
         <section key={fieldSessionId}>
-          <h2 className="mb-3 text-sm font-black text-[#182230]">{groupLabel(list)}</h2>
+          <h2 className="mb-3 text-sm font-black text-[var(--ui-ink-alt)]">{groupLabel(list)}</h2>
           {renderGrid(list)}
         </section>
       ))}
       {grouped.ungrouped.length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-black text-[#182230]">最近比赛</h2>
+          <h2 className="mb-3 text-sm font-black text-[var(--ui-ink-alt)]">最近比赛</h2>
           {renderGrid(grouped.ungrouped)}
         </section>
       )}

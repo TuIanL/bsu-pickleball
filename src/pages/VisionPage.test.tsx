@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import type { AnalysisJobSummary, AnalysisPipelineResult } from "../types/report";
 import { demoAnalysisReport } from "../data/demoData";
 import { VisionPage } from "./VisionPage";
@@ -22,10 +23,13 @@ vi.mock("../services/analysisClient", () => ({
   getPositionHeatmaps: vi.fn(() => Promise.resolve(null)),
   getPositionScatterPlots: vi.fn(() => Promise.resolve(null)),
   getShotRallyEvents: vi.fn(() => Promise.resolve(null)),
+  getCaptureTake: vi.fn(() => Promise.reject(new Error("no capture take"))),
+  getFormalSegmentationSummary: vi.fn(() => Promise.reject(new Error("no formal segmentation"))),
+  listSegments: vi.fn(() => Promise.resolve([])),
 }));
 
 // 重型展示组件在本次测试中不关心，渲染为空避免额外依赖
-vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: () => <div data-testid="video-analysis-card" /> }));
+vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: ({ headerInfo }: { headerInfo?: ReactNode }) => <div data-testid="video-analysis-card">{headerInfo}</div> }));
 vi.mock("../components/platform/MetricCard", () => ({ MetricCard: () => <div /> }));
 vi.mock("../components/platform/SkillRatings", () => ({ SkillRatings: () => <div /> }));
 vi.mock("../components/RecommendedDrills", () => ({ RecommendedDrills: () => <div /> }));
@@ -119,7 +123,7 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
     expect(onSelectView).not.toHaveBeenCalled();
   });
 
-  it("时序 artifact 读取失败时保留视频、任务状态和原有位置图卡片", async () => {
+  it("时序 artifact 读取失败时保留视频、可折叠任务状态和原有位置图卡片", async () => {
     const result = {
       job_id: "job-vision",
       status: "completed",
@@ -146,6 +150,7 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
     expect(await screen.findByText("读取失败")).toBeTruthy();
     expect(screen.getByText("视频分析结果")).toBeTruthy();
     expect(screen.getByTestId("video-analysis-card")).toBeTruthy();
+    expect(screen.getByLabelText("任务状态与视觉层信息")).toBeTruthy();
     expect(screen.getByText("处理结束 · 人物结果缺失")).toBeTruthy();
     expect(screen.getByText(/不能从空产物恢复/)).toBeTruthy();
     expect(screen.getAllByText("位置热力图").length).toBeGreaterThan(0);

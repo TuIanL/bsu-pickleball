@@ -507,7 +507,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       </div>
 
       {/* Field Session 选择器 */}
-      <div className="mb-6 rounded-2xl border border-[#DDE9D6] bg-white p-5">
+      <div className="mb-6 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="flex items-center gap-2 text-sm font-bold text-slate-600">
             <Radar size={16} />
@@ -522,7 +522,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
         ) : (
           <div className="flex flex-wrap gap-2">
             <button
-              className={`px-4 py-2 rounded-full text-xs font-bold transition ${!selectedFieldSession ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"}`}
+              className={`px-4 py-2 rounded-full text-xs font-bold transition ${!selectedFieldSession ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"}`}
               onClick={handleSelectDirectRecording}
               type="button"
             >
@@ -532,22 +532,22 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
               <button
                 key={fs.id}
                 className={`px-4 py-2 rounded-full text-xs font-bold transition ${
-                  selectedFieldSession?.id === fs.id ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+                  selectedFieldSession?.id === fs.id ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"
                 }`}
                 onClick={() => setSelectedFieldSession(fs)}
                 type="button"
               >
                 {fs.title || fs.id}
                 <span className={`ml-1.5 inline-block size-1.5 rounded-full ${
-                  fs.status === "live" ? "bg-[#22C55E]" : fs.status === "completed" ? "bg-[#2F80ED]" : fs.status === "archived" ? "bg-slate-400" : "bg-slate-300"
+                  fs.status === "live" ? "bg-[var(--ui-brand-solid)]" : fs.status === "completed" ? "bg-[var(--ui-info-solid)]" : fs.status === "archived" ? "bg-slate-400" : "bg-slate-300"
                 }`} />
               </button>
             ))}
           </div>
         )}
         {selectedFieldSession && (
-          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500 border-t border-[#DDE9D6] pt-3">
-            <span>状态: <strong className="text-[#17231D]">{selectedFieldSession.status === "live" ? "进行中" : selectedFieldSession.status === "completed" ? "已完成" : selectedFieldSession.status === "archived" ? "已归档" : "计划中"}</strong></span>
+          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500 border-t border-[var(--ui-border)] pt-3">
+            <span>状态: <strong className="text-[var(--ui-ink)]">{selectedFieldSession.status === "live" ? "进行中" : selectedFieldSession.status === "completed" ? "已完成" : selectedFieldSession.status === "archived" ? "已归档" : "计划中"}</strong></span>
             <span>{selectedFieldSession.venue} · {selectedFieldSession.court_name}</span>
             <span>{selectedFieldSession.capture_mode === "practice" ? "练习" : selectedFieldSession.capture_mode === "match" ? "比赛" : "工程"} · {selectedFieldSession.match_format === "doubles" ? "双打" : "单打"}</span>
             {selectedFieldSession.status !== "archived" && (
@@ -562,9 +562,9 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   <button className="quiet-button px-2.5 py-1 text-xs" disabled={loading} onClick={() => handleFieldSessionAction("archive")} type="button">归档任务</button>
                 )}
                 {selectedFieldSession.status !== "live" && (
-                  <button className="quiet-button px-2.5 py-1 text-xs text-[#C92A2A]" disabled={loading} onClick={handleDeleteFieldSession} type="button">删除任务</button>
+                  <button className="quiet-button px-2.5 py-1 text-xs text-[var(--ui-danger)]" disabled={loading} onClick={handleDeleteFieldSession} type="button">删除任务</button>
                 )}
-                <button className="text-[#C92A2A] hover:underline" onClick={handleSelectDirectRecording} type="button">取消选择</button>
+                <button className="text-[var(--ui-danger)] hover:underline" onClick={handleSelectDirectRecording} type="button">取消选择</button>
               </div>
             )}
           </div>
@@ -572,7 +572,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
         {/* 时间线事件部分（仅在选中 Field Session 时显示） */}
         {selectedFieldSession && selectedFieldSession.status !== "archived" && (
-          <div className="mt-3 border-t border-[#DDE9D6] pt-3">
+          <div className="mt-3 border-t border-[var(--ui-border)] pt-3">
             {/* 快捷打点面板（仅在录制中显示） */}
             {activeSession && activeSession.field_session_id === selectedFieldSession.id && (
               <div className="mb-3">
@@ -608,11 +608,11 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   {timelineEvents.map((ev) => (
                     <div
                       key={ev.id}
-                      className="flex items-center justify-between rounded-lg border border-[#DDE9D6] bg-[#F8FBF5] px-3 py-1.5"
+                      className="flex items-center justify-between rounded-lg border border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] px-3 py-1.5"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-bold text-[#17231D] truncate">
+                          <span className="text-[11px] font-bold text-[var(--ui-ink)] truncate">
                             {ev.label || ev.event_type}
                           </span>
                           <span className="text-[10px] text-slate-400">
@@ -632,7 +632,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                       </div>
                       <div className="flex items-center gap-1 ml-2 shrink-0">
                         <button
-                          className="p-1 rounded hover:bg-[#E8F2DC] text-slate-400 hover:text-[#17231D]"
+                          className="p-1 rounded hover:bg-[var(--ui-surface-lime-soft)] text-slate-400 hover:text-[var(--ui-ink)]"
                           onClick={() => handleEditEvent(ev)}
                           type="button"
                           title="编辑"
@@ -640,7 +640,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                           <Edit3 size={12} />
                         </button>
                         <button
-                          className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-[#C92A2A]"
+                          className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-[var(--ui-danger)]"
                           onClick={() => handleDeleteEvent(ev.id)}
                           type="button"
                           title="删除"
@@ -737,7 +737,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       </Modal>
 
       {error && (
-        <div className="mb-6 rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 px-5 py-4 text-sm text-[#C92A2A]">
+        <div className="mb-6 rounded-xl border border-[var(--ui-danger-strong)]/25 bg-[var(--ui-danger-solid)]/8 px-5 py-4 text-sm text-[var(--ui-danger)]">
           {error}
           <button className="ml-3 underline" onClick={() => setError(null)} type="button">关闭</button>
         </div>
@@ -745,15 +745,15 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
       {/* 视频播放器弹窗 */}
       {playingSession && (
-        <div className="mb-6 rounded-2xl border border-[#DDE9D6] bg-white p-6">
+        <div className="mb-6 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-bold truncate pr-4">录播回放 · {playingSession.session_id}</h3>
             <button className="quiet-button p-2" onClick={handleClosePlayer} type="button" title="关闭播放器"><X size={18} /></button>
           </div>
           <p className="mb-3 text-xs text-slate-400">{playingSession.camera_id} · {playingSession.court_name}{playingSession.duration_sec ? ` · ${playingSession.duration_sec.toFixed(0)}秒` : ""}</p>
           {playbackError ? (
-            <div className="rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 p-8 text-center">
-              <p className="text-sm font-semibold text-[#C92A2A] mb-2">视频播放失败</p>
+            <div className="rounded-xl border border-[var(--ui-danger-strong)]/25 bg-[var(--ui-danger-solid)]/8 p-8 text-center">
+              <p className="text-sm font-semibold text-[var(--ui-danger)] mb-2">视频播放失败</p>
               <p className="text-xs text-slate-500">视频文件可能已被删除或浏览器不支持此格式。</p>
               <button className="mt-3 quiet-button px-4 py-1.5 text-xs" onClick={() => { setPlaybackError(false); }} type="button">重试</button>
             </div>
@@ -764,10 +764,10 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       )}
 
       {activeSession && (
-        <div className="mb-6 rounded-2xl border border-[#22C55E]/30 bg-[#22C55E]/8 p-5">
+        <div className="mb-6 rounded-2xl border border-[var(--ui-brand)]/30 bg-[var(--ui-brand-solid)]/8 p-5">
           <div className="flex items-center gap-3">
-            <span className="flex size-3 animate-pulse rounded-full bg-[#22C55E]" />
-            <span className="font-bold text-[#168A34]">正在录制</span>
+            <span className="flex size-3 animate-pulse rounded-full bg-[var(--ui-brand-solid)]" />
+            <span className="font-bold text-[var(--ui-brand-deep)]">正在录制</span>
             <span className="text-sm text-slate-500">{activeSession.camera_id} · {activeSession.court_name}</span>
             <span className="text-sm text-slate-400">{activeSession.started_at}</span>
           </div>
@@ -780,19 +780,19 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       )}
 
       {/* 实时预览 — 居中全宽 */}
-      <div className="mb-6 rounded-2xl border border-[#DDE9D6] bg-white p-6">
+      <div className="mb-6 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-6">
         <h3 className="mb-4 flex items-center gap-2 text-lg font-bold">
-          <span className="grid size-8 place-items-center rounded-lg bg-[#19B84C]/12 text-[#168A34]"><Play size={16} /></span>
+          <span className="grid size-8 place-items-center rounded-lg bg-[var(--ui-brand-cta)]/12 text-[var(--ui-brand-deep)]"><Play size={16} /></span>
           实时预览
         </h3>
         {previewStatus === "idle" && (
-          <div className="rounded-xl border border-dashed border-[#DDE9D6] bg-[#F8FBF5] p-16 text-center">
+          <div className="rounded-xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-16 text-center">
             <Camera size={36} className="mx-auto mb-3 text-slate-300" />
             <p className="text-sm text-slate-400">选择摄像头后显示实时画面</p>
           </div>
         )}
         {previewStatus === "loading" && (
-          <div className="rounded-xl border border-dashed border-[#DDE9D6] bg-[#F8FBF5] p-16 text-center">
+          <div className="rounded-xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-16 text-center">
             <RefreshCw size={36} className="mx-auto mb-3 animate-spin text-slate-300" />
             <p className="text-sm text-slate-400">正在加载摄像头画面...</p>
           </div>
@@ -808,8 +808,8 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
           />
         )}
         {previewStatus === "failed" && (
-          <div className="rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 p-10 text-center">
-            <p className="text-sm font-semibold text-[#C92A2A] mb-2">预览加载失败</p>
+          <div className="rounded-xl border border-[var(--ui-danger-strong)]/25 bg-[var(--ui-danger-solid)]/8 p-10 text-center">
+            <p className="text-sm font-semibold text-[var(--ui-danger)] mb-2">预览加载失败</p>
             <p className="text-xs text-slate-500 mb-3">摄像头流可能不可达、鉴权失败或无法解码。请检查摄像头地址后重试。</p>
             <button className="quiet-button px-4 py-1.5 text-xs" onClick={() => { setPreviewStatus("loading"); setPreviewKey((k) => k + 1); }} type="button">重试预览</button>
           </div>
@@ -820,10 +820,10 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* 左侧：摄像头管理 */}
         <section>
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+          <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="flex items-center gap-2 text-lg font-bold">
-                <span className="grid size-8 place-items-center rounded-lg bg-[#19B84C]/12 text-[#168A34]"><Camera size={16} /></span>
+                <span className="grid size-8 place-items-center rounded-lg bg-[var(--ui-brand-cta)]/12 text-[var(--ui-brand-deep)]"><Camera size={16} /></span>
                 摄像头列表
               </h3>
               <button className="green-button px-3 py-1.5 text-xs" onClick={() => setShowRegisterModal(true)} type="button">
@@ -837,24 +837,24 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 {cameras.map((cam) => {
                   const probe = probeResults[cam.camera_id];
                   return (
-                    <div key={cam.camera_id} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-3">
+                    <div key={cam.camera_id} className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-3">
                       <div className="flex items-center justify-between">
                         <div>
-                          <span className="font-bold text-sm text-[#17231D]">{cam.name}</span>
+                          <span className="font-bold text-sm text-[var(--ui-ink)]">{cam.name}</span>
                           <span className="ml-2 text-xs text-slate-400">({cam.camera_id})</span>
                         </div>
-                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${probe?.online ? "text-[#168A34] bg-[#22C55E]/12" : "text-slate-400 bg-slate-100"}`}>
-                          <span className={`size-1.5 rounded-full ${probe?.online ? "bg-[#22C55E]" : "bg-slate-300"}`} />
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${probe?.online ? "text-[var(--ui-brand-deep)] bg-[var(--ui-brand-solid)]/12" : "text-slate-400 bg-slate-100"}`}>
+                          <span className={`size-1.5 rounded-full ${probe?.online ? "bg-[var(--ui-brand-solid)]" : "bg-slate-300"}`} />
                           {probe?.online ? "在线" : probe ? "离线" : "未检测"}
                         </span>
                       </div>
                       <p className="mt-0.5 text-xs text-slate-400 truncate">{cam.stream_url}</p>
                       {probe?.online && probe.resolution && <p className="text-xs text-slate-400">分辨率: {probe.resolution} · 延迟: {probe.latency_ms}ms</p>}
-                      {probe && !probe.online && probe.error_message && <p className="text-xs text-[#C92A2A]">{probe.error_message}</p>}
+                      {probe && !probe.online && probe.error_message && <p className="text-xs text-[var(--ui-danger)]">{probe.error_message}</p>}
                       <div className="mt-2 flex gap-2">
                         <button className="quiet-button px-2.5 py-1 text-xs" onClick={() => handleProbe(cam.camera_id)} type="button">探测</button>
                         <button className="quiet-button px-2.5 py-1 text-xs" disabled={!!activeSession} onClick={() => setRecordingForm((f) => ({ ...f, camera_id: cam.camera_id }))} type="button">录制</button>
-                        <button className="quiet-button px-2.5 py-1 text-xs text-[#C92A2A]" onClick={() => handleRemoveCamera(cam.camera_id)} disabled={!!activeSession} type="button">删除</button>
+                        <button className="quiet-button px-2.5 py-1 text-xs text-[var(--ui-danger)]" onClick={() => handleRemoveCamera(cam.camera_id)} disabled={!!activeSession} type="button">删除</button>
                       </div>
                     </div>
                   );
@@ -866,7 +866,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
         {/* 右侧：录制控制 + 最近录制 */}
         <section className="space-y-6">
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+          <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-6">
             <h3 className="mb-4 text-lg font-bold">开始录制</h3>
             <div className="space-y-3">
               <select className="field-input" value={recordingForm.camera_id} onChange={(e) => setRecordingForm((f) => ({ ...f, camera_id: e.target.value }))}>
@@ -891,7 +891,7 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 </select>
               </div>
               <label className="flex items-center gap-2 text-sm text-slate-600">
-                <input type="checkbox" className="size-4 accent-[#22C55E]" checked={recordingForm.auto_analyze_after_stop ?? true} onChange={(e) => setRecordingForm((f) => ({ ...f, auto_analyze_after_stop: e.target.checked }))} />
+                <input type="checkbox" className="size-4 accent-[var(--ui-brand)]" checked={recordingForm.auto_analyze_after_stop ?? true} onChange={(e) => setRecordingForm((f) => ({ ...f, auto_analyze_after_stop: e.target.checked }))} />
                 停止后自动创建分析任务
               </label>
               <button className="green-button w-full py-2.5" disabled={loading || !!activeSession} onClick={handleStartRecording} type="button">
@@ -901,11 +901,11 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </div>
 
           {/* 最近录制历史（精简） */}
-          <div className="rounded-2xl border border-[#DDE9D6] bg-white p-6">
+          <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold">最近录制</h3>
               {sessions.length > 0 && (
-                <button className="text-xs font-semibold text-[#2F80ED] hover:underline" onClick={() => onNavigate("/analysis/tasks")} type="button">
+                <button className="text-xs font-semibold text-[var(--ui-info)] hover:underline" onClick={() => onNavigate("/analysis/tasks")} type="button">
                   查看全部录制 →
                 </button>
               )}
@@ -915,22 +915,22 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
             ) : (
               <div className="space-y-2.5">
                 {recentSessions.map((session) => (
-                  <div key={session.session_id} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-3">
+                  <div key={session.session_id} className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-3">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-[#17231D] truncate max-w-[140px]">{session.session_id}</span>
+                      <span className="font-bold text-xs text-[var(--ui-ink)] truncate max-w-[140px]">{session.session_id}</span>
                       <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusColor(session.status)}`}>{statusLabel(session.status)}</span>
                     </div>
                     <p className="mt-0.5 text-[11px] text-slate-400">{session.camera_id} · {session.court_name}{session.duration_sec ? ` · ${session.duration_sec.toFixed(0)}秒` : ""}</p>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
                       {isPlayableSession(session) && (
-                        <button className="text-[11px] font-semibold text-[#2F80ED] hover:underline flex items-center gap-1" onClick={() => handlePlaySession(session)} type="button"><Play size={10} /> 播放</button>
+                        <button className="text-[11px] font-semibold text-[var(--ui-info)] hover:underline flex items-center gap-1" onClick={() => handlePlaySession(session)} type="button"><Play size={10} /> 播放</button>
                       )}
                       {session.auto_analysis_job_id && (
-                        <button className="text-[11px] font-semibold text-[#168A34] hover:underline" onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)} type="button">分析结果 →</button>
+                        <button className="text-[11px] font-semibold text-[var(--ui-brand-deep)] hover:underline" onClick={() => onNavigate(`/analysis/${session.auto_analysis_job_id}`)} type="button">分析结果 →</button>
                       )}
                       {!isPlayableSession(session) && nonPlayableReason(session) && <span className="text-[11px] text-slate-400">{nonPlayableReason(session)}</span>}
                       {session.status !== "recording" && (
-                        <button className="text-[11px] font-semibold text-[#C92A2A] hover:underline ml-auto" onClick={() => handleDeleteSession(session.session_id)} type="button">
+                        <button className="text-[11px] font-semibold text-[var(--ui-danger)] hover:underline ml-auto" onClick={() => handleDeleteSession(session.session_id)} type="button">
                           <Trash2 size={10} className="inline" /> 删除
                         </button>
                       )}

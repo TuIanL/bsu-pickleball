@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.segment_serialization import segment_to_api_dict
 from app.core.config import get_settings
 from app.database import get_db
 from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentType
-from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
+from app.models.match_state_segmentation import MatchStateSegmentationRun
 from app.schemas.match_state_candidate import MatchStateCandidateDecisionRequest
 from app.schemas.segment_boundary_review import BOUNDARY_REVIEW_SCHEMA_VERSION, BoundaryReviewRequest
 from app.schemas.segment_creation import RallyCreateRequest
@@ -20,6 +21,7 @@ from app.schemas.segment_ordinal import RALLY_ORDINAL_UPDATE_SCHEMA_VERSION, Ral
 from app.services import analysis_batch_service, match_state_candidate_service, segment_edit_service
 from app.services.capture_segment_service import get_segment
 from app.services.capture_take_service import get_capture_take
+from app.services.formal_segmentation_service import ACTIVE_SEGMENTATION_STATUSES
 
 router = APIRouter(prefix="/api/capture-segments", tags=["segment-editing"])
 
@@ -58,7 +60,7 @@ def patch_segment(
         if "edit_version 冲突" in msg:
             raise HTTPException(409, msg) from e
         raise HTTPException(400, msg) from e
-    return _seg_dict(seg)
+    return segment_to_api_dict(seg)
 
 
 @router.post("/{segment_id}/reset-boundary-correction")
@@ -68,7 +70,7 @@ def reset_boundary(segment_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Segment 不存在")
     seg = segment_edit_service.reset_boundary(db, seg)
     db.commit()
-    return _seg_dict(seg)
+    return segment_to_api_dict(seg)
 
 
 @router.post("/{segment_id}/boundary-review")
@@ -112,7 +114,7 @@ def split_segment(segment_id: str, split_ms: int, db: Session = Depends(get_db))
     except ValueError as e:
         db.rollback()
         raise HTTPException(400, str(e)) from e
-    return {"segments": [_seg_dict(a), _seg_dict(b)]}
+    return {"segments": [segment_to_api_dict(a), segment_to_api_dict(b)]}
 
 
 @router.post("/merge")
@@ -129,7 +131,7 @@ def merge_segments(segment_ids: list[str], db: Session = Depends(get_db)):
     except ValueError as e:
         db.rollback()
         raise HTTPException(400, str(e)) from e
-    return _seg_dict(merged)
+    return segment_to_api_dict(merged)
 
 
 # ── Archive / Restore ──
@@ -142,7 +144,7 @@ def archive_segment(segment_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Segment 不存在")
     seg = segment_edit_service.archive_segment(db, seg)
     db.commit()
-    return _seg_dict(seg)
+    return segment_to_api_dict(seg)
 
 
 @router.post("/{segment_id}/restore")
@@ -152,7 +154,7 @@ def restore_segment(segment_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Segment 不存在")
     seg = segment_edit_service.restore_segment(db, seg)
     db.commit()
-    return _seg_dict(seg)
+    return segment_to_api_dict(seg)
 
 
 @router.delete("/{segment_id}", status_code=204)
@@ -208,14 +210,16 @@ def get_formal_segmentation_summary(capture_take_id: str, db: Session = Depends(
     # The product summary therefore follows the active successful publication,
     # so the segment page keeps showing the preserved automatic rallies while
     # the failed retry remains auditable through its AnalysisJob/Run record.
-    active_statuses = {
-        MatchStateSegmentationRunStatus.succeeded,
-        MatchStateSegmentationRunStatus.valid_no_rallies,
-    }
-    run = next((candidate for candidate in runs if candidate.status in active_statuses), runs[0])
+    # 「已发布/可用」状态集合与切分复用共用服务层单一来源，此处只做一次判定，
+    # 之后的分段计数与响应字段都复用它。
+    run = next(
+        (candidate for candidate in runs if candidate.status in ACTIVE_SEGMENTATION_STATUSES),
+        runs[0],
+    )
+    published = run.status in ACTIVE_SEGMENTATION_STATUSES
 
     count = 0
-    if run.status in active_statuses:
+    if published:
         count = (
             db.query(CaptureSegment)
             .filter(
@@ -250,7 +254,7 @@ def get_formal_segmentation_summary(capture_take_id: str, db: Session = Depends(
         "model_package_id": run.model_package_id,
         "model_version": run.model_package_version,
         "generated_at": run.finished_at.isoformat() if run.finished_at else None,
-        "segment_count": count if run.status in active_statuses else 0,
+        "segment_count": count if published else 0,
         "window_plan_hash": run.window_plan_hash,
         "artifact_available": artifact_available,
         "detail": detail,
@@ -280,7 +284,7 @@ def create_rally_segment(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(400, str(exc)) from exc
-    return _seg_dict(segment)
+    return segment_to_api_dict(segment)
 
 
 @router2.post("/{capture_take_id}/rally-ordinals")
@@ -311,7 +315,7 @@ def update_rally_ordinals(
         "operation_id": operation_id,
         "mode": request.mode,
         "start_ordinal": request.start_ordinal,
-        "segments": [_seg_dict(segment) for segment in segments],
+        "segments": [segment_to_api_dict(segment) for segment in segments],
     }
 
 
@@ -415,7 +419,7 @@ def decide_match_state_candidate(
         "schema_version": "match-state-candidate-review.v1",
         "capture_take_id": capture_take_id,
         "record": record,
-        "segment": _seg_dict(segment) if segment is not None else None,
+        "segment": segment_to_api_dict(segment) if segment is not None else None,
     }
 
 
@@ -491,35 +495,8 @@ def get_batch_detail(
 # ── helpers ──
 
 
-def _seg_dict(seg) -> dict:
-    return {
-        "id": seg.id,
-        "capture_take_id": seg.capture_take_id,
-        "segment_type": seg.segment_type.value if hasattr(seg.segment_type, "value") else seg.segment_type,
-        "parent_segment_id": seg.parent_segment_id,
-        "ordinal": seg.ordinal,
-        "label": seg.label,
-        "start_ms": seg.start_ms,
-        "end_ms": seg.end_ms,
-        "corrected_start_ms": seg.corrected_start_ms,
-        "corrected_end_ms": seg.corrected_end_ms,
-        "corrected_at": seg.corrected_at.isoformat() if getattr(seg, "corrected_at", None) else None,
-        "effective_start_ms": seg.effective_start_ms if hasattr(seg, "effective_start_ms") else seg.start_ms,
-        "effective_end_ms": seg.effective_end_ms if hasattr(seg, "effective_end_ms") else seg.end_ms,
-        "edit_version": seg.edit_version if hasattr(seg, "edit_version") else 0,
-        "created_by_operation_id": getattr(seg, "created_by_operation_id", None),
-        "edit_status": seg.edit_status.value
-        if hasattr(seg.edit_status, "value")
-        else getattr(seg, "edit_status", "active"),
-        "status": seg.status.value if hasattr(seg.status, "value") else seg.status,
-        "source": seg.source.value if hasattr(seg.source, "value") else seg.source,
-        "segmentation_run_id": getattr(seg, "segmentation_run_id", None),
-        "is_highlight": seg.is_highlight,
-    }
-
-
 def _boundary_review_seg_dict(seg, review: dict | None) -> dict:
-    item = _seg_dict(seg)
+    item = segment_to_api_dict(seg)
     status = str((review or {}).get("review_status") or "pending")
     if seg.edit_status == EditStatus.archived:
         status = "excluded"

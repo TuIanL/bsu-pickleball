@@ -5,28 +5,28 @@ import { errorToNotice as buildErrorNotice } from "../services/analysisDiagnosti
 
 export const toneStyles: Record<InsightTone, { dot: string; text: string; border: string; bg: string }> = {
   advantage: {
-    dot: "bg-[#22C55E]",
-    text: "text-[#168A34]",
-    border: "border-[#22C55E]/25",
-    bg: "bg-[#22C55E]/12",
+    dot: "bg-[var(--ui-brand-solid)]",
+    text: "text-[var(--ui-brand-deep)]",
+    border: "border-[var(--ui-brand)]/25",
+    bg: "bg-[var(--ui-brand-solid)]/12",
   },
   risk: {
-    dot: "bg-[#FF9500]",
-    text: "text-[#A45A00]",
-    border: "border-[#FF9500]/25",
-    bg: "bg-[#FF9500]/12",
+    dot: "bg-[var(--ui-stage)]",
+    text: "text-[var(--ui-warning)]",
+    border: "border-[var(--ui-stage)]/25",
+    bg: "bg-[var(--ui-stage)]/12",
   },
   error: {
-    dot: "bg-[#FF4D4F]",
-    text: "text-[#C92A2A]",
-    border: "border-[#FF4D4F]/25",
-    bg: "bg-[#FF4D4F]/12",
+    dot: "bg-[var(--ui-danger-solid)]",
+    text: "text-[var(--ui-danger)]",
+    border: "border-[var(--ui-danger-strong)]/25",
+    bg: "bg-[var(--ui-danger-solid)]/12",
   },
   training: {
-    dot: "bg-[#2F80ED]",
-    text: "text-[#1E63B6]",
-    border: "border-[#2F80ED]/25",
-    bg: "bg-[#2F80ED]/12",
+    dot: "bg-[var(--ui-info-solid)]",
+    text: "text-[var(--ui-info-deep)]",
+    border: "border-[var(--ui-info)]/25",
+    bg: "bg-[var(--ui-info-solid)]/12",
   },
 };
 
@@ -70,13 +70,13 @@ export function sortAnalysisJobs(
 
 export function analysisStatusMeta(status: AnalysisJobSummary["status"]) {
   const styles = {
-    uploaded: { label: "视频已接收", className: "bg-[#2F80ED]/12 text-[#1E63B6]" },
-    queued: { label: "排队中", className: "bg-[#2F80ED]/12 text-[#1E63B6]" },
-    processing: { label: "正在分析", className: "bg-[#FF9500]/14 text-[#A45A00]" },
-    completed: { label: "分析完成", className: "bg-[#22C55E]/14 text-[#168A34]" },
-    failed: { label: "分析失败", className: "bg-[#FF4D4F]/12 text-[#C92A2A]" },
+    uploaded: { label: "视频已接收", className: "bg-[var(--ui-info-solid)]/12 text-[var(--ui-info-deep)]" },
+    queued: { label: "排队中", className: "bg-[var(--ui-info-solid)]/12 text-[var(--ui-info-deep)]" },
+    processing: { label: "正在分析", className: "bg-[var(--ui-stage)]/14 text-[var(--ui-warning)]" },
+    completed: { label: "分析完成", className: "bg-[var(--ui-brand-solid)]/14 text-[var(--ui-brand-deep)]" },
+    failed: { label: "分析失败", className: "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]" },
     canceled: { label: "已取消", className: "bg-slate-200 text-slate-700" },
-    interrupted: { label: "任务失联", className: "bg-[#FF9500]/14 text-[#A45A00]" },
+    interrupted: { label: "任务失联", className: "bg-[var(--ui-stage)]/14 text-[var(--ui-warning)]" },
   } satisfies Record<AnalysisJobSummary["status"], { label: string; className: string }>;
 
   return styles[status];

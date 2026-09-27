@@ -148,7 +148,7 @@ function InlineEditTitle({
       <span className="block">
         <input
           ref={inputRef}
-          className="w-full rounded-md border border-[var(--capture-brand-primary,#23985b)] bg-white px-1.5 py-0.5 text-sm font-bold text-[var(--capture-text-primary,#182b24)] outline-none ring-2 ring-[var(--capture-brand-primary,#23985b)]/25 placeholder:text-[var(--capture-text-muted,#8f9d96)]"
+          className="w-full rounded-md border border-[var(--capture-brand-primary,#23985b)] bg-[var(--ui-surface)] px-1.5 py-0.5 text-sm font-bold text-[var(--capture-text-primary,#182b24)] outline-none ring-2 ring-[var(--capture-brand-primary,#23985b)]/25 placeholder:text-[var(--capture-text-muted,#8f9d96)]"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commit(draft)}
@@ -242,7 +242,7 @@ function InlineEditDate({
         <input
           ref={inputRef}
           type="date"
-          className="rounded-md border border-[var(--capture-brand-primary,#23985b)] bg-white px-1.5 py-0.5 text-xs text-[var(--capture-text-primary,#182b24)] outline-none ring-2 ring-[var(--capture-brand-primary,#23985b)]/25"
+          className="rounded-md border border-[var(--capture-brand-primary,#23985b)] bg-[var(--ui-surface)] px-1.5 py-0.5 text-xs text-[var(--capture-text-primary,#182b24)] outline-none ring-2 ring-[var(--capture-brand-primary,#23985b)]/25"
           defaultValue={toDateInputValue(value)}
           onChange={(e) => void commit(e.target.value)}
           onKeyDown={(e) => {

@@ -27,7 +27,7 @@ export default function StructuredScatterPlot({ data, fallbackPngUrl }: Structur
       return (
         <img
           alt="位置散点图"
-          className="aspect-[11/16] w-full bg-white object-contain"
+          className="aspect-[11/16] w-full bg-[var(--ui-surface)] object-contain"
           src={fallbackPngUrl}
         />
       );
@@ -69,7 +69,7 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
 
   return (
     <div className="relative">
-      <svg viewBox={viewBox} className="w-full bg-white" style={{ aspectRatio: `${TRACKING_VIEWBOX_WIDTH}/${TRACKING_VIEWBOX_HEIGHT}` }}>
+      <svg viewBox={viewBox} className="w-full bg-[var(--ui-surface)]" style={{ aspectRatio: `${TRACKING_VIEWBOX_WIDTH}/${TRACKING_VIEWBOX_HEIGHT}` }}>
         <rect
           x={0}
           y={0}
@@ -160,7 +160,7 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
               className="inline-block h-2.5 w-2.5 rounded-full"
               style={{ backgroundColor: player.color, opacity: visibleLayers.has(`player-${player.id}`) ? 1 : 0.3 }}
             />
-            <span className={visibleLayers.has(`player-${player.id}`) ? "text-[#14241B]" : "text-slate-400 line-through"}>
+            <span className={visibleLayers.has(`player-${player.id}`) ? "text-[var(--ui-ink)]" : "text-slate-400 line-through"}>
               {player.label}
             </span>
           </button>
@@ -174,7 +174,7 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
               className="inline-block h-2.5 w-2.5 rounded-full"
               style={{ backgroundColor: BALL_COLOR, opacity: visibleLayers.has("ball") ? 1 : 0.3 }}
             />
-            <span className={visibleLayers.has("ball") ? "text-[#14241B]" : "text-slate-400 line-through"}>
+            <span className={visibleLayers.has("ball") ? "text-[var(--ui-ink)]" : "text-slate-400 line-through"}>
               球轨迹
             </span>
           </button>
@@ -189,7 +189,7 @@ function ScatterSVG({ data }: { data: StructuredVisualizationData }) {
                 ✕
               </span>
             </span>
-            <span className={visibleLayers.has("bounces") ? "text-[#14241B]" : "text-slate-400 line-through"}>
+            <span className={visibleLayers.has("bounces") ? "text-[var(--ui-ink)]" : "text-slate-400 line-through"}>
               弹跳候选
             </span>
           </button>

@@ -76,15 +76,15 @@ export function AnalysisModeSelectPopover({
     <div
       ref={panelRef}
       aria-label="按类型筛选与选择"
-      className="absolute right-0 top-full z-30 mt-2 w-72 rounded-2xl border border-[#DDE9D6] bg-white p-3 shadow-lg"
+      className="absolute right-0 top-full z-30 mt-2 w-72 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-3 shadow-lg"
       role="menu"
     >
-      <p className="px-2 pb-2 text-xs font-bold uppercase tracking-[0.16em] text-[#168A34]">按类型筛选</p>
+      <p className="px-2 pb-2 text-xs font-bold uppercase tracking-[0.16em] text-[var(--ui-brand-deep)]">按类型筛选</p>
       <div className="flex flex-wrap gap-1.5 px-1">
         <button
           aria-pressed={modeFilter === "all"}
           className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${
-            modeFilter === "all" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+            modeFilter === "all" ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"
           }`}
           onClick={() => onSelectModeFilter("all")}
           type="button"
@@ -95,7 +95,7 @@ export function AnalysisModeSelectPopover({
           <button
             aria-pressed={modeFilter === mode}
             className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${
-              modeFilter === mode ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+              modeFilter === mode ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"
             }`}
             key={mode}
             onClick={() => onSelectModeFilter(mode)}
@@ -106,17 +106,17 @@ export function AnalysisModeSelectPopover({
         ))}
       </div>
 
-      <p className="mt-3 px-2 pb-2 text-xs font-bold uppercase tracking-[0.16em] text-[#168A34]">批量选择</p>
+      <p className="mt-3 px-2 pb-2 text-xs font-bold uppercase tracking-[0.16em] text-[var(--ui-brand-deep)]">批量选择</p>
       <div className="grid gap-1">
         {rows.map((row) => (
           <label
-            className="flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-2 transition hover:bg-[#F5FAF1]"
+            className="flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-2 transition hover:bg-[var(--ui-surface-soft)]"
             key={row.mode}
           >
-            <span className="inline-flex items-center gap-2.5 text-sm font-semibold text-[#14241B]">
+            <span className="inline-flex items-center gap-2.5 text-sm font-semibold text-[var(--ui-ink)]">
               <input
                 checked={row.state === "checked"}
-                className="size-4 accent-[#22C55E]"
+                className="size-4 accent-[var(--ui-brand)]"
                 disabled={row.eligibleCount === 0}
                 onChange={(event) => onToggleMode(row.mode, event.target.checked)}
                 ref={(element) => {
@@ -128,7 +128,7 @@ export function AnalysisModeSelectPopover({
               />
               {analysisModeLabel(row.mode)}
             </span>
-            <span className="rounded-full bg-[#F1F7EC] px-2 py-0.5 text-xs font-bold text-[#168A34]">
+            <span className="rounded-full bg-[var(--ui-surface-tint)] px-2 py-0.5 text-xs font-bold text-[var(--ui-brand-deep)]">
               {row.eligibleCount}
             </span>
           </label>

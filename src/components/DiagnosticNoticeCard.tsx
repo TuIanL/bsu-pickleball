@@ -6,8 +6,8 @@ export function DiagnosticNoticeCard({ notice, tone = "error" }: { notice: Diagn
   );
   const toneClass =
     tone === "error"
-      ? "border-[#FF4D4F]/30 bg-[#FF4D4F]/10 text-[#C92A2A]"
-      : "border-[#2F80ED]/25 bg-[#2F80ED]/10 text-[#1E63B6]";
+      ? "border-[var(--ui-danger-strong)]/30 bg-[var(--ui-danger-solid)]/10 text-[var(--ui-danger)]"
+      : "border-[var(--ui-info)]/25 bg-[var(--ui-info-solid)]/10 text-[var(--ui-info-deep)]";
 
   return (
     <div className={`rounded-2xl border p-3 text-sm ${toneClass}`}>
@@ -16,9 +16,9 @@ export function DiagnosticNoticeCard({ notice, tone = "error" }: { notice: Diagn
       {visibleDetails.length ? (
         <dl className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-2">
           {visibleDetails.map(([label, value]) => (
-            <div className="rounded-xl bg-white/65 p-2" key={label}>
+            <div className="rounded-xl bg-[var(--ui-surface)]/65 p-2" key={label}>
               <dt className="font-black text-slate-500">{label}</dt>
-              <dd className="mt-1 break-words font-semibold text-[#14241B]">{value}</dd>
+              <dd className="mt-1 break-words font-semibold text-[var(--ui-ink)]">{value}</dd>
             </div>
           ))}
         </dl>

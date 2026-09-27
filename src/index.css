@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
+/* Tailwind v4 手动暗色变体：跟随 <html data-theme="dark">，而非系统偏好，
+   以保证首次访问恒为亮色（见 spec persistent-ui-theme「默认亮色与持久化主题状态」）。 */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 :root {
   color: #17231d;
   background: #f1f5f3;
+  color-scheme: light;
 
   /* Global product tokens.
      --capture-* prefix retained for backward compatibility. */
@@ -71,12 +76,320 @@
   --capture-radius-lg: 16px;
   --capture-shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.03);
 
+  /* ─────────────────────────────────────────────────────────────
+     界面语义色（--ui-*）
+     亮色取值 = 迁移前各页面硬编码色的原值，逐值对应，保证亮色外观不变；
+     暗色取值在 [data-theme="dark"] 中覆盖。数据语义色（球队、热力、
+     录制、业务状态）不进这一层，仍由 --capture-* 表达。
+     ───────────────────────────────────────────────────────────── */
+
+  /* 前景：由深到浅 */
+  --ui-ink: #14241b;            /* 主文字 / 标题 */
+  --ui-ink-alt: #182230;        /* 偏蓝的深色文字 */
+  --ui-ink-solid: #17231d;      /* 深底（实心按钮、徽标底） */
+  --ui-text-strong: #334155;    /* slate-700 */
+  --ui-text-body: #475569;      /* slate-600 */
+  --ui-text-secondary: #64748b; /* slate-500 */
+  --ui-text-muted: #94a3b8;     /* slate-400 */
+  --ui-text-faint: #cbd5e1;     /* slate-300 */
+  --ui-text-secondary-alt: #667085;
+  --ui-text-muted-alt: #98a2b3;
+
+  /* 表面：由浅到深 */
+  --ui-surface: #ffffff;        /* 卡片 / 浮层 */
+  --ui-surface-muted: #f8fafc;  /* slate-50 */
+  --ui-surface-soft: #f5faf1;
+  --ui-surface-subtle: #f7fbf5;
+  --ui-track: #e2e8f0;          /* 进度条轨道等 slate-200 */
+
+  /* 描边 */
+  --ui-border: #dde9d6;
+  --ui-border-soft: #d8e5d2;
+  --ui-border-strong: #c7d5cd;
+  --ui-hairline: #e5eee0;       /* 分隔线 */
+  --ui-border-neutral: #e4e7ec;
+
+  /* 品牌与状态 */
+  --ui-brand: #22c55e;              /* 图标 / 描边 / 焦点环 */
+  --ui-brand-solid: #22c55e;        /* 白字实心按钮底 */
+  --ui-brand-solid-deep: #168a34;   /* 更深的白字实心按钮底 */
+  --ui-brand-deep: #168a34;         /* 强调绿文字 */
+  --ui-brand-soft: #ddf1e5;
+  --ui-info: #2f80ed;
+  --ui-info-solid: #2f80ed;
+  --ui-info-soft: #eff6ff;
+  --ui-danger: #c92a2a;
+  --ui-danger-deep: #b91c1c;
+  --ui-danger-deeper: #991b1b;
+  --ui-danger-solid: #ff4d4f;
+  --ui-danger-soft: #fef2f2;
+  --ui-danger-border: #fca5a5;
+  --ui-warning: #a45a00;
+  --ui-warning-soft: #fff7ed;
+  --ui-warning-border: #f4d8a8;
+  --ui-stage: #ff9500;              /* 阶段高亮 / 进行中 */
+  --ui-neutral-strong: #344054;
+  --ui-neutral-muted: #98a2b3;
+
+  /* 浮层与阴影 */
+  --ui-overlay: #ffffff;
+  --ui-overlay-scrim: rgba(15, 23, 18, 0.45);
+  --ui-shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.03);
+  --ui-shadow-raised: 0 18px 48px rgba(31, 61, 43, 0.13);
+  --ui-scrollbar-thumb: #cbd6cd;
+
+  /* ─────────────────────────────────────────────────────────────
+     中性色阶（--ui-neutral-* / --ui-gray-*）
+     亮色取值逐条搬运 Tailwind v4 默认调色板的 oklch 原值，保证亮色渲染不变；
+     再把 Tailwind 的 --color-slate-* / --color-gray-* 指向本族，
+     于是既有的 text-slate-* / bg-slate-* / border-slate-* 等 500+ 处
+     中性色无需改业务代码即可随主题变化。
+     white / black 不在覆盖范围内：白字多落在彩色表面上，黑色多用于蒙层。
+     ───────────────────────────────────────────────────────────── */
+  --ui-neutral-50: oklch(98.4% 0.003 247.858);
+  --ui-neutral-100: oklch(96.8% 0.007 247.896);
+  --ui-neutral-200: oklch(92.9% 0.013 255.508);
+  --ui-neutral-300: oklch(86.9% 0.022 252.894);
+  --ui-neutral-400: oklch(70.4% 0.04 256.788);
+  --ui-neutral-500: oklch(55.4% 0.046 257.417);
+  --ui-neutral-600: oklch(44.6% 0.043 257.281);
+  --ui-neutral-700: oklch(37.2% 0.044 257.287);
+  --ui-neutral-800: oklch(27.9% 0.041 260.031);
+  --ui-neutral-900: oklch(20.8% 0.042 265.755);
+  --ui-neutral-950: oklch(12.9% 0.042 264.695);
+
+  --ui-gray-50: oklch(98.5% 0.002 247.839);
+  --ui-gray-100: oklch(96.7% 0.003 264.542);
+  --ui-gray-200: oklch(92.8% 0.006 264.531);
+  --ui-gray-300: oklch(87.2% 0.01 258.338);
+  --ui-gray-400: oklch(70.7% 0.022 261.325);
+  --ui-gray-500: oklch(55.1% 0.027 264.364);
+  --ui-gray-600: oklch(44.6% 0.03 256.802);
+  --ui-gray-700: oklch(37.3% 0.034 259.733);
+  --ui-gray-800: oklch(27.8% 0.033 256.848);
+  --ui-gray-900: oklch(21% 0.034 264.665);
+  --ui-gray-950: oklch(13% 0.028 261.692);
+
+  --color-slate-50: var(--ui-neutral-50);
+  --color-slate-100: var(--ui-neutral-100);
+  --color-slate-200: var(--ui-neutral-200);
+  --color-slate-300: var(--ui-neutral-300);
+  --color-slate-400: var(--ui-neutral-400);
+  --color-slate-500: var(--ui-neutral-500);
+  --color-slate-600: var(--ui-neutral-600);
+  --color-slate-700: var(--ui-neutral-700);
+  --color-slate-800: var(--ui-neutral-800);
+  --color-slate-900: var(--ui-neutral-900);
+  --color-slate-950: var(--ui-neutral-950);
+
+  --color-gray-50: var(--ui-gray-50);
+  --color-gray-100: var(--ui-gray-100);
+  --color-gray-200: var(--ui-gray-200);
+  --color-gray-300: var(--ui-gray-300);
+  --color-gray-400: var(--ui-gray-400);
+  --color-gray-500: var(--ui-gray-500);
+  --color-gray-600: var(--ui-gray-600);
+  --color-gray-700: var(--ui-gray-700);
+  --color-gray-800: var(--ui-gray-800);
+  --color-gray-900: var(--ui-gray-900);
+  --color-gray-950: var(--ui-gray-950);
+
   font-family:
     Inter, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial,
     "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   暗色模式
+   以近黑页面底 + 分层深色表面为基调；品牌绿家系保留，仅按暗底对比度
+   调整明度；数据语义色（球队、热力、录制、业务状态）保留含义并提亮。
+   ════════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* 底色层级 */
+  --capture-surface-page: #0b0f0d;
+  --capture-surface-soft: #121815;
+  --capture-surface-card: #161d1a;
+  --capture-surface-elevated: #1b2420;
+  --capture-surface-video: #050807;
+
+  /* 边框 */
+  --capture-border-default: #2a352f;
+  --capture-border-strong: #3a4a41;
+
+  /* 品牌绿（暗底上提亮，白字按钮仍用较深的 solid 值保对比度） */
+  --capture-brand-primary: #35b06d;
+  --capture-brand-strong: #1f8a52;       /* 白字 Primary Button */
+  --capture-brand-primary-hover: #26a05f;
+  --capture-brand-soft: #14291f;
+
+  /* 文字三级 */
+  --capture-text-primary: #e8efea;
+  --capture-text-secondary: #a5b4ab;
+  --capture-text-muted: #7d8c84;
+
+  /* 辅助色 */
+  --capture-accent: #7fc6d2;
+  --capture-lime: #cbe477;
+
+  /* 侧边栏 */
+  --capture-sidebar-bg: #0e1411;
+  --capture-sidebar-border: #232e28;
+  --capture-nav-active-bg: #163023;
+  --capture-nav-active-text: #4cc287;
+
+  /* 状态色板（语义不变，前景提亮、浅底转为深色浅底） */
+  --capture-status-pending: #94a3b8;
+  --capture-status-pending-soft: #1c2622;
+  --capture-status-processing: #f0b357;
+  --capture-status-processing-soft: #2e2413;
+  --capture-status-success: #4ec98a;
+  --capture-status-success-soft: #122a1e;
+  --capture-status-merge: #f5a524;
+  --capture-status-merge-soft: #2e2413;
+  --capture-status-failed: #ff6b5e;
+  --capture-status-failed-soft: #331518;
+  --capture-status-ai: #5fbccd;
+  --capture-status-ai-soft: #12272b;
+
+  /* 功能语义色（保留色相关系，按暗底可读性提亮） */
+  --capture-status-recording: #ff5f63;
+  --capture-status-recording-soft: #331518;
+  --capture-status-warning: #ffb266;
+  --capture-status-info: #7ea2ff;
+  --capture-timeline-set: #ff9d4d;
+  --capture-timeline-game: #7ea2ff;
+  --capture-timeline-rally: #4fc98a;
+  --capture-timeline-highlight: #a78bfa;
+  --capture-timeline-playhead: #ff5f63;
+  --capture-timeline-side-change: #ff8fb8;
+
+  --capture-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.35);
+
+  /* ── 界面语义色 ── */
+
+  /* 前景：由亮到暗 */
+  --ui-ink: #e8efea;
+  --ui-ink-alt: #e6edf2;
+  --ui-ink-solid: #e8efea;
+  --ui-text-strong: #cfd9d5;
+  --ui-text-body: #b0bfba;
+  --ui-text-secondary: #93a29c;
+  --ui-text-muted: #6f7f78;
+  --ui-text-faint: #55635d;
+  --ui-text-secondary-alt: #93a29c;
+  --ui-text-muted-alt: #6f7f78;
+
+  /* 表面：由深到浅 */
+  --ui-surface: #161d1a;
+  --ui-surface-muted: #1a211e;
+  --ui-surface-soft: #121815;
+  --ui-surface-subtle: #141b18;
+  --ui-track: #2a352f;
+
+  /* 描边 */
+  --ui-border: #2a352f;
+  --ui-border-soft: #28332d;
+  --ui-border-strong: #3a4a41;
+  --ui-hairline: #232e28;
+  --ui-border-neutral: #2d3833;
+
+  /* 品牌与状态 */
+  --ui-brand: #4cc287;
+  --ui-brand-solid: #1f8a52;
+  --ui-brand-solid-deep: #1f8a52;
+  --ui-brand-deep: #4cc287;
+  --ui-brand-soft: #14291f;
+  --ui-info: #7ea2ff;
+  --ui-info-solid: #2f6ee0;
+  --ui-info-soft: #12202f;
+  --ui-danger: #ff6b5e;
+  --ui-danger-deep: #ff7f74;
+  --ui-danger-deeper: #ff9188;
+  --ui-danger-solid: #d93a3c;
+  --ui-danger-soft: #331518;
+  --ui-danger-border: #7a2b28;
+  --ui-warning: #f0b357;
+  --ui-warning-soft: #2b2013;
+  --ui-warning-border: #5a4520;
+  --ui-stage: #ff9d33;
+  --ui-neutral-strong: #b0bfba;
+  --ui-neutral-muted: #6f7f78;
+
+  /* 浮层与阴影 */
+  --ui-overlay: #1b2420;
+  --ui-overlay-scrim: rgba(0, 0, 0, 0.62);
+  --ui-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.35);
+  --ui-shadow-raised: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --ui-scrollbar-thumb: #3a4a41;
+
+  /* 中性色阶：暗底上的可读梯度（浅阶用作表面/描边，深阶用作文字） */
+  --ui-neutral-50: #161d24;
+  --ui-neutral-100: #1a212a;
+  --ui-neutral-200: #2a3540;
+  --ui-neutral-300: #56687a;
+  --ui-neutral-400: #7f8f9c;
+  --ui-neutral-500: #9aa8b4;
+  --ui-neutral-600: #b3c0cb;
+  --ui-neutral-700: #cdd7e0;
+  --ui-neutral-800: #dde4ec;
+  --ui-neutral-900: #e8eef5;
+  --ui-neutral-950: #f1f5fa;
+
+  --ui-gray-50: #161d24;
+  --ui-gray-100: #1a212a;
+  --ui-gray-200: #2a3540;
+  --ui-gray-300: #3b4753;
+  --ui-gray-400: #7f8f9c;
+  --ui-gray-500: #9aa8b4;
+  --ui-gray-600: #b3c0cb;
+  --ui-gray-700: #cdd7e0;
+  --ui-gray-800: #dde4ec;
+  --ui-gray-900: #e8eef5;
+  --ui-gray-950: #f1f5fa;
+}
+
+html[data-theme="dark"] {
+  background: #0b0f0d;
+}
+
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(34, 197, 94, 0.1), transparent 30rem),
+    radial-gradient(circle at 82% 12%, rgba(47, 128, 237, 0.1), transparent 30rem),
+    radial-gradient(circle at 50% 100%, rgba(217, 255, 63, 0.07), transparent 34rem),
+    linear-gradient(180deg, #0e1412 0%, #0b0f0d 42%, #090c0b 100%);
+}
+
+html[data-theme="dark"] ::selection {
+  color: #071008;
+  background: #6fd97a;
+}
+
+/* 主题切换过渡：仅在切换瞬间由脚本在 <html> 上挂 .theme-transition。
+   成本控制（组件多的页面切主题不卡）：
+   ① 只过渡三个便宜且必要的大面积属性，刻意不含 box-shadow / fill / stroke——
+      它们要在每个节点上重新光栅化，是切换卡顿的主因；图标走 currentColor，
+      父级 color 过渡即可，视觉上无差别。
+   ② 排除 SVG 子树与媒体元素：它们数量多、重绘贵，且不承载界面底色。
+   ③ 由脚本按节点数决定是否挂类（见 theme.ts 的 TRANSITION_NODE_BUDGET），
+      超重页面直接切换，避免整页重绘。 */
+html.theme-transition,
+html.theme-transition :where(:not(svg, svg *, img, video, canvas, picture, source)) {
+  transition-property: background-color, border-color, color !important;
+  transition-duration: 140ms !important;
+  transition-timing-function: ease-out !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.theme-transition,
+  html.theme-transition :where(:not(svg, svg *, img, video, canvas, picture, source)) {
+    transition: none !important;
+  }
 }
 
 * {
@@ -116,26 +429,31 @@ button {
 }
 
 @layer components {
+  /* 注意：`@apply` 不会为 `var()` 生成 color-mix 回退（透明度修饰符会被丢弃），
+     因此这里的半透明表面显式写 color-mix，保证亮色下仍是原来的半透明效果。 */
   .sport-card {
-    @apply rounded-2xl border border-[#DDE9D6] bg-white/90 backdrop-blur;
-    box-shadow: 0 18px 48px rgba(31, 61, 43, 0.13);
+    @apply rounded-2xl border border-[var(--ui-border)] backdrop-blur;
+    background-color: color-mix(in srgb, var(--ui-surface) 90%, transparent);
+    box-shadow: var(--ui-shadow-raised);
   }
 
   .glass-panel {
-    @apply border border-[#DDE9D6] bg-white/80 backdrop-blur-xl;
+    @apply border border-[var(--ui-border)] backdrop-blur-xl;
+    background-color: color-mix(in srgb, var(--ui-surface) 80%, transparent);
   }
 
   .green-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-full bg-[#19B84C] px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-[#22C55E] focus:outline-none focus:ring-2 focus:ring-[#22C55E] focus:ring-offset-2 focus:ring-offset-[#F5F8F2];
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-[var(--ui-brand-cta)] px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-[var(--ui-brand-cta-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--ui-brand)] focus:ring-offset-2 focus:ring-offset-[var(--ui-focus-offset)];
     box-shadow: 0 14px 30px rgba(25, 184, 76, 0.2);
   }
 
   .quiet-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-full border border-[#D8E5D2] bg-white/85 px-5 py-3 text-sm font-semibold text-[#203127] transition hover:-translate-y-0.5 hover:border-[#22C55E]/45 hover:bg-[#F5FFF2] focus:outline-none focus:ring-2 focus:ring-[#22C55E]/55 focus:ring-offset-2 focus:ring-offset-[#F5F8F2];
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-[var(--ui-border-soft)] px-5 py-3 text-sm font-semibold text-[var(--ui-text-deep)] transition hover:-translate-y-0.5 hover:border-[var(--ui-brand)]/45 hover:bg-[var(--ui-surface-hover-mint)] focus:outline-none focus:ring-2 focus:ring-[var(--ui-brand)]/55 focus:ring-offset-2 focus:ring-offset-[var(--ui-focus-offset)];
+    background-color: color-mix(in srgb, var(--ui-surface) 85%, transparent);
   }
 
   .danger-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-full border border-[#F5C1C1] bg-[#A32D2D] px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-[#791F1F] focus:outline-none focus:ring-2 focus:ring-[#E24B4A] focus:ring-offset-2 focus:ring-offset-[#F5F8F2];
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-[var(--ui-danger-border-soft)] bg-[var(--ui-danger-solid-deep)] px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-[var(--ui-danger-solid-deeper)] focus:outline-none focus:ring-2 focus:ring-[var(--ui-danger-ring)] focus:ring-offset-2 focus:ring-offset-[var(--ui-focus-offset)];
   }
 
   .green-button:disabled,
@@ -145,7 +463,8 @@ button {
   }
 
   .field-input {
-    @apply w-full rounded-2xl border border-[#D8E5D2] bg-white/90 px-4 py-3 text-sm font-semibold text-[#203127] outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20;
+    @apply w-full rounded-2xl border border-[var(--ui-border-soft)] px-4 py-3 text-sm font-semibold text-[var(--ui-text-deep)] outline-none transition focus:border-[var(--ui-brand)]/70 focus:ring-2 focus:ring-[var(--ui-brand)]/20;
+    background-color: color-mix(in srgb, var(--ui-surface) 90%, transparent);
   }
 }
 
@@ -203,21 +522,22 @@ button {
    仅在 class=".pb-vision-theme" 的 DOM 树下生效，不影响其他页面
    ============================================================ */
 .pb-vision-theme {
-  /* 主色（--pb-* 保留为 compatibility aliases，引用全局 Token） */
+  /* 主色（--pb-* 保留为 compatibility aliases，引用全局 Token）
+     界面色一律引用全局语义变量，暗色随主题变化；数据语义色（6 维度、热力）保留原值。 */
   --pb-primary: var(--capture-brand-primary);        /* 深绿 #23985B：按钮、选中态、进度条 */
   --pb-primary-dark: var(--capture-brand-strong);    /* #197947：边框、强调文字 */
   --pb-primary-soft: var(--capture-brand-soft);      /* #DDF1E5：hover / 弱强调背景 */
 
   /* 页面 & 卡片 */
-  --pb-page-bg: var(--capture-surface-page);         /* #F1F5F3 浅灰白页面底 */
-  --pb-card-bg: #ffffff;                             /* 卡片白 */
-  --pb-card-border: var(--capture-border-default);   /* #D9E3DD 卡片边框 */
-  --pb-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --pb-page-bg: var(--capture-surface-page);         /* 页面底 */
+  --pb-card-bg: var(--ui-surface);                   /* 卡片底：亮色 #FFFFFF */
+  --pb-card-border: var(--capture-border-default);   /* 卡片边框 */
+  --pb-card-shadow: var(--ui-shadow-card);
 
   /* 文字色 */
-  --pb-text-primary: var(--capture-text-primary);    /* #182B24 近黑主文 */
-  --pb-text-secondary: var(--capture-text-secondary);/* #64736C 中灰次文 */
-  --pb-text-muted: var(--capture-text-muted);        /* #8F9D96 淡灰辅助 */
+  --pb-text-primary: var(--capture-text-primary);    /* 近黑主文 */
+  --pb-text-secondary: var(--capture-text-secondary);/* 中灰次文 */
+  --pb-text-muted: var(--capture-text-muted);        /* 淡灰辅助 */
 
   /* 6 维度专属彩色（原值保留：Kitchen Game / Ball Control / Defense / Offense / Court IQ / Targeting） */
   --pb-dim-kitchen: #a855f7;      /* 紫 */
@@ -313,9 +633,9 @@ button {
 
 /* PB 3D 球场视角按钮容器（覆盖默认） */
 .pb-vision-theme .pb-3d-view-btns button {
-  background: #ffffff !important;
-  border: 1px solid #e5e7eb !important;
-  color: #111827 !important;
+  background: var(--ui-surface) !important;
+  border: 1px solid var(--ui-track) !important;
+  color: var(--ui-ink) !important;
   border-radius: 0.5rem !important;
   width: 44px !important;
   height: 44px !important;
@@ -329,6 +649,19 @@ button {
   box-shadow: 0 0 0 2px rgba(35, 152, 91, 0.25) !important;
 }
 
+/* 报告作用域的维度浅底与米黄提示卡：暗色改为同色相的深色底，
+   保留 6 维度与提示语义，文字仍用卡片主色保证对比度。 */
+[data-theme="dark"] .pb-vision-theme {
+  --pb-dim-kitchen-bg: #221a2e;
+  --pb-dim-ballctrl-bg: #121c2b;
+  --pb-dim-defense-bg: #10262b;
+  --pb-dim-offense-bg: #2a1f13;
+  --pb-dim-courtiq-bg: #2a2413;
+  --pb-dim-targeting-bg: #2a1622;
+  --pb-coach-bg: #2a2413;
+  --pb-coach-border: #5a4f22;
+}
+
 /* 长期平均对比线 & Δ 值占位（初始隐藏，未来接真实数据时移除 display:none 即可） */
 .pb-long-term-compare {
   display: none;
@@ -338,7 +671,7 @@ button {
 }
 /* 解除占位示例：.pb-vision-theme.has-history .pb-long-term-compare { display:block; } */
 
-/* 片段页自动回合中央提示（SegmentVideoPlayer）：
+/* 数据分析视图自动回合中央提示：
    进入新回合时闪现一次，2 秒后由 .auto-rally-cue--visible 移除而淡出。
    高不透明度字 + 深色描边，保证在明亮画面上仍可读。 */
 .auto-rally-cue {
@@ -357,7 +690,7 @@ button {
   opacity: 0.9;
 }
 
-/* 片段页播放进度条：接管原生 range 的轨道渲染以承载自动回合区间配色，
+/* 数据分析回放进度条：接管原生 range 的轨道渲染以承载自动回合区间配色，
    滑块与拖拽链路由原生 range 自身负责，仅重绘外观。未启用配色时不加此类。 */
 .rally-band-progress {
   -webkit-appearance: none;
@@ -390,3 +723,80 @@ button {
   background: #22c55e;
 }
 
+/* ════════════════════════════════════════════════════════════════
+   补充的界面语义色（低频浅绿表面与强调色）
+   与上表分开是便于对照：亮色仍为迁移前的原值，暗色在下方覆盖。
+   ════════════════════════════════════════════════════════════════ */
+:root {
+  --ui-surface-tint: #f1f7ec;
+  --ui-surface-mint: #eaf8f0;
+  --ui-surface-green-50: #f0fdf4;
+  --ui-surface-green-soft: #f8fbf5;
+  --ui-surface-green-tint: #f9fff6;
+  --ui-surface-lime-soft: #e8f2dc;
+  --ui-surface-track-green: #dfeada;
+  --ui-info-deep: #1e63b6;
+  --ui-success-text: #176b3c;
+  --ui-success-soft: #e5f4ea;
+  /* 通用按钮 / 输入框 / 焦点环用到的补充色（原值取自 index.css 组件层） */
+  --ui-brand-cta: #19b84c;
+  --ui-brand-cta-hover: #22c55e;
+  --ui-text-deep: #203127;
+  --ui-focus-offset: #f5f8f2;
+  --ui-surface-hover-mint: #f5fff2;
+  --ui-danger-border-soft: #f5c1c1;
+  --ui-danger-solid-deep: #a32d2d;
+  --ui-danger-solid-deeper: #791f1f;
+  --ui-danger-ring: #e24b4a;
+  /* 第二轮迁移补充：低频但成规模出现的表面/描边/强调色，亮色仍取原值 */
+  --ui-danger-strong: #ff4d4f;
+  --ui-surface-neutral: #f2f4f7;
+  --ui-surface-paper: #fbfdf9;
+  --ui-surface-mint-soft: #eaf7ee;
+  --ui-surface-line: #e7efe2;
+  --ui-success-deep: #15803d;
+  --ui-success-text-deep: #166534;
+  --ui-success-ink: #173321;
+  --ui-warning-deep: #b45309;
+  --ui-warning-deeper: #9a6500;
+  --ui-warning-soft-2: #fdf6e7;
+  --ui-border-mint: #b8cdb5;
+  --ui-border-neutral-2: #d0d5dd;
+  --ui-text-slate: #9ca3af;
+}
+
+[data-theme="dark"] {
+  --ui-surface-tint: #121815;
+  --ui-surface-mint: #131c17;
+  --ui-surface-green-50: #12201a;
+  --ui-surface-green-soft: #141b18;
+  --ui-surface-green-tint: #141c18;
+  --ui-surface-lime-soft: #17201a;
+  --ui-surface-track-green: #22302a;
+  --ui-info-deep: #7ea2ff;
+  --ui-success-text: #4ec98a;
+  --ui-success-soft: #122a1e;
+  --ui-brand-cta: #1f8a52;
+  --ui-brand-cta-hover: #26a05f;
+  --ui-text-deep: #e8efea;
+  --ui-focus-offset: #0b0f0d;
+  --ui-surface-hover-mint: #16241c;
+  --ui-danger-border-soft: #7a2b28;
+  --ui-danger-solid-deep: #b42318;
+  --ui-danger-solid-deeper: #8f1d1d;
+  --ui-danger-ring: #ff6b5e;
+  --ui-danger-strong: #ff6b5e;
+  --ui-surface-neutral: #1a212a;
+  --ui-surface-paper: #141b18;
+  --ui-surface-mint-soft: #131c17;
+  --ui-surface-line: #22302a;
+  --ui-success-deep: #4ec98a;
+  --ui-success-text-deep: #4ec98a;
+  --ui-success-ink: #7fc98d;
+  --ui-warning-deep: #f0b357;
+  --ui-warning-deeper: #f0b357;
+  --ui-warning-soft-2: #2b2013;
+  --ui-border-mint: #33453c;
+  --ui-border-neutral-2: #3b4753;
+  --ui-text-slate: #6f7f78;
+}

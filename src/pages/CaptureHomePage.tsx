@@ -32,8 +32,8 @@ const statusLabel: Record<string, string> = {
 
 const statusStyle: Record<string, string> = {
   planned: "bg-slate-100 text-slate-600",
-  live: "bg-[#22C55E]/12 text-[#168A34]",
-  completed: "bg-[#2F80ED]/12 text-[#1E63B6]",
+  live: "bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]",
+  completed: "bg-[var(--ui-info-solid)]/12 text-[var(--ui-info-deep)]",
   archived: "bg-slate-100 text-slate-400",
 };
 
@@ -86,7 +86,7 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
     <div className="mx-auto max-w-[1480px] px-4 sm:px-6 lg:px-8 py-10 lg:py-12">
       {/* 标题区 */}
       <div className="mb-8">
-        <h1 className="text-4xl font-black text-[#14241B]">现场采集</h1>
+        <h1 className="text-4xl font-black text-[var(--ui-ink)]">现场采集</h1>
         <p className="mt-2 text-lg text-slate-600">
           创建一次新的球场采集任务，系统会记录摄像头、场地、比赛模式和录制视频。
         </p>
@@ -104,12 +104,12 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
 
       {/* 最近采集任务 */}
       <div>
-        <h2 className="text-lg font-bold text-[#14241B] mb-4">最近采集任务</h2>
+        <h2 className="text-lg font-bold text-[var(--ui-ink)] mb-4">最近采集任务</h2>
 
         {loading ? (
           <p className="text-sm text-slate-400">加载中…</p>
         ) : fieldSessions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-[#DDE9D6] p-12 text-center">
+          <div className="rounded-2xl border border-dashed border-[var(--ui-border)] p-12 text-center">
             <Camera size={32} className="mx-auto text-slate-300 mb-3" />
             <p className="text-sm text-slate-400">还没有采集任务</p>
             <p className="text-xs text-slate-300 mt-1">点击上方按钮创建第一次现场采集</p>
@@ -119,15 +119,15 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
             {fieldSessions.map((session) => (
               <button
                 key={session.id}
-                className="sport-card group flex items-center gap-6 p-5 text-left transition hover:-translate-y-0.5 hover:border-[#22C55E]/35"
+                className="sport-card group flex items-center gap-6 p-5 text-left transition hover:-translate-y-0.5 hover:border-[var(--ui-brand)]/35"
                 onClick={() => onNavigate(`/capture/${session.id}`)}
                 type="button"
               >
-                <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-[#22C55E]/10 text-[#168A34]">
+                <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-[var(--ui-brand-solid)]/10 text-[var(--ui-brand-deep)]">
                   <Camera size={20} aria-hidden="true" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <strong className="block text-base font-black text-[#14241B] truncate">
+                  <strong className="block text-base font-black text-[var(--ui-ink)] truncate">
                     {session.title || "未命名采集任务"}
                   </strong>
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500">
@@ -160,7 +160,7 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
                   </span>
                   {session.status === "live" && (
                     <button
-                      className="quiet-button px-2 py-1 text-xs text-[#168A34] opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="quiet-button px-2 py-1 text-xs text-[var(--ui-brand-deep)] opacity-0 group-hover:opacity-100 transition-opacity"
                       onClick={(e) => handleComplete(e, session.id, session.title)}
                       type="button"
                     >
@@ -168,7 +168,7 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
                     </button>
                   )}
                   <button
-                    className="quiet-button px-2 py-1 text-xs text-[#C92A2A] opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="quiet-button px-2 py-1 text-xs text-[var(--ui-danger)] opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={(e) => handleDelete(e, session.id, session.title)}
                     type="button"
                   >

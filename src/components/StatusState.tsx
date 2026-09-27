@@ -19,8 +19,8 @@ export function StatusState({
   return (
     <PageFrame>
       <section className="sport-card p-8 text-center">
-        <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">分析任务</p>
-        <h1 className="mt-3 text-4xl font-black text-[#14241B]">{title}</h1>
+        <p className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">分析任务</p>
+        <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)]">{title}</h1>
         <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-600">{body}</p>
         {notice ? (
           <div className="mx-auto mt-5 max-w-3xl text-left">

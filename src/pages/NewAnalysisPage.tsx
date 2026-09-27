@@ -184,7 +184,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   return (
     <PageFrame>
       <button
-        className="mb-6 inline-flex items-center gap-1.5 text-sm font-bold text-[#168A34] transition hover:text-[#0F7A2B]"
+        className="mb-6 inline-flex items-center gap-1.5 text-sm font-bold text-[var(--ui-brand-deep)] transition hover:text-[#0F7A2B]"
         onClick={() => onNavigate("/library")}
         type="button"
       >
@@ -193,27 +193,27 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
       </button>
       <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <div>
-          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
             <Upload size={16} aria-hidden="true" />
             上传比赛视频
           </p>
-          <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">创建视觉分析任务</h1>
+          <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">创建视觉分析任务</h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
             上传视频会进入本地 Python 后端，四角标定后创建持久化任务，由 worker 执行视觉分析，先输出移动、速度、热力图等真实可追溯反馈。
           </p>
 
-          <div className="mt-6 grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/70 p-4">
+          <div className="mt-6 grid gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-4">
             {[
               ["1", "上传视频", "保留原始文件和基础比赛信息"],
               ["2", "四角标定", "把画面坐标映射到标准匹克球场"],
               ["3", "生成报告", "输出移动轨迹、速度、热力图和有限诊断"],
             ].map(([index, title, body]) => (
-              <div className="flex gap-3 rounded-2xl bg-[#F5FAF1] p-3" key={index}>
-                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#22C55E] text-sm font-black text-[#071008]">
+              <div className="flex gap-3 rounded-2xl bg-[var(--ui-surface-soft)] p-3" key={index}>
+                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ui-brand-solid)] text-sm font-black text-[#071008]">
                   {index}
                 </span>
                 <div>
-                  <strong className="text-[#14241B]">{title}</strong>
+                  <strong className="text-[var(--ui-ink)]">{title}</strong>
                   <p className="mt-1 text-sm text-slate-600">{body}</p>
                 </div>
               </div>
@@ -225,17 +225,17 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">视频文件</p>
             {videoIdParam ? (
-              <div className="mt-3 rounded-3xl border border-[#22C55E]/30 bg-[#F0FFF0] p-6 text-center">
-                <span className="grid size-14 place-items-center mx-auto rounded-full bg-[#22C55E]/15 text-[#168A34]">
+              <div className="mt-3 rounded-3xl border border-[var(--ui-brand)]/30 bg-[#F0FFF0] p-6 text-center">
+                <span className="grid size-14 place-items-center mx-auto rounded-full bg-[var(--ui-brand-solid)]/15 text-[var(--ui-brand-deep)]">
                   <Camera size={24} aria-hidden="true" />
                 </span>
-                <strong className="mt-4 block text-lg text-[#14241B]">已选择视频</strong>
+                <strong className="mt-4 block text-lg text-[var(--ui-ink)]">已选择视频</strong>
                 <p className="mt-2 text-sm text-slate-500">
                   跳过文件上传步骤，直接进行四角标定
                 </p>
               </div>
             ) : (
-            <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-[#BFD5B8] bg-[#F5FAF1] p-8 text-center transition hover:border-[#22C55E]/60 hover:bg-[#F9FFF6]">
+            <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-[#BFD5B8] bg-[var(--ui-surface-soft)] p-8 text-center transition hover:border-[var(--ui-brand)]/60 hover:bg-[var(--ui-surface-green-tint)]">
               <input
                 accept="video/*"
                 className="sr-only"
@@ -249,10 +249,10 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 }}
                 type="file"
               />
-              <span className="grid size-14 place-items-center rounded-full bg-[#22C55E]/15 text-[#168A34]">
+              <span className="grid size-14 place-items-center rounded-full bg-[var(--ui-brand-solid)]/15 text-[var(--ui-brand-deep)]">
                 <Upload size={24} aria-hidden="true" />
               </span>
-              <strong className="mt-4 text-lg text-[#14241B]">
+              <strong className="mt-4 text-lg text-[var(--ui-ink)]">
                 {selectedFile ? selectedFile.name : "选择比赛视频"}
               </strong>
               <p className="mt-2 text-sm text-slate-500">
@@ -281,7 +281,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               onChange={setRosterConfirmation}
             />
           ) : (
-            <div className="mt-4 rounded-2xl border border-[#F4D8A8] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
+            <div className="mt-4 rounded-2xl border border-[var(--ui-warning-border)] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
               已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要场地控制画像时，请切回新流程。
             </div>
           )}
@@ -346,7 +346,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   type="button"
                   className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
                     metadata.matchFormat === "doubles"
-                      ? "bg-white text-gray-900 shadow-sm border border-gray-200"
+                      ? "bg-[var(--ui-surface)] text-gray-900 shadow-sm border border-gray-200"
                       : "text-gray-500 hover:text-gray-700"
                   }`}
                   onClick={() => updateMetadata("matchFormat", "doubles")}
@@ -357,7 +357,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                   type="button"
                   className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
                     metadata.matchFormat === "singles"
-                      ? "bg-white text-gray-900 shadow-sm border border-gray-200"
+                      ? "bg-[var(--ui-surface)] text-gray-900 shadow-sm border border-gray-200"
                       : "text-gray-500 hover:text-gray-700"
                   }`}
                   onClick={() => updateMetadata("matchFormat", "singles")}
@@ -393,31 +393,31 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
             </div>
           ) : null}
 
-          <div className="mt-6 rounded-3xl border border-[#DDE9D6] bg-white/70 p-4">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">模型推理</p>
+          <div className="mt-6 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">模型推理</p>
             <p className="mt-1 text-xs text-slate-500">选择本次分析是否运行以下模型推理（默认开启，可手动关闭）。</p>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-[#F5FAF1] px-3 py-2.5">
-                <span className="text-sm font-semibold text-[#14241B]">人体检测 (YOLO)</span>
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-[var(--ui-surface-soft)] px-3 py-2.5">
+                <span className="text-sm font-semibold text-[var(--ui-ink)]">人体检测 (YOLO)</span>
                 <input
                   checked={enableModelInference}
-                  className="size-4 accent-[#22C55E]"
+                  className="size-4 accent-[var(--ui-brand)]"
                   onChange={(event) => setEnableModelInference(event.target.checked)}
                   type="checkbox"
                 />
               </label>
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-[#F5FAF1] px-3 py-2.5">
-                <span className="text-sm font-semibold text-[#14241B]">姿态识别 (RTMPose)</span>
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-[var(--ui-surface-soft)] px-3 py-2.5">
+                <span className="text-sm font-semibold text-[var(--ui-ink)]">姿态识别 (RTMPose)</span>
                 <input
                   checked={enablePoseInference}
-                  className="size-4 accent-[#22C55E]"
+                  className="size-4 accent-[var(--ui-brand)]"
                   onChange={(event) => setEnablePoseInference(event.target.checked)}
                   type="checkbox"
                 />
               </label>
             </div>
             {!metadataComplete ? (
-              <p className="mt-2 text-xs text-[#A45A00]">完成视频选择与四角标定后，人体检测与姿态识别才会真正运行。</p>
+              <p className="mt-2 text-xs text-[var(--ui-warning)]">完成视频选择与四角标定后，人体检测与姿态识别才会真正运行。</p>
             ) : null}
           </div>
 

@@ -10,17 +10,17 @@ export function AnalysisFlowSelector({ value, onChange }: AnalysisFlowSelectorPr
   return (
     <section
       aria-label="分析流程选择"
-      className="rounded-3xl border border-[#DDE9D6] bg-white/70 p-4"
+      className="rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-4"
       data-testid="analysis-flow-selector"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">分析流程</p>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">分析流程</p>
           <p className="mt-1 text-sm leading-6 text-slate-600">
             新流程会冻结本次任务的 P1–P4 名册、发球队、比分和回合上下文；旧流程用于兼容历史分析。
           </p>
         </div>
-        <span className="rounded-full bg-[#EAF8EA] px-2.5 py-1 text-xs font-bold text-[#168A34]">
+        <span className="rounded-full bg-[#EAF8EA] px-2.5 py-1 text-xs font-bold text-[var(--ui-brand-deep)]">
           默认：新流程
         </span>
       </div>
@@ -29,8 +29,8 @@ export function AnalysisFlowSelector({ value, onChange }: AnalysisFlowSelectorPr
           aria-pressed={value === "new"}
           className={`rounded-2xl border px-3 py-3 text-left transition ${
             value === "new"
-              ? "border-[#22C55E] bg-[#F0FFF0] text-[#14241B] shadow-sm"
-              : "border-[#DDE9D6] bg-white text-slate-500 hover:border-[#8FD39D]"
+              ? "border-[var(--ui-brand)] bg-[#F0FFF0] text-[var(--ui-ink)] shadow-sm"
+              : "border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-500 hover:border-[#8FD39D]"
           }`}
           data-testid="analysis-flow-new"
           onClick={() => onChange("new")}
@@ -43,8 +43,8 @@ export function AnalysisFlowSelector({ value, onChange }: AnalysisFlowSelectorPr
           aria-pressed={value === "legacy"}
           className={`rounded-2xl border px-3 py-3 text-left transition ${
             value === "legacy"
-              ? "border-[#F4B860] bg-[#FFF8EA] text-[#14241B] shadow-sm"
-              : "border-[#DDE9D6] bg-white text-slate-500 hover:border-[#D8B26E]"
+              ? "border-[#F4B860] bg-[#FFF8EA] text-[var(--ui-ink)] shadow-sm"
+              : "border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-500 hover:border-[#D8B26E]"
           }`}
           data-testid="analysis-flow-legacy"
           onClick={() => onChange("legacy")}

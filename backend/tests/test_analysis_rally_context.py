@@ -13,6 +13,7 @@ from app.schemas.analysis import AnalysisJobCreate, AnalysisUploadMetadata
 from app.schemas.field_session import FieldSessionCreate
 from app.schemas.rally_context import (
     AnalysisRosterConfirmationEntry,
+    AnalysisRosterSnapshotPayload,
     RosterConfirmationRequest,
     context_hash,
 )
@@ -478,7 +479,27 @@ def test_attach_window_context_binding_records_method_and_hash(db):
 # ── 身份连续性审计（3.4）──
 
 
-def test_binding_audit_confirms_and_reports_failures(db):
+def _formal_sample(
+    player_id: str,
+    *,
+    timestamp_ms: int,
+    x_ft: float,
+    y_ft: float,
+    bbox: list[float] | None = None,
+) -> dict:
+    sample: dict = {
+        "player_id": player_id,
+        "take_timestamp_ms": timestamp_ms,
+        "x_ft": x_ft,
+        "y_ft": y_ft,
+    }
+    if bbox is not None:
+        sample["bbox"] = bbox
+    return sample
+
+
+def test_binding_audit_confirms_only_simultaneous_one_to_one_matches(db):
+    """同一时刻、同一机位的唯一几何匹配才确认；越出时间窗口的不确认。"""
     take_id = make_take(db)
     roster = ctx_svc.freeze_roster_snapshot(
         db,
@@ -488,10 +509,15 @@ def test_binding_audit_confirms_and_reports_failures(db):
         request=RosterConfirmationRequest(entries=four_entries()),
     )
     formal_payload = {
-        "player_roster": [{"player_id": "Player_1"}, {"player_id": "Player_3"}],
+        "player_roster": [{"player_id": f"Player_{index}"} for index in range(1, 5)],
         "samples": [
-            {"player_id": "Player_1", "x_ft": 10.5, "y_ft": 20.5},
-            {"player_id": "Player_3", "x_ft": 200.0, "y_ft": 200.0},
+            # Player_1 / Player_2 在锚点时刻附近、位置相符 → 可确认
+            _formal_sample("Player_1", timestamp_ms=1050, x_ft=10.2, y_ft=20.3),
+            _formal_sample("Player_2", timestamp_ms=2040, x_ft=11.1, y_ft=21.2),
+            # Player_3 的观测离锚点 9 秒（超出 2 秒窗口）→ 不确认
+            _formal_sample("Player_3", timestamp_ms=12000, x_ft=12.0, y_ft=22.0),
+            # Player_4 位置相差 40ft → 不确认
+            _formal_sample("Player_4", timestamp_ms=4050, x_ft=53.0, y_ft=63.0),
         ],
     }
     audit = ctx_svc.build_bootstrap_binding_audit(
@@ -500,13 +526,61 @@ def test_binding_audit_confirms_and_reports_failures(db):
     assert audit is not None
     assert audit.roster_hash == roster.roster_hash
     by_player = {entry.canonical_player_id: entry for entry in audit.entries}
-    assert by_player["Player_1"].method == "anchor_reacquire"
     assert by_player["Player_1"].confirmed is True
-    assert by_player["Player_3"].method == "temporal_fallback"
-    assert by_player["Player_2"].method == "unavailable"
-    assert by_player["Player_2"].confirmed is False
-    assert by_player["Player_2"].reason == "bootstrap_binding_failed"
+    assert by_player["Player_1"].method == "anchor_simultaneous_match"
+    assert by_player["Player_1"].formal_canonical_player_id == "Player_1"
+    assert by_player["Player_1"].evidence.time_delta_ms == 50
+    assert by_player["Player_2"].confirmed is True
+    assert by_player["Player_3"].confirmed is False
+    assert by_player["Player_3"].reason in {
+        "bootstrap_binding_no_formal_observation",
+        "bootstrap_binding_outside_time_window",
+    }
+    assert by_player["Player_4"].confirmed is False
     assert audit.status == "partial"
+    # 已确认映射是唯一可消费的 P 槽位 → 正式身份来源
+    assert audit.p_slot_to_formal_player() == {"Player_1": "Player_1", "Player_2": "Player_2"}
+    # 历史弱证据方法不再被用于确认
+    assert all(entry.method != "temporal_fallback" for entry in audit.entries if entry.confirmed)
+
+
+def test_multiview_binding_uses_the_anchor_views_source_timestamp():
+    roster = AnalysisRosterSnapshotPayload(
+        snapshot_id="source-time-test", owner_key="take-x", status="available",
+        entries=[AnalysisRosterConfirmationEntry(
+            canonical_player_id="Player_1", slot_index=0, candidate_id="candidate-b",
+            source_view_id="cam_2", anchor_timestamp_ms=2200,
+            anchor_court_xy=[10.0, 20.0], anchor_bbox=[20, 20, 40, 80],
+        )],
+    )
+    sample = {
+        "global_player_id": "global_player_7", "take_timestamp_ms": 1000,
+        "x_ft": 10.0, "y_ft": 20.0,
+        "view_observations": {
+            "cam_1": {"view_status": "available", "source_timestamp_ms": 1000},
+            "cam_2": {"view_status": "available", "source_timestamp_ms": 2200},
+        },
+    }
+    manifest = {"schema_version": "global-player-roster.v1", "players": [
+        {"global_player_id": "global_player_7", "player_id": "Player_3"}
+    ]}
+    audit = ctx_svc.build_bootstrap_binding_audit(
+        job_id="job-source-time", roster=roster,
+        formal_roster_payload={"samples": [sample]}, formal_roster_manifest=manifest,
+    )
+    assert audit is not None
+    assert audit.entries[0].confirmed is True
+    assert audit.entries[0].formal_canonical_player_id == "Player_3"
+    assert audit.entries[0].evidence.view_id == "cam_2"
+    assert audit.entries[0].evidence.time_delta_ms == 0
+
+    sample["view_observations"]["cam_2"]["view_status"] = "unavailable"
+    without_b = ctx_svc.build_bootstrap_binding_audit(
+        job_id="job-source-time", roster=roster,
+        formal_roster_payload={"samples": [sample]}, formal_roster_manifest=manifest,
+    )
+    assert without_b is not None
+    assert without_b.entries[0].confirmed is False
 
 
 def test_binding_audit_is_absent_without_roster(db):
@@ -514,17 +588,108 @@ def test_binding_audit_is_absent_without_roster(db):
     assert ctx_svc.build_bootstrap_binding_audit(job_id="job-x", roster=None, formal_roster_payload={}) is None
 
 
-def test_binding_audit_fails_closed_when_anchor_evidence_is_missing(db):
-    """没有画面/球场锚点时，不能把槽位连续性当作身份确认。"""
+def test_binding_audit_refuses_same_number_without_anchor_evidence(db):
+    """只有相同 Player_N 字符串、没有同时刻证据时不得确认。"""
     take_id = make_take(db)
-    entries = four_entries()
-    entries[0] = entries[0].model_copy(update={"anchor_court_xy": None, "anchor_bbox": None})
     roster = ctx_svc.freeze_roster_snapshot(
         db,
         capture_take_id=take_id,
         video_id=None,
-        job_id="job-audit-missing-anchor",
+        job_id="job-audit-same-number",
+        request=RosterConfirmationRequest(entries=four_entries()[:2]),
+        match_format="singles",
+    )
+    assert roster.status == "available"
+    audit = ctx_svc.build_bootstrap_binding_audit(
+        job_id="job-audit-same-number",
+        roster=roster,
+        formal_roster_payload={"player_roster": [{"player_id": "Player_1"}], "samples": []},
+    )
+    assert audit is not None
+    entry = audit.entries[0]
+    assert entry.canonical_player_id == "Player_1"
+    assert entry.confirmed is False
+    assert entry.formal_canonical_player_id is None
+    assert entry.reason == "bootstrap_binding_no_formal_observation"
+    assert audit.status == "unavailable"
+
+
+def test_binding_audit_reports_conflicting_slots_without_silent_renumber(db):
+    """两个槽位竞争同一正式球员时两个槽位都不确认，也不改写编号。"""
+    take_id = make_take(db)
+    entries = four_entries()
+    # 让 P1 与 P2 的锚点落在同一时刻、同一位置，去竞争同一个正式球员。
+    entries[1] = entries[1].model_copy(
+        update={"anchor_timestamp_ms": entries[0].anchor_timestamp_ms, "anchor_court_xy": [10.2, 20.3]}
+    )
+    roster = ctx_svc.freeze_roster_snapshot(
+        db,
+        capture_take_id=take_id,
+        video_id=None,
+        job_id="job-audit-conflict",
         request=RosterConfirmationRequest(entries=entries),
+    )
+    audit = ctx_svc.build_bootstrap_binding_audit(
+        job_id="job-audit-conflict",
+        roster=roster,
+        formal_roster_payload={
+            "player_roster": [{"player_id": "Player_1"}],
+            "samples": [_formal_sample("Player_1", timestamp_ms=1000, x_ft=10.2, y_ft=20.3)],
+        },
+    )
+    assert audit is not None
+    contested = [
+        entry
+        for entry in audit.entries
+        if entry.canonical_player_id in {"Player_1", "Player_2"}
+    ]
+    assert all(entry.confirmed is False for entry in contested)
+    assert any(entry.reason == "bootstrap_binding_conflicting_slots" for entry in contested)
+    assert audit.p_slot_to_formal_player() == {}
+
+
+def test_binding_audit_marks_ambiguous_when_two_players_are_indistinguishable(db):
+    """同一时刻有两个正式球员都满足几何门槛 → 歧义，不确认。"""
+    take_id = make_take(db)
+    roster = ctx_svc.freeze_roster_snapshot(
+        db,
+        capture_take_id=take_id,
+        video_id=None,
+        job_id="job-audit-ambiguous",
+        request=RosterConfirmationRequest(entries=four_entries()[:2]),
+        match_format="singles",
+    )
+    audit = ctx_svc.build_bootstrap_binding_audit(
+        job_id="job-audit-ambiguous",
+        roster=roster,
+        formal_roster_payload={
+            "player_roster": [{"player_id": "Player_1"}, {"player_id": "Player_2"}],
+            "samples": [
+                _formal_sample("Player_1", timestamp_ms=1000, x_ft=10.0, y_ft=20.0),
+                _formal_sample("Player_2", timestamp_ms=1000, x_ft=10.1, y_ft=20.1),
+            ],
+        },
+    )
+    assert audit is not None
+    entry = audit.entries[0]
+    assert entry.confirmed is False
+    assert entry.reason == "bootstrap_binding_ambiguous_match"
+    assert audit.p_slot_to_formal_player() == {}
+
+
+def test_binding_audit_fails_closed_when_anchor_evidence_is_missing(db):
+    """没有画面/球场锚点时，不能把槽位连续性当作身份确认。
+
+    冻结层（任务 3.5）已经会拒绝缺锚点的名册，所以这里**直接构造**名册负载，
+    单独验证审计自身的护栏——历史快照里可能存在结构不完整的条目。
+    """
+    entries = four_entries()
+    entries[0] = entries[0].model_copy(update={"anchor_court_xy": None, "anchor_bbox": None})
+    roster = AnalysisRosterSnapshotPayload(
+        snapshot_id="snap-missing-anchor",
+        owner_key="take-audit-missing-anchor",
+        status="available",
+        entries=entries,
     )
     audit = ctx_svc.build_bootstrap_binding_audit(
         job_id="job-audit-missing-anchor",
@@ -540,11 +705,137 @@ def test_binding_audit_fails_closed_when_anchor_evidence_is_missing(db):
     assert player.formal_canonical_player_id is None
     assert player.method == "unavailable"
     assert player.confirmed is False
-    assert player.reason == "bootstrap_binding_failed"
+    assert player.reason == "bootstrap_binding_anchor_evidence_missing"
     assert audit.status == "unavailable"
 
 
+def test_roster_freeze_rejects_structurally_invalid_entries(db):
+    """槽位数量、候选唯一性与来源完整性都要校验；不合法不得冻结成 available。"""
+    take_id = make_take(db)
+    entries = [
+        entry.model_copy(update={"candidate_id": f"bp_{index}", "slot_index": index})
+        for index, entry in enumerate(four_entries())
+    ]
+
+    duplicated = list(entries)
+    duplicated[3] = duplicated[3].model_copy(update={"candidate_id": "bp_0"})
+    snapshot = ctx_svc.freeze_roster_snapshot(
+        db,
+        capture_take_id=take_id,
+        video_id=None,
+        job_id="job-roster-dup",
+        request=RosterConfirmationRequest(entries=duplicated, initial_team_a_end="end_a"),
+    )
+    assert snapshot.status == "insufficient_candidates"
+    assert snapshot.unavailable_reason == "analysis_roster_invalid_entries"
+
+    missing_source = list(entries)
+    missing_source[2] = missing_source[2].model_copy(update={"source_view_id": None})
+    snapshot2 = ctx_svc.freeze_roster_snapshot(
+        db,
+        capture_take_id=take_id,
+        video_id=None,
+        job_id="job-roster-nosource",
+        request=RosterConfirmationRequest(entries=missing_source, initial_team_a_end="end_a"),
+    )
+    assert snapshot2.status == "insufficient_candidates"
+    assert snapshot2.unavailable_reason == "analysis_roster_invalid_entries"
+
+    missing_anchor = list(entries)
+    missing_anchor[1] = missing_anchor[1].model_copy(
+        update={"anchor_bbox": None, "anchor_court_xy": None}
+    )
+    snapshot3 = ctx_svc.freeze_roster_snapshot(
+        db,
+        capture_take_id=take_id,
+        video_id=None,
+        job_id="job-roster-noanchor",
+        request=RosterConfirmationRequest(entries=missing_anchor, initial_team_a_end="end_a"),
+    )
+    assert snapshot3.status == "insufficient_candidates"
+    assert snapshot3.unavailable_reason == "analysis_roster_invalid_entries"
+
+    ok = ctx_svc.freeze_roster_snapshot(
+        db,
+        capture_take_id=take_id,
+        video_id=None,
+        job_id="job-roster-ok",
+        request=RosterConfirmationRequest(entries=entries, initial_team_a_end="end_a"),
+    )
+    assert ok.status == "available"
+    assert [entry.slot_index for entry in ok.entries] == [0, 1, 2, 3]
+    assert [entry.candidate_id for entry in ok.entries] == ["bp_0", "bp_1", "bp_2", "bp_3"]
+
+
 # ── canonical artifact 的上下文引用（4.4）──
+
+
+def test_trajectory_identity_map_is_gated_by_the_binding_audit(tmp_path):
+    """未通过审计的槽位不得把融合轨迹解析成正式 Player_N（指标随之降级）。"""
+    from app.services import canonical_shot_rally_events as events
+    from app.schemas.rally_context import (
+        BootstrapBindingAuditEntry,
+        BootstrapBindingAuditPayload,
+    )
+
+    manifest = {
+        "schema_version": "global-player-roster.v1",
+        "players": [
+            {
+                "global_player_id": "global_player_1",
+                "player_id": "Player_1",
+                "mapping_confirmed": True,
+                "mapping_method": "direct_reference_binding",
+            },
+            {
+                "global_player_id": "global_player_2",
+                "player_id": "Player_2",
+                "mapping_confirmed": True,
+                "mapping_method": "direct_reference_binding",
+            },
+        ],
+    }
+    manifest_path = tmp_path / "roster_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    class _Storage:
+        def roster_manifest_json_path(self, job_id: str):
+            return manifest_path
+
+    roster = {
+        "entries": [
+            {"canonical_player_id": "Player_1"},
+            {"canonical_player_id": "Player_2"},
+        ]
+    }
+
+    # 无审计（legacy 路径）：保持既往行为
+    legacy = events._frozen_trajectory_identity_map(_Storage(), "job-1", roster)
+    assert legacy == {"global_player_1": "Player_1", "global_player_2": "Player_2"}
+
+    audit = BootstrapBindingAuditPayload(
+        job_id="job-1",
+        roster_hash="hash",
+        status="partial",
+        unavailable_reason="bootstrap_binding_partial",
+        entries=[
+            BootstrapBindingAuditEntry(
+                canonical_player_id="Player_1",
+                formal_canonical_player_id="Player_1",
+                method="anchor_simultaneous_match",
+                confirmed=True,
+            ),
+            BootstrapBindingAuditEntry(
+                canonical_player_id="Player_2",
+                method="unavailable",
+                confirmed=False,
+                reason="bootstrap_binding_insufficient_evidence",
+            ),
+        ],
+    )
+    gated = events._frozen_trajectory_identity_map(_Storage(), "job-1", roster, audit)
+    assert gated == {"global_player_1": "Player_1"}
+    assert audit.p_slot_to_formal_player() == {"Player_1": "Player_1"}
 
 
 def test_formal_window_plan_hash_ignores_context_references():

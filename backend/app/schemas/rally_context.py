@@ -43,12 +43,26 @@ CourtEnd = Literal["end_a", "end_b"]
 RosterSnapshotStatus = Literal["available", "skipped", "insufficient_candidates", "unavailable"]
 
 # bootstrap anchor 到正式 canonical Player 的绑定方法。
+#
+# 只有 `anchor_simultaneous_match` / `anchor_simultaneous_multiview` 属于**强证据**：
+# 它们要求锚点时刻、锚点机位上确实存在与确认框对应的正式观测。历史取值保留是为了
+# 读取既有产物，新的审计产出**不再**用 `temporal_fallback` 确认任何条目。
 BootstrapBindingMethod = Literal[
-    "anchor_reacquire",  # 以 anchor 时空邻域重新捕获同一 canonical player
+    "anchor_simultaneous_match",  # 锚点时刻同机位 bbox 唯一匹配（可带球场/外观佐证）
+    "anchor_simultaneous_multiview",  # 上述匹配同时被第二机位可信观测佐证
+    "anchor_reacquire",  # 历史：以 anchor 时空邻域重新捕获（弱证据，仍可读）
     "partial_reacquire",  # 只在部分帧上稳定关联
-    "temporal_fallback",  # 仅靠时间连续性，置信度低但唯一
+    "temporal_fallback",  # 历史：仅靠时间连续性（**不得**用于确认）
     "unavailable",  # 无法绑定
 ]
+
+# 绑定失败/降级的结构化原因码（下游按字符串消费，不得随意改写）。
+REASON_BINDING_NO_ANCHOR_EVIDENCE = "bootstrap_binding_anchor_evidence_missing"
+REASON_BINDING_NO_FORMAL_OBSERVATION = "bootstrap_binding_no_formal_observation"
+REASON_BINDING_OUTSIDE_TIME_WINDOW = "bootstrap_binding_outside_time_window"
+REASON_BINDING_AMBIGUOUS_MATCH = "bootstrap_binding_ambiguous_match"
+REASON_BINDING_CONFLICTING_SLOTS = "bootstrap_binding_conflicting_slots"
+REASON_BINDING_INSUFFICIENT_EVIDENCE = "bootstrap_binding_insufficient_evidence"
 
 # formal window 与分析回合上下文的绑定方法，优先级由强到弱。
 ContextBindingMethod = Literal[
@@ -68,6 +82,9 @@ REASON_INITIAL_COURT_END_NOT_CONFIRMED = "initial_court_end_not_confirmed"
 REASON_ROSTER_NOT_CONFIRMED = "analysis_roster_not_confirmed"
 REASON_ROSTER_SKIPPED_BY_USER = "analysis_roster_skipped_by_user"
 REASON_ROSTER_INSUFFICIENT_CANDIDATES = "analysis_roster_insufficient_candidates"
+# 提交的名册结构不合法（槽位重复、同一候选占两槽、缺来源或锚点）。这类名册
+# 不能冻结成 available：结构问题会让后续身份绑定无从核验。
+REASON_ROSTER_INVALID_ENTRIES = "analysis_roster_invalid_entries"
 REASON_NO_SCORING_SNAPSHOTS = "no_rally_scoring_snapshots"
 REASON_AMBIGUOUS_TEMPORAL_MATCH = "ambiguous_temporal_match"
 REASON_NO_TEMPORAL_CANDIDATE = "no_temporal_candidate"
@@ -295,9 +312,22 @@ class CourtEndProjectionPayload(BaseModel):
 
 
 class AnalysisRosterConfirmationEntry(BaseModel):
-    """一条 P1–P4 确认记录，含 bootstrap 身份锚点。"""
+    """一条 P1–P4 确认记录，含 bootstrap 身份锚点。
+
+    三个身份层次在这里各有其字段，不得互相顶替：
+
+    - `canonical_player_id` = **用户确认的 P 槽位**（`Player_1`..`Player_4`）。
+    - `candidate_id` = 该槽位对应的预检候选（`candidate_id`）；手工框选时为 None。
+    - `formal_canonical_player_id` 不在这里：它只能由正式绑定审计产出。
+
+    `candidate_id` / `slot_index` **刻意不参与** `roster_snapshot_hash`：它们记录的是
+    "当时看到的是哪个预检候选"，不是名册语义；把新字段塞进 hash 会让既有 Job 读取时
+    重算出的 hash 与落库值不一致。
+    """
 
     canonical_player_id: str
+    candidate_id: str | None = None
+    slot_index: int | None = None
     display_name: str | None = None
     team_id: TeamId | None = None
     source_view_id: str | None = None
@@ -333,19 +363,41 @@ class AnalysisRosterSnapshotPayload(BaseModel):
         return [entry.canonical_player_id for entry in self.entries if entry.team_id == team_id]
 
 
+class BootstrapBindingEvidence(BaseModel):
+    """一次绑定的可核对证据。缺项为 None，不填占位值。"""
+
+    view_id: str | None = None
+    time_delta_ms: int | None = None
+    bbox_iou: float | None = None
+    bbox_center_distance_px: float | None = None
+    court_distance_ft: float | None = None
+    appearance_distance: float | None = None
+    multiview_corroborated: bool | None = None
+    competing_formal_players: int = 0
+    competing_slots: int = 0
+
+
 class BootstrapBindingAuditEntry(BaseModel):
-    """单个 bootstrap anchor 到正式 canonical Player 的绑定结论。"""
+    """单个 bootstrap anchor 到正式 canonical Player 的绑定结论。
+
+    `canonical_player_id` 是**用户确认的 P 槽位**；`formal_canonical_player_id` 是
+    通过同时刻证据唯一匹配到的正式球员。两者相等与否由证据决定，不靠编号推断。
+    """
 
     canonical_player_id: str
+    slot_index: int | None = None
+    candidate_id: str | None = None
     bootstrap_run_id: str | None = None
     source_view_id: str | None = None
     anchor_timestamp_ms: int = 0
+    anchor_bbox: list[float] | None = None
     anchor_court_xy: list[float] | None = None
     formal_canonical_player_id: str | None = None
     method: BootstrapBindingMethod = "unavailable"
     confidence: float | None = None
     confirmed: bool = False
     reason: str | None = None
+    evidence: BootstrapBindingEvidence = Field(default_factory=BootstrapBindingEvidence)
 
 
 class BootstrapBindingAuditPayload(BaseModel):
@@ -358,6 +410,18 @@ class BootstrapBindingAuditPayload(BaseModel):
 
     def binding_hash(self) -> str:
         return canonical_hash(self.model_dump(mode="json"))
+
+    def p_slot_to_formal_player(self) -> dict[str, str]:
+        """已确认的唯一映射：P 槽位 → 正式 canonical Player。
+
+        只有 `confirmed=True` 且一对一不冲突的条目才会出现在结果里；
+        未确认的槽位不返回任何映射（下游据此降级，而不是退回未经确认的编号）。
+        """
+        mapping: dict[str, str] = {}
+        for entry in self.entries:
+            if entry.confirmed and entry.formal_canonical_player_id:
+                mapping[entry.canonical_player_id] = entry.formal_canonical_player_id
+        return mapping
 
 
 # ── 4. Job-bound 分析回合上下文 ──
@@ -426,7 +490,7 @@ class AnalysisRallyContextSnapshotPayload(BaseModel):
 
 
 class PlayerBootstrapCandidate(BaseModel):
-    """bootstrap 返回的单个球员候选。"""
+    """bootstrap 返回的单个球员候选（v1 契约，仅为过渡期向后兼容保留）。"""
 
     canonical_player_id: str
     display_name: str | None = None
@@ -437,10 +501,101 @@ class PlayerBootstrapCandidate(BaseModel):
     confidence: float | None = None
 
 
+# ── 5b. bootstrap v2：自动候选预检契约 ──
+#
+# v1 的 `canonical_player_id` 把「预检候选身份」与「正式 Player_N」混为一谈。
+# v2 显式拆开三层：`candidate_id`（预检运行内稳定）／P 槽位（用户确认的展示位）／
+# `formal_canonical_player_id`（正式追踪身份，只由绑定审计产出）。
+
+PLAYER_BOOTSTRAP_V2_SCHEMA = "player-bootstrap.v2"
+
+
+class PlayerBootstrapCandidateEvidence(BaseModel):
+    """单个候选的可核对证据；缺证据时字段为 None，**不填占位值**。"""
+
+    # 目标球场成员证据（需要标定；无标定时为 None）
+    target_court_membership: float | None = None
+    target_court_occupancy: float | None = None
+    mean_target_court_distance_ft: float | None = None
+    # 短时连续性：出现次数 / 采样帧数
+    continuity: float | None = None
+    coverage_ratio: float | None = None
+    sampled_hits: int = 0
+    sampled_frames: int = 0
+    # 画面质量与外观区分度
+    body_crop_quality: float | None = None
+    appearance_quality: float | None = None
+    appearance_margin: float | None = None
+    # 双机位一致性（仅可信同步、且候选被两机位同时看到时有值）
+    multiview_agreement: float | None = None
+    # 候选落在 canonical 球场的哪一端：`end_a`（y < 中线）/ `end_b`（y > 中线）；
+    # 中线死区内或没有球场投影时为 None。分侧配额选取据此判定，未知侧不受配额约束。
+    side: str | None = None
+
+
+class PlayerBootstrapCandidateV2(BaseModel):
+    """v2 候选：身份锚点与画面证据必须自洽（同一时刻、同一机位）。"""
+
+    candidate_id: str
+    # 建议 P 槽位只是建议；最终映射由用户确认后随 Job 冻结。
+    suggested_slot: int | None = None
+    view_id: str
+    timestamp_ms: int
+    bbox: list[float]
+    # 该候选最佳人物画面的时间/机位由 `view_id` + `timestamp_ms` 唯一确定。
+    frame_url: str | None = None
+    crop_url: str | None = None
+    court_xy: list[float] | None = None
+    confidence: float | None = None
+    score: float | None = None
+    source_views: list[str] = Field(default_factory=list)
+    evidence: PlayerBootstrapCandidateEvidence = Field(
+        default_factory=PlayerBootstrapCandidateEvidence
+    )
+
+
+class PlayerBootstrapReferenceFrame(BaseModel):
+    """主参考画面：只叠加**该帧实际观测到**的候选框。"""
+
+    view_id: str
+    timestamp_ms: int
+    frame_url: str | None = None
+    candidate_ids: list[str] = Field(default_factory=list)
+    observed_bboxes: dict[str, list[float]] = Field(default_factory=dict)
+
+
 class PlayerBootstrapQualityDiagnostic(BaseModel):
     code: str
     detail: str = ""
     severity: Literal["info", "warning", "blocking"] = "info"
+
+
+class PlayerBootstrapResultV2(BaseModel):
+    """受限 player bootstrap v2 的响应契约（确认页默认消费）。"""
+
+    schema_version: Literal["player-bootstrap.v2"] = PLAYER_BOOTSTRAP_V2_SCHEMA
+    status: Literal["available", "insufficient_candidates", "unavailable"]
+    unavailable_reason: str | None = None
+    owner_key: str
+    capture_take_id: str | None = None
+    video_id: str | None = None
+    video_id_b: str | None = None
+    match_format: str | None = None
+    expected_player_count: int = 4
+    clip_start_ms: int = 0
+    clip_end_ms: int | None = None
+    bootstrap_run_id: str | None = None
+    bootstrap_model_version: str | None = None
+    bootstrap_cache_key: str | None = None
+    # 预检使用的机位与双摄是否被信任
+    views: list[str] = Field(default_factory=list)
+    multiview_used: bool = False
+    sampled_frame_count: int = 0
+    reference_frame: PlayerBootstrapReferenceFrame | None = None
+    candidates: list[PlayerBootstrapCandidateV2] = Field(default_factory=list)
+    diagnostics: list[PlayerBootstrapQualityDiagnostic] = Field(default_factory=list)
+    skippable: bool = True
+    consumers_enabled: bool = True
 
 
 class PlayerBootstrapResult(BaseModel):

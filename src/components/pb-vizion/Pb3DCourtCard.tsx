@@ -133,7 +133,7 @@ export default function Pb3DCourtCard() {
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--pb-text-muted,#98a2b3)]">球路报告</p>
           <h2 className="mt-1 text-lg font-black text-[var(--pb-text-primary,#182230)]">分段球路报告</h2>
         </div>
-        <span className="rounded-full bg-[#EAF8F0] px-2.5 py-1 text-xs font-bold text-[#168A34]">{trajectoryCount} 段</span>
+        <span className="rounded-full bg-[var(--ui-surface-mint)] px-2.5 py-1 text-xs font-bold text-[var(--ui-brand-deep)]">{trajectoryCount} 段</span>
       </div>
       <div className="pb-3d-view-btns relative overflow-hidden rounded-2xl bg-gray-50 aspect-[16/10]">
         {webGlError ? (

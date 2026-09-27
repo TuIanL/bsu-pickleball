@@ -70,13 +70,13 @@ function EventMarker({
   return (
     <button
       aria-label={label}
-      className="group absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full p-1 text-left transition hover:z-10 focus:z-10 focus:outline-none focus:ring-2 focus:ring-[#168A34]/40"
+      className="group absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full p-1 text-left transition hover:z-10 focus:z-10 focus:outline-none focus:ring-2 focus:ring-[var(--ui-brand-deep)]/40"
       onClick={() => onSelect(event)}
       style={{ left: `${Math.max(2, Math.min(98, position))}%` }}
       type="button"
     >
       <span
-        className="block h-5 w-5 rounded-full border-[3px] bg-white shadow-sm transition group-hover:scale-125"
+        className="block h-5 w-5 rounded-full border-[3px] bg-[var(--ui-surface)] shadow-sm transition group-hover:scale-125"
         style={{ borderColor: playerRing, opacity: QUALITY_OPACITY[event.qualityBand] }}
       >
         <span className="block h-full w-full rounded-full" style={{ backgroundColor: color }} />
@@ -101,17 +101,17 @@ function TimelineRow({
   const firstTime = timedEvents.length ? Math.min(...timedEvents) : row.startMs;
   const lastTime = timedEvents.length ? Math.max(...timedEvents) : row.endMs;
   return (
-    <div className="rounded-2xl border border-[#E6EFE0] bg-white/75 p-3">
+    <div className="rounded-2xl border border-[#E6EFE0] bg-[var(--ui-surface)]/75 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <strong className="block truncate text-sm text-[#14241B]">{row.label}</strong>
+          <strong className="block truncate text-sm text-[var(--ui-ink)]">{row.label}</strong>
           <span className="text-xs text-slate-500">
             {row.events.length} 个击球 · {firstTime != null ? formatMs(firstTime) : "时间未知"}–{lastTime != null ? formatMs(lastTime) : "时间未知"}
           </span>
         </div>
         {row.isUnassigned && <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">边界外事件</span>}
       </div>
-      <div className="relative mt-4 h-16 overflow-x-auto rounded-xl bg-[#F5FAF1] px-3">
+      <div className="relative mt-4 h-16 overflow-x-auto rounded-xl bg-[var(--ui-surface-soft)] px-3">
         <div className="relative h-full min-w-[420px]">
           <div className="absolute left-0 right-0 top-1/2 h-px bg-[#CFE0C7]" />
           {row.events.map((event, index) => (
@@ -133,21 +133,21 @@ function TimelineRow({
 
 function EventDetails({ event, onSeekToMs }: { event: RallyShotTimelineEvent; onSeekToMs?: (timestampMs: number) => void }) {
   return (
-    <div className="rounded-2xl border border-[#CFE0C7] bg-[#F5FAF1] p-4" data-testid="rally-shot-details">
+    <div className="rounded-2xl border border-[#CFE0C7] bg-[var(--ui-surface-soft)] p-4" data-testid="rally-shot-details">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#168A34]">事件详情</p>
-          <h3 className="mt-1 text-base font-black text-[#14241B]">{event.shotId} · {event.stageLabel}</h3>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--ui-brand-deep)]">事件详情</p>
+          <h3 className="mt-1 text-base font-black text-[var(--ui-ink)]">{event.shotId} · {event.stageLabel}</h3>
         </div>
         <span className="rounded-full px-2.5 py-1 text-xs font-bold" style={{ backgroundColor: `${STAGE_COLORS[event.stage]}18`, color: STAGE_COLORS[event.stage] }}>
           {event.qualityLabel}
         </span>
       </div>
       <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs text-slate-600 sm:grid-cols-2">
-        <div><dt className="inline text-slate-400">击球者：</dt> <dd className="inline font-bold text-[#14241B]">{event.ownershipLabel}</dd></div>
-        <div><dt className="inline text-slate-400">时间：</dt> <dd className="inline font-bold text-[#14241B]">{formatMs(event.timestampMs)}</dd></div>
-        <div><dt className="inline text-slate-400">证据窗口：</dt> <dd className="inline font-bold text-[#14241B]">{event.canSeek ? `${formatMs(event.evidenceStartMs)}–${formatMs(event.evidenceEndMs)}` : "暂无可跳转证据"}</dd></div>
-        <div><dt className="inline text-slate-400">轨迹长度：</dt> <dd className="inline font-bold text-[#14241B]">{event.pathDistanceFt == null ? "—" : `${event.pathDistanceFt.toFixed(1)} ft`}</dd></div>
+        <div><dt className="inline text-slate-400">击球者：</dt> <dd className="inline font-bold text-[var(--ui-ink)]">{event.ownershipLabel}</dd></div>
+        <div><dt className="inline text-slate-400">时间：</dt> <dd className="inline font-bold text-[var(--ui-ink)]">{formatMs(event.timestampMs)}</dd></div>
+        <div><dt className="inline text-slate-400">证据窗口：</dt> <dd className="inline font-bold text-[var(--ui-ink)]">{event.canSeek ? `${formatMs(event.evidenceStartMs)}–${formatMs(event.evidenceEndMs)}` : "暂无可跳转证据"}</dd></div>
+        <div><dt className="inline text-slate-400">轨迹长度：</dt> <dd className="inline font-bold text-[var(--ui-ink)]">{event.pathDistanceFt == null ? "—" : `${event.pathDistanceFt.toFixed(1)} ft`}</dd></div>
       </dl>
       {event.canSeek && event.evidenceStartMs != null ? (
         <button className="green-button mt-4 px-3 py-2 text-xs" onClick={() => onSeekToMs?.(event.evidenceStartMs!)} type="button">
@@ -167,25 +167,25 @@ export function RallyShotTimeline({ artifact, loadState, status, detail, onSeekT
   const isUnavailable = loadState === "unavailable" || loadState === "failed" || artifact?.status !== "available";
 
   return (
-    <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4 md:col-span-2">
+    <article className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4 md:col-span-2">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">回合事件分析</p>
-          <h3 className="mt-2 text-xl font-black text-[#14241B]">回合—击球阶段时序图</h3>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">回合事件分析</p>
+          <h3 className="mt-2 text-xl font-black text-[var(--ui-ink)]">回合—击球阶段时序图</h3>
           <p className="mt-1 text-sm leading-6 text-slate-500">沿视频时间轴查看每个回合的击球阶段、球员归属和可回放证据。</p>
         </div>
-        <span className="rounded-full bg-[#E9F5E4] px-2.5 py-1 text-xs font-black text-[#168A34]">SHOT / RALLY</span>
+        <span className="rounded-full bg-[#E9F5E4] px-2.5 py-1 text-xs font-black text-[var(--ui-brand-deep)]">SHOT / RALLY</span>
       </div>
 
       {loadState === "loading" ? (
         <div className="mt-5 rounded-2xl border border-dashed border-[#CFE0C7] bg-[#F8FCF6] p-5 text-sm text-slate-500" role="status">正在读取回合事件…</div>
       ) : isUnavailable ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F8FCF6] p-5">
+        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[#F8FCF6] p-5">
           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-600">{loadState === "failed" || status === "failed" ? "读取失败" : "不可用"}</span>
           <p className="mt-3 text-sm leading-6 text-slate-500">{detail || artifact?.detail || "当前任务没有可用的回合—击球事件数据。"}</p>
         </div>
       ) : model?.mode === "empty" ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-[#DDE9D6] bg-[#F8FCF6] p-5 text-sm text-slate-500">暂无可展示击球事件。</div>
+        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[#F8FCF6] p-5 text-sm text-slate-500">暂无可展示击球事件。</div>
       ) : model ? (
         <>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -195,9 +195,9 @@ export function RallyShotTimeline({ artifact, loadState, status, detail, onSeekT
               ["平均每回合", formatAverage(model.summary.averageShotsPerRally)],
               ["归属不明", model.summary.unassignedCount],
             ].map(([label, value]) => (
-              <div className="rounded-xl bg-[#F5FAF1] px-3 py-2" key={label}>
+              <div className="rounded-xl bg-[var(--ui-surface-soft)] px-3 py-2" key={label}>
                 <span className="block text-[11px] font-bold text-slate-400">{label}</span>
-                <strong className="mt-1 block text-lg font-black tabular-nums text-[#14241B]">{value}</strong>
+                <strong className="mt-1 block text-lg font-black tabular-nums text-[var(--ui-ink)]">{value}</strong>
               </div>
             ))}
           </div>

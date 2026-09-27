@@ -110,6 +110,18 @@ describe("LibraryItemWorkspace 分析入口", () => {
     expect(screen.queryByRole("button", { name: "评分校准" })).toBeNull();
   });
 
+  it("素材工作区不再提供独立的片段页标签", async () => {
+    (resolveLibraryItemByRef as Mock).mockResolvedValue(item({
+      ref: { kind: "sync_recording", sourceId: "sync-1" },
+      sourceType: "sync_recording",
+      fieldSessionId: "fs-1",
+      captureTakeId: "take-1",
+    }));
+    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    await screen.findByText("测试素材");
+    expect(screen.queryByRole("button", { name: "片段" })).toBeNull();
+  });
+
   it("概览列出历史分析任务，并可删除已完成任务（保留视频）", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const target = item({

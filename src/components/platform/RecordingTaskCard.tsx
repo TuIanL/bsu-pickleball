@@ -46,14 +46,14 @@ export function RecordingTaskCard({
   };
 
   return (
-    <article className={`sport-card p-5 sm:p-6 ${selected ? "border-[#22C55E]/50 ring-1 ring-[#22C55E]/20" : ""}`}>
+    <article className={`sport-card p-5 sm:p-6 ${selected ? "border-[var(--ui-brand)]/50 ring-1 ring-[var(--ui-brand)]/20" : ""}`}>
       <div className="grid gap-5 lg:grid-cols-[1fr_0.38fr] lg:items-center">
         <div className="flex items-start gap-3">
           {selectable && (
             <input
               type="checkbox"
               checked={selected}
-              className="mt-1 size-4 shrink-0 accent-[#22C55E]"
+              className="mt-1 size-4 shrink-0 accent-[var(--ui-brand)]"
               onChange={() => onToggleSelect?.(session.session_id)}
             />
           )}
@@ -63,10 +63,10 @@ export function RecordingTaskCard({
                 <Camera size={12} /> 录制视频
               </span>
               <span className={`rounded-full px-3 py-1 text-xs font-black ${statusColor(session.status)}`}>{statusLabel(session.status)}</span>
-              {hasAnalysis && <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/8 px-3 py-1 text-xs font-bold text-[#168A34]">已分析</span>}
+              {hasAnalysis && <span className="rounded-full border border-[var(--ui-brand)]/30 bg-[var(--ui-brand-solid)]/8 px-3 py-1 text-xs font-bold text-[var(--ui-brand-deep)]">已分析</span>}
               {session.duration_sec ? <span className="text-xs text-slate-400">{session.duration_sec.toFixed(0)}秒</span> : null}
             </div>
-            <h4 className="text-lg font-black text-[#14241B]">{session.court_name || session.session_id}</h4>
+            <h4 className="text-lg font-black text-[var(--ui-ink)]">{session.court_name || session.session_id}</h4>
             <p className="mt-1 text-xs text-slate-400">
               {session.camera_id} · {session.camera_angle ?? "未知角度"} · {session.match_format === "doubles" ? "双打" : "单打"}
             </p>
@@ -94,7 +94,7 @@ export function RecordingTaskCard({
             </button>
           )}
           {session.status !== "recording" && (
-            <button className="quiet-button px-3 py-2 text-xs text-[#C92A2A]" onClick={handleDelete} type="button">
+            <button className="quiet-button px-3 py-2 text-xs text-[var(--ui-danger)]" onClick={handleDelete} type="button">
               <Trash2 size={12} className="inline mr-1" />删除
             </button>
           )}

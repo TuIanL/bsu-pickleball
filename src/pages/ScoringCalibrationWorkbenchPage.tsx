@@ -18,7 +18,6 @@ import {
   reviewScoringCalibrationPackage,
   updateScoringCalibrationAnnotation,
 } from "../services/analysisClient";
-import { SegmentVideoPlayer, type SegmentVideoPlayerHandle } from "../components/SegmentVideoPlayer";
 import { ScoringCalibrationTimeline } from "../components/ScoringCalibrationTimeline";
 import type {
   AnnotationDecision,
@@ -81,7 +80,6 @@ const EMPTY_FORM: AnnotationFormState = {
 };
 
 export function ScoringCalibrationWorkbenchPage({
-  fieldSessionId,
   takeId,
   onNavigate,
 }: {
@@ -109,7 +107,7 @@ export function ScoringCalibrationWorkbenchPage({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const playerRef = useRef<SegmentVideoPlayerHandle>(null);
+  const playerRef = useRef<HTMLVideoElement | null>(null);
 
   const trackOptions = useMemo(
     () => (take?.video_ids ?? []).map((id, index) => ({
@@ -188,7 +186,7 @@ export function ScoringCalibrationWorkbenchPage({
     const start = rally.effective_start_ms ?? rally.start_ms;
     setActiveRallyId(rally.id);
     setCurrentTimeMs(start);
-    playerRef.current?.seekToTakeTime(start);
+    if (playerRef.current) playerRef.current.currentTime = start / 1000;
     if (resetForm) {
       setSelectedAnnotationId(null);
       setSelectedCandidateId(null);
@@ -235,7 +233,7 @@ export function ScoringCalibrationWorkbenchPage({
     setAdvancedOpen(true);
     if (annotation.rally_segment_id && queueRallies.some((rally) => rally.id === annotation.rally_segment_id)) setActiveRallyId(annotation.rally_segment_id);
     setCurrentTimeMs(annotation.evidence_start_ms);
-    playerRef.current?.seekToTakeTime(annotation.evidence_start_ms);
+    if (playerRef.current) playerRef.current.currentTime = annotation.evidence_start_ms / 1000;
   };
 
   const selectCandidate = (candidate: ScoringCalibrationCandidate) => {
@@ -258,7 +256,7 @@ export function ScoringCalibrationWorkbenchPage({
       decision: "accepted",
     });
     setCurrentTimeMs(Math.max(0, candidate.start_ms ?? eventMs - 500));
-    playerRef.current?.seekToTakeTime(Math.max(0, candidate.start_ms ?? eventMs - 500));
+    if (playerRef.current) playerRef.current.currentTime = Math.max(0, candidate.start_ms ?? eventMs - 500) / 1000;
   };
 
   const startManualAnnotation = () => {
@@ -480,16 +478,16 @@ export function ScoringCalibrationWorkbenchPage({
 
   if (loading) return <div className="p-8 text-sm text-slate-400">正在加载评分校准工作台…</div>;
   if (loadError || !take) {
-    return <div className="mx-auto max-w-4xl p-8 text-center text-sm text-[#B91C1C]">{loadError ?? "CaptureTake 不存在"}</div>;
+    return <div className="mx-auto max-w-4xl p-8 text-center text-sm text-[var(--ui-danger-deep)]">{loadError ?? "CaptureTake 不存在"}</div>;
   }
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-4 px-4 py-6">
       <div className="flex flex-wrap items-center gap-3">
-        <button className="inline-flex items-center gap-1 text-sm text-[#2F80ED]" onClick={() => onNavigate(`/capture/${fieldSessionId}/takes/${takeId}/segments`)}>
-          <ArrowLeft size={16} /> 返回片段管理
+        <button className="inline-flex items-center gap-1 text-sm text-[var(--ui-info)]" onClick={() => onNavigate(`/recording/${take.source_session_id}`)}>
+          <ArrowLeft size={16} /> 返回录制工作区
         </button>
-        <h1 className="text-lg font-bold text-[#14241B]">评分校准标注工作台</h1>
+        <h1 className="text-lg font-bold text-[var(--ui-ink)]">评分校准标注工作台</h1>
         {currentPackage && <StatusBadge status={currentPackage.status} revision={currentPackage.revision} />}
         {packageList.length > 1 && (
           <select
@@ -505,12 +503,12 @@ export function ScoringCalibrationWorkbenchPage({
         <div className="ml-auto flex items-center gap-2">
           {message && <span className="max-w-[320px] text-xs text-slate-500">{message}</span>}
           {currentPackage?.status === "locked" ? (
-            <button className="inline-flex items-center gap-1 rounded-lg border border-[#2F80ED] px-3 py-2 text-xs font-bold text-[#2F80ED]" onClick={() => void createRevision()} disabled={saving}>
+            <button className="inline-flex items-center gap-1 rounded-lg border border-[var(--ui-info)] px-3 py-2 text-xs font-bold text-[var(--ui-info)]" onClick={() => void createRevision()} disabled={saving}>
               <RotateCcw size={14} /> 创建修订
             </button>
           ) : currentPackage ? (
             <>
-              <button className="inline-flex items-center gap-1 rounded-lg border border-[#64748B] px-3 py-2 text-xs font-bold text-[#475569]" onClick={() => void markReviewed()} disabled={saving}>
+              <button className="inline-flex items-center gap-1 rounded-lg border border-[#64748B] px-3 py-2 text-xs font-bold text-[var(--ui-text-body)]" onClick={() => void markReviewed()} disabled={saving}>
                 <Check size={14} /> 标记 reviewed
               </button>
               <button className="green-button inline-flex items-center gap-1 px-3 py-2 text-xs" onClick={() => void lockPackage()} disabled={saving}>
@@ -522,11 +520,11 @@ export function ScoringCalibrationWorkbenchPage({
       </div>
 
       {!currentPackage ? (
-        <div className="rounded-2xl border border-dashed border-[#B8CDB5] bg-white p-10 text-center">
-          <h2 className="text-base font-bold text-[#14241B]">还没有评分校准标注包</h2>
+        <div className="rounded-2xl border border-dashed border-[var(--ui-border-mint)] bg-[var(--ui-surface)] p-10 text-center">
+          <h2 className="text-base font-bold text-[var(--ui-ink)]">还没有评分校准标注包</h2>
           <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">请使用已注册的本地比赛视频创建一个 draft。PB Vision 分享链接不会直接作为系统视频源。</p>
           {(take.video_ids?.length ?? 0) === 0 ? (
-            <p className="mt-4 text-sm font-bold text-[#B91C1C]">当前 CaptureTake 没有可播放视频，请先完成视频注册。</p>
+            <p className="mt-4 text-sm font-bold text-[var(--ui-danger-deep)]">当前 CaptureTake 没有可播放视频，请先完成视频注册。</p>
           ) : (
             <button className="green-button mt-5 inline-flex items-center gap-2 px-4 py-2 text-sm" onClick={() => void createPackage()} disabled={saving}>
               <Plus size={16} /> 创建 draft 标注包
@@ -538,16 +536,39 @@ export function ScoringCalibrationWorkbenchPage({
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
             <div className="space-y-4">
               {activeVideoUrl ? (
-                <SegmentVideoPlayer
-                  ref={playerRef}
-                  videoUrl={activeVideoUrl}
-                  trackOptions={trackOptions}
-                  onTrackChange={(index) => { setActiveVideoIndex(index); setForm((current) => ({ ...current, video_id: take.video_ids?.[index] ?? "" })); }}
-                  onTimeUpdate={setCurrentTimeMs}
-                  onDurationReady={setDurationMs}
-                />
+                <div className="overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[#091016]">
+                  <video
+                    ref={playerRef}
+                    className="aspect-video w-full bg-black object-contain"
+                    src={activeVideoUrl}
+                    controls
+                    muted
+                    playsInline
+                    preload="metadata"
+                    onTimeUpdate={(event) => setCurrentTimeMs(event.currentTarget.currentTime * 1000)}
+                    onLoadedMetadata={(event) => setDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)}
+                  />
+                  {trackOptions.length > 1 ? (
+                    <div className="flex justify-end px-3 py-2">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+                        机位
+                        <select
+                          className="rounded-lg border border-white/20 bg-[#17211c] px-2 py-1 text-xs"
+                          value={activeVideoIndex}
+                          onChange={(event) => {
+                            const index = Number(event.target.value);
+                            setActiveVideoIndex(index);
+                            setForm((current) => ({ ...current, video_id: take.video_ids?.[index] ?? "" }));
+                          }}
+                        >
+                          {trackOptions.map((option, index) => <option key={option.url} value={index}>{option.label}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
+                </div>
               ) : (
-                <div className="grid aspect-video place-items-center rounded-2xl border border-[#FECACA] bg-[#FEF2F2] text-sm text-[#B91C1C]">暂无可用视频回放</div>
+                <div className="grid aspect-video place-items-center rounded-2xl border border-[#FECACA] bg-[var(--ui-danger-soft)] text-sm text-[var(--ui-danger-deep)]">暂无可用视频回放</div>
               )}
               <ScoringCalibrationTimeline
                 segments={queueRallies}
@@ -557,7 +578,7 @@ export function ScoringCalibrationWorkbenchPage({
                 currentTimeMs={currentTimeMs}
                 selectedAnnotationId={selectedAnnotationId}
                 selectedCandidateId={selectedCandidateId}
-                onSeek={(ms) => { setCurrentTimeMs(ms); playerRef.current?.seekToTakeTime(ms); }}
+                onSeek={(ms) => { setCurrentTimeMs(ms); if (playerRef.current) playerRef.current.currentTime = ms / 1000; }}
                 onSelectAnnotation={selectAnnotation}
                 onSelectCandidate={selectCandidate}
               />
@@ -580,10 +601,10 @@ export function ScoringCalibrationWorkbenchPage({
                 onSkip={skipCurrentRally}
                 onNext={() => { const destination = nextRally(); if (destination) focusRally(destination); }}
               />
-              <div className="rounded-2xl border border-[#B8CDB5] bg-[#F6FBF3] p-4">
+              <div className="rounded-2xl border border-[var(--ui-border-mint)] bg-[#F6FBF3] p-4">
                 <div className="flex items-center gap-2">
-                  <h2 className="mr-auto text-sm font-bold text-[#14241B]">高级信息</h2>
-                  <button type="button" className="rounded-lg border border-[#B8CDB5] bg-white px-3 py-1.5 text-[11px] font-bold text-[#2F80ED]" onClick={() => setAdvancedOpen((current) => !current)}>
+                  <h2 className="mr-auto text-sm font-bold text-[var(--ui-ink)]">高级信息</h2>
+                  <button type="button" className="rounded-lg border border-[var(--ui-border-mint)] bg-[var(--ui-surface)] px-3 py-1.5 text-[11px] font-bold text-[var(--ui-info)]" onClick={() => setAdvancedOpen((current) => !current)}>
                     {advancedOpen ? "收起详细字段" : "补充字段"}
                   </button>
                 </div>
@@ -606,11 +627,11 @@ export function ScoringCalibrationWorkbenchPage({
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+            <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
               <div className="mb-3 flex flex-wrap items-center gap-2">
-                <h2 className="mr-auto text-sm font-bold text-[#14241B]">人工标注队列</h2>
+                <h2 className="mr-auto text-sm font-bold text-[var(--ui-ink)]">人工标注队列</h2>
                 {(["all", "unreviewed", "uncertain", "warning"] as const).map((value) => (
-                  <button key={value} className={`rounded-full px-3 py-1 text-[11px] font-bold ${filter === value ? "bg-[#2F80ED] text-white" : "bg-slate-100 text-slate-500"}`} onClick={() => setFilter(value)}>
+                  <button key={value} className={`rounded-full px-3 py-1 text-[11px] font-bold ${filter === value ? "bg-[var(--ui-info-solid)] text-white" : "bg-slate-100 text-slate-500"}`} onClick={() => setFilter(value)}>
                     {{ all: "全部", unreviewed: "未复核", uncertain: "不确定", warning: "有 warning" }[value]}
                   </button>
                 ))}
@@ -620,9 +641,9 @@ export function ScoringCalibrationWorkbenchPage({
               ) : (
                 <div className="space-y-1">
                   {visibleAnnotations.map((annotation) => (
-                    <button key={annotation.id} type="button" className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs ${selectedAnnotationId === annotation.id ? "border-[#2F80ED] bg-[#EFF6FF]" : "border-transparent hover:bg-slate-50"}`} onClick={() => selectAnnotation(annotation)}>
+                    <button key={annotation.id} type="button" className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs ${selectedAnnotationId === annotation.id ? "border-[var(--ui-info)] bg-[var(--ui-info-soft)]" : "border-transparent hover:bg-slate-50"}`} onClick={() => selectAnnotation(annotation)}>
                       <span className="w-12 tabular-nums text-slate-400">{formatMs(annotation.event_ms)}</span>
-                      <span className="font-bold text-[#14241B]">{stageLabel(annotation.stage)}</span>
+                      <span className="font-bold text-[var(--ui-ink)]">{stageLabel(annotation.stage)}</span>
                       <span className="text-slate-500">{outcomeLabel(annotation.outcome)}</span>
                       <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[10px]">{decisionLabel(annotation.decision)}</span>
                       <ChevronRight size={14} className="text-slate-300" />
@@ -684,22 +705,22 @@ function QuickSamplingPanel({
   const activeProgress = activeRally ? progressByRally.get(activeRally.id) : undefined;
   const disabled = locked || quickSaving || !activeRally;
   return (
-    <div className="rounded-2xl border border-[#B8CDB5] bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-[var(--ui-border-mint)] bg-[var(--ui-surface)] p-4 shadow-sm">
       <div className="flex flex-wrap items-start gap-3">
         <div className="mr-auto">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-bold text-[#14241B]">快速校准</h2>
-            <span className="rounded-full bg-[#DCFCE7] px-2 py-0.5 text-[10px] font-bold text-[#166534]">默认抽样</span>
+            <h2 className="text-sm font-bold text-[var(--ui-ink)]">快速校准</h2>
+            <span className="rounded-full bg-[#DCFCE7] px-2 py-0.5 text-[10px] font-bold text-[var(--ui-success-text-deep)]">默认抽样</span>
           </div>
           <p className="mt-1 text-xs text-slate-500">每个回合只先确认发球和接发的最小事实，不需要逐球填完整场。</p>
         </div>
         <div className="flex rounded-lg bg-slate-100 p-0.5 text-[11px] font-bold">
-          <button type="button" className={`rounded-md px-3 py-1.5 ${queueMode === "sampled" ? "bg-white text-[#2F80ED] shadow-sm" : "text-slate-500"}`} onClick={() => onQueueModeChange("sampled")}>抽样 12 个</button>
-          <button type="button" className={`rounded-md px-3 py-1.5 ${queueMode === "all" ? "bg-white text-[#2F80ED] shadow-sm" : "text-slate-500"}`} onClick={() => onQueueModeChange("all")}>全部回合</button>
+          <button type="button" className={`rounded-md px-3 py-1.5 ${queueMode === "sampled" ? "bg-[var(--ui-surface)] text-[var(--ui-info)] shadow-sm" : "text-slate-500"}`} onClick={() => onQueueModeChange("sampled")}>抽样 12 个</button>
+          <button type="button" className={`rounded-md px-3 py-1.5 ${queueMode === "all" ? "bg-[var(--ui-surface)] text-[var(--ui-info)] shadow-sm" : "text-slate-500"}`} onClick={() => onQueueModeChange("all")}>全部回合</button>
         </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-        <span className="font-bold text-[#14241B]">已处理 {completedCount} / {rallies.length}</span>
+        <span className="font-bold text-[var(--ui-ink)]">已处理 {completedCount} / {rallies.length}</span>
         <span>待处理 {Math.max(0, rallies.length - completedCount)}</span>
         <span>已跳过 {skippedCount}</span>
         {activeRally && <span>当前第 {activeRallyIndex + 1} 条 · {formatMs(activeRally.effective_start_ms ?? activeRally.start_ms)}–{formatMs(activeRally.effective_end_ms ?? activeRally.end_ms ?? activeRally.start_ms)}</span>}
@@ -712,8 +733,8 @@ function QuickSamplingPanel({
             {rallies.map((rally) => {
               const progress = progressByRally.get(rally.id);
               return (
-                <button key={rally.id} type="button" className={`min-w-[104px] rounded-lg border px-2.5 py-2 text-left text-[11px] ${activeRally?.id === rally.id ? "border-[#2F80ED] bg-[#EFF6FF]" : "border-[#E5E7EB] bg-white hover:border-[#B8CDB5]"}`} onClick={() => onFocusRally(rally)}>
-                  <div className="flex items-center gap-1 font-bold text-[#14241B]"><span>{rally.label || `回合 ${rally.ordinal}`}</span><span className="ml-auto text-slate-400">{progress?.skipped ? "跳过" : progress?.complete ? "完成" : "待处理"}</span></div>
+                <button key={rally.id} type="button" className={`min-w-[104px] rounded-lg border px-2.5 py-2 text-left text-[11px] ${activeRally?.id === rally.id ? "border-[var(--ui-info)] bg-[var(--ui-info-soft)]" : "border-[#E5E7EB] bg-[var(--ui-surface)] hover:border-[var(--ui-border-mint)]"}`} onClick={() => onFocusRally(rally)}>
+                  <div className="flex items-center gap-1 font-bold text-[var(--ui-ink)]"><span>{rally.label || `回合 ${rally.ordinal}`}</span><span className="ml-auto text-slate-400">{progress?.skipped ? "跳过" : progress?.complete ? "完成" : "待处理"}</span></div>
                   <div className="mt-1 tabular-nums text-slate-400">{formatMs(rally.effective_start_ms ?? rally.start_ms)}–{formatMs(rally.effective_end_ms ?? rally.end_ms ?? rally.start_ms)}</div>
                   <div className="mt-1 text-[10px] text-slate-500">发球 {progress?.serve ? "✓" : "—"} · 接发 {progress?.return ? "✓" : "—"}</div>
                 </button>
@@ -721,7 +742,7 @@ function QuickSamplingPanel({
             })}
           </div>
           <div className="mt-3 rounded-xl border border-[#E5E7EB] bg-[#FAFCF9] p-3">
-            <div className="flex items-center gap-2 text-xs"><span className="font-bold text-[#14241B]">当前回合：{activeRally?.label || `回合 ${(activeRally?.ordinal ?? 0)}`}</span><span className="text-slate-400">先看这一小段，再点结果</span></div>
+            <div className="flex items-center gap-2 text-xs"><span className="font-bold text-[var(--ui-ink)]">当前回合：{activeRally?.label || `回合 ${(activeRally?.ordinal ?? 0)}`}</span><span className="text-slate-400">先看这一小段，再点结果</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <QuickActionButton label="发球入界" onClick={() => onQuickAction("serveInPlay")} disabled={disabled} tone="green" />
               <QuickActionButton label="发球失败" onClick={() => onQuickAction("serveFailed")} disabled={disabled} tone="orange" />
@@ -729,10 +750,10 @@ function QuickSamplingPanel({
               <QuickActionButton label="接发不可观察" onClick={() => onQuickAction("returnUnobservable")} disabled={disabled} tone="gray" />
             </div>
             <div className="mt-2 flex gap-2">
-              <button type="button" className="flex-1 rounded-lg border border-dashed border-slate-300 py-2 text-xs font-bold text-slate-500 hover:bg-white" onClick={onSkip} disabled={disabled}>跳过当前回合</button>
-              <button type="button" className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#2F80ED] px-4 py-2 text-xs font-bold text-[#2F80ED] hover:bg-[#EFF6FF]" onClick={onNext} disabled={locked || quickSaving}><ChevronRight size={14} /> 下一条</button>
+              <button type="button" className="flex-1 rounded-lg border border-dashed border-slate-300 py-2 text-xs font-bold text-slate-500 hover:bg-[var(--ui-surface)]" onClick={onSkip} disabled={disabled}>跳过当前回合</button>
+              <button type="button" className="inline-flex items-center justify-center gap-1 rounded-lg border border-[var(--ui-info)] px-4 py-2 text-xs font-bold text-[var(--ui-info)] hover:bg-[var(--ui-info-soft)]" onClick={onNext} disabled={locked || quickSaving}><ChevronRight size={14} /> 下一条</button>
             </div>
-            {activeProgress?.complete && <p className="mt-2 text-[11px] font-bold text-[#166534]">当前回合已完成，可点击下一条或重新点选修改。</p>}
+            {activeProgress?.complete && <p className="mt-2 text-[11px] font-bold text-[var(--ui-success-text-deep)]">当前回合已完成，可点击下一条或重新点选修改。</p>}
           </div>
         </>
       )}
@@ -742,9 +763,9 @@ function QuickSamplingPanel({
 
 function QuickActionButton({ label, onClick, disabled, tone }: { label: string; onClick: () => void; disabled: boolean; tone: "green" | "orange" | "blue" | "gray" }) {
   const styles = {
-    green: "border-[#86EFAC] bg-[#F0FDF4] text-[#166534] hover:bg-[#DCFCE7]",
-    orange: "border-[#FED7AA] bg-[#FFF7ED] text-[#9A3412] hover:bg-[#FFEDD5]",
-    blue: "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8] hover:bg-[#DBEAFE]",
+    green: "border-[#86EFAC] bg-[var(--ui-surface-green-50)] text-[var(--ui-success-text-deep)] hover:bg-[#DCFCE7]",
+    orange: "border-[#FED7AA] bg-[var(--ui-warning-soft)] text-[#9A3412] hover:bg-[#FFEDD5]",
+    blue: "border-[#BFDBFE] bg-[var(--ui-info-soft)] text-[#1D4ED8] hover:bg-[#DBEAFE]",
     gray: "border-[#CBD5E1] bg-slate-50 text-slate-600 hover:bg-slate-100",
   }[tone];
   return <button type="button" className={`rounded-lg border px-2 py-2.5 text-xs font-bold ${styles}`} onClick={onClick} disabled={disabled}>{label}</button>;
@@ -772,11 +793,11 @@ function AnnotationForm({
   hasSelection: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
+    <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="mr-auto text-sm font-bold text-[#14241B]">人工事实</h2>
-        <button type="button" className="rounded-lg border border-[#DDE9D6] px-2 py-1 text-[11px] text-slate-500" onClick={onNew} disabled={disabled}>新建</button>
-        {hasSelection && <button type="button" className="rounded-lg p-1 text-[#B91C1C] hover:bg-[#FEF2F2]" title="撤销当前标注" onClick={onRemove} disabled={disabled}><Trash2 size={14} /></button>}
+        <h2 className="mr-auto text-sm font-bold text-[var(--ui-ink)]">人工事实</h2>
+        <button type="button" className="rounded-lg border border-[var(--ui-border)] px-2 py-1 text-[11px] text-slate-500" onClick={onNew} disabled={disabled}>新建</button>
+        {hasSelection && <button type="button" className="rounded-lg p-1 text-[var(--ui-danger-deep)] hover:bg-[var(--ui-danger-soft)]" title="撤销当前标注" onClick={onRemove} disabled={disabled}><Trash2 size={14} /></button>}
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <NumberField label="事件 ms" value={form.event_ms} disabled={disabled} onChange={(value) => onChange({ event_ms: value })} />
@@ -795,7 +816,7 @@ function AnnotationForm({
       <label className="mt-2 block space-y-1 text-xs"><span className="text-slate-500">备注</span><textarea className="field-input min-h-16 resize-y" value={form.note} disabled={disabled} onChange={(event) => onChange({ note: event.target.value })} placeholder="记录遮挡、边界或判断依据" /></label>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <button type="button" className="green-button inline-flex items-center justify-center gap-2 py-2 text-sm" onClick={onSave} disabled={disabled}><Save size={15} /> 保存</button>
-        <button type="button" className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#2F80ED] py-2 text-xs font-bold text-[#2F80ED] hover:bg-[#EFF6FF]" onClick={onSaveNext} disabled={disabled}><ChevronRight size={14} /> 保存并下一条</button>
+        <button type="button" className="inline-flex items-center justify-center gap-1 rounded-lg border border-[var(--ui-info)] py-2 text-xs font-bold text-[var(--ui-info)] hover:bg-[var(--ui-info-soft)]" onClick={onSaveNext} disabled={disabled}><ChevronRight size={14} /> 保存并下一条</button>
       </div>
       <p className="mt-2 text-[10px] leading-4 text-slate-400">不可观察不会自动视为失败；只有锁定后的 revision 才能作为 Gold Set。</p>
     </div>
@@ -804,22 +825,22 @@ function AnnotationForm({
 
 function CandidateQueue({ candidates, candidateStatus, candidateMessage, candidateCoverageWarning, disabled, onSelect, onDecision }: { candidates: ScoringCalibrationCandidate[]; candidateStatus?: string; candidateMessage?: string | null; candidateCoverageWarning?: string | null; disabled: boolean; onSelect: (candidate: ScoringCalibrationCandidate) => void; onDecision: (candidate: ScoringCalibrationCandidate, decision: AnnotationDecision) => void }) {
   return (
-    <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="text-sm font-bold text-[#14241B]">当前回合的算法候选</h2><span className="text-[11px] text-slate-400">仅作为定位建议，不能自动成为 Gold Set</span></div>
-      {candidateCoverageWarning && <p className="mb-2 rounded-lg bg-[#FFF7ED] px-3 py-2 text-[11px] text-[#9A3412]">覆盖提示：{candidateCoverageWarning}</p>}
-      {candidates.length === 0 ? <p className="py-4 text-sm text-slate-400">{candidateMessage ?? (candidateStatus === "unavailable" ? "候选存储不可用" : "当前回合没有候选，可直接使用上方快捷人工校准。")} </p> : <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{candidates.map((candidate) => <div key={candidate.candidate_id} className="flex items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-xs"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onSelect(candidate)}><span className="font-bold text-[#8B5CF6]">{candidate.candidate_type === "serve" ? "发球候选" : "击球候选"}</span><span className="tabular-nums text-slate-500">{formatMs(candidate.timestamp_ms)}</span><span className="truncate text-slate-400">{candidate.artifact_name ?? candidate.candidate_id}</span>{candidate.confidence != null && <span className="text-slate-400">{Math.round(candidate.confidence * 100)}%</span>}</button><button type="button" title="拒绝候选" className="rounded p-1 text-slate-400 hover:bg-[#FEF2F2] hover:text-[#B91C1C]" onClick={() => onDecision(candidate, "rejected")} disabled={disabled}><X size={13} /></button></div>)}</div>}
+    <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="text-sm font-bold text-[var(--ui-ink)]">当前回合的算法候选</h2><span className="text-[11px] text-slate-400">仅作为定位建议，不能自动成为 Gold Set</span></div>
+      {candidateCoverageWarning && <p className="mb-2 rounded-lg bg-[var(--ui-warning-soft)] px-3 py-2 text-[11px] text-[#9A3412]">覆盖提示：{candidateCoverageWarning}</p>}
+      {candidates.length === 0 ? <p className="py-4 text-sm text-slate-400">{candidateMessage ?? (candidateStatus === "unavailable" ? "候选存储不可用" : "当前回合没有候选，可直接使用上方快捷人工校准。")} </p> : <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{candidates.map((candidate) => <div key={candidate.candidate_id} className="flex items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-xs"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onSelect(candidate)}><span className="font-bold text-[#8B5CF6]">{candidate.candidate_type === "serve" ? "发球候选" : "击球候选"}</span><span className="tabular-nums text-slate-500">{formatMs(candidate.timestamp_ms)}</span><span className="truncate text-slate-400">{candidate.artifact_name ?? candidate.candidate_id}</span>{candidate.confidence != null && <span className="text-slate-400">{Math.round(candidate.confidence * 100)}%</span>}</button><button type="button" title="拒绝候选" className="rounded p-1 text-slate-400 hover:bg-[var(--ui-danger-soft)] hover:text-[var(--ui-danger-deep)]" onClick={() => onDecision(candidate, "rejected")} disabled={disabled}><X size={13} /></button></div>)}</div>}
     </div>
   );
 }
 
 function QualityCard({ package: currentPackage }: { package: ScoringCalibrationPackage }) {
   const quality = currentPackage.quality;
-  return <div className="rounded-2xl border border-[#DDE9D6] bg-white p-4"><div className="mb-3 flex items-center gap-2"><h2 className="text-sm font-bold text-[#14241B]">质量摘要</h2><span className="ml-auto text-[11px] text-slate-400">revision {currentPackage.revision}</span></div><div className="grid grid-cols-2 gap-2 text-xs">{[["条目", quality.total_count], ["已确认", quality.confirmed_count], ["未知/不可观察", quality.unknown_or_unobservable_count], ["候选未匹配", quality.unmatched_candidate_count], ["冲突", quality.conflict_count], ["证据完整率", `${Math.round(quality.evidence_complete_rate * 100)}%`]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-slate-400">{label}</div><div className="mt-1 font-bold text-[#14241B]">{value}</div></div>)}</div>{currentPackage.validation_issues.length > 0 && <div className="mt-3 space-y-1 text-[11px]">{currentPackage.validation_issues.slice(0, 4).map((issue, index) => <div key={`${issue.code}-${index}`} className={issue.severity === "error" ? "text-[#B91C1C]" : "text-[#A16207]"}>{issue.severity === "error" ? "阻塞" : "提示"}：{issue.message}</div>)}</div>}</div>;
+  return <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4"><div className="mb-3 flex items-center gap-2"><h2 className="text-sm font-bold text-[var(--ui-ink)]">质量摘要</h2><span className="ml-auto text-[11px] text-slate-400">revision {currentPackage.revision}</span></div><div className="grid grid-cols-2 gap-2 text-xs">{[["条目", quality.total_count], ["已确认", quality.confirmed_count], ["未知/不可观察", quality.unknown_or_unobservable_count], ["候选未匹配", quality.unmatched_candidate_count], ["冲突", quality.conflict_count], ["证据完整率", `${Math.round(quality.evidence_complete_rate * 100)}%`]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-slate-400">{label}</div><div className="mt-1 font-bold text-[var(--ui-ink)]">{value}</div></div>)}</div>{currentPackage.validation_issues.length > 0 && <div className="mt-3 space-y-1 text-[11px]">{currentPackage.validation_issues.slice(0, 4).map((issue, index) => <div key={`${issue.code}-${index}`} className={issue.severity === "error" ? "text-[var(--ui-danger-deep)]" : "text-[#A16207]"}>{issue.severity === "error" ? "阻塞" : "提示"}：{issue.message}</div>)}</div>}</div>;
 }
 
 function StatusBadge({ status, revision }: { status: string; revision: number }) {
   const label = status === "locked" ? "已锁定" : status === "reviewed" ? "已审核" : "草稿";
-  return <span className={`rounded-full px-3 py-1 text-[11px] font-bold ${status === "locked" ? "bg-[#DCFCE7] text-[#166534]" : status === "reviewed" ? "bg-[#E0E7FF] text-[#3730A3]" : "bg-[#FEF3C7] text-[#92400E]"}`}>{label} · r{revision}</span>;
+  return <span className={`rounded-full px-3 py-1 text-[11px] font-bold ${status === "locked" ? "bg-[#DCFCE7] text-[var(--ui-success-text-deep)]" : status === "reviewed" ? "bg-[#E0E7FF] text-[#3730A3]" : "bg-[#FEF3C7] text-[#92400E]"}`}>{label} · r{revision}</span>;
 }
 
 function NumberField({ label, value, disabled, onChange, stringValue = false }: { label: string; value: number | string; disabled: boolean; onChange: (value: number) => void; stringValue?: boolean }) {

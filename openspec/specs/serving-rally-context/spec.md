@@ -1,7 +1,7 @@
 # serving-rally-context Specification
 
 ## Purpose
-TBD - created by archiving change add-analysis-roster-and-rally-context. Update Purpose after archive.
+定义录制期间计分事实的快照、球队端位投影，以及绑定到分析 Job 的回合上下文，确保后续分析使用一致且可追溯的数据。
 ## Requirements
 ### Requirement: 录制时封存不依赖名册的计分事实
 系统 MUST 在有效 `rally_start` 的同一事务中创建 `RallyScoringSnapshot`，记录 `rally_id`、server_team、回合开始前比分、scoring_ruleset_version、来源 action/event id 与 revision。snapshot MUST NOT 引用 `AnalysisRosterSnapshot`、P1–P4 或分析期端位。

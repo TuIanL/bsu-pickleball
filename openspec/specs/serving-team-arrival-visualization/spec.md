@@ -1,7 +1,7 @@
 # serving-team-arrival-visualization Specification
 
 ## Purpose
-TBD - created by archiving change add-serving-team-kitchen-line-arrival. Update Purpose after archive.
+定义分析工作区中发球队网前到位率主卡的展示方式，包括球员分组、统计比例和数据不足或不可用时的状态说明。
 ## Requirements
 ### Requirement: 发球队网前到位率场地控制主卡
 已完成的真实视频分析工作区 SHALL 在数据分析区域提供“发球队 · 网前到位率”场地控制主卡。卡片 SHALL 使用当前 Job 的 `kitchen-arrival.v1`，按 P1–P4 展示显示名、队伍归属、到位率及 arrived/eligible 分子分母；横向球场和四条比例泳道只表示统计对照，不表示实时站位。

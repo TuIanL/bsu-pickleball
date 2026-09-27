@@ -8,6 +8,7 @@ import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { EstimatedBallTrajectory, EstimatedTrajectoryPoint } from "../../services/ballTrajectoryVisualization";
 import type { MetricCourtSceneCalibration, ScenePoint3D } from "../../types/metricCourtScene";
+import { useThemeOptional } from "../../theme/ThemeProvider";
 
 export type CameraView = "oblique" | "top" | "sideline" | "baseline" | "obliqueBaseline";
 
@@ -42,6 +43,16 @@ const DIRECTION_COLORS = {
 
 const MAX_RENDER_GAP_SECONDS = 0.55;
 const VIEWPORT_BACKGROUND = "#F5F8F6";
+
+/**
+ * three.js 需要具体色值设置清屏色，无法直接吃 CSS 变量，
+ * 因此从根元素解析当前主题的界面语义色；解析失败回退到亮色原值。
+ */
+function resolveUiColor(token: string, fallback: string): string {
+  if (typeof window === "undefined" || typeof window.getComputedStyle !== "function") return fallback;
+  const value = window.getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  return value || fallback;
+}
 
 function courtVector(xFt: number, heightFt: number, yFt: number): THREE.Vector3 {
   return new THREE.Vector3(xFt - 10, heightFt, yFt - 22);
@@ -375,6 +386,7 @@ export function BallTrajectoryScene({
   sceneCalibration = null,
   metricValidity = null,
 }: BallTrajectorySceneProps) {
+  const { theme } = useThemeOptional();
   const containerRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
@@ -427,6 +439,14 @@ export function BallTrajectoryScene({
     updateTrajectoryObjects();
   }, [updateTrajectoryObjects]);
 
+  // 主题切换后同步 3D 视口底色：渲染循环持续出帧，改 clear color 即刻生效；
+  // 只调整充当界面背景的清屏色，球场、球路与轨迹的数据配色保持不变。
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.setClearColor(resolveUiColor("--ui-surface-soft", VIEWPORT_BACKGROUND), 1);
+  }, [theme]);
+
   // Three.js 初始化只执行一次；轨迹、选中态和视角分别由独立 effect 更新。
   useEffect(() => {
     const mount = mountRef.current;
@@ -441,7 +461,7 @@ export function BallTrajectoryScene({
     }
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setClearColor(VIEWPORT_BACKGROUND, 1);
+    renderer.setClearColor(resolveUiColor("--ui-surface-soft", VIEWPORT_BACKGROUND), 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.dataset.trajectoryCanvas = "true";
@@ -567,7 +587,7 @@ export function BallTrajectoryScene({
     >
       <div className="absolute inset-0" ref={mountRef} />
       {sceneCalibration ? (
-        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[#D6DED9] bg-white/90 px-3 py-2 text-xs text-[#416248] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
+        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[#D6DED9] bg-[var(--ui-surface)]/90 px-3 py-2 text-xs text-[#416248] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
           {sceneCalibration.status === "ready" ? "Metric 3D 场景" : "场景标定降级"} · revision {sceneCalibration.revision} · {sceneCalibration.net_profile.height_source === "measured" ? "现场实测网高" : "标准网高"}
         </div>
       ) : null}
@@ -576,7 +596,7 @@ export function BallTrajectoryScene({
           {metricValidity === "visualization_only" ? "仅可视化高度" : "approximate 3D fallback · 未发布现场场景标定"}
         </div>
       ) : null}
-      <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 rounded-lg border border-[#D6DED9] bg-white/92 p-1.5 shadow-sm backdrop-blur-sm sm:right-4 sm:top-4">
+      <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 rounded-lg border border-[#D6DED9] bg-[var(--ui-surface)]/92 p-1.5 shadow-sm backdrop-blur-sm sm:right-4 sm:top-4">
         {(Object.keys(VIEW_CONFIG) as CameraView[]).map((view) => {
           const config = VIEW_CONFIG[view];
           const Icon = config.icon;
@@ -584,7 +604,7 @@ export function BallTrajectoryScene({
             <button
               aria-label={`${config.label}视角`}
               aria-pressed={activeView === view}
-              className={`grid size-10 place-items-center rounded-md border transition ${activeView === view ? "border-[#25B86A] bg-[#EAF8F0] text-[#168A34]" : "border-transparent text-[#667085] hover:bg-[#F2F4F3]"}`}
+              className={`grid size-10 place-items-center rounded-md border transition ${activeView === view ? "border-[#25B86A] bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" : "border-transparent text-[var(--ui-text-secondary-alt)] hover:bg-[#F2F4F3]"}`}
               data-active={activeView === view ? "true" : "false"}
               key={view}
               onClick={() => selectView(view)}
@@ -598,7 +618,7 @@ export function BallTrajectoryScene({
         <span className="mx-1 h-px bg-[#E4E9E6]" />
         <button
           aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
-          className="grid size-10 place-items-center rounded-md text-[#667085] transition hover:bg-[#F2F4F3]"
+          className="grid size-10 place-items-center rounded-md text-[var(--ui-text-secondary-alt)] transition hover:bg-[#F2F4F3]"
           onClick={toggleFullscreen}
           title={isFullscreen ? "退出全屏" : "全屏查看"}
           type="button"
@@ -606,7 +626,7 @@ export function BallTrajectoryScene({
           <Expand size={19} aria-hidden="true" />
         </button>
       </div>
-      <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-[#D6DED9] bg-white/88 px-3 py-2 text-xs text-[#667085] shadow-sm backdrop-blur-sm sm:bottom-4 sm:left-4">
+      <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-[#D6DED9] bg-[var(--ui-surface)]/88 px-3 py-2 text-xs text-[var(--ui-text-secondary-alt)] shadow-sm backdrop-blur-sm sm:bottom-4 sm:left-4">
         拖动旋转 · 滚轮缩放 · 点击球路查看详情
       </div>
     </div>

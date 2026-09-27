@@ -1,4 +1,4 @@
-import { Bone, Box, CircleDot, CirclePause, Diamond, Map, Maximize2, Minimize2, Pause, Play, Route, Ruler, Volume2, VolumeX } from "lucide-react";
+import { Bone, Box, CircleDot, CirclePause, Diamond, FastForward, Map, Maximize2, Minimize2, Pause, Play, Route, Ruler, Volume2, VolumeX } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import type {
   BallTrajectoryArtifact,
@@ -33,6 +33,13 @@ import {
 import type { DisplayViewGeometry } from "../../types/videoCourtOverlay";
 import { buildCourtOverlayGeometry, buildNetOverlayPoints, clipNetOverlayPointsToCourt } from "../../services/videoCourtOverlay";
 import { VideoCourtOverlay } from "./VideoCourtOverlay";
+import { RallyCueOverlay } from "./RallyCueOverlay";
+import {
+  useAutoRallyPlayback,
+  type AutoRallyCue,
+  type AutoRallySegment,
+  type RallyNavigationRequest,
+} from "../../hooks/useAutoRallyPlayback";
 
 const BOUNCE_MARKER_WINDOW_SECONDS = 0.35;
 const MAX_VISIBLE_BOUNCE_MARKERS = 3;
@@ -40,6 +47,7 @@ const BALL_TRAIL_SECONDS = 1.2;
 const BALL_PATH_GAP_SECONDS = 0.7;
 const MAX_BALL_PATH_POINTS = 84;
 const HYBRID_SEGMENT_RETENTION_SECONDS = 0.8;
+const EMPTY_AUTO_RALLY_SEGMENTS: AutoRallySegment[] = [];
 
 interface VideoAnalysisCardProps {
   compact?: boolean;
@@ -89,6 +97,13 @@ interface VideoAnalysisCardProps {
   pipelineTracks?: PipelineTrackPoint[];
   /** 证据 seek 契约：video metadata loaded 后跳转到该毫秒位置 */
   seekToMs?: number;
+  /** 仅数据分析视图传入；省略时播放器 DOM 与交互保持原样。 */
+  autoRallySegments?: AutoRallySegment[];
+  autoSkipUnavailableReason?: string | null;
+  rallyNavigationRequest?: RallyNavigationRequest | null;
+  onPlaybackToggle?: (canonicalPlayheadMs: number, playing: boolean) => void;
+  onActiveRallyChange?: (rally: AutoRallyCue | null) => void;
+  headerInfo?: React.ReactNode;
 }
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
@@ -96,17 +111,17 @@ type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "fail
 type ServeMarker = ReturnType<typeof resolveServeMarkers>[number];
 
 const toneClass = {
-  advantage: "border-[#22C55E]/40 bg-[#22C55E]/15 text-[#DCFCE7]",
-  risk: "border-[#FF9500]/40 bg-[#FF9500]/15 text-[#FFD7A0]",
-  error: "border-[#FF4D4F]/40 bg-[#FF4D4F]/15 text-[#FFC2C3]",
-  training: "border-[#2F80ED]/40 bg-[#2F80ED]/15 text-[#BBD8FF]",
+  advantage: "border-[var(--ui-brand)]/40 bg-[var(--ui-brand-solid)]/15 text-[#DCFCE7]",
+  risk: "border-[var(--ui-stage)]/40 bg-[var(--ui-stage)]/15 text-[#FFD7A0]",
+  error: "border-[var(--ui-danger-strong)]/40 bg-[var(--ui-danger-solid)]/15 text-[#FFC2C3]",
+  training: "border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/15 text-[#BBD8FF]",
 };
 
 const markerClass = {
-  advantage: "bg-[#22C55E]",
-  risk: "bg-[#FF9500]",
-  error: "bg-[#FF4D4F]",
-  training: "bg-[#2F80ED]",
+  advantage: "bg-[var(--ui-brand-solid)]",
+  risk: "bg-[var(--ui-stage)]",
+  error: "bg-[var(--ui-danger-solid)]",
+  training: "bg-[var(--ui-info-solid)]",
 };
 
 export function VideoAnalysisCard({
@@ -152,11 +167,17 @@ export function VideoAnalysisCard({
   fallbackVideoSrc,
   pipelineTracks,
   seekToMs,
+  autoRallySegments,
+  autoSkipUnavailableReason,
+  rallyNavigationRequest,
+  onPlaybackToggle,
+  onActiveRallyChange,
+  headerInfo,
 }: VideoAnalysisCardProps) {
   if (videoSrc) {
     return (
-      <article className="sport-card overflow-hidden">
-        <VideoCardHeader match={match} />
+      <article className="sport-card relative">
+        <VideoCardHeader match={match} headerInfo={headerInfo} />
         <RealVideoOverlay
           match={match}
           ballTrajectory={ballTrajectory}
@@ -196,14 +217,19 @@ export function VideoAnalysisCard({
           fallbackVideoSrc={fallbackVideoSrc}
           pipelineTracks={pipelineTracks}
           seekToMs={seekToMs}
+          autoRallySegments={autoRallySegments}
+          autoSkipUnavailableReason={autoSkipUnavailableReason}
+          rallyNavigationRequest={rallyNavigationRequest}
+          onPlaybackToggle={onPlaybackToggle}
+          onActiveRallyChange={onActiveRallyChange}
         />
       </article>
     );
   }
 
   return (
-    <article className="sport-card overflow-hidden">
-      <VideoCardHeader match={match} />
+    <article className="sport-card relative">
+      <VideoCardHeader match={match} headerInfo={headerInfo} />
 
       <div className="relative aspect-video overflow-hidden bg-[#091016]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(34,197,94,0.1),transparent_35%),linear-gradient(135deg,rgba(47,128,237,0.22),transparent_42%),linear-gradient(180deg,#151A1F,#080C10)]" />
@@ -287,7 +313,7 @@ export function VideoAnalysisCard({
         </div>
 
         <button
-          className="absolute left-1/2 top-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[#22C55E]/35 bg-[#22C55E]/20 text-[#22C55E] shadow-[0_0_48px_rgba(34,197,94,0.22)] transition hover:scale-105 hover:bg-[#22C55E] hover:text-[#071008]"
+          className="absolute left-1/2 top-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--ui-brand)]/35 bg-[var(--ui-brand-solid)]/20 text-[var(--ui-brand)] shadow-[0_0_48px_rgba(34,197,94,0.22)] transition hover:scale-105 hover:bg-[var(--ui-brand-solid)] hover:text-[#071008]"
           type="button"
           aria-label="播放演示视频"
         >
@@ -296,15 +322,15 @@ export function VideoAnalysisCard({
       </div>
 
       {!compact ? (
-        <div className="border-t border-[#DDE9D6] bg-white/70 px-4 py-4 sm:px-5">
+        <div className="border-t border-[var(--ui-border)] bg-[var(--ui-surface)]/70 px-4 py-4 sm:px-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex items-center gap-3 text-slate-600">
               <CirclePause size={18} aria-hidden="true" />
               <Volume2 size={18} aria-hidden="true" />
               <span className="text-xs font-bold">{match.currentTime} / {match.duration}</span>
             </div>
-            <div className="relative h-2 flex-1 rounded-full bg-[#DFEADA]">
-              <span className="absolute inset-y-0 left-0 rounded-full bg-[#22C55E]" style={{ width: "69%" }} />
+            <div className="relative h-2 flex-1 rounded-full bg-[var(--ui-surface-track-green)]">
+              <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--ui-brand-solid)]" style={{ width: "69%" }} />
               {timeline.map((marker) => (
                 <span
                   className={`group absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[#071008] ${markerClass[marker.tone]}`}
@@ -346,16 +372,17 @@ class CourtMinimapErrorBoundary extends React.Component<
   }
 }
 
-function VideoCardHeader({ match }: { match: MatchSummary }) {
+function VideoCardHeader({ match, headerInfo }: { match: MatchSummary; headerInfo?: React.ReactNode }) {
   const hasScore = Boolean(match.score) && match.score !== "MVP";
   return (
-    <div className="flex items-center justify-between border-b border-[#DDE9D6] px-4 py-3 sm:px-5">
+    <div className="flex items-center justify-between border-b border-[var(--ui-border)] px-4 py-3 sm:px-5">
       <div>
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">实时智能标注</p>
-        <h2 className="mt-1 text-lg font-black text-[#14241B] sm:text-xl">视频回放 · {match.currentRally}</h2>
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">实时智能标注</p>
+        <h2 className="mt-1 text-lg font-black text-[var(--ui-ink)] sm:text-xl">视频回放 · {match.currentRally}</h2>
       </div>
+      {headerInfo}
       {hasScore ? (
-        <div className="rounded-full border border-[#DDE9D6] bg-[#17231D] px-3 py-1 text-sm font-black text-white">
+        <div className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-ink-solid)] px-3 py-1 text-sm font-black text-white">
           {match.score}
         </div>
       ) : null}
@@ -402,6 +429,11 @@ function RealVideoOverlay({
   fallbackVideoSrc,
   pipelineTracks,
   seekToMs,
+  autoRallySegments,
+  autoSkipUnavailableReason,
+  rallyNavigationRequest,
+  onPlaybackToggle,
+  onActiveRallyChange,
 }: {
   match: MatchSummary;
   ballTrajectory?: BallTrajectoryArtifact | null;
@@ -443,6 +475,11 @@ function RealVideoOverlay({
   pipelineTracks?: PipelineTrackPoint[];
   /** 证据 seek 契约：video metadata loaded 后跳转到该毫秒位置（clamp 到 [0, duration]） */
   seekToMs?: number;
+  autoRallySegments?: AutoRallySegment[];
+  autoSkipUnavailableReason?: string | null;
+  rallyNavigationRequest?: RallyNavigationRequest | null;
+  onPlaybackToggle?: (canonicalPlayheadMs: number, playing: boolean) => void;
+  onActiveRallyChange?: (rally: AutoRallyCue | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -485,7 +522,59 @@ function RealVideoOverlay({
   const mappingRate = Number(displayTimeMapping?.rate ?? 1) > 0 ? Number(displayTimeMapping?.rate ?? 1) : 1;
   // Player/球路/小地图都消费 canonical 时间；video.currentTime 仍是目标媒体时间。
   const canonicalTime = sourceTimeToCanonicalTimeMs(currentTime * 1000, displayTimeMapping) / 1000;
-  const canonicalToSourceSeconds = (value: number) => canonicalTimeToSourceTimeMs(value * 1000, displayTimeMapping) / 1000;
+  const canonicalToSourceSeconds = React.useCallback(
+    (value: number) => canonicalTimeToSourceTimeMs(value * 1000, { offsetMs: mappingOffsetSeconds * 1000, rate: mappingRate }) / 1000,
+    [mappingOffsetSeconds, mappingRate],
+  );
+  const canonicalDurationMs = duration > 0
+    ? sourceTimeToCanonicalTimeMs(duration * 1000, displayTimeMapping)
+    : 0;
+  const requestSeekSourceMs = React.useCallback((sourceMs: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const sourceSeconds = Math.max(0, Math.min(sourceMs / 1000, Number.isFinite(video.duration) && video.duration > 0 ? video.duration : Number.POSITIVE_INFINITY));
+    video.currentTime = sourceSeconds;
+    setCurrentTime(sourceSeconds);
+  }, []);
+  const requestPlay = React.useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    void video.play().catch(() => setIsPlaying(false));
+  }, []);
+  const requestPause = React.useCallback(() => videoRef.current?.pause(), []);
+  const autoRallyPlayback = useAutoRallyPlayback({
+    segments: autoRallySegments ?? EMPTY_AUTO_RALLY_SEGMENTS,
+    durationMs: canonicalDurationMs,
+    playheadMs: canonicalTime * 1000,
+    isPlaying,
+    unavailableReason: autoSkipUnavailableReason,
+    displayTimeMapping,
+    requestSeek: requestSeekSourceMs,
+    requestPlay,
+    requestPause,
+  });
+  const { interruptPlayback, markUserNavigation, navigateToRally } = autoRallyPlayback;
+  const rallyNavigationRequestRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!rallyNavigationRequest || rallyNavigationRequest.requestId === rallyNavigationRequestRef.current) return;
+    rallyNavigationRequestRef.current = rallyNavigationRequest.requestId;
+    navigateToRally(rallyNavigationRequest.rally.id);
+  }, [navigateToRally, rallyNavigationRequest]);
+
+  const activeRallyId = autoRallyPlayback.activeRally?.id ?? null;
+  const activeRallyOrdinal = autoRallyPlayback.activeRally?.ordinal ?? null;
+  const activeRallyCause = autoRallyPlayback.activeRally?.cause ?? null;
+  const lastActiveRallySignalRef = useRef<string | null>(null);
+  useEffect(() => {
+    const signal = `${activeRallyId ?? ""}:${activeRallyCause ?? ""}`;
+    if (lastActiveRallySignalRef.current === signal) return;
+    lastActiveRallySignalRef.current = signal;
+    if (!onActiveRallyChange) return;
+    onActiveRallyChange(activeRallyId && activeRallyOrdinal != null
+      ? { id: activeRallyId, ordinal: activeRallyOrdinal, cause: activeRallyCause ?? "user" }
+      : null);
+  }, [activeRallyCause, activeRallyId, activeRallyOrdinal, onActiveRallyChange]);
 
   const selectedFusedOverlay = useMemo(() => {
     if (!fusedPlayerOverlay) return null;
@@ -601,7 +690,16 @@ function RealVideoOverlay({
   const serveDetail = layerDetail(serveEventsLoadState, serveEvents?.detail ?? serveEventsDetail, "发球候选 marker");
   const serveStatus = resolveLayerStatus(serveEventsLoadState, serveEvents?.status ?? serveEventsStatus);
   const fullscreenSupported = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
-  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const legacyProgress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const progress = autoRallySegments !== undefined && canonicalDurationMs > 0
+    ? Math.min(100, Math.max(0, (canonicalTime * 1000 / canonicalDurationMs) * 100))
+    : legacyProgress;
+  const autoRallyBandsEnabled = autoRallySegments !== undefined
+    && canonicalDurationMs > 0
+    && autoRallySegments.length > 0;
+  const bandScale = (timeMs: number) => `${canonicalDurationMs > 0
+    ? (Math.max(0, Math.min(timeMs, canonicalDurationMs)) / canonicalDurationMs) * 100
+    : 0}%`;
   const serveMarkers = useMemo(() => resolveServeMarkers(serveEvents, duration), [duration, serveEvents]);
 
   useEffect(() => {
@@ -688,6 +786,10 @@ function RealVideoOverlay({
       setIsPlaying(false);
       syncTime();
     };
+    const handleEnded = () => {
+      interruptPlayback();
+      handlePause();
+    };
     const commitPendingDisplaySwitch = () => {
       const pendingSwitch = pendingDisplaySwitchRef.current;
       if (!pendingSwitch || pendingSwitch.source !== activeVideoSrc || !pendingSwitch.seekApplied) return false;
@@ -720,6 +822,7 @@ function RealVideoOverlay({
       if (requestedSeekMs !== undefined && !seekAppliedRef.current && requestedSeekMs >= 0) {
         seekAppliedRef.current = true;
         if (pendingSwitch) pendingSwitch.seekApplied = true;
+        if (seekToMs !== undefined) markUserNavigation(requestedSeekMs);
         const targetSeconds = canonicalToSourceSeconds(requestedSeekMs / 1000);
         const alreadyAtTarget = Math.abs(video.currentTime - targetSeconds) < 0.05;
         if (Number.isFinite(video.duration) && video.duration > 0) {
@@ -738,7 +841,7 @@ function RealVideoOverlay({
 
     video.addEventListener("play", handlePlay);
     video.addEventListener("pause", handlePause);
-    video.addEventListener("ended", handlePause);
+    video.addEventListener("ended", handleEnded);
     const handleSeeked = () => {
       syncTime();
       const pendingSwitch = pendingDisplaySwitchRef.current;
@@ -761,7 +864,7 @@ function RealVideoOverlay({
     return () => {
       video.removeEventListener("play", handlePlay);
       video.removeEventListener("pause", handlePause);
-      video.removeEventListener("ended", handlePause);
+      video.removeEventListener("ended", handleEnded);
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("seeking", syncTime);
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
@@ -774,11 +877,16 @@ function RealVideoOverlay({
         window.cancelAnimationFrame(animationId);
       }
     };
-  }, [activeVideoSrc, seekToMs, mappingOffsetSeconds, mappingRate]);
+  }, [activeVideoSrc, canonicalToSourceSeconds, interruptPlayback, markUserNavigation, seekToMs, videoSrc]);
 
   const togglePlayback = () => {
     const video = videoRef.current;
     if (!video) {
+      return;
+    }
+    onPlaybackToggle?.(canonicalTime * 1000, !video.paused);
+    if (autoRallySegments !== undefined) {
+      autoRallyPlayback.handlePlaybackToggle();
       return;
     }
     if (video.paused) {
@@ -830,7 +938,16 @@ function RealVideoOverlay({
     if (!video || duration <= 0) {
       return;
     }
-    const nextTime = (Number(event.target.value) / 100) * duration;
+    const percentage = Number(event.target.value) / 100;
+    if (autoRallySegments !== undefined) {
+      const nextCanonicalMs = percentage * canonicalDurationMs;
+      autoRallyPlayback.markUserNavigation(nextCanonicalMs);
+      const nextTime = canonicalToSourceSeconds(nextCanonicalMs / 1000);
+      video.currentTime = nextTime;
+      setCurrentTime(nextTime);
+      return;
+    }
+    const nextTime = percentage * duration;
     video.currentTime = nextTime;
     setCurrentTime(nextTime);
   };
@@ -840,6 +957,7 @@ function RealVideoOverlay({
     if (!video) {
       return;
     }
+    autoRallyPlayback.markUserNavigation(seekTime * 1000);
     const sourceTime = canonicalToSourceSeconds(seekTime);
     video.currentTime = sourceTime;
     setCurrentTime(sourceTime);
@@ -875,6 +993,7 @@ function RealVideoOverlay({
           src={activeVideoSrc}
           onError={handleVideoError}
         />
+        {autoRallySegments !== undefined ? <RallyCueOverlay cue={autoRallyPlayback.activeRally} /> : null}
         {activeVideoSrc && duration === 0 && loadError && (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
             <span className="text-sm font-semibold text-white/90">{loadError}</span>
@@ -1077,7 +1196,7 @@ function RealVideoOverlay({
               <button
                 aria-pressed={option.id === displayViewId}
                 className={`rounded-lg px-2.5 py-1.5 text-xs font-black transition ${
-                  option.id === displayViewId ? "bg-[#22C55E] text-[#071008]" : "text-white/80 hover:bg-white/10"
+                  option.id === displayViewId ? "bg-[var(--ui-brand-solid)] text-[#071008]" : "text-white/80 hover:bg-white/10"
                 } ${!option.available ? "cursor-not-allowed opacity-45" : ""}`}
                 disabled={!option.available}
                 key={option.id}
@@ -1249,9 +1368,43 @@ function RealVideoOverlay({
               {formatSeconds(currentTime)} / {formatSeconds(duration)}
             </span>
             <div className="relative flex-1">
+              {autoRallyBandsEnabled ? (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
+                  data-auto-rally-bands="true"
+                >
+                  <span className="absolute inset-0 bg-slate-600" />
+                  {autoRallySegments?.map((band) => {
+                    if (!Number.isFinite(band.startMs) || (band.endMs != null && !Number.isFinite(band.endMs))) return null;
+                    const start = Math.max(0, Math.min(band.startMs, canonicalDurationMs));
+                    const end = Math.max(0, Math.min(band.endMs ?? canonicalDurationMs, canonicalDurationMs));
+                    if (end <= start) return null;
+                    const active = autoRallyPlayback.activeRally?.id === band.id;
+                    return (
+                      <span
+                        className="absolute inset-y-0"
+                        data-active={active ? "true" : "false"}
+                        data-auto-rally-band={band.id}
+                        key={band.id}
+                        style={{
+                          left: bandScale(start),
+                          width: bandScale(end - start),
+                          backgroundColor: active ? "#D9FF3F" : "#22C55E",
+                        }}
+                      />
+                    );
+                  })}
+                  <span
+                    className="absolute inset-y-0 left-0 bg-white/25"
+                    data-auto-rally-played="true"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              ) : null}
               <input
                 aria-label="视频播放进度"
-                className="relative z-10 h-2 w-full accent-[#22C55E]"
+                className={`relative z-10 h-2 w-full ${autoRallyBandsEnabled ? "rally-band-progress" : "accent-[var(--ui-brand)]"}`}
                 max="100"
                 min="0"
                 onChange={handleProgressChange}
@@ -1271,8 +1424,29 @@ function RealVideoOverlay({
             </button>
           </div>
           <div className="mt-2 h-1 rounded-full bg-white/15">
-            <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${progress}%` }} />
+            <span className="block h-full rounded-full bg-[var(--ui-brand-solid)]" style={{ width: `${progress}%` }} />
           </div>
+          {autoRallySegments !== undefined ? (
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <button
+                aria-label="自动跳过非比赛时间"
+                aria-pressed={autoRallyPlayback.autoSkipEnabled}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[0.68rem] font-bold transition disabled:cursor-not-allowed disabled:opacity-45 ${autoRallyPlayback.autoSkipEnabled ? "border-lime-300/40 bg-lime-300/15 text-lime-100" : "border-white/15 bg-white/10 text-slate-200"}`}
+                disabled={Boolean(autoRallyPlayback.autoSkipUnavailableReason)}
+                onClick={() => autoRallyPlayback.setAutoSkipEnabled((enabled) => !enabled)}
+                title={autoRallyPlayback.autoSkipUnavailableReason ?? (autoRallyPlayback.autoSkipEnabled ? "自动跳过非比赛时间：已开启" : "自动跳过非比赛时间：已关闭")}
+                type="button"
+              >
+                <FastForward size={13} aria-hidden="true" />
+                自动跳过非比赛时间
+              </button>
+              {autoRallyPlayback.autoSkipUnavailableReason ? (
+                <span className="min-w-0 truncate text-[0.65rem] text-slate-300" role="status">
+                  {autoRallyPlayback.autoSkipUnavailableReason}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
             {serveRallyStripEnabled && serveEventsLoadState !== "idle" ? (
               <p className="mt-2 text-[0.68rem] font-semibold text-slate-300">
                 发球候选：{serveMarkers.length ? `${serveMarkers.length} 个候选` : statusCopy(serveStatus, serveDetail)}
@@ -1331,7 +1505,7 @@ export function ServeRallyStrip({
             </p>
           </div>
           {status === "partial" ? (
-            <span className="rounded-full border border-[#FF9500]/35 bg-[#FF9500]/15 px-2 py-1 text-[0.65rem] font-black text-[#FFD7A0]">
+            <span className="rounded-full border border-[var(--ui-stage)]/35 bg-[var(--ui-stage)]/15 px-2 py-1 text-[0.65rem] font-black text-[#FFD7A0]">
               降级信号
             </span>
           ) : null}
@@ -1389,10 +1563,10 @@ function OverlayToggle({
   unavailableReason: string;
 }) {
   const activeClasses = {
-    blue: "border-[#2F80ED]/60 bg-[#2F80ED]/25 text-[#BBD8FF]",
-    green: "border-[#22C55E]/60 bg-[#22C55E]/22 text-[#D9FF3F]",
+    blue: "border-[var(--ui-info)]/60 bg-[var(--ui-info-solid)]/25 text-[#BBD8FF]",
+    green: "border-[var(--ui-brand)]/60 bg-[var(--ui-brand-solid)]/22 text-[#D9FF3F]",
     lime: "border-[#D9FF3F]/60 bg-[#D9FF3F]/18 text-[#D9FF3F]",
-    orange: "border-[#FF9500]/60 bg-[#FF9500]/20 text-[#FFD7A0]",
+    orange: "border-[var(--ui-stage)]/60 bg-[var(--ui-stage)]/20 text-[#FFD7A0]",
   }[tone];
 
   return (

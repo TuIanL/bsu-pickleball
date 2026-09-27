@@ -47,12 +47,12 @@ export function Modal({ isOpen, onClose, title, children, size = "md" }: ModalPr
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
       onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
     >
-      <div className={`${sizeClasses} w-full bg-white rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto`}>
+      <div className={`${sizeClasses} w-full bg-[var(--ui-surface)] rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto`}>
         {title && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-[#DDE9D6]">
-            <h3 className="text-lg font-bold text-[#17231D]">{title}</h3>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--ui-border)]">
+            <h3 className="text-lg font-bold text-[var(--ui-ink)]">{title}</h3>
             <button
-              className="p-1 rounded-lg hover:bg-[#F1F7EC] text-slate-400 hover:text-slate-600 transition"
+              className="p-1 rounded-lg hover:bg-[var(--ui-surface-tint)] text-slate-400 hover:text-slate-600 transition"
               onClick={onClose}
               type="button"
               title="关闭"

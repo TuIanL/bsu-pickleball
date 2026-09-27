@@ -21,6 +21,10 @@ ACTIVE_SEGMENTATION_STATUSES = {
     MatchStateSegmentationRunStatus.succeeded,
     MatchStateSegmentationRunStatus.valid_no_rallies,
 }
+# 同一集合的字符串视图：切分工件里的 status 是裸字符串，发布判定也走这一个来源。
+ACTIVE_SEGMENTATION_STATUS_VALUES = frozenset(
+    status.value for status in ACTIVE_SEGMENTATION_STATUSES
+)
 
 
 def publish_reusable_segmentation(
@@ -181,18 +185,15 @@ def persist_segmentation_result(
         )
         db.add(run)
         db.flush()
-    if run.status not in {MatchStateSegmentationRunStatus.succeeded, MatchStateSegmentationRunStatus.valid_no_rallies}:
+    if run.status not in ACTIVE_SEGMENTATION_STATUSES:
         run.status = MatchStateSegmentationRunStatus(artifact.status)
-    if artifact.status in {"succeeded", "valid_no_rallies"}:
+    if artifact.status in ACTIVE_SEGMENTATION_STATUS_VALUES:
         previous = (
             db.query(MatchStateSegmentationRun)
             .filter(
                 MatchStateSegmentationRun.capture_take_id == artifact.capture_take_id,
                 MatchStateSegmentationRun.id != artifact.run_id,
-                MatchStateSegmentationRun.status.in_([
-                    MatchStateSegmentationRunStatus.succeeded,
-                    MatchStateSegmentationRunStatus.valid_no_rallies,
-                ]),
+                MatchStateSegmentationRun.status.in_(ACTIVE_SEGMENTATION_STATUSES),
             )
             .order_by(MatchStateSegmentationRun.finished_at.desc())
             .first()
@@ -256,11 +257,7 @@ def persist_segmentation_failure(
         run_status = MatchStateSegmentationRunStatus(status)
     except ValueError as exc:
         raise ValueError(f"unsupported segmentation failure status: {status}") from exc
-    if run_status in {
-        MatchStateSegmentationRunStatus.succeeded,
-        MatchStateSegmentationRunStatus.valid_no_rallies,
-        MatchStateSegmentationRunStatus.superseded,
-    }:
+    if run_status in ACTIVE_SEGMENTATION_STATUSES | {MatchStateSegmentationRunStatus.superseded}:
         raise ValueError(f"status is not a failure status: {status}")
     run_id = _run_id()
     run = MatchStateSegmentationRun(

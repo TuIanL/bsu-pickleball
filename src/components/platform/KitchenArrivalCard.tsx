@@ -27,15 +27,15 @@ export function KitchenArrivalCard({
   const players = artifact?.players ?? [];
   const showPercent = (player: KitchenArrivalPlayerResult) => player.status === "available" && player.arrival_rate !== null;
   return (
-    <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" data-testid="kitchen-arrival-card">
+    <article className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4" data-testid="kitchen-arrival-card">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <strong className="block text-sm text-[#14241B]">发球队 · 网前到位率</strong>
+          <strong className="block text-sm text-[var(--ui-ink)]">发球队 · 网前到位率</strong>
           <p className="mt-1 text-xs leading-5 text-slate-500">按冻结的发球队与回合上下文统计，不是实时位置。</p>
         </div>
         <span className="rounded-full bg-[#E9F5FF] px-2.5 py-1 text-xs font-black text-[#1769AA]">双打</span>
       </div>
-      <div className="mt-4 overflow-hidden rounded-xl border border-[#DDE9D6] bg-[#F5FAF1] p-3" data-testid="kitchen-arrival-court-profile">
+      <div className="mt-4 overflow-hidden rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3" data-testid="kitchen-arrival-court-profile">
         <svg aria-label="横向厨房线场地控制画像" className="h-20 w-full" role="img" viewBox="0 0 640 120">
           <rect fill="#EAF6E5" height="88" rx="12" width="640" x="0" y="16" />
           <rect fill="#D5ECCD" height="88" width="112" x="208" y="16" />
@@ -70,7 +70,7 @@ export function KitchenArrivalCard({
                       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3" key={player.player_id}>
                         <div>
                           <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="font-bold text-[#14241B]">
+                            <span className="font-bold text-[var(--ui-ink)]">
                               {player.player_id.replace("Player_", "P")}{player.display_name ? ` · ${player.display_name}` : ""}
                             </span>
                             <span className="text-slate-500">{stateLabel(player)}</span>

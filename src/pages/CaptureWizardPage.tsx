@@ -96,9 +96,9 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
               <div
                 className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm font-bold transition ${
                   index === step
-                    ? "bg-[#17231D] text-white shadow-sm"
+                    ? "bg-[var(--ui-ink-solid)] text-white shadow-sm"
                     : index < step
-                      ? "bg-[#22C55E]/12 text-[#168A34]"
+                      ? "bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]"
                       : "bg-slate-100 text-slate-400"
                 }`}
               >
@@ -108,7 +108,7 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 {label}
               </div>
               {index < STEPS.length - 1 && (
-                <div className={`h-px w-8 ${index < step ? "bg-[#22C55E]/30" : "bg-slate-200"}`} />
+                <div className={`h-px w-8 ${index < step ? "bg-[var(--ui-brand-solid)]/30" : "bg-slate-200"}`} />
               )}
             </div>
           ))}
@@ -117,7 +117,7 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
 
       {/* 错误提示 */}
       {error && (
-        <div className="mb-6 rounded-xl border border-[#FF4D4F]/20 bg-[#FF4D4F]/8 px-4 py-3 text-sm font-medium text-[#C92A2A]">
+        <div className="mb-6 rounded-xl border border-[var(--ui-danger-strong)]/20 bg-[var(--ui-danger-solid)]/8 px-4 py-3 text-sm font-medium text-[var(--ui-danger)]">
           {error}
         </div>
       )}
@@ -126,11 +126,11 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
       {step === 0 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3 mb-4">
-            <div className="grid size-10 place-items-center rounded-xl bg-[#22C55E]/12 text-[#168A34]">
+            <div className="grid size-10 place-items-center rounded-xl bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]">
               <Camera size={20} />
             </div>
             <div>
-              <h2 className="text-xl font-black text-[#14241B]">采集场景</h2>
+              <h2 className="text-xl font-black text-[var(--ui-ink)]">采集场景</h2>
               <p className="text-sm text-slate-500">描述这次球场采集的基本信息</p>
             </div>
           </div>
@@ -168,8 +168,8 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                     key={opt.value}
                     className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
                       form.capture_mode === opt.value
-                        ? "bg-[#17231D] text-white"
-                        : "border border-[#DDE9D6] bg-white text-slate-600 hover:border-[#22C55E]/30"
+                        ? "bg-[var(--ui-ink-solid)] text-white"
+                        : "border border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-600 hover:border-[var(--ui-brand)]/30"
                     }`}
                     onClick={() => update({ capture_mode: opt.value })}
                     type="button"
@@ -191,8 +191,8 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                     key={opt.value}
                     className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
                       form.match_format === opt.value
-                        ? "bg-[#17231D] text-white"
-                        : "border border-[#DDE9D6] bg-white text-slate-600 hover:border-[#22C55E]/30"
+                        ? "bg-[var(--ui-ink-solid)] text-white"
+                        : "border border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-600 hover:border-[var(--ui-brand)]/30"
                     }`}
                     onClick={() => update({ match_format: opt.value })}
                     type="button"
@@ -220,11 +220,11 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
       {step === 1 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3 mb-4">
-            <div className="grid size-10 place-items-center rounded-xl bg-[#2F80ED]/12 text-[#2F80ED]">
+            <div className="grid size-10 place-items-center rounded-xl bg-[var(--ui-info-solid)]/12 text-[var(--ui-info)]">
               <Cpu size={20} />
             </div>
             <div>
-              <h2 className="text-xl font-black text-[#14241B]">摄像头方案</h2>
+              <h2 className="text-xl font-black text-[var(--ui-ink)]">摄像头方案</h2>
               <p className="text-sm text-slate-500">选择采集使用的摄像头方案（具体摄像头在控制台中确认）</p>
             </div>
           </div>
@@ -254,8 +254,8 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 key={opt.value}
                 className={`sport-card flex items-start gap-4 p-5 text-left transition ${
                   form.camera_setup === opt.value
-                    ? "border-[#2F80ED]/40 bg-[#2F80ED]/6"
-                    : "hover:border-[#22C55E]/25"
+                    ? "border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/6"
+                    : "hover:border-[var(--ui-brand)]/25"
                 }`}
                 onClick={() => update({ camera_setup: opt.value, ...(opt.value !== "dual" && form.display_mode === "showcase" ? { display_mode: "standard" } : {}) })}
                 type="button"
@@ -263,18 +263,18 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 <div
                   className={`grid size-10 shrink-0 place-items-center rounded-xl ${
                     form.camera_setup === opt.value
-                      ? "bg-[#2F80ED]/15 text-[#2F80ED]"
+                      ? "bg-[var(--ui-info-solid)]/15 text-[var(--ui-info)]"
                       : "bg-slate-100 text-slate-400"
                   }`}
                 >
                   <opt.icon size={20} />
                 </div>
                 <div className="min-w-0">
-                  <strong className="block text-base font-black text-[#14241B]">{opt.title}</strong>
+                  <strong className="block text-base font-black text-[var(--ui-ink)]">{opt.title}</strong>
                   <p className="mt-1 text-sm text-slate-500">{opt.desc}</p>
                 </div>
                 {form.camera_setup === opt.value && (
-                  <div className="ml-auto grid size-6 shrink-0 place-items-center rounded-full bg-[#2F80ED] text-white">
+                  <div className="ml-auto grid size-6 shrink-0 place-items-center rounded-full bg-[var(--ui-info-solid)] text-white">
                     <CheckCircle2 size={14} />
                   </div>
                 )}
@@ -288,11 +288,11 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
       {step === 2 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3 mb-4">
-            <div className="grid size-10 place-items-center rounded-xl bg-[#FF9500]/12 text-[#FF9500]">
+            <div className="grid size-10 place-items-center rounded-xl bg-[var(--ui-stage)]/12 text-[var(--ui-stage)]">
               <Sparkles size={20} />
             </div>
             <div>
-              <h2 className="text-xl font-black text-[#14241B]">分析设置</h2>
+              <h2 className="text-xl font-black text-[var(--ui-ink)]">分析设置</h2>
               <p className="text-sm text-slate-500">选择录制结束后的默认处理方式</p>
             </div>
           </div>
@@ -306,17 +306,17 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 <button
                   key={opt.value}
                   type="button"
-                  className={`sport-card flex items-start gap-3 p-4 text-left transition ${form.display_mode === opt.value ? "border-[#FF9500]/40 bg-[#FF9500]/6" : "hover:border-[#22C55E]/25"}`}
+                  className={`sport-card flex items-start gap-3 p-4 text-left transition ${form.display_mode === opt.value ? "border-[var(--ui-stage)]/40 bg-[var(--ui-stage)]/6" : "hover:border-[var(--ui-brand)]/25"}`}
                   onClick={() => update({ display_mode: opt.value, ...(opt.value === "showcase" ? { camera_setup: "dual" } : {}) })}
                 >
-                  <opt.icon size={20} className={form.display_mode === opt.value ? "text-[#FF9500]" : "text-slate-400"} />
-                  <span className="min-w-0"><strong className="block text-sm font-black text-[#14241B]">{opt.title}</strong><span className="mt-1 block text-xs text-slate-500">{opt.desc}</span></span>
-                  {form.display_mode === opt.value && <CheckCircle2 size={16} className="ml-auto shrink-0 text-[#FF9500]" />}
+                  <opt.icon size={20} className={form.display_mode === opt.value ? "text-[var(--ui-stage)]" : "text-slate-400"} />
+                  <span className="min-w-0"><strong className="block text-sm font-black text-[var(--ui-ink)]">{opt.title}</strong><span className="mt-1 block text-xs text-slate-500">{opt.desc}</span></span>
+                  {form.display_mode === opt.value && <CheckCircle2 size={16} className="ml-auto shrink-0 text-[var(--ui-stage)]" />}
                 </button>
               ))}
             </div>
             {form.display_mode === "showcase" && (
-              <p className="rounded-lg border border-[#FF9500]/25 bg-[#FF9500]/6 px-3 py-2 text-xs text-[#9A5A00]">展示模式已锁定双摄方案。展示屏为独立页面，关闭或刷新不会停止录制。</p>
+              <p className="rounded-lg border border-[var(--ui-stage)]/25 bg-[var(--ui-stage)]/6 px-3 py-2 text-xs text-[#9A5A00]">展示模式已锁定双摄方案。展示屏为独立页面，关闭或刷新不会停止录制。</p>
             )}
             {[
               {
@@ -342,8 +342,8 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 key={opt.value}
                 className={`sport-card flex items-start gap-4 p-5 text-left transition ${
                   form.analysisIntent === opt.value
-                    ? "border-[#FF9500]/40 bg-[#FF9500]/6"
-                    : "hover:border-[#22C55E]/25"
+                    ? "border-[var(--ui-stage)]/40 bg-[var(--ui-stage)]/6"
+                    : "hover:border-[var(--ui-brand)]/25"
                 }`}
                 onClick={() => update({ analysisIntent: opt.value })}
                 type="button"
@@ -351,18 +351,18 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 <div
                   className={`grid size-10 shrink-0 place-items-center rounded-xl ${
                     form.analysisIntent === opt.value
-                      ? "bg-[#FF9500]/15 text-[#FF9500]"
+                      ? "bg-[var(--ui-stage)]/15 text-[var(--ui-stage)]"
                       : "bg-slate-100 text-slate-400"
                   }`}
                 >
                   <opt.icon size={20} />
                 </div>
                 <div className="min-w-0">
-                  <strong className="block text-base font-black text-[#14241B]">{opt.title}</strong>
+                  <strong className="block text-base font-black text-[var(--ui-ink)]">{opt.title}</strong>
                   <p className="mt-1 text-sm text-slate-500">{opt.desc}</p>
                 </div>
                 {form.analysisIntent === opt.value && (
-                  <div className="ml-auto grid size-6 shrink-0 place-items-center rounded-full bg-[#FF9500] text-white">
+                  <div className="ml-auto grid size-6 shrink-0 place-items-center rounded-full bg-[var(--ui-stage)] text-white">
                     <CheckCircle2 size={14} />
                   </div>
                 )}

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 
-from app.api import routes_segment_editing
+from app.api import routes_coding_actions, routes_segment_editing
 from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentStatus, SegmentType
 from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
 from app.models.segment_edit_operation import EditOperationType, SegmentEditOperation
@@ -238,6 +239,114 @@ def test_formal_segmentation_summary_exposes_only_published_algorithm_run(isolat
     assert summary["model_version"] == "v2026.09"
     assert summary["segment_count"] == 1
     assert summary["window_plan_hash"] == "plan-summary"
+    db.close()
+
+
+def _algorithm_segment(db, take_id: str, run_id: str) -> CaptureSegment:
+    segment = CaptureSegment(
+        id=f"auto-{run_id}",
+        capture_take_id=take_id,
+        segment_type=SegmentType.rally,
+        ordinal=1,
+        label="第1分",
+        start_ms=1000,
+        end_ms=2000,
+        status=SegmentStatus.inferred,
+        source=SegmentSource.algorithm,
+        edit_status=EditStatus.active,
+        segmentation_run_id=run_id,
+    )
+    db.add(segment)
+    db.flush()
+    return segment
+
+
+def test_formal_segmentation_summary_keeps_latest_published_run_over_failed_retry(isolated_database):
+    """失败重试不得顶掉上一次成功发布，且失败记录本身仍可审计。"""
+    db = isolated_database()
+    take, _ = _take_and_rally(db)
+    published = MatchStateSegmentationRun(
+        id="seg-published",
+        capture_take_id=take.id,
+        planning_job_id="job-published",
+        status=MatchStateSegmentationRunStatus.succeeded,
+        profile="match_default",
+        window_plan_hash="plan-published",
+        finished_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    failed = MatchStateSegmentationRun(
+        id="seg-failed-retry",
+        capture_take_id=take.id,
+        planning_job_id="job-failed-retry",
+        status=MatchStateSegmentationRunStatus.inference_failed,
+        profile="match_default",
+        diagnostics_json=json.dumps({"detail": "模型权重缺失"}, ensure_ascii=False),
+        finished_at=datetime(2026, 9, 2, tzinfo=UTC),
+    )
+    db.add_all([published, failed])
+    db.flush()
+    _algorithm_segment(db, take.id, published.id)
+    db.commit()
+
+    summary = routes_segment_editing.get_formal_segmentation_summary(take.id, db)
+    assert summary["run_id"] == "seg-published"
+    assert summary["status"] == "succeeded"
+    assert summary["segment_count"] == 1
+    # 失败重试不 supersede 已发布 run：两条记录各自保留原状态，供审计追溯。
+    assert published.status is MatchStateSegmentationRunStatus.succeeded
+    assert db.get(MatchStateSegmentationRun, "seg-failed-retry").status is (
+        MatchStateSegmentationRunStatus.inference_failed
+    )
+    db.close()
+
+
+def test_formal_segmentation_summary_treats_valid_no_rallies_as_published(isolated_database):
+    """valid_no_rallies 属于已发布状态：摘要照常返回该 run，但分段计数为 0。"""
+    db = isolated_database()
+    take, _ = _take_and_rally(db)
+    db.add(
+        MatchStateSegmentationRun(
+            id="seg-valid-empty",
+            capture_take_id=take.id,
+            planning_job_id="job-valid-empty",
+            status=MatchStateSegmentationRunStatus.valid_no_rallies,
+            profile="match_default",
+            window_plan_hash="plan-valid-empty",
+            finished_at=datetime(2026, 9, 3, tzinfo=UTC),
+        )
+    )
+    db.commit()
+
+    summary = routes_segment_editing.get_formal_segmentation_summary(take.id, db)
+    assert summary["run_id"] == "seg-valid-empty"
+    assert summary["status"] == "valid_no_rallies"
+    assert summary["segment_count"] == 0
+    db.close()
+
+
+def test_segment_list_and_edit_routes_share_one_serializer(isolated_database):
+    """片段列表路由与片段编辑路由输出同一份字典契约（共享序列化模块）。"""
+    db = isolated_database()
+    take, rally = _take_and_rally(db)
+
+    listed = next(item for item in routes_coding_actions.list_segments(take.id, db=db) if item["id"] == rally.id)
+    edited = routes_segment_editing.patch_segment(
+        rally.id,
+        corrected_start_ms=2_400,
+        corrected_end_ms=7_600,
+        expected_version=0,
+        db=db,
+    )
+
+    assert set(listed) == set(edited)
+    # 本次编辑真正改动的字段之外，两侧取值必须逐字一致。
+    mutated = {"corrected_start_ms", "corrected_end_ms", "corrected_at", "edit_version", "effective_start_ms", "effective_end_ms"}
+    assert {k: v for k, v in listed.items() if k not in mutated} == {
+        k: v for k, v in edited.items() if k not in mutated
+    }
+    assert listed["effective_start_ms"] == 2_000
+    assert edited["effective_start_ms"] == 2_400
+    assert edited["effective_end_ms"] == 7_600
     db.close()
 
 

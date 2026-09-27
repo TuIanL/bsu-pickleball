@@ -59,7 +59,7 @@ export function FieldSessionGroupCard({
   );
 
   return (
-    <section className={`overflow-hidden rounded-3xl border bg-white/80 shadow-sm ${selectedFieldSession ? "border-[#22C55E]/50 ring-1 ring-[#22C55E]/20" : "border-[#DDE9D6]"}`}>
+    <section className={`overflow-hidden rounded-3xl border bg-[var(--ui-surface)]/80 shadow-sm ${selectedFieldSession ? "border-[var(--ui-brand)]/50 ring-1 ring-[var(--ui-brand)]/20" : "border-[var(--ui-border)]"}`}>
       <div
         role="button"
         tabIndex={0}
@@ -70,7 +70,7 @@ export function FieldSessionGroupCard({
             setExpanded((v) => !v);
           }
         }}
-        className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-[#F5FAF1]"
+        className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-[var(--ui-surface-soft)]"
         aria-expanded={expanded}
       >
         {!isUncategorized && onToggleSelectFieldSession && (
@@ -78,17 +78,17 @@ export function FieldSessionGroupCard({
             <input
               type="checkbox"
               checked={selectedFieldSession}
-              className="size-4 accent-[#22C55E] cursor-pointer"
+              className="size-4 accent-[var(--ui-brand)] cursor-pointer"
               onChange={() => {}}
             />
           </span>
         )}
-        <span className="text-[#168A34]">
+        <span className="text-[var(--ui-brand-deep)]">
           {expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-base font-black text-[#14241B]">{title}</h3>
+            <h3 className="truncate text-base font-black text-[var(--ui-ink)]">{title}</h3>
             {hasRecording && (
               <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-black text-red-500">
                 <span className="size-1.5 rounded-full bg-red-500" />
@@ -96,7 +96,7 @@ export function FieldSessionGroupCard({
               </span>
             )}
             {!isUncategorized && fieldSession?.status && (
-              <span className="rounded-full bg-[#F1F7EC] px-2.5 py-0.5 text-xs font-bold text-slate-500">
+              <span className="rounded-full bg-[var(--ui-surface-tint)] px-2.5 py-0.5 text-xs font-bold text-slate-500">
                 {STATUS_LABEL[fieldSession.status] ?? fieldSession.status}
               </span>
             )}
@@ -111,13 +111,13 @@ export function FieldSessionGroupCard({
             {latestStartedAt ? ` · 最近 ${formatGroupTime(latestStartedAt)}` : ""}
           </p>
         </div>
-        <span className="shrink-0 rounded-full bg-[#17231D] px-3 py-1 text-xs font-black text-white">
+        <span className="shrink-0 rounded-full bg-[var(--ui-ink-solid)] px-3 py-1 text-xs font-black text-white">
           {recordings.length} 条
         </span>
         {!isUncategorized && (
           <button
             type="button"
-            className="shrink-0 rounded-lg px-2 py-1 text-xs text-[#C92A2A] hover:bg-red-50 transition"
+            className="shrink-0 rounded-lg px-2 py-1 text-xs text-[var(--ui-danger)] hover:bg-red-50 transition"
             onClick={(e) => {
               e.stopPropagation();
               if (fieldSession && onDeleteFieldSession) {
@@ -132,7 +132,7 @@ export function FieldSessionGroupCard({
       </div>
 
       {expanded && (
-        <div className="grid gap-3 border-t border-[#DDE9D6] bg-white/60 p-4">
+        <div className="grid gap-3 border-t border-[var(--ui-border)] bg-[var(--ui-surface)]/60 p-4">
           {recordings.length === 0 ? (
             <p className="px-1 py-3 text-sm text-slate-400">暂无录制</p>
           ) : (

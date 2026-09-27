@@ -4,7 +4,6 @@
 // 结果类 view 可开性依据「素材 Job 状态 + 展示元数据」一次判定：
 //   - analysis / report / trajectory / technical → analysisState
 //   - video     → source media availability
-//   - segments  → 拥有 captureTake
 // 禁止初始门控逐 view 拉重产物（trajectory/report/heatmap…）。
 // 区分 invalid view（source 不支持 → replace 到 overview）与
 // 合法但缺产物（停在原 URL 显示缺产物提示）。
@@ -14,7 +13,7 @@ import type { AnalysisPipelineResult } from "../../types/report";
 import type { LibraryAnalysisJobView } from "../../services/libraryAdapter";
 import { getReportCapability } from "../../services/reportCapability";
 
-export type LibraryView = "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "segments" | "technical";
+export type LibraryView = "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "technical";
 
 export type CapabilityState = "available" | "unavailable" | "loading";
 
@@ -24,7 +23,6 @@ export interface LibraryViewCapabilities {
   trajectory: CapabilityState;
   landing: CapabilityState;
   report: CapabilityState;
-  segments: CapabilityState;
   technical: CapabilityState;
   reasons?: Partial<Record<LibraryView, string>>;
 }
@@ -36,11 +34,7 @@ export interface SelectedAnalysisCapabilityInput {
 }
 
 /** 该素材 source 根本不支持的 view（→ 应 replace 到 overview） */
-const INVALID_VIEWS_BY_KIND: Partial<Record<LibraryItemViewModel["ref"]["kind"], LibraryView[]>> = {
-  upload: ["segments"],
-  recording: [],
-  sync_recording: [],
-};
+const INVALID_VIEWS_BY_KIND: Partial<Record<LibraryItemViewModel["ref"]["kind"], LibraryView[]>> = {};
 
 /**
  * 依据 LibraryItemViewModel 一次性计算各 view 可开性。
@@ -79,15 +73,12 @@ export function computeLibraryViewCapabilities(
       reason: legacyResult ? "正在核对报告所需的真实分析数据" : "该素材尚无可用的分析结果",
     };
   const canPlayVideo = item.availabilityState !== "unavailable";
-  const hasTake = Boolean(item.fieldSessionId && item.captureTakeId);
-
   const resultCaps: LibraryViewCapabilities = {
     video: canPlayVideo ? "available" : "unavailable",
     analysis: manifestPending ? "loading" : manifestReady ? "available" : "unavailable",
     trajectory: manifestPending ? "loading" : trajectoryReady ? "available" : "unavailable",
     landing: manifestPending ? "loading" : landingReady ? "available" : "unavailable",
     report: reportCapability.state,
-    segments: hasTake ? "available" : "unavailable",
     technical: hasSelection && (completed || terminalDiagnostic) ? "available" : "unavailable",
     reasons,
   };
@@ -116,8 +107,6 @@ export function computeLibraryViewCapabilities(
   }
   if (selected && completed && !manifestPending && !trajectoryReady) reasons.trajectory = "该历史任务未生成可用球路";
   if (selected && completed && !manifestPending && !landingReady) reasons.landing = "该历史任务未生成可用落点";
-  if (!hasTake) reasons.segments = "该素材没有可管理的片段数据";
-
   return resultCaps;
 }
 

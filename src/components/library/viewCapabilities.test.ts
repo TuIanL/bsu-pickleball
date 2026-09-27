@@ -3,7 +3,6 @@ import type { LibraryItemViewModel } from "../../services/libraryAdapter";
 import type { AnalysisPipelineResult } from "../../types/report";
 import {
   computeLibraryViewCapabilities,
-  isInvalidViewForItem,
   resolveViewCapability,
 } from "./viewCapabilities";
 
@@ -46,12 +45,10 @@ describe("LibraryViewCapabilities", () => {
     expect(caps.reasons?.video).toBe("视频存储暂不可用");
   });
 
-  it("这个 change 的非法 view：upload 不支持 segments（→ replace 到 overview）", () => {
-    const upload = item({ ref: { kind: "upload", sourceId: "v-1" }, sourceType: "upload" });
-    expect(isInvalidViewForItem(upload, "segments")).toBe(true);
-    // resolveViewCapability 对合法 view 返回可用
-    const caps = computeLibraryViewCapabilities(upload);
-    expect(resolveViewCapability(upload, "segments", caps)).toBe("invalid");
+  it("片段页不再是 Library 能力或可选视图", () => {
+    const caps = computeLibraryViewCapabilities(item({ fieldSessionId: "fs-1", captureTakeId: "take-1" }));
+    expect(caps).not.toHaveProperty("segments");
+    expect(Object.keys(caps)).not.toContain("segments");
   });
 
   it("合法但缺产物：无分析时停在原 view 显示缺产物提示，而非静默回落", () => {
@@ -62,11 +59,6 @@ describe("LibraryViewCapabilities", () => {
   it("overview 恒可达", () => {
     const caps = computeLibraryViewCapabilities(item({}));
     expect(resolveViewCapability(item({}), "overview", caps)).toBe("available");
-  });
-
-  it("segments 无 take 时不可用；有 take 时可用", () => {
-    expect(computeLibraryViewCapabilities(item({ fieldSessionId: undefined, captureTakeId: undefined })).segments).toBe("unavailable");
-    expect(computeLibraryViewCapabilities(item({ fieldSessionId: "fs-1", captureTakeId: "take-1" })).segments).toBe("available");
   });
 
   it("selected completed Job 按自己的 manifest 门控球路与报告，不借用 primary 产物", () => {

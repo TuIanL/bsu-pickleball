@@ -19,7 +19,7 @@ export function ScoreBoard({
   const scoreB = liveState.score_b ?? 0;
 
   return (
-    <div className="space-y-3 rounded-xl border border-[#DDE9D6] bg-white p-4">
+    <div className="space-y-3 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
       {/* Header */}
       <ScoreHeader
         gameOrdinal={liveState.game_ordinal}

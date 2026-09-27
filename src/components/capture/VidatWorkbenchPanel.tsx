@@ -133,11 +133,11 @@ export function VidatWorkbenchPanel({ captureTakeId, onImported }: { captureTake
   };
 
   return (
-    <section className="border-y border-[#DDE9D6] bg-white px-4 py-4 sm:px-5" aria-label="Vidat 视频标注工作台">
+    <section className="border-y border-[var(--ui-border)] bg-[var(--ui-surface)] px-4 py-4 sm:px-5" aria-label="Vidat 视频标注工作台">
       <div className="flex flex-col gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <h2 className="text-base font-black text-[#14241B]">Vidat 视频标注</h2>
+            <h2 className="text-base font-black text-[var(--ui-ink)]">Vidat 视频标注</h2>
             <span className="text-xs text-slate-500">在 Vidat 中逐帧修正比赛事件</span>
           </div>
           <p className="mt-1 text-xs text-slate-500">{current ? `${packageLabel(current)} · ${current.provenance} · ${current.imported_at ? "已导入" : "待编辑"}${current.is_active ? " · 当前投影" : ""}` : "还没有标注包，先导出一份视频标注"}</p>
@@ -146,7 +146,7 @@ export function VidatWorkbenchPanel({ captureTakeId, onImported }: { captureTake
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {packages.length > 0 && <label className="flex items-center gap-2 text-xs font-semibold text-slate-500">
             <span>选择标注包</span>
-            <select aria-label="选择标注包" className="h-9 min-w-[150px] rounded-lg border border-[#D8E5D2] bg-white px-3 text-sm font-semibold text-[#203127] outline-none focus:border-[#22C55E]" value={selected} onChange={event => {
+            <select aria-label="选择标注包" className="h-9 min-w-[150px] rounded-lg border border-[var(--ui-border-soft)] bg-[var(--ui-surface)] px-3 text-sm font-semibold text-[var(--ui-text-deep)] outline-none focus:border-[var(--ui-brand)]" value={selected} onChange={event => {
               const next = packages.find(item => item.id === event.target.value);
               setSelected(event.target.value);
               setPreview(null);
@@ -170,36 +170,36 @@ export function VidatWorkbenchPanel({ captureTakeId, onImported }: { captureTake
         <input ref={inputRef} className="hidden" type="file" accept="application/json,.json" onChange={event => void chooseFile(event.target.files?.[0])} />
         {busy && <Loader2 className="animate-spin text-slate-400" size={17} />}
       </div>
-      {metadataOpen && <div className="mt-4 grid gap-2 border-t border-[#DDE9D6] pt-4 sm:grid-cols-3">
-        <label className="text-xs font-semibold text-slate-500">名称<input className="mt-1 h-9 w-full rounded-lg border border-[#D8E5D2] px-2 text-sm" value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="第 N 版" /></label>
-        <label className="text-xs font-semibold text-slate-500">负责人<input className="mt-1 h-9 w-full rounded-lg border border-[#D8E5D2] px-2 text-sm" value={ownerDraft} onChange={event => setOwnerDraft(event.target.value)} placeholder="可选" /></label>
-        <label className="text-xs font-semibold text-slate-500">备注<input className="mt-1 h-9 w-full rounded-lg border border-[#D8E5D2] px-2 text-sm" value={noteDraft} onChange={event => setNoteDraft(event.target.value)} placeholder="可选" /></label>
+      {metadataOpen && <div className="mt-4 grid gap-2 border-t border-[var(--ui-border)] pt-4 sm:grid-cols-3">
+        <label className="text-xs font-semibold text-slate-500">名称<input className="mt-1 h-9 w-full rounded-lg border border-[var(--ui-border-soft)] px-2 text-sm" value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="第 N 版" /></label>
+        <label className="text-xs font-semibold text-slate-500">负责人<input className="mt-1 h-9 w-full rounded-lg border border-[var(--ui-border-soft)] px-2 text-sm" value={ownerDraft} onChange={event => setOwnerDraft(event.target.value)} placeholder="可选" /></label>
+        <label className="text-xs font-semibold text-slate-500">备注<input className="mt-1 h-9 w-full rounded-lg border border-[var(--ui-border-soft)] px-2 text-sm" value={noteDraft} onChange={event => setNoteDraft(event.target.value)} placeholder="可选" /></label>
         <div className="flex flex-wrap gap-2 sm:col-span-3">
           <button className="green-button px-3 py-2 text-xs" disabled={busy || !selected} onClick={updateMetadata} type="button">保存当前元数据</button>
           <button className="quiet-button px-3 py-2 text-xs" disabled={busy} onClick={derivePackage} type="button">从当前元数据派生</button>
           <button className="quiet-button px-3 py-2 text-xs" disabled={busy} onClick={() => { setNameDraft(""); setOwnerDraft(""); setNoteDraft(""); }} type="button"><X size={14} />清空表单</button>
         </div>
       </div>}
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#DDE9D6] pt-4 text-xs text-slate-500">
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--ui-border)] pt-4 text-xs text-slate-500">
         <span>Vidat 服务：{serviceStatus?.status ?? "未知"}</span>
         <button className="quiet-button px-3 py-2 text-xs" disabled={busy} onClick={closePackageWindow} type="button"><X size={14} />关闭 Vidat 标签页</button>
         <button className="quiet-button px-3 py-2 text-xs" disabled={busy} onClick={stopService} type="button"><Power size={14} />停止 Vidat 服务</button>
       </div>
-      {packages.length > 1 && <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#DDE9D6] pt-4">
+      {packages.length > 1 && <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--ui-border)] pt-4">
         <GitCompare size={16} className="text-slate-500" />
         <span className="text-xs font-semibold text-slate-500">比较当前版本与</span>
-        <select aria-label="比较版本" className="h-9 min-w-[180px] rounded-lg border border-[#D8E5D2] bg-white px-3 text-sm" value={compareTarget} onChange={event => setCompareTarget(event.target.value)}>
+        <select aria-label="比较版本" className="h-9 min-w-[180px] rounded-lg border border-[var(--ui-border-soft)] bg-[var(--ui-surface)] px-3 text-sm" value={compareTarget} onChange={event => setCompareTarget(event.target.value)}>
           {packages.filter(item => item.id !== selected).map(item => <option key={item.id} value={item.id}>{packageLabel(item)}</option>)}
         </select>
         <button className="quiet-button px-3 py-2 text-xs" disabled={busy || !compareTarget || compareTarget === selected} onClick={comparePackages} type="button">比较版本</button>
       </div>}
-      {comparison && <div className="mt-4 rounded-lg border border-[#DDE9D6] bg-[#F8FCF6] p-3 text-sm">
+      {comparison && <div className="mt-4 rounded-lg border border-[var(--ui-border)] bg-[#F8FCF6] p-3 text-sm">
         <div className="flex items-center justify-between gap-2"><strong>版本差异</strong><button className="text-slate-500" onClick={() => setComparison(null)} type="button" aria-label="关闭版本差异"><X size={16} /></button></div>
         <p className="mt-1 text-xs text-slate-500">{String(comparison.before.name)} → {String(comparison.after.name)} · 变更 {comparison.changes.length} 条</p>
         <ul className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2">{comparison.changes.map((change, index) => <li key={`${change.kind}-${index}`}>{change.kind}</li>)}</ul>
       </div>}
       {error && <p className="mt-3 text-sm text-red-700" role="alert">{error}</p>}
-      {preview && <div className="mt-4 border-t border-[#DDE9D6] pt-4">
+      {preview && <div className="mt-4 border-t border-[var(--ui-border)] pt-4">
         <div className="grid gap-2 text-sm sm:grid-cols-4">
           <span>变更 {preview.changes.length}</span><span>受影响回合 {preview.score_summary.affected_scores.length}</span>
           <span>最终胜者 {String(preview.score_summary.final.match_winner ?? "未决出")}</span><span>阻塞 {preview.blocking_errors.length}</span>

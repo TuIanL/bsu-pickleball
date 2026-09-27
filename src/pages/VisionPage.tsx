@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { ArrowRight, BadgeCheck, Brain, Camera, ChevronRight, Layers, LineChart, Route, Timer } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { ArrowRight, BadgeCheck, Brain, Camera, Info, Layers, LineChart, Route, Timer } from "lucide-react";
 import type { NavigateFn, AppPath, NavigatePath, ReportType } from "../app/navigationTypes";
 import type { AnalysisJobSummary, AnalysisPipelineResult, AnalysisReport, VisualizationManifest, BallTrajectoryArtifact, BounceEventsArtifact, PoseOverlayArtifact, ServeEventsArtifact, TrackingOverlayArtifact, FusedPlayerOverlayArtifact, StructuredVisualizationData, ReconstructedBallTrajectoryArtifact } from "../types/report";
 import type { ShotRallyEventsArtifact } from "../types/shotRallyEvents";
@@ -9,6 +9,7 @@ import { PageFrame } from "../components/PageFrame";
 import { RailMeta } from "../components/RailMeta";
 import { StatusState } from "../components/StatusState";
 import { VideoAnalysisCard } from "../components/platform/VideoAnalysisCard";
+import { AnalysisSegmentPanel } from "../components/platform/AnalysisSegmentPanel";
 import { MetricCard } from "../components/platform/MetricCard";
 import { SkillRatings } from "../components/platform/SkillRatings";
 import { RecommendedDrills } from "../components/RecommendedDrills";
@@ -25,9 +26,10 @@ import { demoAnalysisReport as demoReport, getAnalysisJob, getAnalysisReport, ge
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { errorToNotice, analysisStatusMeta, analysisModeLabel, formatDateTime, toneStyles } from "../utils/analysisHelpers";
 import { resolveDisplayViewId, withDisplayViewQuery } from "../utils/multiviewDisplay";
-import { getReportCapability, type ReportCapability } from "../services/reportCapability";
+import { getReportCapability } from "../services/reportCapability";
 import { useDisplayViewGeometry, type DisplayViewGeometryInput } from "../hooks/useDisplayViewGeometry";
 import { kitchenArrivalCardEnabled } from "../config/featureFlags";
+import type { AutoRallyCue, AutoRallySegment, RallyNavigationRequest } from "../hooks/useAutoRallyPlayback";
 
 type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "failed";
 
@@ -547,6 +549,22 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     videoSrc,
   } = useVisualAnalysisReport(jobId);
   const taskReturnPath = taskListPathForJob(job);
+  const [autoRallySegments, setAutoRallySegments] = useState<AutoRallySegment[] | undefined>(undefined);
+  const [autoSkipUnavailableReason, setAutoSkipUnavailableReason] = useState<string | null>(null);
+  const [activeRallyId, setActiveRallyId] = useState<string | null>(null);
+  const [rallyNavigationRequest, setRallyNavigationRequest] = useState<RallyNavigationRequest | null>(null);
+  const rallyRequestIdRef = useRef(0);
+  const handlePlaybackDataChange = useCallback((segments: AutoRallySegment[], unavailableReason: string | null) => {
+    setAutoRallySegments(segments);
+    setAutoSkipUnavailableReason(unavailableReason);
+  }, []);
+  const handleRallySelect = useCallback((rally: AutoRallySegment) => {
+    setActiveRallyId(rally.id);
+    setRallyNavigationRequest({ requestId: ++rallyRequestIdRef.current, rally });
+  }, []);
+  const handleActiveRallyChange = useCallback((rally: AutoRallyCue | null) => {
+    setActiveRallyId(rally?.id ?? null);
+  }, []);
   const referenceViewId = job?.referenceViewId ?? "cam_1";
   const displayViewInputs = job?.analysisKind === "multiview"
     ? (job.jointViewInputs ?? []).filter((item, index, all) => all.findIndex((candidate) => candidate.cameraSlot === item.cameraSlot) === index)
@@ -751,18 +769,18 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
           <section className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <button
-                className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[#168A34]"
+                className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-600 transition hover:text-[var(--ui-brand-deep)]"
                 onClick={() => onNavigate(taskReturnPath)}
                 type="button"
               >
                 <ArrowRight className="rotate-180" size={16} aria-hidden="true" />
                 返回任务管理
               </button>
-              <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+              <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
                 <Camera size={16} aria-hidden="true" />
                 智能视频分析
               </p>
-              <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">视频分析结果</h1>
+              <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">视频分析结果</h1>
               <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
                 当前数据来源：{sourceLabel}。详细报告已收纳到右侧下级标签中，主画面只保留视频和状态。
               </p>
@@ -835,6 +853,34 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               fallbackVideoSrc={displayFallbackVideoSrc}
               pipelineTracks={result?.tracks}
               seekToMs={seekToMs}
+              autoRallySegments={autoRallySegments}
+              autoSkipUnavailableReason={autoSkipUnavailableReason}
+              rallyNavigationRequest={rallyNavigationRequest}
+              onActiveRallyChange={handleActiveRallyChange}
+              headerInfo={(
+                <AnalysisInfoPopover
+                  analysis={analysis}
+                  ballTrajectory={ballTrajectory ?? null}
+                  ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
+                  bounceEvents={bounceEvents ?? null}
+                  bounceEventsLoadState={bounceEventsLoadState}
+                  job={job}
+                  fusedPlayerOverlay={fusedPlayerOverlay ?? null}
+                  fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
+                  displayViewId={displayViewId}
+                  poseOverlay={poseOverlay ?? null}
+                  poseOverlayLoadState={poseOverlayLoadState}
+                  result={result}
+                  heatmapsManifest={heatmapsManifest ?? null}
+                  heatmapsLoadState={heatmapsLoadState}
+                  scatterManifest={scatterManifest ?? null}
+                  scatterLoadState={scatterLoadState}
+                  serveEvents={serveEvents ?? null}
+                  serveEventsLoadState={serveEventsLoadState}
+                  trackingOverlay={trackingOverlay ?? null}
+                  trackingOverlayLoadState={trackingOverlayLoadState}
+                />
+              )}
             />
             <VisualizationArtifactGallery
               heatmapsManifest={heatmapsManifest ?? null}
@@ -859,32 +905,17 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               onSeekToMs={handleTimelineSeek}
             />
           </div>
-          <AnalysisStatusRail
-            analysis={analysis}
-            ballTrajectory={ballTrajectory ?? null}
-            ballTrajectoryLoadState={reconstructedBallTrajectoryLoadState === "available" ? "available" : ballTrajectoryLoadState}
-            bounceEvents={bounceEvents ?? null}
-            bounceEventsLoadState={bounceEventsLoadState}
+          <AnalysisSegmentPanel
             job={job}
+            activeRallyId={activeRallyId}
+            onRallySelect={handleRallySelect}
+            onPlaybackDataChange={handlePlaybackDataChange}
+            reportActions={analysis.reportActions}
+            reportCapability={reportCapability}
+            reportPath={reportPath}
             onNavigate={onNavigate}
             embedded={embedded}
             onSelectView={onSelectView}
-            fusedPlayerOverlay={fusedPlayerOverlay ?? null}
-            fusedPlayerOverlayLoadState={fusedPlayerOverlayLoadState}
-            displayViewId={displayViewId}
-            poseOverlay={poseOverlay ?? null}
-            poseOverlayLoadState={poseOverlayLoadState}
-            reportPath={reportPath}
-            reportCapability={reportCapability}
-            result={result}
-            heatmapsManifest={heatmapsManifest ?? null}
-            heatmapsLoadState={heatmapsLoadState}
-            scatterManifest={scatterManifest ?? null}
-            scatterLoadState={scatterLoadState}
-            serveEvents={serveEvents ?? null}
-            serveEventsLoadState={serveEventsLoadState}
-            trackingOverlay={trackingOverlay ?? null}
-            trackingOverlayLoadState={trackingOverlayLoadState}
           />
         </section>
 
@@ -896,16 +927,16 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     <PageFrame>
       <section className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
             <Camera size={16} aria-hidden="true" />
             智能视频分析
           </p>
-          <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">比赛分析工作台</h1>
+          <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">比赛分析工作台</h1>
           <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
             视频回放是入口，报告和训练建议是下一步。当前数据来源：{sourceLabel}。
           </p>
           {!jobId && recentJob ? (
-            <div className="mt-5 inline-flex flex-wrap items-center gap-3 rounded-2xl border border-[#22C55E]/25 bg-white/85 px-4 py-3 shadow-sm">
+            <div className="mt-5 inline-flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--ui-brand)]/25 bg-[var(--ui-surface)]/85 px-4 py-3 shadow-sm">
               <span className="text-sm font-semibold text-slate-600">
                 最近分析：{recentJob.metadata.matchTitle} · {recentJob.metadata.fileName}
               </span>
@@ -1012,17 +1043,17 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {supportedActions.map((action) => (
           <button
-            className="sport-card group p-5 text-left transition hover:-translate-y-1 hover:border-[#22C55E]/35"
+            className="sport-card group p-5 text-left transition hover:-translate-y-1 hover:border-[var(--ui-brand)]/35"
             key={action.type}
             onClick={() => onNavigate(reportPath(action.type))}
             type="button"
           >
-            <span className="grid size-10 place-items-center rounded-2xl border border-[#22C55E]/25 bg-[#22C55E]/12 text-[#168A34]">
+            <span className="grid size-10 place-items-center rounded-2xl border border-[var(--ui-brand)]/25 bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]">
               <LineChart size={18} aria-hidden="true" />
             </span>
-            <strong className="mt-4 block text-lg font-black text-[#14241B]">{action.title}</strong>
+            <strong className="mt-4 block text-lg font-black text-[var(--ui-ink)]">{action.title}</strong>
             <p className="mt-2 text-sm leading-6 text-slate-600">{action.description}</p>
-            <span className="mt-4 inline-flex items-center gap-2 text-sm font-bold text-slate-700 group-hover:text-[#168A34]">
+            <span className="mt-4 inline-flex items-center gap-2 text-sm font-bold text-slate-700 group-hover:text-[var(--ui-brand-deep)]">
               查看报告
               <ArrowRight size={15} aria-hidden="true" />
             </span>
@@ -1145,10 +1176,10 @@ function VisualizationArtifactGallery({
     <section className="sport-card p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">可视化产物</p>
-          <h2 className="mt-2 text-xl font-black text-[#14241B]">位置与回合可视化</h2>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">可视化产物</p>
+          <h2 className="mt-2 text-xl font-black text-[var(--ui-ink)]">位置与回合可视化</h2>
         </div>
-        <LineChart className="text-[#168A34]" size={22} aria-hidden="true" />
+        <LineChart className="text-[var(--ui-brand-deep)]" size={22} aria-hidden="true" />
       </div>
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         {groups.map((group) => {
@@ -1159,9 +1190,9 @@ function VisualizationArtifactGallery({
 
           if (group.hasStructured && structuredData) {
             return (
-              <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={group.title}>
+              <article className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4" key={group.title}>
                 <div className="flex items-center justify-between gap-3">
-                  <strong className="text-sm text-[#14241B]">{group.title}</strong>
+                  <strong className="text-sm text-[var(--ui-ink)]">{group.title}</strong>
                   <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-black text-green-700">SVG</span>
                 </div>
                 <div className="mt-4">
@@ -1178,22 +1209,22 @@ function VisualizationArtifactGallery({
           }
 
           return (
-            <article className="rounded-2xl border border-[#DDE9D6] bg-white/75 p-4" key={group.title}>
+            <article className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4" key={group.title}>
               <div className="flex items-center justify-between gap-3">
-                <strong className="text-sm text-[#14241B]">{group.title}</strong>
+                <strong className="text-sm text-[var(--ui-ink)]">{group.title}</strong>
                 <span className={`rounded-full px-2.5 py-1 text-xs font-black ${meta.className}`}>{meta.label}</span>
               </div>
               {items.length > 0 ? (
                 <div className="mt-4 grid gap-3">
                   {items.map((item) => (
-                    <figure className="overflow-hidden rounded-2xl border border-[#DDE9D6] bg-[#F5FAF1]" key={item.id}>
+                    <figure className="overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)]" key={item.id}>
                       <img
                         alt={item.title || item.label}
-                        className="aspect-[11/16] w-full bg-white object-contain"
+                        className="aspect-[11/16] w-full bg-[var(--ui-surface)] object-contain"
                         src={resolveAnalysisAssetUrl(item.url)}
                       />
-                      <figcaption className="border-t border-[#DDE9D6] bg-white/80 p-3">
-                        <strong className="block text-sm text-[#14241B]">{item.title || item.label}</strong>
+                      <figcaption className="border-t border-[var(--ui-border)] bg-[var(--ui-surface)]/80 p-3">
+                        <strong className="block text-sm text-[var(--ui-ink)]">{item.title || item.label}</strong>
                         <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>
                       </figcaption>
                     </figure>
@@ -1231,7 +1262,7 @@ function VisualizationArtifactGallery({
   );
 }
 
-function AnalysisStatusRail({
+function AnalysisInfoPopover({
   analysis,
   ballTrajectory,
   ballTrajectoryLoadState,
@@ -1240,16 +1271,11 @@ function AnalysisStatusRail({
   heatmapsManifest,
   heatmapsLoadState,
   job,
-  onNavigate,
-  embedded,
   fusedPlayerOverlay,
   fusedPlayerOverlayLoadState,
   displayViewId,
-  onSelectView,
   poseOverlay,
   poseOverlayLoadState,
-  reportPath,
-  reportCapability,
   result,
   scatterManifest,
   scatterLoadState,
@@ -1266,16 +1292,11 @@ function AnalysisStatusRail({
   heatmapsManifest: VisualizationManifest | null;
   heatmapsLoadState: OverlayLoadState;
   job?: AnalysisJobSummary | null;
-  onNavigate: NavigateFn;
-  embedded?: boolean;
   fusedPlayerOverlay: FusedPlayerOverlayArtifact | null;
   fusedPlayerOverlayLoadState: OverlayLoadState;
   displayViewId?: string;
-  onSelectView?: (view: LibraryView) => void;
   poseOverlay: PoseOverlayArtifact | null;
   poseOverlayLoadState: OverlayLoadState;
-  reportPath: (type: ReportType) => NavigatePath;
-  reportCapability: ReportCapability;
   result?: AnalysisPipelineResult | null;
   scatterManifest: VisualizationManifest | null;
   scatterLoadState: OverlayLoadState;
@@ -1318,7 +1339,7 @@ function AnalysisStatusRail({
         result?.artifacts.reconstructed_ball_trajectory_status
           ?? ballTrajectory?.status
           ?? result?.artifacts.cleaned_ball_trajectory_status
-          ?? result?.artifacts.ball_trajectory_status
+          ?? result?.artifacts.ball_trajectory_status,
       ),
       detail: result?.artifacts.reconstructed_ball_trajectory_detail
         ?? result?.artifacts.cleaned_ball_trajectory_detail
@@ -1349,110 +1370,75 @@ function AnalysisStatusRail({
   const activeStage = job?.stages.find((stage) => stage.status === "active") ?? job?.stages.find((stage) => stage.id === job.stage);
   const completedWithoutPlayers = job?.status === "completed" && job.analysisMode !== "demo"
     && result != null && result.tracks.length === 0;
-  const supportedActions = analysis.reportActions.filter((action) => supportedReportTypes.includes(action.type));
-  const contextualPath = (path: string) => withTaskListContext(path, taskContextForJob(job));
-  const taskReturnPath = taskListPathForJob(job);
 
   return (
-    <aside className="grid gap-4">
-      <section className="sport-card p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">任务状态</p>
-            <h2 className="mt-2 text-xl font-black text-[#14241B]">{completedWithoutPlayers ? "处理结束 · 人物结果缺失" : job ? analysisStatusMeta(job.status).label : "样例分析"}</h2>
-          </div>
-          <span className="grid size-10 place-items-center rounded-2xl bg-[#22C55E]/12 text-[#168A34]">
-            <BadgeCheck size={19} aria-hidden="true" />
-          </span>
-        </div>
-        {completedWithoutPlayers ? (
-          <p className="mt-3 text-sm text-amber-800" role="status">
-            此历史任务没有生成有效人物轨迹，人物热力图与运动报告不可用；已生成的球路、回合及落点可独立查看。修复后需要重新计算人物分析，不能从空产物恢复。
-          </p>
-        ) : null}
-        {job ? (
-          <>
-            <div className="mt-4 h-2 rounded-full bg-[#DFEADA]">
-              <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+    <details className="group relative shrink-0">
+      <summary
+        aria-label="任务状态与视觉层信息"
+        className="grid size-9 cursor-pointer list-none place-items-center rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)] text-[var(--ui-brand-deep)] transition hover:bg-[var(--ui-surface-green-tint)] [&::-webkit-details-marker]:hidden"
+        title="任务状态与视觉层信息"
+      >
+        <Info size={17} aria-hidden="true" />
+      </summary>
+      <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70vh,38rem)] w-[min(90vw,27rem)] overflow-y-auto rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4 text-left shadow-2xl">
+        <section>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">任务状态</p>
+              <h2 className="mt-1 text-lg font-black text-[var(--ui-ink)]">{completedWithoutPlayers ? "处理结束 · 人物结果缺失" : job ? analysisStatusMeta(job.status).label : "样例分析"}</h2>
             </div>
-            <dl className="mt-4 grid gap-2 text-sm">
-              <RailMeta label="比赛" value={job.metadata.matchTitle} />
-              <RailMeta label="视频" value={job.metadata.fileName} />
-              <RailMeta label="分析模式" value={analysisModeLabel(job.analysisMode)} />
-              <RailMeta label="当前阶段" value={activeStage?.label ?? job.stage} />
-              <RailMeta
-                label="分析窗口"
-                value={
-                  result?.analysis_window?.requested_clip?.start_ms != null && result.analysis_window.requested_clip.end_ms != null
-                    ? `${(result.analysis_window.requested_clip.start_ms / 1000).toFixed(2)} - ${(result.analysis_window.requested_clip.end_ms / 1000).toFixed(2)} 秒`
-                    : "全视频"
-                }
-              />
-              {result?.analysis_window?.output_time_origin_ms != null ? (
-                <RailMeta label="叠加视频时间起点" value={`${(result.analysis_window.output_time_origin_ms / 1000).toFixed(2)} 秒`} />
-              ) : null}
-              <RailMeta label="更新时间" value={formatDateTime(job.updatedAt || job.createdAt)} />
-            </dl>
-          </>
-        ) : null}
-      </section>
-
-      <section className="sport-card p-5">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">视觉层状态</p>
-        <div className="mt-4 grid gap-3">
-          {overlayRows.map((row) => {
-            const meta = overlayStatusMeta(row.status);
-            return (
-              <div className="rounded-2xl border border-[#DDE9D6] bg-white/70 p-3" key={row.label}>
-                <div className="flex items-center justify-between gap-3">
-                  <strong className="text-sm text-[#14241B]">{row.label}</strong>
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-black ${meta.className}`}>{meta.label}</span>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-slate-500">{row.detail ?? meta.detail}</p>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="sport-card p-5">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">下级报告</p>
-        <div className="mt-4 grid gap-2">
-          {job?.id ? (
-            <button
-              className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
-              onClick={() => (embedded && onSelectView ? onSelectView("technical") : onNavigate(contextualPath(`/analysis/${job.id}/details`)))}
-              type="button"
-            >
-              分析详情
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
+            <BadgeCheck className="shrink-0 text-[var(--ui-brand-deep)]" size={19} aria-hidden="true" />
+          </div>
+          {completedWithoutPlayers ? (
+            <p className="mt-3 text-xs leading-5 text-amber-800" role="status">
+              此历史任务没有生成有效人物轨迹，人物热力图与运动报告不可用；已生成的球路、回合及落点可独立查看。修复后需要重新计算人物分析，不能从空产物恢复。
+            </p>
           ) : null}
-          {supportedActions.map((action) => (
-            <button
-              className="flex items-center justify-between gap-3 rounded-2xl border border-[#DDE9D6] bg-white/75 px-4 py-3 text-left text-sm font-black text-[#14241B] transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6] disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={reportCapability.state !== "available"}
-              key={action.type}
-              onClick={() => {
-                if (reportCapability.state !== "available") return;
-                if (embedded && onSelectView) onSelectView("report");
-                else onNavigate(reportPath(action.type));
-              }}
-              title={reportCapability.state === "available" ? undefined : reportCapability.reason}
-              type="button"
-            >
-              {action.title}
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
-          ))}
-        </div>
-        {!embedded ? (
-          <button className="quiet-button mt-4 w-full px-4 py-2.5" onClick={() => onNavigate(taskReturnPath)} type="button">
-            返回任务管理
-          </button>
-        ) : null}
-      </section>
-    </aside>
+          {job ? (
+            <>
+              <div className="mt-3 h-2 rounded-full bg-[var(--ui-surface-track-green)]">
+                <span className="block h-full rounded-full bg-[var(--ui-brand-solid)]" style={{ width: `${job.progress}%` }} />
+              </div>
+              <dl className="mt-3 grid gap-2 text-xs">
+                <RailMeta label="比赛" value={job.metadata.matchTitle} />
+                <RailMeta label="视频" value={job.metadata.fileName} />
+                <RailMeta label="分析模式" value={analysisModeLabel(job.analysisMode)} />
+                <RailMeta label="当前阶段" value={activeStage?.label ?? job.stage} />
+                <RailMeta
+                  label="分析窗口"
+                  value={result?.analysis_window?.requested_clip?.start_ms != null && result.analysis_window.requested_clip.end_ms != null
+                    ? `${(result.analysis_window.requested_clip.start_ms / 1000).toFixed(2)} - ${(result.analysis_window.requested_clip.end_ms / 1000).toFixed(2)} 秒`
+                    : "全视频"}
+                />
+                {result?.analysis_window?.output_time_origin_ms != null ? (
+                  <RailMeta label="叠加视频时间起点" value={`${(result.analysis_window.output_time_origin_ms / 1000).toFixed(2)} 秒`} />
+                ) : null}
+                <RailMeta label="更新时间" value={formatDateTime(job.updatedAt || job.createdAt)} />
+              </dl>
+            </>
+          ) : null}
+          {!job ? <p className="mt-2 text-xs text-slate-500">{analysis.jobId ? `分析任务 ${analysis.jobId}` : "当前为样例数据"}</p> : null}
+        </section>
+
+        <section className="mt-4 border-t border-[var(--ui-border)] pt-4">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">视觉层状态</p>
+          <div className="mt-3 grid gap-2">
+            {overlayRows.map((row) => {
+              const meta = overlayStatusMeta(row.status);
+              return (
+                <div className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-neutral)]/65 p-2.5" key={row.label}>
+                  <div className="flex items-center justify-between gap-3">
+                    <strong className="text-xs text-[var(--ui-ink)]">{row.label}</strong>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${meta.className}`}>{meta.label}</span>
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-4 text-slate-500">{row.detail ?? meta.detail}</p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </details>
   );
 }
 
@@ -1477,16 +1463,16 @@ function normalizeOverlayStatus(status: string): string {
 
 function overlayStatusMeta(status?: string) {
   if (status === "loading") {
-    return { label: "加载中", className: "bg-[#2F80ED]/14 text-[#1E63B6]", detail: "该视觉层正在按需读取，视频和报告可先使用。" };
+    return { label: "加载中", className: "bg-[var(--ui-info-solid)]/14 text-[var(--ui-info-deep)]", detail: "该视觉层正在按需读取，视频和报告可先使用。" };
   }
   if (status === "available") {
-    return { label: "可用", className: "bg-[#22C55E]/14 text-[#168A34]", detail: "该视觉层来自上传视频分析结果。" };
+    return { label: "可用", className: "bg-[var(--ui-brand-solid)]/14 text-[var(--ui-brand-deep)]", detail: "该视觉层来自上传视频分析结果。" };
   }
   if (status === "partial") {
-    return { label: "部分可用", className: "bg-[#FF9500]/14 text-[#A45A00]", detail: "该视觉层只有部分帧或片段可用。" };
+    return { label: "部分可用", className: "bg-[var(--ui-stage)]/14 text-[var(--ui-warning)]", detail: "该视觉层只有部分帧或片段可用。" };
   }
   if (status === "failed") {
-    return { label: "失败", className: "bg-[#FF4D4F]/12 text-[#C92A2A]", detail: "该视觉层生成失败，可查看后端诊断。" };
+    return { label: "失败", className: "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]", detail: "该视觉层生成失败，可查看后端诊断。" };
   }
   if (status === "skipped") {
     return { label: "已跳过", className: "bg-slate-100 text-slate-600", detail: "该视觉层在本次分析中未启用。" };
@@ -1495,7 +1481,7 @@ function overlayStatusMeta(status?: string) {
     return { label: "不可用", className: "bg-slate-100 text-slate-600", detail: "该视觉层缺少模型、配置或输入。" };
   }
   if (status === "no_detections" || status === "no_poses" || status === "no_candidates") {
-    return { label: "无结果", className: "bg-[#FF9500]/14 text-[#A45A00]", detail: "模型已运行，但没有产生可用目标。" };
+    return { label: "无结果", className: "bg-[var(--ui-stage)]/14 text-[var(--ui-warning)]", detail: "模型已运行，但没有产生可用目标。" };
   }
   return { label: "不可用", className: "bg-slate-100 text-slate-600", detail: "本次任务没有可用的真实视觉层数据。" };
 }
@@ -1505,10 +1491,10 @@ function CoachNotesCard({ notes }: { notes: AnalysisReport["coachNotes"] }) {
     <section className="sport-card p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">智能教练笔记</p>
-          <h2 className="mt-2 text-xl font-black text-[#14241B]">可执行洞察</h2>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">智能教练笔记</p>
+          <h2 className="mt-2 text-xl font-black text-[var(--ui-ink)]">可执行洞察</h2>
         </div>
-        <Brain className="text-[#168A34]" size={22} aria-hidden="true" />
+        <Brain className="text-[var(--ui-brand-deep)]" size={22} aria-hidden="true" />
       </div>
       <div className="mt-5 grid gap-3">
         {notes.map((note) => {
@@ -1545,7 +1531,7 @@ function HighlightsCard({
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">关键片段</p>
-          <h2 className="mt-2 text-xl font-black text-[#14241B]">关键片段</h2>
+          <h2 className="mt-2 text-xl font-black text-[var(--ui-ink)]">关键片段</h2>
         </div>
         <Timer className="text-[#D9FF3F]" size={22} aria-hidden="true" />
       </div>
@@ -1555,13 +1541,13 @@ function HighlightsCard({
 
           return (
             <button
-              className="rounded-2xl border border-[#DDE9D6] bg-white/70 p-4 text-left transition hover:border-[#22C55E]/35 hover:bg-[#F9FFF6]"
+              className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-4 text-left transition hover:border-[var(--ui-brand)]/35 hover:bg-[var(--ui-surface-green-tint)]"
               key={highlight.id}
               onClick={() => onNavigate(highlight.tone === "training" ? "/training" : reportPath("movement"))}
               type="button"
             >
               <div className="flex items-center justify-between gap-3">
-                <strong className="text-[#14241B]">{highlight.title}</strong>
+                <strong className="text-[var(--ui-ink)]">{highlight.title}</strong>
                 <span className={`rounded-full px-2 py-1 text-xs font-black ${style.bg} ${style.text}`}>{highlight.time}</span>
               </div>
               <p className={`mt-2 text-xs font-black uppercase tracking-[0.12em] ${style.text}`}>

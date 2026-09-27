@@ -681,11 +681,11 @@ export function AnalysisTasksPage({
     <PageFrame>
       <section className="grid gap-6 lg:grid-cols-[1fr_0.38fr] lg:items-stretch">
         <div className="sport-card p-6 sm:p-8">
-          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">
+          <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
             <Camera size={16} aria-hidden="true" />
             视频分析
           </p>
-          <h1 className="mt-3 text-4xl font-black text-[#14241B] sm:text-5xl">分析任务管理</h1>
+          <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">分析任务管理</h1>
           <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
             这里汇总从上传到完成的所有视觉分析任务。任务由后端队列和 worker 执行，阶段耗时、错误码和结果产物会被保留，方便产品调试和科研复现。
           </p>
@@ -703,7 +703,7 @@ export function AnalysisTasksPage({
             </button>
           </div>
         </div>
-        <div className="grid gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-5 shadow-sm">
+        <div className="grid gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-5 shadow-sm">
           {(sourceFilter === "upload"
             ? [
               ["全部任务", uploadJobs.length],
@@ -728,9 +728,9 @@ export function AnalysisTasksPage({
                 ["失败/取消", recordings.filter((s) => s.status === "failed" || s.status === "canceled").length],
               ]
           ).map(([label, value]) => (
-                <div className="flex items-center justify-between rounded-2xl bg-[#F5FAF1] px-4 py-3" key={label}>
+                <div className="flex items-center justify-between rounded-2xl bg-[var(--ui-surface-soft)] px-4 py-3" key={label}>
                   <span className="text-sm font-bold text-slate-500">{label}</span>
-                  <strong className="text-2xl font-black text-[#14241B]">{value}</strong>
+                  <strong className="text-2xl font-black text-[var(--ui-ink)]">{value}</strong>
                 </div>
               ))}
         </div>
@@ -746,7 +746,7 @@ export function AnalysisTasksPage({
       <div className="mt-6 flex gap-2">
         <button
           className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
-            sourceFilter === "upload" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+            sourceFilter === "upload" ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"
           }`}
           onClick={() => switchSourceFilter("upload")}
           type="button"
@@ -756,7 +756,7 @@ export function AnalysisTasksPage({
         </button>
         <button
           className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
-            sourceFilter === "recorded" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+            sourceFilter === "recorded" ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"
           }`}
           onClick={() => switchSourceFilter("recorded")}
           type="button"
@@ -766,7 +766,7 @@ export function AnalysisTasksPage({
         </button>
         <button
           className={`px-5 py-2.5 rounded-full text-sm font-bold transition ${
-            sourceFilter === "sync_recording" ? "bg-[#17231D] text-white" : "bg-[#F1F7EC] text-slate-600 hover:bg-[#E8F2DC]"
+            sourceFilter === "sync_recording" ? "bg-[var(--ui-ink-solid)] text-white" : "bg-[var(--ui-surface-tint)] text-slate-600 hover:bg-[var(--ui-surface-lime-soft)]"
           }`}
           onClick={() => switchSourceFilter("sync_recording")}
           type="button"
@@ -781,13 +781,13 @@ export function AnalysisTasksPage({
         <>
           {jobs === null ? (
             <section className="mt-6 sport-card p-8 text-center">
-              <p className="text-sm font-bold text-[#168A34]">正在读取任务列表</p>
+              <p className="text-sm font-bold text-[var(--ui-brand-deep)]">正在读取任务列表</p>
               <p className="mt-2 text-sm text-slate-500">正在连接后端并同步历史分析任务。</p>
             </section>
           ) : uploadJobs.length === 0 ? (
             <section className="mt-6 sport-card p-8 text-center">
-              <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">暂无分析任务</p>
-              <h2 className="mt-3 text-3xl font-black text-[#14241B]">先上传一场比赛</h2>
+              <p className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">暂无分析任务</p>
+              <h2 className="mt-3 text-3xl font-black text-[var(--ui-ink)]">先上传一场比赛</h2>
               <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
                 上传视频并完成四角标定后，任务会出现在这里，状态会从排队、分析中更新到分析完成。
                 {recordingDerivedJobs.length > 0 && (
@@ -798,20 +798,20 @@ export function AnalysisTasksPage({
             </section>
           ) : (
             <section className="mt-6 grid gap-4">
-              <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-                  <label className="inline-flex items-center gap-3 text-sm font-bold text-[#14241B]">
-                    <input checked={allVisibleSelected} className="size-4 accent-[#22C55E]" disabled={!visibleEligibleIds.length || isDeleting} onChange={toggleSelectAll} type="checkbox" />
+                  <label className="inline-flex items-center gap-3 text-sm font-bold text-[var(--ui-ink)]">
+                    <input checked={allVisibleSelected} className="size-4 accent-[var(--ui-brand)]" disabled={!visibleEligibleIds.length || isDeleting} onChange={toggleSelectAll} type="checkbox" />
                     已选 {selectedVisibleIds.length} / {visibleEligibleIds.length} 个可删除历史任务
                   </label>
                   <div className="relative">
                     <button
                       aria-expanded={modeSelectOpen}
                       aria-haspopup="menu"
-                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-semibold outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20 ${
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-semibold outline-none transition focus:border-[var(--ui-brand)]/70 focus:ring-2 focus:ring-[var(--ui-brand)]/20 ${
                         modeFilter !== "all"
-                          ? "border-[#17231D] bg-[#17231D] text-white hover:bg-[#0F1A14]"
-                          : "border-[#D8E5D2] bg-white text-[#203127] hover:bg-[#F5FAF1]"
+                          ? "border-[#17231D] bg-[var(--ui-ink-solid)] text-white hover:bg-[#0F1A14]"
+                          : "border-[var(--ui-border-soft)] bg-[var(--ui-surface)] text-[var(--ui-text-deep)] hover:bg-[var(--ui-surface-soft)]"
                       }`}
                       disabled={!modeRows.some((row) => row.eligibleCount > 0) || isDeleting}
                       onClick={() => setModeSelectOpen((open) => !open)}
@@ -835,12 +835,12 @@ export function AnalysisTasksPage({
                       rows={modeRows}
                     />
                   </div>
-                  <label className="inline-flex items-center gap-2 text-sm font-semibold text-[#203127]">
+                  <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--ui-text-deep)]">
                     <ArrowDownUp size={16} className="text-slate-500" aria-hidden="true" />
                     排序
                     <select
                       aria-label="任务排序"
-                      className="rounded-lg border border-[#D8E5D2] bg-white px-2.5 py-1.5 text-sm font-semibold text-[#203127] outline-none transition focus:border-[#22C55E]/70 focus:ring-2 focus:ring-[#22C55E]/20"
+                      className="rounded-lg border border-[var(--ui-border-soft)] bg-[var(--ui-surface)] px-2.5 py-1.5 text-sm font-semibold text-[var(--ui-text-deep)] outline-none transition focus:border-[var(--ui-brand)]/70 focus:ring-2 focus:ring-[var(--ui-brand)]/20"
                       onChange={handleSortChange}
                       value={`${sortKey}:${sortDir}`}
                     >
@@ -886,12 +886,12 @@ export function AnalysisTasksPage({
         <>
           {recordingsLoading || fieldSessionsLoading ? (
             <section className="mt-6 sport-card p-8 text-center">
-              <p className="text-sm font-bold text-[#168A34]">正在读取录制列表</p>
+              <p className="text-sm font-bold text-[var(--ui-brand-deep)]">正在读取录制列表</p>
             </section>
           ) : fieldSessions.length === 0 && recordings.length === 0 ? (
             <section className="mt-6 sport-card p-8 text-center">
-              <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#168A34]">暂无录制视频</p>
-              <h2 className="mt-3 text-3xl font-black text-[#14241B]">先去球场采集录制</h2>
+              <p className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">暂无录制视频</p>
+              <h2 className="mt-3 text-3xl font-black text-[var(--ui-ink)]">先去球场采集录制</h2>
               <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
                 在球场采集页面注册摄像头并录制比赛后，所有录制记录会在这里统一管理。
               </p>
@@ -900,12 +900,12 @@ export function AnalysisTasksPage({
           ) : (
             <section className="mt-6 grid gap-4">
               {/* 批量删除工具栏 */}
-              <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                <label className="inline-flex items-center gap-3 text-sm font-bold text-[#14241B]">
+              <div className="flex flex-col gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <label className="inline-flex items-center gap-3 text-sm font-bold text-[var(--ui-ink)]">
                   <input
                     checked={recordings.filter(r => r.status !== "recording").length > 0
                       && recordings.filter(r => r.status !== "recording").every(r => selectedRecordingIds.has(r.session_id))}
-                    className="size-4 accent-[#22C55E]"
+                    className="size-4 accent-[var(--ui-brand)]"
                     disabled={!recordings.some(r => r.status !== "recording") || isBatchDeleting}
                     onChange={handleSelectAllRecordings}
                     type="checkbox"
@@ -934,11 +934,11 @@ export function AnalysisTasksPage({
               </div>
 
               {/* 采集任务操作工具栏 */}
-              <div className="flex flex-col gap-3 rounded-3xl border border-[#DDE9D6] bg-white/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3 text-sm font-bold text-[#14241B]">
+              <div className="flex flex-col gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/75 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3 text-sm font-bold text-[var(--ui-ink)]">
                   <input
                     checked={fieldSessions.length > 0 && fieldSessions.every(fs => selectedFieldSessionIds.has(fs.id))}
-                    className="size-4 accent-[#22C55E]"
+                    className="size-4 accent-[var(--ui-brand)]"
                     disabled={!fieldSessions.length || isFieldSessionBatchDeleting}
                     onChange={() => {
                       if (fieldSessions.every(fs => selectedFieldSessionIds.has(fs.id))) {
@@ -1005,12 +1005,12 @@ export function AnalysisTasksPage({
       {sourceFilter === "sync_recording" && (
         <>
           {syncRecordingsLoading ? (
-            <section className="mt-8 text-center py-12 rounded-2xl bg-[#F1F7EC]/60">
+            <section className="mt-8 text-center py-12 rounded-2xl bg-[var(--ui-surface-tint)]/60">
               <RefreshCw size={20} className="mx-auto mb-3 text-slate-300 animate-spin" />
               <p className="text-sm text-slate-400">正在读取双摄录制列表</p>
             </section>
           ) : syncRecordings.length === 0 ? (
-            <section className="mt-8 text-center py-12 rounded-2xl border border-dashed border-[#DDE9D6]">
+            <section className="mt-8 text-center py-12 rounded-2xl border border-dashed border-[var(--ui-border)]">
               <Camera size={28} className="mx-auto mb-3 text-slate-300" />
               <p className="text-sm font-bold text-slate-500 mb-1">暂无双摄录制记录</p>
               <p className="text-xs text-slate-400 mb-4">前往采集控制台开始双摄同步录制</p>
@@ -1026,7 +1026,7 @@ export function AnalysisTasksPage({
             <section className="mt-6 grid gap-4">
               {syncRecordings.map((sr) => (
                 <div
-                  className={taskSessionId === sr.session_id ? "scroll-mt-6 rounded-2xl ring-2 ring-[#22C55E]/35 ring-offset-2" : undefined}
+                  className={taskSessionId === sr.session_id ? "scroll-mt-6 rounded-2xl ring-2 ring-[var(--ui-brand)]/35 ring-offset-2" : undefined}
                   id={`sync-recording-${sr.session_id}`}
                   key={sr.session_id}
                 >
@@ -1057,8 +1057,8 @@ export function AnalysisTasksPage({
         <Modal isOpen onClose={handleClosePlayer} title={`录播回放 · ${playingSession.session_id}`} size="lg">
           <p className="mb-3 text-xs text-slate-400">{playingSession.camera_id} · {playingSession.court_name}{playingSession.duration_sec ? ` · ${playingSession.duration_sec.toFixed(0)}秒` : ""}</p>
           {playbackError ? (
-            <div className="rounded-xl border border-[#FF4D4F]/25 bg-[#FF4D4F]/8 p-8 text-center">
-              <p className="text-sm font-semibold text-[#C92A2A] mb-2">视频播放失败</p>
+            <div className="rounded-xl border border-[var(--ui-danger-strong)]/25 bg-[var(--ui-danger-solid)]/8 p-8 text-center">
+              <p className="text-sm font-semibold text-[var(--ui-danger)] mb-2">视频播放失败</p>
               <button className="mt-3 quiet-button px-4 py-1.5 text-xs" onClick={() => setPlaybackError(false)} type="button">重试</button>
             </div>
           ) : (
@@ -1080,9 +1080,9 @@ export function AnalysisTasksPage({
               const videoId = playingSyncSession.registered_video_ids?.[role] ?? (role === "cam_1" ? playingSyncSession.default_analysis_video_id : undefined);
               const hasError = syncPlaybackErrors[role];
               return (
-                <section className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF4] p-3" key={role}>
+                <section className="rounded-xl border border-[var(--ui-border)] bg-[#F8FBF4] p-3" key={role}>
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-black text-[#14241B]">{role === "cam_1" ? "底线机位 A" : "底线机位 B"}</h3>
+                    <h3 className="text-sm font-black text-[var(--ui-ink)]">{role === "cam_1" ? "底线机位 A" : "底线机位 B"}</h3>
                     <span className="truncate text-xs font-bold text-slate-500">{slot?.camera_id ?? "未记录摄像头"}</span>
                   </div>
                   {videoId && !hasError ? (
@@ -1141,22 +1141,22 @@ export function AnalysisTaskCard({
   const isInterrupted = job.status === "interrupted";
 
   return (
-    <article className={`sport-card p-5 sm:p-6 ${recent ? "border-[#22C55E]/50" : ""}`}>
+    <article className={`sport-card p-5 sm:p-6 ${recent ? "border-[var(--ui-brand)]/50" : ""}`}>
       <div className="grid gap-5 lg:grid-cols-[1fr_0.38fr] lg:items-center">
         <div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <span className={`rounded-full px-3 py-1 text-xs font-black ${status.className}`}>{status.label}</span>
-              <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+              <span className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 px-3 py-1 text-xs font-bold text-slate-500">
                 {analysisModeLabel(job.analysisMode)}
               </span>
               {job.enableModelInference !== undefined || job.enablePoseInference !== undefined ? (
-                <span className="rounded-full border border-[#DDE9D6] bg-white/80 px-3 py-1 text-xs font-bold text-slate-500">
+                <span className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 px-3 py-1 text-xs font-bold text-slate-500">
                   检测{job.enableModelInference ? "开" : "关"} · 姿态{job.enablePoseInference ? "开" : "关"}
                 </span>
               ) : null}
               {recent ? (
-                <span className="rounded-full border border-[#22C55E]/30 bg-[#22C55E]/12 px-3 py-1 text-xs font-black text-[#168A34]">
+                <span className="rounded-full border border-[var(--ui-brand)]/30 bg-[var(--ui-brand-solid)]/12 px-3 py-1 text-xs font-black text-[var(--ui-brand-deep)]">
                   最近任务
                 </span>
               ) : null}
@@ -1165,7 +1165,7 @@ export function AnalysisTaskCard({
               <label className="inline-flex items-center gap-2 text-xs font-black text-slate-500">
                 <input
                   checked={selected}
-                  className="size-4 accent-[#22C55E]"
+                  className="size-4 accent-[var(--ui-brand)]"
                   disabled={deleting}
                   onChange={() => onToggleSelected(job.id)}
                   type="checkbox"
@@ -1174,23 +1174,23 @@ export function AnalysisTaskCard({
               </label>
             ) : null}
           </div>
-          <h2 className="mt-4 text-2xl font-black text-[#14241B]">{job.metadata.matchTitle}</h2>
+          <h2 className="mt-4 text-2xl font-black text-[var(--ui-ink)]">{job.metadata.matchTitle}</h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             {job.metadata.fileName} · {job.metadata.venue} · {job.metadata.athleteLabel}
           </p>
           {job.recordingSessionId || job.cameraSlot || job.metadata.recording_session_id ? (
-            <div className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-[#168A34]/20 bg-[#EAF7EE] px-3 py-1.5 text-xs">
-              <span className="inline-flex items-center gap-1 font-black text-[#168A34]">
+            <div className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--ui-brand-deep)]/20 bg-[var(--ui-surface-mint-soft)] px-3 py-1.5 text-xs">
+              <span className="inline-flex items-center gap-1 font-black text-[var(--ui-brand-deep)]">
                 <Video size={12} aria-hidden="true" />
                 来源录制
               </span>
               {(job.cameraSlot ?? job.metadata.camera_slot) ? (
-                <span className="rounded-full bg-white/80 px-2 py-0.5 font-bold text-[#14241B]">
+                <span className="rounded-full bg-[var(--ui-surface)]/80 px-2 py-0.5 font-bold text-[var(--ui-ink)]">
                   {(job.cameraSlot ?? job.metadata.camera_slot) === "cam_1" ? "底线 A 机位" : "底线 B 机位"}
                 </span>
               ) : null}
               <button
-                className="ml-1 inline-flex items-center gap-0.5 font-bold text-[#168A34] underline-offset-2 hover:underline"
+                className="ml-1 inline-flex items-center gap-0.5 font-bold text-[var(--ui-brand-deep)] underline-offset-2 hover:underline"
                 onClick={() => onNavigate(`/capture/${job.recordingSessionId ?? job.metadata.recording_session_id}/analyze?cam=${job.cameraSlot ?? job.metadata.camera_slot ?? "cam_1"}` as AppPath)}
                 type="button"
               >
@@ -1205,7 +1205,7 @@ export function AnalysisTaskCard({
             <TaskMeta label="任务 ID" value={job.id} />
           </div>
           {job.status === "failed" ? (
-            <p className="mt-3 rounded-2xl border border-[#FF4D4F]/20 bg-[#FF4D4F]/10 p-3 text-sm font-semibold leading-6 text-[#C92A2A]">
+            <p className="mt-3 rounded-2xl border border-[var(--ui-danger-strong)]/20 bg-[var(--ui-danger-solid)]/10 p-3 text-sm font-semibold leading-6 text-[var(--ui-danger)]">
               {job.publicErrorMessage ?? job.errorMessage ?? currentStage?.detail ?? "分析失败，请检查后端日志或重新上传。"}
               {job.errorCode ? <span className="mt-1 block text-xs font-black uppercase">错误码：{job.errorCode}</span> : null}
             </p>
@@ -1216,7 +1216,7 @@ export function AnalysisTaskCard({
             </p>
           ) : null}
           {isInterrupted ? (
-            <p className="mt-3 rounded-2xl border border-[#FF9500]/25 bg-[#FF9500]/10 p-3 text-sm font-semibold leading-6 text-[#A45A00]">
+            <p className="mt-3 rounded-2xl border border-[var(--ui-stage)]/25 bg-[var(--ui-stage)]/10 p-3 text-sm font-semibold leading-6 text-[var(--ui-warning)]">
               任务失联：{job.publicErrorMessage ?? "Worker 在规定时间内没有心跳，已保留最后进度，请重新分析。"}
               {job.workerHeartbeatAt ? <span className="mt-1 block text-xs">最后心跳：{formatDateTime(job.workerHeartbeatAt)}</span> : null}
             </p>
@@ -1224,16 +1224,16 @@ export function AnalysisTaskCard({
         </div>
         <div>
           {job.status !== "failed" && job.status !== "canceled" && !isInterrupted ? (
-            <div className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4">
+            <div className="rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
               <div className="flex items-end justify-between">
                 <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">进度</span>
-                <strong className="text-3xl font-black text-[#168A34]">{job.progress}%</strong>
+                <strong className="text-3xl font-black text-[var(--ui-brand-deep)]">{job.progress}%</strong>
               </div>
               <div className="mt-3">
                 <JobStageStepper compact stages={job.stages} ariaLabel={`任务 ${job.id} 分析阶段进度`} />
               </div>
-              <div className="mt-3 h-1.5 rounded-full bg-[#DFEADA]">
-                <span className="block h-full rounded-full bg-[#22C55E]" style={{ width: `${job.progress}%` }} />
+              <div className="mt-3 h-1.5 rounded-full bg-[var(--ui-surface-track-green)]">
+                <span className="block h-full rounded-full bg-[var(--ui-brand-solid)]" style={{ width: `${job.progress}%` }} />
               </div>
             </div>
           ) : null}
@@ -1275,12 +1275,12 @@ export function AnalysisTaskCard({
               </button>
             ) : null}
             {canCancel ? (
-              <button className="quiet-button px-4 py-2.5 text-[#A45A00]" disabled={canceling} onClick={() => onCancel(job)} type="button">
+              <button className="quiet-button px-4 py-2.5 text-[var(--ui-warning)]" disabled={canceling} onClick={() => onCancel(job)} type="button">
                 {canceling ? "取消中" : "取消任务"}
               </button>
             ) : null}
             {selectable ? (
-              <button className="quiet-button px-4 py-2.5 text-[#C92A2A]" disabled={deleting} onClick={() => onDelete(job)} type="button">
+              <button className="quiet-button px-4 py-2.5 text-[var(--ui-danger)]" disabled={deleting} onClick={() => onDelete(job)} type="button">
                 <Trash2 size={15} aria-hidden="true" />
                 {deleting ? "删除中" : "删除"}
               </button>
@@ -1294,9 +1294,9 @@ export function AnalysisTaskCard({
 
 function TaskMeta({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-[#F5FAF1] p-3">
+    <div className="rounded-2xl bg-[var(--ui-surface-soft)] p-3">
       <span className="block text-xs font-black uppercase tracking-[0.12em] text-slate-500">{label}</span>
-      <strong className="mt-1 block break-words text-[#14241B]">{value}</strong>
+      <strong className="mt-1 block break-words text-[var(--ui-ink)]">{value}</strong>
     </div>
   );
 }
@@ -1367,9 +1367,9 @@ export function SyncRecordingTaskCard({
     recording: "录制中", completed: "已完成", failed: "失败", canceled: "已取消",
   };
   const statusColor: Record<string, string> = {
-    recording: "bg-[#FF4D4F]/12 text-[#C92A2A]",
-    completed: "bg-[#22C55E]/12 text-[#168A34]",
-    failed: "bg-[#FF4D4F]/12 text-[#C92A2A]",
+    recording: "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]",
+    completed: "bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]",
+    failed: "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]",
     canceled: "bg-slate-200 text-slate-500",
   };
   const mergeStatusLabel: Record<string, string> = {
@@ -1421,7 +1421,7 @@ export function SyncRecordingTaskCard({
         )}
         {isActive && onCancelJob && (
           <button
-            className="quiet-button px-2.5 py-1.5 text-xs text-[#9A6500]"
+            className="quiet-button px-2.5 py-1.5 text-xs text-[var(--ui-warning-deeper)]"
             disabled={isCanceling}
             onClick={() => onCancelJob(job)}
             type="button"
@@ -1431,7 +1431,7 @@ export function SyncRecordingTaskCard({
         )}
         {!isActive && onDeleteJob && (
           <button
-            className="quiet-button px-2.5 py-1.5 text-xs text-[#C92A2A]"
+            className="quiet-button px-2.5 py-1.5 text-xs text-[var(--ui-danger)]"
             disabled={isDeleting}
             onClick={() => onDeleteJob(job)}
             type="button"
@@ -1451,7 +1451,7 @@ export function SyncRecordingTaskCard({
   ) => {
     const statusMeta = analysisStatusMeta(job.status);
     return (
-      <div className={`flex flex-col gap-2 rounded-xl border px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${history ? "border-[#E7EFE2] bg-[#FBFDF9]" : "border-[#DDE9D6] bg-white"}`}>
+      <div className={`flex flex-col gap-2 rounded-xl border px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${history ? "border-[var(--ui-surface-line)] bg-[var(--ui-surface-paper)]" : "border-[var(--ui-border)] bg-[var(--ui-surface)]"}`}>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${statusMeta.className}`}>
@@ -1463,7 +1463,7 @@ export function SyncRecordingTaskCard({
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
             <span>{formatDateTime(job.updatedAt || job.createdAt)}</span>
             <span className="font-mono">{job.id}</span>
-            {job.errorMessage && <span className="text-[#C92A2A]">{job.errorMessage}</span>}
+            {job.errorMessage && <span className="text-[var(--ui-danger)]">{job.errorMessage}</span>}
           </div>
         </div>
         {renderTaskActions(job, label, slot)}
@@ -1496,15 +1496,15 @@ export function SyncRecordingTaskCard({
     const hasHistory = group.history.length > 0;
     const historyExpanded = Boolean(expandedHistory[id]);
     return (
-      <div className="rounded-xl border border-[#DDE9D6] bg-white p-3">
+      <div className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h4 className="text-sm font-black text-[#14241B]">{title}</h4>
-              {group.all.length > 0 && <span className="rounded-full bg-[#F1F7EC] px-2 py-0.5 text-xs font-bold text-[#168A34]">{group.all.length} 个任务</span>}
+              <h4 className="text-sm font-black text-[var(--ui-ink)]">{title}</h4>
+              {group.all.length > 0 && <span className="rounded-full bg-[var(--ui-surface-tint)] px-2 py-0.5 text-xs font-bold text-[var(--ui-brand-deep)]">{group.all.length} 个任务</span>}
               {hasHistory && (
                 <button
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[#168A34]"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-[var(--ui-brand-deep)]"
                   aria-expanded={historyExpanded}
                   onClick={() => setExpandedHistory((currentState) => ({ ...currentState, [id]: !currentState[id] }))}
                   type="button"
@@ -1519,14 +1519,14 @@ export function SyncRecordingTaskCard({
         </div>
         <div className="mt-2 grid gap-2">
           {current ? renderTaskRow(current, actionLabel ?? title.replace("分析", ""), slot) : createLabel && createPath && canCreate ? (
-            <div className="flex flex-col gap-2 rounded-xl border border-dashed border-[#DDE9D6] bg-[#FBFDF9] px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2 rounded-xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-paper)] px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-xs text-slate-400">尚未创建该类分析任务</span>
               <button className="quiet-button px-2.5 py-1.5 text-xs" onClick={() => navigateWithTaskContext(createPath)} type="button">
                 {createLabel}
               </button>
             </div>
           ) : (
-            <p className="rounded-xl border border-dashed border-[#E7EFE2] px-3 py-3 text-xs text-slate-400">当前暂无任务</p>
+            <p className="rounded-xl border border-dashed border-[var(--ui-surface-line)] px-3 py-3 text-xs text-slate-400">当前暂无任务</p>
           )}
           {historyExpanded && group.history.map((job) => (
             <div key={job.id}>{renderTaskRow(job, actionLabel ?? title.replace("分析", ""), slot, true)}</div>
@@ -1537,21 +1537,21 @@ export function SyncRecordingTaskCard({
   };
 
   return (
-    <div className="rounded-xl border border-[#DDE9D6] bg-white p-4">
+    <div className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
       <div className="flex items-start justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-bold text-[#14241B]">
+            <span className="text-sm font-bold text-[var(--ui-ink)]">
               底线机位 A: {cam1Name}
             </span>
             <span className="text-xs text-slate-400">·</span>
-            <span className="text-sm font-bold text-[#14241B]">
+            <span className="text-sm font-bold text-[var(--ui-ink)]">
               底线机位 B: {cam2Name}
             </span>
             <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${statusColor[session.status] ?? ""}`}>
               {statusLabel[session.status] ?? session.status}
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${mergeStatus === "completed" ? "bg-[#22C55E]/12 text-[#168A34]" : mergeStatus === "failed" ? "bg-[#FF4D4F]/12 text-[#C92A2A]" : "bg-[#E8A838]/15 text-[#9A6500]"}`}>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${mergeStatus === "completed" ? "bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]" : mergeStatus === "failed" ? "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]" : "bg-[#E8A838]/15 text-[var(--ui-warning-deeper)]"}`}>
               {mergeStatusLabel[mergeStatus] ?? mergeStatus}
             </span>
           </div>
@@ -1569,20 +1569,20 @@ export function SyncRecordingTaskCard({
         <p className="mt-2 text-xs text-[#FF4D4F] truncate">{session.merge_error || session.error_message}</p>
       )}
       {canPlay && session.default_analysis_video_id && (
-        <div className="mt-3 pt-3 border-t border-[#DDE9D6]">
-          <span className="text-xs text-[#168A34] font-bold">默认分析视频已就绪</span>
+        <div className="mt-3 pt-3 border-t border-[var(--ui-border)]">
+          <span className="text-xs text-[var(--ui-brand-deep)] font-bold">默认分析视频已就绪</span>
         </div>
       )}
-      <div className="mt-4 border-t border-[#DDE9D6] pt-3">
+      <div className="mt-4 border-t border-[var(--ui-border)] pt-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-black text-[#14241B]">分析任务</p>
+            <p className="text-sm font-black text-[var(--ui-ink)]">分析任务</p>
             <p className="mt-0.5 text-xs text-slate-400">
               {analysisJobs.length > 0 ? `${analysisJobs.length} 个公开任务，按类型展示最新任务` : "尚未创建分析任务"}
             </p>
           </div>
           {analysisJobs.length > 0 && (
-            <span className="rounded-full bg-[#17231D] px-2.5 py-1 text-xs font-black text-white">{analysisJobs.length} 个</span>
+            <span className="rounded-full bg-[var(--ui-ink-solid)] px-2.5 py-1 text-xs font-black text-white">{analysisJobs.length} 个</span>
           )}
         </div>
         <div className="mt-2 grid gap-2">
@@ -1630,7 +1630,7 @@ export function SyncRecordingTaskCard({
           })}
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#DDE9D6] pt-3">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--ui-border)] pt-3">
         <div className="flex flex-wrap gap-2">
         {(mergeStatus === "pending" || mergeStatus === "failed") && session.status === "completed" && (
           <button className="green-button inline-flex items-center gap-1 px-3 py-2 text-xs" onClick={() => onMerge(session.session_id)} disabled={merging} type="button">
@@ -1639,7 +1639,7 @@ export function SyncRecordingTaskCard({
           </button>
         )}
         {mergeStatus === "running" && (
-          <span className="self-center text-xs font-semibold text-[#9A6500]">正在后台合并两路视频...</span>
+          <span className="self-center text-xs font-semibold text-[var(--ui-warning-deeper)]">正在后台合并两路视频...</span>
         )}
         {canPlay && (
           <button className="quiet-button px-3 py-2 text-xs" onClick={() => onPlay(session)} type="button">
@@ -1660,7 +1660,7 @@ export function SyncRecordingTaskCard({
         <div className="flex flex-wrap gap-2">
         {analysisJobs.length > 0 && (
           <button
-            className="quiet-button px-3 py-2 text-xs text-[#C92A2A]"
+            className="quiet-button px-3 py-2 text-xs text-[var(--ui-danger)]"
             disabled={deletingAnalysis}
             onClick={() => onDeleteAnalysis(session.session_id)}
             type="button"
@@ -1670,7 +1670,7 @@ export function SyncRecordingTaskCard({
           </button>
         )}
         {session.status !== "recording" && (
-          <button className="quiet-button px-3 py-2 text-xs text-[#C92A2A]" onClick={() => onDelete(session.session_id)} type="button">
+          <button className="quiet-button px-3 py-2 text-xs text-[var(--ui-danger)]" onClick={() => onDelete(session.session_id)} type="button">
             <Trash2 size={12} className="inline mr-1" />删除录制
           </button>
         )}

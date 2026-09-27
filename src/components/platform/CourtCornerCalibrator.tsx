@@ -83,6 +83,16 @@ export interface CourtCornerCalibratorProps {
   onCancel?: () => void;
   /** 是否正在提交（禁用按钮） */
   isSubmitting?: boolean;
+  /**
+   * 呈现模式。`standalone`（默认）为单摄流程使用的完整卡片；
+   * `embedded` 用于双摄向导内与其他标定器并排——收紧 padding 与标题层级，
+   * 便于在半宽容器内使用，其余行为完全一致。
+   */
+  variant?: "standalone" | "embedded";
+  /** 覆盖 eyebrow 标题（embedded 模式下通常传入机位标识，如「A 视角 · 球场四角」） */
+  title?: string;
+  /** 覆盖提交按钮文案（默认「确认并启动分析」，向导内应传入仅确认本路的文案） */
+  submitLabel?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -144,7 +154,11 @@ export function CourtCornerCalibrator({
   cancelLabel = "取消",
   initialPoints,
   isSubmitting = false,
+  variant = "standalone",
+  title,
+  submitLabel = "确认并启动分析",
 }: CourtCornerCalibratorProps) {
+  const embedded = variant === "embedded";
   const calibrationVideoRef = useRef<HTMLVideoElement | null>(null);
   const calibrationCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const calibrationAutoSeekAttemptsRef = useRef(0);
@@ -503,20 +517,32 @@ export function CourtCornerCalibrator({
   const labelFont = naturalSize ? Math.max(12, naturalSize.width * 0.014) : 12;
 
   return (
-    <section className="rounded-3xl border border-[#DDE9D6] bg-[#F5FAF1] p-4 sm:p-6">
+    <section
+      className={
+        embedded
+          ? "rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3"
+          : "rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4 sm:p-6"
+      }
+    >
       {/* Header */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#168A34]">四角标定</p>
+          <p
+            className={`font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)] ${
+              embedded ? "text-[10px]" : "text-xs"
+            }`}
+          >
+            {title ?? "四角标定"}
+          </p>
           <div className="mt-1 flex items-center gap-1.5">
-            <h2 className="text-lg font-black text-[#14241B]">
+            <h2 className={`font-black text-[var(--ui-ink)] ${embedded ? "text-sm" : "text-lg"}`}>
               {manualMode ? "拖动四边形对齐球场四角" : "自动识别球场边线"}
             </h2>
             {hasCalibrationDiagnostics ? (
               <button
                 aria-expanded={showCalibrationDetails}
                 aria-label="查看自动识别详细数据"
-                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[#168A34]/30 bg-[#168A34]/10 text-[#168A34] transition-colors hover:bg-[#168A34]/20"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--ui-brand-deep)]/30 bg-[var(--ui-brand-solid-deep)]/10 text-[var(--ui-brand-deep)] transition-colors hover:bg-[var(--ui-brand-solid-deep)]/20"
                 onClick={() => setShowCalibrationDetails((prev) => !prev)}
                 type="button"
               >
@@ -548,7 +574,7 @@ export function CourtCornerCalibrator({
       </div>
 
       {/* Auto calibration status */}
-      <div className="mt-3 grid gap-3 rounded-2xl border border-[#22C55E]/20 bg-white/70 p-3">
+      <div className="mt-3 grid gap-3 rounded-2xl border border-[var(--ui-brand)]/20 bg-[var(--ui-surface)]/70 p-3">
         {/* 保留可见：识别中/上传中进度反馈 */}
         {automaticCalibrationStatus === "uploading" || automaticCalibrationStatus === "detecting" ? (
           automaticCalibrationDiagnostic ? (
@@ -565,7 +591,7 @@ export function CourtCornerCalibrator({
         automaticCalibrationStatus === "error" ? (
           <>
             {manualMode ? (
-              <p className="text-xs font-semibold text-[#A45A00]">
+              <p className="text-xs font-semibold text-[var(--ui-warning)]">
                 自动标定失败，已切换到人工标定：拖动下方四边形对齐球场四角。
               </p>
             ) : null}
@@ -590,8 +616,8 @@ export function CourtCornerCalibrator({
                     ["综合置信度", automaticCalibration.confidence_breakdown.combined],
                   ] as const
                 ).map(([label, value]) => (
-                  <div key={label} className="rounded-xl border border-[#DDE9D6] bg-[#F8FBF5] p-2 text-center">
-                    <div className="font-black text-base text-[#17231D]">{(value * 100).toFixed(0)}%</div>
+                  <div key={label} className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-2 text-center">
+                    <div className="font-black text-base text-[var(--ui-ink)]">{(value * 100).toFixed(0)}%</div>
                     <div className="mt-0.5 text-slate-400">{label}</div>
                   </div>
                 ))}
@@ -600,7 +626,7 @@ export function CourtCornerCalibrator({
             {automaticPreviewUrl ? (
               <img
                 alt="自动标定检测预览"
-                className="max-h-56 w-full rounded-xl border border-[#DDE9D6] object-contain"
+                className="max-h-56 w-full rounded-xl border border-[var(--ui-border)] object-contain"
                 src={automaticPreviewUrl}
               />
             ) : null}
@@ -752,7 +778,7 @@ export function CourtCornerCalibrator({
       </div>
 
       {/* Point summary */}
-      <div className="mt-3 grid gap-2 sm:grid-cols-4">
+      <div className={`mt-3 grid gap-2 ${embedded ? "grid-cols-2" : "sm:grid-cols-4"}`}>
         {calibrationPointOrder.map((point) => {
           const match = calibrationPoints.find((p) => p.id === point.id);
           return (
@@ -760,8 +786,8 @@ export function CourtCornerCalibrator({
               key={point.id}
               className={`rounded-xl border p-2 text-center text-xs ${
                 match
-                  ? "border-[#22C55E] bg-[#EAF7EE] font-bold text-[#168A34]"
-                  : "border-[#DDE9D6] bg-[#F8FBF5] text-slate-400"
+                  ? "border-[var(--ui-brand)] bg-[var(--ui-surface-mint-soft)] font-bold text-[var(--ui-brand-deep)]"
+                  : "border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] text-slate-400"
               }`}
             >
               {match ? `${point.label} · (${match.x}, ${match.y})` : point.label}
@@ -772,9 +798,9 @@ export function CourtCornerCalibrator({
 
       {/* Error */}
       {error ? (
-        <div className="mt-3 rounded-2xl border border-[#FCA5A5] bg-[#FEF2F2] p-3 text-xs">
-          <strong className="block text-[#991B1B]">{error.title}</strong>
-          <p className="mt-1 text-[#B91C1C]">{error.body}</p>
+        <div className="mt-3 rounded-2xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-3 text-xs">
+          <strong className="block text-[var(--ui-danger-deeper)]">{error.title}</strong>
+          <p className="mt-1 text-[var(--ui-danger-deep)]">{error.body}</p>
         </div>
       ) : null}
 
@@ -787,7 +813,7 @@ export function CourtCornerCalibrator({
             onClick={handleSubmit}
             type="button"
           >
-            {isSubmitting ? "提交中…" : "确认并启动分析"}
+            {isSubmitting ? "提交中…" : submitLabel}
           </button>
         )}
         {onCancel && (
