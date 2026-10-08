@@ -217,7 +217,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
   return (
     <div className="min-h-screen"
       style={{
-        background: "linear-gradient(180deg, #F4F8F6 0%, #EEF3F1 100%)",
+        background: "var(--capture-surface-page)",
       }}
     >
       {/* 顶部弱径向渐变氛围 */}
@@ -258,7 +258,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--capture-text-muted,#8f9d96)]" aria-hidden="true" />
             <input
-              className="w-full rounded-lg border border-[var(--capture-border-default,#d9e3dd)] bg-[#FAFCFB] py-2 pl-9 pr-3 text-sm text-[var(--capture-text-primary,#182b24)] outline-none placeholder:text-[var(--capture-text-muted,#8f9d96)] focus:border-[var(--capture-brand-primary,#23985b)]"
+              className="w-full rounded-lg border border-[var(--capture-border-default,#d9e3dd)] bg-[var(--ui-surface-soft)] py-2 pl-9 pr-3 text-sm text-[var(--capture-text-primary,#182b24)] outline-none placeholder:text-[var(--capture-text-muted,#8f9d96)] focus:border-[var(--capture-brand-primary,#23985b)]"
               placeholder="搜索比赛..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -268,7 +268,7 @@ export function LibraryPage({ onNavigate }: LibraryPageProps) {
             {(["all", "upload", "recording", "sync_recording"] as const).map((k) => (
               <button
                 key={k}
-                className={`rounded-md px-3 py-1 text-xs font-bold transition ${kind === k ? "bg-[#E4F2E9] text-[var(--capture-brand-primary,#23985b)]" : "text-[var(--capture-text-secondary,#64736c)] hover:bg-[var(--capture-border-default,#d9e3dd)]/40"}`}
+                className={`rounded-md px-3 py-1 text-xs font-bold transition ${kind === k ? "bg-[var(--ui-brand-soft)] text-[var(--capture-brand-primary,#23985b)]" : "text-[var(--capture-text-secondary,#64736c)] hover:bg-[var(--capture-border-default,#d9e3dd)]/40"}`}
                 onClick={() => setKind(k)}
                 type="button"
               >

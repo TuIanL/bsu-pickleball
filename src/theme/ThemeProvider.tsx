@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   applyTheme,
   persistTheme,
@@ -30,29 +30,29 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>(() => resolveInitialTheme());
 
-  // 首帧把 React 解析出的主题写回 DOM（覆盖启动脚本缺失的场景）。
+  const previousThemeRef = useRef(theme);
+  const animateNextChangeRef = useRef(false);
+
+  // 状态更新器必须保持纯函数；DOM、存储与事件在提交后同步，避免
+  // StrictMode 重复求值或自定义事件重入导致一次点击切换两次。
   useEffect(() => {
-    applyTheme(theme);
+    const changed = previousThemeRef.current !== theme;
+    previousThemeRef.current = theme;
+    applyTheme(theme, { animate: changed && animateNextChangeRef.current });
+    animateNextChangeRef.current = false;
+    if (!changed) return;
+    persistTheme(theme);
+    window.dispatchEvent(new CustomEvent<ThemeMode>("app:themechange", { detail: theme }));
   }, [theme]);
 
   const setTheme = useCallback((mode: ThemeMode) => {
-    setThemeState((current) => {
-      if (current === mode) return current;
-      applyTheme(mode, { animate: true });
-      persistTheme(mode);
-      window.dispatchEvent(new CustomEvent<ThemeMode>("app:themechange", { detail: mode }));
-      return mode;
-    });
+    animateNextChangeRef.current = previousThemeRef.current !== mode;
+    setThemeState(mode);
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setThemeState((current) => {
-      const next: ThemeMode = current === "dark" ? "light" : "dark";
-      applyTheme(next, { animate: true });
-      persistTheme(next);
-      window.dispatchEvent(new CustomEvent<ThemeMode>("app:themechange", { detail: next }));
-      return next;
-    });
+    animateNextChangeRef.current = true;
+    setThemeState((current) => (current === "dark" ? "light" : "dark"));
   }, []);
 
   // 跨标签页同步：同源其他标签页写入存储时跟随。

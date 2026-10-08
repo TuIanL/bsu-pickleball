@@ -182,3 +182,30 @@ describe("LibraryCard 元数据内联编辑（library-card-metadata-editing）",
     expect(screen.queryByLabelText("修改比赛日期")).toBeNull();
   });
 });
+
+describe("LibraryCard 缺失封面恢复", () => {
+  it("poster 请求失败后回退到双摄首帧，下一张 poster 仍可加载", () => {
+    const source = item({
+      sourceType: "sync_recording", cameraSetup: "dual", thumbnailUrl: "/poster-missing",
+      cameraCoverSources: { cam_1: "/stream-a", cam_2: "/stream-b" },
+    });
+    const navigate = vi.fn();
+    const { container, rerender } = render(<LibraryCard item={source} onNavigate={navigate} />);
+    fireEvent.error(screen.getByRole("img", { name: "测试素材" }));
+    expect(screen.queryByRole("img", { name: "测试素材" })).toBeNull();
+    expect(Array.from(container.querySelectorAll("video[data-cover]")).map((video) => video.getAttribute("src"))).toEqual(["/stream-a", "/stream-b"]);
+    for (const video of container.querySelectorAll("video[data-cover]")) fireEvent.error(video);
+    expect(container.querySelectorAll("video[data-cover]")).toHaveLength(0);
+    rerender(<LibraryCard item={{ ...source, thumbnailUrl: "/poster-new" }} onNavigate={navigate} />);
+    expect(screen.getByRole("img", { name: "测试素材" }).getAttribute("src")).toBe("/poster-new");
+  });
+
+  it("没有备用视频时移除损坏的 poster，保留卡片导航", () => {
+    const navigate = vi.fn();
+    render(<LibraryCard item={item({ thumbnailUrl: "/poster-missing" })} onNavigate={navigate} />);
+    fireEvent.error(screen.getByRole("img", { name: "测试素材" }));
+    expect(screen.queryByRole("img", { name: "测试素材" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看 测试素材 详情" }));
+    expect(navigate).toHaveBeenCalledWith("/library/upload/video-1?view=overview");
+  });
+});

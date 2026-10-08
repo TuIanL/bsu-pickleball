@@ -143,10 +143,10 @@ export function CoverVideo({ src, className }: { src?: string; className?: strin
   }, [src]);
 
   if (state.kind === "img") {
-    return <img src={state.url} alt="" className={className} />;
+    return <img src={state.url} alt="" className={className} onError={() => setState({ kind: "video" })} />;
   }
   if (state.kind === "video" && src) {
-    return <video muted playsInline preload="metadata" src={src} className={className} data-cover="true" />;
+    return <video muted playsInline preload="metadata" src={src} className={className} data-cover="true" onError={() => setState({ kind: "empty" })} />;
   }
   return (
     <div className={`grid place-items-center ${className ?? ""}`} style={{ containerType: "size" } satisfies CSSProperties}>
