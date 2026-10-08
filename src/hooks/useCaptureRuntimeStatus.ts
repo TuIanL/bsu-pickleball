@@ -14,6 +14,7 @@ import type {
   CaptureRuntimeStatusState,
   CaptureTakeRuntimeStatus,
 } from "../types/captureRuntimeStatus";
+import { useDocumentVisible } from "./useDocumentVisible";
 
 /** 轮询间隔（毫秒），spec 要求 ≤2s */
 export const POLL_INTERVAL_MS = 2000;
@@ -84,19 +85,16 @@ export function useCaptureRuntimeStatus({
   phase,
 }: UseCaptureRuntimeStatusOptions): UseCaptureRuntimeStatusResult {
   const [state, setState] = useState<CaptureRuntimeStatusState>(INITIAL_STATE);
+  const isDocumentVisible = useDocumentVisible();
 
   // 用 ref 保存最新的 captureTakeId / phase，避免闭包过期
   const takeIdRef = useRef<string | null>(captureTakeId);
-  const phaseRef = useRef<string>(phase);
   // seq 用于丢弃同一 take 内的过期响应
   const seqRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlightRef = useRef(false);
-  // 标记是否处于活跃轮询阶段（用于 visibilitychange 恢复）
-  const shouldPollRef = useRef(false);
 
   takeIdRef.current = captureTakeId;
-  phaseRef.current = phase;
 
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current) {
@@ -170,9 +168,8 @@ export function useCaptureRuntimeStatus({
   useEffect(() => {
     const takeId = captureTakeId;
     const shouldPoll = takeId !== null && ACTIVE_POLLING_PHASES.has(phase);
-    shouldPollRef.current = shouldPoll;
 
-    if (shouldPoll && takeId) {
+    if (shouldPoll && takeId && isDocumentVisible) {
       startPolling();
     } else {
       stopPolling();
@@ -191,22 +188,7 @@ export function useCaptureRuntimeStatus({
       seqRef.current += 1;
       inFlightRef.current = false;
     };
-  }, [captureTakeId, phase, startPolling, stopPolling, clearPollTimer]);
-
-  // 可见性优化：页面隐藏时停止轮询，恢复时重启
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) {
-        clearPollTimer();
-      } else if (shouldPollRef.current && !pollTimerRef.current) {
-        startPolling();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [clearPollTimer, startPolling]);
+  }, [captureTakeId, phase, isDocumentVisible, startPolling, stopPolling, clearPollTimer]);
 
   // 卸载时清理
   useEffect(() => {
@@ -215,11 +197,11 @@ export function useCaptureRuntimeStatus({
     };
   }, [clearPollTimer]);
 
-  // 派生：是否在轮询 = 有 takeId 且处于活跃阶段且定时器仍存活
+  // 派生可见的活跃轮询态，避免 ref 清 timer 后 UI 仍显示旧值。
   const isPolling =
     captureTakeId !== null &&
     ACTIVE_POLLING_PHASES.has(phase) &&
-    pollTimerRef.current !== null;
+    isDocumentVisible;
 
   return { state, isPolling };
 }

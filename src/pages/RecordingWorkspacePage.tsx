@@ -59,14 +59,14 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
 };
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
-  set_start: "text-[#F97316] bg-[var(--ui-warning-soft)] border-[#F97316]",
-  set_end: "text-[#F97316] bg-[var(--ui-warning-soft)] border-[#F97316]",
-  game_start: "text-[#3B82F6] bg-[var(--ui-info-soft)] border-[#3B82F6]",
-  game_end: "text-[#3B82F6] bg-[var(--ui-info-soft)] border-[#3B82F6]",
+  set_start: "text-[var(--capture-timeline-set)] bg-[var(--ui-warning-soft)] border-[var(--capture-timeline-set)]",
+  set_end: "text-[var(--capture-timeline-set)] bg-[var(--ui-warning-soft)] border-[var(--capture-timeline-set)]",
+  game_start: "text-[var(--capture-timeline-game)] bg-[var(--ui-info-soft)] border-[var(--capture-timeline-game)]",
+  game_end: "text-[var(--capture-timeline-game)] bg-[var(--ui-info-soft)] border-[var(--capture-timeline-game)]",
   rally_start: "text-[var(--ui-brand)] bg-[var(--ui-surface-green-50)] border-[var(--ui-brand)]",
   rally_end: "text-slate-500 bg-slate-50 border-slate-300",
-  side_change: "text-[#A855F7] bg-[#FAF5FF] border-[#A855F7]",
-  timeout_start: "text-[#F97316] bg-[var(--ui-warning-soft)] border-[#F97316]",
+  side_change: "text-[var(--capture-timeline-side-change)] bg-[var(--ui-surface-purple-soft)] border-[var(--capture-timeline-side-change)]",
+  timeout_start: "text-[var(--capture-timeline-set)] bg-[var(--ui-warning-soft)] border-[var(--capture-timeline-set)]",
   score_update: "text-[var(--ui-brand)] bg-[var(--ui-surface-green-50)] border-[var(--ui-brand)]",
   session_note: "text-slate-500 bg-slate-50 border-slate-300",
   add_note: "text-slate-500 bg-slate-50 border-slate-300",
@@ -447,7 +447,7 @@ export function RecordingWorkspacePage({ sessionId, onNavigate, embedded }: { se
                   <span className="tabular-nums text-slate-400 w-12 shrink-0">{formatElapsed(event.timestamp_ms)}</span>
                   <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${colorClass}`}>{label}</span>
                   {event.note && <span className="text-slate-500 truncate min-w-0">{event.note}</span>}
-                  {event.payload_json?.highlight === true && <span className="text-[#F59E0B] text-xs shrink-0">★</span>}
+                  {event.payload_json?.highlight === true && <span className="text-[var(--capture-status-warning)] text-xs shrink-0">★</span>}
                 </div>
               );
             })}

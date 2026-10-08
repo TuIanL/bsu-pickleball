@@ -184,7 +184,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
   return (
     <PageFrame>
       <button
-        className="mb-6 inline-flex items-center gap-1.5 text-sm font-bold text-[var(--ui-brand-deep)] transition hover:text-[#0F7A2B]"
+        className="mb-6 inline-flex items-center gap-1.5 text-sm font-bold text-[var(--ui-brand-deep)] transition hover:text-[var(--ui-success-deep)]"
         onClick={() => onNavigate("/library")}
         type="button"
       >
@@ -209,7 +209,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               ["3", "生成报告", "输出移动轨迹、速度、热力图和有限诊断"],
             ].map(([index, title, body]) => (
               <div className="flex gap-3 rounded-2xl bg-[var(--ui-surface-soft)] p-3" key={index}>
-                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ui-brand-solid)] text-sm font-black text-[#071008]">
+                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ui-brand-solid)] text-sm font-black text-[var(--ui-display-ink)]">
                   {index}
                 </span>
                 <div>
@@ -225,7 +225,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">视频文件</p>
             {videoIdParam ? (
-              <div className="mt-3 rounded-3xl border border-[var(--ui-brand)]/30 bg-[#F0FFF0] p-6 text-center">
+              <div className="mt-3 rounded-3xl border border-[var(--ui-brand)]/30 bg-[var(--ui-brand-selection-bg)] p-6 text-center">
                 <span className="grid size-14 place-items-center mx-auto rounded-full bg-[var(--ui-brand-solid)]/15 text-[var(--ui-brand-deep)]">
                   <Camera size={24} aria-hidden="true" />
                 </span>
@@ -235,7 +235,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 </p>
               </div>
             ) : (
-            <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-[#BFD5B8] bg-[var(--ui-surface-soft)] p-8 text-center transition hover:border-[var(--ui-brand)]/60 hover:bg-[var(--ui-surface-green-tint)]">
+            <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-[var(--ui-border-mint)] bg-[var(--ui-surface-soft)] p-8 text-center transition hover:border-[var(--ui-brand)]/60 hover:bg-[var(--ui-surface-green-tint)]">
               <input
                 accept="video/*"
                 className="sr-only"
@@ -281,7 +281,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               onChange={setRosterConfirmation}
             />
           ) : (
-            <div className="mt-4 rounded-2xl border border-[var(--ui-warning-border)] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
+            <div className="mt-4 rounded-2xl border border-[var(--ui-warning-border)] bg-[var(--ui-warning-surface)] p-4 text-sm leading-6 text-[var(--ui-text-warning-contrast)]" data-testid="legacy-analysis-flow-note">
               已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要场地控制画像时，请切回新流程。
             </div>
           )}

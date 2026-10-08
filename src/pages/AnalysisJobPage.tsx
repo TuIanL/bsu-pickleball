@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Camera, Layers } from "lucide-react";
 import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
 import { resolveAnalysisFlowOrigin, resolveLibraryRefFromAnalysisJob, taskContextForJob, taskListPathForJob, withTaskListContext } from "../app/navigationContext";
-import type { AnalysisJobSummary } from "../types/report";
+import type { AnalysisJobSummary, AnalysisRunTraceEvent, AnalysisRunTraceResponse } from "../types/report";
+import { analysisFailureClassLabel } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { DiagnosticNoticeCard } from "../components/DiagnosticNoticeCard";
@@ -10,7 +11,7 @@ import { JobStageStepper } from "../components/platform/JobStageStepper";
 import { StatusState } from "../components/StatusState";
 import { supportedReportTypes } from "../app/router";
 import { reportActions } from "../data/demoData";
-import { getAnalysisJob, getAnalysisResult, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
+import { getAnalysisJob, getAnalysisResult, getAnalysisRunTrace, rememberAnalysisJob, cancelAnalysisJob } from "../services/analysisClient";
 import { errorToNotice, isCancelableAnalysisJob, cameraAngleLabel, formatDateTime, formatDurationMs, analysisStatusMeta, analysisModeLabel } from "../utils/analysisHelpers";
 import { resolveLibraryItemByRef, type LibraryItemViewModel } from "../services/libraryAdapter";
 import { computeLibraryViewCapabilities, type LibraryView } from "../components/library/viewCapabilities";
@@ -18,18 +19,42 @@ import { libraryAnalysisPathFor } from "../services/libraryAnalysisRouting";
 import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { getReportCapability, type ReportCapability } from "../services/reportCapability";
 import type { AnalysisPipelineResult } from "../types/report";
+import { useDocumentVisible } from "../hooks/useDocumentVisible";
 
 const VIEW_LABELS: Record<string, string> = { cam_1: "A 机位", cam_2: "B 机位" };
 
 const TERMINAL_STATUSES = ["completed", "failed", "canceled", "interrupted"] as const;
 
-export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
+/** 轨迹不可用/部分可用时的原因码 → 人话。 */
+const TRACE_REASON_LABELS: Record<string, string> = {
+  run_trace_missing: "本次运行没有写入轨迹文件",
+  run_trace_empty: "轨迹文件为空",
+  run_trace_unreadable: "轨迹文件无法解析",
+  malformed_trace_lines_skipped: "部分轨迹行损坏，已跳过",
+  legacy_job_without_trace: "该任务创建于轨迹功能上线之前",
+  trace_sink_unwritable: "轨迹目标位置不可写（例如外接存储未挂载）",
+};
+
+function traceReasonLabel(reason?: string | null): string {
+  if (!reason) return "";
+  return TRACE_REASON_LABELS[reason] ?? reason;
+}
+
+function runTraceToJsonl(events: AnalysisRunTraceEvent[]): string {
+  return events.map((event) => JSON.stringify(event)).join("\n");
+}
+
+export function AnalysisJobPage({ jobId, returnParam, onNavigate }: { jobId: string; returnParam?: string; onNavigate: NavigateFn }) {
+  const isDocumentVisible = useDocumentVisible();
   const [job, setJob] = useState<AnalysisJobSummary | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
   const [cancelNotice, setCancelNotice] = useState<DiagnosticNotice | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
   // library origin 完成/失败/取消时，定向解析素材以门控结果 CTA（轻量，不拉重产物）
   const [libraryItem, setLibraryItem] = useState<LibraryItemViewModel | null>(null);
+  // 运行轨迹：按需向后端拉取（任务摘要只带可用性摘要，不内联事件序列）
+  const [runTrace, setRunTrace] = useState<AnalysisRunTraceResponse | null>(null);
+  const [traceNotice, setTraceNotice] = useState<DiagnosticNotice | null>(null);
   const [reportManifest, setReportManifest] = useState<{
     jobId?: string;
     state: "idle" | "loading" | "loaded" | "error";
@@ -39,7 +64,6 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   const isMultiview = job?.analysisKind === "multiview";
   const isTerminal = Boolean(job && TERMINAL_STATUSES.includes(job.status as (typeof TERMINAL_STATUSES)[number]));
 
-  const returnParam = new URLSearchParams(window.location.search).get("return");
   const taskContext = taskContextForJob(job);
   const origin = resolveAnalysisFlowOrigin(returnParam, taskContext);
   const libraryOrigin = origin.kind === "library" ? origin : null;
@@ -59,11 +83,11 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     libraryOrigin ? `/library/${libraryOrigin.itemKind}/${encodeURIComponent(libraryOrigin.sourceId)}?view=${view}&analysisJob=${encodeURIComponent(jobId)}` : null;
 
   // capture origin 完成后的结果定位：job → Library ref；无法归属降级 legacy 工程结果
-  const captureResultPath = useMemo(() => {
+  const captureResultPath = (() => {
     if (!captureOrigin || !job) return null;
     const ref = resolveLibraryRefFromAnalysisJob(job);
     return ref ? `/library/${ref.kind}/${encodeURIComponent(ref.sourceId)}?view=analysis&analysisJob=${encodeURIComponent(job.id)}` : null;
-  }, [captureOrigin, job]);
+  })();
 
   // library origin terminal：定向解析素材，门控「查看球路/报告/技术详情」与「再次分析」
   useEffect(() => {
@@ -83,6 +107,27 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.id, job?.status, libraryOrigin?.returnPath]);
+
+  // 运行轨迹按需读取：终态任务、或发生过重试的任务才拉，避免无谓请求。
+  const runTraceKey = `${job?.id ?? ""}:${job?.retryHistory?.length ?? 0}:${job?.attempt ?? 0}`;
+  useEffect(() => {
+    if (!job || !(isTerminal || (job.retryHistory?.length ?? 0) > 0)) {
+      return;
+    }
+    let alive = true;
+    getAnalysisRunTrace(job.id)
+      .then((trace) => {
+        if (alive) setRunTrace(trace);
+      })
+      .catch(() => {
+        // 轨迹读取失败不影响任务页：按「不可用」降级展示，不报错。
+        if (alive) setRunTrace(null);
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runTraceKey, isTerminal]);
 
   const terminalLibraryItem = libraryOrigin && job && isTerminal ? libraryItem : null;
   const completedJobId = job?.status === "completed" ? job.id : undefined;
@@ -116,7 +161,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   );
 
   // library origin 完成 CTA：轻量 capability 门控，不加载重产物；未就绪时至少给出主 CTA
-  const libraryResultCtas = useMemo(() => {
+  const libraryResultCtas = (() => {
     if (!libraryOrigin) return [];
     const base = `/library/${libraryOrigin.itemKind}/${encodeURIComponent(libraryOrigin.sourceId)}`;
     const candidates: { view: "analysis" | "trajectory" | "report" | "technical"; label: string; primary?: boolean; path: string; disabled?: boolean; reason?: string }[] = [
@@ -131,12 +176,9 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
       .map((c) => c.view === "report" && reportCapability.state !== "available"
         ? { ...c, disabled: true, reason: reportCapability.reason }
         : c);
-  }, [libraryOrigin, terminalLibraryItem, caps, jobId, reportCapability]);
+  })();
 
-  const reanalyzePath = useMemo(
-    () => (libraryOrigin && terminalLibraryItem ? libraryAnalysisPathFor(terminalLibraryItem) : null),
-    [libraryOrigin, terminalLibraryItem],
-  );
+  const reanalyzePath = libraryOrigin && terminalLibraryItem ? libraryAnalysisPathFor(terminalLibraryItem) : null;
 
   useEffect(() => {
     let alive = true;
@@ -154,7 +196,7 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
     };
 
     const loadJob = async () => {
-      if (!alive || isLoading) {
+      if (!alive || !isDocumentVisible || isLoading) {
         return;
       }
       isLoading = true;
@@ -194,16 +236,9 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
       }
       void loadJob();
     };
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        reloadOnResume();
-      }
-    };
-
-    void loadJob();
+    if (isDocumentVisible) void loadJob();
     window.addEventListener("focus", reloadOnResume);
     window.addEventListener("online", reloadOnResume);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       alive = false;
@@ -212,9 +247,8 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
       }
       window.removeEventListener("focus", reloadOnResume);
       window.removeEventListener("online", reloadOnResume);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [jobId]);
+  }, [jobId, isDocumentVisible]);
 
   if (job === undefined) {
     return <StatusState title="正在读取分析任务" body="正在连接后端或本地 mock 任务记录。" onNavigate={onNavigate} backPath={backPath} />;
@@ -279,6 +313,49 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
   const completedStageCount = job.stages.filter((stage) => stage.status === "done" || stage.status === "skipped").length;
   const totalDurationMs = job.stages.reduce((sum, stage) => sum + (stage.durationMs ?? 0), 0);
   const visibleViewRuns = job.viewRuns && Object.keys(job.viewRuns).length > 0 ? job.viewRuns : null;
+
+  // ── 分析进程：重试历史 + 首次失败证据 + 轨迹可用性 ──────────────────────────
+  const retryEntries = job.retryHistory ?? [];
+  const failureEvidence = job.failureEvidence ?? null;
+  const traceEvents = runTrace?.events ?? [];
+  const traceAvailability = runTrace?.availability ?? job.runTrace?.availability ?? null;
+  const traceReason = runTrace?.reason ?? job.runTrace?.reason ?? null;
+  const traceSummary =
+    traceAvailability === "available"
+      ? `可用（${traceEvents.length} 条事件）`
+      : traceAvailability === "partial"
+        ? `部分可用（${traceEvents.length} 条事件${traceReason ? ` · ${traceReasonLabel(traceReason)}` : ""}）`
+        : traceAvailability === "unavailable"
+          ? `不可用${traceReason ? `（${traceReasonLabel(traceReason)}）` : ""}`
+          : "未记录";
+  const attempts = job.attempt ?? (retryEntries.length > 0 ? retryEntries.length + 1 : 1);
+  const showRunProgress = isTerminal || retryEntries.length > 0;
+  const stageInternalMessage = failedStage?.internalMessage ?? currentStage?.internalMessage ?? null;
+
+  const handleCopyRunTrace = async () => {
+    if (traceEvents.length === 0) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(runTraceToJsonl(traceEvents));
+      setTraceNotice({ title: "轨迹已复制", body: "本次运行的事件轨迹已复制到剪贴板。" });
+    } catch (error) {
+      setTraceNotice(errorToNotice("复制轨迹失败", "浏览器拒绝了剪贴板访问，可改用「下载轨迹」。", error));
+    }
+  };
+
+  const handleDownloadRunTrace = () => {
+    if (traceEvents.length === 0) {
+      return;
+    }
+    const blob = new Blob([runTraceToJsonl(traceEvents)], { type: "application/jsonl" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${job.id}-run-trace.jsonl`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <PageFrame>
@@ -515,6 +592,93 @@ export function AnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNaviga
               }}
               tone="info"
             />
+          </div>
+        ) : null}
+        {showRunProgress ? (
+          <div className="mt-4 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-black uppercase tracking-[0.12em] text-slate-500">分析进程</h2>
+              <span className="text-xs font-bold text-slate-500">
+                已尝试 {attempts} 次
+                {retryEntries.length > 0 ? ` · 重试 ${retryEntries.length} 次` : " · 未发生重试"}
+              </span>
+            </div>
+
+            {failureEvidence ? (
+              <div className="mt-3 rounded-2xl bg-[var(--ui-surface)] p-3">
+                <p className="text-sm font-black text-[var(--ui-ink)]">
+                  首次失败原因：{analysisFailureClassLabel(failureEvidence.failureClass)}
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                  阶段 {failureEvidence.stage ?? "未知"} · 错误码 {failureEvidence.errorCode ?? "未提供"} · 第{" "}
+                  {failureEvidence.attempt ?? "?"} 次尝试
+                  {failureEvidence.at ? ` · ${formatDateTime(failureEvidence.at)}` : ""}
+                </p>
+              </div>
+            ) : null}
+
+            {retryEntries.length > 0 ? (
+              <ol className="mt-3 space-y-2">
+                {retryEntries.map((entry, index) => (
+                  <li
+                    className="rounded-2xl bg-[var(--ui-surface)] p-3"
+                    key={`${entry.stage}-${entry.retryIndex}-${index}`}
+                  >
+                    <p className="text-sm font-bold text-[var(--ui-ink)]">
+                      第 {entry.retryIndex}/{entry.retryLimit || "?"} 次重试 · {entry.stage}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                      原因：{analysisFailureClassLabel(entry.failureClass)}
+                      {entry.exceptionType ? ` · ${entry.exceptionType}` : ""}
+                      {entry.errorCode ? ` · ${entry.errorCode}` : ""}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                      {entry.willRetry ? "还会继续重试" : "重试次数已用尽，再次失败即终止"}
+                      {typeof entry.progressBefore === "number" ? ` · 失败时进度 ${entry.progressBefore}%` : ""}
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+
+            <details className="mt-3 rounded-2xl bg-[var(--ui-surface)] p-3">
+              <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.12em] text-slate-500">
+                技术详情
+              </summary>
+              <div className="mt-2 space-y-2 text-xs font-semibold leading-5 text-slate-600">
+                <p>运行轨迹：{traceSummary}</p>
+                {job.internalErrorMessage ? (
+                  <p className="break-all">任务内部错误：{job.internalErrorMessage}</p>
+                ) : null}
+                {stageInternalMessage ? <p className="break-all">阶段内部信息：{stageInternalMessage}</p> : null}
+                {job.runTrace?.target ?? runTrace?.target ? (
+                  <p className="break-all">轨迹位置：{job.runTrace?.target ?? runTrace?.target}</p>
+                ) : null}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)] px-3 py-1.5 text-xs font-bold text-[var(--ui-ink)] transition hover:border-[var(--ui-brand-deep)] disabled:opacity-50"
+                    disabled={traceEvents.length === 0}
+                    onClick={() => void handleCopyRunTrace()}
+                    type="button"
+                  >
+                    复制轨迹
+                  </button>
+                  <button
+                    className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)] px-3 py-1.5 text-xs font-bold text-[var(--ui-ink)] transition hover:border-[var(--ui-brand-deep)] disabled:opacity-50"
+                    disabled={traceEvents.length === 0}
+                    onClick={handleDownloadRunTrace}
+                    type="button"
+                  >
+                    下载轨迹 JSONL
+                  </button>
+                </div>
+              </div>
+            </details>
+          </div>
+        ) : null}
+        {traceNotice ? (
+          <div className="mt-4">
+            <DiagnosticNoticeCard notice={traceNotice} tone={traceNotice.title.includes("失败") ? "error" : "info"} />
           </div>
         ) : null}
         {cancelNotice ? (

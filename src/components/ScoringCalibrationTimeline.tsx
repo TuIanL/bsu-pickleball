@@ -67,7 +67,7 @@ export function ScoringCalibrationTimeline({
             <button
               key={candidate.candidate_id}
               type="button"
-              className={`absolute top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white shadow ${candidate.decision === "rejected" ? "bg-slate-300" : selectedCandidateId === candidate.candidate_id ? "bg-[#F97316] ring-2 ring-[#F97316]/30" : "bg-[#8B5CF6]"}`}
+              className={`absolute top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white shadow ${candidate.decision === "rejected" ? "bg-slate-300" : selectedCandidateId === candidate.candidate_id ? "bg-[var(--capture-timeline-set)] ring-2 ring-[var(--capture-timeline-set)]/30" : "bg-[var(--ui-purple)]"}`}
               style={{ left: scale(candidate.timestamp_ms) }}
               title={`算法候选 ${formatMs(candidate.timestamp_ms)}`}
               onClick={(event) => { event.stopPropagation(); onSelectCandidate(candidate); }}
@@ -79,7 +79,7 @@ export function ScoringCalibrationTimeline({
             <button
               key={annotation.id}
               type="button"
-              className={`absolute top-0 h-6 w-1.5 rounded ${selectedAnnotationId === annotation.id ? "bg-[#EF4444] ring-2 ring-[#EF4444]/30" : annotation.decision === "unreviewed" ? "bg-[#F59E0B]" : "bg-[var(--ui-info-solid)]"}`}
+              className={`absolute top-0 h-6 w-1.5 rounded ${selectedAnnotationId === annotation.id ? "bg-[var(--capture-timeline-playhead)] ring-2 ring-[var(--capture-timeline-playhead)]/30" : annotation.decision === "unreviewed" ? "bg-[var(--capture-status-warning)]" : "bg-[var(--ui-info-solid)]"}`}
               style={{ left: scale(annotation.event_ms) }}
               title={`人工标注 ${formatMs(annotation.event_ms)}`}
               onClick={(event) => { event.stopPropagation(); onSelectAnnotation(annotation); }}

@@ -2,6 +2,24 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { LibraryItemViewModel } from "../../services/libraryAdapter";
 import { LibraryItemWorkspace } from "./LibraryItemWorkspace";
+import { parseLocation } from "../../app/router";
+import type { NavigateFn } from "../../app/navigationTypes";
+
+function RoutedLibraryItemWorkspace(props: {
+  kind: "upload" | "recording" | "sync_recording";
+  sourceId: string;
+  view: "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "technical";
+  onNavigate: NavigateFn;
+}) {
+  const route = parseLocation(window.location.pathname, window.location.search);
+  return (
+    <LibraryItemWorkspace
+      {...props}
+      analysisJobId={route.name === "library-item" ? route.analysisJobId : undefined}
+      querySearch={window.location.search}
+    />
+  );
+}
 
 afterEach(() => {
   cleanup();
@@ -61,7 +79,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       videoId: "video-rec",
     });
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
-    render(<LibraryItemWorkspace kind="recording" sourceId="rec-1" view="overview" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="recording" sourceId="rec-1" view="overview" onNavigate={onNavigate} />);
 
     fireEvent.click(await screen.findByText("开始分析"));
     const called = onNavigate.mock.calls[0][0];
@@ -77,7 +95,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       videoId: undefined,
     });
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
-    render(<LibraryItemWorkspace kind="recording" sourceId="rec-x" view="overview" onNavigate={vi.fn()} />);
+    render(<RoutedLibraryItemWorkspace kind="recording" sourceId="rec-x" view="overview" onNavigate={vi.fn()} />);
     expect(await screen.findByText("视频就绪后即可开始分析")).toBeTruthy();
     expect(screen.queryByText("开始分析")).toBeNull();
   });
@@ -91,7 +109,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       captureTakeId: "take-9",
     });
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
     expect(await screen.findByText("双摄协同分析")).toBeTruthy();
     expect(screen.getByText("A 机位分析")).toBeTruthy();
     expect(screen.getByText("B 机位分析")).toBeTruthy();
@@ -104,7 +122,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       fieldSessionId: "session-1",
       captureTakeId: "take-1",
     }));
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
 
     await screen.findByText("测试素材");
     expect(screen.queryByRole("button", { name: "评分校准" })).toBeNull();
@@ -117,7 +135,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       fieldSessionId: "fs-1",
       captureTakeId: "take-1",
     }));
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
     await screen.findByText("测试素材");
     expect(screen.queryByRole("button", { name: "片段" })).toBeNull();
   });
@@ -136,7 +154,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       ],
     });
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
 
     // 历史任务两个：完成（删除）与分析中（取消）
     expect(await screen.findByText("历史分析任务")).toBeTruthy();
@@ -165,7 +183,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
     });
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
     const onNavigate = vi.fn();
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
 
     const resultButtons = await screen.findAllByRole("button", { name: "查看结果" });
     fireEvent.click(resultButtons[1]);
@@ -189,7 +207,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
         { id: "old", status: "completed", analysisKind: "multiview", createdAt: "2026-08-02T00:00:00Z" },
       ],
     }));
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={vi.fn()} />);
     expect(await screen.findByText("当前版本")).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看最新版本" })).toBeTruthy();
   });
@@ -205,7 +223,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       analysisJobs: [{ id: "new", status: "completed", analysisKind: "multiview", createdAt: "2026-08-03T00:00:00Z" }],
     }));
     const onNavigate = vi.fn();
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
     await waitFor(() => expect(onNavigate).toHaveBeenCalled());
     expect(getAnalysisResult).not.toHaveBeenCalled();
     expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("view=analysis&t=7&foo=bar"), { replace: true });
@@ -241,13 +259,13 @@ describe("LibraryItemWorkspace 分析入口", () => {
       ["technical", "single-technical:old"],
     ] as const) {
       window.history.replaceState({}, "", `/library/sync_recording/sync-1?view=${selectedView}&analysisJob=old&t=9`);
-      const rendered = render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view={selectedView} onNavigate={onNavigate} />);
+      const rendered = render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view={selectedView} onNavigate={onNavigate} />);
       expect(await screen.findByText(expected)).toBeTruthy();
       rendered.unmount();
     }
 
     window.history.replaceState({}, "", "/library/sync_recording/sync-1?view=analysis&analysisJob=old&t=9");
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
     await screen.findByText("vision:old");
     fireEvent.click(screen.getByRole("button", { name: "球路" }));
     expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/analysisJob=old/), { replace: true });
@@ -266,7 +284,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
     }));
     vi.mocked(getAnalysisResult).mockResolvedValue({ job_id: "old", status: "completed", metrics: {}, artifacts: { shot_landings_url: "/old/landing.json" } } as never);
     const onNavigate = vi.fn();
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="landing" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="landing" onNavigate={onNavigate} />);
     expect(await screen.findByText("landing:old")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "landing-video" }));
     expect(onNavigate).toHaveBeenLastCalledWith(expect.stringMatching(/view=video.*analysisJob=old|analysisJob=old.*view=video/), { replace: true });
@@ -286,7 +304,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
     (resolveLibraryItemByRef as Mock).mockResolvedValue(target);
     vi.mocked(getAnalysisResult).mockResolvedValue({ job_id: "old", status: "completed", metrics: {}, artifacts: { ball_trajectory_url: "/old/ball.json" } } as never);
     const onNavigate = vi.fn();
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="analysis" onNavigate={onNavigate} />);
 
     expect((await screen.findByTestId("vision-view")).getAttribute("data-embedded")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "球路" }));
@@ -309,7 +327,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       metrics: { distances: [], speeds: [], kitchen_dwell: [] }, artifacts: {},
     } as never);
     const onNavigate = vi.fn();
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
 
     const reportTab = await screen.findByRole("button", { name: "报告" });
     expect((reportTab as HTMLButtonElement).disabled).toBe(true);
@@ -332,7 +350,7 @@ describe("LibraryItemWorkspace 分析入口", () => {
       ],
     }));
     const onNavigate = vi.fn();
-    render(<LibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
+    render(<RoutedLibraryItemWorkspace kind="sync_recording" sourceId="sync-1" view="overview" onNavigate={onNavigate} />);
     await screen.findByText("当前版本");
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]);
     await waitFor(() => expect(deleteAnalysisJob).toHaveBeenCalledWith("old"));

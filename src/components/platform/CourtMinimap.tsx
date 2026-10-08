@@ -134,11 +134,11 @@ export function CourtMinimap({
   return (
     <section
       aria-label="球场移动与球路 HUD"
-      className={`w-[7.25rem] overflow-hidden rounded-lg border border-white/20 bg-[#07131B]/88 shadow-[0_14px_36px_rgba(0,0,0,0.36)] backdrop-blur-md sm:w-36 ${className}`}
+      className={`w-[7.25rem] overflow-hidden rounded-lg border border-white/20 bg-[var(--ui-display-panel)]/88 shadow-[0_14px_36px_rgba(0,0,0,0.36)] backdrop-blur-md sm:w-36 ${className}`}
       data-testid="court-minimap-hud"
     >
       <div className="flex items-center justify-between border-b border-white/10 px-2.5 py-2 text-[0.58rem] font-bold tracking-wide text-slate-300">
-        <span className="text-[#D9FF3F]">COURT HUD</span>
+        <span className="text-[var(--ui-display-lime)]">COURT HUD</span>
         <span>{formatTime(currentTimeSec)}</span>
       </div>
       <svg className="block h-auto w-full" role="img" viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}>
@@ -201,7 +201,7 @@ export function CourtMinimap({
       </svg>
       <div className="grid grid-cols-2 gap-x-2 border-t border-white/10 px-2.5 py-2 text-[0.57rem] font-semibold text-slate-300">
         <span>球员 {hud.visiblePlayerCount}</span>
-        <span className="text-right text-[#D9FF3F]">球 {hud.ballLatest ? "LIVE" : "--"}</span>
+        <span className="text-right text-[var(--ui-display-lime)]">球 {hud.ballLatest ? "LIVE" : "--"}</span>
         {hud.players.slice(0, 2).map((player) => <span className="col-span-1 mt-1 text-slate-400" key={player.id}>{player.label} {player.stale ? "丢失" : formatSpeed(player.speedMetersPerSecond)}</span>)}
         <span className="col-span-1 mt-1 text-right text-slate-400">弹跳 {hud.bounces.length}</span>
       </div>

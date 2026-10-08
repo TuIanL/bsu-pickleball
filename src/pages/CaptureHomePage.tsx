@@ -153,7 +153,7 @@ export function CaptureHomePage({ onNavigate }: { onNavigate: NavigateFn }) {
                     </span>
                   )}
                   {session.display_mode === "showcase" && (
-                    <span className="rounded-full bg-[#FFF1D6] px-2.5 py-1 text-xs font-bold text-[#9A5A00]">展示模式</span>
+                    <span className="rounded-full bg-[var(--ui-warning-soft-2)] px-2.5 py-1 text-xs font-bold text-[var(--ui-warning-deep)]">展示模式</span>
                   )}
                   <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusStyle[session.status] ?? "bg-slate-100 text-slate-500"}`}>
                     {statusLabel[session.status] ?? session.status}

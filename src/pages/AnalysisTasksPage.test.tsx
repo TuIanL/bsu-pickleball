@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary, SyncRecordingSession } from "../types/report";
-import { AnalysisTaskCard, SyncRecordingTaskCard } from "./AnalysisTasksPage";
+import * as analysisClient from "../services/analysisClient";
+import { AnalysisTaskCard, AnalysisTasksPage, SyncRecordingTaskCard } from "./AnalysisTasksPage";
 
 function makeSession(overrides: Partial<SyncRecordingSession> = {}): SyncRecordingSession {
   return {
@@ -228,6 +229,24 @@ describe("AnalysisTaskCard 列表卡进度区", () => {
     expect(screen.queryAllByTestId("stage-capsule")).toHaveLength(0);
   });
 
+  it("轮询失败保留现有任务并在稍后继续请求", async () => {
+    const listJobs = vi.spyOn(analysisClient, "listAnalysisJobs");
+    listJobs
+      .mockResolvedValueOnce([makeTaskJob()])
+      .mockRejectedValueOnce(new Error("temporary network failure"))
+      .mockResolvedValue([makeTaskJob({ progress: 48, status: "processing" })]);
+
+    render(<AnalysisTasksPage onNavigate={vi.fn()} />);
+    expect(await screen.findByText("34%")).toBeTruthy();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 2400));
+    expect(await screen.findByText("读取分析任务失败")).toBeTruthy();
+    expect(screen.getByText("34%")).toBeTruthy();
+
+    expect(await screen.findByText("48%", {}, { timeout: 7000 })).toBeTruthy();
+    expect(listJobs.mock.calls.length).toBeGreaterThanOrEqual(3);
+  }, 12_000);
+
   it("failed 任务不显示进度条，以错误摘要为主", () => {
     const job = makeTaskJob({
       status: "failed",
@@ -267,5 +286,43 @@ describe("AnalysisTaskCard 列表卡进度区", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新分析" }));
     expect(onNavigate).toHaveBeenCalledWith("/analysis/new");
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
+  });
+
+  it("取消任务仍展示运行期间的重试次数与首次失败归因", () => {
+    const job = {
+      ...makeJob("job-canceled", "multiview"),
+      status: "canceled",
+      canceledAt: "2026-10-04T11:30:00.000Z",
+      errorCode: "ANALYSIS_JOB_CANCELED",
+      retryHistory: [
+        {
+          stage: "multiview-ball-analysis",
+          retryIndex: 1,
+          retryLimit: 1,
+          willRetry: false,
+          failureClass: "input_media",
+        },
+      ],
+      failureEvidence: {
+        errorCode: "ANALYSIS_STAGE_FAILED",
+        failureClass: "input_media",
+        stage: "multiview-ball-analysis",
+        attempt: 1,
+      },
+    } as unknown as AnalysisJobSummary;
+
+    render(
+      <AnalysisTaskCard
+        job={job}
+        onCancel={vi.fn()}
+        onDelete={vi.fn()}
+        onNavigate={vi.fn()}
+        onToggleSelected={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/已重试 1 次 · 首次失败：输入或媒体问题（multiview-ball-analysis）/),
+    ).toBeTruthy();
   });
 });

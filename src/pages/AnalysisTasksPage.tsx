@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, ChevronDown, ChevronRight, Play, RefreshCw, Trash2, Upload, LayoutDashboard, Video, ArrowRight, ArrowDownUp, ListFilter } from "lucide-react";
 import type { NavigateFn, AppPath, TaskListSource } from "../app/navigationTypes";
 import { parseTaskListContext, taskListPath, withTaskListContext } from "../app/navigationContext";
 import type { AnalysisJobSummary, RecordingSession, FieldSession, SyncRecordingSession } from "../types/report";
+import { analysisFailureClassLabel } from "../types/report";
 import type { DiagnosticNotice } from "../services/analysisDiagnostics";
 import { PageFrame } from "../components/PageFrame";
 import { Modal } from "../components/platform/Modal";
@@ -46,6 +47,7 @@ import {
 import type { AnalysisSortKey, AnalysisSortDir, AnalysisModeValue } from "../utils/analysisHelpers";
 import { AnalysisModeSelectPopover } from "../components/platform/AnalysisModeSelectPopover";
 import type { AnalysisModeFilter } from "../components/platform/AnalysisModeSelectPopover";
+import { useDocumentVisible } from "../hooks/useDocumentVisible";
 
 // 会话级持久化：进入任务详情再返回后保持「按类型筛选」的选择
 const MODE_FILTER_SESSION_KEY = "analysis-tasks-mode-filter";
@@ -75,6 +77,9 @@ export function AnalysisTasksPage({
   taskSource?: TaskListSource;
   taskSessionId?: string;
 }) {
+  const isDocumentVisible = useDocumentVisible();
+  const recordingsPollInFlightRef = useRef(false);
+  const syncRecordingsPollInFlightRef = useRef(false);
   const [jobs, setJobs] = useState<AnalysisJobSummary[] | null>(null);
   const [loadError, setLoadError] = useState<DiagnosticNotice | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -346,6 +351,8 @@ export function AnalysisTasksPage({
   };
 
   const recordingGroups = groupRecordingsByFieldSession(fieldSessions, recordings);
+  const hasActiveRecording = recordings.some((s) => s.status === "recording");
+  const hasRunningMerge = syncRecordings.some((item) => item.merge_status === "running");
 
   useEffect(() => {
     // 预加载 sync recordings（无论当前 tab），用于 upload tab 排除双摄派生任务
@@ -359,20 +366,24 @@ export function AnalysisTasksPage({
 
   // 录制列表轮询（有活跃录制时）
   useEffect(() => {
-    if (sourceFilter !== "recorded") return;
-    const hasActiveRecording = recordings.some((s) => s.status === "recording");
-    if (!hasActiveRecording) return;
+    if (sourceFilter !== "recorded" || !hasActiveRecording || !isDocumentVisible) return;
     const interval = window.setInterval(() => {
-      void loadRecordings();
+      if (recordingsPollInFlightRef.current) return;
+      recordingsPollInFlightRef.current = true;
+      void loadRecordings().finally(() => { recordingsPollInFlightRef.current = false; });
     }, 3000);
     return () => window.clearInterval(interval);
-  }, [sourceFilter, recordings, loadRecordings]);
+  }, [sourceFilter, hasActiveRecording, isDocumentVisible, loadRecordings]);
 
   useEffect(() => {
-    if (sourceFilter !== "sync_recording" || !syncRecordings.some((item) => item.merge_status === "running")) return;
-    const interval = window.setInterval(() => { void loadSyncRecordingsList(); }, 2500);
+    if (sourceFilter !== "sync_recording" || !hasRunningMerge || !isDocumentVisible) return;
+    const interval = window.setInterval(() => {
+      if (syncRecordingsPollInFlightRef.current) return;
+      syncRecordingsPollInFlightRef.current = true;
+      void loadSyncRecordingsList().finally(() => { syncRecordingsPollInFlightRef.current = false; });
+    }, 2500);
     return () => window.clearInterval(interval);
-  }, [sourceFilter, syncRecordings, loadSyncRecordingsList]);
+  }, [sourceFilter, hasRunningMerge, isDocumentVisible, loadSyncRecordingsList]);
 
   useEffect(() => {
     if (sourceFilter !== "sync_recording" || !taskSessionId || syncRecordingsLoading) return;
@@ -403,7 +414,7 @@ export function AnalysisTasksPage({
     let timer: number | undefined;
 
     const tick = async () => {
-      if (!alive) {
+      if (!alive || !isDocumentVisible) {
         return;
       }
       try {
@@ -413,7 +424,7 @@ export function AnalysisTasksPage({
         }
         setJobs(nextJobs);
         setLoadError(null);
-        if (nextJobs.some(isActiveAnalysisJob)) {
+        if (isDocumentVisible && nextJobs.some(isActiveAnalysisJob)) {
           timer = window.setTimeout(tick, 2200);
         }
       } catch (error) {
@@ -421,11 +432,17 @@ export function AnalysisTasksPage({
           return;
         }
         setLoadError(errorToNotice("读取分析任务失败", "无法读取任务列表，请检查后端服务或稍后重试。", error));
-        setJobs([]);
+        // 刻意**不**清空 jobs：一次网络抖动（后端重启、笔记本休眠、wifi 短暂断开、
+        // 单次 502）不应让页面从"有 N 个任务"跳到空态——用户会误以为任务被删了。
+        // 同时必须继续排程：此前此分支既不重排定时器也不清空之外的任何恢复动作，
+        // 使一次失败后该页面永不再自动刷新，活跃任务的进度条永久冻结
+        // （只能手动点「刷新任务」）。对照 AnalysisJobPage.tsx 的 catch 里有
+        // scheduleLoad(3000)，此处属遗漏而非有意设计。
+        if (isDocumentVisible) timer = window.setTimeout(tick, 3000);
       }
     };
 
-    tick();
+    if (isDocumentVisible) tick();
 
     return () => {
       alive = false;
@@ -433,7 +450,7 @@ export function AnalysisTasksPage({
         window.clearTimeout(timer);
       }
     };
-  }, []);
+  }, [isDocumentVisible]);
 
   const visibleJobs = jobs ?? [];
   /** 双摄派生任务与上传任务使用同一归属解析，避免展示范围漂移。 */
@@ -460,7 +477,9 @@ export function AnalysisTasksPage({
   const eligibleJobs = visibleJobs.filter((job) => !isActiveAnalysisJob(job));
   const eligibleJobIds = eligibleJobs.map((job) => job.id);
   const eligibleJobKey = eligibleJobIds.join("|");
-  const selectedEligibleIds = selectedJobIds.filter((jobId) => eligibleJobIds.includes(jobId));
+  const selectedJobIdSet = useMemo(() => new Set(selectedJobIds), [selectedJobIds]);
+  const eligibleJobIdSet = useMemo(() => new Set(eligibleJobIds), [eligibleJobIds]);
+  const selectedEligibleIds = selectedJobIds.filter((jobId) => eligibleJobIdSet.has(jobId));
   const isDeleting = deletingJobIds.length > 0;
 
   /** 上传 tab 内可删除任务：「按类型选择」只作用于这些可见任务 */
@@ -492,13 +511,15 @@ export function AnalysisTasksPage({
     () => filteredUploadJobs.filter((job) => !isActiveAnalysisJob(job)).map((job) => job.id),
     [filteredUploadJobs],
   );
-  const selectedVisibleIds = selectedJobIds.filter((jobId) => visibleEligibleIds.includes(jobId));
-  const allVisibleSelected = visibleEligibleIds.length > 0 && visibleEligibleIds.every((jobId) => selectedJobIds.includes(jobId));
+  const visibleEligibleIdSet = useMemo(() => new Set(visibleEligibleIds), [visibleEligibleIds]);
+  const selectedVisibleIds = selectedJobIds.filter((jobId) => visibleEligibleIdSet.has(jobId));
+  const allVisibleSelected = visibleEligibleIds.length > 0 && visibleEligibleIds.every((jobId) => selectedJobIdSet.has(jobId));
 
   useEffect(() => {
     // Keep selections valid after the server-side job list changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- removes deleted/ineligible selections.
-    setSelectedJobIds((current) => current.filter((jobId) => eligibleJobIds.includes(jobId)));
+    const eligibleIds = new Set(eligibleJobIds);
+    setSelectedJobIds((current) => current.filter((jobId) => eligibleIds.has(jobId)));
   }, [eligibleJobKey]);
 
   const buildDeleteToast = (
@@ -810,7 +831,7 @@ export function AnalysisTasksPage({
                       aria-haspopup="menu"
                       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-semibold outline-none transition focus:border-[var(--ui-brand)]/70 focus:ring-2 focus:ring-[var(--ui-brand)]/20 ${
                         modeFilter !== "all"
-                          ? "border-[#17231D] bg-[var(--ui-ink-solid)] text-white hover:bg-[#0F1A14]"
+                          ? "border-[var(--ui-ink-solid)] bg-[var(--ui-ink-solid)] text-white hover:bg-[var(--ui-brand-solid-deep)]"
                           : "border-[var(--ui-border-soft)] bg-[var(--ui-surface)] text-[var(--ui-text-deep)] hover:bg-[var(--ui-surface-soft)]"
                       }`}
                       disabled={!modeRows.some((row) => row.eligibleCount > 0) || isDeleting}
@@ -1080,7 +1101,7 @@ export function AnalysisTasksPage({
               const videoId = playingSyncSession.registered_video_ids?.[role] ?? (role === "cam_1" ? playingSyncSession.default_analysis_video_id : undefined);
               const hasError = syncPlaybackErrors[role];
               return (
-                <section className="rounded-xl border border-[var(--ui-border)] bg-[#F8FBF4] p-3" key={role}>
+                <section className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-paper)] p-3" key={role}>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-black text-[var(--ui-ink)]">{role === "cam_1" ? "底线机位 A" : "底线机位 B"}</h3>
                     <span className="truncate text-xs font-bold text-slate-500">{slot?.camera_id ?? "未记录摄像头"}</span>
@@ -1093,7 +1114,7 @@ export function AnalysisTasksPage({
                       onError={() => setSyncPlaybackErrors((current) => ({ ...current, [role]: true }))}
                     />
                   ) : (
-                    <div className="flex aspect-video items-center justify-center rounded-lg bg-[#0F172A] px-4 text-center text-sm font-semibold text-white/60">
+                    <div className="flex aspect-video items-center justify-center rounded-lg bg-[var(--ui-ink-alt)] px-4 text-center text-sm font-semibold text-white/60">
                       {hasError ? "视频播放失败" : "该机位还没有注册成可预览视频"}
                     </div>
                   )}
@@ -1208,6 +1229,19 @@ export function AnalysisTaskCard({
             <p className="mt-3 rounded-2xl border border-[var(--ui-danger-strong)]/20 bg-[var(--ui-danger-solid)]/10 p-3 text-sm font-semibold leading-6 text-[var(--ui-danger)]">
               {job.publicErrorMessage ?? job.errorMessage ?? currentStage?.detail ?? "分析失败，请检查后端日志或重新上传。"}
               {job.errorCode ? <span className="mt-1 block text-xs font-black uppercase">错误码：{job.errorCode}</span> : null}
+            </p>
+          ) : null}
+          {/* 分析进程：重试次数与首次失败归因（终态不抹除，取消/失联后仍可见） */}
+          {(job.retryHistory?.length ?? 0) > 0 || job.failureEvidence ? (
+            <p className="mt-3 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3 text-xs font-semibold leading-5 text-slate-600">
+              {job.retryHistory && job.retryHistory.length > 0
+                ? `已重试 ${job.retryHistory.length} 次`
+                : "本次运行未发生重试"}
+              {job.failureEvidence
+                ? ` · 首次失败：${analysisFailureClassLabel(job.failureEvidence.failureClass)}${
+                    job.failureEvidence.stage ? `（${job.failureEvidence.stage}）` : ""
+                  }`
+                : ""}
             </p>
           ) : null}
           {job.status === "canceled" ? (
@@ -1551,7 +1585,7 @@ export function SyncRecordingTaskCard({
             <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${statusColor[session.status] ?? ""}`}>
               {statusLabel[session.status] ?? session.status}
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${mergeStatus === "completed" ? "bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]" : mergeStatus === "failed" ? "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]" : "bg-[#E8A838]/15 text-[var(--ui-warning-deeper)]"}`}>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${mergeStatus === "completed" ? "bg-[var(--ui-brand-solid)]/12 text-[var(--ui-brand-deep)]" : mergeStatus === "failed" ? "bg-[var(--ui-danger-solid)]/12 text-[var(--ui-danger)]" : "bg-[var(--ui-warning)]/15 text-[var(--ui-warning-deeper)]"}`}>
               {mergeStatusLabel[mergeStatus] ?? mergeStatus}
             </span>
           </div>
@@ -1561,12 +1595,12 @@ export function SyncRecordingTaskCard({
             )}
             <span>分段: {session.segments?.length ?? 0}</span>
             <span>可预览: {canPlay ? "A / B" : "合并完成后可用"}</span>
-            {session.total_restarts > 0 && <span className="text-[#E8A838]">重启 {session.total_restarts} 次</span>}
+            {session.total_restarts > 0 && <span className="text-[var(--ui-warning)]">重启 {session.total_restarts} 次</span>}
           </div>
         </div>
       </div>
       {(session.error_message || session.merge_error) && (
-        <p className="mt-2 text-xs text-[#FF4D4F] truncate">{session.merge_error || session.error_message}</p>
+        <p className="mt-2 text-xs text-[var(--ui-danger)] truncate">{session.merge_error || session.error_message}</p>
       )}
       {canPlay && session.default_analysis_video_id && (
         <div className="mt-3 pt-3 border-t border-[var(--ui-border)]">

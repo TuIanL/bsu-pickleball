@@ -92,7 +92,7 @@ export function JobStageStepper({
                   aria-hidden="true"
                   className={`h-px w-2.5 shrink-0 sm:w-3 ${
                     stage.status === "pending"
-                      ? "bg-[#DCE5D6]"
+                      ? "bg-[var(--ui-border-soft)]"
                       : stage.status === "failed"
                         ? "bg-[var(--ui-danger-solid)]/60"
                         : "bg-[var(--ui-brand-solid)]/50"

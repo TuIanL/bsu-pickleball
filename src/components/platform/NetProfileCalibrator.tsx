@@ -162,7 +162,7 @@ export function NetProfileSettings({
           />
         </label>
       </div>
-      <div className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3 text-xs leading-5 text-[#416248]">
+      <div className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3 text-xs leading-5 text-[var(--ui-text-success-muted)]">
         <Info size={14} className="mb-1 text-[var(--ui-brand-deep)]" aria-hidden="true" />
         标准值：两侧 91.44 cm，中心 86.36 cm。后端以英尺存储并在发布时生成采样剖面。蓝色四分之一点会作为 hold-out 回投检查，不参与 profile 拟合。
       </div>
@@ -294,7 +294,7 @@ export function NetProfileCalibrator({
       data-testid={`net-profile-calibrator-${viewId}`}
     >
       <div>
-        <div className="relative overflow-hidden rounded-2xl border border-[#CFE3D0] bg-black">
+        <div className="relative overflow-hidden rounded-2xl border border-[var(--ui-border-mint)] bg-black">
           <video
             ref={videoRef}
             className="block aspect-video w-full object-contain"

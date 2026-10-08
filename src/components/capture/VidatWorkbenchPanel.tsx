@@ -193,7 +193,7 @@ export function VidatWorkbenchPanel({ captureTakeId, onImported }: { captureTake
         </select>
         <button className="quiet-button px-3 py-2 text-xs" disabled={busy || !compareTarget || compareTarget === selected} onClick={comparePackages} type="button">比较版本</button>
       </div>}
-      {comparison && <div className="mt-4 rounded-lg border border-[var(--ui-border)] bg-[#F8FCF6] p-3 text-sm">
+      {comparison && <div className="mt-4 rounded-lg border border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-3 text-sm">
         <div className="flex items-center justify-between gap-2"><strong>版本差异</strong><button className="text-slate-500" onClick={() => setComparison(null)} type="button" aria-label="关闭版本差异"><X size={16} /></button></div>
         <p className="mt-1 text-xs text-slate-500">{String(comparison.before.name)} → {String(comparison.after.name)} · 变更 {comparison.changes.length} 条</p>
         <ul className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2">{comparison.changes.map((change, index) => <li key={`${change.kind}-${index}`}>{change.kind}</li>)}</ul>

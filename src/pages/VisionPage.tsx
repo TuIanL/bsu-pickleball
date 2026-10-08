@@ -1533,7 +1533,7 @@ function HighlightsCard({
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">关键片段</p>
           <h2 className="mt-2 text-xl font-black text-[var(--ui-ink)]">关键片段</h2>
         </div>
-        <Timer className="text-[#D9FF3F]" size={22} aria-hidden="true" />
+        <Timer className="text-[var(--ui-display-lime)]" size={22} aria-hidden="true" />
       </div>
       <div className="mt-5 grid gap-3">
         {highlights.map((highlight) => {

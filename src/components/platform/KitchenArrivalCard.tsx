@@ -33,7 +33,7 @@ export function KitchenArrivalCard({
           <strong className="block text-sm text-[var(--ui-ink)]">发球队 · 网前到位率</strong>
           <p className="mt-1 text-xs leading-5 text-slate-500">按冻结的发球队与回合上下文统计，不是实时位置。</p>
         </div>
-        <span className="rounded-full bg-[#E9F5FF] px-2.5 py-1 text-xs font-black text-[#1769AA]">双打</span>
+        <span className="rounded-full bg-[var(--ui-info-soft)] px-2.5 py-1 text-xs font-black text-[var(--ui-info-deep)]">双打</span>
       </div>
       <div className="mt-4 overflow-hidden rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3" data-testid="kitchen-arrival-court-profile">
         <svg aria-label="横向厨房线场地控制画像" className="h-20 w-full" role="img" viewBox="0 0 640 120">

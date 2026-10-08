@@ -69,6 +69,7 @@ export type CaptureRuntimeState =
   | { phase: "starting"; intent: CaptureStartIntent }                                  // 启动中
   | { phase: "recording"; session: UnifiedCaptureSession }                             // 录制中
   | { phase: "stopping"; session: UnifiedCaptureSession; operationError?: string }     // 停止中
+  | { phase: "canceling"; session: UnifiedCaptureSession; operationError?: string }    // 取消请求已发出，等待后端确认
   | { phase: "recovering"; session: UnifiedCaptureSession; operationError: string }    // 恢复中
   | { phase: "completed"; session: UnifiedCaptureSession; result: NormalizedCaptureStopResult }   // 完成
   | { phase: "partial"; session: UnifiedCaptureSession; result: NormalizedCaptureStopResult }      // 部分完成

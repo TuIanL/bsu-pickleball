@@ -98,6 +98,31 @@ describe("parsePath", () => {
 });
 
 describe("parseLocation", () => {
+  it("keeps only supported recording camera slots from the query", () => {
+    expect(parseLocation("/capture/session-1/analyze", "?cam=cam_2")).toMatchObject({
+      name: "recording-analyze",
+      sessionId: "session-1",
+      cam: "cam_2",
+    });
+    expect(parseLocation("/capture/session-1/analyze", "?cam=x")).not.toHaveProperty("cam");
+  });
+
+  it("parses analysis and library query state for route consumers", () => {
+    expect(parseLocation("/analysis/job-1", "?return=%2Flibrary%2Frecording%2Frec-1")).toMatchObject({
+      name: "analysis-job",
+      returnParam: "/library/recording/rec-1",
+    });
+    expect(parseLocation("/capture/takes/take-1/analyze", "?session=sync-1&return=%2Flibrary%2Fsync_recording%2Fsync-1")).toMatchObject({
+      name: "multiview-setup",
+      routeSessionId: "sync-1",
+      returnParam: "/library/sync_recording/sync-1",
+    });
+    expect(parseLocation("/library/recording/rec-1", "?analysisJob=job-1")).toMatchObject({
+      name: "library-item",
+      analysisJobId: "job-1",
+    });
+  });
+
   it("parses initial load with pathname and search", () => {
     const result = parseLocation("/upload", "?videoId=video-1&source=recording");
     expect(result).toEqual({

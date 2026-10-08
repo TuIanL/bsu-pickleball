@@ -50,7 +50,7 @@ function DrillGrid({
           </div>
           <h3 className="mt-4 text-lg font-black text-[var(--ui-ink)]">{drill.title}</h3>
           <p className="mt-3 text-sm leading-6 text-slate-600">{drill.goal}</p>
-          <p className="mt-4 rounded-2xl bg-[#F0F6EA] p-3 text-xs leading-5 text-slate-600">{drill.evidence}</p>
+          <p className="mt-4 rounded-2xl bg-[var(--ui-surface-soft)] p-3 text-xs leading-5 text-slate-600">{drill.evidence}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             <button className="green-button px-3 py-2 text-xs" onClick={() => onNavigate("/training")} type="button">
               加入训练计划

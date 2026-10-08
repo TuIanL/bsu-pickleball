@@ -219,7 +219,7 @@ export function PerformanceInsightsPanel({
                   {finding.evidence_windows.length > 0 && jobId ? (
                     finding.evidence_windows.slice(0, 3).map((window, index) => (
                       <button
-                        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/10 px-3 py-1 text-[11px] font-bold text-[#1D4ED8] transition hover:bg-[var(--ui-info-solid)]/20"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/10 px-3 py-1 text-[11px] font-bold text-[var(--ui-info-deep)] transition hover:bg-[var(--ui-info-solid)]/20"
                         key={`${finding.id}-window-${index}`}
                         onClick={() =>
                           onNavigate(
@@ -251,7 +251,7 @@ export function PerformanceInsightsPanel({
       {/* ── 算法候选事实（独立区，不进入 findings）── */}
       {insights.candidate_facts.length > 0 ? (
         <section className="rounded-2xl border border-dashed border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/5 p-5">
-          <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-[#1D4ED8]">算法候选事实</h3>
+          <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-[var(--ui-info-deep)]">算法候选事实</h3>
           <ul className="mt-3 flex flex-col gap-1.5">
             {insights.candidate_facts.map((fact) => (
               <li className="text-sm leading-6 text-slate-600" key={fact.kind}>

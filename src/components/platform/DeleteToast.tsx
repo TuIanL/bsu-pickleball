@@ -38,8 +38,8 @@ export default function DeleteToast({ toast, onClose }: DeleteToastProps) {
       aria-live="polite"
       className={`toast-in fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-2 rounded-xl border px-3.5 py-2.5 text-sm shadow-lg ${
         attention
-          ? "border-amber-300 bg-amber-50 text-amber-900"
-          : "border-green-300 bg-green-50 text-green-900"
+          ? "border-[var(--ui-warning-border-strong)] bg-[var(--ui-warning-surface)] text-[var(--ui-warning-deeper)]"
+          : "border-[var(--ui-success-border)] bg-[var(--ui-success-soft)] text-[var(--ui-success-ink)]"
       }`}
     >
       <p className="flex-1 font-medium leading-5">{message}</p>
@@ -48,7 +48,7 @@ export default function DeleteToast({ toast, onClose }: DeleteToastProps) {
           type="button"
           aria-label="关闭提示"
           onClick={onClose}
-          className="shrink-0 rounded p-0.5 text-amber-700 transition hover:bg-amber-100"
+          className="shrink-0 rounded p-0.5 text-[var(--ui-warning-deep)] transition hover:bg-[var(--ui-warning-soft-2)]"
         >
           <X size={14} aria-hidden="true" />
         </button>

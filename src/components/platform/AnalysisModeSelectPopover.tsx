@@ -134,7 +134,7 @@ export function AnalysisModeSelectPopover({
           </label>
         ))}
       </div>
-      <p className="mt-2 border-t border-[#EEF3E8] px-2 pt-2 text-xs leading-5 text-slate-500">
+      <p className="mt-2 border-t border-[var(--ui-hairline)] px-2 pt-2 text-xs leading-5 text-slate-500">
         筛选点击类型后列表只显示该类；勾选类型即选中该类全部可删除任务，删除请使用「批量删除」。
       </p>
     </div>

@@ -66,7 +66,7 @@ export default function PbCourtCoverage() {
       </div>
 
       <div
-        className="w-full rounded-xl overflow-hidden bg-[#f9fafb] border border-[var(--pb-card-border,#e5e7eb)]"
+        className="w-full rounded-xl overflow-hidden bg-[var(--ui-surface-muted)] border border-[var(--pb-card-border,#e5e7eb)]"
         style={{ aspectRatio: "16 / 10" }}
       >
         {zoneDataForStructured ? (

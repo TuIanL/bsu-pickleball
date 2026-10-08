@@ -316,7 +316,7 @@ export function CaptureWizardPage({ onNavigate }: { onNavigate: NavigateFn }) {
               ))}
             </div>
             {form.display_mode === "showcase" && (
-              <p className="rounded-lg border border-[var(--ui-stage)]/25 bg-[var(--ui-stage)]/6 px-3 py-2 text-xs text-[#9A5A00]">展示模式已锁定双摄方案。展示屏为独立页面，关闭或刷新不会停止录制。</p>
+              <p className="rounded-lg border border-[var(--ui-stage)]/25 bg-[var(--ui-stage)]/6 px-3 py-2 text-xs text-[var(--ui-warning-deep)]">展示模式已锁定双摄方案。展示屏为独立页面，关闭或刷新不会停止录制。</p>
             )}
             {[
               {

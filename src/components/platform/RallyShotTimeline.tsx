@@ -81,7 +81,7 @@ function EventMarker({
       >
         <span className="block h-full w-full rounded-full" style={{ backgroundColor: color }} />
       </span>
-      <span className="pointer-events-none absolute left-1/2 top-8 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#14241B] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block group-focus:block">
+      <span className="pointer-events-none absolute left-1/2 top-8 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-[var(--ui-ink)] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block group-focus:block">
         {event.stageLabel} · {event.playerLabel}
       </span>
     </button>
@@ -101,7 +101,7 @@ function TimelineRow({
   const firstTime = timedEvents.length ? Math.min(...timedEvents) : row.startMs;
   const lastTime = timedEvents.length ? Math.max(...timedEvents) : row.endMs;
   return (
-    <div className="rounded-2xl border border-[#E6EFE0] bg-[var(--ui-surface)]/75 p-3">
+    <div className="rounded-2xl border border-[var(--ui-hairline)] bg-[var(--ui-surface)]/75 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <strong className="block truncate text-sm text-[var(--ui-ink)]">{row.label}</strong>
@@ -113,7 +113,7 @@ function TimelineRow({
       </div>
       <div className="relative mt-4 h-16 overflow-x-auto rounded-xl bg-[var(--ui-surface-soft)] px-3">
         <div className="relative h-full min-w-[420px]">
-          <div className="absolute left-0 right-0 top-1/2 h-px bg-[#CFE0C7]" />
+          <div className="absolute left-0 right-0 top-1/2 h-px bg-[var(--ui-border-mint)]" />
           {row.events.map((event, index) => (
             <EventMarker
               event={event}
@@ -133,7 +133,7 @@ function TimelineRow({
 
 function EventDetails({ event, onSeekToMs }: { event: RallyShotTimelineEvent; onSeekToMs?: (timestampMs: number) => void }) {
   return (
-    <div className="rounded-2xl border border-[#CFE0C7] bg-[var(--ui-surface-soft)] p-4" data-testid="rally-shot-details">
+    <div className="rounded-2xl border border-[var(--ui-border-mint)] bg-[var(--ui-surface-soft)] p-4" data-testid="rally-shot-details">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--ui-brand-deep)]">事件详情</p>
@@ -174,18 +174,18 @@ export function RallyShotTimeline({ artifact, loadState, status, detail, onSeekT
           <h3 className="mt-2 text-xl font-black text-[var(--ui-ink)]">回合—击球阶段时序图</h3>
           <p className="mt-1 text-sm leading-6 text-slate-500">沿视频时间轴查看每个回合的击球阶段、球员归属和可回放证据。</p>
         </div>
-        <span className="rounded-full bg-[#E9F5E4] px-2.5 py-1 text-xs font-black text-[var(--ui-brand-deep)]">SHOT / RALLY</span>
+        <span className="rounded-full bg-[var(--ui-surface-lime-soft)] px-2.5 py-1 text-xs font-black text-[var(--ui-brand-deep)]">SHOT / RALLY</span>
       </div>
 
       {loadState === "loading" ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-[#CFE0C7] bg-[#F8FCF6] p-5 text-sm text-slate-500" role="status">正在读取回合事件…</div>
+        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border-mint)] bg-[var(--ui-surface-green-soft)] p-5 text-sm text-slate-500" role="status">正在读取回合事件…</div>
       ) : isUnavailable ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[#F8FCF6] p-5">
+        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-5">
           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-600">{loadState === "failed" || status === "failed" ? "读取失败" : "不可用"}</span>
           <p className="mt-3 text-sm leading-6 text-slate-500">{detail || artifact?.detail || "当前任务没有可用的回合—击球事件数据。"}</p>
         </div>
       ) : model?.mode === "empty" ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[#F8FCF6] p-5 text-sm text-slate-500">暂无可展示击球事件。</div>
+        <div className="mt-5 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-green-soft)] p-5 text-sm text-slate-500">暂无可展示击球事件。</div>
       ) : model ? (
         <>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -213,13 +213,13 @@ export function RallyShotTimeline({ artifact, loadState, status, detail, onSeekT
           </div>
 
           {model.mode === "chronological" && (
-            <p className="mt-4 rounded-xl bg-[#FFF7E8] px-3 py-2 text-xs leading-5 text-[#8A5A00]">
+            <p className="mt-4 rounded-xl bg-[var(--ui-warning-soft-2)] px-3 py-2 text-xs leading-5 text-[var(--ui-warning-deep)]">
               未提供可靠回合边界，当前按击球事件时间排序；未推断回合编号或阶段顺序。
             </p>
           )}
 
           {model.summary.shotCount > 0 && model.summary.shotCount < 3 && (
-            <p className="mt-3 rounded-xl bg-[#F8F4FF] px-3 py-2 text-xs leading-5 text-[#6B4AA1]">
+            <p className="mt-3 rounded-xl bg-[var(--ui-purple-soft)] px-3 py-2 text-xs leading-5 text-[var(--ui-purple)]">
               当前击球事件样本较少，时序图仅作为证据索引，不代表完整回合统计。
             </p>
           )}

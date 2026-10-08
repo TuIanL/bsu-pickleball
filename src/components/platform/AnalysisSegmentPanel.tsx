@@ -207,7 +207,7 @@ export function AnalysisSegmentPanel({
         ) : null}
 
         {captureTakeId && takeLoadState === "failed" ? (
-          <p className="mt-3 text-xs text-amber-700" role="status">素材详情暂不可用；片段与切分摘要仍会单独显示。</p>
+          <p className="mt-3 text-xs text-[var(--ui-warning-deep)]" role="status">素材详情暂不可用；片段与切分摘要仍会单独显示。</p>
         ) : null}
         {takeLoadState === "loaded" && take?.duration_ms != null ? (
           <p className="mt-2 text-[11px] text-slate-500">素材时长 {formatMs(take.duration_ms)}</p>
@@ -217,7 +217,7 @@ export function AnalysisSegmentPanel({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-xs font-black text-[var(--ui-ink)]">自动回合切分（只读）</h3>
             {statusLabel ? (
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${status === "succeeded" || status === "valid_no_rallies" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${status === "succeeded" || status === "valid_no_rallies" ? "bg-[var(--ui-success-soft)] text-[var(--ui-success-text)]" : "bg-[var(--ui-warning-soft-2)] text-[var(--ui-warning-deep)]"}`}>
                 {statusLabel}
               </span>
             ) : null}
@@ -229,7 +229,7 @@ export function AnalysisSegmentPanel({
               <span>模型 {summary.model_version ?? summary.model_package_id ?? "未知版本"}</span>
               <span>生成于 {formatGeneratedAt(summary.generated_at)}</span>
               <span>{summary.segment_count} 个模型回合</span>
-              {summary.detail && !["succeeded", "valid_no_rallies"].includes(summary.status) ? <span className="text-amber-700">{summary.detail}</span> : null}
+              {summary.detail && !["succeeded", "valid_no_rallies"].includes(summary.status) ? <span className="text-[var(--ui-warning-deep)]">{summary.detail}</span> : null}
             </div>
           ) : (
             <p className="mt-2 text-xs text-slate-500">尚未生成正式模型结果。</p>
@@ -239,7 +239,7 @@ export function AnalysisSegmentPanel({
         <section aria-label="模型回合列表" className="mt-3">
           <h3 className="mb-2 text-xs font-black text-[var(--ui-ink)]">模型回合</h3>
           {segmentsLoadState === "loading" ? <p className="text-xs text-slate-500">正在读取片段列表…</p> : null}
-          {segmentsLoadState === "failed" ? <p className="text-xs text-amber-700" role="status">片段列表暂不可用。</p> : null}
+          {segmentsLoadState === "failed" ? <p className="text-xs text-[var(--ui-warning-deep)]" role="status">片段列表暂不可用。</p> : null}
           {segmentsLoadState === "loaded" && modelSegments.length === 0 ? <p className="text-xs text-slate-500">当前筛选下没有模型片段。</p> : null}
           <div className="grid max-h-[min(34vh,24rem)] gap-1 overflow-y-auto pr-1">
             {modelSegments.map((segment) => {

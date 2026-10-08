@@ -5,6 +5,8 @@ import {
   createMultiviewAnalysisJob,
   deleteRecordingAnalysis,
   getAnalysisReport,
+  getAnalysisResult,
+  getCaptureTake,
   getStructuredVizData,
   getMultiviewBallStereoEvidence,
   getShotRallyEvents,
@@ -58,6 +60,31 @@ describe("analysis job compatibility", () => {
     expect(job.cameraSlot).toBe("cam_2");
     expect(job.metadata.recording_session_id).toBe("rec-legacy");
     expect(job.metadata.camera_slot).toBe("cam_2");
+  });
+
+  it("reports malformed core analysis reads with endpoint context", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([{ id: "job-bad", status: "processing", progress: "34" }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await expect(listAnalysisJobs()).rejects.toThrow(/Invalid analysis job list payload/);
+  });
+
+  it("validates the essential fields in analysis result and CaptureTake payloads", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: "job-bad", status: "completed", metrics: {}, tracks: [], artifacts: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "take-bad", revision: "new" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+
+    await expect(getAnalysisResult("job-bad")).rejects.toThrow(/Invalid analysis result payload/);
+    await expect(getCaptureTake("take-bad")).rejects.toThrow(/Invalid capture take payload/);
   });
 
   it("reads Parent-owned multiview stereo evidence through the scoped artifact URL", async () => {

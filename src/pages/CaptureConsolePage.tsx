@@ -445,7 +445,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
         {/* 预检 */}
         {isDualMode && (
           <button
-            className="shrink-0 rounded-lg border border-[#3B82F6] px-2.5 py-1.5 text-xs font-bold text-[#3B82F6] transition hover:bg-[var(--ui-info-soft)] disabled:opacity-50"
+            className="shrink-0 rounded-lg border border-[var(--capture-timeline-game)] px-2.5 py-1.5 text-xs font-bold text-[var(--capture-timeline-game)] transition hover:bg-[var(--ui-info-soft)] disabled:opacity-50"
             onClick={preflight.runTest}
             disabled={!cameraSetup.isReady || preflight.preflightState.status === "running" || runtime.isRecording}
             type="button"
@@ -458,7 +458,7 @@ export default function CaptureConsolePage({ sessionId, onNavigate }: CaptureCon
           <p className="shrink-0 text-xs text-[var(--ui-brand)]">测试通过</p>
         )}
         {preflight.preflightState.status === "failed" && (
-          <p className="basis-full text-xs text-[#FF4D4F]">测试失败: {preflight.preflightState.error}</p>
+          <p className="basis-full text-xs text-[var(--ui-danger-strong)]">测试失败: {preflight.preflightState.error}</p>
         )}
       </div>
     );

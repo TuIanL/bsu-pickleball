@@ -39,6 +39,7 @@ const watchedJobIds = new Set<string>();
 let intervalMs = DEFAULT_INTERVAL_MS;
 let schedulerTimer: number | undefined;
 let documentVisible = typeof document === "undefined" ? true : !document.hidden;
+let tickInFlight = false;
 
 function emit() {
   for (const listener of listeners) listener();
@@ -66,39 +67,42 @@ function toSnapshot(job: AnalysisJobSummary): AnalysisRuntimeSnapshot {
 }
 
 async function tick() {
-  if (!documentVisible || watchedJobIds.size === 0) {
-    scheduleNext();
-    return;
-  }
+  if (!documentVisible || watchedJobIds.size === 0 || tickInFlight) return;
+  tickInFlight = true;
   const ids = [...watchedJobIds];
-  const chunks: string[][] = [];
-  for (let i = 0; i < ids.length; i += CONCURRENCY_LIMIT) {
-    chunks.push(ids.slice(i, i + CONCURRENCY_LIMIT));
-  }
-  for (const chunk of chunks) {
-    await Promise.all(
-      chunk.map((id) =>
-        getAnalysisJob(id)
-          .then((job) => {
-            if (job) {
-              snapshots.set(job.id, toSnapshot(job));
-              if (!isActiveStatus(job.status)) {
-                watchedJobIds.delete(job.id);
+  try {
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += CONCURRENCY_LIMIT) {
+      chunks.push(ids.slice(i, i + CONCURRENCY_LIMIT));
+    }
+    for (const chunk of chunks) {
+      await Promise.all(
+        chunk.map((id) =>
+          getAnalysisJob(id)
+            .then((job) => {
+              if (job) {
+                snapshots.set(job.id, toSnapshot(job));
+                if (!isActiveStatus(job.status)) {
+                  watchedJobIds.delete(job.id);
+                }
               }
-            }
-          })
-          .catch(() => {
-            // 单 job 失败不拖垮整个调度
-          }),
-      ),
-    );
+            })
+            .catch(() => {
+              // 单 job 失败不拖垮整个调度
+            }),
+        ),
+      );
+    }
+    emit();
+  } finally {
+    tickInFlight = false;
+    // 请求若在页面隐藏期间结束，不重新安排计时器；visible 事件会发起新一轮对账。
+    if (documentVisible) scheduleNext();
   }
-  emit();
-  scheduleNext();
 }
 
 function scheduleNext() {
-  if (schedulerTimer !== undefined || watchedJobIds.size === 0) return;
+  if (!documentVisible || schedulerTimer !== undefined || watchedJobIds.size === 0) return;
   schedulerTimer = window.setTimeout(() => {
     schedulerTimer = undefined;
     void tick();
@@ -161,6 +165,9 @@ if (typeof document !== "undefined") {
     if (documentVisible) {
       // 恢复可见立即 reconcile 一次
       void tick();
+    } else if (schedulerTimer !== undefined) {
+      window.clearTimeout(schedulerTimer);
+      schedulerTimer = undefined;
     }
   });
 }

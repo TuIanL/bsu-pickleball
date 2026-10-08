@@ -31,7 +31,12 @@ export function RecordingTaskCard({
     return map[status] ?? status;
   };
   const statusColor = (status: string) => {
-    const map: Record<string, string> = { recording: "text-red-500 bg-red-50", completed: "text-green-600 bg-green-50", failed: "text-orange-500 bg-orange-50", canceled: "text-gray-400 bg-gray-50" };
+    const map: Record<string, string> = {
+      recording: "text-[var(--ui-danger)] bg-[var(--ui-danger-soft)]",
+      completed: "text-[var(--ui-success-text)] bg-[var(--ui-success-soft)]",
+      failed: "text-[var(--ui-warning-deep)] bg-[var(--ui-warning-soft-2)]",
+      canceled: "text-[var(--ui-text-muted)] bg-[var(--ui-surface-muted)]",
+    };
     return map[status] ?? "text-gray-500 bg-gray-50";
   };
 

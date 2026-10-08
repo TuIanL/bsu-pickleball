@@ -15,6 +15,7 @@ import {
   listRecordings, listSyncRecordings, getFieldSession,
 } from "../services/analysisClient";
 import type { RecordingStartRequest, SyncStartRequest, CaptureTakeSummary, FieldSession } from "../types/report";
+import { useDocumentVisible } from "./useDocumentVisible";
 
 // ── Reducer ──────────────────────────────────────────────────────
 
@@ -36,6 +37,20 @@ export type RuntimeAction =
   | { type: "ACTIVE_SESSION_FOUND"; session: UnifiedCaptureSession }
   | { type: "NO_ACTIVE_SESSION" }
   | { type: "HYDRATE_FAILED"; error: string };
+
+export type CaptureRecoveryClock = { startedAt: number; attemptCount: number };
+
+export function beginCaptureRecoveryCycle(clock: CaptureRecoveryClock, now: number): boolean {
+  if (clock.startedAt !== 0) return false;
+  clock.startedAt = now;
+  clock.attemptCount = 0;
+  return true;
+}
+
+export function resetCaptureRecoveryCycle(clock: CaptureRecoveryClock): void {
+  clock.startedAt = 0;
+  clock.attemptCount = 0;
+}
 
 function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction): CaptureRuntimeState {
   switch (action.type) {
@@ -75,10 +90,13 @@ function captureRuntimeReducer(state: CaptureRuntimeState, action: RuntimeAction
       return { phase: rPhase, session: action.session, result: action.result! };
     }
     case "CANCEL_REQUESTED":
+      // 必须表达「取消请求在飞」的可观察状态。此前此分支条件不成立时 return state、
+      // 成立时也 return state，是一个无状态变化的动作：取消请求飞行期间 UI 完全没有
+      // 反馈，用户可重复点击并并发发出多个 cancelRecording。
       if (state.phase !== "recording" && state.phase !== "stopping" && state.phase !== "recovering") return state;
-      return state;
+      return { ...state, phase: "canceling" };
     case "CANCELED":
-      if (state.phase !== "stopping" && state.phase !== "recording" && state.phase !== "recovering") return state;
+      if (state.phase !== "stopping" && state.phase !== "recording" && state.phase !== "recovering" && state.phase !== "canceling") return state;
       return { phase: "canceled", session: action.session };
     case "FAILED":
       return { phase: "failed", session: action.session, result: null, error: action.error };
@@ -118,6 +136,7 @@ type UseCaptureRuntimeOptions = {
  *   - start / stop / cancel / recover / hydrate / reset：生命周期操作方法。
  */
 export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: UseCaptureRuntimeOptions) {
+  const isDocumentVisible = useDocumentVisible();
   const [state, dispatch] = useReducer(captureRuntimeReducer, { phase: "hydrating" });
   const [elapsedMs, setElapsedMs] = useState(0);             // 已录制毫秒数
   const clockRef = useRef<ReturnType<typeof setInterval> | null>(null);  // 计时器引用
@@ -142,9 +161,14 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
   }, []);
 
   const recordingStartedAt = state.phase === "recording" ? state.session.startedAt : null;
+  // 终态时长：仅在拿到轨道时长时采用。tracks 为空（双摄合并失败但take 已建、
+  // 或后端归一化遗漏）时**保持既有 elapsedMs 不动**——此前 `?? 0` 会把正在
+  // 走秒的时长回写成 00:00，让操作员误以为录制没成功而重录，而数据在服务端
+  // 其实存在。以 undefined 表示"未知"而非用 0 冒充已知值。
   const stoppedDurationMs = state.phase === "completed" || state.phase === "partial"
-    ? state.result.captureTakeId ? (state.result.tracks[0]?.durationMs ?? 0) : 0
+    ? (state.result.tracks[0]?.durationMs ?? (state.result.captureTakeId ? undefined : 0))
     : null;
+  const pollingSession = state.phase === "recording" ? state.session : null;
 
   // elapsedMs lifecycle
   useEffect(() => {
@@ -152,7 +176,9 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
       startClock(recordingStartedAt);
     } else {
       stopClock();
-      if (stoppedDurationMs !== null) {
+      // 只在拿到确切时长时覆盖；undefined（终态但轨道时长不可得）表示"未知"，
+      // 此时保留既有 elapsedMs，不用 0 冒充。
+      if (typeof stoppedDurationMs === "number") {
         // The interval is external state; publish the final duration after it stops.
         // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronizes terminal capture duration.
         setElapsedMs(stoppedDurationMs);
@@ -161,17 +187,21 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
     return stopClock;
   }, [recordingStartedAt, stoppedDurationMs, startClock, stopClock]);
 
-  const activeSession = state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering"
+  const activeSession = state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "canceling"
     || state.phase === "completed" || state.phase === "partial" || state.phase === "canceled"
     ? state.session
     : null;
 
   // session-specific polling
   useEffect(() => {
-    if (state.phase !== "recording") return;
-    const sid = state.session.sourceSessionId;
-    const mode = state.session.mode;
-    const timer = setInterval(async () => {
+    if (!pollingSession || !isDocumentVisible) return;
+    const session = pollingSession;
+    const sid = session.sourceSessionId;
+    const mode = session.mode;
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
       try {
         if (mode === "single") {
           const s = await getRecording(sid);
@@ -182,13 +212,16 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
         } else {
           const s = await getSyncRecording(sid);
           if (s && (s.status === "failed" || s.status === "completed")) {
-            dispatch({ type: "FAILED", session: state.session, error: "双摄录制已在服务端结束" });
+            dispatch({ type: "FAILED", session, error: "双摄录制已在服务端结束" });
           }
         }
       } catch { /* polling failure is non-critical */ }
-    }, 5000);
+      finally { inFlight = false; }
+    };
+    void poll();
+    const timer = setInterval(() => { void poll(); }, 5000);
     return () => clearInterval(timer);
-  }, [state.phase, activeSession?.sourceSessionId, activeSession?.mode]);
+  }, [pollingSession?.sourceSessionId, pollingSession?.mode, isDocumentVisible]);
 
   // ── Hydration: 页面重进时发现活跃录制 ──
   const hydrate = useCallback(async () => {
@@ -408,15 +441,19 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
   useEffect(() => {
     if (state.phase !== "recovering") {
       recoveryRef.current.timer = null;
+      //离开恢复态即重置计时起点与尝试计数，使恢复可重入。
+      // 此前 `startedAt` 只在下方 `=== 0` 时赋值、全模块无任何重置，因此同一挂载
+      // 周期内第二次进入 recovering 时 elapsed 立刻 > 30s → 判定超时并 return，
+      // 既不排程下一次查询也不请求后端，UI 显示"恢复超时"而后端录制可能几秒后
+      // 就绪，**数据被白白丢弃**。场次录制一天内重复 stop 很容易触发。
+      resetCaptureRecoveryCycle(recoveryRef.current);
       // Reset the timeout indicator when recovery leaves its polling state.
       // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronizes derived recovery status.
       setRecoveryTimedOut(false);
       return;
     }
 
-    if (recoveryRef.current.startedAt === 0) {
-      recoveryRef.current.startedAt = Date.now();
-      recoveryRef.current.attemptCount = 0;
+    if (beginCaptureRecoveryCycle(recoveryRef.current, Date.now())) {
       setRecoveryAttemptCount(0);
       setRecoveryTimedOut(false);
     }
@@ -481,7 +518,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
   }, []);
 
   const captureTakeId = (() => {
-    if (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering") {
+    if (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "canceling") {
       return state.session.captureTakeId;
     }
     if (state.phase === "completed" || state.phase === "partial") {
@@ -496,7 +533,7 @@ export function useCaptureRuntime({ fieldSessionId, onFieldSessionStarted }: Use
 
   return {
     phase: state.phase,                                // 当前阶段
-    session: (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "completed" || state.phase === "partial")
+    session: (state.phase === "recording" || state.phase === "stopping" || state.phase === "recovering" || state.phase === "canceling" || state.phase === "completed" || state.phase === "partial")
       ? state.session : (state.phase === "canceled" ? state.session : null),
     result: (state.phase === "completed" || state.phase === "partial" || state.phase === "failed") ? state.result : null,
     error: state.phase === "failed" ? state.error : operationError,

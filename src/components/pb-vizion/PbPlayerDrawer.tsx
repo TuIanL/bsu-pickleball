@@ -107,7 +107,7 @@ export default function PbPlayerDrawer() {
                   className={
                     "w-full flex items-center gap-3 px-2 py-2 rounded-lg text-left transition-all " +
                     (active
-                      ? "bg-[#4b5563] text-white shadow-sm"
+                      ? "bg-[var(--ui-display-gray)] text-white shadow-sm"
                       : "hover:bg-black/5 text-[var(--pb-text-primary,#111827)]")
                   }
                 >

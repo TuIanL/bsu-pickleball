@@ -105,6 +105,8 @@ function withChartTheme(option: EChartsCoreOption, mode: "light" | "dark"): ECha
  */
 export function EChart({ option, height = 260, ariaLabel, testId, fallbackText = "图表渲染不可用", onEvents }: EChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const boundEventsRef = useRef<Record<string, (params: unknown) => void>>({});
   const [failed, setFailed] = useState(false);
   const { theme } = useThemeOptional();
 
@@ -122,10 +124,8 @@ export function EChart({ option, height = 260, ariaLabel, testId, fallbackText =
         throw new Error("canvas unavailable");
       }
       chart = echarts.init(element);
+      chartRef.current = chart;
       chart.setOption(themedOption);
-      for (const [eventName, handler] of Object.entries(onEvents ?? {})) {
-        chart.on(eventName, handler);
-      }
       // eslint-disable-next-line react-hooks/set-state-in-effect -- 初始化成功后清除失败标记
       setFailed(false);
       if (typeof ResizeObserver !== "undefined") {
@@ -143,16 +143,30 @@ export function EChart({ option, height = 260, ariaLabel, testId, fallbackText =
       }
       if (chart) {
         try {
-          for (const [eventName, handler] of Object.entries(onEvents ?? {})) {
+          for (const [eventName, handler] of Object.entries(boundEventsRef.current)) {
             chart.off(eventName, handler);
           }
+          boundEventsRef.current = {};
           chart.dispose();
         } catch {
           /* dispose 在无 canvas 环境下可能抛错，忽略 */
         }
       }
+      chartRef.current = null;
     };
-  }, [themedOption, onEvents]);
+  }, [themedOption]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const [eventName, handler] of Object.entries(boundEventsRef.current)) {
+      chart.off(eventName, handler);
+    }
+    boundEventsRef.current = onEvents ?? {};
+    for (const [eventName, handler] of Object.entries(boundEventsRef.current)) {
+      chart.on(eventName, handler);
+    }
+  }, [onEvents, themedOption]);
 
   return (
     <div aria-label={ariaLabel} className="w-full" data-testid={testId} role="img">

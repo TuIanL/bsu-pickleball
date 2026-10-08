@@ -804,7 +804,7 @@ export function AnalysisRosterConfirmation({
                   />
                   <button
                     type="button"
-                    className="mt-2 rounded-lg border border-[#B7E4C7] bg-[var(--ui-surface-soft)] px-3 py-2 text-xs font-bold text-[var(--ui-brand-deep)] disabled:opacity-50"
+                    className="mt-2 rounded-lg border border-[var(--ui-success-border)] bg-[var(--ui-surface-soft)] px-3 py-2 text-xs font-bold text-[var(--ui-brand-deep)] disabled:opacity-50"
                     onClick={captureCurrentFrame}
                     disabled={!activeVideoId}
                     data-testid="roster-capture-frame"

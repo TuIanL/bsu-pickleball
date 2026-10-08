@@ -508,7 +508,7 @@ export function ScoringCalibrationWorkbenchPage({
             </button>
           ) : currentPackage ? (
             <>
-              <button className="inline-flex items-center gap-1 rounded-lg border border-[#64748B] px-3 py-2 text-xs font-bold text-[var(--ui-text-body)]" onClick={() => void markReviewed()} disabled={saving}>
+              <button className="inline-flex items-center gap-1 rounded-lg border border-[var(--ui-text-secondary)] px-3 py-2 text-xs font-bold text-[var(--ui-text-body)]" onClick={() => void markReviewed()} disabled={saving}>
                 <Check size={14} /> 标记 reviewed
               </button>
               <button className="green-button inline-flex items-center gap-1 px-3 py-2 text-xs" onClick={() => void lockPackage()} disabled={saving}>
@@ -536,7 +536,7 @@ export function ScoringCalibrationWorkbenchPage({
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
             <div className="space-y-4">
               {activeVideoUrl ? (
-                <div className="overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[#091016]">
+                <div className="overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-display-panel)]">
                   <video
                     ref={playerRef}
                     className="aspect-video w-full bg-black object-contain"
@@ -553,7 +553,7 @@ export function ScoringCalibrationWorkbenchPage({
                       <label className="flex items-center gap-2 text-xs font-semibold text-slate-200">
                         机位
                         <select
-                          className="rounded-lg border border-white/20 bg-[#17211c] px-2 py-1 text-xs"
+                          className="rounded-lg border border-white/20 bg-[var(--ui-display-panel-raised)] px-2 py-1 text-xs"
                           value={activeVideoIndex}
                           onChange={(event) => {
                             const index = Number(event.target.value);
@@ -568,7 +568,7 @@ export function ScoringCalibrationWorkbenchPage({
                   ) : null}
                 </div>
               ) : (
-                <div className="grid aspect-video place-items-center rounded-2xl border border-[#FECACA] bg-[var(--ui-danger-soft)] text-sm text-[var(--ui-danger-deep)]">暂无可用视频回放</div>
+                <div className="grid aspect-video place-items-center rounded-2xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] text-sm text-[var(--ui-danger-deep)]">暂无可用视频回放</div>
               )}
               <ScoringCalibrationTimeline
                 segments={queueRallies}
@@ -601,7 +601,7 @@ export function ScoringCalibrationWorkbenchPage({
                 onSkip={skipCurrentRally}
                 onNext={() => { const destination = nextRally(); if (destination) focusRally(destination); }}
               />
-              <div className="rounded-2xl border border-[var(--ui-border-mint)] bg-[#F6FBF3] p-4">
+              <div className="rounded-2xl border border-[var(--ui-border-mint)] bg-[var(--ui-surface-green-soft)] p-4">
                 <div className="flex items-center gap-2">
                   <h2 className="mr-auto text-sm font-bold text-[var(--ui-ink)]">高级信息</h2>
                   <button type="button" className="rounded-lg border border-[var(--ui-border-mint)] bg-[var(--ui-surface)] px-3 py-1.5 text-[11px] font-bold text-[var(--ui-info)]" onClick={() => setAdvancedOpen((current) => !current)}>
@@ -710,7 +710,7 @@ function QuickSamplingPanel({
         <div className="mr-auto">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-bold text-[var(--ui-ink)]">快速校准</h2>
-            <span className="rounded-full bg-[#DCFCE7] px-2 py-0.5 text-[10px] font-bold text-[var(--ui-success-text-deep)]">默认抽样</span>
+            <span className="rounded-full bg-[var(--ui-surface-success-badge)] px-2 py-0.5 text-[10px] font-bold text-[var(--ui-success-text-deep)]">默认抽样</span>
           </div>
           <p className="mt-1 text-xs text-slate-500">每个回合只先确认发球和接发的最小事实，不需要逐球填完整场。</p>
         </div>
@@ -733,7 +733,7 @@ function QuickSamplingPanel({
             {rallies.map((rally) => {
               const progress = progressByRally.get(rally.id);
               return (
-                <button key={rally.id} type="button" className={`min-w-[104px] rounded-lg border px-2.5 py-2 text-left text-[11px] ${activeRally?.id === rally.id ? "border-[var(--ui-info)] bg-[var(--ui-info-soft)]" : "border-[#E5E7EB] bg-[var(--ui-surface)] hover:border-[var(--ui-border-mint)]"}`} onClick={() => onFocusRally(rally)}>
+                <button key={rally.id} type="button" className={`min-w-[104px] rounded-lg border px-2.5 py-2 text-left text-[11px] ${activeRally?.id === rally.id ? "border-[var(--ui-info)] bg-[var(--ui-info-soft)]" : "border-[var(--ui-border-neutral)] bg-[var(--ui-surface)] hover:border-[var(--ui-border-mint)]"}`} onClick={() => onFocusRally(rally)}>
                   <div className="flex items-center gap-1 font-bold text-[var(--ui-ink)]"><span>{rally.label || `回合 ${rally.ordinal}`}</span><span className="ml-auto text-slate-400">{progress?.skipped ? "跳过" : progress?.complete ? "完成" : "待处理"}</span></div>
                   <div className="mt-1 tabular-nums text-slate-400">{formatMs(rally.effective_start_ms ?? rally.start_ms)}–{formatMs(rally.effective_end_ms ?? rally.end_ms ?? rally.start_ms)}</div>
                   <div className="mt-1 text-[10px] text-slate-500">发球 {progress?.serve ? "✓" : "—"} · 接发 {progress?.return ? "✓" : "—"}</div>
@@ -741,7 +741,7 @@ function QuickSamplingPanel({
               );
             })}
           </div>
-          <div className="mt-3 rounded-xl border border-[#E5E7EB] bg-[#FAFCF9] p-3">
+          <div className="mt-3 rounded-xl border border-[var(--ui-border-neutral)] bg-[var(--ui-surface-paper)] p-3">
             <div className="flex items-center gap-2 text-xs"><span className="font-bold text-[var(--ui-ink)]">当前回合：{activeRally?.label || `回合 ${(activeRally?.ordinal ?? 0)}`}</span><span className="text-slate-400">先看这一小段，再点结果</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <QuickActionButton label="发球入界" onClick={() => onQuickAction("serveInPlay")} disabled={disabled} tone="green" />
@@ -763,10 +763,10 @@ function QuickSamplingPanel({
 
 function QuickActionButton({ label, onClick, disabled, tone }: { label: string; onClick: () => void; disabled: boolean; tone: "green" | "orange" | "blue" | "gray" }) {
   const styles = {
-    green: "border-[#86EFAC] bg-[var(--ui-surface-green-50)] text-[var(--ui-success-text-deep)] hover:bg-[#DCFCE7]",
-    orange: "border-[#FED7AA] bg-[var(--ui-warning-soft)] text-[#9A3412] hover:bg-[#FFEDD5]",
-    blue: "border-[#BFDBFE] bg-[var(--ui-info-soft)] text-[#1D4ED8] hover:bg-[#DBEAFE]",
-    gray: "border-[#CBD5E1] bg-slate-50 text-slate-600 hover:bg-slate-100",
+    green: "border-[var(--ui-success-border)] bg-[var(--ui-surface-green-50)] text-[var(--ui-success-text-deep)] hover:bg-[var(--ui-surface-success-badge)]",
+    orange: "border-[var(--ui-warning-border-strong)] bg-[var(--ui-warning-soft)] text-[var(--ui-text-warning-soft)] hover:bg-[var(--ui-surface-warning-soft)]",
+    blue: "border-[var(--ui-border-info-soft)] bg-[var(--ui-info-soft)] text-[var(--ui-info-deep)] hover:bg-[var(--ui-surface-info-soft)]",
+    gray: "border-[var(--ui-track)] bg-slate-50 text-slate-600 hover:bg-slate-100",
   }[tone];
   return <button type="button" className={`rounded-lg border px-2 py-2.5 text-xs font-bold ${styles}`} onClick={onClick} disabled={disabled}>{label}</button>;
 }
@@ -827,20 +827,20 @@ function CandidateQueue({ candidates, candidateStatus, candidateMessage, candida
   return (
     <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="text-sm font-bold text-[var(--ui-ink)]">当前回合的算法候选</h2><span className="text-[11px] text-slate-400">仅作为定位建议，不能自动成为 Gold Set</span></div>
-      {candidateCoverageWarning && <p className="mb-2 rounded-lg bg-[var(--ui-warning-soft)] px-3 py-2 text-[11px] text-[#9A3412]">覆盖提示：{candidateCoverageWarning}</p>}
-      {candidates.length === 0 ? <p className="py-4 text-sm text-slate-400">{candidateMessage ?? (candidateStatus === "unavailable" ? "候选存储不可用" : "当前回合没有候选，可直接使用上方快捷人工校准。")} </p> : <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{candidates.map((candidate) => <div key={candidate.candidate_id} className="flex items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-xs"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onSelect(candidate)}><span className="font-bold text-[#8B5CF6]">{candidate.candidate_type === "serve" ? "发球候选" : "击球候选"}</span><span className="tabular-nums text-slate-500">{formatMs(candidate.timestamp_ms)}</span><span className="truncate text-slate-400">{candidate.artifact_name ?? candidate.candidate_id}</span>{candidate.confidence != null && <span className="text-slate-400">{Math.round(candidate.confidence * 100)}%</span>}</button><button type="button" title="拒绝候选" className="rounded p-1 text-slate-400 hover:bg-[var(--ui-danger-soft)] hover:text-[var(--ui-danger-deep)]" onClick={() => onDecision(candidate, "rejected")} disabled={disabled}><X size={13} /></button></div>)}</div>}
+      {candidateCoverageWarning && <p className="mb-2 rounded-lg bg-[var(--ui-warning-soft)] px-3 py-2 text-[11px] text-[var(--ui-text-warning-soft)]">覆盖提示：{candidateCoverageWarning}</p>}
+      {candidates.length === 0 ? <p className="py-4 text-sm text-slate-400">{candidateMessage ?? (candidateStatus === "unavailable" ? "候选存储不可用" : "当前回合没有候选，可直接使用上方快捷人工校准。")} </p> : <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{candidates.map((candidate) => <div key={candidate.candidate_id} className="flex items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-xs"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onSelect(candidate)}><span className="font-bold text-[var(--ui-purple)]">{candidate.candidate_type === "serve" ? "发球候选" : "击球候选"}</span><span className="tabular-nums text-slate-500">{formatMs(candidate.timestamp_ms)}</span><span className="truncate text-slate-400">{candidate.artifact_name ?? candidate.candidate_id}</span>{candidate.confidence != null && <span className="text-slate-400">{Math.round(candidate.confidence * 100)}%</span>}</button><button type="button" title="拒绝候选" className="rounded p-1 text-slate-400 hover:bg-[var(--ui-danger-soft)] hover:text-[var(--ui-danger-deep)]" onClick={() => onDecision(candidate, "rejected")} disabled={disabled}><X size={13} /></button></div>)}</div>}
     </div>
   );
 }
 
 function QualityCard({ package: currentPackage }: { package: ScoringCalibrationPackage }) {
   const quality = currentPackage.quality;
-  return <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4"><div className="mb-3 flex items-center gap-2"><h2 className="text-sm font-bold text-[var(--ui-ink)]">质量摘要</h2><span className="ml-auto text-[11px] text-slate-400">revision {currentPackage.revision}</span></div><div className="grid grid-cols-2 gap-2 text-xs">{[["条目", quality.total_count], ["已确认", quality.confirmed_count], ["未知/不可观察", quality.unknown_or_unobservable_count], ["候选未匹配", quality.unmatched_candidate_count], ["冲突", quality.conflict_count], ["证据完整率", `${Math.round(quality.evidence_complete_rate * 100)}%`]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-slate-400">{label}</div><div className="mt-1 font-bold text-[var(--ui-ink)]">{value}</div></div>)}</div>{currentPackage.validation_issues.length > 0 && <div className="mt-3 space-y-1 text-[11px]">{currentPackage.validation_issues.slice(0, 4).map((issue, index) => <div key={`${issue.code}-${index}`} className={issue.severity === "error" ? "text-[var(--ui-danger-deep)]" : "text-[#A16207]"}>{issue.severity === "error" ? "阻塞" : "提示"}：{issue.message}</div>)}</div>}</div>;
+  return <div className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-4"><div className="mb-3 flex items-center gap-2"><h2 className="text-sm font-bold text-[var(--ui-ink)]">质量摘要</h2><span className="ml-auto text-[11px] text-slate-400">revision {currentPackage.revision}</span></div><div className="grid grid-cols-2 gap-2 text-xs">{[["条目", quality.total_count], ["已确认", quality.confirmed_count], ["未知/不可观察", quality.unknown_or_unobservable_count], ["候选未匹配", quality.unmatched_candidate_count], ["冲突", quality.conflict_count], ["证据完整率", `${Math.round(quality.evidence_complete_rate * 100)}%`]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-slate-400">{label}</div><div className="mt-1 font-bold text-[var(--ui-ink)]">{value}</div></div>)}</div>{currentPackage.validation_issues.length > 0 && <div className="mt-3 space-y-1 text-[11px]">{currentPackage.validation_issues.slice(0, 4).map((issue, index) => <div key={`${issue.code}-${index}`} className={issue.severity === "error" ? "text-[var(--ui-danger-deep)]" : "text-[var(--ui-warning-deeper)]"}>{issue.severity === "error" ? "阻塞" : "提示"}：{issue.message}</div>)}</div>}</div>;
 }
 
 function StatusBadge({ status, revision }: { status: string; revision: number }) {
   const label = status === "locked" ? "已锁定" : status === "reviewed" ? "已审核" : "草稿";
-  return <span className={`rounded-full px-3 py-1 text-[11px] font-bold ${status === "locked" ? "bg-[#DCFCE7] text-[var(--ui-success-text-deep)]" : status === "reviewed" ? "bg-[#E0E7FF] text-[#3730A3]" : "bg-[#FEF3C7] text-[#92400E]"}`}>{label} · r{revision}</span>;
+  return <span className={`rounded-full px-3 py-1 text-[11px] font-bold ${status === "locked" ? "bg-[var(--ui-surface-success-badge)] text-[var(--ui-success-text-deep)]" : status === "reviewed" ? "bg-[var(--ui-surface-review-badge)] text-[var(--ui-text-review-badge)]" : "bg-[var(--ui-surface-warning-badge)] text-[var(--ui-warning-deep)]"}`}>{label} · r{revision}</span>;
 }
 
 function NumberField({ label, value, disabled, onChange, stringValue = false }: { label: string; value: number | string; disabled: boolean; onChange: (value: number) => void; stringValue?: boolean }) {

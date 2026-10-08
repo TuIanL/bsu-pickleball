@@ -660,7 +660,7 @@ export function CourtCornerCalibrator({
       ) : null}
 
       {/* Video + overlay */}
-      <div className="relative mt-4 overflow-hidden rounded-2xl bg-[#091016]">
+      <div className="relative mt-4 overflow-hidden rounded-2xl bg-[var(--ui-display-panel)]">
         <video
           className="block aspect-video w-full object-contain"
           controls={false}

@@ -20,7 +20,7 @@ export function AnalysisFlowSelector({ value, onChange }: AnalysisFlowSelectorPr
             新流程会冻结本次任务的 P1–P4 名册、发球队、比分和回合上下文；旧流程用于兼容历史分析。
           </p>
         </div>
-        <span className="rounded-full bg-[#EAF8EA] px-2.5 py-1 text-xs font-bold text-[var(--ui-brand-deep)]">
+        <span className="rounded-full bg-[var(--ui-surface-mint)] px-2.5 py-1 text-xs font-bold text-[var(--ui-brand-deep)]">
           默认：新流程
         </span>
       </div>
@@ -29,8 +29,8 @@ export function AnalysisFlowSelector({ value, onChange }: AnalysisFlowSelectorPr
           aria-pressed={value === "new"}
           className={`rounded-2xl border px-3 py-3 text-left transition ${
             value === "new"
-              ? "border-[var(--ui-brand)] bg-[#F0FFF0] text-[var(--ui-ink)] shadow-sm"
-              : "border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-500 hover:border-[#8FD39D]"
+              ? "border-[var(--ui-brand)] bg-[var(--ui-brand-selection-bg)] text-[var(--ui-ink)] shadow-sm"
+              : "border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-500 hover:border-[var(--ui-brand-selection-border-hover)]"
           }`}
           data-testid="analysis-flow-new"
           onClick={() => onChange("new")}
@@ -43,8 +43,8 @@ export function AnalysisFlowSelector({ value, onChange }: AnalysisFlowSelectorPr
           aria-pressed={value === "legacy"}
           className={`rounded-2xl border px-3 py-3 text-left transition ${
             value === "legacy"
-              ? "border-[#F4B860] bg-[#FFF8EA] text-[var(--ui-ink)] shadow-sm"
-              : "border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-500 hover:border-[#D8B26E]"
+              ? "border-[var(--ui-warning-border-strong)] bg-[var(--ui-warning-soft-2)] text-[var(--ui-ink)] shadow-sm"
+              : "border-[var(--ui-border)] bg-[var(--ui-surface)] text-slate-500 hover:border-[var(--ui-warning-border-hover)]"
           }`}
           data-testid="analysis-flow-legacy"
           onClick={() => onChange("legacy")}

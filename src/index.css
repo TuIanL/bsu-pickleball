@@ -738,6 +738,8 @@ button {
   --ui-info-deep: #1e63b6;
   --ui-success-text: #176b3c;
   --ui-success-soft: #e5f4ea;
+  --ui-success-border: #86efac;
+  --ui-success-ink: #14532d;
   /* 通用按钮 / 输入框 / 焦点环用到的补充色（原值取自 index.css 组件层） */
   --ui-brand-cta: #19b84c;
   --ui-brand-cta-hover: #22c55e;
@@ -760,9 +762,60 @@ button {
   --ui-warning-deep: #b45309;
   --ui-warning-deeper: #9a6500;
   --ui-warning-soft-2: #fdf6e7;
+  --ui-warning-surface: #fffbeb;
+  --ui-warning-border-strong: #f4b860;
+  --ui-warning-border-hover: #d8b26e;
+  --ui-brand-selection-bg: #f0fff0;
+  --ui-brand-selection-border-hover: #8fd39d;
+  --ui-purple: #6b4aa1;
+  --ui-purple-soft: #f8f4ff;
   --ui-border-mint: #b8cdb5;
   --ui-border-neutral-2: #d0d5dd;
   --ui-text-slate: #9ca3af;
+  /* 页面状态面板：保持原有浅色对比，同时为暗色模式提供同语义深色面板。 */
+  --ui-surface-success-panel: #f1fbf3;
+  --ui-surface-success-badge: #dcfce7;
+  --ui-border-success-panel: #b7e7c2;
+  --ui-text-success-panel: #16733a;
+  --ui-surface-warning-panel: #fff9ed;
+  --ui-surface-warning-badge: #fef3c7;
+  --ui-surface-warning-soft: #ffedd5;
+  --ui-border-warning-panel: #f6d79a;
+  --ui-text-warning-panel: #8b5a17;
+  --ui-surface-danger-panel: #fff5f5;
+  --ui-border-danger-panel: #f2c2c2;
+  --ui-text-danger-panel: #a32d2d;
+  --ui-border-info-soft: #bfdbfe;
+  --ui-surface-info-soft: #dbeafe;
+  --ui-surface-purple-soft: #faf5ff;
+  --ui-surface-review-badge: #e0e7ff;
+  --ui-text-review-badge: #3730a3;
+  --ui-surface-court-workspace: #f5f8f6;
+  --ui-border-court-workspace: #d6ded9;
+  --ui-border-court-divider: #e4e9e6;
+  --ui-border-pale: #eef2ea;
+  --ui-text-success-muted: #416248;
+  --ui-text-warning-contrast: #7a4a00;
+  --ui-text-warning-soft: #9a3412;
+  /* 固定展示 / 可视化调色板。它们表达舞台或数据系列，不随应用主题变色。 */
+  --ui-display-ink: #071008;
+  --ui-display-panel: #091016;
+  --ui-display-panel-alt: #111318;
+  --ui-display-panel-deep: #0d1419;
+  --ui-display-panel-raised: #17211c;
+  --ui-display-panel-warm: #3a2814;
+  --ui-display-court: #173b2a;
+  --ui-display-border: #33473b;
+  --ui-display-text: #c9d8cf;
+  --ui-display-text-muted: #8fa99a;
+  --ui-display-text-soft: #b9c9bf;
+  --ui-display-blue: #bbd8ff;
+  --ui-display-amber: #ffd7a0;
+  --ui-display-green: #dcfce7;
+  --ui-display-red: #ffc2c3;
+  --ui-display-gold: #d9943c;
+  --ui-display-gray: #4b5563;
+  --ui-display-lime: #d9ff3f;
 }
 
 [data-theme="dark"] {
@@ -776,6 +829,8 @@ button {
   --ui-info-deep: #7ea2ff;
   --ui-success-text: #4ec98a;
   --ui-success-soft: #122a1e;
+  --ui-success-border: #286844;
+  --ui-success-ink: #7fc98d;
   --ui-brand-cta: #1f8a52;
   --ui-brand-cta-hover: #26a05f;
   --ui-text-deep: #e8efea;
@@ -796,7 +851,38 @@ button {
   --ui-warning-deep: #f0b357;
   --ui-warning-deeper: #f0b357;
   --ui-warning-soft-2: #2b2013;
+  --ui-warning-surface: #2b2013;
+  --ui-warning-border-strong: #70572d;
+  --ui-warning-border-hover: #66502b;
+  --ui-brand-selection-bg: #14291f;
+  --ui-brand-selection-border-hover: #2f704c;
+  --ui-purple: #c4b0f4;
+  --ui-purple-soft: #241d32;
   --ui-border-mint: #33453c;
   --ui-border-neutral-2: #3b4753;
   --ui-text-slate: #6f7f78;
+  --ui-surface-success-panel: #122a1e;
+  --ui-surface-success-badge: #122a1e;
+  --ui-border-success-panel: #286844;
+  --ui-text-success-panel: #4ec98a;
+  --ui-surface-warning-panel: #2b2013;
+  --ui-surface-warning-badge: #2b2013;
+  --ui-surface-warning-soft: #342719;
+  --ui-border-warning-panel: #70572d;
+  --ui-text-warning-panel: #f0b357;
+  --ui-surface-danger-panel: #331518;
+  --ui-border-danger-panel: #7a2b28;
+  --ui-text-danger-panel: #ff7f74;
+  --ui-border-info-soft: #2f6ee0;
+  --ui-surface-info-soft: #12202f;
+  --ui-surface-purple-soft: #241d32;
+  --ui-surface-review-badge: #241d32;
+  --ui-text-review-badge: #c4b0f4;
+  --ui-surface-court-workspace: #141b18;
+  --ui-border-court-workspace: #2a352f;
+  --ui-border-court-divider: #28332d;
+  --ui-border-pale: #232e28;
+  --ui-text-success-muted: #8fc7a3;
+  --ui-text-warning-contrast: #f0b357;
+  --ui-text-warning-soft: #ffb266;
 }

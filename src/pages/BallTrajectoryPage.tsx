@@ -62,7 +62,7 @@ function ownershipBadge(status: string): { label: string; className: string } | 
     case "confirmed":
       return { label: "归属确认", className: "bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" };
     case "ambiguous":
-      return { label: "归属不明", className: "bg-[#FEF6E7] text-[#B54708]" };
+      return { label: "归属不明", className: "bg-[var(--ui-warning-soft-2)] text-[var(--ui-warning-deep)]" };
     case "unassigned":
       return { label: "击球者不明", className: "bg-[var(--ui-surface-neutral)] text-[var(--ui-text-secondary-alt)]" };
     case "not_applicable":
@@ -302,17 +302,17 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_304px]">
         <div className="min-w-0">
           {webGlError ? (
-            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#FECACA] bg-[#FFF7F7] p-8 text-center">
+            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[var(--ui-danger-border)] bg-[var(--ui-surface-danger-panel)] p-8 text-center">
               <div>
-                <AlertCircle className="mx-auto text-[#D92D20]" size={26} aria-hidden="true" />
+                <AlertCircle className="mx-auto text-[var(--ui-danger-deep)]" size={26} aria-hidden="true" />
                 <h2 className="mt-4 text-lg font-bold text-[var(--ui-ink-alt)]">3D 渲染不可用</h2>
                 <p className="mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-secondary-alt)]">{webGlError}</p>
               </div>
             </div>
           ) : v3Artifact?.display_trajectory_status === "unavailable" ? (
-            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#FECACA] bg-[#FFF7F7] p-8 text-center">
+            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[var(--ui-danger-border)] bg-[var(--ui-surface-danger-panel)] p-8 text-center">
               <div>
-                <AlertCircle className="mx-auto text-[#D92D20]" size={24} aria-hidden="true" />
+                <AlertCircle className="mx-auto text-[var(--ui-danger-deep)]" size={24} aria-hidden="true" />
                 <h2 className="mt-4 text-lg font-bold text-[var(--ui-ink-alt)]">双摄球路暂不可用</h2>
                 <p className="mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-secondary-alt)]">{v3Artifact.detail}</p>
               </div>
@@ -327,7 +327,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
               metricValidity={v3Artifact?.coordinate_semantics?.validity ?? v3Artifact?.coordinate_semantics?.metric_validity ?? null}
             />
           ) : (
-            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[#DDE5E0] bg-[#F8FAF9] p-8 text-center">
+            <div className="grid min-h-[430px] place-items-center rounded-lg border border-[var(--ui-border)] bg-[var(--ui-surface-subtle)] p-8 text-center">
               <div>
                 <SlidersHorizontal className="mx-auto text-[var(--ui-text-secondary-alt)]" size={24} aria-hidden="true" />
                 <h2 className="mt-4 text-lg font-bold text-[var(--ui-ink-alt)]">筛选后没有球路</h2>
@@ -384,7 +384,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
             <label className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold text-[var(--ui-text-secondary-alt)]">
               场景数量
               <select
-                className="h-9 rounded-md border border-[var(--ui-border-neutral-2)] bg-[var(--ui-surface)] px-2 text-xs text-[var(--ui-neutral-strong)] outline-none focus:border-[#25B86A]"
+                className="h-9 rounded-md border border-[var(--ui-border-neutral-2)] bg-[var(--ui-surface)] px-2 text-xs text-[var(--ui-neutral-strong)] outline-none focus:border-[var(--ui-brand-cta)]"
                 onChange={(event) => setDisplayLimit(event.target.value === "all" ? "all" : Number(event.target.value) as 12 | 24 | 48)}
                 value={displayLimit}
               >
@@ -436,7 +436,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 const badge = ownershipBadge(shot.ownershipStatus);
                 return (
                   <button
-                    className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${shot.shotId === effectiveSelectedShotId ? "bg-[var(--ui-surface-mint)]" : "hover:bg-[#F7F9F8]"}`}
+                    className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${shot.shotId === effectiveSelectedShotId ? "bg-[var(--ui-surface-mint)]" : "hover:bg-[var(--ui-surface-green-soft)]"}`}
                     key={shot.shotId}
                     onClick={() => setSelectedShotId(shot.shotId)}
                     type="button"
@@ -457,7 +457,7 @@ export function BallTrajectoryPage({ jobId, onNavigate, embedded, onSelectView }
                 );
               }) : filteredTrajectories.map((trajectory) => (
                 <button
-                  className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${trajectory.id === effectiveSelectedShotId ? "bg-[var(--ui-surface-mint)]" : "hover:bg-[#F7F9F8]"}`}
+                  className={`flex min-h-12 w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${trajectory.id === effectiveSelectedShotId ? "bg-[var(--ui-surface-mint)]" : "hover:bg-[var(--ui-surface-green-soft)]"}`}
                   key={trajectory.id}
                   onClick={() => setSelectedShotId(trajectory.id)}
                   type="button"
@@ -523,7 +523,7 @@ function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <dt className="text-[var(--ui-text-muted-alt)]">{label}</dt>
-      <dd className="text-right font-semibold text-[#475467]">{value}</dd>
+      <dd className="text-right font-semibold text-[var(--ui-text-body)]">{value}</dd>
     </div>
   );
 }

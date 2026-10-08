@@ -45,7 +45,7 @@ class RouteChunkBoundary extends Component<{ children: ReactNode }, { error: Err
             <p className="mt-2">请重试；当前地址和查询参数会保留。</p>
             <button
               type="button"
-              className="mt-4 rounded-lg bg-[#14241B] px-4 py-2 text-xs font-bold text-white"
+              className="mt-4 rounded-lg bg-[var(--ui-ink)] px-4 py-2 text-xs font-bold text-white"
               onClick={() => window.location.reload()}
             >
               重试或刷新
@@ -86,7 +86,7 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
       case "analysis-tasks":
         return <AnalysisTasksPage onNavigate={onNavigate} recentJob={recentJob} taskSource={route.taskSource} taskSessionId={route.taskSessionId} />;
       case "analysis-job":
-        return <AnalysisJobPage jobId={route.jobId} onNavigate={onNavigate} />;
+        return <AnalysisJobPage jobId={route.jobId} returnParam={route.returnParam} onNavigate={onNavigate} />;
       case "analysis-details":
         return <AnalysisDetailsPage jobId={route.jobId} onNavigate={onNavigate} />;
       case "vision":
@@ -110,11 +110,10 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
       case "recordingWorkspace":
         return <RecordingWorkspacePage sessionId={route.sessionId} onNavigate={onNavigate} />;
       case "recording-analyze": {
-        const cam = new URLSearchParams(window.location.search).get("cam") as "cam_1" | "cam_2" | null;
-        return <RecordingAnalyzePage sessionId={route.sessionId} cam={cam} onNavigate={onNavigate} />;
+        return <RecordingAnalyzePage sessionId={route.sessionId} cam={route.cam ?? null} onNavigate={onNavigate} />;
       }
       case "multiview-setup":
-        return <MultiViewAnalysisSetupPage captureTakeId={route.captureTakeId} onNavigate={onNavigate} />;
+        return <MultiViewAnalysisSetupPage captureTakeId={route.captureTakeId} routeSessionId={route.routeSessionId} returnParam={route.returnParam} onNavigate={onNavigate} />;
       case "sync-calibration":
         return <SyncCalibrationWorkbenchPage captureTakeId={route.captureTakeId} onNavigate={onNavigate} returnPath={route.returnPath} />;
       case "showcase":
@@ -127,6 +126,8 @@ export function AppRouter({ route, onNavigate, recentJob }: AppRouterProps) {
             kind={route.kind}
             sourceId={route.sourceId}
             view={route.view as "overview" | "video" | "analysis" | "trajectory" | "landing" | "report" | "technical"}
+            analysisJobId={route.analysisJobId}
+            querySearch={route.querySearch}
             onNavigate={onNavigate}
           />
         );

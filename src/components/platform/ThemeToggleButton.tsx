@@ -13,7 +13,7 @@ interface ThemeToggleButtonProps {
 }
 
 const BASE_CLASSES =
-  "inline-flex items-center justify-center shrink-0 rounded-full border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-brand)]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ui-surface-page)] disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center shrink-0 rounded-full border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-brand)]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--capture-surface-page)] disabled:cursor-not-allowed disabled:opacity-50";
 
 const VARIANT_CLASSES: Record<ToggleVariant, string> = {
   header: "size-10",

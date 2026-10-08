@@ -60,8 +60,8 @@ export function TrainingPage({ onNavigate }: { onNavigate: NavigateFn }) {
         <article className="sport-card p-5 sm:p-6">
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">教学内容</p>
           <h2 className="mt-2 text-2xl font-black text-[var(--ui-ink)]">教学视频与动作对标占位</h2>
-          <div className="mt-5 aspect-video rounded-3xl border border-[var(--ui-border)] bg-[#F0F7EA] p-5">
-            <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-[#BFD5B8] bg-[var(--ui-surface)]/70">
+          <div className="mt-5 aspect-video rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-5">
+            <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-[var(--ui-border-mint)] bg-[var(--ui-surface)]/70">
               <div className="text-center">
                 <span className="mx-auto grid size-14 place-items-center rounded-full bg-[var(--ui-brand-solid)]/15 text-[var(--ui-brand-deep)]">
                   <Play size={26} fill="currentColor" aria-hidden="true" />
