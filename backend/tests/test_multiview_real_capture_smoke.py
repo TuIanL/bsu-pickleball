@@ -466,6 +466,7 @@ def test_real_capture_joint_roster_cap_and_canonical_identity(tmp_path):
     )
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-roster-real", take_dir)
     composer = MultiViewResultComposer(storage)
     joint_output = SimpleNamespace(

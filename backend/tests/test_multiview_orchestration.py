@@ -608,6 +608,7 @@ def test_composer_inherits_url_status_from_reference_child(tmp_path):
     storage = make_temp_storage(tmp_path)
     composer = MultiViewResultComposer(storage)
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-child", take_dir)
     storage.register_capture_job("job-parent", take_dir)
 

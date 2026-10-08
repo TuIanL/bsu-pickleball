@@ -202,7 +202,6 @@ def build_court_end_projection(
     ]
     current_team_a_end = seed_team_a_end
 
-    game_end_count = 0
     saw_side_change_in_current_game = False
     # 局边界标记：优先用 `start_game`（权威的"新一局开始"），没有足够 `start_game`
     # 时退化为 `end_game`/`end_set`。两条路径都不改动端位，只用于诊断。

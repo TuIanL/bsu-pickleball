@@ -42,7 +42,12 @@ class Settings(BaseModel):
     match_state_candidate_dir: Path = Path("data/match_state_candidates")  # 模型候选时间线（不覆盖人工时间线）
     cameras_dir: Path = Path("data/cameras")  # 摄像头配置目录
     tmp_dir: Path = Path("data/tmp")  # 临时文件目录
+    tmp_retention_hours: float = Field(default=24.0, gt=0)  # 非运行任务临时目录保留时长
     static_test_frames_dir: Path = Path("data/test_frames")  # 测试生成帧目录
+    # 运行时根目录（含 logs/）。缺省为仓库根下的 .runtime；`PICKLEBALL_RUNTIME_DIR`
+    # 可覆盖。启动脚本用它写 PID 与日志，后端按同一变量读日志目录——两者若不一致，
+    # `GET /api/analysis/jobs/{id}/logs` 会恒返回 no_matching_log_lines。
+    runtime_dir: Path = Path(".runtime")
     max_upload_bytes: int = Field(default=20 * 1024 * 1024 * 1024, gt=0)  # 单个上传视频的大小上限（默认 20 GiB）
     capture_min_free_space_bytes: int = 1024 * 1024 * 1024  # 录制开始前至少保留 1 GiB 空间
     model_dir: Path = Path("../models")  # 模型权重所在目录（相对项目根）
@@ -207,8 +212,6 @@ class Settings(BaseModel):
     analysis_worker_poll_interval_seconds: float = 0.5
     analysis_worker_shutdown_grace_seconds: float = 10.0
     max_cpu_jobs: int = 1  # 最大并行 CPU 任务数
-    max_gpu_jobs: int = 1  # 最大并行 GPU 任务数
-    enable_gpu_jobs: bool = False  # 是否启用 GPU 任务
     job_stage_timeout_seconds: int = 0  # 单个阶段超时秒数（0=不限制）
     job_max_retries: int = 1  # 任务失败最大重试次数
     job_zombie_timeout_seconds: int = 120  # 僵尸任务判定阈值（秒，启动时超此时间未更新的 running 任务标为 failed）
@@ -293,6 +296,20 @@ class Settings(BaseModel):
     def resolved_static_test_frames_dir(self) -> Path:
         return self.resolve_path(self.static_test_frames_dir)
 
+    @property
+    def resolved_runtime_dir(self) -> Path:
+        """运行时根目录。日志目录为`<runtime_dir>/logs`。
+
+        由 `PICKLEBALL_RUNTIME_DIR` 覆盖。路由层必须经本property 读取，
+        不要自己按`Path(__file__).parents[N]` 猜测——那种猜测在自定义运行时
+        目录下会与实际写日志的位置不一致，导致日志读取端点恒返回空结果。
+        """
+        return self.resolve_path(self.runtime_dir)
+
+    @property
+    def resolved_runtime_logs_dir(self) -> Path:
+        return self.resolved_runtime_dir / "logs"
+
     def ensure_data_dirs(self) -> None:
         # 确保各个数据目录都存在（不存在就创建，已存在也不报错）
         for path in (
@@ -368,7 +385,9 @@ def get_settings() -> Settings:
         ),
         cameras_dir=Path(os.getenv("PICKLEBALL_CAMERAS_DIR", "data/cameras")),
         tmp_dir=Path(os.getenv("PICKLEBALL_TMP_DIR", "data/tmp")),
+        tmp_retention_hours=max(0.1, float(os.getenv("PICKLEBALL_TMP_RETENTION_HOURS", "24"))),
         static_test_frames_dir=Path(os.getenv("PICKLEBALL_STATIC_TEST_FRAMES_DIR", "data/test_frames")),
+        runtime_dir=Path(os.getenv("PICKLEBALL_RUNTIME_DIR", ".runtime")),
         max_upload_bytes=int(os.getenv("PICKLEBALL_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024 * 1024))),
         model_dir=model_dir,
         match_state_segmentation_package_dir=Path(
@@ -657,8 +676,6 @@ def get_settings() -> Settings:
             1.0, float(os.getenv("PICKLEBALL_ANALYSIS_WORKER_SHUTDOWN_GRACE_SECONDS", "10"))
         ),
         max_cpu_jobs=max(1, int(os.getenv("PICKLEBALL_MAX_CPU_JOBS", "1"))),
-        max_gpu_jobs=max(1, int(os.getenv("PICKLEBALL_MAX_GPU_JOBS", "1"))),
-        enable_gpu_jobs=os.getenv("PICKLEBALL_ENABLE_GPU_JOBS", "false").lower() in {"1", "true", "yes"},
         job_stage_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_STAGE_TIMEOUT_SECONDS", "0"))),
         job_max_retries=max(0, int(os.getenv("PICKLEBALL_JOB_MAX_RETRIES", "1"))),
         job_zombie_timeout_seconds=max(0, int(os.getenv("PICKLEBALL_JOB_ZOMBIE_TIMEOUT_SECONDS", "120"))),

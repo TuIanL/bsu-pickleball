@@ -28,9 +28,7 @@ from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, Pipe
 from app.services.analysis_progress import resolve_progress_mode, stage_definitions
 from app.schemas.tracking import ImagePoint, ProjectedCourtPoint2D, ProjectedTrackPoint
 from app.services.storage_service import StorageService
-from app.vision.multiview.artifact import FUSED_DIAGNOSTICS_FILENAME, FUSED_TRAJECTORY_FILENAME
 from app.vision.multiview.artifact import normalize_fusion_diagnostics
-from app.vision.multiview.consumers import movement_points, visualization_points
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
 from app.vision.pickleball_performance_engine.metric_inputs import standard_court_metric_points

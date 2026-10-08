@@ -1514,7 +1514,6 @@ class GlobalPlayerAssociator:
                     _pick("cam_1" if q1 > q2 else "cam_2", "intrinsic_arbitrated")
                 else:
                     # quality 仍接近 → continuity/binding tie-break(保留 incumbent)
-                    incumbent = {u.view_id: u for u in us}
                     bound = [u for u in us if self.mapping.get(self.mapping_key(u.observation)) == gid]
                     if bound:
                         us[:] = [bound[0]]

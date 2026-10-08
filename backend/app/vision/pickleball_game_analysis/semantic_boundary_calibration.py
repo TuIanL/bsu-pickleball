@@ -13,7 +13,6 @@ from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
     BallSemanticPolicyConfig,
     MatchSemanticSnapshot,
     SemanticAuthority,
-    SemanticPhase,
     SemanticTimelineProvider,
 )
 

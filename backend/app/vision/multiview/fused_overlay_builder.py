@@ -29,7 +29,7 @@ reference view 有 F0 strong observation（origin=base/guided_roi）
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 

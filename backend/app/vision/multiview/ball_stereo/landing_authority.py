@@ -10,7 +10,6 @@ D6: bounce 事件权威第一版 = reference-view confirmed bounce（复用 Boun
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 Point2D = tuple[float, float]

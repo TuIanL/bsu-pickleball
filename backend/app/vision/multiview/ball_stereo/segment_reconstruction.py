@@ -276,7 +276,6 @@ def reconstruct_segment(
     zs = []
     for o in observations:
         t_norm = (o.t_sec - t_norm_min) / t_span
-        take_xyz = None
         # 尝试用该视角在 t_norm 处直接射线求最近点（简化：取该观测对应 3D 的近似）
         # 这里用简单启发：用观测直接反投影到球场有歧义，故用 Ding 射线即可——简化用逐观测三角化不可行，
         # 因此初值用"球场投影 + 恒定略高 z"并依赖优化收紧回投。

@@ -203,7 +203,6 @@ def assemble_evidence(job: AnalysisJobSummary, inputs: AssemblerInputs) -> Evide
         subject_id = str(player.get("id") or "")
         if not subject_id:
             continue
-        tracked = float(player.get("tracked_seconds") or 0.0)
         denominator = float(player.get("denominator_seconds") or 0.0)
         sufficiency = player.get("data_sufficiency")
         quality = "high" if sufficiency == "sufficient" else "low"

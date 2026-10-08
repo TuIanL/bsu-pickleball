@@ -18,7 +18,7 @@ provenance（`evidence_type=bootstrap_backfill`、`display_only=True`、`metric_
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import hypot
 from typing import Any
 

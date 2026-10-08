@@ -48,6 +48,7 @@ from app.services.job_orchestration import (
     utc_now,
 )
 from app.services.storage_service import StorageService
+from app.services.tmp_cleanup import DailyTmpCleanup, purge_stale_tmp as _purge_stale_tmp
 from app.services.video_service import video_service
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,33 @@ RESULTS: dict[str, AnalysisPipelineResult] = {}
 _LOCK = Lock()  # 保护上面这些内存字典的线程锁
 _STORAGE = StorageService()
 _JOB_STORE = JobStore(_STORAGE)
+_TMP_CLEANUP: DailyTmpCleanup | None = None
+
+
+def purge_stale_tmp(max_age_hours: float | None = None) -> int:
+    """Purge old temp data while preserving directories for active jobs."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    return _purge_stale_tmp(
+        max_age_hours if max_age_hours is not None else settings.tmp_retention_hours,
+        storage=_STORAGE,
+        job_store=_JOB_STORE,
+    )
+
+
+def start_tmp_cleanup_scheduler() -> None:
+    """Clean stale temp data at startup and schedule a daily follow-up."""
+    global _TMP_CLEANUP
+    if _TMP_CLEANUP is None:
+        _TMP_CLEANUP = DailyTmpCleanup(purge_stale_tmp)
+    purge_stale_tmp()
+    _TMP_CLEANUP.start()
+
+
+def stop_tmp_cleanup_scheduler() -> None:
+    if _TMP_CLEANUP is not None:
+        _TMP_CLEANUP.stop()
 
 
 def _pipeline_factory(analysis_options: dict | None = None) -> AnalysisPipeline:
@@ -526,19 +554,22 @@ def get_mock_report(job_id: str) -> AnalysisReport | None:
 
 
 def get_pipeline_result(job_id: str) -> AnalysisPipelineResult | None:
-    # 按 job_id 取流水线结果：先查内存，再查磁盘。
-    cached = RESULTS.get(job_id)
-    if cached is not None:
-        return cached
-
+    # 读取当前 Worker 原子发布到磁盘的流水线结果。
     job = get_mock_job(job_id)
     if job is not None:
         _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
+
+    # Worker 正在尝试或重试时，结果文件可能还留有上次 attempt 的内容；
+    # marker 优先于缓存和磁盘结果，避免把未完成的产物当作成功结果返回。
+    if _STORAGE.artifact_attempt_is_incomplete(job_id):
+        return None
 
     path = _STORAGE.output_json_path(job_id)
     if not path.exists():
         return None
 
+    # 磁盘文件可能刚由独立 Worker 原子替换，始终以当前文件为准，避免
+    # 进程内缓存继续返回前一 attempt 的结果。
     result = AnalysisPipelineResult.model_validate(_STORAGE.read_json(path))
     with _LOCK:
         RESULTS[job_id] = result

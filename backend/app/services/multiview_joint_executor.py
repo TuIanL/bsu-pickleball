@@ -479,16 +479,6 @@ def _build_canonical_ball_processor(
         and len(projection_metric_qualified) == len(view_inputs)
         and all(projection_metric_qualified)
     )
-    net_scene_camera_ready = (
-        scene_calibration is not None
-        and getattr(scene_calibration, "status", None) == "ready"
-        and len(projection_sources) == len(view_inputs)
-        and all(
-            source == "net_refined_virtual"
-            and not bool(projection_diagnostics[item.camera_slot].get("approximate", True))
-            for item in view_inputs
-        )
-    )
     quality_reasons = sorted(
         {
             str(reason)

@@ -78,6 +78,7 @@ def test_delete_capture_job_removes_full_artifact_dir_preserves_recording(monkey
     mock_analysis._sync_orchestration_storage()
 
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     job = _create_completed_job(mock_analysis, make_metadata(capture_take_id="CT_001"))
     job.videoId = "capture-video"
     job.calibrationId = "capture-calibration"

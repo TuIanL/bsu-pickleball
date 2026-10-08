@@ -393,3 +393,82 @@ def test_success_is_published_after_completion_artifacts(tmp_path, monkeypatch):
     runtime.on_completed = lambda *args: (_ for _ in ()).throw(OSError("disk full"))
     final = runtime._execute_pipeline(job, threading.Event())
     assert final.canonicalStatus == "failed"
+
+
+def test_lease_loss_does_not_stop_worker_from_claiming_next_job(tmp_path):
+    """单 job 租约丢失只终止本次运行，Worker 必须继续领取后续任务。
+
+    回归缺陷：`_heartbeat_loop` 曾调用 `self._stop_event.set()` 表达「这个 job
+    丢了租约」，但 `_stop_event` 是「整个 Worker 关停」语义（由 `stop()` 使用，
+    并作为 `_loop` 主循环的 `while` 条件）。置位后 Worker 永久不再领取任何任务，
+    且 embedded 模式无自愈路径（lifespan 只启动一次）。
+
+    常见触发路径：用户取消一个运行中的任务使 job 进入终态，
+    `mutate(expected_status="running")` 失配 → `heartbeat` 返回 False。
+    """
+    storage = make_storage(tmp_path)
+    store = JobStore(storage)
+    first = store.claim(make_job(store).id, "worker-a")
+    assert first is not None
+
+    runtime = AnalysisWorkerRuntime(
+        store,
+        pipeline_factory=lambda: None,
+        on_completed=lambda _job, _result: None,
+        worker_id="worker-a",
+    )
+    runtime.settings.analysis_worker_heartbeat_interval_seconds = 0.01
+
+    # 让下一次 heartbeat 失败（模拟 job 被别的进程置为终态后条件更新失配）
+    store.heartbeat = lambda job_id, run_id, *, heartbeat_at=None: False  # type: ignore[method-assign]
+
+    stop_event = threading.Event()
+    failed_event = threading.Event()
+    thread = threading.Thread(
+        target=runtime._heartbeat_loop,
+        args=(first, stop_event, failed_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=1)
+
+    # 本次运行被判定失败
+    assert thread.is_alive() is False
+    assert failed_event.is_set() is True
+    # 关键断言：Worker 主循环的关停事件**不得**被置位
+    assert runtime._stop_event.is_set() is False
+
+
+def test_worker_loop_keeps_running_after_lease_loss_of_single_job(tmp_path):
+    """Worker 主循环在单个 job 租约丢失后仍继续运行（端到端跨任务连续性）。"""
+    storage = make_storage(tmp_path)
+    store = JobStore(storage)
+    first = store.claim(make_job(store).id, "worker-a")
+    assert first is not None
+
+    runtime = AnalysisWorkerRuntime(
+        store,
+        pipeline_factory=lambda: None,
+        on_completed=lambda _job, _result: None,
+        worker_id="worker-a",
+    )
+    runtime.settings.analysis_worker_heartbeat_interval_seconds = 0.01
+    runtime.settings.analysis_worker_poll_interval_seconds = 0.01
+    store.heartbeat = lambda job_id, run_id, *, heartbeat_at=None: False  # type: ignore[method-assign]
+
+    stop_event = threading.Event()
+    failed_event = threading.Event()
+    thread = threading.Thread(
+        target=runtime._heartbeat_loop,
+        args=(first, stop_event, failed_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=1)
+    assert failed_event.is_set() is True
+
+    # 第二个 job 仍能被 claim（若 _stop_event 被误置位，这里不会成立）
+    second_id = make_job(store).id
+    claimed_second = store.claim(second_id, "worker-a")
+    assert claimed_second is not None
+    assert claimed_second.canonicalStatus == "running"

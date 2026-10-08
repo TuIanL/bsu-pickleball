@@ -98,6 +98,60 @@ ANALYSIS_ERROR_CODES: dict[str, str] = {
     "internal_error": "ANALYSIS_INTERNAL_ERROR",
 }
 
+# 失败归因类别（回答「为什么失败」，与回答「哪一步失败」的 ANALYSIS_ERROR_CODES 正交）。
+# 这是唯一的权威定义；`app.services.analysis_failure_taxonomy` 从这里导入，避免两份枚举漂移。
+ANALYSIS_FAILURE_CLASSES: tuple[str, ...] = (
+    "input_media",
+    "calibration",
+    "model_environment",
+    "resource_timeout",
+    "worker_lease",
+    "orchestration",
+    "internal_defect",
+)
+
+# 轨迹读取可用性
+RunTraceAvailability = Literal["available", "partial", "unavailable"]
+
+
+class AnalysisFailureEvidence(BaseModel):
+    """运行期间**首次**失败留下的证据。
+
+    终态（取消 / 失联）不得覆盖它：任务可能「先因 X 失败并重试，最后被取消」，
+    这两件事必须同时可见。
+    """
+
+    errorCode: str | None = None
+    failureClass: str | None = None  # 取值见 ANALYSIS_FAILURE_CLASSES
+    stage: str | None = None
+    attempt: int | None = None
+    at: str | None = None
+
+
+class AnalysisRetryHistoryEntry(BaseModel):
+    """一次阶段内重试的记录。"""
+
+    stage: str
+    retryIndex: int = Field(default=1, ge=1)
+    retryLimit: int = Field(default=0, ge=0)
+    willRetry: bool = False
+    failureClass: str | None = None  # 取值见 ANALYSIS_FAILURE_CLASSES
+    errorCode: str | None = None
+    exceptionType: str | None = None
+    exceptionDigest: str | None = None
+    progressBefore: int | None = None
+    progressAfter: int | None = None
+    at: str | None = None
+
+
+class AnalysisRunTraceStatus(BaseModel):
+    """运行轨迹的可用性摘要（轨迹本体按需单独读取，不内联进任务摘要）。"""
+
+    availability: RunTraceAvailability
+    reason: str | None = None
+    target: str | None = None
+    eventCount: int = Field(default=0, ge=0)
+
 
 class AnalysisUploadMetadata(BaseModel):
     """上传分析时附带的比赛元信息（前端填写/自动生成）。"""
@@ -143,6 +197,7 @@ class AnalysisStage(BaseModel):
     errorCode: str | None = None
     publicMessage: str | None = None  # 给用户看的信息
     internalMessage: str | None = None  # 内部调试信息
+    failureClass: str | None = None  # 失败归因类别，取值见 ANALYSIS_FAILURE_CLASSES
     retryCount: int = Field(default=0, ge=0)
     counters: dict[str, Any] = Field(default_factory=dict)
 
@@ -274,6 +329,15 @@ class AnalysisJobSummary(BaseModel):
     errorCode: str | None = None
     publicErrorMessage: str | None = None
     internalErrorMessage: str | None = None
+    # 运行期间失败证据与重试历史：终态（取消/失联）不得清空，使
+    # 「先因 X 失败并重试 N 次」与「最终被取消」可以同时被消费者看到。
+    # 历史任务缺这两个字段时保持 None / 空列表。
+    failureEvidence: AnalysisFailureEvidence | None = None
+    retryHistory: list[AnalysisRetryHistoryEntry] = Field(default_factory=list)
+    artifactStorageStatus: Literal["normal", "degraded"] = "normal"
+    artifactStorageReason: str | None = None
+    # 运行轨迹可用性摘要（轨迹本体按需读取，不内联进摘要以控制轮询体积）。
+    runTrace: AnalysisRunTraceStatus | None = None
     videoId: str | None = None
     calibrationId: str | None = None
     analysisMode: AnalysisMode = "demo"

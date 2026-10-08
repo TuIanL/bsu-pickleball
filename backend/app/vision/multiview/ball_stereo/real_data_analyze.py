@@ -89,7 +89,7 @@ def main() -> None:
     res1, anc1 = _projection(d["cam1_calib"], d["cam1_orientation"], "cam1")
     res2, anc2 = _projection(d["cam2_calib"], d["cam2_orientation"], "cam2")
     p1, p2 = res1, res2
-    obs1, obs2, t1, t2 = d["obs_cam1"], d["obs_cam2"], d["t_cam1"], d["t_cam2"]
+    obs1, obs2, t2 = d["obs_cam1"], d["obs_cam2"], d["t_cam2"]
     cam1_init = CameraInit(res1.focal_ft, res1.rotation, res1.translation, res1.image_width / 2.0, res1.image_height / 2.0)
     cam2_init = CameraInit(res2.focal_ft, res2.rotation, res2.translation, res2.image_width / 2.0, res2.image_height / 2.0)
 
@@ -119,14 +119,14 @@ def main() -> None:
     tracks: list[list[dict]] = []
     open_tracks: list[dict] = []  # {last_t, last_xyz, pts}
     for r in rows:
-        best, bi, bd = None, None, 1e9
+        best, bd = None, 1e9
         for i, tr in enumerate(open_tracks):
             dt = r["t1_ms"] - tr["last_t"]
             if 0 <= dt <= max_gap_ms:
                 dist = float(np.sqrt((r["x"] - tr["last_xyz"][0]) ** 2 + (r["y"] - tr["last_xyz"][1]) ** 2
                               + (r["z"] - tr["last_xyz"][2]) ** 2))
                 if dist <= max_step_ft and dist < bd:
-                    bd, best, bi = dist, tr, i
+                    bd, best = dist, tr
         if best is None:
             open_tracks.append({"last_t": r["t1_ms"], "last_xyz": (r["x"], r["y"], r["z"]), "pts": [r]})
         else:

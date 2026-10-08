@@ -256,6 +256,7 @@ def test_publish_supersedes_only_previous_algorithm_and_keeps_manual(isolated_da
     )
     db.commit()
     storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
     StorageService.register_capture_job("job-new", tmp_path / "take")
     artifact = build_segmentation_artifact(
         planning_job_id="job-new",
@@ -308,6 +309,7 @@ def test_publish_failure_can_roll_back_without_touching_previous_run(isolated_da
     )
     db.commit()
     storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
     StorageService.register_capture_job("job-rollback-new", tmp_path / "take")
     artifact = build_segmentation_artifact(
         planning_job_id="job-rollback-new",
@@ -333,6 +335,7 @@ def test_successful_segmentation_is_republished_for_compatible_new_parent(isolat
     db = isolated_database()
     _create_take(db, tmp_path, take_id="take-reuse")
     storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
     StorageService.register_capture_job("job-old", tmp_path / "take")
     StorageService.register_capture_job("job-new", tmp_path / "take")
     artifact = build_segmentation_artifact(

@@ -14,6 +14,8 @@
 - POST   /jobs/{job_id}/cancel         取消任务
 - GET    /jobs/{job_id}/result         读取分析结果（未出结果则返回状态）
 - GET    /jobs/{job_id}/report         读取分析报告
+- GET    /jobs/{job_id}/run-trace      读取本次运行的事件轨迹（append-only JSONL）
+- GET    /jobs/{job_id}/logs           按任务读取运行日志（只读、有界，可用环境变量关闭）
 - GET    /jobs/{job_id}/artifacts/{name}  读取某个分析产物（overlay 等）
 
 补充说明：当前任务的实际处理走的是 mock_analysis（模拟实现），
@@ -24,13 +26,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 
 # Literal：限定某个参数只能取固定的几个字符串值（这里用于限定 artifact 名称白名单）
 # Union：表示返回值"可能是多种类型之一"
 # Query：URL 查询参数
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -70,6 +73,7 @@ from app.services.multiview_observability import (
     MultiviewObservabilityProjector,
     structured_error,
 )
+from app.services.analysis_run_trace import read_job_logs, read_job_run_trace, redact_public_strings
 from app.services.storage_service import StorageService
 from app.services.formal_segmentation_service import get_bound_formal_artifact
 
@@ -78,6 +82,33 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 # 存储服务对象，用于定位各类分析产物（artifact）在磁盘上的路径
 _STORAGE = StorageService()
 _MULTIVIEW_OBSERVABILITY = MultiviewObservabilityProjector(_STORAGE)
+
+# 运行日志读取的开关与目录：本地 runtime 默认开启；如需对外暴露可关掉。
+_JOB_LOGS_ENABLED_ENV = "PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED"
+_RUNTIME_DIR_ENV = "PICKLEBALL_RUNTIME_DIR"
+_DEFAULT_LOG_TAIL = 200
+_MAX_LOG_TAIL = 2000
+
+
+def _job_logs_enabled() -> bool:
+    raw = os.environ.get(_JOB_LOGS_ENABLED_ENV, "0").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _public_job_payload(job: AnalysisJobSummary) -> dict[str, Any]:
+    """Keep persisted internal diagnostics useful while scrubbing host paths at API boundaries."""
+    return redact_public_strings(job.model_dump(mode="json"))
+
+
+def _runtime_log_dir() -> Path:
+    # 仍直接读环境变量而非 Settings.get_settings()：后者带 lru_cache，
+    # 测试用 monkeypatch.setenv 改变量后缓存不会失效。缺省值取 Settings 的
+    # runtime_dir 语义（仓库根/.runtime），但不再用 `Path(__file__).parents[N]`
+    # 猜测——那种猜测在自定义运行时目录下会与启动脚本写日志的位置不一致，
+    # 使本端点恒返回 no_matching_log_lines。
+    override = os.environ.get(_RUNTIME_DIR_ENV)
+    root = Path(override).expanduser() if override else Path.cwd() / ".runtime"
+    return root / "logs"
 
 
 @router.get("/jobs/{job_id}/artifacts/match-state-segmentation")
@@ -184,7 +215,7 @@ def create_analysis_job_route(payload: AnalysisJobCreate, db: Session = Depends(
     去重通过后再落盘冻结名册与 `AnalysisRallyContextSnapshot`。
     """
     try:
-        return create_analysis_job(payload, db=db)
+        return _public_job_payload(create_analysis_job(payload, db=db))
     except MultiviewPreflightError as exc:
         return JSONResponse(
             status_code=400,
@@ -219,7 +250,7 @@ def list_analysis_jobs_route(
             for j in jobs
             if j.metadata.recording_session_id == recording_session_id or j.recordingSessionId == recording_session_id
         ]
-    return jobs
+    return [_public_job_payload(job) for job in jobs]
 
 
 @router.delete("/jobs/{job_id}", response_model=AnalysisDeleteResult)
@@ -256,7 +287,7 @@ def read_analysis_job(job_id: str) -> AnalysisJobSummary:
         # 任务不存在
         raise HTTPException(status_code=404, detail="Analysis job not found")
 
-    return job
+    return _public_job_payload(job)
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=AnalysisJobSummary)
@@ -273,7 +304,7 @@ def cancel_analysis_job_route(job_id: str) -> AnalysisJobSummary:
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
 
-    return job
+    return _public_job_payload(job)
 
 
 @router.get("/jobs/{job_id}/result", response_model=AnalysisPipelineResult | AnalysisJobSummary)
@@ -290,15 +321,15 @@ def read_analysis_result(job_id: str) -> AnalysisPipelineResult | AnalysisJobSum
         raise HTTPException(status_code=404, detail="Analysis job not found")
 
     if job.canonicalStatus == "interrupted":
-        return job
+        return _public_job_payload(job)
 
     _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
 
     result = get_pipeline_result(job_id)
     if result is not None:
-        return result
+        return redact_public_strings(result.model_dump(mode="json"))
 
-    return job
+    return _public_job_payload(job)
 
 
 @router.get("/jobs/{job_id}/report", response_model=AnalysisReport)
@@ -321,6 +352,73 @@ def read_analysis_report(job_id: str) -> AnalysisReport:
         raise HTTPException(status_code=404, detail="Analysis report not found")
 
     return report
+
+
+@router.get("/jobs/{job_id}/run-trace", response_model=None)
+def read_analysis_run_trace(job_id: str) -> JSONResponse:
+    """读取一次分析运行的事件轨迹（append-only JSONL 的解析结果）。
+
+    轨迹按需读取，**不**内联进任务摘要：进度页以 1.6s / 任务列表以 5s 轮询，
+    内联会让响应体积随重试次数膨胀。
+    任务没有轨迹时返回 `availability=unavailable` 与明确原因，而不是用空结果冒充成功。
+    """
+    job = get_mock_job(job_id)
+    if job is None:
+        return JSONResponse(
+            status_code=404,
+            content={"code": "not_found", "message": "Analysis job not found.", "job_id": job_id},
+        )
+    trace_path = _STORAGE.resolve_run_trace_path(job_id, job.metadata.capture_take_id)
+    legacy_job = job.retryHistory == [] and job.failureEvidence is None and job.runTrace is None
+    payload = read_job_run_trace(trace_path, legacy_job=legacy_job)
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "availability": payload["availability"],
+            "reason": payload["reason"],
+            "target": _STORAGE.logical_run_trace_reference(job_id, trace_path),
+            "event_count": len(payload["events"]),
+            "events": redact_public_strings(payload["events"]),
+        }
+    )
+
+
+@router.get("/jobs/{job_id}/logs", response_model=None)
+def read_analysis_job_logs(
+    job_id: str,
+    tail: int = Query(default=_DEFAULT_LOG_TAIL, ge=1, le=_MAX_LOG_TAIL),
+) -> JSONResponse:
+    """按任务读取运行日志（只读、有界）。
+
+    uvicorn 访问日志行没有时间戳，Worker 日志行有；因此以任务标识子串匹配为主，
+    时间窗口（领取时间 ~ 结束时间）只作用于能解析出时间戳的行。匹配不到时显式
+    返回 `availability=partial` 与原因，而不是返回空列表让调用方以为「没有日志」。
+    """
+    job = get_mock_job(job_id)
+    if job is None:
+        return JSONResponse(
+            status_code=404,
+            content={"code": "not_found", "message": "Analysis job not found.", "job_id": job_id},
+        )
+    if not _job_logs_enabled():
+        return JSONResponse(
+            status_code=403,
+            content={
+                "code": "job_logs_disabled",
+                "message": "Job log reading is disabled by configuration.",
+                "job_id": job_id,
+            },
+        )
+    log_dir = _runtime_log_dir()
+    payload = read_job_logs(
+        log_paths=[log_dir / "backend.log", log_dir / "analysis-worker.log"],
+        job_id=job_id,
+        worker_run_id=job.workerRunId,
+        window_start=job.claimedAt or job.startedAt or job.createdAt,
+        window_end=job.finishedAt or job.updatedAt,
+        max_lines=tail,
+    )
+    return JSONResponse({"job_id": job_id, **payload})
 
 
 @router.get("/jobs/{job_id}/multiview/observability", response_model=None)

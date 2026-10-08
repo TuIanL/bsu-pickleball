@@ -78,6 +78,29 @@ npm run app:stop
 On macOS, you can also double-click `start-pickleball.command` and
 `stop-pickleball.command` in the repository root.
 
+The local startup script generates a fresh `PICKLEBALL_API_TOKEN` when one is
+not supplied and passes it only to the API, worker, and Vite server process.
+Both listeners bind to loopback. Browser JSON and native media requests use the
+same-origin `/__analysis_api` proxy, including local production preview.
+For manual startup, set the same server-only token in both terminals:
+
+```bash
+export PICKLEBALL_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
+Every API route (including `/calibration/*`) requires
+`Authorization: Bearer $PICKLEBALL_API_TOKEN`; `/health` stays public.
+`/docs`, `/openapi.json`, and `/redoc` are disabled by default. The local launcher
+sets `PICKLEBALL_LOCAL_DOCS=true`; these endpoints then accept loopback peers with
+a localhost/loopback Host only. Keep this option disabled in remote deployments.
+Missing tokens prevent
+startup. `PICKLEBALL_AUTH_DISABLED=true` is reserved for isolated development
+and test environments with no token configured. A configured token takes precedence.
+Never put secrets in `VITE_*` variables. The local proxy rejects LAN/public
+bindings and foreign browser origins; remote hosting needs a separate deployment
+and session-authentication design. Per-job log reads are disabled by default and can be
+enabled with `PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED=true`.
+
 The startup command leaves model inference disabled by default. Set model flags
 explicitly after installing optional dependencies and placing trusted local
 weights; the script preflights those files before starting any process.
@@ -85,13 +108,14 @@ weights; the script preflights those files before starting any process.
 For manual backend-only debugging, run:
 
 ```bash
-uvicorn app.main:app --reload
+PICKLEBALL_API_TOKEN="$PICKLEBALL_API_TOKEN" uvicorn app.main:app --reload
 ```
 
 The frontend can use:
 
 ```bash
-VITE_ANALYSIS_API_URL=http://localhost:8000 npm run dev
+PICKLEBALL_API_PROXY_TARGET=http://127.0.0.1:8000 \
+PICKLEBALL_API_TOKEN="$PICKLEBALL_API_TOKEN" npm run dev
 ```
 
 厨房线到位率的产物计算和卡片发布是两个独立开关：
@@ -304,13 +328,15 @@ enabled by default; add `--disable-clahe` for an unenhanced baseline, or
 Upload a video:
 
 ```bash
-curl -F "file=@sample.mp4" http://localhost:8000/api/videos/upload
+curl -H "Authorization: Bearer $PICKLEBALL_API_TOKEN" \
+  -F "file=@sample.mp4" http://localhost:8000/api/videos/upload
 ```
 
 Create a manual calibration:
 
 ```bash
 curl -X POST http://localhost:8000/api/calibrations \
+  -H "Authorization: Bearer $PICKLEBALL_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "video_id": "video-example",
@@ -331,6 +357,7 @@ replaced by this demo payload in the frontend.
 
 ```bash
 curl -X POST http://localhost:8000/api/analysis/jobs \
+  -H "Authorization: Bearer $PICKLEBALL_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "metadata": {
@@ -352,6 +379,7 @@ Create a pipeline-backed job by including `videoId` and optional `calibrationId`
 
 ```bash
 curl -X POST http://localhost:8000/api/analysis/jobs \
+  -H "Authorization: Bearer $PICKLEBALL_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "videoId": "video-example",
@@ -374,7 +402,8 @@ curl -X POST http://localhost:8000/api/analysis/jobs \
 Cancel a queued or running job:
 
 ```bash
-curl -X POST http://localhost:8000/api/analysis/jobs/job-example/cancel
+curl -X POST http://localhost:8000/api/analysis/jobs/job-example/cancel \
+  -H "Authorization: Bearer $PICKLEBALL_API_TOKEN"
 ```
 
 ## Algorithm Modules

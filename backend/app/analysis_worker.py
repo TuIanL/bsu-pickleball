@@ -16,7 +16,9 @@ from app.services.mock_analysis import (
     analysis_worker_thread_alive,
     recover_zombie_jobs,
     start_analysis_worker,
+    start_tmp_cleanup_scheduler,
     stop_analysis_worker,
+    stop_tmp_cleanup_scheduler,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, request_stop)
     init_db()
     recover_zombie_jobs()
+    start_tmp_cleanup_scheduler()
     start_analysis_worker(force=True)
     logger.info("analysis-worker started")
     try:
@@ -45,6 +48,7 @@ def main() -> None:
     finally:
         logger.info("analysis-worker stopping")
         stop_analysis_worker()
+        stop_tmp_cleanup_scheduler()
 
 
 if __name__ == "__main__":

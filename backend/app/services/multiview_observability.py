@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.analysis import AnalysisJobSummary
-from app.services.mock_analysis import get_mock_job, get_pipeline_result
+from app.services.mock_analysis import get_mock_job
 from app.services.storage_service import StorageService
 
 AVAILABILITIES = {"available", "partial", "unavailable", "not_applicable"}

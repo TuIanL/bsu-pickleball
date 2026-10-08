@@ -121,6 +121,7 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-p", take_dir)
 
     job = AnalysisJobSummary(
@@ -374,6 +375,7 @@ def test_compose_publishes_fused_player_overlay(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-p2", take_dir)
 
     job = AnalysisJobSummary(
@@ -445,6 +447,7 @@ def test_historical_v1_fused_overlay_safely_stays_reference_view_only(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-legacy-overlay", take_dir)
     job = AnalysisJobSummary(
         id="job-legacy-overlay",
@@ -515,6 +518,7 @@ def test_fused_overlay_unavailable_without_geometry(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-p3", take_dir)
 
     job = AnalysisJobSummary(
@@ -569,6 +573,7 @@ def test_compose_writes_placeholder_display_diagnostics_when_payload_missing(tmp
     storage.settings.outputs_dir = tmp_path / "outputs"
     storage.settings.ensure_data_dirs()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-pdiag", take_dir)
 
     job = AnalysisJobSummary(

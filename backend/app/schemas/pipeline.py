@@ -46,6 +46,8 @@ class AnalysisArtifacts(BaseModel):
     """
 
     result_json_path: str | None = None
+    artifact_storage_status: Literal["normal", "degraded"] = "normal"
+    artifact_storage_reason: str | None = None
     match_state_segmentation_json_path: str | None = None
     match_state_segmentation_url: str | None = None
     match_state_segmentation_status: str | None = None

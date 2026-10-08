@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -49,7 +49,7 @@ from app.vision.multiview.sync import (
 )
 from app.vision.multiview.view_input import MultiViewViewInput
 from app.vision.match_state import MatchStateSegmentationRuntime, SegmentationInput
-from app.vision.match_state.media_sampler import RGBMediaSamplingConfig, iter_capture_take_media, sample_capture_take_media
+from app.vision.match_state.media_sampler import RGBMediaSamplingConfig, iter_capture_take_media
 from app.vision.match_state.package import load_production_package
 from app.vision.match_state.package import ModelPackageError
 from app.services.formal_segmentation_service import persist_segmentation_failure, persist_segmentation_result
@@ -134,8 +134,6 @@ class SingleViewAnalysisExecutor:
         token,
         progress_callback: Callable[[object], None],
     ) -> AnalysisPipelineResult:
-        from app.services.storage_service import StorageService
-
         payload = AnalysisJobCreate(
             metadata=job.metadata,
             videoId=job.videoId,
@@ -147,10 +145,14 @@ class SingleViewAnalysisExecutor:
             clipEndMs=getattr(job, "clipEndMs", None),
             useRallyContext=(getattr(job, "rallyContextMode", "legacy") == "new"),
         )
+        storage = StorageService()
         if job.metadata.capture_take_id:
-            StorageService.register_capture_job_from_take(job.id, job.metadata.capture_take_id)
+            storage.resolve_capture_job_root(job.id, job.metadata.capture_take_id)
         elif job.metadata.session_dir:
-            StorageService.register_capture_job(job.id, job.metadata.session_dir)
+            try:
+                storage.register_capture_job(job.id, job.metadata.session_dir)
+            except Exception:
+                logger.warning("Unable to register capture artifact root for job %s", job.id, exc_info=True)
 
         pipeline = self.pipeline_factory(
             analysis_options={
@@ -161,7 +163,7 @@ class SingleViewAnalysisExecutor:
         match_context = build_match_context(
             job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
         )
-        bound_plan = _load_bound_window_plan(StorageService(), job)
+        bound_plan = _load_bound_window_plan(storage, job)
         if job.segmentationRunId and job.windowPlanHash and bound_plan is None:
             # Formal children are bound to an immutable artifact.  A missing,
             # corrupt, or mismatched plan must never silently widen analysis to

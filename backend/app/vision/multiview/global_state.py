@@ -397,14 +397,12 @@ class GlobalPlayerRegistry:
         同 tick 同 candidate 每 view 至多接受一个 observation（由调用方在创建后调用
         `note_candidate_observation` 累积，本方法只在创建/复用层面保证归属）。
         """
-        strong_key = (view_id, view_player_id, identity_epoch)
         for cid, cand in self.candidates.items():
             if not cand.association_eligibility:
                 continue
             binding = cand.local_bindings.get(view_id)
             if binding is not None and binding.get("view_player_id") == view_player_id and int(binding.get("identity_epoch", -1)) == identity_epoch:
                 return cid  # ① 强 key
-        weak_key = (view_id, view_player_id)
         for cid, cand in self.candidates.items():
             binding = cand.local_bindings.get(view_id)
             if binding is not None and binding.get("view_player_id") == view_player_id:
@@ -486,7 +484,6 @@ class GlobalPlayerRegistry:
         state.association_eligible = True
         for view_id, binding in cand.local_bindings.items():
             player_id = binding.get("view_player_id")
-            epoch = int(binding.get("identity_epoch") or 0)
             if player_id:
                 self.historical_bindings[(view_id, player_id)] = gid
         self.candidates.pop(candidate_id, None)
