@@ -3,6 +3,9 @@
 ## Purpose
 
 定义姿态估计引擎：RTMPose 模型配置、逐帧姿态推理与结果序列化，以及骨架叠加层的语义。
+
+约定模型输入、帧级姿态结果和骨架可视化的衔接，保证模型配置与序列化产物能够供后续分析和页面显示使用。
+
 ## Requirements
 ### Requirement: RTMPose model configuration
 The backend SHALL provide a pose estimation engine that can load a configured RTMPose runtime, model config, and checkpoint or exported model for real uploaded-video analysis jobs, and SHALL run it for eligible real jobs when pose inference is enabled and the assets are available.
@@ -76,4 +79,3 @@ The backend SHALL describe enough pose metadata for clients to render human skel
 #### Scenario: Unsupported keypoint schema is configured
 - **WHEN** the configured pose model emits a keypoint schema the application does not recognize
 - **THEN** the backend reports the pose stage as failed or skipped with a clear unsupported-schema detail
-

@@ -58,14 +58,24 @@ python -m pip install -e "backend[dev]"
 npm run app:start
 
 # 或分别启动
+export PICKLEBALL_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 npm run dev          # 仅前端（localhost:5173）
-cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8000   # 仅后端
+cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8000   # 仅后端，共用已导出的 token
 
 # 停止
 npm run app:stop
 ```
 
 启动后访问 `http://localhost:5173` 即可使用。
+`npm run app:start` 默认仅监听 `127.0.0.1`，适用于这台电脑上的演示。启动脚本生成随机 API token，
+只传给 API、Worker 和 Vite 服务端；浏览器的 JSON、视频、图片和下载统一走 `/__analysis_api`。
+手动分别启动时，在两个终端设置相同的 `PICKLEBALL_API_TOKEN`。不要使用 `VITE_PICKLEBALL_API_TOKEN`，
+此类变量会暴露到浏览器；发现旧配置时 Vite 会拒绝启动。`/health` 保持公开，后端其余 API 要求 Bearer token。
+已有 token 优先于 `PICKLEBALL_AUTH_DISABLED`，避免残留测试开关关闭认证。
+
+构建后的本机预览使用 `npm run build`，再在配置了同一 token 的终端运行 `npm run preview`；
+预览代理与开发代理采用相同边界。代理拒绝非本机连接、陌生 Host 和跨来源浏览器请求。
+`dist/` 本身不包含代理，不能直接作为支持认证的远端部署方案；局域网/公网访问需要独立的会话认证与部署设计。
 
 macOS 用户也可使用根目录的便捷脚本双击启动/停止：
 - `start-pickleball.command`
@@ -77,6 +87,11 @@ macOS 用户也可使用根目录的便捷脚本双击启动/停止：
 
 | 环境变量 | 说明 | 默认值 |
 |----------|------|--------|
+| `PICKLEBALL_API_TOKEN` | API Bearer token；启动必填 | 无（缺失时拒绝启动） |
+| `PICKLEBALL_AUTH_DISABLED` | 显式关闭 API 鉴权，仅用于隔离测试/开发 | false |
+| `PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED` | 启用按任务读取日志的端点 | false（本地启动脚本显式开启） |
+| `PICKLEBALL_API_PROXY_TARGET` | Vite 服务端的后端地址，仅允许本机 HTTP 地址 | `http://127.0.0.1:8000` |
+| `VITE_ANALYSIS_API_URL` | 浏览器访问 API 的入口 | `/__analysis_api` |
 | `PICKLEBALL_BACKEND_PORT` | 后端端口 | 8000 |
 | `PICKLEBALL_DATA_DIR` | 数据目录 | data |
 | `PICKLEBALL_ENABLE_MODEL_INFERENCE` | 启用 YOLO/模型推理 | false |
@@ -249,6 +264,9 @@ Worker 执行视觉分析：
 ## API 概览
 
 后端运行在 `http://localhost:8000`，主要 API 端点：
+
+`/health` 无需 token。其余下表中的 API 与 `/calibration/*` 路由需要请求头
+`Authorization: Bearer $PICKLEBALL_API_TOKEN`。本机启动脚本显式设置 `PICKLEBALL_LOCAL_DOCS=true`，允许从本机访问后端的 `/docs`、`/openapi.json` 和 `/redoc`；其他启动方式默认关闭这些端点，对外部署须保持关闭。
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
