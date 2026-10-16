@@ -13,6 +13,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from app.sqlite_runtime import apply_sqlite_pragmas, sqlite_journal_mode
+
 PayloadMutator = Callable[[dict[str, Any]], dict[str, Any] | None]
 PayloadSelector = Callable[[dict[str, Any]], bool]
 
@@ -20,17 +22,16 @@ PayloadSelector = Callable[[dict[str, Any]], bool]
 class AnalysisControlPlane:
     """为 JobStore 提供带条件更新的 SQLite 控制面。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, companion_paths: tuple[Path, ...] = ()) -> None:
         self.path = path.expanduser().resolve()
+        self.journal_mode = sqlite_journal_mode(self.path, *companion_paths)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = NORMAL")
+        apply_sqlite_pragmas(connection, self.path, journal_mode=self.journal_mode)
         return connection
 
     def ensure_schema(self) -> None:

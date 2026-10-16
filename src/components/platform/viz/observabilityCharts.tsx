@@ -251,7 +251,7 @@ export function RefinementGateChart({ data, availability }: { data: RefinementOb
         ))}
       </div>
       <p className="mt-3 text-xs font-semibold text-[var(--ui-ink)]">最终产品来源：<strong>{publishedF1 ? "F1" : data.final_source === "first_pass_f0" ? "F0" : String(data.final_source ?? "-")}</strong></p>
-      {data.safety_gate?.reason ? <p className="mt-2 rounded-xl border border-[#F6D79A] bg-[#FFF9ED] px-3 py-2 text-sm leading-6 text-[#8B5A17]">安全门说明：{data.safety_gate.reason}</p> : null}
+      {data.safety_gate?.reason ? <p className="mt-2 rounded-xl border border-[var(--ui-border-warning-panel)] bg-[var(--ui-surface-warning-panel)] px-3 py-2 text-sm leading-6 text-[var(--ui-text-warning-panel)]">安全门说明：{data.safety_gate.reason}</p> : null}
     </ChartOrPlaceholder>
   );
 }

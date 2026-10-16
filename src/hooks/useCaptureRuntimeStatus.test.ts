@@ -8,7 +8,7 @@
  * - 终态停止轮询：completed 后不再发请求
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor, cleanup } from "@testing-library/react";
+import { act, renderHook, waitFor, cleanup } from "@testing-library/react";
 import { useCaptureRuntimeStatus, POLL_INTERVAL_MS } from "./useCaptureRuntimeStatus";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 
@@ -119,11 +119,9 @@ describe("useCaptureRuntimeStatus", () => {
 
   it("captureTakeId 切换时丢弃旧响应", async () => {
     const newSnapshot = makeSnapshot({ captureTakeId: "ct_new" });
-
-    // 旧 take 的请求永不 resolve（模拟过期）
-    mockGetRuntimeStatus.mockImplementationOnce(
-      () => new Promise(() => { /* never resolves */ }),
-    );
+    const oldSnapshot = makeSnapshot({ captureTakeId: "ct_test" });
+    let resolveOldRequest!: (snapshot: CaptureTakeRuntimeStatus) => void;
+    mockGetRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveOldRequest = resolve; }));
     mockGetRuntimeStatus.mockResolvedValue(newSnapshot);
 
     const { result, rerender } = renderHook(
@@ -137,6 +135,9 @@ describe("useCaptureRuntimeStatus", () => {
     await waitFor(() => {
       expect(result.current.state.snapshot?.captureTakeId).toBe("ct_new");
     });
+
+    await act(async () => { resolveOldRequest(oldSnapshot); });
+    expect(result.current.state.snapshot?.captureTakeId).toBe("ct_new");
   });
 
   it("请求失败时保留最后快照并设置 error", async () => {
@@ -215,5 +216,25 @@ describe("useCaptureRuntimeStatus", () => {
     await waitFor(() => {
       expect(result.current.state.snapshot).not.toBeNull();
     });
+  });
+
+  it("隐藏时暂停轮询并在页面恢复可见后重新请求", async () => {
+    const originalHidden = document.hidden;
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    mockGetRuntimeStatus.mockResolvedValue(makeSnapshot());
+    const { result } = renderHook(() =>
+      useCaptureRuntimeStatus({ captureTakeId: "ct_test", phase: "recording" }),
+    );
+
+    expect(result.current.isPolling).toBe(false);
+    expect(mockGetRuntimeStatus).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await waitFor(() => expect(mockGetRuntimeStatus).toHaveBeenCalledTimes(1));
+    expect(result.current.isPolling).toBe(true);
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: originalHidden });
+    document.dispatchEvent(new Event("visibilitychange"));
   });
 });

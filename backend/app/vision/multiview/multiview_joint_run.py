@@ -32,6 +32,7 @@ from app.vision.multiview.offline_refinement import (
 from app.vision.multiview.quality import IntrinsicFeatures, view_intrinsic_quality
 from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
 from app.vision.multiview.debug_trace import build_joint_debug_trace
+from app.services.analysis_roster_runtime import match_anchor_observations
 
 
 class CancellationToken(Protocol):
@@ -39,6 +40,60 @@ class CancellationToken(Protocol):
 
 
 ProgressCallback = Callable[[int, int], None]
+
+PERCEPTION_TRACE_FOCUS_HALF_WIDTH_S = 2.0
+PERCEPTION_TRACE_OPENING_WIDTH_S = 4.0
+
+
+def build_perception_trace_windows(
+    *,
+    start_s: float,
+    end_s: float,
+    anchors: tuple[Any, ...] = (),
+) -> dict[str, dict[str, Any]]:
+    """Build diagnostic windows on this run's actual source time range."""
+    if end_s <= start_s:
+        return {}
+    windows: dict[str, dict[str, Any]] = {}
+
+    def add(label: str, focus: str, center_s: float, half_width_s: float, *, anchor_player_id: str | None = None):
+        window_start = max(start_s, center_s - half_width_s)
+        window_end = min(end_s, center_s + half_width_s)
+        if window_end <= window_start:
+            return
+        row: dict[str, Any] = {
+            "window_seconds": [round(window_start, 3), round(window_end, 3)],
+            "focus": focus,
+        }
+        if anchor_player_id:
+            row["anchor_player_ids"] = [anchor_player_id]
+        windows[label] = row
+
+    add(
+        "opening",
+        "opening",
+        start_s + PERCEPTION_TRACE_OPENING_WIDTH_S / 2,
+        PERCEPTION_TRACE_OPENING_WIDTH_S / 2,
+    )
+    midpoint_s = (start_s + end_s) / 2
+    add("midpoint", "midpoint", midpoint_s, PERCEPTION_TRACE_FOCUS_HALF_WIDTH_S)
+    add("late", "late", end_s, PERCEPTION_TRACE_FOCUS_HALF_WIDTH_S)
+    for anchor in anchors:
+        anchor_ms = getattr(anchor, "timestamp_ms", None)
+        player_id = getattr(anchor, "player_id", None)
+        if anchor_ms is None or not player_id:
+            continue
+        anchor_s = float(anchor_ms) / 1000.0
+        if anchor_s < start_s - PERCEPTION_TRACE_FOCUS_HALF_WIDTH_S or anchor_s > end_s + PERCEPTION_TRACE_FOCUS_HALF_WIDTH_S:
+            continue
+        add(
+            f"frozen_roster_anchor_{player_id}",
+            "frozen_roster_anchor",
+            anchor_s,
+            PERCEPTION_TRACE_FOCUS_HALF_WIDTH_S,
+            anchor_player_id=str(player_id),
+        )
+    return windows
 
 
 def interpolate_short_confirmed_identity_gaps(
@@ -134,6 +189,8 @@ class MultiViewJointRunOutput:
     # player display diagnostics（只读 observability；构建失败不影响核心结果）
     display_diagnostics_payload: dict[str, object] | None = None
     display_diagnostics_error: str | None = None
+    # Real, on-court observations without an audited frozen P identity.
+    anonymous_overlay_observations: list[dict[str, object]] = field(default_factory=list)
     # canonical-tick 球路阶段输出；由 executor 在最终 compose 前发布。
     ball_analysis: Any | None = None
 
@@ -165,6 +222,7 @@ class MultiViewJointRun:
         execution_mode: str = "single_view_fallback",
         authoritative_joint_eligible: bool = False,
         debug_trace_enabled: bool = False,
+        runtime_roster: Any | None = None,
         ball_processor: Any | None = None,
     ) -> None:
         self.run_id = run_id
@@ -203,8 +261,30 @@ class MultiViewJointRun:
         self.execution_mode = execution_mode
         self.authoritative_joint_eligible = authoritative_joint_eligible
         self.debug_trace_enabled = bool(debug_trace_enabled)
+        self.runtime_roster = runtime_roster
+        self._frozen_anchor_track_keys: dict[tuple[str, str, int], tuple[str, dict[str, object]]] = {}
+        self._frozen_anchor_audit: dict[str, dict[str, object]] = {}
+        self._anonymous_overlay_observations: list[dict[str, object]] = []
+        self.perception_funnel: dict[str, dict[str, int]] = {
+            view_id: {
+                "available_ticks": 0,
+                "raw_detection_count": 0,
+                "roi_filtered_base_count": 0,
+                "local_track_count": 0,
+                "local_candidate_count": 0,
+                "global_candidate_observation_count": 0,
+            }
+            for view_id in self.runtimes
+        }
+        self.end_funnel: dict[str, dict[str, int]] = {
+            end: {"global_input_observation_count": 0, "global_candidate_observation_count": 0, "assigned_observation_count": 0}
+            for end in ("end_a", "end_b", "unknown")
+        }
+        self.perception_stage_trace: dict[str, dict[str, Any]] = {}
+        self._perception_trace_window_specs: dict[str, dict[str, Any]] = {}
         self.ball_processor = ball_processor
         self._debug_ticks: list[dict[str, object]] = []
+        self._processed_tick_timestamps_ms: list[float] = []
         self._recovery_evidence: list[dict[str, object]] = []
         self.counter: dict[str, int] = {}
         # 失败语义:非 reference 视角连续缺帧(解码失败)→ 该时刻起 degraded,不再 step(继续 reference)
@@ -221,6 +301,47 @@ class MultiViewJointRun:
         # same-tick RecoveryAttemptLedger（B-Phase-2）：同 pair 去重 + 每 view ROI 预算
         self._same_tick_attempted: set[tuple[str, str]] = set()
         self._same_tick_ledger: dict[str, list[Any]] = {view_id: [] for view_id in self.runtimes}
+
+    def _configure_perception_stage_trace(self, start_s: float, end_s: float) -> None:
+        anchors = tuple(getattr(self.runtime_roster, "anchors", ()) or ())
+        specs = build_perception_trace_windows(start_s=start_s, end_s=end_s, anchors=anchors)
+        self._perception_trace_window_specs = specs
+        self.perception_stage_trace = {
+            label: {
+                **spec,
+                "ticks": 0,
+                "per_view": {
+                    view_id: {
+                        "raw_detection_count": 0,
+                        "roi_filtered_base_count": 0,
+                        "local_track_count": 0,
+                        "local_candidate_count": 0,
+                        "global_formal_observation_count": 0,
+                        "global_candidate_observation_count": 0,
+                        "unassigned_formal_observation_count": 0,
+                        "unassigned_formal_reason_counts": {},
+                        "assigned_observation_count": 0,
+                        "metric_eligible_fused_player_count": 0,
+                    }
+                    for view_id in self.runtimes
+                },
+                "per_canonical_end": {
+                    end_name: {
+                        "global_formal_observation_count": 0,
+                        "global_candidate_observation_count": 0,
+                        "assigned_observation_count": 0,
+                        "metric_eligible_fused_player_count": 0,
+                    }
+                    for end_name in ("end_a", "end_b", "unknown")
+                },
+                "metric_scope_ticks": 0,
+                "roster_anchor_audit": {
+                    "confirmed_player_ids": [],
+                    "unresolved_reasons": {},
+                },
+            }
+            for label, spec in specs.items()
+        }
 
     # ---- 主循环 ---------------------------------------------------------------
 
@@ -254,6 +375,12 @@ class MultiViewJointRun:
             raise ValueError("reference frame range must be positive")
         tick_indices = list(range(reference_frame_start, reference_frame_end, stride))
         total_ticks = len(tick_indices)
+        first_timestamp_s = self._source_timestamp_for_frame(tick_indices[0], reference_fps)
+        last_timestamp_s = self._source_timestamp_for_frame(tick_indices[-1], reference_fps)
+        self._configure_perception_stage_trace(
+            first_timestamp_s,
+            last_timestamp_s + stride / reference_fps,
+        )
         metric_start = metric_frame_start if metric_frame_start is not None else reference_frame_start
         metric_end = metric_frame_end if metric_frame_end is not None else reference_frame_end
         if metric_start < reference_frame_start or metric_end > reference_frame_end or metric_end <= metric_start:
@@ -295,6 +422,7 @@ class MultiViewJointRun:
                     self.ball_processor.process_tick(tick_id=tick_number, bundle=bundle)
             tick_authoritative = self._tick_is_authoritative(bundle)
             take_ms = bundle.take_timestamp_ms
+            self._processed_tick_timestamps_ms.append(float(take_ms))
             f0_tick_metadata[tick_number] = {
                 "canonical_timestamp_ms": take_ms,
                 "reference_frame_index": ref_idx,
@@ -485,6 +613,13 @@ class MultiViewJointRun:
                     continue
                 self._consecutive_missing[view_id] = 0
                 prepared_by_view[view_id] = prepared
+                # Production two-phase runtimes expose the distinct raw and
+                # court-ROI stages. Legacy adapters leave those stages unknown.
+                if hasattr(prepared, "raw_detections"):
+                    funnel = self.perception_funnel[view_id]
+                    funnel["available_ticks"] += 1
+                    funnel["raw_detection_count"] += len(getattr(prepared, "raw_detections", ()) or ())
+                    funnel["roi_filtered_base_count"] += len(getattr(prepared, "roi_filtered_base", ()) or ())
 
             # ---- current-tick barrier：两路 prepare 完成后做 same-tick 决策 ----
             if self.recovery_config.same_tick_recovery_enabled and prepared_by_view:
@@ -507,6 +642,9 @@ class MultiViewJointRun:
                 if result is None:
                     continue
                 view_results[view_id] = result
+                funnel = self.perception_funnel[view_id]
+                funnel["local_track_count"] += len(getattr(result, "frame_detections", ()) or ())
+                funnel["local_candidate_count"] += len(getattr(result, "candidate_detections", ()) or ())
                 if getattr(result, "guided_detection_invoked", False):
                     self.recovery_funnel["guided_candidate_count"] = self.recovery_funnel.get(
                         "guided_candidate_count", 0
@@ -525,7 +663,9 @@ class MultiViewJointRun:
                         self.counter.get(f"{view_id}:recovery_reject_{reason}", 0) + int(count)
                     )
                 all_obs.extend(self._result_to_observations(view_id, result, take_ms))
-                candidate_obs.extend(self._result_to_candidate_observations(view_id, result, take_ms))
+                view_candidates = self._result_to_candidate_observations(view_id, result, take_ms)
+                candidate_obs.extend(view_candidates)
+                funnel["global_candidate_observation_count"] += len(view_candidates)
                 guided_obs_count = sum(
                     1 for obs in all_obs if obs.view_id == view_id and obs.detection_origin == "guided_roi"
                 )
@@ -571,6 +711,51 @@ class MultiViewJointRun:
                     self.orientations,
                     tick=tick_number,
                 )
+            candidate_observation_ids = {id(observation) for observation in candidate_obs}
+            for observation in [*all_obs, *candidate_obs]:
+                end = self._canonical_end_for_y(observation.canonical_y_ft)
+                self.end_funnel[end]["global_input_observation_count"] += 1
+                if id(observation) in candidate_observation_ids:
+                    self.end_funnel[end]["global_candidate_observation_count"] += 1
+            for update in updates:
+                end = self._canonical_end_for_y(update.observation.canonical_y_ft)
+                self.end_funnel[end]["assigned_observation_count"] += 1
+                # 7.2：累计已分配 global 身份的端位观测，供锚点端位冲突时重新裁决。
+                self.registry.observe_roster_end_evidence(update.global_id, end)
+            self._process_frozen_roster_anchors(
+                observations=[*all_obs, *candidate_obs],
+                anchor_evidence_observations=[
+                    observation
+                    for view_id, result in view_results.items()
+                    for observation in self._result_to_anchor_evidence_observations(view_id, result, take_ms)
+                ],
+                take_timestamp_ms=take_ms,
+            )
+            if self.runtime_roster is not None:
+                assigned_global_by_observation = {id(update.observation): update.global_id for update in updates}
+                for observation in [*all_obs, *candidate_obs]:
+                    global_id = assigned_global_by_observation.get(id(observation))
+                    state = self.registry.players.get(global_id) if global_id else None
+                    if state is not None and state.frozen_identity_confirmed:
+                        continue
+                    if observation.bbox is None and observation.image_footpoint is None:
+                        continue
+                    self._anonymous_overlay_observations.append({
+                        "canonical_tick": tick_number,
+                        "reference_frame_index": ref_idx,
+                        "view_id": observation.view_id,
+                        "source_frame_index": observation.source_frame_index,
+                        "timestamp_seconds": take_ms / 1000.0,
+                        "observation_id": (
+                            f"{observation.view_id}:{observation.tracklet_lineage_id}"
+                            if observation.tracklet_lineage_id else
+                            f"{observation.view_id}:track:{observation.track_id}:epoch:{observation.local_identity_epoch}"
+                        ),
+                        "bbox": list(observation.bbox) if observation.bbox is not None else None,
+                        "footpoint": list(observation.image_footpoint) if observation.image_footpoint is not None else None,
+                        "source_confidence": min(1.0, max(0.0, float(observation.confidence or 0.0))),
+                        "detection_origin": observation.detection_origin,
+                    })
             self._local_slot_events.extend(
                 dict(event)
                 for event in (getattr(self.associator, "last_tick_local_slot_events", None) or [])
@@ -578,6 +763,16 @@ class MultiViewJointRun:
             # D1:conflict 仲裁使用 pre-tick prediction（tick barrier 前冻结,含 uncertainty）
             fused = self.associator.fuse_assignments(
                 updates, include_tentative=True, predictions=predictions,
+            )
+            self._record_perception_trace_window(
+                timestamp_s=take_ms / 1000.0,
+                metric_eligible_tick=metric_eligible_tick,
+                prepared_by_view=prepared_by_view,
+                view_results=view_results,
+                observations=all_obs,
+                candidate_observations=candidate_obs,
+                updates=updates,
+                fused=fused,
             )
             if self.ball_processor is not None and hasattr(self.ball_processor, "commit_tick"):
                 # 当前 tick 的球员观察和 global identity 已完成；语义策略在此之后
@@ -939,6 +1134,7 @@ class MultiViewJointRun:
             "reference_frame_range": {"start": reference_frame_start, "end": reference_frame_end},
             "metric_frame_range": {"start": metric_start, "end": metric_end},
             "processed_tick_count": total_ticks,
+            "processed_tick_timestamps_ms": list(self._processed_tick_timestamps_ms),
             "canonical_frame_id": (
                 self.canonical_frame_ref.frame_id if self.canonical_frame_ref is not None else None
             ),
@@ -950,10 +1146,19 @@ class MultiViewJointRun:
                 1 for tick_index in tick_indices if self._tick_authoritative_by_index.get(tick_index, False)
             ),
             "frame_status_counts": dict(self.clock.status_counts),
+            "perception_funnel": {
+                "per_view": {key: dict(value) for key, value in self.perception_funnel.items()},
+                "per_canonical_end": {key: dict(value) for key, value in self.end_funnel.items()},
+                "end_split_semantics": "canonical court y; 0..22=end_a, 22..44=end_b; 1.5ft around net unresolved",
+            },
+            "perception_stage_trace": self.perception_stage_trace,
             "p1_online_recovery_config": self.recovery_config.snapshot(),
             "recovery_funnel": dict(self.recovery_funnel),
             "roi_recovery": {"per_view": per_view_roi_recovery},
             "association_counters": dict(getattr(self.associator, "diagnostics", {})),
+            "provisional_replacement_events": list(
+                getattr(self.registry, "provisional_replacement_events", ())
+            ),
             "candidate_recovery": (
                 candidate_recovery_snapshot()
                 if callable(candidate_recovery_snapshot)
@@ -975,6 +1180,12 @@ class MultiViewJointRun:
                     "player_id": _roster_canonical_player_id(state, self.reference_view_id),
                     "label": _roster_display_label(state, self.reference_view_id),
                     "status": state.roster_status,
+                    "canonical_end": state.roster_end,
+                    "frozen_player_id": state.frozen_player_id,
+                    "frozen_identity_confirmed": state.frozen_identity_confirmed,
+                    "frozen_identity_confirmed_from_ms": state.frozen_identity_confirmed_from_ms,
+                    "frozen_identity_evidence": dict(state.frozen_identity_evidence),
+                    "provisional_replacement_history": list(state.provisional_replacement_history),
                     "lifecycle": state.lifecycle,
                     "cross_view_anchored": state.cross_view_anchored,
                     "bindings": {
@@ -1000,6 +1211,16 @@ class MultiViewJointRun:
             "confirmed_player_count": sum(
                 1 for s in self.registry.players.values() if s.roster_status == "confirmed"
             ),
+            "frozen_roster": {
+                "status": getattr(self.runtime_roster, "status", "unavailable"),
+                "reason": getattr(self.runtime_roster, "reason", "roster_runtime_unavailable"),
+                "roster_hash": getattr(self.runtime_roster, "roster_hash", None),
+                "initial_team_a_end": getattr(self.runtime_roster, "initial_team_a_end", None),
+                "anchor_binding_audit": self._build_frozen_anchor_audit(),
+                "confirmed_count": sum(
+                    1 for state in self.registry.players.values() if state.frozen_identity_confirmed
+                ),
+            },
         }
         if analysis_window is not None:
             diagnostics["analysis_window"] = analysis_window
@@ -1124,8 +1345,266 @@ class MultiViewJointRun:
             recovery_evidence=list(self._recovery_evidence),
             display_diagnostics_payload=display_diagnostics_payload,
             display_diagnostics_error=display_diagnostics_error,
+            anonymous_overlay_observations=list(self._anonymous_overlay_observations),
             ball_analysis=ball_analysis,
         )
+
+    def _process_frozen_roster_anchors(
+        self,
+        *,
+        observations: list[JointObservation],
+        take_timestamp_ms: float,
+        anchor_evidence_observations: list[JointObservation] | None = None,
+    ) -> None:
+        roster = self.runtime_roster
+        if roster is None or not getattr(roster, "available", False):
+            return
+        anchors = tuple(getattr(roster, "anchors", ()) or ())
+        if not anchors or not observations and not anchor_evidence_observations:
+            return
+        # A transition tick can expose the same tracker ID through both the
+        # formal and candidate adapters. Keep one geometric witness per source
+        # track, preferring the formal observation when available.
+        anchor_observations: dict[tuple[str, int | str], JointObservation] = {}
+        observation_priority = {
+            "anchor_evidence": 0,
+            "candidate": 1,
+            "unassigned_formal": 2,
+            "tentative": 2,
+            "detected": 2,
+        }
+        for observation in [*observations, *(anchor_evidence_observations or [])]:
+            identity = (
+                (observation.view_id, int(observation.track_id))
+                if observation.track_id is not None
+                else (observation.view_id, observation.tracklet_lineage_id or self.associator.observation_key(observation))
+            )
+            existing = anchor_observations.get(identity)
+            if existing is None or observation_priority.get(observation.tracking_status, 0) > observation_priority.get(
+                existing.tracking_status, 0
+            ):
+                anchor_observations[identity] = observation
+        matches, reasons, competition_evidence = match_anchor_observations(
+            anchors, list(anchor_observations.values())
+        )
+        for anchor in anchors:
+            if anchor.player_id in reasons:
+                prior_audit = self._frozen_anchor_audit.get(anchor.player_id)
+                if not (prior_audit and prior_audit.get("confirmed")):
+                    if prior_audit and prior_audit.get("reason") == "bootstrap_binding_waiting_global_association" and (
+                        reasons[anchor.player_id] == "bootstrap_binding_no_simultaneous_observation"
+                    ):
+                        continue
+                    self._frozen_anchor_audit[anchor.player_id] = {
+                        "canonical_player_id": anchor.player_id,
+                        "candidate_id": anchor.candidate_id,
+                        "source_view_id": anchor.view_id,
+                        "anchor_timestamp_ms": anchor.timestamp_ms,
+                        "formal_canonical_player_id": None,
+                        "global_player_id": None,
+                        "tracklet_lineage_id": None,
+                        "local_identity_epoch": None,
+                        "confirmed": False,
+                        "method": "unavailable",
+                        "reason": reasons[anchor.player_id],
+                        # 7.1：落败槽位保留竞争证据（胜者、双方证据、裁决规则）。
+                        "competition": competition_evidence.get(anchor.player_id),
+                    }
+        for anchor, observation, evidence in matches:
+            local_key = self._frozen_anchor_track_key(observation)
+            prior = self._frozen_anchor_track_keys.get(local_key)
+            if prior is not None and prior[0] != anchor.player_id:
+                # 7.1：同一tracklet 已被证据更强的槽位占用时，本槽位落败并留证；
+                # 保留既有槽位的归属，不再让"先到者"无条件独占。
+                self._frozen_anchor_audit[anchor.player_id] = {
+                    "canonical_player_id": anchor.player_id,
+                    "candidate_id": anchor.candidate_id,
+                    "source_view_id": anchor.view_id,
+                    "anchor_timestamp_ms": anchor.timestamp_ms,
+                    "confirmed": False,
+                    "method": "unavailable",
+                    "reason": "bootstrap_binding_tracklet_competes_for_slots",
+                    "competition": {
+                        "winner_player_id": prior[0],
+                        "winner_evidence": prior[1],
+                        "loser_evidence": evidence,
+                        "resolution_rule": "court_distance_then_bbox_iou_then_time_delta",
+                    },
+                }
+                continue
+            enriched_match = {
+                **evidence,
+                "track_id": observation.track_id,
+                "tracklet_lineage_id": observation.tracklet_lineage_id,
+                "local_identity_epoch": observation.local_identity_epoch,
+                "local_identity_reason": observation.local_identity_reason,
+                "tracking_status": observation.tracking_status,
+            }
+            self._frozen_anchor_track_keys[local_key] = (anchor.player_id, enriched_match)
+            self._frozen_anchor_audit[anchor.player_id] = {
+                "canonical_player_id": anchor.player_id,
+                "candidate_id": anchor.candidate_id,
+                "bootstrap_run_id": anchor.bootstrap_run_id,
+                "source_view_id": anchor.view_id,
+                "anchor_timestamp_ms": anchor.timestamp_ms,
+                "formal_canonical_player_id": None,
+                "global_player_id": None,
+                "track_id": observation.track_id,
+                "tracklet_lineage_id": observation.tracklet_lineage_id,
+                "local_identity_epoch": int(observation.local_identity_epoch),
+                "confirmed": False,
+                "method": "unavailable",
+                "reason": "bootstrap_binding_waiting_global_association",
+                "evidence": enriched_match,
+            }
+
+        for observation in observations:
+            local_key = self._frozen_anchor_track_key(observation)
+            assignment = self._frozen_anchor_track_keys.get(local_key)
+            if assignment is None:
+                continue
+            player_id, evidence = assignment
+            global_id = self.associator.mapping.get(self.associator.mapping_key(observation))
+            if not global_id:
+                global_id = self.registry.historical_bindings.get(
+                    (observation.view_id, self.associator.observation_key(observation))
+                )
+            if not global_id:
+                continue
+            anchor = next((item for item in anchors if item.player_id == player_id), None)
+            if anchor is None:
+                continue
+            enriched_evidence = {
+                **evidence,
+                "view_id": observation.view_id,
+                "global_player_id": global_id,
+                "track_id": observation.track_id,
+                "tracklet_lineage_id": observation.tracklet_lineage_id,
+                "local_identity_epoch": observation.local_identity_epoch,
+                "local_identity_reason": observation.local_identity_reason,
+                "tracking_status": observation.tracking_status,
+            }
+            confirmed, reason = self.registry.confirm_frozen_identity(
+                global_id,
+                player_id,
+                anchor_timestamp_ms=anchor.timestamp_ms,
+                evidence=enriched_evidence,
+                expected_end=anchor.end,
+            )
+            current = {
+                "canonical_player_id": player_id,
+                "candidate_id": anchor.candidate_id,
+                "bootstrap_run_id": anchor.bootstrap_run_id,
+                "source_view_id": anchor.view_id,
+                "anchor_timestamp_ms": anchor.timestamp_ms,
+                "formal_canonical_player_id": player_id if confirmed else None,
+                "global_player_id": global_id,
+                "track_id": observation.track_id,
+                "tracklet_lineage_id": observation.tracklet_lineage_id,
+                "local_identity_epoch": int(observation.local_identity_epoch),
+                "local_identity_reason": observation.local_identity_reason,
+                "confirmed": confirmed,
+                "method": "anchor_simultaneous_match" if confirmed else "unavailable",
+                "reason": reason,
+                "evidence": enriched_evidence,
+            }
+            self._frozen_anchor_audit[player_id] = current
+
+    def _frozen_anchor_track_key(self, observation: JointObservation) -> tuple[str, str, int]:
+        """Use a view's raw tracker ID across candidate/formal and local-label changes."""
+        if observation.track_id is not None:
+            return (observation.view_id, f"track:{int(observation.track_id)}", 0)
+        identity = observation.tracklet_lineage_id or self.associator.observation_key(observation)
+        return (observation.view_id, identity, int(observation.local_identity_epoch))
+
+    @staticmethod
+    def _result_to_anchor_evidence_observations(
+        view_id: str,
+        result: Any,
+        take_ms: float,
+    ) -> list[JointObservation]:
+        """Expose tracked bbox/time evidence to roster matching without position updates."""
+        detections_by_track: dict[int, tuple[Any, str]] = {}
+        for status, detections in (
+            ("detected", getattr(result, "frame_detections", ()) or ()),
+            ("candidate", getattr(result, "candidate_detections", ()) or ()),
+        ):
+            for detection in detections:
+                raw_track_id = getattr(detection, "track_id", None)
+                try:
+                    track_id = int(raw_track_id)
+                except (TypeError, ValueError):
+                    continue
+                prior = detections_by_track.get(track_id)
+                if prior is None or (prior[1] == "candidate" and status == "detected"):
+                    detections_by_track[track_id] = (detection, status)
+
+        source_timestamp_ms = getattr(result, "source_timestamp_ms", None)
+        if source_timestamp_ms is None:
+            source_timestamp_ms = take_ms
+        reason_by_track = getattr(result, "unassigned_formal_track_reasons_by_track", {}) or {}
+        return [
+            JointObservation(
+                view_id=view_id,
+                source_frame_index=int(getattr(result, "frame_index", 0)),
+                take_timestamp_ms=float(take_ms),
+                source_timestamp_ms=float(source_timestamp_ms),
+                local_x_ft=0.0,
+                local_y_ft=0.0,
+                track_id=track_id,
+                tracklet_lineage_id=f"{view_id}:track:{track_id}",
+                confidence=float(getattr(detection, "confidence", 0.0) or 0.0),
+                bbox=[float(value) for value in detection.bbox],
+                tracking_status="anchor_evidence",
+                local_identity_reason=(
+                    str(reason_by_track[track_id]) if track_id in reason_by_track else None
+                ),
+            )
+            for track_id, (detection, _status) in detections_by_track.items()
+            if getattr(detection, "bbox", None) is not None and len(detection.bbox) == 4
+        ]
+
+    def _build_frozen_anchor_audit(
+        self,
+        *,
+        current_timestamp_ms: float | None = None,
+    ) -> dict[str, object]:
+        roster = self.runtime_roster
+        anchors = tuple(getattr(roster, "anchors", ()) or ()) if roster is not None else ()
+        entries: list[dict[str, object]] = []
+        for index, anchor in enumerate(anchors):
+            entry = dict(self._frozen_anchor_audit.get(anchor.player_id) or {
+                "canonical_player_id": anchor.player_id,
+                "canonical_end": anchor.end,
+                "candidate_id": anchor.candidate_id,
+                "source_view_id": anchor.view_id,
+                "anchor_timestamp_ms": anchor.timestamp_ms,
+                "formal_canonical_player_id": None,
+                "global_player_id": None,
+                "tracklet_lineage_id": None,
+                "local_identity_epoch": None,
+                "confirmed": False,
+                "method": "unavailable",
+                "reason": (
+                    "bootstrap_binding_anchor_not_reached"
+                    if current_timestamp_ms is not None and current_timestamp_ms < anchor.timestamp_ms
+                    else "bootstrap_binding_no_simultaneous_observation"
+                ),
+            })
+            entry["slot_index"] = index
+            entry["canonical_end"] = anchor.end
+            entry["anchor_bbox"] = list(anchor.bbox) if anchor.bbox else None
+            entry["anchor_court_xy"] = list(anchor.canonical_xy) if anchor.canonical_xy else None
+            entry["evidence"] = entry.get("evidence") or {}
+            entries.append(entry)
+        confirmed_count = sum(bool(entry.get("confirmed")) for entry in entries)
+        return {
+            "schema_version": "bootstrap-binding-audit.v1",
+            "roster_hash": getattr(roster, "roster_hash", None),
+            "status": "available" if entries and confirmed_count == len(entries) else "partial" if confirmed_count else "unavailable",
+            "unavailable_reason": None if confirmed_count == len(entries) else "bootstrap_binding_partial",
+            "entries": entries,
+        }
 
     # ---- 内部 ---------------------------------------------------------------
 
@@ -1146,6 +1625,7 @@ class MultiViewJointRun:
                 "y_ft": observation.local_y_ft,
                 "quality": observation.confidence,
                 "view_player_id": observation.view_player_id,
+                "local_identity_reason": observation.local_identity_reason,
                 "local_identity_epoch": observation.local_identity_epoch,
                 "tracklet_lineage_id": observation.tracklet_lineage_id,
                 "source_track_id": observation.track_id,
@@ -1369,6 +1849,7 @@ class MultiViewJointRun:
             "canonical_x_ft": observation.canonical_x_ft,
             "canonical_y_ft": observation.canonical_y_ft,
             "view_player_id": observation.view_player_id,
+            "local_identity_reason": observation.local_identity_reason,
             "local_identity_epoch": observation.local_identity_epoch,
             "track_id": observation.track_id,
             "confidence": observation.confidence,
@@ -1386,6 +1867,102 @@ class MultiViewJointRun:
             if observation.image_footpoint is not None
             else None,
         }
+
+    def _record_perception_trace_window(
+        self,
+        *,
+        timestamp_s: float,
+        metric_eligible_tick: bool,
+        prepared_by_view: dict[str, Any],
+        view_results: dict[str, Any],
+        observations: list[JointObservation],
+        candidate_observations: list[JointObservation],
+        updates: list[Any],
+        fused: dict[str, tuple[float, float, list[str]]],
+    ) -> None:
+        labels = [
+            label
+            for label, spec in self._perception_trace_window_specs.items()
+            if float(spec["window_seconds"][0]) <= timestamp_s < float(spec["window_seconds"][1])
+        ]
+        for label in labels:
+            window = self.perception_stage_trace[label]
+            window["ticks"] += 1
+            if metric_eligible_tick:
+                window["metric_scope_ticks"] += 1
+            per_view = window["per_view"]
+            for view_id in self.runtimes:
+                row = per_view[view_id]
+                prepared = prepared_by_view.get(view_id)
+                if prepared is not None and hasattr(prepared, "raw_detections"):
+                    row["raw_detection_count"] += len(getattr(prepared, "raw_detections", ()) or ())
+                    row["roi_filtered_base_count"] += len(getattr(prepared, "roi_filtered_base", ()) or ())
+                result = view_results.get(view_id)
+                if result is not None:
+                    row["local_track_count"] += len(getattr(result, "frame_detections", ()) or ())
+                    row["local_candidate_count"] += len(getattr(result, "candidate_detections", ()) or ())
+                    unassigned_reasons = getattr(result, "unassigned_formal_track_reasons_by_track", {}) or {}
+                    row["unassigned_formal_observation_count"] += len(unassigned_reasons)
+                    reason_counts = row["unassigned_formal_reason_counts"]
+                    for reason in unassigned_reasons.values():
+                        reason_counts[str(reason)] = int(reason_counts.get(str(reason), 0)) + 1
+                formal = [item for item in observations if item.view_id == view_id]
+                candidates = [item for item in candidate_observations if item.view_id == view_id]
+                row["global_formal_observation_count"] += len(formal)
+                row["global_candidate_observation_count"] += len(candidates)
+                row["assigned_observation_count"] += sum(update.view_id == view_id for update in updates)
+            per_end = window["per_canonical_end"]
+            for observation in observations:
+                end = self._canonical_end_for_y(observation.canonical_y_ft)
+                per_end[end]["global_formal_observation_count"] += 1
+            for observation in candidate_observations:
+                end = self._canonical_end_for_y(observation.canonical_y_ft)
+                per_end[end]["global_candidate_observation_count"] += 1
+            for update in updates:
+                end = self._canonical_end_for_y(update.observation.canonical_y_ft)
+                per_end[end]["assigned_observation_count"] += 1
+            if metric_eligible_tick:
+                for global_id, (_x, y, views) in fused.items():
+                    identity_updates = [update for update in updates if update.global_id == global_id]
+                    if any(update.tentative for update in identity_updates):
+                        continue
+                    end = self._canonical_end_for_y(y)
+                    per_end[end]["metric_eligible_fused_player_count"] += 1
+                    for view_id in views:
+                        per_view[view_id]["metric_eligible_fused_player_count"] += 1
+
+            audit = self._build_frozen_anchor_audit(current_timestamp_ms=timestamp_s * 1000.0)
+            entries = audit.get("entries", [])
+            if isinstance(entries, list):
+                window["roster_anchor_audit"] = {
+                    "confirmed_player_ids": sorted(
+                        str(entry.get("canonical_player_id"))
+                        for entry in entries
+                        if isinstance(entry, dict) and entry.get("confirmed")
+                    ),
+                    "unresolved_reasons": {
+                        str(entry.get("canonical_player_id")): str(entry.get("reason") or "unconfirmed")
+                        for entry in entries
+                        if isinstance(entry, dict) and not entry.get("confirmed")
+                    },
+                }
+
+    @staticmethod
+    def _canonical_end_for_y(y: float | None) -> str:
+        if y is None or not 0.0 <= float(y) <= 44.0 or abs(float(y) - 22.0) <= 1.5:
+            return "unknown"
+        return "end_a" if float(y) < 22.0 else "end_b"
+
+    def _source_timestamp_for_frame(self, frame_index: int, reference_fps: float) -> float:
+        provider = self.reference_timing_provider
+        if provider is not None:
+            try:
+                timestamp = provider.take_timestamp_for_frame(frame_index)
+            except Exception:  # noqa: BLE001 - diagnostic window setup must not fail a run
+                timestamp = None
+            if timestamp is not None:
+                return float(timestamp)
+        return frame_index / reference_fps
 
     @staticmethod
     def _runtime_prepare(runtime: Any, sample: Any, timestamp_s: float, pre_tick_guidance: tuple) -> Any | None:
@@ -1573,19 +2150,32 @@ class MultiViewJointRun:
     ) -> list[JointObservation]:
         """把 ViewFrameResult 的球场位置转成 JointObservation(canonical 由 associator 归一化)。"""
         obs: list[JointObservation] = []
-        positions_by_track = {int(pos.track_id): pos for pos in result.frame_positions}
+        positions_by_track = {
+            int(pos.track_id): pos for pos in getattr(result, "frame_positions", [])
+        }
+        # Keep every formal on-court detection in the joint association input.
+        # A missing local P label is an identity gap, not a perception gap.
         formal_detections = [
             detection for detection in getattr(result, "frame_detections", [])
-            if getattr(detection, "player_id", None)
+            if getattr(detection, "track_id", None) is not None
         ]
-        # Lightweight legacy adapters may not expose formal detections. Production
-        # ViewTrackingSession uses this branch only for stable local identities.
+        # Legacy adapters without formal detection records expose positions only.
         candidates = formal_detections or (
-            [] if hasattr(result, "frame_detections") else list(result.frame_positions)
+            [] if hasattr(result, "frame_detections") else list(getattr(result, "frame_positions", []))
         )
+        tentative_track_ids = {int(track_id) for track_id in (getattr(result, "tentative_track_ids", ()) or ())}
+        identity_by_track = getattr(result, "local_identity_by_track", {}) or {}
+        reason_by_track = getattr(result, "unassigned_formal_track_reasons_by_track", {}) or {}
         for item in candidates:
+            raw_track_id = getattr(item, "track_id", None)
+            try:
+                track_id = int(raw_track_id)
+            except (TypeError, ValueError):
+                if formal_detections:
+                    continue
+                track_id = int(getattr(item, "track_id", 0))
             pos = (
-                positions_by_track.get(int(getattr(item, "track_id", 0)))
+                positions_by_track.get(track_id)
                 if formal_detections
                 else item
             )
@@ -1594,11 +2184,32 @@ class MultiViewJointRun:
             if pos.court_position is None:
                 continue
             track_id = int(pos.track_id)
-            player_id = getattr(item, "player_id", None) or getattr(
-                result, "local_identity_by_track", {}
-            ).get(track_id, "")
-            if not player_id:
+            tentative = track_id in tentative_track_ids
+            player_id = "" if tentative else (
+                getattr(item, "player_id", None) or identity_by_track.get(track_id, "")
+            )
+            if not player_id and formal_detections and (
+                not bool(getattr(pos, "valid", False))
+                or not bool(getattr(pos, "is_inside_court", False))
+                or getattr(pos, "projection_status", None) != "inside_court"
+            ):
                 continue
+            local_reason = (
+                str(reason_by_track.get(track_id))
+                if reason_by_track.get(track_id)
+                else "soft_takeover_tentative" if tentative
+                else None if player_id
+                else "no_local_player_identity"
+            )
+            tracklet_lineage = getattr(result, "local_tracklet_lineage_by_track", {}).get(track_id)
+            if not player_id or tentative:
+                # A tentative P guess must not make unrelated raw tracks share
+                # one local identity key or one lineage.
+                tracklet_lineage = f"{view_id}:track:{track_id}"
+            local_identity_epoch = (
+                int(getattr(result, "local_identity_epoch_by_track", {}).get(track_id, 0))
+                if player_id else 0
+            )
             obs.append(
                 JointObservation(
                     view_id=view_id,
@@ -1612,9 +2223,9 @@ class MultiViewJointRun:
                     local_y_ft=pos.court_position[1],
                     canonical_x_ft=None,
                     canonical_y_ft=None,
-                    view_player_id=player_id,
-                    local_identity_epoch=int(getattr(result, "local_identity_epoch_by_track", {}).get(track_id, 0)),
-                    tracklet_lineage_id=getattr(result, "local_tracklet_lineage_by_track", {}).get(track_id),
+                    view_player_id=str(player_id),
+                    local_identity_epoch=local_identity_epoch,
+                    tracklet_lineage_id=tracklet_lineage,
                     track_id=track_id,
                     confidence=pos.confidence or 0.0,
                     projection_confidence=pos.projection_confidence,
@@ -1634,7 +2245,7 @@ class MultiViewJointRun:
                             frame_height_px=float(getattr(item, "source_height", 0) or 0) or None,
                             projection_confidence=pos.projection_confidence,
                             footpoint_method=pos.footpoint_method,
-                            tracking_status="detected",
+                            tracking_status="detected" if player_id else "unmatched",
                         )
                     ),
                     source_timestamp_ms=getattr(result, "source_timestamp_ms", None),
@@ -1646,7 +2257,12 @@ class MultiViewJointRun:
                     selection_error_ms=getattr(result, "selection_error_ms", None),
                     timing_authority=getattr(result, "timing_authority", "missing"),
                     sync_quality=getattr(result, "sync_quality", "unknown"),
-                    tracking_status=str(getattr(pos, "tracking_status", "detected")),
+                    tracking_status=(
+                        "tentative" if tentative
+                        else "detected" if player_id
+                        else "unassigned_formal"
+                    ),
+                    local_identity_reason=local_reason,
                 )
             )
         return obs
@@ -1664,7 +2280,6 @@ class MultiViewJointRun:
             int(pos.track_id): pos
             for pos in positions
         }
-        lineage_by_track = getattr(result, "candidate_tracklet_lineage_by_track", {}) or {}
         candidates: list[JointObservation] = []
         for detection in getattr(result, "candidate_detections", []) or []:
             raw_track_id = getattr(detection, "track_id", None)
@@ -1689,7 +2304,7 @@ class MultiViewJointRun:
             if getattr(result, "observation_origin_by_track", {}).get(track_id, "base") != "base":
                 continue
             bbox = list(position.bbox)
-            candidate_lineage = lineage_by_track.get(track_id) or f"unlocked_track:{track_id}"
+            candidate_lineage = f"{view_id}:track:{track_id}"
             candidates.append(
                 JointObservation(
                     view_id=view_id,
@@ -1702,7 +2317,7 @@ class MultiViewJointRun:
                     local_x_ft=float(position.court_position[0]),
                     local_y_ft=float(position.court_position[1]),
                     view_player_id="",
-                    tracklet_lineage_id=f"{view_id}:{candidate_lineage}",
+                    tracklet_lineage_id=candidate_lineage,
                     track_id=track_id,
                     confidence=float(getattr(detection, "confidence", position.confidence) or 0.0),
                     projection_confidence=position.projection_confidence,
@@ -1731,6 +2346,7 @@ class MultiViewJointRun:
                     timing_authority=getattr(result, "timing_authority", "missing"),
                     sync_quality=getattr(result, "sync_quality", "unknown"),
                     tracking_status="candidate",
+                    local_identity_reason="unlocked_candidate",
                 )
             )
         return candidates
@@ -1746,6 +2362,8 @@ def _roster_canonical_player_id(state, reference_view_id: str) -> str | None:
     - 仅有 non-reference evidence → 暂缓分配（返回 None）；
     - 整场 reference 缺失 → 由 composer 用 deterministic fallback（slot 顺序）兜底。
     """
+    if getattr(state, "frozen_identity_confirmed", False) and getattr(state, "frozen_player_id", None):
+        return str(state.frozen_player_id)
     binding = state.view_bindings.get(reference_view_id)
     if binding is not None and binding.view_player_id:
         pid = binding.view_player_id

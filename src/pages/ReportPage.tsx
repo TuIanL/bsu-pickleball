@@ -284,7 +284,7 @@ export function ReportPage({
           </div>
           <div className="rounded-3xl border border-[var(--ui-brand)]/25 bg-[var(--ui-brand-solid)]/10 p-6">
             <span className="text-sm font-bold text-[var(--ui-brand-deep)]">{definition.heroMetricLabel}</span>
-            <strong className="mt-4 block text-5xl font-black text-[#13A12C]">{definition.heroMetric}</strong>
+            <strong className="mt-4 block text-5xl font-black text-[var(--ui-success-deep)]">{definition.heroMetric}</strong>
             <button className="mt-6 green-button w-full" onClick={() => onNavigate("/training")} type="button">
               查看相关训练
               <ArrowRight size={16} aria-hidden="true" />

@@ -38,6 +38,9 @@ class JointOverlayEvidenceBundle:
     view_ids: tuple[str, ...] = ("cam_1", "cam_2")
     # global_player_id → canonical Player_N（复用 _build_roster_map 产物）
     roster_map: dict[str, str] = field(default_factory=dict)
+    # Confirmed P identity may begin at a mid-video anchor; earlier samples
+    # remain anonymous until a backward continuity proof exists.
+    identity_start_ms_by_global: dict[str, float] = field(default_factory=dict)
     # view_id → ViewGeometry（orientation / inverse_homography / frame size）
     view_geometry: dict[str, ViewGeometry] = field(default_factory=dict)
     # final fused trajectory samples：global_player_id → {reference_frame_index: sample}
@@ -52,10 +55,13 @@ class JointOverlayEvidenceBundle:
     last_real_observed_ms: dict[tuple[str, str], float] = field(default_factory=dict)
     # bootstrap 启动窗口展示回填：(player_id, reference_frame_index) → 真实观测（display-only）
     bootstrap_backfill: dict[tuple[str, int], BootstrapBackfillObservation] = field(default_factory=dict)
+    # Real detections/tracks without an audited frozen P identity.
+    anonymous_observations: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "view_ids", tuple(self.view_ids))
         object.__setattr__(self, "roster_map", dict(self.roster_map))
+        object.__setattr__(self, "identity_start_ms_by_global", dict(self.identity_start_ms_by_global))
         object.__setattr__(self, "view_geometry", dict(self.view_geometry))
         object.__setattr__(self, "fused_samples", {
             gid: dict(samples) for gid, samples in self.fused_samples.items()
@@ -66,6 +72,9 @@ class JointOverlayEvidenceBundle:
         object.__setattr__(self, "recovered_observations", dict(self.recovered_observations))
         object.__setattr__(self, "last_real_observed_ms", dict(self.last_real_observed_ms))
         object.__setattr__(self, "bootstrap_backfill", dict(self.bootstrap_backfill))
+        object.__setattr__(self, "anonymous_observations", {
+            key: [dict(item) for item in values] for key, values in self.anonymous_observations.items()
+        })
 
     # ---- 只读查询 ----------------------------------------------------------
 
@@ -108,11 +117,13 @@ def build_overlay_evidence_bundle(
     f0_snapshot: F0RefinementSnapshot | None,
     reference_view_id: str,
     roster_map: dict[str, str],
+    identity_start_ms_by_global: dict[str, float] | None = None,
     view_geometry: dict[str, ViewGeometry] | None = None,
     fused_trajectory: Mapping[str, Any] | None = None,
     recovered_observations: list[RecoveredViewObservation] | None = None,
     final_source: str = "first_pass_f0",
     bootstrap_backfill: list[BootstrapBackfillObservation] | None = None,
+    anonymous_observations: list[dict[str, Any]] | None = None,
 ) -> JointOverlayEvidenceBundle:
     """从 joint run 产物组装只读 evidence bundle。
 
@@ -140,6 +151,12 @@ def build_overlay_evidence_bundle(
         fused_positions.setdefault(gid, {})[frame_index] = (float(x), float(y))
 
     recovered_map: dict[tuple[str, int], RecoveredViewObservation] = {}
+    anonymous_map: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for item in anonymous_observations or []:
+        view_id = str(item.get("view_id") or "")
+        canonical_tick = item.get("canonical_tick")
+        if view_id and isinstance(canonical_tick, int):
+            anonymous_map.setdefault((view_id, canonical_tick), []).append(dict(item))
     last_real_observed_ms: dict[tuple[str, str], float] = {}
     for observation in recovered_observations or []:
         key = (observation.global_player_id, observation.canonical_tick)
@@ -168,6 +185,7 @@ def build_overlay_evidence_bundle(
         reference_view_id=reference_view_id,
         view_ids=tuple(f0_snapshot.view_ids) if f0_snapshot is not None else ("cam_1", "cam_2"),
         roster_map=dict(roster_map),
+        identity_start_ms_by_global=dict(identity_start_ms_by_global or {}),
         view_geometry=dict(view_geometry or {}),
         fused_samples=fused_samples,
         fused_positions=fused_positions,
@@ -175,4 +193,5 @@ def build_overlay_evidence_bundle(
         final_source=str(final_source),
         last_real_observed_ms=last_real_observed_ms,
         bootstrap_backfill=bootstrap_map,
+        anonymous_observations=anonymous_map,
     )

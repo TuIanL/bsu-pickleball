@@ -149,11 +149,11 @@ export function ReportVisualization({
               </svg>
               <div className="absolute bottom-6 right-6 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/90 px-3 py-2 text-xs shadow-sm">
                 <div className="flex items-center gap-2">
-                  <span className="inline-block h-2.5 w-5 rounded-full bg-gradient-to-r from-[#86EFAC] to-[#16A34A]" />
+                  <span className="inline-block h-2.5 w-5 rounded-full bg-gradient-to-r from-[var(--ui-success-border)] to-[var(--ui-success-deep)]" />
                   <span className="font-semibold text-[var(--ui-ink)]">轨迹路径</span>
                 </div>
                 <div className="mt-1 flex items-center gap-2">
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#D9FF3F] border border-[#16A34A]" />
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[var(--ui-display-lime)] border border-[var(--ui-success-deep)]" />
                   <span className="text-slate-600">终点</span>
                 </div>
                 <div className="flex items-center gap-2">

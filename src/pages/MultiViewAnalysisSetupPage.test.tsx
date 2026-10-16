@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseLocation } from "../app/router";
+import type { NavigateFn } from "../app/navigationTypes";
 
 const mocks = vi.hoisted(() => ({
   getCaptureTake: vi.fn(),
@@ -29,6 +31,18 @@ vi.mock("../services/analysisClient", () => ({
   getFusedManifest: mocks.getFusedManifest,
   getFusionDiagnostics: mocks.getFusionDiagnostics,
 }));
+
+function RoutedMultiViewAnalysisSetupPage({ onNavigate }: { onNavigate: NavigateFn }) {
+  const route = parseLocation(window.location.pathname, window.location.search);
+  return (
+    <MultiViewAnalysisSetupPage
+      captureTakeId={route.name === "multiview-setup" ? route.captureTakeId : ""}
+      routeSessionId={route.name === "multiview-setup" ? route.routeSessionId : undefined}
+      returnParam={route.name === "multiview-setup" ? route.returnParam : undefined}
+      onNavigate={onNavigate}
+    />
+  );
+}
 
 const FOUR_POINTS = [
   { id: "top_left", label: "远端左角", viewX: 10, viewY: 10, x: 10, y: 10 },
@@ -197,7 +211,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     // 关键回归断言：绝不能用 take id 去查 sync 会话（否则 404 "同步录制会话 ct_... 不存在"）
     await waitFor(() => expect(mocks.getSyncRecording).toHaveBeenCalledWith(SYNC_SESSION_ID));
@@ -210,7 +224,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     await waitFor(() => expect(mocks.getSyncRecording).toHaveBeenCalledWith(SYNC_SESSION_ID));
     expect(mocks.getSyncRecording).not.toHaveBeenCalledWith(TAKE_ID);
@@ -222,7 +236,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     // 步骤指示器只有三项
     for (const label of ["球场标定", "球网标定", "名册与确认"]) {
@@ -244,7 +258,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     const orientationHeading = await screen.findByText("机位朝向");
     const courtPanel = screen.getByTestId("court-calibration-panel");
@@ -261,7 +275,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     const nextButton = await screen.findByRole("button", { name: "下一步：球网标定" });
     // 未完成标定时仍禁用（门控靠两路完成度，而不是 take.status）
@@ -278,7 +292,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID, { registered_video_ids: { cam_1: "video-a" } }));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     const nextButton = await screen.findByRole("button", { name: "下一步：球网标定" });
     expect((nextButton as HTMLButtonElement).disabled).toBe(true);
@@ -292,7 +306,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
     const onNavigate = vi.fn();
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={onNavigate} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={onNavigate} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();
@@ -311,7 +325,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "确认 A 视角球场四角" }));
 
@@ -332,7 +346,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();
@@ -362,7 +376,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus({ state, analysis_allowed: allowed, reason_codes: [state] }));
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     const statusBar = await screen.findByTestId("material-status-bar");
     expect(within(statusBar).getByText(label)).toBeTruthy();
@@ -383,7 +397,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
     mocks.createMultiviewAnalysisJob.mockRejectedValue(new Error("sync preflight failed"));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();
@@ -407,7 +421,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
     mocks.createMultiviewAnalysisJob.mockResolvedValue({ id: "job-debug" });
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();
@@ -430,7 +444,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
     mocks.createMultiviewAnalysisJob.mockResolvedValue({ id: "job-shared-profile" });
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();
@@ -471,7 +485,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.createMultiviewAnalysisJob.mockResolvedValue({ id: "job-parent" });
     const onNavigate = vi.fn();
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={onNavigate} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={onNavigate} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();
@@ -492,7 +506,7 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
     mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID, { duration_sec: 300 }));
 
-    render(<MultiViewAnalysisSetupPage captureTakeId={TAKE_ID} onNavigate={vi.fn()} />);
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
 
     await screen.findByTestId("court-calibration-panel");
     completeCourtStep();

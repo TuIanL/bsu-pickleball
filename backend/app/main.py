@@ -1,8 +1,10 @@
 import os as _os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # 导入各个模块的路由
@@ -27,16 +29,24 @@ from app.api.routes_video import router as video_router
 
 # 导入配置和日志设置
 from app.core.config import get_settings
+from app.core.api_auth import local_documentation_enabled, require_api_token, validate_api_auth_configuration
 from app.core.logging import configure_logging
 from app.core.upload_limit import UploadBodyLimitMiddleware
 from app.database import init_db
-from app.services.mock_analysis import recover_zombie_jobs, start_analysis_worker, stop_analysis_worker
+from app.services.mock_analysis import (
+    recover_zombie_jobs,
+    start_analysis_worker,
+    start_tmp_cleanup_scheduler,
+    stop_analysis_worker,
+    stop_tmp_cleanup_scheduler,
+)
 from app.services.timing_backfill import start_timing_backfill
 
 # 配置日志系统
 configure_logging()
 # 获取应用设置
 settings = get_settings()
+validate_api_auth_configuration()
 
 
 @asynccontextmanager
@@ -44,6 +54,7 @@ async def lifespan(_: FastAPI):
     """Initialize durable services before serving requests and stop workers on exit."""
     init_db()
     recover_zombie_jobs()
+    start_tmp_cleanup_scheduler()
     start_analysis_worker()
     _cleanup_stale_leases()
     # 异步后台补写缺失的 registered video PTS sidecar；失败仅告警，不阻塞启动
@@ -52,6 +63,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         stop_analysis_worker()
+        stop_tmp_cleanup_scheduler()
 
 
 # 初始化 FastAPI 应用
@@ -60,7 +72,33 @@ app = FastAPI(
     version=settings.app_version,
     description="匹克球视频上传、标定及运动分析的 MVP 后端基础框架。",
     lifespan=lifespan,
+    docs_url=None,
+    openapi_url=None,
+    redoc_url=None,
 )
+
+
+def _require_local_documentation(request: Request) -> None:
+    if not local_documentation_enabled(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def local_openapi(request: Request):
+    _require_local_documentation(request)
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def local_swagger(request: Request):
+    _require_local_documentation(request)
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def local_redoc(request: Request):
+    _require_local_documentation(request)
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
 
 # 添加跨域资源共享 (CORS) 中间件
 app.add_middleware(
@@ -98,6 +136,24 @@ app.include_router(scoring_calibration_router)
 _TEST_FRAMES_DIR = str(settings.resolved_static_test_frames_dir)
 _os.makedirs(_TEST_FRAMES_DIR, exist_ok=True)
 app.mount("/api/sync-recordings/test-frames", StaticFiles(directory=_TEST_FRAMES_DIR), name="test_frames")
+
+
+@app.middleware("http")
+async def protect_api_routes(request: Request, call_next):
+    """Protect every /api route and mount at one boundary, without per-route decorators."""
+    path = request.url.path
+    is_api_path = path == "/api" or path.startswith("/api/")
+    is_manual_calibration_path = path == "/calibration" or path.startswith("/calibration/")
+    if (is_api_path or is_manual_calibration_path) and request.method != "OPTIONS":
+        try:
+            require_api_token(authorization=request.headers.get("authorization"))
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+    return await call_next(request)
 
 
 def _cleanup_stale_leases() -> None:

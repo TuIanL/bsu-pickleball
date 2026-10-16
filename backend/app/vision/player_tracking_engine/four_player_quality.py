@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import defaultdict
 from typing import Any, Literal
 
@@ -100,8 +101,14 @@ class FourPlayerIdentificationQuality(BaseModel):
     players: dict[str, PlayerIdentificationSummary] = Field(default_factory=dict)
     funnel: PipelineFunnelCounters = Field(default_factory=PipelineFunnelCounters)
     candidate_recovery: CandidateRecoveryQuality = Field(default_factory=CandidateRecoveryQuality)
+    per_view_funnel: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    per_canonical_end_funnel: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    identity_slots: dict[str, dict[str, Any]] = Field(default_factory=dict)
     mapping_confirmation_available: bool = False
     mapping_confirmed_by_player: dict[str, bool | None] = Field(default_factory=dict)
+    # 7.3：roster.json 与 anchor_binding_audit 对同一槽位给出互斥结论时的证据。
+    # 非空即表示身份审计存在双源真相冲突，质量 verdict 必须 fail-closed。
+    mapping_conflict_with_audit: dict[str, dict[str, Any]] = Field(default_factory=dict)
     camera_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
     hard_invariants: dict[str, bool] = Field(default_factory=dict)
     absolute_gates: dict[str, bool] = Field(default_factory=dict)
@@ -162,6 +169,20 @@ def evaluate_quality(artifact: FourPlayerIdentificationQuality) -> FourPlayerIde
             set(artifact.mapping_confirmed_by_player) == set(CANONICAL_PLAYERS)
             and all(artifact.mapping_confirmed_by_player.get(player_id) is True for player_id in CANONICAL_PLAYERS)
         )
+    # 7.3：审计与 roster.json 结论冲突时无法判定哪个为真，fail-closed。
+    if artifact.mapping_conflict_with_audit:
+        hard["identity_audit_single_source"] = False
+    elif artifact.identity_slots or artifact.mapping_confirmation_available:
+        hard["identity_audit_single_source"] = True
+    if artifact.identity_slots:
+        confirmed_by_end = {
+            end: sum(
+                1 for slot in artifact.identity_slots.values()
+                if slot.get("status") == "confirmed" and slot.get("canonical_end") == end
+            )
+            for end in ("end_a", "end_b")
+        }
+        hard["two_confirmed_players_per_canonical_end"] = confirmed_by_end == {"end_a": 2, "end_b": 2}
     absolute: dict[str, bool] = {}
     for player_id in CANONICAL_PLAYERS:
         player = artifact.players[player_id]
@@ -286,25 +307,92 @@ def build_quality_from_joint_artifacts(
         isinstance(item, dict) and "mapping_confirmed" in item
         for item in roster_players
     )
-    mapping_confirmed_by_player = {
+    # 7.3：`roster.json` 的 `mapping_confirmed` 与 `frozen_roster.anchor_binding_audit`
+    # 曾各自独立求值，导致同一 Job 内 P4 同时被报成 confirmed 与 unconfirmed。
+    # 现在 audit 是唯一权威来源：roster.json 的结论只在 audit 无该槽位记录时作为
+    # 兼容回退；两者冲突时记入 `mapping_conflict_with_audit` 并使门槛判定为 fail。
+    roster_mapping_confirmed = {
         str(item.get("player_id")): bool(item.get("mapping_confirmed"))
         for item in roster_players
         if isinstance(item, dict)
         and str(item.get("player_id") or "") in CANONICAL_PLAYERS
     }
-    ticks = sorted({float(sample.get("timestamp_seconds") or 0.0) for sample in samples})
+    frozen_roster = dict((runtime_diagnostics or {}).get("frozen_roster") or {})
+    anchor_audit = dict(frozen_roster.get("anchor_binding_audit") or {})
+    audit_entries = {
+        str(entry.get("canonical_player_id")): entry
+        for entry in (anchor_audit.get("entries") or [])
+        if isinstance(entry, dict) and entry.get("canonical_player_id") in CANONICAL_PLAYERS
+    }
+    # 审计条目的 confirmed 必须同时满足 `confirmed is True` 且 formal 槽位回指本身，
+    # 否则一个 global 身份可同时声称多个 P 槽位（实测 P4 被 global_player_3/4 同时占用）。
+    audit_confirmed_by_player = {
+        player_id: (
+            entry.get("confirmed") is True
+            and entry.get("formal_canonical_player_id") == player_id
+        )
+        for player_id, entry in audit_entries.items()
+    }
+    mapping_conflict_with_audit: dict[str, dict[str, Any]] = {}
+    mapping_confirmed_by_player: dict[str, bool | None] = {}
+    for player_id in CANONICAL_PLAYERS:
+        audit_value = audit_confirmed_by_player.get(player_id)
+        roster_value = roster_mapping_confirmed.get(player_id)
+        if audit_value is None:
+            # 审计未覆盖该槽位：兼容回退到 roster.json，并标明来源不是权威审计。
+            mapping_confirmed_by_player[player_id] = roster_value
+            continue
+        mapping_confirmed_by_player[player_id] = audit_value
+        if roster_value is not None and roster_value != audit_value:
+            mapping_conflict_with_audit[player_id] = {
+                "audit_confirmed": audit_value,
+                "roster_json_confirmed": roster_value,
+                "audit_reason": audit_entries[player_id].get("reason"),
+                "audit_global_player_id": audit_entries[player_id].get("global_player_id"),
+            }
+    expected_end_by_player = {
+        player_id: str(entry.get("canonical_end"))
+        for player_id, entry in audit_entries.items()
+        if entry.get("canonical_end") in {"end_a", "end_b"}
+        and audit_confirmed_by_player.get(player_id) is True
+        and entry.get("formal_canonical_player_id") == player_id
+    }
+    processed_timestamps_ms = (runtime_diagnostics or {}).get("processed_tick_timestamps_ms")
+    has_processed_timeline = isinstance(processed_timestamps_ms, list) and bool(processed_timestamps_ms)
+    if has_processed_timeline:
+        ticks = sorted({float(value) / 1000.0 for value in processed_timestamps_ms})
+    else:
+        ticks = sorted({float(sample.get("timestamp_seconds") or 0.0) for sample in samples})
     duration = max(ticks) - min(ticks) if len(ticks) > 1 else 0.0
     timestamps: dict[str, list[float]] = defaultdict(list)
     source_tracks: dict[str, dict[str, set[int]]] = defaultdict(lambda: defaultdict(set))
     detection_ticks: dict[str, set[float]] = defaultdict(set)
+    perception_track_ids: dict[str, set[int]] = defaultdict(set)
+    perception_sample_ticks: dict[str, set[float]] = defaultdict(set)
+    eligible_samples_by_end: dict[str, int] = defaultdict(int)
     trajectory_ambiguous: dict[str, int] = defaultdict(int)
     trajectory_quarantined: dict[str, int] = defaultdict(int)
+    cross_side_samples: dict[str, int] = defaultdict(int)
     accepted_identity_statuses = {"confirmed_observed", "confirmed_recovered", "interpolated"}
     for sample in samples:
+        timestamp = float(sample.get("timestamp_seconds") or 0.0)
+        sample_end = _canonical_end_for_y(sample.get("y_ft"))
+        if bool(sample.get("metric_eligible")) and sample_end:
+            eligible_samples_by_end[sample_end] += 1
+        for view_id, observation in (sample.get("view_observations") or {}).items():
+            if not isinstance(observation, dict):
+                continue
+            track_id = observation.get("source_track_id")
+            if isinstance(track_id, int):
+                perception_track_ids[str(view_id)].add(track_id)
+                if bool(sample.get("metric_eligible")):
+                    perception_sample_ticks[str(view_id)].add(timestamp)
         player_id = global_to_player.get(str(sample.get("global_player_id")))
         if player_id is None:
             continue
-        timestamp = float(sample.get("timestamp_seconds") or 0.0)
+        expected_end = expected_end_by_player.get(player_id)
+        if bool(sample.get("metric_eligible")) and expected_end and sample_end in {"end_a", "end_b"} and sample_end != expected_end:
+            cross_side_samples[player_id] += 1
         identity_status = str(sample.get("identity_status", "confirmed_observed"))
         mapping_confirmed = (
             mapping_confirmed_by_player.get(player_id) is True
@@ -417,7 +505,9 @@ def build_quality_from_joint_artifacts(
         observed = sorted(set(timestamps[player_id]))
         gaps: list[float] = []
         if ticks:
-            if observed:
+            if has_processed_timeline:
+                gaps.append(_longest_gap_on_processed_timeline(ticks, observed))
+            elif observed:
                 gaps.extend([observed[0] - ticks[0], ticks[-1] - observed[-1]])
                 gaps.extend(b - a for a, b in zip(observed, observed[1:]))
             else:
@@ -442,6 +532,7 @@ def build_quality_from_joint_artifacts(
             ambiguous_count=ambiguous[player_id] + trajectory_ambiguous[player_id],
             quarantined_count=trajectory_quarantined[player_id],
             accepted_count=len(observed),
+            cross_side_count=cross_side_samples[player_id],
             local_slot_reassociation_violation_count=local_reassociation_violations[player_id],
             display_topology_transition_count=topology_transitions[player_id],
             appearance=AppearanceQualitySummary(
@@ -465,13 +556,53 @@ def build_quality_from_joint_artifacts(
                 ),
             ),
         )
+    raw_funnel = dict((runtime_diagnostics or {}).get("perception_funnel") or {})
+    raw_per_view = dict(raw_funnel.get("per_view") or {})
+    per_view_funnel: dict[str, dict[str, Any]] = {}
+    for view_id in set(raw_per_view) | set(perception_track_ids):
+        values = dict(raw_per_view.get(view_id) or {})
+        per_view_funnel[str(view_id)] = {
+            **values,
+            "global_metric_eligible_sample_count": len(perception_sample_ticks.get(str(view_id), set())),
+            "raw_detection_trace_available": "raw_detection_count" in values,
+        }
+    raw_by_end = dict(raw_funnel.get("per_canonical_end") or {})
+    per_end_funnel = {
+        end: {
+            **dict(raw_by_end.get(end) or {}),
+            "metric_eligible_sample_count": int(eligible_samples_by_end.get(end, 0)),
+        }
+        for end in ("end_a", "end_b", "unknown")
+    }
+    identity_slots: dict[str, dict[str, Any]] = {}
+    if frozen_roster or audit_entries:
+        for player_id in CANONICAL_PLAYERS:
+            entry = audit_entries.get(player_id) or {}
+            # 7.3：与 mapping_confirmed_by_player 共用同一判定，避免同一产物双口径。
+            confirmed = audit_confirmed_by_player.get(player_id) is True
+            identity_slots[player_id] = {
+                "status": "confirmed" if confirmed else "unconfirmed",
+                "reason": entry.get("reason") or (None if confirmed else "bootstrap_binding_no_simultaneous_observation"),
+                "canonical_end": entry.get("canonical_end"),
+                "global_player_id": entry.get("global_player_id") if confirmed else None,
+                "tracklet_lineage_id": entry.get("tracklet_lineage_id") if confirmed else None,
+                "anchor_timestamp_ms": entry.get("anchor_timestamp_ms"),
+                "raw_detection_count": None,
+                "local_track_count": None,
+                "metric_eligible_sample_count": summaries[player_id].canonical_ticks,
+                "conflicts_with_roster_json": player_id in mapping_conflict_with_audit,
+            }
     artifact = FourPlayerIdentificationQuality(
         job_id=job_id,
         algorithm_version=algorithm_version,
         thresholds=thresholds or IdentificationThresholds(),
         attempted_ticks=attempted,
         duration_seconds=duration,
-        confirmed_roster_count=int(roster.get("confirmed_player_count") or 0),
+        confirmed_roster_count=(
+            int(frozen_roster.get("confirmed_count") or 0)
+            if "confirmed_count" in frozen_roster
+            else int(roster.get("confirmed_player_count") or 0)
+        ),
         players=summaries,
         candidate_recovery=CandidateRecoveryQuality(
             available="minimum_consecutive_ticks" in candidate_recovery_runtime,
@@ -495,10 +626,14 @@ def build_quality_from_joint_artifacts(
         ),
         mapping_confirmation_available=mapping_confirmation_available,
         mapping_confirmed_by_player=mapping_confirmed_by_player,
+        mapping_conflict_with_audit=mapping_conflict_with_audit,
+        per_view_funnel=per_view_funnel,
+        per_canonical_end_funnel=per_end_funnel,
+        identity_slots=identity_slots,
         funnel=PipelineFunnelCounters(
             attempted_ticks=attempted,
-            base_detection_ticks=sum(len(values) for values in detection_ticks.values()),
-            tracker_fragments=sum(player.source_track_count for player in summaries.values()),
+            base_detection_ticks=sum(len(values) for values in perception_sample_ticks.values()),
+            tracker_fragments=sum(len(values) for values in perception_track_ids.values()),
             local_slot_reassociation_violation_count=sum(local_reassociation_violations.values()),
             display_topology_transition_count=sum(topology_transitions.values()),
             bbox_footpoint_inconsistency_count=sum(
@@ -511,6 +646,63 @@ def build_quality_from_joint_artifacts(
         camera_profiles=dict(association_appearance.get("profiles") or {}),
     )
     return evaluate_quality(artifact)
+
+
+def _canonical_end_for_y(value: Any) -> str:
+    try:
+        y = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if not 0.0 <= y <= 44.0 or abs(y - 22.0) <= 1.5:
+        return "unknown"
+    return "end_a" if y < 22.0 else "end_b"
+
+
+def _longest_gap_on_processed_timeline(ticks: list[float], observed: list[float]) -> float:
+    """Measure absence only over ticks the joint run actually attempted.
+
+    Selected rally windows can be separated by long unprocessed pauses. Those
+    pauses must not count as tracking misses, while an all-player dropout at the
+    tail of an analyzed window must still be included even when no trajectory
+    sample exists at the final attempted ticks.
+    """
+    if not ticks:
+        return 0.0
+    deltas = [right - left for left, right in zip(ticks, ticks[1:]) if right > left]
+    local_deltas = [delta for delta in deltas if delta <= 1.0]
+    cadence = sorted(local_deltas or deltas)[len(local_deltas or deltas) // 2] if deltas else 0.0
+    continuity_limit = max(0.5, cadence * 3.0)
+    segments: list[list[float]] = []
+    segment_start = 0
+    for index in range(1, len(ticks)):
+        if ticks[index] - ticks[index - 1] > continuity_limit:
+            segments.append(ticks[segment_start:index])
+            segment_start = index
+    segments.append(ticks[segment_start:])
+
+    match_tolerance = max(0.05, cadence * 0.51)
+    longest = 0.0
+    for segment in segments:
+        if not segment:
+            continue
+        start, end = segment[0], segment[-1]
+        matched: set[float] = set()
+        for timestamp in observed:
+            if timestamp < start - match_tolerance or timestamp > end + match_tolerance:
+                continue
+            insertion = bisect_left(segment, timestamp)
+            candidates = [index for index in (insertion - 1, insertion) if 0 <= index < len(segment)]
+            index = min(candidates, key=lambda candidate: abs(segment[candidate] - timestamp))
+            if abs(segment[index] - timestamp) <= match_tolerance:
+                matched.add(segment[index])
+        if not matched:
+            longest = max(longest, end - start)
+            continue
+        observed_ticks = sorted(matched)
+        gaps = [observed_ticks[0] - start, end - observed_ticks[-1]]
+        gaps.extend(right - left for left, right in zip(observed_ticks, observed_ticks[1:]))
+        longest = max(longest, *gaps)
+    return longest
 
 
 def unavailable_quality(job_id: str, detail: str) -> FourPlayerIdentificationQuality:

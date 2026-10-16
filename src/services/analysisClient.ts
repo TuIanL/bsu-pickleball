@@ -35,7 +35,16 @@ import type {
   PlayerDisplayDiagnosticsResponse,
   MatchStateSegmentationArtifactSummary,
   FormalSegmentationSummary,
+  AnalysisRunTraceResponse,
+  AnalysisJobLogsResponse,
 } from "../types/report";
+import {
+  AnalysisPayloadValidationError,
+  analysisJobListSchema,
+  analysisResultSchema,
+  captureTakeSummarySchema,
+  validateAnalysisPayload,
+} from "./analysisClientSchemas";
 import type { CaptureTakeRuntimeStatus } from "../types/captureRuntimeStatus";
 import type {
   MetricSnapshotArtifact,
@@ -77,7 +86,7 @@ import {
   type RosterConfirmationRequest,
 } from "../types/rallyContext";
 
-const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "/__analysis_api";
 const STORAGE_KEY = "pre-pickleball-analysis-jobs";
 const RECENT_JOB_KEY = "pre-pickleball-recent-analysis-job";
 export const RECENT_ANALYSIS_JOB_EVENT = "pre-pickleball-recent-analysis-job-change";
@@ -427,6 +436,11 @@ export function resolveAnalysisApiUrl(path: string): string {
   return toApiUrl(path);
 }
 
+/** Native media and JSON use the same authenticated local server in dev and preview. */
+function toBrowserResourceUrl(path: string): string {
+  return toApiUrl(path);
+}
+
 function stringifyBackendDetail(detail: unknown): string | undefined {
   if (detail == null) {
     return undefined;
@@ -741,7 +755,9 @@ export async function createAnalysisJob(request: AnalysisJobRequest): Promise<An
 
 export async function listAnalysisJobs(options: DemoFallbackOptions = {}): Promise<AnalysisJobSummary[]> {
   try {
-    const jobs = (await requestJson<AnalysisJobSummary[]>("/api/analysis/jobs")).map(normalizeAnalysisJobSummary);
+    const payload = await requestJson<unknown>("/api/analysis/jobs");
+    const jobs = validateAnalysisPayload<AnalysisJobSummary[]>(analysisJobListSchema, payload, "analysis job list")
+      .map(normalizeAnalysisJobSummary);
     if (jobs.length) {
       rememberAnalysisJob(jobs[0]);
       return jobs;
@@ -752,6 +768,7 @@ export async function listAnalysisJobs(options: DemoFallbackOptions = {}): Promi
     }
     return storedJobs;
   } catch (error) {
+    if (error instanceof AnalysisPayloadValidationError) throw error;
     const storedJobs = options.useDemoFallback ? getStoredJobSummaries() : [];
     if (storedJobs.length) {
       rememberAnalysisJob(storedJobs[0]);
@@ -915,7 +932,7 @@ export async function getMultiviewRecoveryEpisodes(jobId: string, filters: Recov
 }
 
 export function getMultiviewDebugVideoUrl(jobId: string): string {
-  return toApiUrl(`/api/analysis/jobs/${jobId}/multiview/debug-video`);
+  return toBrowserResourceUrl(`/api/analysis/jobs/${jobId}/multiview/debug-video`);
 }
 
 export async function deleteAnalysisJob(jobId: string, options: DemoFallbackOptions = {}): Promise<AnalysisDeleteResult> {
@@ -983,6 +1000,29 @@ export async function getAnalysisJob(jobId: string): Promise<AnalysisJobSummary 
   }
 }
 
+export async function getAnalysisRunTrace(jobId: string): Promise<AnalysisRunTraceResponse | null> {
+  try {
+    return await requestJson<AnalysisRunTraceResponse>(`/api/analysis/jobs/${jobId}/run-trace`);
+  } catch (error) {
+    // 轨迹不可用不是致命错误：调用方按 availability 降级展示，不打断任务页。
+    if (isAnalysisApiError(error) && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function getAnalysisJobLogs(jobId: string, tail = 200): Promise<AnalysisJobLogsResponse | null> {
+  try {
+    return await requestJson<AnalysisJobLogsResponse>(`/api/analysis/jobs/${jobId}/logs?tail=${tail}`);
+  } catch (error) {
+    if (isAnalysisApiError(error) && (error.status === 404 || error.status === 403)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function getAnalysisReport(jobId: string): Promise<AnalysisReport | null> {
   try {
     return await requestJson<AnalysisReport>(`/api/analysis/jobs/${jobId}/report`);
@@ -1000,9 +1040,15 @@ export async function getAnalysisReport(jobId: string): Promise<AnalysisReport |
 
 export async function getAnalysisResult(jobId: string): Promise<AnalysisPipelineResult | AnalysisJobSummary | null> {
   try {
-    const result = await requestJson<AnalysisPipelineResult | AnalysisJobSummary>(`/api/analysis/jobs/${jobId}/result`);
+    const payload = await requestJson<unknown>(`/api/analysis/jobs/${jobId}/result`);
+    const result = validateAnalysisPayload<AnalysisPipelineResult | AnalysisJobSummary>(
+      analysisResultSchema,
+      payload,
+      "analysis result",
+    );
     return isAnalysisJobSummary(result) ? normalizeAnalysisJobSummary(result) : result;
   } catch (error) {
+    if (error instanceof AnalysisPayloadValidationError) throw error;
     const stored = getStoredDemoJob(jobId);
     if (stored) {
       return stored.summary;
@@ -1015,11 +1061,11 @@ export async function getAnalysisResult(jobId: string): Promise<AnalysisPipeline
 }
 
 export function getVideoStreamUrl(videoId?: string): string | undefined {
-  return videoId ? toApiUrl(`/api/videos/${videoId}/stream`) : undefined;
+  return videoId ? toBrowserResourceUrl(`/api/videos/${videoId}/stream`) : undefined;
 }
 
 export function getVideoPosterUrl(videoId?: string): string | undefined {
-  return videoId ? toApiUrl(`/api/videos/${videoId}/poster`) : undefined;
+  return videoId ? toBrowserResourceUrl(`/api/videos/${videoId}/poster`) : undefined;
 }
 
 export interface VideoTimingFrame {
@@ -1068,7 +1114,7 @@ export async function materializeVideoTiming(videoId: string): Promise<VideoTimi
 }
 
 export function resolveAnalysisAssetUrl(path?: string): string | undefined {
-  return path ? toApiUrl(path) : undefined;
+  return path ? toBrowserResourceUrl(path) : undefined;
 }
 
 export async function getTrackingOverlay(result: AnalysisPipelineResult): Promise<TrackingOverlayArtifact | null> {
@@ -1504,11 +1550,11 @@ export async function mergeSyncRecording(sessionId: string): Promise<SyncRecordi
 }
 
 export function getCameraPreviewUrl(cameraId?: string): string | undefined {
-  return cameraId ? toApiUrl(`/api/cameras/${cameraId}/preview`) : undefined;
+  return cameraId ? toBrowserResourceUrl(`/api/cameras/${cameraId}/preview`) : undefined;
 }
 
 export function getShowcaseStreamUrl(runtimeId: string, slot: "cam_1" | "cam_2"): string {
-  return toApiUrl(`/api/showcase-runtimes/${encodeURIComponent(runtimeId)}/streams/${slot}`);
+  return toBrowserResourceUrl(`/api/showcase-runtimes/${encodeURIComponent(runtimeId)}/streams/${slot}`);
 }
 
 export async function getShowcaseRuntimeStatus(runtimeId: string): Promise<ShowcaseRuntimeStatus> {
@@ -1617,7 +1663,8 @@ export async function deleteTimelineEvent(eventId: string): Promise<void> {
 // ── CaptureTake & Coding Actions API ──
 
 export async function getCaptureTake(takeId: string): Promise<CaptureTakeSummary> {
-  return requestJson<CaptureTakeSummary>(`/api/capture-takes/${takeId}`);
+  const payload = await requestJson<unknown>(`/api/capture-takes/${takeId}`);
+  return validateAnalysisPayload<CaptureTakeSummary>(captureTakeSummarySchema, payload, "capture take");
 }
 
 /** Read the current published formal segmentation run for the production segment page. */
@@ -1722,7 +1769,7 @@ export async function confirmSyncAnchors(
 }
 
 export function getSyncAnchorExportUrl(takeId: string): string {
-  return toApiUrl(`/api/capture-takes/${takeId}/sync-anchors/export`);
+  return toBrowserResourceUrl(`/api/capture-takes/${takeId}/sync-anchors/export`);
 }
 
 export async function getMergeStatus(takeId: string): Promise<{ status: string; detail?: string }> {

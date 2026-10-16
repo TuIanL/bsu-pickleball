@@ -267,7 +267,7 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
             onChange={setRosterConfirmation}
           />
         ) : (
-          <div className="mt-4 rounded-2xl border border-[var(--ui-warning-border)] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]" data-testid="legacy-analysis-flow-note">
+          <div className="mt-4 rounded-2xl border border-[var(--ui-warning-border)] bg-[var(--ui-warning-surface)] p-4 text-sm leading-6 text-[var(--ui-text-warning-contrast)]" data-testid="legacy-analysis-flow-note">
             已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要场地控制画像时，请切回新流程。
           </div>
         )}

@@ -2,6 +2,9 @@
 
 ## Purpose
 定义发球队员在发球回合中到达己方厨房线的判定、证据与样本口径，以及相应的汇总产物和指标状态。
+
+保持到位和未到位判定的证据要求及指标状态一致，避免将击球机会或技能评分混入该位置行为统计。
+
 ## Requirements
 ### Requirement: 发球队厨房线到位率的定义与前置输入
 系统 SHALL 为具备 Job-bound `AnalysisRallyContextSnapshot`、confirmed identity audit、formal window binding 与真实轨迹的双打比赛级或正式 Rally 批次级任务计算 `Raw Serving-Rally Arrival`。某球员在其 Team A/B 发球的回合中，当其距该回合己方厨房线的距离不大于 `kitchen-arrival-reference.v1.arrival_band_m`，并稳定不少于 `stable_ms` 时，视为到位；该定义 MUST NOT 等同于进入非截击区。
@@ -50,4 +53,3 @@ V1 SHALL 将所有同时满足正式发球回合、身份、context、端位和�
 - **WHEN** 一个证据充分的发球回合很快结束
 - **THEN** 系统 SHALL 仍按 raw serving-rally 规则分类
 - **AND** 不得标记为第三拍推进质量、机会调整率或技能评分
-

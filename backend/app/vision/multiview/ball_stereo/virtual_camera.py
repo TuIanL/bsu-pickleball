@@ -70,8 +70,6 @@ def _reproj_and_infront(
     """返回 (回投误差 px, 最小相机深度)。"""
     if len(local_pts) == 0:
         return math.inf, math.inf
-    k = np.array([[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]])
-    proj = k @ np.hstack([rotation, translation.reshape(3, 1)])
     xyz = np.hstack([local_pts, np.zeros((len(local_pts), 1))])
     cam = (rotation @ xyz.T).T + translation
     depth = cam[:, 2]

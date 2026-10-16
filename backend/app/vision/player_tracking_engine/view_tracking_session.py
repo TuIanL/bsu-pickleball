@@ -153,6 +153,8 @@ class ViewFrameResult:
     local_identity_by_track: dict[int, str] = field(default_factory=dict)
     local_identity_epoch_by_track: dict[int, int] = field(default_factory=dict)
     local_tracklet_lineage_by_track: dict[int, str] = field(default_factory=dict)
+    tentative_track_ids: set[int] = field(default_factory=set)
+    unassigned_formal_track_reasons_by_track: dict[int, str] = field(default_factory=dict)
     observation_origin_by_track: dict[int, str] = field(default_factory=dict)
     guidance_id_by_track: dict[int, str] = field(default_factory=dict)
     donor_view_by_track: dict[int, str] = field(default_factory=dict)
@@ -406,6 +408,7 @@ class ViewTrackingSession:
         )
         # 2) ROI 过滤（ROI artifact 由调用方计算、构造时注入）
         detections, roi_filtered = filter_detections_to_roi(raw_detections, self.roi_artifact)
+        base_roi_detections = list(detections)
         self.roi_filtered_detection_count += roi_filtered
         if self.roi_artifact.status != "available":
             self.full_frame_fallback_count += 1
@@ -430,7 +433,7 @@ class ViewTrackingSession:
             timestamp=timestamp,
             frame=frame,
             raw_detections=raw_detections,
-            roi_filtered_base=list(detections),
+            roi_filtered_base=base_roi_detections,
             pre_tick_guided=pre_tick_guided,
             guided_by_detection=guided_by_detection,
             merged_pre_tick=list(detections),
@@ -578,6 +581,7 @@ class ViewTrackingSession:
             else []
         )
         # 10) 身份管理
+        identity_diagnostic_start = len(self.identity_manager.diagnostics)
         player_samples = self.identity_manager.update(
             frame_index=frame_index,
             positions=frame_positions,
@@ -594,6 +598,42 @@ class ViewTrackingSession:
             for sample in player_samples
             if sample.track_id is not None and sample.tracking_status == "tentative"
         }
+        unassigned_formal_track_reasons: dict[int, str] = {}
+        formal_track_ids = {
+            int(detection.track_id)
+            for detection in frame_detections
+            if detection.track_id is not None
+        }
+        for track_id in formal_track_ids:
+            if track_id in player_by_track:
+                if track_id in tentative_by_track:
+                    unassigned_formal_track_reasons[track_id] = "soft_takeover_tentative"
+                continue
+            track_diagnostics = [
+                diagnostic
+                for diagnostic in self.identity_manager.diagnostics[identity_diagnostic_start:]
+                if diagnostic.track_id == track_id and diagnostic.reason
+            ]
+            specific_reason = next(
+                (
+                    diagnostic.reason
+                    for diagnostic in track_diagnostics
+                    if diagnostic.reason
+                    not in {
+                        "no player slot or candidate above threshold",
+                        "no lock manager hint",
+                    }
+                ),
+                None,
+            )
+            unassigned_formal_track_reasons[track_id] = (
+                specific_reason
+                or next(
+                    (diagnostic.reason for diagnostic in track_diagnostics if diagnostic.reason == "no lock manager hint"),
+                    None,
+                )
+                or "no_local_player_identity"
+            )
         epoch_by_player = dict(self.render_identity_epoch_by_player)
         # PlayerLockManager increments its slot epoch on a real reconnect/track
         # change. Prefer that lifecycle epoch over the renderer-only epoch so a
@@ -668,9 +708,14 @@ class ViewTrackingSession:
             if detection.track_id is None:
                 continue
             player_id = player_by_track.get(int(detection.track_id))
-            if player_id is not None:
+            if player_id is not None and int(detection.track_id) not in tentative_by_track:
                 detection.player_id = player_id
                 detection.label = player_id.replace("Player_", "P")
+            else:
+                # Soft positional takeover is useful recovery evidence, but its
+                # guessed Player_N label must not become a local identity join.
+                detection.player_id = None
+                detection.label = None
 
         # 累积
         self._raw_detections.extend(prepared.raw_detections)
@@ -763,6 +808,8 @@ class ViewTrackingSession:
             local_identity_by_track={int(k): v for k, v in player_by_track.items() if int(k) in surviving_track_ids},
             local_identity_epoch_by_track=identity_epoch_by_track,
             local_tracklet_lineage_by_track=tracklet_lineage_by_track,
+            tentative_track_ids={int(track_id) for track_id in tentative_by_track},
+            unassigned_formal_track_reasons_by_track=unassigned_formal_track_reasons,
             observation_origin_by_track=origin_by_track,
             guidance_id_by_track=guidance_by_track,
             donor_view_by_track=donor_by_track,

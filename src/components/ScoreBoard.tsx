@@ -87,8 +87,8 @@ function ScoreDisplay({ scoreA, scoreB, server }: { scoreA: number; scoreB: numb
   return (
     <div className="flex items-center justify-center gap-4 text-2xl font-black">
       <div className="flex flex-col items-center gap-1">
-        {server === "A" && <span className="text-xs text-green-600">● 发球</span>}
-        <span className={`${server === "A" ? "text-green-700" : "text-slate-700"}`}>{scoreA}</span>
+        {server === "A" && <span className="text-xs text-[var(--ui-success-text)]">● 发球</span>}
+        <span className={`${server === "A" ? "text-[var(--ui-success-text)]" : "text-slate-700"}`}>{scoreA}</span>
         <span className="text-xs text-slate-400">A 方</span>
       </div>
       <span className="text-slate-300 text-xl">:</span>
@@ -109,8 +109,8 @@ function RecentPoints({ results, openRallyExists }: { results: Array<{ winner: s
           key={i}
           className="w-4 h-4 rounded-sm border"
           style={{
-            backgroundColor: r.winner === "A" ? "#22C55E" : r.winner === "B" ? "#3B82F6" : "#CBD5E1",
-            borderColor: r.winner === "A" ? "#16A34A" : r.winner === "B" ? "#2563EB" : "#94A3B8",
+            backgroundColor: r.winner === "A" ? "var(--ui-brand-solid)" : r.winner === "B" ? "var(--ui-info-solid)" : "var(--ui-neutral-300)",
+            borderColor: r.winner === "A" ? "var(--ui-brand-deep)" : r.winner === "B" ? "var(--ui-info-deep)" : "var(--ui-neutral-400)",
           }}
           title={r.validity === "replay" ? "重打" : `A${r.winner === "A" ? "✓" : ""} B${r.winner === "B" ? "✓" : ""}`}
         />

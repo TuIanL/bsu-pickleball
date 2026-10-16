@@ -192,6 +192,128 @@ def test_promotion_occupies_slot_and_expiry_cleans():
     assert "global_player_1" in reg.players  # 清理不影响 roster
 
 
+def test_frozen_double_roster_caps_candidate_slots_by_canonical_end():
+    ends = {
+        "Player_1": "end_a", "Player_2": "end_a",
+        "Player_3": "end_b", "Player_4": "end_b",
+    }
+    reg = GlobalPlayerRegistry(expected_player_count=4, frozen_player_end_by_id=ends)
+    end_a_candidates = []
+    for index in range(4):
+        cid = reg.find_or_create_candidate(
+            view_id="cam_1", view_player_id=f"A{index}", identity_epoch=0,
+            canonical_x_ft=3.0 + index, canonical_y_ft=8.0, tick=index,
+        )
+        reg.note_candidate_observation(
+            cid, view_id="cam_1", view_player_id=f"A{index}", identity_epoch=0,
+            canonical_x_ft=3.0 + index, canonical_y_ft=8.0, tick=index,
+        )
+        end_a_candidates.append(cid)
+    promoted = [reg.promote_candidate(cid, tick=10) for cid in end_a_candidates]
+    assert promoted[:2] == ["global_player_1", "global_player_2"]
+    assert promoted[2:] == [None, None]
+    assert all(cid in reg.candidates for cid in end_a_candidates[2:])
+
+    end_b_candidates = []
+    for index in range(2):
+        cid = reg.find_or_create_candidate(
+            view_id="cam_1", view_player_id=f"B{index}", identity_epoch=0,
+            canonical_x_ft=7.0 + index, canonical_y_ft=36.0, tick=index,
+        )
+        reg.note_candidate_observation(
+            cid, view_id="cam_1", view_player_id=f"B{index}", identity_epoch=0,
+            canonical_x_ft=7.0 + index, canonical_y_ft=36.0, tick=index,
+        )
+        end_b_candidates.append(cid)
+    assert [reg.promote_candidate(cid, tick=10) for cid in end_b_candidates] == [
+        "global_player_3", "global_player_4"
+    ]
+    assert {state.roster_end for state in reg.players.values()} == {"end_a", "end_b"}
+
+
+def test_frozen_double_roster_keeps_midline_candidates_unresolved():
+    ends = {f"Player_{index}": "end_a" if index < 3 else "end_b" for index in range(1, 5)}
+    reg = GlobalPlayerRegistry(expected_player_count=4, frozen_player_end_by_id=ends)
+    cid = reg.find_or_create_candidate(
+        view_id="cam_1", view_player_id="midline", identity_epoch=0,
+        canonical_x_ft=10.0, canonical_y_ft=22.0, tick=0,
+    )
+    reg.note_candidate_observation(
+        cid, view_id="cam_1", view_player_id="midline", identity_epoch=0,
+        canonical_x_ft=10.0, canonical_y_ft=22.0, tick=0,
+    )
+    assert reg.promote_candidate(cid, tick=10) is None
+    assert cid in reg.candidates
+
+
+def test_stale_unconfirmed_provisional_is_replaced_only_by_same_end_candidate():
+    ends = {
+        "Player_1": "end_a", "Player_2": "end_a",
+        "Player_3": "end_b", "Player_4": "end_b",
+    }
+    reg = GlobalPlayerRegistry(expected_player_count=4, frozen_player_end_by_id=ends)
+    for index, (gid, end) in enumerate([
+        ("global_player_1", "end_a"), ("global_player_2", "end_a"),
+        ("global_player_3", "end_b"), ("global_player_4", "end_b"),
+    ], start=1):
+        state = reg.ensure(gid)
+        state.roster_status = "provisional"
+        state.roster_end = end
+        state.last_seen_s = 1.0 if gid == "global_player_1" else 19.0
+        state.provisional_created_s = 0.0
+        state.x_ft, state.y_ft = 5.0, 8.0 if end == "end_a" else 36.0
+        reg.estimator.update(gid, state.x_ft, state.y_ft, state.last_seen_s)
+    reg.historical_bindings[("cam_1", "old-track")] = "global_player_1"
+
+    cid = reg.find_or_create_candidate(
+        view_id="cam_1", view_player_id="new-track", identity_epoch=0,
+        canonical_x_ft=12.0, canonical_y_ft=9.0, tick=20,
+    )
+    for tick in range(20, 25):
+        reg.note_candidate_observation(
+            cid, view_id="cam_1", view_player_id="new-track", identity_epoch=0,
+            canonical_x_ft=12.0, canonical_y_ft=9.0, tick=tick,
+        )
+
+    assert reg.promote_candidate(cid, tick=25, now_s=20.0) == "global_player_1"
+    replacement = reg.players["global_player_1"]
+    assert replacement.roster_end == "end_a"
+    assert replacement.view_bindings == {}
+    assert reg.historical_bindings.get(("cam_1", "old-track")) is None
+    assert reg.historical_bindings[("cam_1", "new-track")] == "global_player_1"
+    assert reg.provisional_replacement_events[0]["reason"] == "stale_unconfirmed_provisional_replaced"
+
+
+def test_stale_frozen_identity_and_cross_view_anchor_are_never_replaced():
+    ends = {
+        "Player_1": "end_a", "Player_2": "end_a",
+        "Player_3": "end_b", "Player_4": "end_b",
+    }
+    reg = GlobalPlayerRegistry(expected_player_count=4, frozen_player_end_by_id=ends)
+    for index, (gid, end) in enumerate([
+        ("global_player_1", "end_a"), ("global_player_2", "end_a"),
+        ("global_player_3", "end_b"), ("global_player_4", "end_b"),
+    ], start=1):
+        state = reg.ensure(gid)
+        state.roster_status = "provisional"
+        state.roster_end = end
+        state.last_seen_s = 0.0
+        state.provisional_created_s = 0.0
+    reg.players["global_player_1"].frozen_identity_confirmed = True
+    reg.players["global_player_2"].cross_view_anchored = True
+    cid = reg.find_or_create_candidate(
+        view_id="cam_1", view_player_id="new-track", identity_epoch=0,
+        canonical_x_ft=12.0, canonical_y_ft=9.0, tick=25,
+    )
+    for tick in range(25, 30):
+        reg.note_candidate_observation(
+            cid, view_id="cam_1", view_player_id="new-track", identity_epoch=0,
+            canonical_x_ft=12.0, canonical_y_ft=9.0, tick=tick,
+        )
+    assert reg.promote_candidate(cid, tick=30, now_s=20.0) is None
+    assert cid in reg.candidates
+
+
 # ---- Associator（tasks 3.4）----
 
 
@@ -763,3 +885,135 @@ def test_single_view_active_not_stale_regression():
     result = reg.absorb_measurement("global_player_1", 5.2, 8.1, 3.0, tick=30)
     assert result.accepted is True
     assert reg.players["global_player_1"].association_eligible is True
+
+
+# ---- 7.2 端位是可修订的观测结论 ------------------------------------------------
+
+
+def _roster_with_end(end: str | None):
+    registry = GlobalPlayerRegistry(
+        expected_player_count=4,
+        reference_view_id="cam_1",
+        frozen_player_end_by_id={
+            "Player_1": "end_a",
+            "Player_2": "end_a",
+            "Player_3": "end_b",
+            "Player_4": "end_b",
+        },
+    )
+    state = registry.ensure("global_player_1")
+    state.roster_status = "provisional"
+    state.roster_end = end
+    if end in {"end_a", "end_b"}:
+        state.roster_end_evidence = {end: 1}
+    return registry, state
+
+
+def test_roster_end_conflict_is_rejected_without_posterior_evidence():
+    """7.2：入场时端位与冻结端位冲突、又没有后验多数证据时，仍然拒绝。"""
+    registry, state = _roster_with_end("end_a")
+
+    confirmed, reason = registry.confirm_frozen_identity(
+        "global_player_1", "Player_3",
+        anchor_timestamp_ms=55_500, evidence={"bbox_iou": 0.86},
+        expected_end="end_b",
+    )
+
+    assert confirmed is False
+    assert reason == "anchor_global_end_conflict"
+    # 不得改写端位
+    assert state.roster_end == "end_a"
+    assert state.roster_end_revision_history == []
+
+
+def test_roster_end_is_revisable_when_posterior_evidence_is_strict_majority():
+    """7.2：后续可判定观测的严格多数在冻结端位时，冲突应触发重新裁决。"""
+    registry, state = _roster_with_end("end_a")
+    # 850个 end_a 样本 vs 1700 个 end_b 样本（对齐真实产物的横跨比例）
+    for _ in range(850):
+        registry.observe_roster_end_evidence("global_player_1", "end_a")
+    for _ in range(1700):
+        registry.observe_roster_end_evidence("global_player_1", "end_b")
+
+    confirmed, reason = registry.confirm_frozen_identity(
+        "global_player_1", "Player_3",
+        anchor_timestamp_ms=55_500, evidence={"bbox_iou": 0.86},
+        expected_end="end_b",
+    )
+
+    assert confirmed is True
+    assert reason is None
+    assert state.roster_end == "end_b"
+    assert state.frozen_player_id == "Player_3"
+    # 修订必须逐人留痕
+    assert len(state.roster_end_revision_history) == 1
+    revision = state.roster_end_revision_history[0]
+    assert revision["previous_end"] == "end_a"
+    assert revision["new_end"] == "end_b"
+    assert revision["supporting_samples"] == 1700
+    # 入场时那1 个 end_a 样本同样计入总数：851 + 1700
+    assert revision["total_decidable_samples"] == 2551
+    assert revision["rule"] == "strict_majority_of_decidable_observations"
+
+
+def test_roster_end_revision_requires_strict_majority_not_just_lead():
+    """7.2：仅微弱领先不得改写端位，避免"为了通过锚点匹配而改端位"。"""
+    registry, state = _roster_with_end("end_a")
+    for _ in range(100):
+        registry.observe_roster_end_evidence("global_player_1", "end_a")
+    for _ in range(100):
+        registry.observe_roster_end_evidence("global_player_1", "end_b")
+
+    confirmed, reason = registry.confirm_frozen_identity(
+        "global_player_1", "Player_3",
+        anchor_timestamp_ms=55_500, evidence={},
+        expected_end="end_b",
+    )
+
+    # 50% 平局 -> 不得修订
+    assert confirmed is False
+    assert reason == "anchor_global_end_conflict"
+    assert state.roster_end == "end_a"
+
+
+def test_roster_end_revision_never_creates_two_confirmed_players_on_one_end():
+    """7.2：修订不得造成同一端位两个已确认身份（唯一性门槛不降低）。"""
+    registry, state = _roster_with_end("end_a")
+    # end_b 已有两个已确认身份占满
+    for gid, pid in (("global_player_3", "Player_3"), ("global_player_4", "Player_4")):
+        other = registry.ensure(gid)
+        other.roster_status = "confirmed"
+        other.roster_end = "end_b"
+        other.frozen_player_id = pid
+        other.frozen_identity_confirmed = True
+    for _ in range(10):
+        registry.observe_roster_end_evidence("global_player_1", "end_a")
+    for _ in range(500):
+        registry.observe_roster_end_evidence("global_player_1", "end_b")
+
+    confirmed, reason = registry.confirm_frozen_identity(
+        "global_player_1", "Player_3",
+        anchor_timestamp_ms=55_500, evidence={},
+        expected_end="end_b",
+    )
+
+    # end_b 已满 -> 不得修订、不得绑定
+    assert confirmed is False
+    assert reason in {"anchor_global_end_conflict", "frozen_slot_already_bound"}
+    assert state.roster_end == "end_a"
+
+
+def test_roster_end_evidence_ignores_unknown_and_pre_roster_states():
+    """7.2：中间死区（unknown）与尚无端位的身份不得计入证据。"""
+    registry, state = _roster_with_end("end_a")
+    registry.observe_roster_end_evidence("global_player_1", "unknown")
+    registry.observe_roster_end_evidence("global_player_missing", "end_b")
+
+    assert state.roster_end_evidence == {"end_a": 1}
+    confirmed, reason = registry.confirm_frozen_identity(
+        "global_player_1", "Player_3",
+        anchor_timestamp_ms=55_500, evidence={},
+        expected_end="end_b",
+    )
+    assert confirmed is False
+    assert reason == "anchor_global_end_conflict"

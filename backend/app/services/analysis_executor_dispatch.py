@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -49,7 +49,7 @@ from app.vision.multiview.sync import (
 )
 from app.vision.multiview.view_input import MultiViewViewInput
 from app.vision.match_state import MatchStateSegmentationRuntime, SegmentationInput
-from app.vision.match_state.media_sampler import RGBMediaSamplingConfig, iter_capture_take_media, sample_capture_take_media
+from app.vision.match_state.media_sampler import RGBMediaSamplingConfig, iter_capture_take_media
 from app.vision.match_state.package import load_production_package
 from app.vision.match_state.package import ModelPackageError
 from app.services.formal_segmentation_service import persist_segmentation_failure, persist_segmentation_result
@@ -134,8 +134,6 @@ class SingleViewAnalysisExecutor:
         token,
         progress_callback: Callable[[object], None],
     ) -> AnalysisPipelineResult:
-        from app.services.storage_service import StorageService
-
         payload = AnalysisJobCreate(
             metadata=job.metadata,
             videoId=job.videoId,
@@ -147,10 +145,14 @@ class SingleViewAnalysisExecutor:
             clipEndMs=getattr(job, "clipEndMs", None),
             useRallyContext=(getattr(job, "rallyContextMode", "legacy") == "new"),
         )
+        storage = StorageService()
         if job.metadata.capture_take_id:
-            StorageService.register_capture_job_from_take(job.id, job.metadata.capture_take_id)
+            storage.resolve_capture_job_root(job.id, job.metadata.capture_take_id)
         elif job.metadata.session_dir:
-            StorageService.register_capture_job(job.id, job.metadata.session_dir)
+            try:
+                storage.register_capture_job(job.id, job.metadata.session_dir)
+            except Exception:
+                logger.warning("Unable to register capture artifact root for job %s", job.id, exc_info=True)
 
         pipeline = self.pipeline_factory(
             analysis_options={
@@ -161,7 +163,7 @@ class SingleViewAnalysisExecutor:
         match_context = build_match_context(
             job.metadata.matchFormat if hasattr(job.metadata, "matchFormat") else None
         )
-        bound_plan = _load_bound_window_plan(StorageService(), job)
+        bound_plan = _load_bound_window_plan(storage, job)
         if job.segmentationRunId and job.windowPlanHash and bound_plan is None:
             # Formal children are bound to an immutable artifact.  A missing,
             # corrupt, or mismatched plan must never silently widen analysis to
@@ -177,11 +179,10 @@ class SingleViewAnalysisExecutor:
             "match_context": match_context,
             "progress_callback": progress_callback,
             "cancellation_token": token,
-            # A formal plan is an analysis-time gate, not a set of independent
-            # clips: keep one continuous decode so tracker identity survives
-            # rally boundaries.  Legacy jobs retain their explicit clip.
-            "clip_start_ms": None if bound_plan is not None else payload.clipStartMs,
-            "clip_end_ms": None if bound_plan is not None else payload.clipEndMs,
+            # Keep one continuous decode within the requested clip so tracker
+            # identity survives rally boundaries without widening to the take.
+            "clip_start_ms": payload.clipStartMs,
+            "clip_end_ms": payload.clipEndMs,
             "capture_take_id": job.metadata.capture_take_id,
             "analysis_window_plan": bound_plan,
         }
@@ -279,6 +280,7 @@ class SegmentationPrerequisiteExecutor:
             device=settings.match_state_segmentation_device,
             required_profile=settings.match_state_segmentation_required_profile,
         )
+        token.raise_if_cancelled()
         # 为 formal window 挂上源 rally 引用与分析回合上下文绑定（direct_segment_link 的材料）。
         # 引用字段刻意不参与 plan_hash，因此不会改变 Parent 绑定的 windowPlanHash。
         # feature gate 关闭时完全跳过，formal 切分行为与既有版本逐字一致。
@@ -332,7 +334,11 @@ class SegmentationPrerequisiteExecutor:
                         db.close()
                 except Exception:
                     logger.exception("Unable to persist formal segmentation failure for %s", source.capture_take_id)
-        if parent is not None:
+        if (
+            parent is not None
+            and parent.orchestrationStatus == "waiting_segmentation"
+            and parent.segmentationPrerequisiteJobId == job.id
+        ):
             updates: dict[str, object] = {
                 "segmentationStatus": result.status,
                 "segmentationErrorCode": result.error_code,

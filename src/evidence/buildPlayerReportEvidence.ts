@@ -13,7 +13,6 @@ import type {
   ShotEvidence,
   ThirdShotStats,
 } from "./evidenceTypes";
-import type { TrainingRecommendation } from "../types/report";
 import type { MetricSnapshotEntry } from "../types/shotRallyEvents";
 import {
   sameCanonicalPlayer,
@@ -83,15 +82,9 @@ function extractHeatmap(
   if (sources.report.source !== "demo") {
     return unavailable("真实报告不使用位置网格代替区域统计", [{ kind: "heatmap" }]);
   }
-  const reportAny = sources.report as unknown as {
-    metrics?: { heatmap?: { players?: import("../types/report").HeatmapPlayerGrid[] } };
-    visualizations?: {
-      heatmaps?: { players?: import("../types/report").HeatmapPlayerGrid[] };
-    };
-  };
   const pools: (import("../types/report").HeatmapPlayerGrid[] | undefined)[] = [];
-  if (reportAny.metrics?.heatmap?.players) pools.push(reportAny.metrics.heatmap.players);
-  if (reportAny.visualizations?.heatmaps?.players) pools.push(reportAny.visualizations.heatmaps.players);
+  if (sources.report.metrics?.heatmap?.players) pools.push(sources.report.metrics.heatmap.players);
+  if (sources.report.visualizations?.heatmaps?.players) pools.push(sources.report.visualizations.heatmaps.players);
   for (const pool of pools) {
     if (!pool) continue;
     const match = pool.find((p) => sameCanonicalPlayer(p.id, playerId, roster));
@@ -149,9 +142,7 @@ function extractDistanceFt(
   playerId: string,
   roster: Record<string, string> | null | undefined
 ): EvidenceValue<number> {
-  const m = (sources.report as unknown as {
-    metrics?: { distances?: Array<{ track_id?: string; player_id?: string; distance_ft?: number }> };
-  }).metrics;
+  const m = sources.report.metrics;
   const distances = m?.distances;
   if (Array.isArray(distances)) {
     for (const d of distances) {
@@ -302,7 +293,7 @@ function buildInsights(
   const pi = sources.report.performanceInsights;
   const findings = pi?.findings?.length ? pi.findings : [];
   const recommendations = pi?.recommendations?.length ? pi.recommendations : [];
-  const coachNotes = (sources.report.coachNotes ?? []) as unknown as TrainingRecommendation[];
+  const coachNotes = sources.report.coachNotes ?? [];
 
   const thirdShotMetric = findMetric(sources, "third_shot_count", "player", playerId);
   const thirdShot = thirdShotMetric
@@ -324,7 +315,7 @@ function buildInsights(
       ? available(recommendations, [{ kind: "performance_insight", field: "recommendations" }])
       : unavailable("当前数据不足以生成可靠训练建议"),
     coachNotes: coachNotes.length
-      ? available(coachNotes as typeof coachNotes, [{ kind: "performance_insight", field: "coachNotes" }])
+      ? available(coachNotes, [{ kind: "performance_insight", field: "coachNotes" }])
       : unavailable("当前数据不足以生成可靠训练建议"),
     thirdShot,
   };

@@ -28,9 +28,7 @@ from app.schemas.pipeline import AnalysisArtifacts, AnalysisPipelineResult, Pipe
 from app.services.analysis_progress import resolve_progress_mode, stage_definitions
 from app.schemas.tracking import ImagePoint, ProjectedCourtPoint2D, ProjectedTrackPoint
 from app.services.storage_service import StorageService
-from app.vision.multiview.artifact import FUSED_DIAGNOSTICS_FILENAME, FUSED_TRAJECTORY_FILENAME
 from app.vision.multiview.artifact import normalize_fusion_diagnostics
-from app.vision.multiview.consumers import movement_points, visualization_points
 from app.vision.pickleball_performance_engine.doubles_spacing_metrics import doubles_spacing
 from app.vision.pickleball_performance_engine.heatmap_generator import generate_heatmap
 from app.vision.pickleball_performance_engine.metric_inputs import standard_court_metric_points
@@ -806,6 +804,8 @@ class MultiViewResultComposer:
         roster_map: dict[str, str] | None = None,
         roster_entries: list[dict[str, object]] | None = None,
         metric_tracks: list[ProjectedTrackPoint] | None = None,
+        identity_start_ms_by_global: dict[str, float] | None = None,
+        frozen_roster_job: bool = False,
     ) -> None:
         """joint 模式产出前端视觉层产物（2026-08-13 修复：此前 artifacts 全空）。
 
@@ -824,6 +824,33 @@ class MultiViewResultComposer:
             build_joint_tracking_overlay,
         )
 
+        if frozen_roster_job:
+            try:
+                from app.services.analysis_roster_runtime import build_bootstrap_binding_audit_payload
+
+                frozen_diagnostics = (
+                    joint_output.diagnostics.get("frozen_roster")
+                    if isinstance(joint_output.diagnostics, dict) else None
+                )
+                payload = build_bootstrap_binding_audit_payload(
+                    job_id=job.id,
+                    roster_hash=getattr(job, "rosterSnapshotHash", None),
+                    audit=(
+                        frozen_diagnostics.get("anchor_binding_audit")
+                        if isinstance(frozen_diagnostics, dict) else None
+                    ),
+                    unavailable_reason=(
+                        str(frozen_diagnostics.get("reason"))
+                        if isinstance(frozen_diagnostics, dict) and frozen_diagnostics.get("reason") else None
+                    ),
+                )
+                self.storage.write_json_atomic(
+                    self.storage.bootstrap_binding_audit_json_path(job.id),
+                    payload.model_dump(mode="json"),
+                )
+            except Exception as exc:  # noqa: BLE001 - audit failure must not block video and metrics
+                logger.exception("independent frozen roster binding audit publish failed: %s", exc)
+
         frame_size = (
             joint_output.diagnostics.get("frame_size")
             if isinstance(joint_output.diagnostics, dict)
@@ -832,6 +859,54 @@ class MultiViewResultComposer:
         fps = float(job.sourceFps or 0.0)
         stride = int(job.frameStride or 1)
         video_id = job.videoId
+
+        frozen_roster_diagnostics = (
+            joint_output.diagnostics.get("frozen_roster")
+            if isinstance(joint_output.diagnostics, dict) else None
+        )
+        frozen_audit = (
+            frozen_roster_diagnostics.get("anchor_binding_audit")
+            if frozen_roster_job and isinstance(frozen_roster_diagnostics, dict) else None
+        )
+        identity_slot_entries: list[dict[str, object]] = []
+        if frozen_roster_job:
+            raw_slot_entries = frozen_audit.get("entries", []) if isinstance(frozen_audit, dict) else []
+            slot_by_player = {
+                str(entry.get("canonical_player_id")): dict(entry)
+                for entry in raw_slot_entries
+                if isinstance(entry, dict) and entry.get("canonical_player_id")
+            }
+            observed_samples_by_player: dict[str, int] = {}
+            for sample in getattr(getattr(joint_output, "normalized", None), "samples", ()) or ():
+                global_id = str(getattr(sample, "global_player_id", "") or "")
+                player_id = (roster_map or {}).get(global_id)
+                audit_entry = next(
+                    (entry for entry in slot_by_player.values() if entry.get("global_player_id") == global_id and entry.get("confirmed") is True),
+                    None,
+                )
+                if not player_id or not audit_entry or not getattr(sample, "metric_eligible", False):
+                    continue
+                if getattr(sample, "identity_status", None) not in {"confirmed_observed", "confirmed_recovered", "interpolated"}:
+                    continue
+                anchor_ms = float(audit_entry.get("anchor_timestamp_ms") or 0.0)
+                if float(getattr(sample, "take_timestamp_ms", 0.0) or 0.0) < anchor_ms:
+                    continue
+                observed_samples_by_player[player_id] = observed_samples_by_player.get(player_id, 0) + 1
+            runtime_status = (
+                str(frozen_roster_diagnostics.get("status") or "unavailable")
+                if isinstance(frozen_roster_diagnostics, dict) else "unavailable"
+            )
+            for index in range(1, 5):
+                player_id = f"Player_{index}"
+                entry = slot_by_player.get(player_id, {})
+                confirmed = entry.get("confirmed") is True and entry.get("formal_canonical_player_id") == player_id
+                identity_slot_entries.append({
+                    **entry,
+                    "canonical_player_id": player_id,
+                    "status": "confirmed" if confirmed else "unconfirmed" if runtime_status == "available" else "unavailable",
+                    "observed_samples": observed_samples_by_player.get(player_id, 0),
+                    "reason": entry.get("reason") or (None if confirmed else frozen_roster_diagnostics.get("reason") if isinstance(frozen_roster_diagnostics, dict) else "roster_runtime_unavailable"),
+                })
 
         # 1) tracking_overlay（框架）：debug trace 聚合。
         #    joint 模式正式视觉层已由 fused_player_overlay 承担（add-multiview-
@@ -874,6 +949,8 @@ class MultiViewResultComposer:
             metric_tracks=metric_tracks,
             language=getattr(get_settings(), "visualization_language", "zh"),
             roster_map=roster_map,
+            identity_slots=identity_slot_entries,
+            frozen_roster_job=frozen_roster_job,
         )
         for key, value in viz_fields.items():
             setattr(artifacts, key, value)
@@ -902,6 +979,19 @@ class MultiViewResultComposer:
                 roster_map=roster_map or {},
                 expected_player_count=expected_count,
                 status="confirmed" if roster_state == "ROSTER_ACTIVE" else "bootstrap",
+                confirmed_identity_only=frozen_roster_job,
+                roster_hash=(
+                    (joint_output.diagnostics.get("frozen_roster") or {}).get("roster_hash")
+                    if frozen_roster_job and isinstance(joint_output.diagnostics, dict)
+                    else None
+                ),
+                # 7.3：冻结名册 Job 的身份确认以独立锚点审计为唯一权威来源，
+                # 避免 roster.json 与审计各自求值产生互斥结论。
+                anchor_binding_audit=(
+                    (joint_output.diagnostics.get("frozen_roster") or {}).get("anchor_binding_audit")
+                    if frozen_roster_job and isinstance(joint_output.diagnostics, dict)
+                    else None
+                ),
             )
             for key, value in roster_fields.items():
                 setattr(artifacts, key, value)
@@ -916,6 +1006,8 @@ class MultiViewResultComposer:
             frame_size=frame_size if isinstance(frame_size, dict) else None,
             roster_map=roster_map,
             artifacts=artifacts,
+            identity_start_ms_by_global=identity_start_ms_by_global or {},
+            frozen_roster_job=frozen_roster_job,
         )
 
         # 2d) player-display-diagnostics.v1（逐球员逐 stage 显示漏斗，
@@ -1033,6 +1125,8 @@ class MultiViewResultComposer:
         frame_size: dict[str, int] | None,
         roster_map: dict[str, str] | None,
         artifacts: AnalysisArtifacts,
+        identity_start_ms_by_global: dict[str, float] | None = None,
+        frozen_roster_job: bool = False,
     ) -> None:
         """joint 模式发布 `multiview-fused-player-overlay.v1` 正式叠加层。
 
@@ -1068,11 +1162,15 @@ class MultiViewResultComposer:
                 f0_snapshot=getattr(joint_output, "f0_snapshot", None),
                 reference_view_id=reference_view_id,
                 roster_map=dict(roster_map or {}),
+                identity_start_ms_by_global=dict(identity_start_ms_by_global or {}),
                 view_geometry=geometry_map,
                 fused_trajectory=joint_output.trajectory if isinstance(joint_output.trajectory, dict) else None,
                 recovered_observations=list(overlay_context.get("recovered_observations") or []),
                 final_source=str(overlay_context.get("final_source", "first_pass_f0")),
-                bootstrap_backfill=getattr(joint_output, "bootstrap_display_backfill", None),
+                anonymous_observations=list(overlay_context.get("anonymous_observations") or []),
+                bootstrap_backfill=(
+                    None if frozen_roster_job else getattr(joint_output, "bootstrap_display_backfill", None)
+                ),
             )
             expected_player_count = int(
                 joint_output.diagnostics.get("expected_player_count", 4)
@@ -1383,12 +1481,41 @@ class MultiViewResultComposer:
             if isinstance(joint_output.diagnostics, dict)
             else []
         )
-        roster_map = _build_roster_map(roster_entries)
-        metric_tracks = standard_court_metric_points(
-            self.fused_to_projected_tracks(synthetic, eligible_only=True, roster_map=roster_map)
+        frozen_roster_job = bool(getattr(job, "rosterSnapshotHash", None))
+        # 7.4：个人热力图 / 散点图 / 位置指标 / 状态卡共用同一份审计权威映射。
+        frozen_anchor_audit = (
+            (joint_output.diagnostics.get("frozen_roster") or {}).get("anchor_binding_audit")
+            if frozen_roster_job and isinstance(joint_output.diagnostics, dict)
+            else None
         )
-        metrics = self.recompute_metrics(synthetic, match_context, roster_map=roster_map, metric_tracks=metric_tracks)
-        tracks = self.fused_to_projected_tracks(synthetic, roster_map=roster_map)  # track_id = Player_N
+        roster_map = _build_roster_map(
+            roster_entries,
+            confirmed_only=frozen_roster_job,
+            anchor_binding_audit=frozen_anchor_audit,
+        )
+        identity_start_ms_by_global = {
+            str(entry.get("global_player_id")): float(entry.get("frozen_identity_confirmed_from_ms"))
+            for entry in roster_entries
+            if isinstance(entry, dict)
+            and entry.get("frozen_identity_confirmed") is True
+            and entry.get("frozen_identity_confirmed_from_ms") is not None
+        }
+        trusted_synthetic = synthetic
+        if frozen_roster_job:
+            # A future anchor does not prove the identity of earlier samples.
+            trusted_synthetic = dict(synthetic)
+            trusted_synthetic["samples"] = [
+                sample for sample in synthetic["samples"]
+                if isinstance(sample, dict)
+                and str(sample.get("global_player_id") or "") in roster_map
+                and float(sample.get("take_timestamp_ms") or 0.0)
+                >= identity_start_ms_by_global.get(str(sample.get("global_player_id") or ""), float("inf"))
+            ]
+        metric_tracks = standard_court_metric_points(
+            self.fused_to_projected_tracks(trusted_synthetic, eligible_only=True, roster_map=roster_map)
+        )
+        metrics = self.recompute_metrics(trusted_synthetic, match_context, roster_map=roster_map, metric_tracks=metric_tracks)
+        tracks = self.fused_to_projected_tracks(trusted_synthetic, roster_map=roster_map)  # track_id = Player_N
         artifacts = AnalysisArtifacts()
         artifacts.analysis_window = joint_output.diagnostics.get("analysis_window")
         video_id = job.videoId
@@ -1403,6 +1530,8 @@ class MultiViewResultComposer:
             roster_map=roster_map,
             roster_entries=roster_entries,
             metric_tracks=metric_tracks,
+            identity_start_ms_by_global=identity_start_ms_by_global,
+            frozen_roster_job=frozen_roster_job,
         )
         ball_status, ball_detail = self._publish_joint_ball_artifacts(
             job=job,
@@ -1480,15 +1609,52 @@ class MultiViewResultComposer:
         )
 
 
-def _build_roster_map(roster_entries: list[dict[str, object]]) -> dict[str, str]:
+def _build_roster_map(
+    roster_entries: list[dict[str, object]],
+    *,
+    confirmed_only: bool = False,
+    anchor_binding_audit: dict[str, object] | None = None,
+) -> dict[str, str]:
     """由 joint run 的 roster 快照构建 `global_player_id → canonical Player_N` 映射。
 
     display anchor：优先采用 reference view binding 决定的 `player_id`；缺 reference binding
     或冲突时用 deterministic slot 顺序 fallback（Player_1..N 按 roster 顺序分配，避免重跑漂移）。
+
+    7.4：冻结名册 Job 下，`confirmed_only` 映射 SHALL 以 `anchor_binding_audit` 为唯一
+    权威来源，而不是 registry 快照的 `frozen_identity_confirmed`。此前两者分歧时，
+    热力图会画出审计判为未确认的 P 个人图层，而状态卡同时显示未确认。
     """
     roster_map: dict[str, str] = {}
     used_ids: set[str] = set()
     next_slot = 1
+    if confirmed_only:
+        audited = {
+            str(entry.get("global_player_id")): str(entry.get("canonical_player_id"))
+            for entry in ((anchor_binding_audit or {}).get("entries") or [])
+            if isinstance(entry, dict)
+            and entry.get("confirmed") is True
+            and entry.get("formal_canonical_player_id") == entry.get("canonical_player_id")
+            and entry.get("global_player_id")
+        }
+        if audited:
+            for gid, pid in audited.items():
+                if pid not in used_ids:
+                    roster_map[gid] = pid
+                    used_ids.add(pid)
+            return roster_map
+        for entry in roster_entries:
+            gid = str(entry.get("global_player_id") or "")
+            pid = entry.get("frozen_player_id")
+            if (
+                gid
+                and entry.get("frozen_identity_confirmed") is True
+                and isinstance(pid, str)
+                and pid in {f"Player_{index}" for index in range(1, 5)}
+                and pid not in used_ids
+            ):
+                roster_map[gid] = pid
+                used_ids.add(pid)
+        return roster_map
     for entry in roster_entries:  # joint run 已按 global_player_id 排序（稳定）
         gid = str(entry.get("global_player_id", ""))
         pid = entry.get("player_id")

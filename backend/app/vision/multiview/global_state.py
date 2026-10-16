@@ -201,6 +201,20 @@ class GlobalPlayerState:
     roster_confirm_ticks: int = 0  # provisional occupant 连续有测量的 tick 数（确认窗口依据）
     last_seen_s: float | None = None  # 最近一次真实测量时间（stale 判定依据）
     association_eligible: bool = True  # False = stale，退出普通紧门匹配（仅强恢复路径可回归）
+    # Canonical end used for provisional roster capacity. This is the end at
+    # admission time; current position may temporarily cross the centre line.
+    # 7.2：端位是可修订的观测结论，不再是锚点时刻前一次性锁定的不可变约束。
+    # 计数只统计可判定的正式观测，用于冲突时重新裁决。
+    roster_end: str | None = None
+    roster_end_evidence: dict[str, int] = field(default_factory=dict)
+    roster_end_revision_history: list[dict[str, object]] = field(default_factory=list)
+    # Set only by a unique, simultaneous match to a frozen user anchor.
+    frozen_player_id: str | None = None
+    frozen_identity_confirmed: bool = False
+    frozen_identity_confirmed_from_ms: int | None = None
+    frozen_identity_evidence: dict[str, object] = field(default_factory=dict)
+    provisional_created_s: float | None = None
+    provisional_replacement_history: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -230,6 +244,7 @@ class GlobalRosterCandidate:
     tick_views: set[str] = field(default_factory=set)  # 最近一个 tick 内涉及的 view 集合（tick 级双视角判定）
     last_views_tick: int = -1
     last_dual_tick: int = -1  # 最近一次发生跨视角一致的 tick（tick 级累积 dual_view_hit_count）
+    canonical_end: str | None = None
 
 
 def _candidate_distance(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -318,6 +333,7 @@ class GlobalPlayerRegistry:
         candidate_promote_single_ticks: int = 5,
         stale_uncertainty_ft: float = 6.0,
         stale_last_seen_s: float = 10.0,
+        provisional_replace_after_s: float = 10.0,
         candidate_association_radius_ft: float = 3.0,
         reference_view_id: str | None = None,
         # ---- fix-multiview-reacquire-after-fusion-pollution：innovation guard（D2）----
@@ -326,6 +342,7 @@ class GlobalPlayerRegistry:
         # ---- risk 生命周期（D2/D3）----
         reanchor_risk_window_ticks: int = 90,
         risk_clear_clean_ticks: int = 5,
+        frozen_player_end_by_id: dict[str, str] | None = None,
     ) -> None:
         self.estimator = estimator or GlobalMotionEstimator()
         self.players: dict[str, GlobalPlayerState] = {}
@@ -338,6 +355,7 @@ class GlobalPlayerRegistry:
         self.candidate_promote_single_ticks = max(1, int(candidate_promote_single_ticks))
         self.stale_uncertainty_ft = stale_uncertainty_ft
         self.stale_last_seen_s = stale_last_seen_s
+        self.provisional_replace_after_s = max(0.0, float(provisional_replace_after_s))
         self.candidate_association_radius_ft = candidate_association_radius_ft
         self.innovation_floor_ft = innovation_floor_ft
         self.innovation_uncertainty_k = innovation_uncertainty_k
@@ -346,6 +364,7 @@ class GlobalPlayerRegistry:
         self.roster_state: str = "BOOTSTRAPPING"  # BOOTSTRAPPING | ROSTER_ACTIVE
         self._next_candidate = 1
         self.candidates: dict[str, GlobalRosterCandidate] = {}
+        self.provisional_replacement_events: list[dict[str, object]] = []
         self._last_tick: int | None = None
         # (view_id, view_player_id) -> global（弱历史绑定，epoch reset 后仍保留为先验）
         self.historical_bindings: dict[tuple[str, str], str] = {}
@@ -353,6 +372,12 @@ class GlobalPlayerRegistry:
         # reference_view_id 为参考视角（display anchor）；槽位 (view_id, view_player_id)
         # 在同一 view 内只允许一个 global 绑定，冲突走 reassociation 而非直接覆盖。
         self.reference_view_id = reference_view_id
+        self.frozen_player_end_by_id = dict(frozen_player_end_by_id or {})
+        self.side_capacity_enabled = (
+            self.expected_player_count == 4
+            and set(self.frozen_player_end_by_id) == {f"Player_{index}" for index in range(1, 5)}
+            and set(self.frozen_player_end_by_id.values()) == {"end_a", "end_b"}
+        )
         # (view_id, view_player_id) -> 冲突次数（tick 级累计，供 display diagnostics）
         self.reference_slot_conflicts: dict[tuple[str, str], int] = {}
         # 最近一次冲突事件（view_id, view_player_id, incumbent, challenger）
@@ -366,13 +391,119 @@ class GlobalPlayerRegistry:
             self.players[global_id] = GlobalPlayerState(global_player_id=global_id)
         return self.players[global_id]
 
-    def _allocate_roster_slot(self) -> str | None:
+    def confirm_frozen_identity(
+        self,
+        global_id: str,
+        player_id: str,
+        *,
+        anchor_timestamp_ms: int,
+        evidence: dict[str, object],
+        expected_end: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """Bind one global lineage to one frozen P slot after unique anchor evidence.
+
+        7.2：端位冲突不再永久拒绝。`roster_end` 只是入场时的端位估计；当后续
+        可判定观测的多数证据指向冻结端位时，允许重新裁决并留痕。修订不得
+        降低身份唯一性门槛——同一 tick 仍禁止同端重复绑定。
+        """
+        state = self.players.get(global_id)
+        if state is None:
+            return False, "global_player_unavailable"
+        if expected_end and state.roster_end and expected_end != state.roster_end:
+            if not self._reconsider_roster_end(state, expected_end, global_id):
+                return False, "anchor_global_end_conflict"
+        for other_id, other in self.players.items():
+            if other_id != global_id and other.frozen_identity_confirmed and other.frozen_player_id == player_id:
+                return False, "frozen_slot_already_bound"
+        if state.frozen_identity_confirmed and state.frozen_player_id != player_id:
+            return False, "global_player_already_bound_to_other_slot"
+        state.frozen_player_id = player_id
+        state.frozen_identity_confirmed = True
+        state.frozen_identity_confirmed_from_ms = int(anchor_timestamp_ms)
+        state.frozen_identity_evidence = dict(evidence)
+        return True, None
+
+    def _reconsider_roster_end(
+        self,
+        state: GlobalPlayerState,
+        expected_end: str,
+        global_id: str,
+    ) -> bool:
+        """Re-decide a provisional `roster_end` that contradicts the frozen end.
+
+        Only a strict majority of decidable observations may overturn the
+        admission-time estimate, and the revision must not create two confirmed
+        players on the same canonical end at the same tick.
+        """
+        if expected_end not in {"end_a", "end_b"}:
+            return False
+        evidence = dict(state.roster_end_evidence or {})
+        support = int(evidence.get(expected_end, 0))
+        total = sum(int(value) for value in evidence.values())
+        if total <= 0 or support * 2 <= total:
+            return False
+        if self._confirmed_count_on_end(expected_end, exclude_global_id=global_id) >= 2:
+            return False
+        previous = state.roster_end
+        state.roster_end = expected_end
+        state.roster_end_revision_history.append({
+            "previous_end": previous,
+            "new_end": expected_end,
+            "supporting_samples": support,
+            "total_decidable_samples": total,
+            "rule": "strict_majority_of_decidable_observations",
+        })
+        return True
+
+    def _confirmed_count_on_end(self, canonical_end: str, *, exclude_global_id: str | None = None) -> int:
+        """Count already-confirmed identities occupying one canonical end."""
+        return sum(
+            1
+            for gid, other in self.players.items()
+            if gid != exclude_global_id
+            and other.frozen_identity_confirmed
+            and other.roster_end == canonical_end
+        )
+
+    def observe_roster_end_evidence(self, global_id: str, canonical_end: str | None) -> None:
+        """7.2：累计每个 global 身份在可判定端位上的观测计数，供冲突时重新裁决。"""
+        if canonical_end not in {"end_a", "end_b"}:
+            return
+        state = self.players.get(global_id)
+        if state is None or state.roster_end is None:
+            return
+        evidence = dict(state.roster_end_evidence or {})
+        evidence[canonical_end] = int(evidence.get(canonical_end, 0)) + 1
+        state.roster_end_evidence = evidence
+
+    @staticmethod
+    def _canonical_end(y_ft: float) -> str | None:
+        if not (-4.0 <= y_ft <= 48.0):
+            return None
+        if y_ft < 22.0:
+            return "end_a"
+        if y_ft > 22.0:
+            return "end_b"
+        return None
+
+    def _slot_end(self, index: int) -> str | None:
+        if not self.side_capacity_enabled:
+            return None
+        return "end_a" if index <= 2 else "end_b"
+
+    def _allocate_roster_slot(self, canonical_end: str | None = None) -> str | None:
         """分配一个空闲 roster slot（`global_player_1..expected_player_count`）；满返回 None。
 
         取代公开的 `new_global_id()`：普通 unmatched 观测不可达；仅 candidate 晋升 / roster 重建时使用。
         """
         for index in range(1, self.expected_player_count + 1):
             gid = f"global_player_{index}"
+            if gid in self.players:
+                continue
+            if self.side_capacity_enabled:
+                slot_end = self._slot_end(index)
+                if canonical_end not in {"end_a", "end_b"} or slot_end != canonical_end:
+                    continue
             if gid not in self.players:
                 return gid
         return None
@@ -397,14 +528,12 @@ class GlobalPlayerRegistry:
         同 tick 同 candidate 每 view 至多接受一个 observation（由调用方在创建后调用
         `note_candidate_observation` 累积，本方法只在创建/复用层面保证归属）。
         """
-        strong_key = (view_id, view_player_id, identity_epoch)
         for cid, cand in self.candidates.items():
             if not cand.association_eligibility:
                 continue
             binding = cand.local_bindings.get(view_id)
             if binding is not None and binding.get("view_player_id") == view_player_id and int(binding.get("identity_epoch", -1)) == identity_epoch:
                 return cid  # ① 强 key
-        weak_key = (view_id, view_player_id)
         for cid, cand in self.candidates.items():
             binding = cand.local_bindings.get(view_id)
             if binding is not None and binding.get("view_player_id") == view_player_id:
@@ -434,6 +563,7 @@ class GlobalPlayerRegistry:
             },
             last_views_tick=tick,
             tick_views={view_id},
+            canonical_end=self._canonical_end(canonical_y_ft) if self.side_capacity_enabled else None,
         )
         return cid  # ④ 新建
 
@@ -457,6 +587,8 @@ class GlobalPlayerRegistry:
         cand.hit_count += 1
         cand.canonical_x_ft = canonical_x_ft
         cand.canonical_y_ft = canonical_y_ft
+        if self.side_capacity_enabled and cand.canonical_end is None:
+            cand.canonical_end = self._canonical_end(canonical_y_ft)
         if cand.last_views_tick != tick:
             cand.last_views_tick = tick
             cand.tick_views = {view_id}
@@ -470,27 +602,94 @@ class GlobalPlayerRegistry:
             {"view_player_id": view_player_id, "identity_epoch": identity_epoch, "track_id": local_track_id},
         )
 
-    def promote_candidate(self, candidate_id: str, tick: int) -> str | None:
+    def promote_candidate(self, candidate_id: str, tick: int, *, now_s: float | None = None) -> str | None:
         """晋升 candidate 为 provisional roster occupant（占 slot）；无空闲 slot 返回 None。"""
         cand = self.candidates.get(candidate_id)
         if cand is None:
             return None
-        gid = self._allocate_roster_slot()
+        if self.side_capacity_enabled and cand.canonical_end is None:
+            return None
+        gid = self._allocate_roster_slot(cand.canonical_end)
+        replaced_state: GlobalPlayerState | None = None
+        if gid is None and self.side_capacity_enabled:
+            replaced_state = self._stale_provisional_for_end(cand.canonical_end, now_s=now_s)
+            if replaced_state is not None:
+                gid = replaced_state.global_player_id
         if gid is None:
             return None
+        replacement_history = list(replaced_state.provisional_replacement_history) if replaced_state else []
+        if replaced_state is not None:
+            previous_bindings = {
+                view_id: {
+                    "view_player_id": binding.view_player_id,
+                    "identity_epoch": binding.local_identity_epoch,
+                    "tracklet_lineage_id": binding.tracklet_lineage_id,
+                    "track_id": binding.track_id,
+                }
+                for view_id, binding in replaced_state.view_bindings.items()
+            }
+            event = {
+                "global_player_id": gid,
+                "canonical_end": cand.canonical_end,
+                "replacement_candidate_id": candidate_id,
+                "replaced_bindings": previous_bindings,
+                "reason": "stale_unconfirmed_provisional_replaced",
+                "replaced_after_seconds": self.provisional_replace_after_s,
+                "replaced_last_seen_s": replaced_state.last_seen_s,
+                "replacement_timestamp_s": now_s,
+            }
+            replacement_history.append(dict(event))
+            self.provisional_replacement_events.append(event)
+            self.estimator.reset(gid)
+            self.historical_bindings = {
+                key: value for key, value in self.historical_bindings.items() if value != gid
+            }
         state = self.ensure(gid)
+        if replaced_state is not None:
+            # A global ID may be recycled only after its prior unconfirmed lineage
+            # has gone stale. Its old bindings and estimator state are discarded.
+            state = GlobalPlayerState(global_player_id=gid)
+            self.players[gid] = state
         state.x_ft, state.y_ft = cand.canonical_x_ft, cand.canonical_y_ft
         state.lifecycle = "tentative"
         state.roster_status = "provisional"
-        state.last_seen_s = None
+        state.roster_end = cand.canonical_end
+        if cand.canonical_end in {"end_a", "end_b"}:
+            state.roster_end_evidence = {cand.canonical_end: 1}
+        state.last_seen_s = now_s
         state.association_eligible = True
+        state.provisional_created_s = now_s
+        state.provisional_replacement_history = replacement_history
         for view_id, binding in cand.local_bindings.items():
             player_id = binding.get("view_player_id")
-            epoch = int(binding.get("identity_epoch") or 0)
             if player_id:
                 self.historical_bindings[(view_id, player_id)] = gid
         self.candidates.pop(candidate_id, None)
         return gid
+
+    def _stale_provisional_for_end(self, canonical_end: str | None, *, now_s: float | None) -> GlobalPlayerState | None:
+        if canonical_end not in {"end_a", "end_b"} or now_s is None:
+            return None
+        eligible: list[GlobalPlayerState] = []
+        for state in self.players.values():
+            if (
+                state.roster_status != "provisional"
+                or state.roster_end != canonical_end
+                or state.frozen_identity_confirmed
+                or state.cross_view_anchored
+            ):
+                continue
+            last_evidence_s = state.last_seen_s if state.last_seen_s is not None else state.provisional_created_s
+            if last_evidence_s is None or now_s - last_evidence_s < self.provisional_replace_after_s:
+                continue
+            # At least one real observation must once have filled the slot; a
+            # never-observed placeholder is eligible only after its age limit.
+            eligible.append(state)
+        return min(
+            eligible,
+            key=lambda state: state.last_seen_s if state.last_seen_s is not None else state.provisional_created_s or float("inf"),
+            default=None,
+        )
 
     def expire_candidates(self, tick: int) -> None:
         """过期清理未晋升候选（不影响 roster）。"""

@@ -295,7 +295,7 @@ function ZoneHeatmapBody({
         </div>
 
         {selected.data_sufficiency === "insufficient" && (
-          <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          <p className="mt-3 rounded-lg bg-[var(--ui-warning-surface)] px-3 py-2 text-xs text-[var(--ui-warning-deep)]">
             有效帧不足，以下占用百分比为参考，勿作确定结论。
           </p>
         )}
@@ -304,7 +304,7 @@ function ZoneHeatmapBody({
             className="mt-3 rounded-lg px-3 py-2 text-xs leading-5"
             style={{
               backgroundColor:
-                colorScheme === "pb-vision" ? "#F0FDF4" : "#F5FAF1",
+                colorScheme === "pb-vision" ? "var(--ui-surface-green-50)" : "var(--ui-surface-soft)",
               color: palette.textHeaderColor,
             }}
           >

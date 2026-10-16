@@ -581,22 +581,22 @@ export function BallTrajectoryScene({
 
   return (
     <div
-      className="relative min-h-[430px] overflow-hidden rounded-lg bg-[#F5F8F6] sm:min-h-[560px] lg:h-[calc(100vh-230px)] lg:min-h-[620px]"
+      className="relative min-h-[430px] overflow-hidden rounded-lg bg-[var(--ui-surface-court-workspace)] sm:min-h-[560px] lg:h-[calc(100vh-230px)] lg:min-h-[620px]"
       ref={containerRef}
       data-testid="ball-trajectory-scene"
     >
       <div className="absolute inset-0" ref={mountRef} />
       {sceneCalibration ? (
-        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[#D6DED9] bg-[var(--ui-surface)]/90 px-3 py-2 text-xs text-[#416248] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
+        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[var(--ui-border-court-workspace)] bg-[var(--ui-surface)]/90 px-3 py-2 text-xs text-[var(--ui-text-success-muted)] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
           {sceneCalibration.status === "ready" ? "Metric 3D 场景" : "场景标定降级"} · revision {sceneCalibration.revision} · {sceneCalibration.net_profile.height_source === "measured" ? "现场实测网高" : "标准网高"}
         </div>
       ) : null}
       {!sceneCalibration ? (
-        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[#F3D7A0] bg-[#FFFBEB]/95 px-3 py-2 text-xs text-[#9A6700] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
+        <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-[var(--ui-warning-border)] bg-[var(--ui-warning-surface)]/95 px-3 py-2 text-xs text-[var(--ui-warning-deep)] shadow-sm backdrop-blur-sm sm:left-4 sm:top-4">
           {metricValidity === "visualization_only" ? "仅可视化高度" : "approximate 3D fallback · 未发布现场场景标定"}
         </div>
       ) : null}
-      <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 rounded-lg border border-[#D6DED9] bg-[var(--ui-surface)]/92 p-1.5 shadow-sm backdrop-blur-sm sm:right-4 sm:top-4">
+      <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 rounded-lg border border-[var(--ui-border-court-workspace)] bg-[var(--ui-surface)]/92 p-1.5 shadow-sm backdrop-blur-sm sm:right-4 sm:top-4">
         {(Object.keys(VIEW_CONFIG) as CameraView[]).map((view) => {
           const config = VIEW_CONFIG[view];
           const Icon = config.icon;
@@ -604,7 +604,7 @@ export function BallTrajectoryScene({
             <button
               aria-label={`${config.label}视角`}
               aria-pressed={activeView === view}
-              className={`grid size-10 place-items-center rounded-md border transition ${activeView === view ? "border-[#25B86A] bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" : "border-transparent text-[var(--ui-text-secondary-alt)] hover:bg-[#F2F4F3]"}`}
+              className={`grid size-10 place-items-center rounded-md border transition ${activeView === view ? "border-[var(--ui-brand-cta)] bg-[var(--ui-surface-mint)] text-[var(--ui-brand-deep)]" : "border-transparent text-[var(--ui-text-secondary-alt)] hover:bg-[var(--ui-surface-court-workspace)]"}`}
               data-active={activeView === view ? "true" : "false"}
               key={view}
               onClick={() => selectView(view)}
@@ -615,10 +615,10 @@ export function BallTrajectoryScene({
             </button>
           );
         })}
-        <span className="mx-1 h-px bg-[#E4E9E6]" />
+        <span className="mx-1 h-px bg-[var(--ui-border-court-divider)]" />
         <button
           aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
-          className="grid size-10 place-items-center rounded-md text-[var(--ui-text-secondary-alt)] transition hover:bg-[#F2F4F3]"
+          className="grid size-10 place-items-center rounded-md text-[var(--ui-text-secondary-alt)] transition hover:bg-[var(--ui-surface-court-workspace)]"
           onClick={toggleFullscreen}
           title={isFullscreen ? "退出全屏" : "全屏查看"}
           type="button"
@@ -626,7 +626,7 @@ export function BallTrajectoryScene({
           <Expand size={19} aria-hidden="true" />
         </button>
       </div>
-      <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-[#D6DED9] bg-[var(--ui-surface)]/88 px-3 py-2 text-xs text-[var(--ui-text-secondary-alt)] shadow-sm backdrop-blur-sm sm:bottom-4 sm:left-4">
+      <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-[var(--ui-border-court-workspace)] bg-[var(--ui-surface)]/88 px-3 py-2 text-xs text-[var(--ui-text-secondary-alt)] shadow-sm backdrop-blur-sm sm:bottom-4 sm:left-4">
         拖动旋转 · 滚轮缩放 · 点击球路查看详情
       </div>
     </div>

@@ -505,7 +505,26 @@ def test_wrong_roi_person_is_rejected_before_tracker_and_lock_reject_stays_out_o
         render_raw_by_track={},
         player_motion_pixels=None,
     )
-    assert MultiViewJointRun._result_to_observations("cam_1", result, 0.0) == []
+    result.unassigned_formal_track_reasons_by_track = {1: "no lock manager hint"}
+    observations = MultiViewJointRun._result_to_observations("cam_1", result, 0.0)
+    assert len(observations) == 1
+    assert observations[0].view_player_id == ""
+    assert observations[0].tracklet_lineage_id == "cam_1:track:1"
+    assert observations[0].tracking_status == "unassigned_formal"
+    assert observations[0].local_identity_reason == "no lock manager hint"
+
+    # A soft takeover can carry a temporary P guess in the identity manager.
+    # That guess must not escape into the global association key.
+    result.frame_detections[0].player_id = "Player_2"
+    result.local_identity_by_track = {1: "Player_2"}
+    result.local_identity_epoch_by_track = {1: 3}
+    result.tentative_track_ids = {1}
+    result.unassigned_formal_track_reasons_by_track = {1: "soft_takeover_tentative"}
+    tentative = MultiViewJointRun._result_to_observations("cam_1", result, 0.0)
+    assert tentative[0].view_player_id == ""
+    assert tentative[0].local_identity_epoch == 0
+    assert tentative[0].tracking_status == "tentative"
+    assert tentative[0].local_identity_reason == "soft_takeover_tentative"
 
 
 def test_guided_base_anchor_and_overlapping_guidance_are_not_promoted():

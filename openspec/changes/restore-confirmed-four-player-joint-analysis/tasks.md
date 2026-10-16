@@ -1,0 +1,53 @@
+## 1. 固定基线与定位首个断点
+
+- [x] 1.1 只读导出 `job-9a640b069a` 的冻结名册、Global Roster、fused trajectory、overlay、四人质量产物及配置签名，保存逐人/逐端覆盖和最长缺口基线。
+- [ ] 1.2 为 `ct_9997fa5aedf7` 的开场、约 2:32、名册锚点约 4:49、约 7:24 与末段建立逐层 trace：原始检测 → ROI/局部 track → global candidate/association → metric-eligible → P 审计；明确两名 A 端球员首次丢失的阶段及证据。
+- [ ] 1.3 检查两机位 `identity`/`rotate_180` 到 canonical end_a/end_b 的转换、场地边界及同 tick 一人一槽约束；把复现命令、样本时间和断点计数记录在变更验收文件中。
+
+## 2. 冻结名册进入 joint 跟踪与审计
+
+- [x] 2.1 在 joint executor 按 Job ID 加载冻结 `AnalysisRosterSnapshot`，校验 hash、四个互异槽位、Team/端位及锚点字段；缺失或冲突时返回结构化身份不可用原因。
+- [x] 2.2 将只读锚点集合传入 `MultiViewJointRun`，在对应时间/机位依据 bbox、canonical 几何及可用双摄/外观证据建立一对一 P↔global↔tracklet 候选，禁止按编号同名或未来锚点位置直接确认。
+- [x] 2.3 将 `bootstrap-binding-audit` 从 Rally/Shot 组合中独立产出并原子持久化，四个槽位均有确认/冲突/缺证据结论；验证 Rally/Shot 失败时审计仍可读取。
+- [x] 2.4 验证锚点前后身份只沿唯一连续轨迹传播，无法连通的时间段保持未确认；加入相同目标竞争两个 P 槽位和同槽位竞争两个 global 的回归用例。
+
+## 3. 两端候选容量与长期恢复
+
+- [x] 3.1 在双打 Global Roster 建立 canonical end_a/end_b 各两人的候选容量与端位不明待裁决池，并验证同端重复候选不能占满四槽。
+- [x] 3.2 依据用户执行的 120 秒诊断中已覆盖的锚点断点，修复 candidate/association 入口并保留接纳与拒绝原因；不得降低身份唯一性门槛。更长时段的首断点仍由 1.2 继续确认。
+- [x] 3.3 为长期无有效观测且未确认的 provisional 占位实现受控替换；满槽后的真实候选继续积累恢复证据，确认身份短时漏检时保持原槽位。
+- [x] 3.4 验证跨机位关联、端位配额、reassociation 与恢复不会产生同 tick 重复绑定、未经确认的身份换绑或正式跨侧污染。
+
+## 4. 可信身份的产物与页面
+
+- [x] 4.1 建立结果组装的唯一 `global_player_id → frozen P` 已确认映射；顺序 fallback 只作为历史/内部诊断，不作为新 Job 的正式 P 标签或 Team 指标。
+- [x] 4.2 调整 fused overlay：`players` 仅承载已确认 P 身份；真实但未绑定的观测以匿名证据呈现，缺少观测时不生成框；验证切换机位后 Team/端位语义一致。
+- [x] 4.3 调整结构化与 PNG 热力图、散点图、位置指标：个人 P 图层只消费已确认且有效的轨迹；四个冻结槽位保留覆盖/未确认/缺失状态；合并匿名数据需标注来源。
+- [x] 4.4 在分析页同时展示逐槽位状态与“四人识别质量不足”提示，区分未检测与已检测但未确认；验证旧 Job 和无名册 Job 的兼容降级。
+
+## 5. 分层质量产物与自动回归
+
+- [x] 5.1 扩展 `four-player-identification-quality` 的逐视角、逐端、逐人漏斗和缺口字段，确保 `mapping_confirmed=false` 时仍保留非零原始检测/局部轨迹计数。
+- [x] 5.2 为四人确认、每人 coverage ≥0.70、最长缺失 ≤2s、两端各两人、重复/互换/跨侧为零建立独立质量门槛与明确 failure reasons；`completed` Job 质量失败时页面仍显示失败。
+- [x] 5.3 增加端位相反、未确认映射、同端占满、provisional 替换、末段全员缺失及 Rally/Shot 失败等后端/前端回归测试，并运行相关测试集。
+
+## 6. 真实新任务验收
+
+- [x] 6.1 用同一真实 take 和确认名册创建新的完整 `joint_tracking_v2` Job，保留新旧 Job ID、配置签名、阈值与原始产物；不得刷新旧 Job 冒充新算法结果。
+- [ ] 6.2 比较开场、锚点、长缺口和末段的四人叠加、双机位视角、逐人热力图及分层质量摘要，人工核对 P1/P2 位于 A 端、P3/P4 位于 B 端且四人互异。
+- [ ] 6.3 执行全部四人覆盖、最长缺口和身份硬门槛；任何一项未达标则保留 fail 结论与首个断点证据，继续修复后重建新 Job 验证。
+- [x] 6.4 运行 `openspec validate restore-confirmed-four-player-joint-analysis --strict`，记录测试命令、真实验收结果及仍存在的限制。
+
+- [ ] 6.5 多摄身份链独立审核：承接 `harden-analysis-runtime-reliability` design Q5 / task 12.8，检查机位朝向到 canonical end_a/end_b 的转换、冻结名册、同 tick 一人一槽与 P 审计链；结合 1.2/1.3/6.2/6.3 的真实证据给出明确 pass/fail，基础设施可靠性通过不能替代本项。
+
+## 7. 身份裁决层语义修复（2026-10-03 诊断结论）
+
+诊断记录见 `design.md` 的「2026-09-28 诊断 Job 的首断点定位」。三个断点均在身份裁决层，检测与跟踪层不是瓶颈：`global_player_4` 已有 2982 个合格样本且 100% 落在正确端位，却因裁决语义缺陷被判未确认。
+
+- [x] 7.1 修正 tracklet 竞争裁决方向：`multiview_joint_run.py:1410-1420` 当前把后到槽位标为 `bootstrap_binding_tracklet_competes_for_slots`、让先到者占用 tracklet，改为按证据强度（court 距离 → bbox IoU → 时间差）保留胜者，落败槽位入待裁决池并记录双方对比证据；落败方有剩余候选时继续重新匹配。
+- [x] 7.2 把 `roster_end` 从一次性赋值改为可修订结论：`global_state.py:403` 当前端位不符即永久拒绝，改为触发重新裁决（结合锚点证据强度与后续连续观测的端位一致性），修订需逐人留痕（原因、依据样本数、前后取值），且不得降低同 tick 唯一性门槛。
+- [x] 7.3 收敛审计双源真相：`roster.json` 的 `mapping_confirmed` 改为引用审计结论而非独立求值；`four_player_quality.py:302`（读 roster.json）与 `:308-321`（读 anchor_binding_audit）统一到同一来源，不一致时以审计为准并使质量 verdict 为 fail；Rally/Shot 补写审计与权威审计冲突时显式标记不可用，禁止静默覆盖。
+- [x] 7.4 修正页面与指标口径：`heatmaps.players` 个人图层、散点图、位置指标与逐槽位状态卡消费同一映射，消除「热力图画 P4、状态卡同时声明 P4 未确认且有效点为 0」的自相矛盾。
+- [x] 7.5 为 A/B/C 三处各加回归测试：tracklet 竞争由证据弱者先到、端位冲突但后验多数证据在正确端、双源结论冲突时以审计为准；并验证同 tick 无重复绑定、无跨侧污染。
+- [ ] 7.6 在同一 120 秒范围（`clipStartMs=0`、`clipEndMs=120000`）重跑一次真实 Job 验证修复，新旧 Job ID 与产物并存不覆盖；核对 P4 是否转为 confirmed、四人端位是否 2+2 分布。仍不达标时保留 fail 结论与首断点证据，不放宽门槛。
+

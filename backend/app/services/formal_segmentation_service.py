@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.capture_segment import CaptureSegment, EditStatus, SegmentSource, SegmentStatus, SegmentType
 from app.models.match_state_segmentation import MatchStateSegmentationRun, MatchStateSegmentationRunStatus
 from app.services.storage_service import StorageService
-from app.vision.match_state.artifact import SegmentationArtifact
+from app.vision.match_state.artifact import AnalysisWindowPlan, SegmentationArtifact
 
 
 ACTIVE_SEGMENTATION_STATUSES = {
@@ -25,6 +25,15 @@ ACTIVE_SEGMENTATION_STATUSES = {
 ACTIVE_SEGMENTATION_STATUS_VALUES = frozenset(
     status.value for status in ACTIVE_SEGMENTATION_STATUSES
 )
+
+
+@dataclass(frozen=True)
+class ReusableSegmentationBinding:
+    """Published plan identity for this Parent, which may be clipped from a full-take run."""
+
+    id: str
+    status: MatchStateSegmentationRunStatus
+    window_plan_hash: str
 
 
 def publish_reusable_segmentation(
@@ -40,7 +49,9 @@ def publish_reusable_segmentation(
     weights_sha256: str | None,
     decoder_sha256: str | None,
     allow_take_scoped_reuse: bool = False,
-) -> MatchStateSegmentationRun | None:
+    clip_start_ms: int | None = None,
+    clip_end_ms: int | None = None,
+) -> ReusableSegmentationBinding | None:
     """Bind the latest compatible immutable plan to a new analysis Parent.
 
     The historical run remains the authority. A job-scoped copy is published
@@ -49,6 +60,12 @@ def publish_reusable_segmentation(
     """
     if not input_fingerprint:
         return None
+    if (clip_start_ms is None) != (clip_end_ms is None):
+        raise ValueError("clip_start_ms and clip_end_ms must be provided together")
+    if clip_start_ms is not None and clip_start_ms < 0:
+        raise ValueError("clip_start_ms must be nonnegative")
+    if clip_end_ms is not None and clip_end_ms <= (clip_start_ms or 0):
+        raise ValueError("clip_end_ms must be greater than clip_start_ms")
     query = db.query(MatchStateSegmentationRun).filter(
         MatchStateSegmentationRun.capture_take_id == capture_take_id,
         MatchStateSegmentationRun.status.in_(ACTIVE_SEGMENTATION_STATUSES),
@@ -122,17 +139,44 @@ def publish_reusable_segmentation(
         plan = payload.get("window_plan") if isinstance(payload, dict) else None
         if not isinstance(plan, dict) or plan.get("plan_hash") != run.window_plan_hash:
             continue
+        source_windows = plan.get("windows")
+        if not isinstance(source_windows, list):
+            continue
+        try:
+            if AnalysisWindowPlan.create(run.id, source_windows).plan_hash != run.window_plan_hash:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
         reused = dict(payload)
         reused["planning_job_id"] = planning_job_id
+        bound_plan_hash = run.window_plan_hash
+        if clip_start_ms is not None or clip_end_ms is not None:
+            clip_start = clip_start_ms or 0
+            clipped_windows: list[dict[str, Any]] = []
+            for window in source_windows:
+                start = max(int(window["start_ms"]), clip_start)
+                end = min(int(window["end_ms"]), clip_end_ms) if clip_end_ms is not None else int(window["end_ms"])
+                if end > start:
+                    clipped_windows.append({**window, "start_ms": start, "end_ms": end})
+            bound_plan = AnalysisWindowPlan.create(run.id, clipped_windows)
+            bound_plan_hash = bound_plan.plan_hash
+            reused["window_plan"] = bound_plan.to_dict()
+            reused["algorithm_segments"] = clipped_windows
         diagnostics = reused.get("diagnostics")
         if not isinstance(diagnostics, dict):
             diagnostics = {}
-        reused["diagnostics"] = {**diagnostics, "reused_from_run_id": run.id, "reused_from_job_id": run.planning_job_id}
+        reused["diagnostics"] = {
+            **diagnostics,
+            "reused_from_run_id": run.id,
+            "reused_from_job_id": run.planning_job_id,
+            "bound_clip_start_ms": clip_start_ms,
+            "bound_clip_end_ms": clip_end_ms,
+        }
         storage.write_json_atomic(
             storage.formal_segmentation_artifact_path(planning_job_id, capture_take_id),
             reused,
         )
-        return run
+        return ReusableSegmentationBinding(run.id, run.status, bound_plan_hash)
     return None
 
 

@@ -84,6 +84,25 @@ def test_multiview_kitchen_trajectory_prefers_parent_fused_artifact(tmp_path) ->
     ) == player
 
 
+def test_rally_projection_does_not_overwrite_joint_roster_binding_audit(tmp_path) -> None:
+    audit_path = tmp_path / "bootstrap_binding_audit.json"
+    audit_path.write_text('{"source":"joint-run"}', encoding="utf-8")
+
+    class Storage:
+        def bootstrap_binding_audit_json_path(self, _job_id: str) -> Path:
+            return audit_path
+
+        def write_json(self, path: Path, payload: dict) -> None:
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    wrote = composer._persist_bootstrap_binding_audit_if_missing(
+        Storage(), "job-1", {"source": "rally-projection"}
+    )
+
+    assert wrote is False
+    assert json.loads(audit_path.read_text(encoding="utf-8")) == {"source": "joint-run"}
+
+
 def test_explicit_new_flow_does_not_fallback_to_initial_side(monkeypatch) -> None:
     monkeypatch.setattr(
         composer,

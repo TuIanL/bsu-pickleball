@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   Clock,
@@ -50,12 +50,15 @@ import {
   getVideoStreamUrl,
   getCameraPreviewUrl,
 } from "../services/analysisClient";
+import { useDocumentVisible } from "../hooks/useDocumentVisible";
 
 
 /**
  * 球场采集管理页组件
  */
 export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
+  const isDocumentVisible = useDocumentVisible();
+  const recordingPollInFlightRef = useRef(false);
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
   const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
@@ -308,12 +311,14 @@ export function CameraHubPage({ onNavigate }: { onNavigate: NavigateFn }) {
   }, [loadData, refreshKey]);
 
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSession || !isDocumentVisible) return;
     const interval = window.setInterval(() => {
-      void loadData();
+      if (recordingPollInFlightRef.current) return;
+      recordingPollInFlightRef.current = true;
+      void loadData().finally(() => { recordingPollInFlightRef.current = false; });
     }, 3000);
     return () => window.clearInterval(interval);
-  }, [activeSession, loadData]);
+  }, [activeSession?.session_id, isDocumentVisible, loadData]);
 
   const handleRegisterCamera = async () => {
     const cameraId = newCamera.camera_id.trim();

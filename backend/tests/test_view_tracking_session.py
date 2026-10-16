@@ -15,7 +15,7 @@ import numpy as np
 
 from app.core.config import get_settings
 from app.schemas.analysis import build_match_context
-from app.schemas.tracking import Detection
+from app.schemas.tracking import Detection, PlayerFramePosition
 from app.vision.court_view import compute_expanded_detection_roi, filter_detections_to_roi
 from app.vision.player_tracking_engine.court_position_smoother import CourtPositionSmoother
 from app.vision.player_tracking_engine.footpoint_estimator import FootpointEstimator
@@ -201,6 +201,46 @@ def test_step_emits_disjoint_candidate_detections_under_lock_only():
     assert formal_ids & candidate_ids == set()
     # 候选不带 formal 身份
     assert all(d.player_id is None for d in result.candidate_detections)
+
+
+def test_soft_takeover_identity_is_kept_tentative_and_not_written_to_frame_detection():
+    class StubLockManager:
+        _initial_lock_assignments: dict = {}
+        slots: dict = {}
+
+        def update(self, **_kwargs):
+            return PlayerLockUpdate(eligible_track_ids={1})
+
+    config = _make_config()
+    config.eligibility_policy = "lock_only"
+    session = build_view_tracking_session(
+        detector=ScriptedDetector({1: [_det([280, 150, 310, 300])]}),
+        homography=SCALE_HOMOGRAPHY,
+        roi_artifact=_make_roi_artifact(),
+        config=config,
+    )
+    session.player_lock_manager = StubLockManager()
+    session.identity_manager.update(
+        0,
+        [PlayerFramePosition(
+            frame_index=0,
+            timestamp=0.0,
+            track_id=10,
+            bbox=[280, 150, 310, 300],
+            image_footpoint=[295, 300],
+            court_position=[14.75, 15.0],
+            confidence=0.9,
+        )],
+        track_identity_hints={10: "Player_1"},
+    )
+
+    result = session.step(object(), frame_index=1, timestamp=1.0)
+
+    assert result.tentative_track_ids == {1}
+    assert result.unassigned_formal_track_reasons_by_track == {1: "soft_takeover_tentative"}
+    assert result.local_identity_by_track == {1: "Player_1"}
+    assert result.frame_detections[0].player_id is None
+    assert result.frame_detections[0].label is None
 
 
 def test_non_empty_guidance_runs_joint_path_but_default_path_stays_legacy():

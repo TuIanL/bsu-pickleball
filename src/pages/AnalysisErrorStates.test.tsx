@@ -16,6 +16,8 @@ vi.mock("../services/analysisClient", () => ({
   getAnalysisJob: analysisClientMocks.getAnalysisJob,
   getAnalysisReport: analysisClientMocks.getAnalysisReport,
   getAnalysisResult: analysisClientMocks.getAnalysisResult,
+  getAnalysisRunTrace: vi.fn().mockResolvedValue(null),
+  getAnalysisJobLogs: vi.fn().mockResolvedValue(null),
   getVideoStreamUrl: () => undefined,
 }));
 

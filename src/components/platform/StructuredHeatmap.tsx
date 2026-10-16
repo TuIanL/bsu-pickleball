@@ -30,10 +30,66 @@ export default function StructuredHeatmap({ data, fallbackPngUrl }: StructuredHe
 
   // 旧 JSON 无 per-player 网格时，回退渲染合并网格。
   if (players.length === 0 && aggregateGrid) {
-    return <AggregateHeatmapSVG grid={aggregateGrid} />;
+    return (
+      <div>
+        <AggregateHeatmapSVG grid={aggregateGrid} />
+        <IdentitySlotStatus slots={heatmaps.identity_slots} />
+        {heatmaps.aggregate_source === "anonymous_unbound_observations" ? (
+          <p className="mt-2 text-xs text-[var(--ui-text-muted)]">合并区域统计含未确认球员观测，不代表个人 P1–P4。</p>
+        ) : null}
+      </div>
+    );
   }
 
-  return <PlayerLayersHeatmapSVG players={players} />;
+  return (
+    <div>
+      {players.length ? <PlayerLayersHeatmapSVG players={players} /> : <AggregateHeatmapSVG grid={aggregateGrid!} />}
+      <IdentitySlotStatus slots={heatmaps.identity_slots} />
+    </div>
+  );
+}
+
+function IdentitySlotStatus({ slots }: { slots?: NonNullable<StructuredVisualizationData["heatmaps"]>["identity_slots"] }) {
+  if (!slots?.length) return null;
+  return (
+    <div className="mt-3 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-3" aria-label="冻结名册身份状态">
+      <p className="text-xs font-bold text-[var(--ui-ink)]">冻结名册身份状态</p>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        {slots.map((slot) => (
+          <div key={slot.id} className="rounded-lg bg-[var(--ui-surface)] px-2.5 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <strong className="text-[var(--ui-ink)]">
+                {slot.label}{slot.canonical_end ? ` · ${slot.canonical_end === "end_a" ? "A端" : "B端"}` : ""}
+              </strong>
+              <span className={slot.status === "confirmed" ? "font-semibold text-green-700" : "font-semibold text-amber-700"}>
+                {slot.status === "confirmed" ? "已确认" : slot.status === "unavailable" ? "不可用" : "未确认"}
+              </span>
+            </div>
+            {slot.reason ? <p className="mt-1 text-[var(--ui-text-muted)]">{identityReasonLabel(slot.reason)}</p> : null}
+            {typeof slot.observed_samples === "number" ? (
+              <p className="mt-1 text-[var(--ui-text-muted)]">已确认有效点 {slot.observed_samples}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function identityReasonLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    bootstrap_binding_no_simultaneous_observation: "锚点时刻没有可匹配观测",
+    bootstrap_binding_waiting_global_association: "锚点已匹配到检测轨迹，等待全局身份关联",
+    bootstrap_binding_tracklet_competes_for_slots: "同一检测轨迹竞争多个名册槽",
+    bootstrap_binding_ambiguous_match: "锚点匹配存在歧义",
+    bootstrap_binding_conflicting_slots: "多个名册槽竞争同一观测",
+    bootstrap_binding_insufficient_evidence: "观测证据不足，未绑定身份",
+    frozen_identity_end_mismatch: "观测端位与名册不一致",
+    frozen_identity_already_owned: "该观测已绑定其他名册槽",
+    roster_snapshot_hash_mismatch: "冻结名册校验失败",
+    roster_snapshot_missing: "冻结名册不可用",
+  };
+  return labels[reason] ?? reason.replaceAll("_", " ");
 }
 
 function HeatmapCourtBase({ children }: { children: React.ReactNode }) {

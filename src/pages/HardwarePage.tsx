@@ -31,7 +31,7 @@ export function HardwarePage({ onNavigate }: { onNavigate: NavigateFn }) {
               模拟数据
             </span>
           </div>
-          <div className="mt-6 grid grid-cols-3 gap-3 rounded-[2rem] border border-[var(--ui-border)] bg-[#F0F7EA] p-4">
+          <div className="mt-6 grid grid-cols-3 gap-3 rounded-[2rem] border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
             {hardwarePreview.sweetZone.map((cell) => (
               <span
                 className={`aspect-square rounded-2xl border ${
@@ -63,7 +63,7 @@ export function HardwarePage({ onNavigate }: { onNavigate: NavigateFn }) {
           <article className="sport-card p-5 sm:p-6" key={point.insight}>
             <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-center">
               <FusionBlock icon={<Camera size={18} aria-hidden="true" />} label="视觉" value={point.visual} />
-              <Zap className="hidden text-[#D9FF3F] md:block" size={22} aria-hidden="true" />
+              <Zap className="hidden text-[var(--ui-display-lime)] md:block" size={22} aria-hidden="true" />
               <FusionBlock icon={<Radar size={18} aria-hidden="true" />} label="球拍" value={point.sensor} />
             </div>
             <p className="mt-5 rounded-2xl border border-[var(--ui-brand)]/25 bg-[var(--ui-brand-solid)]/12 p-4 text-sm font-semibold leading-6 text-[var(--ui-brand-deep)]">

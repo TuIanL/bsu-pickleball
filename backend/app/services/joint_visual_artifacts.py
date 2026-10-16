@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from app.schemas.tracking import (
     DetectionOverlayFrame,
@@ -137,6 +136,8 @@ def build_joint_position_visualizations(
     metric_tracks,
     language: str,
     roster_map: dict[str, str] | None = None,
+    identity_slots: list[dict[str, object]] | None = None,
+    frozen_roster_job: bool = False,
 ) -> dict[str, object]:
     """从 fused metric tracks 生成 heatmaps / scatter / structured data 产物并发布 Parent 命名空间。
 
@@ -153,8 +154,34 @@ def build_joint_position_visualizations(
 
         points = _metric_tracks_to_visualization_points(metric_tracks)
         if not points:
+            from app.vision.pickleball_game_analysis.visualization_data_builder import (
+                PositionVisualizationDataBuilder,
+            )
+
+            data_path = storage.structured_visualization_data_path(job_id)
+            PositionVisualizationDataBuilder().build_and_write(
+                output_path=data_path,
+                player_points=[],
+                ball_points=[],
+                bounce_points=[],
+            )
+            payload = storage.read_json(data_path)
+            payload["heatmaps"] = {
+                "visual_grid": {"rows": 22, "cols": 10, "max_count": 0, "cells": []},
+                "players": [],
+                "identity_slots": _identity_slots_payload(identity_slots or []),
+                "aggregate_source": (
+                    "confirmed_frozen_roster_only" if frozen_roster_job
+                    else "legacy_or_unfrozen_tracks"
+                ),
+            }
+            storage.write_json_atomic(data_path, payload)
+            fields["structured_visualization_data_path"] = str(data_path)
             fields["position_visualizations_status"] = "no_data"
-            fields["position_visualizations_detail"] = "fused 轨迹无有效球场坐标点"
+            fields["position_visualizations_detail"] = (
+                "没有已确认身份的有效球场坐标；匿名轨迹不会计入个人 P 热力图"
+                if identity_slots else "fused 轨迹无有效球场坐标点"
+            )
             return fields
         config = VisualizationConfig(language=language)
         heatmaps_url = f"/api/analysis/jobs/{job_id}/artifacts/position-heatmaps"
@@ -173,6 +200,15 @@ def build_joint_position_visualizations(
                 ball_points=[],
                 bounce_points=[],
             )
+            path = storage.structured_visualization_data_path(job_id)
+            payload = storage.read_json(path)
+            if isinstance(payload.get("heatmaps"), dict):
+                payload["heatmaps"]["identity_slots"] = _identity_slots_payload(identity_slots or [])
+                payload["heatmaps"]["aggregate_source"] = (
+                    "confirmed_frozen_roster_only" if frozen_roster_job
+                    else "legacy_or_unfrozen_tracks"
+                )
+                storage.write_json_atomic(path, payload)
             fields["structured_visualization_data_path"] = str(storage.structured_visualization_data_path(job_id))
         except Exception as exc:  # noqa: BLE001 - structured data 失败不中断 PNG 产物
             logger.warning("joint structured visualization data failed: %s", exc)
@@ -209,6 +245,30 @@ def build_joint_position_visualizations(
     return fields
 
 
+def _identity_slots_payload(entries: list[dict[str, object]]) -> list[dict[str, object]]:
+    slots: list[dict[str, object]] = []
+    for entry in entries:
+        player_id = str(entry.get("canonical_player_id") or "")
+        if not player_id.startswith("Player_"):
+            continue
+        slots.append({
+            "id": player_id,
+            "label": f"P{player_id.rsplit('_', 1)[-1]}",
+            "status": (
+                str(entry.get("status"))
+                if entry.get("status") in {"confirmed", "unconfirmed", "unavailable"}
+                else "confirmed" if entry.get("confirmed") is True else "unconfirmed"
+            ),
+            "reason": entry.get("reason"),
+            "canonical_end": entry.get("canonical_end"),
+            "global_player_id": entry.get("global_player_id"),
+            "tracklet_lineage_id": entry.get("tracklet_lineage_id"),
+            "anchor_timestamp_ms": entry.get("anchor_timestamp_ms"),
+            "observed_samples": int(entry.get("observed_samples") or 0),
+        })
+    return sorted(slots, key=lambda slot: slot["id"])
+
+
 def build_joint_roster_artifact(
     *,
     storage: StorageService,
@@ -217,16 +277,33 @@ def build_joint_roster_artifact(
     roster_map: dict[str, str],
     expected_player_count: int,
     status: str,
+    confirmed_identity_only: bool = False,
+    roster_hash: str | None = None,
+    anchor_binding_audit: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """写出 `global-player-roster.v1`（诊断 / 映射 contract，非用户展示 identity）。
 
     返回 artifacts 字段增量：roster_manifest_json_path / roster_url / roster_status / roster_detail。
+
+    7.3：`anchor_binding_audit` 是身份确认的唯一权威来源。传入时`mapping_confirmed`
+    只按审计结论求值，并把与 registry 快照的分歧记入 `mapping_conflict_with_registry`；
+    未传入时保留历史行为（历史 Job 不可回填伪确认）。
     """
+    audit_entries = {
+        str(entry.get("canonical_player_id")): entry
+        for entry in ((anchor_binding_audit or {}).get("entries") or [])
+        if isinstance(entry, dict) and entry.get("canonical_player_id")
+    }
     players: list[dict[str, object]] = []
+    conflicts: dict[str, dict[str, object]] = {}
     for entry in roster:
         global_player_id = str(entry.get("global_player_id") or "")
         direct_player_id = entry.get("player_id")
-        player_id = direct_player_id or roster_map.get(global_player_id)
+        frozen_player_id = entry.get("frozen_player_id")
+        frozen_confirmed = entry.get("frozen_identity_confirmed") is True
+        player_id = (
+            frozen_player_id if frozen_confirmed else None
+        ) if confirmed_identity_only else (direct_player_id or roster_map.get(global_player_id))
         # ``roster_map`` deliberately provides a deterministic slot fallback
         # for display continuity.  That fallback must never be reused as proof
         # of a fused global identity by downstream factual metrics.
@@ -235,18 +312,48 @@ def build_joint_roster_artifact(
             and isinstance(direct_player_id, str)
             and direct_player_id.startswith("Player_")
         )
+        mapping_confirmed = bool(
+            frozen_confirmed if confirmed_identity_only
+            else direct_reference_binding and entry.get("status") == "confirmed"
+        )
+        if confirmed_identity_only and audit_entries and isinstance(frozen_player_id, str):
+            audit_entry = audit_entries.get(frozen_player_id)
+            if audit_entry is not None:
+                audited = (
+                    audit_entry.get("confirmed") is True
+                    and audit_entry.get("formal_canonical_player_id") == frozen_player_id
+                )
+                if audited != mapping_confirmed:
+                    conflicts[frozen_player_id] = {
+                        "audit_confirmed": audited,
+                        "registry_confirmed": mapping_confirmed,
+                        "audit_reason": audit_entry.get("reason"),
+                        "audit_global_player_id": audit_entry.get("global_player_id"),
+                        "registry_global_player_id": global_player_id,
+                    }
+                mapping_confirmed = audited
         players.append(
             {
                 "global_player_id": global_player_id,
                 "player_id": player_id,
-                "label": entry.get("label"),
+                "label": (
+                    f"P{str(frozen_player_id).rsplit('_', 1)[-1]}"
+                    if confirmed_identity_only and frozen_confirmed and isinstance(frozen_player_id, str)
+                    else None if confirmed_identity_only else entry.get("label")
+                ),
                 "bindings": entry.get("bindings", {}),
                 "mapping_method": (
-                    "direct_reference_binding" if direct_reference_binding else "slot_fallback"
+                    "anchor_simultaneous_match" if confirmed_identity_only and mapping_confirmed
+                    else "unconfirmed_anchor" if confirmed_identity_only
+                    else "direct_reference_binding" if direct_reference_binding else "slot_fallback"
                 ),
-                "mapping_confirmed": bool(
-                    direct_reference_binding and entry.get("status") == "confirmed"
+                "mapping_confirmed": mapping_confirmed,
+                "frozen_player_id": frozen_player_id if mapping_confirmed else None,
+                "frozen_identity_confirmed_from_ms": (
+                    entry.get("frozen_identity_confirmed_from_ms") if mapping_confirmed else None
                 ),
+                "canonical_end": entry.get("canonical_end"),
+                "identity_evidence": entry.get("frozen_identity_evidence") if mapping_confirmed else None,
             }
         )
 
@@ -256,7 +363,11 @@ def build_joint_roster_artifact(
         "roster_occupied_count": len(roster),
         "confirmed_player_count": sum(1 for r in roster if r.get("status") == "confirmed"),
         "status": status,
+        "roster_hash": roster_hash,
         "players": players,
+        # 7.3：非空表示registry 快照与独立身份审计对同一槽位结论不一致。
+        "mapping_conflict_with_audit": conflicts,
+        "mapping_authority": "anchor_binding_audit" if audit_entries else "registry_snapshot",
     }
     path = storage.roster_manifest_json_path(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)

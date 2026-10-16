@@ -375,6 +375,14 @@ class BootstrapBindingEvidence(BaseModel):
     multiview_corroborated: bool | None = None
     competing_formal_players: int = 0
     competing_slots: int = 0
+    # Preserve the failed local/global association evidence too. These fields
+    # explain why an anchor stayed unresolved without implying a P binding.
+    track_id: int | None = None
+    tracklet_lineage_id: str | None = None
+    local_identity_epoch: int | None = None
+    local_identity_reason: str | None = None
+    tracking_status: str | None = None
+    global_player_id: str | None = None
 
 
 class BootstrapBindingAuditEntry(BaseModel):
@@ -393,6 +401,9 @@ class BootstrapBindingAuditEntry(BaseModel):
     anchor_bbox: list[float] | None = None
     anchor_court_xy: list[float] | None = None
     formal_canonical_player_id: str | None = None
+    global_player_id: str | None = None
+    tracklet_lineage_id: str | None = None
+    local_identity_epoch: int | None = None
     method: BootstrapBindingMethod = "unavailable"
     confidence: float | None = None
     confirmed: bool = False

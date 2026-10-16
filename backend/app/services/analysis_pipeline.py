@@ -20,7 +20,6 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from math import hypot
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -44,7 +43,13 @@ from app.schemas.tracking import (
     TrackingResult,
 )
 from app.services.calibration_service import CalibrationService
-from app.services.analysis_window import AnalysisWindowError, resolve_analysis_window
+from app.services.analysis_errors import (
+    JobCanceledError,
+    StageTimeoutError,
+    WorkerLeaseLostError,
+)
+from app.services.analysis_run_trace import redact_host_paths
+from app.services.analysis_window import resolve_analysis_window
 from app.services.frame_timing_provider import FrameTimingProvider
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoMetadata, VideoService
@@ -55,7 +60,6 @@ from app.vision.court_view import (
     RoiComputationConfig,
     build_court_view_roi_artifact,
     compute_expanded_detection_roi,
-    filter_detections_to_roi,
 )
 
 # 视觉引擎：球场几何、球场视角评分、各项性能指标、跟踪与姿态相关组件
@@ -255,6 +259,7 @@ class _VisualizationArtifactFields:
     scatter_plots_url: str | None = None
     position_visualizations_status: str | None = None
     position_visualizations_detail: str | None = None
+    internal_details: list[str] = field(default_factory=list)
     stage_status: str = "skipped"
     stage_detail: str = "可视化输出未启用"
 
@@ -462,6 +467,8 @@ class AnalysisPipeline:
         ball_fields = _BallArtifactFields()
         player_multitarget_detections: list[MultiTargetDetection] = []
         analysis_window_metadata: dict[str, Any] | None = None
+        serve_events: ServeEventsArtifact | None = None
+        run_output: _TrackingRunOutput | None = None
         self._check_cancelled(cancellation_token)
         video = self.video_service.get_video(video_id) if video_id else None
 
@@ -558,8 +565,6 @@ class AnalysisPipeline:
         player_trajectory_detail: str | None = None
         player_render_trajectory_json_path: str | None = None
         player_render_trajectory_url: str | None = None
-        player_render_trajectory_status: str | None = None
-        player_render_trajectory_detail: str | None = None
         calibration_diagnostics_json_path: str | None = None
         calibration_diagnostics_url: str | None = None
         court_view_roi_path: str | None = None
@@ -591,12 +596,27 @@ class AnalysisPipeline:
                     clip_end_ms=clip_end_ms,
                     analysis_window_plan=analysis_window_plan,
                 )
+            except (JobCanceledError, WorkerLeaseLostError, StageTimeoutError):
+                # 控制信号不是"分析失败"：用户取消、租约丢失、阶段超时都必须穿透
+                # 本层冒泡到编排层，由其按语义处理（取消 / 重新入队 / 超时终止）。
+                # 若落入下面的 `except Exception`，它们会被转成
+                # `status="failed"` 的结果，于是租约丢失与用户取消都被记成
+                # 普通任务失败，failureClass 只能落到 internal_defect ——
+                # 编排层本已写好的正确捕获顺序将失去作用。
+                raise
             except Exception as exc:
                 # 跟踪阶段抛异常 → 整个任务失败
-                failed_stage = self._stage("tracking", "多目标跟踪", "failed", str(exc))
+                public_message = (
+                    "Could not read uploaded video"
+                    if str(exc).startswith("Could not read uploaded video")
+                    else "视频跟踪处理失败，请检查输入视频和分析配置。"
+                )
+                failed_stage = self._stage("tracking", "多目标跟踪", "failed", public_message)
+                failed_stage.public_message = public_message
+                failed_stage.internal_message = str(exc)
                 stages.append(failed_stage)
                 self._notify_progress(progress_callback, failed_stage)
-                result = self._failed(job_id, video_id, calibration_id, str(exc), stages=stages)
+                result = self._failed(job_id, video_id, calibration_id, public_message, stages=stages)
                 self._write_result(result)
                 return result
             tracking_result = run_output.tracking
@@ -735,13 +755,9 @@ class AnalysisPipeline:
                 self.storage.write_json(render_traj_path, render_traj_payload)
                 player_render_trajectory_json_path = str(render_traj_path)
                 player_render_trajectory_url = f"/api/analysis/jobs/{job_id}/artifacts/player-render-trajectories"
-                player_render_trajectory_status = "available"
-                player_render_trajectory_detail = render_traj_payload["detail"]
             else:
                 player_render_trajectory_json_path = None
                 player_render_trajectory_url = None
-                player_render_trajectory_status = "unavailable"
-                player_render_trajectory_detail = "渲染轨迹未生成"
 
             # 发球开始检测（若开启调试产物，先准备调试引用）
             debug_refs = self._serve_debug_refs(job_id) if self.settings.enable_serve_debug_artifacts else None
@@ -756,10 +772,11 @@ class AnalysisPipeline:
                 )
             except Exception as exc:
                 # 检测失败则降级为 unavailable，不阻断主流程
+                logger.warning("Serve-start detection failed for job %s: %s", job_id, exc, exc_info=True)
                 serve_events = self.serve_start_detector.unavailable(
                     job_id=job_id,
                     video_id=video_id,
-                    detail=f"发球开始检测不可用：{exc}",
+                    detail="发球开始检测暂不可用",
                 )
             if self.settings.enable_serve_debug_artifacts:
                 debug_status, debug_detail = self._write_serve_debug_artifacts(
@@ -915,7 +932,6 @@ class AnalysisPipeline:
         _reconstruction_homography = (
             calibration.homography.values if (calibration is not None and calibration.homography is not None) else None
         )
-        _reconstruction_serve_events = locals().get("serve_events")
         self._finalize_ball_analysis(
             job_id,
             ball_run_output,
@@ -930,9 +946,9 @@ class AnalysisPipeline:
             processed_frame_count=_ball_processed,
             progress_callback=progress_callback,
             homography=_reconstruction_homography,
-            serve_events=_reconstruction_serve_events,
+            serve_events=serve_events,
             capture_take_id=capture_take_id,
-            tracking_run_output=locals().get("run_output"),
+            tracking_run_output=run_output,
             timing_provenance=_timing_provenance,
         )
 
@@ -1006,6 +1022,8 @@ class AnalysisPipeline:
             visualization_fields.stage_status,
             visualization_fields.stage_detail,
         )
+        if visualization_fields.internal_details:
+            visualization_stage.internal_message = "；".join(visualization_fields.internal_details)
         visualization_stage.counters = {
             "overlay_video_status": visualization_fields.analysis_overlay_video_status,
             "position_visualizations_status": visualization_fields.position_visualizations_status,
@@ -1368,15 +1386,11 @@ class AnalysisPipeline:
         stages.append(traj_stage)
         fields.detections_status = traj_status
         fields.detections_detail = traj_detail
+        # ball_trajectory_* 与 detections_* 同源：都取 traj_status / traj_detail。
+        # 此前此处还有一次基于 `run.raw_points` 的二次覆盖，会让 artifact 字段
+        # 显示 skipped 而阶段图显示 done（矛盾）。两者必须来自同一判定。
         fields.ball_trajectory_status = traj_status
         fields.ball_trajectory_detail = traj_detail
-
-        fields.ball_trajectory_status = (
-            run.status if run.status != "available" else ("available" if run.raw_points else "skipped")
-        )
-        fields.ball_trajectory_detail = (
-            traj_detail if run.status != "available" or run.raw_points else "未生成可用球轨迹"
-        )
 
         # 只有可用的球分析才生成 overlay 文件；其他状态保留诊断但由 API 返回 404。
         overlay_status = "available" if run.status == "available" else run.status
@@ -1568,7 +1582,7 @@ class AnalysisPipeline:
             progress_callback, self._stage("visualization", "可视化输出", "active", "正在生成可视化 artifact…")
         )
         config = VisualizationConfig(language=self.settings.visualization_language)
-        inputs = self._load_visualization_inputs(job_id)
+        inputs, input_errors = self._load_visualization_inputs(job_id)
         metric_player_points = player_points_from_artifact(inputs.get("players_trajectory") or {})
         render_player_points = (
             player_render_points_from_artifact(inputs.get("player_render_trajectory") or {}) or metric_player_points
@@ -1633,9 +1647,11 @@ class AnalysisPipeline:
                 fields.position_visualizations_detail = f"{heat_result.detail}；{scatter_result.detail}"
                 results.extend([heat_result, scatter_result])
             except Exception as exc:
-                detail = f"位置可视化生成失败：{exc}"
+                logger.warning("Position visualization failed for job %s: %s", job_id, exc, exc_info=True)
+                detail = "位置可视化生成失败，请检查任务日志"
                 fields.position_visualizations_status = "failed"
                 fields.position_visualizations_detail = detail
+                fields.internal_details.append(f"{type(exc).__name__}: {exc}")
                 results.append(VisualizationResult("failed", detail))
         else:
             fields.position_visualizations_status = "skipped"
@@ -1647,6 +1663,20 @@ class AnalysisPipeline:
                 fields.analysis_overlay_video_status = "unavailable"
                 fields.analysis_overlay_video_detail = "缺少源视频，无法生成分析叠加视频"
                 results.append(VisualizationResult("unavailable", fields.analysis_overlay_video_detail))
+            elif input_errors:
+                error_name, (error_status, error_detail) = next(
+                    (
+                        (name, error)
+                        for name, error in input_errors.items()
+                        if error[0] == "failed"
+                    ),
+                    next(iter(input_errors.items())),
+                )
+                fields.analysis_overlay_video_status = error_status
+                fields.analysis_overlay_video_detail = (
+                    f"分析叠加视频未生成（{error_name}）：{redact_host_paths(error_detail)}"
+                )
+                results.append(VisualizationResult(error_status, fields.analysis_overlay_video_detail))
             else:
                 try:
 
@@ -1690,9 +1720,11 @@ class AnalysisPipeline:
                         fields.analysis_overlay_video_metadata = overlay_result.metadata
                     results.append(overlay_result)
                 except Exception as exc:
-                    detail = f"分析叠加视频生成失败：{exc}"
+                    logger.warning("Analysis overlay video failed for job %s: %s", job_id, exc, exc_info=True)
+                    detail = "分析叠加视频生成失败，请检查任务日志"
                     fields.analysis_overlay_video_status = "failed"
                     fields.analysis_overlay_video_detail = detail
+                    fields.internal_details.append(f"{type(exc).__name__}: {exc}")
                     results.append(VisualizationResult("failed", detail))
         else:
             fields.analysis_overlay_video_status = "skipped"
@@ -1702,7 +1734,9 @@ class AnalysisPipeline:
         fields.stage_detail = self._visualization_stage_detail(fields)
         return fields
 
-    def _load_visualization_inputs(self, job_id: str) -> dict[str, dict[str, Any]]:
+    def _load_visualization_inputs(
+        self, job_id: str
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[str, str]]]:
         paths = {
             "tracking_overlay": self.storage.tracking_overlay_json_path(job_id),
             "pose_overlay": self.storage.pose_overlay_json_path(job_id),
@@ -1714,16 +1748,36 @@ class AnalysisPipeline:
             "bounce_events": self.storage.bounce_events_json_path(job_id),
         }
         payloads: dict[str, dict[str, Any]] = {}
+        errors: dict[str, tuple[str, str]] = {}
         for name, path in paths.items():
             if not path.exists():
+                if name == "tracking_overlay":
+                    detail = "上游 tracking_overlay.json 缺失"
+                    logger.warning("Visualization input %s is missing for job %s", name, job_id)
+                    errors[name] = ("unavailable", detail)
                 continue
             try:
                 payload = self.storage.read_json(path)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Could not read visualization input %s for job %s: %s",
+                    name,
+                    job_id,
+                    exc,
+                    exc_info=True,
+                )
+                errors[name] = ("failed", f"上游 {name}.json 读取失败")
                 continue
             if isinstance(payload, dict):
+                if name == "tracking_overlay" and not isinstance(payload.get("frames"), list):
+                    logger.warning("Visualization input %s has no frames list for job %s", name, job_id)
+                    errors[name] = ("failed", "上游 tracking_overlay.json 格式无效")
+                    continue
                 payloads[name] = payload
-        return payloads
+            else:
+                logger.warning("Visualization input %s has invalid root type for job %s", name, job_id)
+                errors[name] = ("failed", f"上游 {name}.json 格式无效")
+        return payloads, errors
 
     @staticmethod
     def _visualization_stage_status(results: list[VisualizationResult]) -> str:
@@ -1776,27 +1830,27 @@ class AnalysisPipeline:
 
         stride = max(1, int(frame_stride))
         capture = cv2.VideoCapture(video.path)
-        if not capture.isOpened():
-            raise RuntimeError(f"Could not read uploaded video: {video.path}")
-
-        # 读取视频基础信息
-        raw_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-        fps_info = resolve_effective_fps(source_fps, raw_fps)
-        fps = fps_info.effective_fps
-        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        timing_provider = FrameTimingProvider.from_media(
-            video.path,
-            frame_count=frame_count,
-            fps=fps,
-        )
-
-        # ── 时间裁剪 + 预热区间 ──
-        pre_roll_ms = self.settings.pre_roll_ms if hasattr(self.settings, "pre_roll_ms") else 1500
-        post_roll_ms = self.settings.post_roll_ms if hasattr(self.settings, "post_roll_ms") else 500
-        video_duration_ms = int(timing_provider.duration_seconds * 1000)
         try:
+            if not capture.isOpened():
+                raise RuntimeError(f"Could not read uploaded video: {video.path}")
+
+            # 读取视频基础信息
+            raw_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            fps_info = resolve_effective_fps(source_fps, raw_fps)
+            fps = fps_info.effective_fps
+            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            timing_provider = FrameTimingProvider.from_media(
+                video.path,
+                frame_count=frame_count,
+                fps=fps,
+            )
+
+            # ── 时间裁剪 + 预热区间 ──
+            pre_roll_ms = self.settings.pre_roll_ms if hasattr(self.settings, "pre_roll_ms") else 1500
+            post_roll_ms = self.settings.post_roll_ms if hasattr(self.settings, "post_roll_ms") else 500
+            video_duration_ms = int(timing_provider.duration_seconds * 1000)
             window = resolve_analysis_window(
                 source_duration_ms=video_duration_ms,
                 source_frame_count=frame_count,
@@ -1807,372 +1861,395 @@ class AnalysisPipeline:
                 post_roll_ms=post_roll_ms,
                 timing_provider=timing_provider,
             )
-        except AnalysisWindowError:
-            capture.release()
-            raise
-        clip_applied = window.enabled
-        decode_start_frame = window.decoded_start_frame
-        decode_end_frame = window.decoded_end_frame
-        clip_start_frame = window.requested_start_frame
-        clip_end_frame = window.requested_end_frame
-        frame_index = decode_start_frame
-        if clip_applied:
-            capture.set(cv2.CAP_PROP_POS_FRAMES, decode_start_frame)
-        # 球场视角（court-view）相关评分器/状态机/阈值
-        # 支持任务级覆盖 court_view_match_threshold
-        effective_match_threshold = (
-            court_view_match_threshold
-            if court_view_match_threshold is not None
-            else self.settings.court_view_match_threshold
-        )
-        court_view_thresholds = CourtViewThresholds(
-            match_threshold=effective_match_threshold,
-            start_frames=self.settings.court_view_start_frames,
-            end_frames=self.settings.court_view_end_frames,
-            diagnostic_only=self.settings.court_view_diagnostic_only or not self.settings.enable_court_view_gate,
-            skip_non_court_frames=self.settings.court_view_skip_non_court_frames
-            and self.settings.enable_court_view_gate,
-        )
-        court_view_scorer = CourtViewFrameScorer(match_width=self.settings.court_view_match_width)
-        court_view_state = CourtViewStateMachine(thresholds=court_view_thresholds)
-        court_view_frame_samples = []
-        # 检测 ROI（感兴趣区域）：开启则按标定四角算一个扩大框，关闭则用全帧 fallback
-        roi_artifact = (
-            compute_expanded_detection_roi(
-                self._calibration_image_points(calibration_keypoints),
-                frame_width,
-                frame_height,
-                calibration_id=calibration_id,
-                config=RoiComputationConfig(
-                    padding_ratio=self.settings.detection_roi_padding_ratio,
-                    min_padding_px=self.settings.detection_roi_min_padding_px,
-                ),
+            clip_applied = window.enabled
+            decode_start_frame = window.decoded_start_frame
+            decode_end_frame = window.decoded_end_frame
+            frame_index = decode_start_frame
+            if clip_applied:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, decode_start_frame)
+            # 球场视角（court-view）相关评分器/状态机/阈值
+            # 支持任务级覆盖 court_view_match_threshold
+            effective_match_threshold = (
+                court_view_match_threshold
+                if court_view_match_threshold is not None
+                else self.settings.court_view_match_threshold
             )
-            if self.settings.enable_detection_roi_filter
-            else compute_expanded_detection_roi(
-                None,
-                frame_width,
-                frame_height,
-                calibration_id=calibration_id,
-            ).model_copy(
-                update={
-                    "status": "skipped",
-                    "detail": "detection ROI filter 已被配置禁用，使用全帧 detection fallback",
-                    "disabled": True,
-                    "diagnostics": {"reason": "disabled_by_config"},
-                }
+            court_view_thresholds = CourtViewThresholds(
+                match_threshold=effective_match_threshold,
+                start_frames=self.settings.court_view_start_frames,
+                end_frames=self.settings.court_view_end_frames,
+                diagnostic_only=self.settings.court_view_diagnostic_only or not self.settings.enable_court_view_gate,
+                skip_non_court_frames=self.settings.court_view_skip_non_court_frames
+                and self.settings.enable_court_view_gate,
             )
-        )
-        roi_filtered_detection_count = 0
-        full_frame_fallback_count = 0
-
-        calibration_diagnostics_path: str | None = None
-        calibration_quality: str | None = None
-        if calibration_keypoints and frame_width > 0 and frame_height > 0:
-            try:
-                image_points = self._calibration_image_points(calibration_keypoints)
-                court_points = [(kp.court.x, kp.court.y) for kp in calibration_keypoints]
-                if image_points and len(image_points) >= 4 and len(court_points) >= 4:
-                    diagnostics = CalibrationDiagnostics(
-                        homography=homography,
-                        image_points=image_points,
-                        court_points=court_points,
-                        frame_shape=(frame_width, frame_height),
-                    )
-                    diag_result = diagnostics.diagnose()
-                    calibration_quality = diag_result.calibration_quality
-                    diag_path = self.storage.calibration_diagnostics_json_path(job_id)
-                    diagnostics.write_artifact(diag_path, job_id)
-                    calibration_diagnostics_path = str(diag_path)
-            except Exception:
-                pass
-
-        debug_writer: ProjectionDebugWriter | None = None
-        debug_minimap: MinimapVisualizer | None = None
-        debug_overlay: ProjectionDebugOverlayWriter | None = None
-
-        last_processed_frame_index: int | None = None
-        last_processed_timestamp: float | None = None
-        processed_frame_count = 0
-        pose_frames = []
-        # 姿态阶段：未启用姿态估计时先预置一个 skipped 阶段
-        pose_stage = (
-            self._stage("pose", "人体姿态", "skipped", "RTMPose 姿态识别未启用，暂不生成骨架关节")
-            if self.pose_estimator is None
-            else None
-        )
-        pose_error: str | None = None
-        # 解析单视角 tracking 运行配置并装配可复用 ViewTrackingSession
-        # （保留 tracker / footpoint_estimator / projector 依赖注入语义）。
-        ball_stationary_blacklist_frames = frames_for_seconds(self.settings.ball_stationary_blacklist_seconds, fps)
-        match_ctx = match_context or build_match_context(None)
-        tracking_config = build_view_tracking_config(
-            self.settings,
-            match_ctx,
-            fps=fps,
-            frame_stride=stride,
-            frame_width=frame_width,
-            frame_height=frame_height,
-        )
-        session = build_view_tracking_session(
-            detector=self.detector,
-            homography=homography,
-            roi_artifact=roi_artifact,
-            config=tracking_config,
-            tracker=self.tracker,
-            footpoint_estimator=self.footpoint_estimator,
-            projector=self.projector,
-        )
-        from app.vision.pickleball_game_analysis.ball_tracker import BallTrackerConfig
-
-        semantic_mode_raw = str(getattr(self.settings, "ball_semantic_policy_mode", "shadow") or "shadow").lower()
-        try:
-            semantic_mode = SemanticPolicyMode(semantic_mode_raw)
-        except ValueError:
-            semantic_mode = SemanticPolicyMode.SHADOW
-        semantic_config = BallSemanticPolicyConfig(
-            mode=semantic_mode,
-            enforce_authoritative_non_play=bool(
-                getattr(self.settings, "ball_semantic_enforce_authoritative_non_play", False)
-            ),
-            enforced_rollout_enabled=bool(
-                getattr(self.settings, "ball_semantic_enforced_rollout", False)
-            ),
-            rollout_id=str(getattr(self.settings, "ball_semantic_rollout_id", "default") or "default"),
-            semantic_timeline_enabled=bool(getattr(self.settings, "ball_semantic_timeline_enabled", True)),
-            serve_prepare_confidence=float(
-                getattr(self.settings, "ball_semantic_serve_prepare_confidence", 0.55)
-            ),
-            serve_armed_confidence=float(getattr(self.settings, "ball_semantic_serve_armed_confidence", 0.70)),
-            rally_end_min_evidence=int(getattr(self.settings, "ball_semantic_rally_end_min_evidence", 2)),
-            policy_version=str(
-                getattr(self.settings, "ball_semantic_policy_version", "semantic_boundary_policy.v1")
-            ),
-            min_confirm_ticks=int(getattr(self.settings, "ball_semantic_min_confirm_ticks", 2)),
-            grace_window_sec=float(getattr(self.settings, "ball_semantic_grace_window_seconds", 0.20)),
-            rescue_min_consecutive_ticks=int(
-                getattr(self.settings, "ball_semantic_rescue_min_consecutive_ticks", 2)
-            ),
-            rescue_min_motion_pixels=float(
-                getattr(self.settings, "ball_semantic_rescue_min_motion_pixels", 15.0)
-            ),
-            evidence_freshness_sec=float(
-                getattr(self.settings, "ball_semantic_evidence_freshness_seconds", 0.50)
-            ),
-            conflict_penalty=float(getattr(self.settings, "ball_semantic_conflict_penalty", 0.25)),
-            boundary_eval_enabled=bool(getattr(self.settings, "ball_semantic_boundary_eval_enabled", True)),
-        )
-        semantic_effective_windows = (
-            resolve_effective_windows(
-                analysis_window_plan=analysis_window_plan,
-                window_plan_bound=True,
-            )
-            if analysis_window_plan is not None
-            else None
-        )
-        semantic_provider = (
-            SemanticTimelineProvider.from_capture_take(
-                capture_take_id,
-                clip_start_ms=clip_start_ms,
-                clip_end_ms=clip_end_ms,
-                video_duration_ms=video_duration_ms,
-                effective_windows=semantic_effective_windows,
-                config=semantic_config,
-            )
-            if bool(getattr(self.settings, "enable_ball_semantic_policy", True))
-            and semantic_config.semantic_timeline_enabled
-            else None
-        )
-        # 球检测（可选）：启用且适配器可用时逐帧运行，使用局部 context 封装状态
-        ball_ctx = _BallRunContext(
-            tracker=(
-                BallTracker(
-                    detector=self.ball_detector,
-                    config=BallTrackerConfig(
-                        effective_fps=fps / max(1, stride),
-                        frame_stride=max(1, stride),
-                        stationary_blacklist_frames=ball_stationary_blacklist_frames,
+            court_view_scorer = CourtViewFrameScorer(match_width=self.settings.court_view_match_width)
+            court_view_state = CourtViewStateMachine(thresholds=court_view_thresholds)
+            court_view_frame_samples = []
+            # 检测 ROI（感兴趣区域）：开启则按标定四角算一个扩大框，关闭则用全帧 fallback
+            roi_artifact = (
+                compute_expanded_detection_roi(
+                    self._calibration_image_points(calibration_keypoints),
+                    frame_width,
+                    frame_height,
+                    calibration_id=calibration_id,
+                    config=RoiComputationConfig(
+                        padding_ratio=self.settings.detection_roi_padding_ratio,
+                        min_padding_px=self.settings.detection_roi_min_padding_px,
                     ),
-                    court_adapter=BallCourtAdapter(),
                 )
-                if self.ball_detector is not None
-                else None
-            ),
-            disabled_reason=(
-                self.ball_detection_unavailable_reason
-                if self.ball_detector is None and self.ball_detection_enabled
-                else None
-            ),
-            semantic_provider=semantic_provider,
-            semantic_policy=BallSearchPolicy(semantic_config) if semantic_provider is not None else None,
-        )
-
-        window_metadata = window.metadata()
-        window_metadata["timing_provenance"] = timing_provider.metadata()
-        window_metadata["processed_frame_count"] = 0
-        requested_clip = window_metadata.get("requested_clip") if clip_applied else None
-        decoded_range = window_metadata.get("decoded_range") if clip_applied else None
-
-        try:
-            if self.settings.enable_projection_debug_jsonl:
-                debug_path = self.storage.outputs_dir / job_id / "projection_debug.jsonl"
-                debug_writer = ProjectionDebugWriter(debug_path)
-                debug_writer.open()
-                debug_minimap = MinimapVisualizer()
-            if self.settings.enable_projection_debug_overlay:
-                debug_overlay = ProjectionDebugOverlayWriter(
-                    self.storage.outputs_dir / job_id / "projection_debug_overlay.mp4",
-                    fps=fps, width=frame_width, height=frame_height,
-                )
-            while True:
-                self._check_cancelled(cancellation_token)
-                ok, frame = capture.read()
-                if not ok:
-                    break
-                # clip 范围终止
-                if clip_applied and frame_index >= decode_end_frame:
-                    break
-                # 按 stride 抽帧：不是目标帧就跳过
-                if frame_index % stride != 0:
-                    frame_index += 1
-                    continue
-
-                timestamp = timing_provider.take_timestamp_for_frame(frame_index)
-                if timestamp is None:
-                    timestamp = frame_index / fps
-                # 标记帧是否为预热帧（pre-roll / post-roll context）
-                last_processed_frame_index = frame_index
-                last_processed_timestamp = timestamp
-                if processed_frame_count == 0 and self.settings.enable_court_view_gate:
-                    court_view_scorer.initialize(frame)
-                court_view_score = (
-                    court_view_scorer.score(frame)
-                    if self.settings.enable_court_view_gate and court_view_scorer.available
-                    else None
-                )
-                court_view_sample = court_view_state.update(frame_index, timestamp, court_view_score)
-                court_view_frame_samples.append(court_view_sample)
-                processed_frame_count += 1
-                window_metadata["processed_frame_count"] = processed_frame_count
-                # 被"非球场视角"门控挡住的帧，跳过后续检测
-                if court_view_sample.reason == "gated_non_court_view":
-                    self._check_cancelled(cancellation_token)
-                    frame_index += 1
-                    continue
-
-                # 1-8b) 复用 ViewTrackingSession 完成逐帧 tracking 计算链
-                # （detect → ROI filter → tracker → footpoint → project → smooth →
-                #  select → lock → identity → render observations）。processed_frame_count
-                # 已在 gate 前递增（D1b），此处只消费 session 输出驱动 debug / ball / pose。
-                result = session.step(frame, frame_index=frame_index, timestamp=timestamp)
-                frame_positions = result.frame_positions
-                frame_detections = result.frame_detections
-                render_raw_by_track = result.render_raw_by_track
-                player_motion_pixels = result.player_motion_pixels
-
-                # 5d) 投影调试日志写入（每帧每个球员一行 JSONL）—— 消费 session 结果
-                if debug_writer is not None and debug_minimap is not None:
-                    for pos in frame_positions:
-                        # 原始投影值（session 在平滑前保存），平滑后 court_position 已被覆盖
-                        raw = render_raw_by_track.get(pos.track_id)
-                        raw = [raw["x_ft"], raw["y_ft"]] if raw else None
-                        smoothed = pos.court_position
-                        px = None
-                        if smoothed and len(smoothed) >= 2:
-                            px = debug_minimap.court_to_pixel(smoothed[0], smoothed[1])
-                        fp_method = pos.footpoint_method or "unknown"
-                        near_bottom = False
-                        clip_suspected = False
-                        pose_unavailable = False
-                        if hasattr(pos, "footpoint_metadata") and pos.footpoint_metadata:
-                            near_bottom = pos.footpoint_metadata.get("near_frame_bottom", False)
-                            clip_suspected = pos.footpoint_metadata.get("bbox_clip_suspected", False)
-                            pose_unavailable = bool(pos.footpoint_metadata.get("pose_unavailable", False))
-                        status = pos.projection_status or "unknown"
-                        filter_reason = None
-                        if status == "outside_tracking_area":
-                            filter_reason = "court position outside allowed tracking bounds (x:-4..24, y:-8..52)"
-                        debug_writer.write_frame(
-                            frame_index=frame_index,
-                            track_id=pos.track_id,
-                            bbox=pos.bbox,
-                            image_footpoint=pos.image_footpoint,
-                            footpoint_method=fp_method,
-                            footpoint_confidence=pos.projection_confidence,
-                            court_position_raw=raw if raw else [0, 0],
-                            court_position_smoothed=smoothed if smoothed else [0, 0],
-                            projection_status=status,
-                            minimap_pixel=px,
-                            calibration_quality=calibration_quality,
-                            near_frame_bottom=near_bottom,
-                            bbox_clip_suspected=clip_suspected,
-                            pose_unavailable=pose_unavailable,
-                            filter_reason=filter_reason,
-                        )
-                # 球检测（可选）：提取至 _process_ball_frame()，保持单视频循环
-                if ball_ctx.tracker is not None:
-                    self._process_ball_frame(
-                        context=ball_ctx,
-                        frame=frame,
-                        frame_index=frame_index,
-                        timestamp=timestamp,
-                        homography=homography,
-                        frame_width=frame_width,
-                        frame_height=frame_height,
-                        player_motion_pixels=player_motion_pixels,
-                    )
-                # 9) 姿态估计（可选）
-                if self.pose_estimator is not None and frame_detections and pose_error is None:
-                    try:
-                        pose_frame = self.pose_estimator.estimate_frame(
-                            frame=frame,
-                            subjects=frame_detections,
-                            frame_index=frame_index,
-                            timestamp_seconds=timestamp,
-                        )
-                        # 只保留有关键点的骨架
-                        pose_frame.subjects = [subject for subject in pose_frame.subjects if subject.keypoints]
-                        if pose_frame.subjects:
-                            pose_frames.append(pose_frame)
-                    except Exception as exc:
-                        pose_error = str(exc)
-                        pose_frames = []
-                self._check_cancelled(cancellation_token)
-
-                # 每隔 30 帧打一条进度日志
-                if processed_frame_count == 1 or processed_frame_count % 30 == 0:
-                    frame_progress = self._tracking_frame_progress(
-                        processed_frame_count=processed_frame_count,
-                        frame_count=window.planned_frame_count,
-                        stride=stride,
-                    )
-                    progress_stage = self._stage(
-                        "frame-sampling",
-                        "抽帧采样",
-                        "active",
-                        f"正在逐帧分析：已处理 {processed_frame_count}/{max(1, (window.planned_frame_count + stride - 1) // stride) if window.planned_frame_count else 'unknown'} 个抽样帧",  # noqa: E501
-                    )
-                    progress_stage.progress = frame_progress
-                    progress_stage.counters = {
-                        "processed_frame_count": processed_frame_count,
-                        "source_frame_count": frame_count,
-                        "planned_frame_count": window.planned_frame_count,
-                        "frame_stride": stride,
+                if self.settings.enable_detection_roi_filter
+                else compute_expanded_detection_roi(
+                    None,
+                    frame_width,
+                    frame_height,
+                    calibration_id=calibration_id,
+                ).model_copy(
+                    update={
+                        "status": "skipped",
+                        "detail": "detection ROI filter 已被配置禁用，使用全帧 detection fallback",
+                        "disabled": True,
+                        "diagnostics": {"reason": "disabled_by_config"},
                     }
-                    self._notify_progress(progress_callback, progress_stage)
-                    logger.info(
-                        "Player tracking progress: processed %s/%s frames",
-                        processed_frame_count,
-                        frame_count or "unknown",
+                )
+            )
+            # These names remain for the tracked ROI diagnostic counters recorded downstream.
+            roi_filtered_detection_count = 0  # noqa: F841
+            full_frame_fallback_count = 0  # noqa: F841
+
+            calibration_diagnostics_path: str | None = None
+            calibration_quality: str | None = None
+            if calibration_keypoints and frame_width > 0 and frame_height > 0:
+                try:
+                    image_points = self._calibration_image_points(calibration_keypoints)
+                    court_points = [(kp.court.x, kp.court.y) for kp in calibration_keypoints]
+                    if image_points and len(image_points) >= 4 and len(court_points) >= 4:
+                        diagnostics = CalibrationDiagnostics(
+                            homography=homography,
+                            image_points=image_points,
+                            court_points=court_points,
+                            frame_shape=(frame_width, frame_height),
+                        )
+                        diag_result = diagnostics.diagnose()
+                        calibration_quality = diag_result.calibration_quality
+                        diag_path = self.storage.calibration_diagnostics_json_path(job_id)
+                        diagnostics.write_artifact(diag_path, job_id)
+                        calibration_diagnostics_path = str(diag_path)
+                except Exception as exc:
+                    calibration_quality = None
+                    failure_detail = f"{type(exc).__name__}: {redact_host_paths(str(exc))}"
+                    logger.warning(
+                        "Calibration diagnostics failed for job %s: %s",
+                        job_id,
+                        failure_detail,
+                        exc_info=True,
                     )
+                    try:
+                        diag_path = self.storage.calibration_diagnostics_json_path(job_id)
+                        self.storage.write_json(
+                            diag_path,
+                            {
+                                "schema_version": "calibration-diagnostics.v1",
+                                "job_id": job_id,
+                                "status": "failed",
+                                "calibration_quality": None,
+                                "failure_stage": "calibration-diagnostics",
+                                "error": failure_detail,
+                            },
+                        )
+                        calibration_diagnostics_path = str(diag_path)
+                    except Exception as artifact_exc:
+                        logger.warning(
+                            "Could not persist calibration diagnostics failure for job %s: %s",
+                            job_id,
+                            artifact_exc,
+                            exc_info=True,
+                        )
 
-                if debug_overlay is not None:
-                    debug_overlay.write_frame(frame, frame_index, frame_positions)
+            debug_writer: ProjectionDebugWriter | None = None
+            debug_minimap: MinimapVisualizer | None = None
+            debug_overlay: ProjectionDebugOverlayWriter | None = None
 
-                frame_index += 1
-        finally:
+            last_processed_frame_index: int | None = None
+            last_processed_timestamp: float | None = None
+            processed_frame_count = 0
+            pose_frames = []
+            # 姿态阶段：未启用姿态估计时先预置一个 skipped 阶段
+            pose_stage = (
+                self._stage("pose", "人体姿态", "skipped", "RTMPose 姿态识别未启用，暂不生成骨架关节")
+                if self.pose_estimator is None
+                else None
+            )
+            pose_error: str | None = None
+            # 解析单视角 tracking 运行配置并装配可复用 ViewTrackingSession
+            # （保留 tracker / footpoint_estimator / projector 依赖注入语义）。
+            ball_stationary_blacklist_frames = frames_for_seconds(self.settings.ball_stationary_blacklist_seconds, fps)
+            match_ctx = match_context or build_match_context(None)
+            tracking_config = build_view_tracking_config(
+                self.settings,
+                match_ctx,
+                fps=fps,
+                frame_stride=stride,
+                frame_width=frame_width,
+                frame_height=frame_height,
+            )
+            session = build_view_tracking_session(
+                detector=self.detector,
+                homography=homography,
+                roi_artifact=roi_artifact,
+                config=tracking_config,
+                tracker=self.tracker,
+                footpoint_estimator=self.footpoint_estimator,
+                projector=self.projector,
+            )
+            from app.vision.pickleball_game_analysis.ball_tracker import BallTrackerConfig
+
+            semantic_mode_raw = str(getattr(self.settings, "ball_semantic_policy_mode", "shadow") or "shadow").lower()
             try:
-                capture.release()
+                semantic_mode = SemanticPolicyMode(semantic_mode_raw)
+            except ValueError:
+                semantic_mode = SemanticPolicyMode.SHADOW
+            semantic_config = BallSemanticPolicyConfig(
+                mode=semantic_mode,
+                enforce_authoritative_non_play=bool(
+                    getattr(self.settings, "ball_semantic_enforce_authoritative_non_play", False)
+                ),
+                enforced_rollout_enabled=bool(
+                    getattr(self.settings, "ball_semantic_enforced_rollout", False)
+                ),
+                rollout_id=str(getattr(self.settings, "ball_semantic_rollout_id", "default") or "default"),
+                semantic_timeline_enabled=bool(getattr(self.settings, "ball_semantic_timeline_enabled", True)),
+                serve_prepare_confidence=float(
+                    getattr(self.settings, "ball_semantic_serve_prepare_confidence", 0.55)
+                ),
+                serve_armed_confidence=float(getattr(self.settings, "ball_semantic_serve_armed_confidence", 0.70)),
+                rally_end_min_evidence=int(getattr(self.settings, "ball_semantic_rally_end_min_evidence", 2)),
+                policy_version=str(
+                    getattr(self.settings, "ball_semantic_policy_version", "semantic_boundary_policy.v1")
+                ),
+                min_confirm_ticks=int(getattr(self.settings, "ball_semantic_min_confirm_ticks", 2)),
+                grace_window_sec=float(getattr(self.settings, "ball_semantic_grace_window_seconds", 0.20)),
+                rescue_min_consecutive_ticks=int(
+                    getattr(self.settings, "ball_semantic_rescue_min_consecutive_ticks", 2)
+                ),
+                rescue_min_motion_pixels=float(
+                    getattr(self.settings, "ball_semantic_rescue_min_motion_pixels", 15.0)
+                ),
+                evidence_freshness_sec=float(
+                    getattr(self.settings, "ball_semantic_evidence_freshness_seconds", 0.50)
+                ),
+                conflict_penalty=float(getattr(self.settings, "ball_semantic_conflict_penalty", 0.25)),
+                boundary_eval_enabled=bool(getattr(self.settings, "ball_semantic_boundary_eval_enabled", True)),
+            )
+            semantic_effective_windows = (
+                resolve_effective_windows(
+                    analysis_window_plan=analysis_window_plan,
+                    window_plan_bound=True,
+                )
+                if analysis_window_plan is not None
+                else None
+            )
+            semantic_provider = (
+                SemanticTimelineProvider.from_capture_take(
+                    capture_take_id,
+                    clip_start_ms=clip_start_ms,
+                    clip_end_ms=clip_end_ms,
+                    video_duration_ms=video_duration_ms,
+                    effective_windows=semantic_effective_windows,
+                    config=semantic_config,
+                )
+                if bool(getattr(self.settings, "enable_ball_semantic_policy", True))
+                and semantic_config.semantic_timeline_enabled
+                else None
+            )
+            # 球检测（可选）：启用且适配器可用时逐帧运行，使用局部 context 封装状态
+            ball_ctx = _BallRunContext(
+                tracker=(
+                    BallTracker(
+                        detector=self.ball_detector,
+                        config=BallTrackerConfig(
+                            effective_fps=fps / max(1, stride),
+                            frame_stride=max(1, stride),
+                            stationary_blacklist_frames=ball_stationary_blacklist_frames,
+                        ),
+                        court_adapter=BallCourtAdapter(),
+                    )
+                    if self.ball_detector is not None
+                    else None
+                ),
+                disabled_reason=(
+                    self.ball_detection_unavailable_reason
+                    if self.ball_detector is None and self.ball_detection_enabled
+                    else None
+                ),
+                semantic_provider=semantic_provider,
+                semantic_policy=BallSearchPolicy(semantic_config) if semantic_provider is not None else None,
+            )
+
+            window_metadata = window.metadata()
+            window_metadata["timing_provenance"] = timing_provider.metadata()
+            window_metadata["processed_frame_count"] = 0
+            requested_clip = window_metadata.get("requested_clip") if clip_applied else None
+            decoded_range = window_metadata.get("decoded_range") if clip_applied else None
+
+            try:
+                if self.settings.enable_projection_debug_jsonl:
+                    debug_path = self.storage.outputs_dir / job_id / "projection_debug.jsonl"
+                    debug_writer = ProjectionDebugWriter(debug_path)
+                    debug_writer.open()
+                    debug_minimap = MinimapVisualizer()
+                if self.settings.enable_projection_debug_overlay:
+                    debug_overlay = ProjectionDebugOverlayWriter(
+                        self.storage.outputs_dir / job_id / "projection_debug_overlay.mp4",
+                        fps=fps, width=frame_width, height=frame_height,
+                    )
+                while True:
+                    self._check_cancelled(cancellation_token)
+                    ok, frame = capture.read()
+                    if not ok:
+                        break
+                    # clip 范围终止
+                    if clip_applied and frame_index >= decode_end_frame:
+                        break
+                    # 按 stride 抽帧：不是目标帧就跳过
+                    if frame_index % stride != 0:
+                        frame_index += 1
+                        continue
+
+                    timestamp = timing_provider.take_timestamp_for_frame(frame_index)
+                    if timestamp is None:
+                        timestamp = frame_index / fps
+                    # 标记帧是否为预热帧（pre-roll / post-roll context）
+                    last_processed_frame_index = frame_index
+                    last_processed_timestamp = timestamp
+                    if processed_frame_count == 0 and self.settings.enable_court_view_gate:
+                        court_view_scorer.initialize(frame)
+                    court_view_score = (
+                        court_view_scorer.score(frame)
+                        if self.settings.enable_court_view_gate and court_view_scorer.available
+                        else None
+                    )
+                    court_view_sample = court_view_state.update(frame_index, timestamp, court_view_score)
+                    court_view_frame_samples.append(court_view_sample)
+                    processed_frame_count += 1
+                    window_metadata["processed_frame_count"] = processed_frame_count
+                    # 被"非球场视角"门控挡住的帧，跳过后续检测
+                    if court_view_sample.reason == "gated_non_court_view":
+                        self._check_cancelled(cancellation_token)
+                        frame_index += 1
+                        continue
+
+                    # 1-8b) 复用 ViewTrackingSession 完成逐帧 tracking 计算链
+                    # （detect → ROI filter → tracker → footpoint → project → smooth →
+                    #  select → lock → identity → render observations）。processed_frame_count
+                    # 已在 gate 前递增（D1b），此处只消费 session 输出驱动 debug / ball / pose。
+                    result = session.step(frame, frame_index=frame_index, timestamp=timestamp)
+                    frame_positions = result.frame_positions
+                    frame_detections = result.frame_detections
+                    render_raw_by_track = result.render_raw_by_track
+                    player_motion_pixels = result.player_motion_pixels
+
+                    # 5d) 投影调试日志写入（每帧每个球员一行 JSONL）—— 消费 session 结果
+                    if debug_writer is not None and debug_minimap is not None:
+                        for pos in frame_positions:
+                            # 原始投影值（session 在平滑前保存），平滑后 court_position 已被覆盖
+                            raw = render_raw_by_track.get(pos.track_id)
+                            raw = [raw["x_ft"], raw["y_ft"]] if raw else None
+                            smoothed = pos.court_position
+                            px = None
+                            if smoothed and len(smoothed) >= 2:
+                                px = debug_minimap.court_to_pixel(smoothed[0], smoothed[1])
+                            fp_method = pos.footpoint_method or "unknown"
+                            near_bottom = False
+                            clip_suspected = False
+                            pose_unavailable = False
+                            if hasattr(pos, "footpoint_metadata") and pos.footpoint_metadata:
+                                near_bottom = pos.footpoint_metadata.get("near_frame_bottom", False)
+                                clip_suspected = pos.footpoint_metadata.get("bbox_clip_suspected", False)
+                                pose_unavailable = bool(pos.footpoint_metadata.get("pose_unavailable", False))
+                            status = pos.projection_status or "unknown"
+                            filter_reason = None
+                            if status == "outside_tracking_area":
+                                filter_reason = "court position outside allowed tracking bounds (x:-4..24, y:-8..52)"
+                            debug_writer.write_frame(
+                                frame_index=frame_index,
+                                track_id=pos.track_id,
+                                bbox=pos.bbox,
+                                image_footpoint=pos.image_footpoint,
+                                footpoint_method=fp_method,
+                                footpoint_confidence=pos.projection_confidence,
+                                court_position_raw=raw if raw else [0, 0],
+                                court_position_smoothed=smoothed if smoothed else [0, 0],
+                                projection_status=status,
+                                minimap_pixel=px,
+                                calibration_quality=calibration_quality,
+                                near_frame_bottom=near_bottom,
+                                bbox_clip_suspected=clip_suspected,
+                                pose_unavailable=pose_unavailable,
+                                filter_reason=filter_reason,
+                            )
+                    # 球检测（可选）：提取至 _process_ball_frame()，保持单视频循环
+                    if ball_ctx.tracker is not None:
+                        self._process_ball_frame(
+                            context=ball_ctx,
+                            frame=frame,
+                            frame_index=frame_index,
+                            timestamp=timestamp,
+                            homography=homography,
+                            frame_width=frame_width,
+                            frame_height=frame_height,
+                            player_motion_pixels=player_motion_pixels,
+                        )
+                    # 9) 姿态估计（可选）
+                    if self.pose_estimator is not None and frame_detections and pose_error is None:
+                        try:
+                            pose_frame = self.pose_estimator.estimate_frame(
+                                frame=frame,
+                                subjects=frame_detections,
+                                frame_index=frame_index,
+                                timestamp_seconds=timestamp,
+                            )
+                            # 只保留有关键点的骨架
+                            pose_frame.subjects = [subject for subject in pose_frame.subjects if subject.keypoints]
+                            if pose_frame.subjects:
+                                pose_frames.append(pose_frame)
+                        except Exception as exc:
+                            # 保留已累积的 pose_frames，不要清空：中途失败（例如最后一帧
+                            # OOM）不应让前 N-1 帧的骨架产物整体消失。循环条件里的
+                            # `pose_error is None` 已确保失败后不再继续推理。
+                            pose_error = str(exc)
+                    self._check_cancelled(cancellation_token)
+
+                    # 每隔 30 帧打一条进度日志
+                    if processed_frame_count == 1 or processed_frame_count % 30 == 0:
+                        frame_progress = self._tracking_frame_progress(
+                            processed_frame_count=processed_frame_count,
+                            frame_count=window.planned_frame_count,
+                            stride=stride,
+                        )
+                        progress_stage = self._stage(
+                            "frame-sampling",
+                            "抽帧采样",
+                            "active",
+                            f"正在逐帧分析：已处理 {processed_frame_count}/{max(1, (window.planned_frame_count + stride - 1) // stride) if window.planned_frame_count else 'unknown'} 个抽样帧",  # noqa: E501
+                        )
+                        progress_stage.progress = frame_progress
+                        progress_stage.counters = {
+                            "processed_frame_count": processed_frame_count,
+                            "source_frame_count": frame_count,
+                            "planned_frame_count": window.planned_frame_count,
+                            "frame_stride": stride,
+                        }
+                        self._notify_progress(progress_callback, progress_stage)
+                        logger.info(
+                            "Player tracking progress: processed %s/%s frames",
+                            processed_frame_count,
+                            frame_count or "unknown",
+                        )
+
+                    if debug_overlay is not None:
+                        debug_overlay.write_frame(frame, frame_index, frame_positions)
+
+                    frame_index += 1
             finally:
                 try:
                     if debug_writer is not None:
@@ -2180,6 +2257,9 @@ class AnalysisPipeline:
                 finally:
                     if debug_overlay is not None:
                         debug_overlay.close()
+        finally:
+            capture.release()
+
         court_view_state.finish(last_processed_frame_index, last_processed_timestamp)
 
         # 结束阶段快照：session 累积的 tracking 产物 + 诊断 + selector 状态

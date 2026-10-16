@@ -904,7 +904,9 @@ class MultiViewAnalysisCoordinator:
                         package_sha256=str(provenance.get("packageSha256") or "unavailable"),
                         weights_sha256=str(provenance.get("weightsSha256") or "unavailable"),
                         decoder_sha256=str(provenance.get("decoderSha256") or "unavailable"),
-                        allow_take_scoped_reuse=clip_start_ms is None and clip_end_ms is None,
+                        allow_take_scoped_reuse=True,
+                        clip_start_ms=clip_start_ms,
+                        clip_end_ms=clip_end_ms,
                     )
                 finally:
                     reuse_db.close()
@@ -1425,7 +1427,7 @@ class MultiViewAnalysisCoordinator:
                 continue
             if job.orchestrationStatus == "waiting_segmentation":
                 prerequisite = self.store.get(job.segmentationPrerequisiteJobId) if job.segmentationPrerequisiteJobId else None
-                if prerequisite is not None and prerequisite.canonicalStatus == "queued" and self._reuse_waiting_segmentation(job, prerequisite):
+                if prerequisite is not None and prerequisite.canonicalStatus in {"queued", "running"} and self._reuse_waiting_segmentation(job, prerequisite):
                     advanced += 1
                     continue
                 if prerequisite is not None and prerequisite.canonicalStatus in TERMINAL_STATUSES:
@@ -1444,9 +1446,9 @@ class MultiViewAnalysisCoordinator:
         return advanced
 
     def _reuse_waiting_segmentation(self, parent: AnalysisJobSummary, prerequisite: AnalysisJobSummary) -> bool:
-        """Release a queued full-take Parent when a compatible plan already exists."""
+        """Release a waiting Parent when a compatible full-take plan already exists."""
         take_id = parent.metadata.capture_take_id
-        if not take_id or parent.clipStartMs is not None or parent.clipEndMs is not None:
+        if not take_id:
             return False
         if not prerequisite.inputSignature:
             return False
@@ -1471,13 +1473,12 @@ class MultiViewAnalysisCoordinator:
                     weights_sha256=str(provenance.get("weightsSha256") or "unavailable"),
                     decoder_sha256=str(provenance.get("decoderSha256") or "unavailable"),
                     allow_take_scoped_reuse=True,
+                    clip_start_ms=parent.clipStartMs,
+                    clip_end_ms=parent.clipEndMs,
                 )
             finally:
                 db.close()
             if run is None:
-                return False
-            _, outcome = self.store.cancel(prerequisite.id)
-            if outcome != "canceled":
                 return False
             mode = resolve_progress_mode(parent.analysisKind, parent.executionMode, True)
             label, _ = stage_details_for(mode, "segment")
@@ -1507,9 +1508,15 @@ class MultiViewAnalysisCoordinator:
             updated = self.store.update(parent.id, **updates)
             if updated is None:
                 return False
+            # Advance the Parent before canceling a running prerequisite. Its
+            # terminal callback must not turn a successfully rebound Parent
+            # into a canceled one.
+            _, outcome = self.store.cancel(prerequisite.id)
+            if outcome not in {"canceled", "requested", "terminal"}:
+                logger.warning("Unable to cancel redundant segmentation %s after rebinding %s", prerequisite.id, parent.id)
             if parent.executionMode != "joint_tracking_v2":
                 self._create_late_children_after_segmentation(updated)
-            logger.info("复用正式回合切分 %s → 已排队 Parent %s", run.id, parent.id)
+            logger.info("复用正式回合切分 %s → 等待中的 Parent %s", run.id, parent.id)
             return True
         except Exception:
             logger.exception("Unable to reuse segmentation for queued Parent %s", parent.id)

@@ -92,6 +92,7 @@ class FusedPlayerOverlayPlayer(BaseModel):
     display_state_sequence: list[str] = Field(default_factory=list)
     display_window_start_ms: float | None = Field(default=None, ge=0)
 
+
     @field_validator("bbox")
     @classmethod
     def _validate_bbox(cls, value: list[float] | None) -> list[float] | None:
@@ -129,12 +130,47 @@ class FusedPlayerOverlayPlayer(BaseModel):
         return point
 
 
+class FusedAnonymousOverlayObservation(BaseModel):
+    """Real detector/track evidence with no audited P identity."""
+
+    observation_id: str = Field(min_length=1)
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    footpoint: list[float] | None = Field(default=None, min_length=2, max_length=2)
+    source_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_type: Literal["base_observed", "guided_observed"] = "base_observed"
+
+    @field_validator("bbox")
+    @classmethod
+    def _validate_anonymous_bbox(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return None
+        if len(value) != 4:
+            raise ValueError("bbox must contain exactly 4 numeric values")
+        bbox = [float(item) for item in value]
+        if not all(isfinite(item) for item in bbox):
+            raise ValueError("bbox must contain only finite numeric values")
+        return bbox
+
+    @field_validator("footpoint")
+    @classmethod
+    def _validate_anonymous_footpoint(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return None
+        if len(value) != 2:
+            raise ValueError("footpoint must contain exactly 2 numeric values")
+        point = [float(item) for item in value]
+        if not all(isfinite(item) for item in point):
+            raise ValueError("footpoint must contain only finite numeric values")
+        return point
+
+
 class FusedPlayerOverlayFrame(BaseModel):
     """参考画面一个 canonical tick 的叠加帧。"""
 
     frame_index: int = Field(ge=0)
     timestamp_seconds: float = Field(ge=0)
     players: list[FusedPlayerOverlayPlayer] = Field(default_factory=list)
+    anonymous_observations: list[FusedAnonymousOverlayObservation] = Field(default_factory=list)
 
 
 class FusedPlayerOverlayView(BaseModel):

@@ -759,6 +759,116 @@ export interface AnalysisUploadMetadata {
   camera_slot?: "cam_1" | "cam_2";
 }
 
+/** 失败归因类别：回答「为什么失败」，与回答「哪一步失败」的 errorCode 正交。 */
+export type AnalysisFailureClass =
+  | "input_media"
+  | "calibration"
+  | "model_environment"
+  | "resource_timeout"
+  | "worker_lease"
+  | "orchestration"
+  | "internal_defect";
+
+export const ANALYSIS_FAILURE_CLASS_LABELS: Record<AnalysisFailureClass, string> = {
+  input_media: "输入或媒体问题",
+  calibration: "标定或场地几何问题",
+  model_environment: "模型或运行环境问题",
+  resource_timeout: "资源不足或超时",
+  worker_lease: "Worker 租约或心跳问题",
+  orchestration: "任务编排问题",
+  internal_defect: "代码缺陷或未归类",
+};
+
+export function analysisFailureClassLabel(value?: string | null): string {
+  if (!value) return "未提供";
+  return ANALYSIS_FAILURE_CLASS_LABELS[value as AnalysisFailureClass] ?? value;
+}
+
+/** 运行期间**首次**失败的证据；终态（取消 / 失联）不会清空它。 */
+export interface AnalysisFailureEvidence {
+  errorCode?: string | null;
+  failureClass?: AnalysisFailureClass | null;
+  stage?: string | null;
+  attempt?: number | null;
+  at?: string | null;
+}
+
+/** 一次阶段内重试的记录。 */
+export interface AnalysisRetryHistoryEntry {
+  stage: string;
+  retryIndex: number;
+  retryLimit: number;
+  willRetry: boolean;
+  failureClass?: AnalysisFailureClass | null;
+  errorCode?: string | null;
+  exceptionType?: string | null;
+  exceptionDigest?: string | null;
+  progressBefore?: number | null;
+  progressAfter?: number | null;
+  at?: string | null;
+}
+
+/** 运行轨迹的可用性摘要（事件本体按需单独读取，不内联进任务摘要）。 */
+export interface AnalysisRunTraceStatus {
+  availability: "available" | "partial" | "unavailable";
+  reason?: string | null;
+  target?: string | null;
+  eventCount: number;
+}
+
+export type AnalysisRunTraceEventName =
+  | "start"
+  | "end"
+  | "retry"
+  | "fail"
+  | "lease_lost"
+  | "canceled"
+  | "trace_sink_unavailable";
+
+export interface AnalysisRunTraceEvent {
+  schema_version: string;
+  seq: number;
+  ts: string;
+  job_id: string;
+  attempt: number;
+  worker_id?: string | null;
+  worker_run_id?: string | null;
+  stage?: string | null;
+  event: AnalysisRunTraceEventName;
+  outcome?: string | null;
+  error_code?: string | null;
+  failure_class?: AnalysisFailureClass | null;
+  exception_type?: string | null;
+  exception_message?: string | null;
+  traceback_digest?: string | null;
+  traceback_frames?: string[];
+  retry_index?: number | null;
+  retry_limit?: number | null;
+  will_retry?: boolean | null;
+  progress_before?: number | null;
+  progress_after?: number | null;
+  detail?: string | null;
+  from_stage?: string | null;
+}
+
+export interface AnalysisRunTraceResponse {
+  job_id: string;
+  availability: "available" | "partial" | "unavailable";
+  reason: string | null;
+  target: string;
+  event_count: number;
+  events: AnalysisRunTraceEvent[];
+}
+
+export interface AnalysisJobLogsResponse {
+  job_id: string;
+  lines: string[];
+  availability: "available" | "partial" | "unavailable";
+  reason?: string | null;
+  scanned_files: string[];
+  truncated: boolean;
+}
+
 export interface AnalysisStage {
   id: AnalysisStageId;
   label: string;
@@ -771,6 +881,8 @@ export interface AnalysisStage {
   errorCode?: string;
   publicMessage?: string;
   internalMessage?: string;
+  /** 失败归因类别（取值见 ANALYSIS_FAILURE_CLASS_LABELS） */
+  failureClass?: string;
   retryCount?: number;
   counters?: Record<string, unknown>;
 }
@@ -811,6 +923,12 @@ export interface AnalysisJobSummary {
   errorCode?: string;
   publicErrorMessage?: string;
   internalErrorMessage?: string;
+  /** 运行期间首次失败的证据（终态不会清空，因此「曾失败后被取消」仍可读） */
+  failureEvidence?: AnalysisFailureEvidence | null;
+  /** 每次阶段内重试的记录 */
+  retryHistory?: AnalysisRetryHistoryEntry[];
+  /** 运行轨迹可用性摘要；轨迹事件请用 GET /jobs/{id}/run-trace 按需读取 */
+  runTrace?: AnalysisRunTraceStatus | null;
   videoId?: string;
   calibrationId?: string;
   analysisMode?: "demo" | "real" | "limited";
@@ -826,6 +944,8 @@ export interface AnalysisJobSummary {
   executionMode?: "late_fusion_v1" | "joint_tracking_v2";
   jointRunId?: string | null;
   canonicalFrameId?: string | null;
+  /** Frozen analysis roster referenced by this job, when the new identity workflow is active. */
+  rosterSnapshotHash?: string | null;
   /** 可见性：internal = 双摄 Source Job，默认不进任务列表 */
   visibility?: "public" | "internal";
   jobRole?: "analysis" | "segmentation_prerequisite";
@@ -1134,6 +1254,13 @@ export interface FusedPlayerOverlayFrame {
   frame_index: number;
   timestamp_seconds: number;
   players: FusedPlayerOverlayEntity[];
+  anonymous_observations?: Array<{
+    observation_id: string;
+    bbox?: [number, number, number, number] | number[] | null;
+    footpoint?: [number, number] | number[] | null;
+    source_confidence: number;
+    evidence_type: "base_observed" | "guided_observed";
+  }>;
 }
 
 export interface FusedPlayerOverlayView {
@@ -2233,6 +2360,12 @@ export interface AnalysisReport {
   progressPoints: ProgressPoint[];
   /** v2 新增：performance insights 投影（旧 v1 报告无此字段） */
   performanceInsights?: ReportPerformanceInsights | null;
+  /** Legacy demo report fields retained for the evidence adapter. */
+  metrics?: {
+    distances?: Array<{ track_id?: string; player_id?: string; distance_ft?: number }>;
+    heatmap?: { players?: HeatmapPlayerGrid[] };
+  };
+  visualizations?: { heatmaps?: { players?: HeatmapPlayerGrid[] } };
 }
 
 // ── 结构化可视化数据（前端 SVG 渲染） ──────────────────────────────
@@ -2260,6 +2393,18 @@ export interface HeatmapPlayerGrid {
 export interface VisualHeatmaps {
   visual_grid?: VisualGrid;
   players: HeatmapPlayerGrid[];
+  identity_slots?: Array<{
+    id: string;
+    label: string;
+    status: "confirmed" | "unconfirmed" | "unavailable";
+    reason?: string | null;
+    canonical_end?: "end_a" | "end_b" | null;
+    global_player_id?: string | null;
+    tracklet_lineage_id?: string | null;
+    anchor_timestamp_ms?: number | null;
+    observed_samples?: number;
+  }>;
+  aggregate_source?: string;
 }
 
 export interface ZoneStat {

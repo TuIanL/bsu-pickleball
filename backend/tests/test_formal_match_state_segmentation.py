@@ -256,6 +256,7 @@ def test_publish_supersedes_only_previous_algorithm_and_keeps_manual(isolated_da
     )
     db.commit()
     storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
     StorageService.register_capture_job("job-new", tmp_path / "take")
     artifact = build_segmentation_artifact(
         planning_job_id="job-new",
@@ -308,6 +309,7 @@ def test_publish_failure_can_roll_back_without_touching_previous_run(isolated_da
     )
     db.commit()
     storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
     StorageService.register_capture_job("job-rollback-new", tmp_path / "take")
     artifact = build_segmentation_artifact(
         planning_job_id="job-rollback-new",
@@ -333,6 +335,7 @@ def test_successful_segmentation_is_republished_for_compatible_new_parent(isolat
     db = isolated_database()
     _create_take(db, tmp_path, take_id="take-reuse")
     storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
     StorageService.register_capture_job("job-old", tmp_path / "take")
     StorageService.register_capture_job("job-new", tmp_path / "take")
     artifact = build_segmentation_artifact(
@@ -390,6 +393,55 @@ def test_successful_segmentation_is_republished_for_compatible_new_parent(isolat
         sync_calibration_revision=4, input_fingerprint="old-job-signature", profile="match_default",
         package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
     ) is None
+
+
+def test_full_take_plan_is_reused_and_clipped_for_short_analysis(isolated_database, tmp_path):
+    db = isolated_database()
+    _create_take(db, tmp_path, take_id="take-short-reuse")
+    storage = StorageService()
+    (tmp_path / "take").mkdir(parents=True, exist_ok=True)
+    StorageService.register_capture_job("job-full-source", tmp_path / "take")
+    StorageService.register_capture_job("job-short-target", tmp_path / "take")
+    artifact = build_segmentation_artifact(
+        planning_job_id="job-full-source", capture_take_id="take-short-reuse",
+        run_id="run-full-source", status="succeeded",
+        model={"package_id": "pkg", "model_version": "v1", "profile": "match_default"},
+        input_provenance={"input_fingerprint": "full-signature", "sync_calibration_revision": 3},
+        decoder={}, state_summary={"unknown_rate": 0.0},
+        segments=(
+            {"segment_id": "rally-1", "start_ms": 1000, "end_ms": 5000},
+            {"segment_id": "rally-2", "start_ms": 118000, "end_ms": 123000},
+            {"segment_id": "rally-3", "start_ms": 300000, "end_ms": 305000},
+        ),
+    )
+    persist_segmentation_result(
+        db, artifact=artifact, storage=storage,
+        package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+    )
+    db.commit()
+    storage.formal_segmentation_artifact_path(
+        "job-full-source", "take-short-reuse", create_root=False
+    ).unlink()
+
+    binding = publish_reusable_segmentation(
+        db, storage=storage, capture_take_id="take-short-reuse",
+        planning_job_id="job-short-target", input_fingerprint="short-signature",
+        sync_calibration_revision=3, profile="match_default",
+        package_sha256="package", weights_sha256="weights", decoder_sha256="decoder",
+        allow_take_scoped_reuse=True, clip_start_ms=0, clip_end_ms=120000,
+    )
+
+    assert binding is not None and binding.id == "run-full-source"
+    assert binding.window_plan_hash != artifact.window_plan.plan_hash
+    reused = storage.read_json(storage.formal_segmentation_artifact_path(
+        "job-short-target", "take-short-reuse", create_root=False
+    ))
+    assert reused["window_plan"]["plan_hash"] == binding.window_plan_hash
+    assert [(item["start_ms"], item["end_ms"]) for item in reused["window_plan"]["windows"]] == [
+        (1000, 5000), (118000, 120000)
+    ]
+    assert reused["diagnostics"]["reconstructed_from_persisted_run"] is True
+    assert json.loads(db.get(MatchStateSegmentationRun, "run-full-source").plan_json) == artifact.window_plan.to_dict()
 
 
 def test_legacy_job_and_manual_segment_remain_readable_after_schema_extension(isolated_database, tmp_path):
@@ -553,6 +605,33 @@ def test_formal_joint_reuses_compatible_segmentation_without_prerequisite(monkey
     assert coordinator._advance_parent(parent).orchestrationStatus == "joint_ready"
 
 
+def test_short_joint_parent_reuses_formal_plan_without_new_prerequisite(monkeypatch, tmp_path):
+    coordinator = _patched_coordinator(monkeypatch, tmp_path)
+    reuse_arguments = {}
+
+    def reuse(_db, **kwargs):
+        reuse_arguments.update(kwargs)
+        return SimpleNamespace(
+            id="seg-existing", window_plan_hash="clipped-plan",
+            status=SimpleNamespace(value="succeeded"),
+        )
+
+    monkeypatch.setattr("app.services.multiview_coordinator.publish_reusable_segmentation", reuse)
+    payload = _formal_payload()
+    payload.multiview.executionMode = "joint_tracking_v2"
+    payload.clipStartMs = 0
+    payload.clipEndMs = 120000
+
+    parent = coordinator.create_multiview_job(payload)
+
+    assert reuse_arguments["allow_take_scoped_reuse"] is True
+    assert (reuse_arguments["clip_start_ms"], reuse_arguments["clip_end_ms"]) == (0, 120000)
+    assert parent.segmentationPrerequisiteJobId is None
+    assert parent.orchestrationStatus == "joint_ready"
+    assert parent.windowPlanHash == "clipped-plan"
+    assert (parent.clipStartMs, parent.clipEndMs) == (0, 120000)
+
+
 def test_reconcile_reuses_plan_for_already_queued_joint_parent(monkeypatch, tmp_path):
     coordinator = _patched_coordinator(monkeypatch, tmp_path)
     payload = _formal_payload()
@@ -575,6 +654,35 @@ def test_reconcile_reuses_plan_for_already_queued_joint_parent(monkeypatch, tmp_
     assert updated.segmentationRunId == "seg-existing"
     assert updated.stages[0].status == "done"
     assert coordinator.store.get(prerequisite_id).canonicalStatus == "canceled"
+
+
+def test_reconcile_reuses_plan_while_redundant_prerequisite_is_running(monkeypatch, tmp_path):
+    coordinator = _patched_coordinator(monkeypatch, tmp_path)
+    payload = _formal_payload()
+    payload.multiview.executionMode = "joint_tracking_v2"
+    payload.clipStartMs = 0
+    payload.clipEndMs = 120000
+    parent = coordinator.create_multiview_job(payload)
+    prerequisite_id = parent.segmentationPrerequisiteJobId
+    assert coordinator.store.claim(prerequisite_id, "test-worker") is not None
+    observed = {}
+
+    def reuse(_db, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(
+            id="seg-existing", window_plan_hash="clipped-plan",
+            status=SimpleNamespace(value="succeeded"),
+        )
+
+    monkeypatch.setattr("app.services.multiview_coordinator.publish_reusable_segmentation", reuse)
+
+    assert coordinator.reconcile_all() == 1
+    updated = coordinator.store.get(parent.id)
+    child = coordinator.store.get(prerequisite_id)
+    assert (observed["clip_start_ms"], observed["clip_end_ms"]) == (0, 120000)
+    assert updated.orchestrationStatus == "joint_ready"
+    assert updated.windowPlanHash == "clipped-plan"
+    assert child.canonicalStatus == "running" and child.cancelRequestedAt
 
 
 def test_formal_segmentation_failure_fails_parent_without_children(monkeypatch, tmp_path):

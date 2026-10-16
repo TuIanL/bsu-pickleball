@@ -13,13 +13,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.schemas.analysis import AnalysisJobSummary
 from app.schemas.performance_insights import (
-    DIMENSION_LABELS,
     PERFORMANCE_DIMENSIONS,
-    DataQualityCounter,
     DimensionAssessment,
     DimensionStatus,
     PerformanceDimension,
@@ -32,14 +30,12 @@ from app.schemas.performance_insights import (
 )
 from app.services.performance_insights.evidence_assembler import EvidenceBundle
 from app.services.performance_insights.ids import (
-    dimension_sort_key,
     finding_id,
     recommendation_id,
     sort_dimensions,
     sort_findings,
     sort_recommendations,
     sort_subjects,
-    _subject_sort_key,
 )
 
 # ---------------------------------------------------------------------------

@@ -158,6 +158,7 @@ def _with_samples(out, f1_trajectory: dict[str, object]):
         debug_trace=getattr(out, "debug_trace", None),
         f0_snapshot=getattr(out, "f0_snapshot", None),
         recovery_evidence=getattr(out, "recovery_evidence", None) or [],
+        anonymous_overlay_observations=getattr(out, "anonymous_overlay_observations", None) or [],
         overlay_context=getattr(out, "overlay_context", None),
     )
 
@@ -479,16 +480,6 @@ def _build_canonical_ball_processor(
         and len(projection_metric_qualified) == len(view_inputs)
         and all(projection_metric_qualified)
     )
-    net_scene_camera_ready = (
-        scene_calibration is not None
-        and getattr(scene_calibration, "status", None) == "ready"
-        and len(projection_sources) == len(view_inputs)
-        and all(
-            source == "net_refined_virtual"
-            and not bool(projection_diagnostics[item.camera_slot].get("approximate", True))
-            for item in view_inputs
-        )
-    )
     quality_reasons = sorted(
         {
             str(reason)
@@ -644,10 +635,10 @@ class MultiViewJointExecutor:
                 source_duration_ms=int(reference_timing_provider.duration_seconds * 1000),
                 source_frame_count=frame_count,
                 fps=fps,
-                # Formal segmentation gates metric eligibility while joint
-                # tracking still decodes one continuous stream.
-                clip_start_ms=None if formal_plan is not None else parent.clipStartMs,
-                clip_end_ms=None if formal_plan is not None else parent.clipEndMs,
+                # Decode continuously within the requested clip, including
+                # the normal tracking pre/post roll around its boundaries.
+                clip_start_ms=parent.clipStartMs,
+                clip_end_ms=parent.clipEndMs,
                 pre_roll_ms=getattr(settings, "pre_roll_ms", 1500),
                 post_roll_ms=getattr(settings, "post_roll_ms", 500),
                 timing_provider=reference_timing_provider,
@@ -660,6 +651,19 @@ class MultiViewJointExecutor:
             match_ctx = build_match_context(
                 parent.metadata.matchFormat if hasattr(parent.metadata, "matchFormat") else None
             )
+            from app.database import get_session_factory
+            from app.services.analysis_roster_runtime import load_runtime_roster
+
+            roster_db = get_session_factory()()
+            try:
+                runtime_roster = load_runtime_roster(
+                    roster_db,
+                    parent.id,
+                    getattr(parent, "rosterSnapshotHash", None),
+                    expected_player_count=match_ctx.expected_player_count,
+                )
+            finally:
+                roster_db.close()
             config = build_view_tracking_config(
                 settings, match_ctx, fps=fps, frame_stride=parent.frameStride,
                 frame_width=width, frame_height=height,
@@ -781,6 +785,7 @@ class MultiViewJointExecutor:
             registry = GlobalPlayerRegistry(
                 expected_player_count=match_ctx.expected_player_count,
                 reference_view_id=reference_view_id,
+                frozen_player_end_by_id=(runtime_roster.player_end_by_id if runtime_roster.available else None),
             )
             associator = GlobalPlayerAssociator(
                 registry,
@@ -820,6 +825,7 @@ class MultiViewJointExecutor:
                 execution_mode=resolution.execution_mode,
                 authoritative_joint_eligible=resolution.authoritative_joint_eligible,
                 debug_trace_enabled=bool(getattr(parent, "debugTraceEnabled", False)),
+                runtime_roster=runtime_roster,
                 ball_processor=ball_processor,
             )
 
@@ -1109,6 +1115,9 @@ class MultiViewJointExecutor:
                     "view_geometry": overlay_geometry,
                     "recovered_observations": recovered_list,
                     "final_source": str(getattr(refinement, "final_source", "first_pass_f0")),
+                    "anonymous_observations": list(
+                        getattr(compose_output, "anonymous_overlay_observations", None) or []
+                    ),
                 }
                 setattr(compose_output, "overlay_context", overlay_context)
             except Exception as exc:  # noqa: BLE001 - overlay 上下文缺失不中断 compose

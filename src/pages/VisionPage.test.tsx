@@ -98,6 +98,11 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
     expect(screen.queryByRole("button", { name: "查看双摄协同详情" })).toBeNull();
   });
 
+  it("冻结名册任务缺少通过的四人质量产物时展示质量不足", async () => {
+    renderPage(makeJob({ rosterSnapshotHash: "frozen-roster-hash" }));
+    expect(await screen.findByText("四人识别质量不足")).toBeTruthy();
+  });
+
   it("双摄协同未完成时不展示入口", async () => {
     renderPage(makeJob({ status: "processing", progress: 40 }));
     expect(await screen.findByText(/任务还在排队或处理中/)).toBeTruthy();

@@ -6,7 +6,7 @@ guidance 只提供 ROI 搜索先验,不直接制造 observation(invariant 3)。
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -201,7 +201,6 @@ class GuidanceGenerator:
             return None
         (ix, iy) = region.expected_image_position
         x1, y1, x2, y2 = region.roi
-        r_px = region.radius_px if region.radius_px is not None else 0.0
         lx, ly = canonical_to_local(px, py, orientation)
 
         guidance_id = f"g_{global_state.global_player_id}_{target_view}_{tick}"

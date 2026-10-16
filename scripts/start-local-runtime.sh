@@ -10,7 +10,7 @@ LOG_DIR="$RUNTIME_DIR/logs"
 
 BACKEND_HOST="${PICKLEBALL_BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${PICKLEBALL_BACKEND_PORT:-8000}"
-FRONTEND_HOST="${PICKLEBALL_FRONTEND_HOST:-0.0.0.0}"
+FRONTEND_HOST="${PICKLEBALL_FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${PICKLEBALL_FRONTEND_PORT:-5173}"
 PYTHON_BIN="${PICKLEBALL_PYTHON:-$BACKEND_DIR/.venv/bin/python}"
 VITE_BIN="$REPO_ROOT/node_modules/.bin/vite"
@@ -201,7 +201,18 @@ PICKLEBALL_ANALYSIS_WORKER_MODE="${PICKLEBALL_ANALYSIS_WORKER_MODE:-external}"
 PICKLEBALL_RTMPOSE_CONFIG_PATH="${PICKLEBALL_RTMPOSE_CONFIG_PATH:-$RTMPOSE_CONFIG_DEFAULT}"
 PICKLEBALL_RTMPOSE_CHECKPOINT_PATH="${PICKLEBALL_RTMPOSE_CHECKPOINT_PATH:-$RTMPOSE_CHECKPOINT_DEFAULT}"
 TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD="${TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD:-1}"
-VITE_ANALYSIS_API_URL="${VITE_ANALYSIS_API_URL:-http://localhost:$BACKEND_PORT}"
+# Browser requests stay same-origin; only the Vite server knows the API origin/token.
+VITE_ANALYSIS_API_URL="/__analysis_api"
+PICKLEBALL_API_PROXY_TARGET="http://127.0.0.1:$BACKEND_PORT"
+for bind_host in "$BACKEND_HOST" "$FRONTEND_HOST"; do
+  [[ "$bind_host" == "127.0.0.1" || "$bind_host" == "localhost" ]] || die "Local demo requires a loopback host (127.0.0.1 or localhost)."
+done
+unset VITE_PICKLEBALL_API_TOKEN
+if [[ -z "${PICKLEBALL_API_TOKEN:-}" ]]; then
+  PICKLEBALL_API_TOKEN="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+fi
+PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED="${PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED:-true}"
+PICKLEBALL_AUTH_DISABLED="${PICKLEBALL_AUTH_DISABLED:-false}"
 
 if python_has_cuda; then
   DEFAULT_COURT_LINE_DEVICE="0"
@@ -324,6 +335,11 @@ fi
 
 say "Starting Pickleball local runtime..."
 say "Logs: $LOG_DIR"
+if [[ "$PICKLEBALL_AUTH_DISABLED" == "true" || "$PICKLEBALL_AUTH_DISABLED" == "1" || "$PICKLEBALL_AUTH_DISABLED" == "yes" || "$PICKLEBALL_AUTH_DISABLED" == "on" ]]; then
+  say "API bearer authentication: explicitly disabled"
+else
+  say "API bearer authentication: enabled (token value is not displayed)"
+fi
 say "Analysis worker mode: $PICKLEBALL_ANALYSIS_WORKER_MODE"
 say "Court-line model: $PICKLEBALL_COURT_LINE_MODEL_PATH"
 say "Court-line device: $PICKLEBALL_COURT_LINE_DEVICE"
@@ -335,6 +351,14 @@ say "Match-state device:  $PICKLEBALL_MATCH_STATE_SEGMENTATION_DEVICE"
 (
   cd "$BACKEND_DIR"
   export MPLCONFIGDIR="${MPLCONFIGDIR:-$RUNTIME_DIR/matplotlib}"
+  # 后端 /api/analysis/jobs/{id}/logs 按此变量定位日志目录。缺失时它退回
+  # Path(__file__).parents[3]/.runtime，导致日志写在自定义目录而 API 读默认
+  # 目录，GET .../logs 恒返回 no_matching_log_lines（排障能力静默失效）。
+  export PICKLEBALL_RUNTIME_DIR="$RUNTIME_DIR"
+  export PICKLEBALL_LOCAL_DOCS=true
+  export PICKLEBALL_API_TOKEN
+  export PICKLEBALL_AUTH_DISABLED
+  export PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED
   export PICKLEBALL_ENABLE_MODEL_INFERENCE
   export PICKLEBALL_ENABLE_POSE_INFERENCE
   export PICKLEBALL_ANALYSIS_WORKER_MODE
@@ -366,6 +390,14 @@ echo "$!" > "$BACKEND_PID_FILE"
 (
   cd "$BACKEND_DIR"
   export MPLCONFIGDIR="${MPLCONFIGDIR:-$RUNTIME_DIR/matplotlib}"
+  # 后端 /api/analysis/jobs/{id}/logs 按此变量定位日志目录。缺失时它退回
+  # Path(__file__).parents[3]/.runtime，导致日志写在自定义目录而 API 读默认
+  # 目录，GET .../logs 恒返回 no_matching_log_lines（排障能力静默失效）。
+  export PICKLEBALL_RUNTIME_DIR="$RUNTIME_DIR"
+  export PICKLEBALL_LOCAL_DOCS=true
+  export PICKLEBALL_API_TOKEN
+  export PICKLEBALL_AUTH_DISABLED
+  export PICKLEBALL_ANALYSIS_JOB_LOGS_ENABLED
   export PICKLEBALL_ENABLE_MODEL_INFERENCE
   export PICKLEBALL_ENABLE_POSE_INFERENCE
   export PICKLEBALL_ANALYSIS_WORKER_MODE
@@ -395,6 +427,7 @@ echo "$!" > "$WORKER_PID_FILE"
 (
   cd "$REPO_ROOT"
   export VITE_ANALYSIS_API_URL
+  export PICKLEBALL_API_TOKEN PICKLEBALL_API_PROXY_TARGET PICKLEBALL_AUTH_DISABLED
   exec "$VITE_BIN" --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
 ) > "$FRONTEND_LOG" 2>&1 &
 echo "$!" > "$FRONTEND_PID_FILE"

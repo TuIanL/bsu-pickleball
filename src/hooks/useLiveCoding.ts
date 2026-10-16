@@ -103,6 +103,12 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
   const segmentsRef = useRef<CaptureSegmentSummary[]>([]);
   const eventsRef = useRef<SessionTimelineEvent[]>([]);
   const initialNonPlayRef = useRef(false);
+  // CaptureTake 切换的竞态守卫：每次「开始加载新 take」时自增。异步回调在写状态前
+  // 比对自身seq 与当前 seq，不一致说明用户已切到别的 take，必须丢弃结果并停掉
+  // 本次创建的 outbox sender（否则它会被挂到 ref 上且永不被 stop，持续串写）。
+  const takeLoadSeqRef = useRef(0);
+  // 时间线事件加载的竞态守卫（独立于 take 加载，因为它还依赖 fieldSessionId）。
+  const timelineLoadSeqRef = useRef(0);
 
   const nowMs = useCallback(() => {
     if (startedAt) {
@@ -127,14 +133,10 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
       setLiveCodingState({ ...response.live_state, revision: response.revision });
     }
     if (Array.isArray(response.timeline_events)) {
-      setTimelineEvents(response.timeline_events as SessionTimelineEvent[]);
-    } else if (response.created_events?.length) {
-      setTimelineEvents(prev => upsertById(prev, response.created_events as unknown as SessionTimelineEvent[]));
+      setTimelineEvents(response.timeline_events);
     }
     if (Array.isArray(response.segments)) {
-      setSegments(response.segments as CaptureSegmentSummary[]);
-    } else if (response.updated_segments?.length) {
-      setSegments(prev => upsertById(prev, response.updated_segments as unknown as CaptureSegmentSummary[]));
+      setSegments(response.segments);
     }
   }, []);
 
@@ -144,9 +146,19 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clears stale external data on Take change.
     setTimelineEvents([]);
     if (!fieldSessionId || !captureTakeId) return;
+    // 守卫：clear 之后上一次请求的 Promise 仍会 resolve 并写回旧数据，使新 take 的
+    // 时间线里出现上一个 take 的打点、操作员据此做出的判断是错的。用自增 seq 让
+    // 过期响应在写回前被丢弃。
+    const seq = ++timelineLoadSeqRef.current;
     listTimelineEvents(fieldSessionId, { capture_take_id: captureTakeId })
-      .then(setTimelineEvents)
+      .then((events) => {
+        if (seq !== timelineLoadSeqRef.current) return;
+        setTimelineEvents(events);
+      })
       .catch(() => {});
+    return () => {
+      timelineLoadSeqRef.current += 1;
+    };
   }, [fieldSessionId, captureTakeId]);
 
   // 初始化/切换 CaptureTake
@@ -154,21 +166,30 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
     if (!captureTakeId || captureTakeId === lastTakeIdRef.current) return;
     lastTakeIdRef.current = captureTakeId;
 
+    // 使本次之前任何仍在飞行的加载失效。
+    const seq = ++takeLoadSeqRef.current;
+
     outboxSenderRef.current?.stop();
     outboxSenderRef.current = null;
 
     (async () => {
+      // 每次 await 之后都校验：用户快速切换 take 时，旧 take 的响应不得覆盖新状态。
+      const stale = () => seq !== takeLoadSeqRef.current;
+
       try {
         const state = await getLiveCodingState(captureTakeId);
+        if (stale()) return;
         setLiveCodingState(state);
         revisionRef.current = state?.revision ?? 0;
       } catch { /* ignore */ }
 
       try {
         const segs = await listSegments(captureTakeId);
+        if (stale()) return;
         setSegments(segs ?? []);
       } catch { /* ignore */ }
 
+      if (stale()) return;
       const pending = getPendingItems(captureTakeId);
       setOutboxItems(pending);
       setOutboxHealth(pending.length > 0 ? "pending" : "synced");
@@ -179,11 +200,20 @@ export function useLiveCoding({ fieldSessionId, captureTakeId, captureMode, phas
         setOutboxItems,
         applyCodingResponse,
       );
+      // 竞态关键点：cleanup 可能已在上面的 await 期间执行完（并把 ref 置空），
+      // 此处若再挂上 ref，这个 sender 将**永远不会被 stop()**，持续把旧 take 的
+      // 编码动作 flush 到服务端 —— 资源泄漏 + 数据串写。故挂上前再校验一次。
+      if (stale()) {
+        sender.stop();
+        return;
+      }
       outboxSenderRef.current = sender;
       sender.flush().catch(() => {});
     })();
 
     return () => {
+      // 使所有仍在飞行的加载结果失效，并停掉本次创建的 sender。
+      takeLoadSeqRef.current += 1;
       outboxSenderRef.current?.stop();
       outboxSenderRef.current = null;
     };

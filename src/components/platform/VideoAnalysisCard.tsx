@@ -5,6 +5,7 @@ import type {
   BounceEventsArtifact,
   FusedPlayerOverlayArtifact,
   FusedPlayerOverlayEntity,
+  FusedPlayerOverlayFrame,
   MatchSummary,
   PipelineTrackPoint,
   PlayerMarker,
@@ -111,10 +112,10 @@ type OverlayLoadState = "idle" | "loading" | "available" | "unavailable" | "fail
 type ServeMarker = ReturnType<typeof resolveServeMarkers>[number];
 
 const toneClass = {
-  advantage: "border-[var(--ui-brand)]/40 bg-[var(--ui-brand-solid)]/15 text-[#DCFCE7]",
-  risk: "border-[var(--ui-stage)]/40 bg-[var(--ui-stage)]/15 text-[#FFD7A0]",
-  error: "border-[var(--ui-danger-strong)]/40 bg-[var(--ui-danger-solid)]/15 text-[#FFC2C3]",
-  training: "border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/15 text-[#BBD8FF]",
+  advantage: "border-[var(--ui-brand)]/40 bg-[var(--ui-brand-solid)]/15 text-[var(--ui-surface-success-badge)]",
+  risk: "border-[var(--ui-stage)]/40 bg-[var(--ui-stage)]/15 text-[var(--ui-display-amber)]",
+  error: "border-[var(--ui-danger-strong)]/40 bg-[var(--ui-danger-solid)]/15 text-[var(--ui-display-red)]",
+  training: "border-[var(--ui-info)]/40 bg-[var(--ui-info-solid)]/15 text-[var(--ui-display-blue)]",
 };
 
 const markerClass = {
@@ -231,7 +232,7 @@ export function VideoAnalysisCard({
     <article className="sport-card relative">
       <VideoCardHeader match={match} headerInfo={headerInfo} />
 
-      <div className="relative aspect-video overflow-hidden bg-[#091016]">
+      <div className="relative aspect-video overflow-hidden bg-[var(--ui-display-panel)]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(34,197,94,0.1),transparent_35%),linear-gradient(135deg,rgba(47,128,237,0.22),transparent_42%),linear-gradient(180deg,#151A1F,#080C10)]" />
         <div className="absolute inset-4 rounded-[1.75rem] border border-white/10 bg-black/20 shadow-[inset_0_0_80px_rgba(0,0,0,0.5)]" />
 
@@ -278,7 +279,7 @@ export function VideoAnalysisCard({
 
         {players.map((player) => (
           <div
-            className="absolute grid size-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white/70 text-xs font-black text-[#071008] shadow-[0_8px_28px_rgba(0,0,0,0.42)]"
+            className="absolute grid size-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white/70 text-xs font-black text-[var(--ui-display-ink)] shadow-[0_8px_28px_rgba(0,0,0,0.42)]"
             key={player.id}
             style={
               {
@@ -313,7 +314,7 @@ export function VideoAnalysisCard({
         </div>
 
         <button
-          className="absolute left-1/2 top-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--ui-brand)]/35 bg-[var(--ui-brand-solid)]/20 text-[var(--ui-brand)] shadow-[0_0_48px_rgba(34,197,94,0.22)] transition hover:scale-105 hover:bg-[var(--ui-brand-solid)] hover:text-[#071008]"
+          className="absolute left-1/2 top-1/2 grid size-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--ui-brand)]/35 bg-[var(--ui-brand-solid)]/20 text-[var(--ui-brand)] shadow-[0_0_48px_rgba(34,197,94,0.22)] transition hover:scale-105 hover:bg-[var(--ui-brand-solid)] hover:text-[var(--ui-display-ink)]"
           type="button"
           aria-label="播放演示视频"
         >
@@ -333,12 +334,12 @@ export function VideoAnalysisCard({
               <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--ui-brand-solid)]" style={{ width: "69%" }} />
               {timeline.map((marker) => (
                 <span
-                  className={`group absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[#071008] ${markerClass[marker.tone]}`}
+                  className={`group absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[var(--ui-display-ink)] ${markerClass[marker.tone]}`}
                   key={marker.id}
                   style={{ left: `${marker.position}%` }}
                   tabIndex={0}
                 >
-                  <span className="pointer-events-none absolute bottom-6 left-1/2 z-10 w-48 -translate-x-1/2 rounded-xl border border-white/10 bg-[#111318] px-3 py-2 text-xs font-semibold text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100">
+                  <span className="pointer-events-none absolute bottom-6 left-1/2 z-10 w-48 -translate-x-1/2 rounded-xl border border-white/10 bg-[var(--ui-display-panel-alt)] px-3 py-2 text-xs font-semibold text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100">
                     {marker.time} · {marker.label}
                   </span>
                 </span>
@@ -629,7 +630,7 @@ function RealVideoOverlay({
   );
 
   const boxCount = useFusedOverlay
-    ? (fusedRenderFrame?.frame?.players?.length ?? 0)
+    ? ((fusedRenderFrame?.frame?.players?.length ?? 0) + (fusedRenderFrame?.frame?.anonymous_observations?.length ?? 0))
     : (detectionRenderFrame?.detections.length ?? 0);
   const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
   const poseInGap = poseRenderFrame?.inGap ?? false;
@@ -977,9 +978,9 @@ function RealVideoOverlay({
   };
 
   return (
-    <div className="bg-[#091016]">
+    <div className="bg-[var(--ui-display-panel)]">
       <div
-        className="relative aspect-video overflow-hidden bg-[#091016] data-[fullscreen=true]:aspect-auto data-[fullscreen=true]:h-screen data-[fullscreen=true]:w-screen"
+        className="relative aspect-video overflow-hidden bg-[var(--ui-display-panel)] data-[fullscreen=true]:aspect-auto data-[fullscreen=true]:h-screen data-[fullscreen=true]:w-screen"
         data-fullscreen={isFullscreen}
         ref={containerRef}
       >
@@ -1030,6 +1031,15 @@ function RealVideoOverlay({
               entity={player}
               source={source}
               inGap={fusedRenderFrame?.inGap ?? false}
+            />
+          ))
+          : null}
+        {showBoxes && useFusedOverlay
+          ? fusedRenderFrame?.frame?.anonymous_observations?.map((observation) => (
+            <FusedAnonymousOverlayBox
+              key={`anonymous-${observation.observation_id}`}
+              observation={observation}
+              source={source}
             />
           ))
           : null}
@@ -1196,7 +1206,7 @@ function RealVideoOverlay({
               <button
                 aria-pressed={option.id === displayViewId}
                 className={`rounded-lg px-2.5 py-1.5 text-xs font-black transition ${
-                  option.id === displayViewId ? "bg-[var(--ui-brand-solid)] text-[#071008]" : "text-white/80 hover:bg-white/10"
+                  option.id === displayViewId ? "bg-[var(--ui-brand-solid)] text-[var(--ui-display-ink)]" : "text-white/80 hover:bg-white/10"
                 } ${!option.available ? "cursor-not-allowed opacity-45" : ""}`}
                 disabled={!option.available}
                 key={option.id}
@@ -1210,7 +1220,7 @@ function RealVideoOverlay({
           </div>
         ) : null}
         {displayViewNotice ? (
-          <p className="absolute left-4 top-[7.8rem] z-20 max-w-[18rem] rounded-lg bg-black/55 px-2 py-1 text-[0.65rem] font-semibold text-[#FFD7A0]">
+          <p className="absolute left-4 top-[7.8rem] z-20 max-w-[18rem] rounded-lg bg-black/55 px-2 py-1 text-[0.65rem] font-semibold text-[var(--ui-display-amber)]">
             {displayViewNotice}
           </p>
         ) : null}
@@ -1286,9 +1296,9 @@ function RealVideoOverlay({
             <button
               aria-expanded={showCourtHud}
               aria-label={showCourtHud ? "收起球场地图" : "展开球场地图"}
-              className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[0.68rem] font-bold backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D9FF3F] ${
+              className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[0.68rem] font-bold backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ui-display-lime)] ${
                 showCourtHud
-                  ? "border-[#D9FF3F]/60 bg-[#D9FF3F]/18 text-[#D9FF3F]"
+                  ? "border-[var(--ui-display-lime)]/60 bg-[var(--ui-display-lime)]/18 text-[var(--ui-display-lime)]"
                   : "border-white/15 bg-black/50 text-white hover:bg-black/70"
               }`}
               onClick={() => setShowCourtHud((value) => !value)}
@@ -1495,17 +1505,17 @@ export function ServeRallyStrip({
 
   const showMarkers = markers.length > 0;
   return (
-    <div className="border-t border-white/10 bg-[#0D1419] px-4 py-3 text-white">
+    <div className="border-t border-white/10 bg-[var(--ui-display-panel-deep)] px-4 py-3 text-white">
       <div className="mx-auto flex w-full max-w-full flex-col gap-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-black uppercase tracking-wide text-[#D9FF3F]">发球候选导航</p>
+            <p className="text-xs font-black uppercase tracking-wide text-[var(--ui-display-lime)]">发球候选导航</p>
             <p className="text-[0.68rem] font-semibold text-slate-300">
               {showMarkers ? `${markers.length} 个回合起点候选` : statusCopy(status, statusDetail)}
             </p>
           </div>
           {status === "partial" ? (
-            <span className="rounded-full border border-[var(--ui-stage)]/35 bg-[var(--ui-stage)]/15 px-2 py-1 text-[0.65rem] font-black text-[#FFD7A0]">
+            <span className="rounded-full border border-[var(--ui-stage)]/35 bg-[var(--ui-stage)]/15 px-2 py-1 text-[0.65rem] font-black text-[var(--ui-display-amber)]">
               降级信号
             </span>
           ) : null}
@@ -1517,9 +1527,9 @@ export function ServeRallyStrip({
               return (
                 <button
                   aria-label={`跳转到第 ${index + 1} 个发球候选 ${formatSeconds(marker.timestamp_seconds)}`}
-                  className={`min-h-20 w-36 shrink-0 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:border-[#D9FF3F]/70 ${
+                  className={`min-h-20 w-36 shrink-0 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:border-[var(--ui-display-lime)]/70 ${
                     active
-                      ? "border-[#D9FF3F] bg-[#D9FF3F]/18 shadow-[0_0_22px_rgba(217,255,63,0.25)]"
+                      ? "border-[var(--ui-display-lime)] bg-[var(--ui-display-lime)]/18 shadow-[0_0_22px_rgba(217,255,63,0.25)]"
                       : "border-white/10 bg-white/[0.06]"
                   }`}
                   key={marker.id}
@@ -1563,17 +1573,17 @@ function OverlayToggle({
   unavailableReason: string;
 }) {
   const activeClasses = {
-    blue: "border-[var(--ui-info)]/60 bg-[var(--ui-info-solid)]/25 text-[#BBD8FF]",
-    green: "border-[var(--ui-brand)]/60 bg-[var(--ui-brand-solid)]/22 text-[#D9FF3F]",
-    lime: "border-[#D9FF3F]/60 bg-[#D9FF3F]/18 text-[#D9FF3F]",
-    orange: "border-[var(--ui-stage)]/60 bg-[var(--ui-stage)]/20 text-[#FFD7A0]",
+    blue: "border-[var(--ui-info)]/60 bg-[var(--ui-info-solid)]/25 text-[var(--ui-display-blue)]",
+    green: "border-[var(--ui-brand)]/60 bg-[var(--ui-brand-solid)]/22 text-[var(--ui-display-lime)]",
+    lime: "border-[var(--ui-display-lime)]/60 bg-[var(--ui-display-lime)]/18 text-[var(--ui-display-lime)]",
+    orange: "border-[var(--ui-stage)]/60 bg-[var(--ui-stage)]/20 text-[var(--ui-display-amber)]",
   }[tone];
 
   return (
     <button
       aria-label={available ? `${active ? "隐藏" : "显示"}${label}` : `${label}不可用`}
       aria-pressed={active}
-      className={`grid size-8 place-items-center rounded-md border backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D9FF3F] disabled:cursor-not-allowed disabled:opacity-45 ${active ? activeClasses : "border-white/15 bg-black/50 text-white"}`}
+      className={`grid size-8 place-items-center rounded-md border backdrop-blur transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ui-display-lime)] disabled:cursor-not-allowed disabled:opacity-45 ${active ? activeClasses : "border-white/15 bg-black/50 text-white"}`}
       disabled={!available}
       onClick={onClick}
       title={available ? `${active ? "隐藏" : "显示"}${label}` : unavailableReason}
@@ -1964,6 +1974,66 @@ function FusedPlayerBox({
       >
         {label}
         {sourceLabel}
+      </text>
+    </g>
+  );
+}
+
+function FusedAnonymousOverlayBox({
+  observation,
+  source,
+}: {
+  observation: NonNullable<FusedPlayerOverlayFrame["anonymous_observations"]>[number];
+  source: { width: number; height: number };
+}) {
+  const color = "#CBD5E1";
+  const label = "未确认球员";
+  if (observation.bbox) {
+    const [x1, y1, x2, y2] = observation.bbox;
+    return (
+      <g data-testid="anonymous-player-observation" key={`anonymous-${observation.observation_id}`}>
+        <rect
+          fill="rgba(203,213,225,0.08)"
+          height={Math.max(0, y2 - y1)}
+          rx={Math.max(4, source.width * 0.003)}
+          stroke={color}
+          strokeDasharray="8 6"
+          strokeWidth={Math.max(2, source.width * 0.0018)}
+          width={Math.max(0, x2 - x1)}
+          x={x1}
+          y={y1}
+        />
+        <text
+          fill={color}
+          fontSize={Math.max(13, source.width * 0.013)}
+          fontWeight="700"
+          paintOrder="stroke"
+          stroke="rgba(0,0,0,0.75)"
+          strokeWidth={Math.max(3, source.width * 0.002)}
+          x={x1}
+          y={Math.max(18, y1 - 8)}
+        >
+          {label}
+        </text>
+      </g>
+    );
+  }
+  if (!observation.footpoint) return null;
+  return (
+    <g data-testid="anonymous-player-observation" key={`anonymous-${observation.observation_id}`}>
+      <circle cx={observation.footpoint[0]} cy={observation.footpoint[1]} r={Math.max(8, source.width * 0.006)} fill="none" stroke={color} strokeDasharray="4 4" strokeWidth={2} />
+      <text
+        fill={color}
+        fontSize={Math.max(12, source.width * 0.011)}
+        fontWeight="700"
+        paintOrder="stroke"
+        stroke="rgba(0,0,0,0.75)"
+        strokeWidth={Math.max(3, source.width * 0.002)}
+        textAnchor="middle"
+        x={observation.footpoint[0]}
+        y={observation.footpoint[1] - Math.max(14, source.width * 0.009)}
+      >
+        {label}
       </text>
     </g>
   );

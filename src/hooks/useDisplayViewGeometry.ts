@@ -157,8 +157,15 @@ export function useDisplayViewGeometry({
   sceneCalibrationRevision,
   inputs,
 }: UseDisplayViewGeometryOptions): Record<string, DisplayViewGeometry> {
-  const inputSignature = JSON.stringify(inputs);
-  const stableInputs = useMemo(() => JSON.parse(inputSignature) as DisplayViewGeometryInput[], [inputSignature]);
+  const inputKey = inputs.map((input) => [
+    input.viewId,
+    input.videoId,
+    input.calibrationId,
+    input.imageWidth,
+    input.imageHeight,
+    input.courtOrientation,
+  ].map((value) => encodeURIComponent(value == null ? "" : String(value))).join(",")).join("|");
+  const stableInputs = useMemo(() => inputs, [inputKey]);
   const [geometryByViewId, setGeometryByViewId] = useState<Record<string, DisplayViewGeometry>>({});
 
   useEffect(() => {

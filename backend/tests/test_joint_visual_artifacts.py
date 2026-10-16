@@ -7,12 +7,16 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.schemas.analysis import AnalysisJobSummary
 from app.services.multiview_result_composer import MultiViewResultComposer
 from app.services.joint_visual_artifacts import (
     JOINT_POSE_UNAVAILABLE,
+    build_joint_roster_artifact,
     build_joint_tracking_overlay,
 )
 
@@ -113,7 +117,7 @@ def test_tracking_overlay_no_detections():
     assert overlay.frames == []
 
 
-def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
+def test_compose_joint_result_publishes_visual_artifacts(tmp_path, monkeypatch):
     """compose_joint_result 产出 tracking_overlay/heatmaps/pose 契约。"""
     from app.schemas.analysis import AnalysisJobSummary
     from app.schemas.metrics import PerformanceMetrics
@@ -121,6 +125,7 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-p", take_dir)
 
     job = AnalysisJobSummary(
@@ -240,6 +245,46 @@ def test_compose_joint_result_publishes_visual_artifacts(tmp_path):
     stage_ids = {s.id: s.status for s in result.stages}
     assert stage_ids["multiview-view-a"] == "done"
     assert stage_ids["multiview-view-b"] == "done"
+
+    # The independent roster audit is persisted by joint visual composition,
+    # before the optional canonical Rally/Shot post-processing callback runs.
+    frozen_job = job.model_copy(update={
+        "analysisMode": "real",
+        "rosterSnapshotHash": "snapshot-hash",
+        "rosterStatus": "available",
+    })
+    joint_output.diagnostics["frozen_roster"] = {
+        "status": "available",
+        "reason": None,
+        "roster_hash": "snapshot-hash",
+        "anchor_binding_audit": {"status": "unavailable", "entries": []},
+    }
+    composer.compose_joint_result(
+        job=frozen_job,
+        joint_output=joint_output,
+        reference_view_id="cam_1",
+        message="ok",
+        refinement=None,
+    )
+    audit_path = storage.bootstrap_binding_audit_json_path(job.id)
+    audit = storage.read_json(audit_path)
+    assert audit["roster_hash"] == "snapshot-hash"
+    assert len(audit["entries"]) == 4
+
+    from app.services import canonical_shot_rally_events, mock_analysis
+
+    def fail_optional_rally_shot(*_args, **_kwargs):
+        raise RuntimeError("canonical Rally/Shot composition failed")
+
+    monkeypatch.setattr(mock_analysis, "_STORAGE", storage)
+    monkeypatch.setattr(canonical_shot_rally_events, "generate_and_persist_canonical_events", fail_optional_rally_shot)
+    try:
+        mock_analysis._on_worker_completed(frozen_job, SimpleNamespace(status="completed"))
+    except RuntimeError as exc:
+        assert "Rally/Shot" in str(exc)
+    else:
+        raise AssertionError("the optional Rally/Shot failure fixture should raise")
+    assert audit_path.exists()
 
     joint_output.normalized.samples.clear()
     joint_output.trajectory["samples"] = []
@@ -374,6 +419,7 @@ def test_compose_publishes_fused_player_overlay(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-p2", take_dir)
 
     job = AnalysisJobSummary(
@@ -445,6 +491,7 @@ def test_historical_v1_fused_overlay_safely_stays_reference_view_only(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-legacy-overlay", take_dir)
     job = AnalysisJobSummary(
         id="job-legacy-overlay",
@@ -515,6 +562,7 @@ def test_fused_overlay_unavailable_without_geometry(tmp_path):
 
     storage = StorageService()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-p3", take_dir)
 
     job = AnalysisJobSummary(
@@ -569,6 +617,7 @@ def test_compose_writes_placeholder_display_diagnostics_when_payload_missing(tmp
     storage.settings.outputs_dir = tmp_path / "outputs"
     storage.settings.ensure_data_dirs()
     take_dir = tmp_path / "take"
+    take_dir.mkdir(parents=True, exist_ok=True)
     storage.register_capture_job("job-pdiag", take_dir)
 
     job = AnalysisJobSummary(
@@ -638,3 +687,134 @@ def test_compose_writes_placeholder_display_diagnostics_when_payload_missing(tmp
         JOBS.update(snapshot[0])
         RESULTS.clear()
         RESULTS.update(snapshot[1])
+
+
+# ---- 7.3 身份审计单一权威源 -------------------------------------------------
+
+
+class _RecordingStorage:
+    """最小 storage 替身：`build_joint_roster_artifact` 直接 `write_text` 落盘。"""
+
+    def __init__(self) -> None:
+        self.path = Path(tempfile.mkdtemp()) / "roster.json"
+
+    def roster_manifest_json_path(self, job_id: str) -> Path:
+        return self.path
+
+    def read_payload(self) -> dict[str, object]:
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+
+def _roster_entries(*, p4_frozen: str | None) -> list[dict[str, object]]:
+    return [
+        {
+            "global_player_id": "global_player_1",
+            "status": "confirmed",
+            "canonical_end": "end_a",
+            "frozen_player_id": "Player_2",
+            "frozen_identity_confirmed": True,
+            "frozen_identity_confirmed_from_ms": 57_500,
+            "frozen_identity_evidence": {"bbox_iou": 0.53},
+            "bindings": {},
+        },
+        {
+            "global_player_id": "global_player_4",
+            "status": "confirmed",
+            "canonical_end": "end_b",
+            "frozen_player_id": p4_frozen,
+            "frozen_identity_confirmed": p4_frozen is not None,
+            "frozen_identity_confirmed_from_ms": 55_500 if p4_frozen else None,
+            "frozen_identity_evidence": {"bbox_iou": 0.86} if p4_frozen else None,
+            "bindings": {},
+        },
+    ]
+
+
+def _audit(*, p4_confirmed: bool, p4_formal: str | None) -> dict[str, object]:
+    entries = [
+        {
+            "canonical_player_id": "Player_2",
+            "canonical_end": "end_a",
+            "confirmed": True,
+            "formal_canonical_player_id": "Player_2",
+            "global_player_id": "global_player_1",
+        },
+        {
+            "canonical_player_id": "Player_4",
+            "canonical_end": "end_b",
+            "confirmed": p4_confirmed,
+            "formal_canonical_player_id": p4_formal,
+            "global_player_id": "global_player_2",
+            "reason": None if p4_confirmed else "anchor_global_end_conflict",
+        },
+    ]
+    return {"schema_version": "bootstrap-binding-audit.v1", "entries": entries}
+
+
+def test_roster_manifest_defers_to_anchor_audit_over_registry_snapshot():
+    """7.3：registry 说 P4 已绑定、审计说未绑定时，roster.json 必须采信审计。"""
+    storage = _RecordingStorage()
+    build_joint_roster_artifact(
+        storage=storage,
+        job_id="job-7-3",
+        roster=_roster_entries(p4_frozen="Player_4"),
+        roster_map={},
+        expected_player_count=4,
+        status="confirmed",
+        confirmed_identity_only=True,
+        roster_hash="hash-1",
+        anchor_binding_audit=_audit(p4_confirmed=False, p4_formal=None),
+    )
+
+    payload = storage.read_payload()
+    by_slot = {p["frozen_player_id"]: p for p in payload["players"]}
+    # 审计未确认 -> roster.json 不得声称 P4 已确认
+    assert "Player_4" not in by_slot
+    p2 = next(p for p in payload["players"] if p["frozen_player_id"] == "Player_2")
+    assert p2["mapping_confirmed"] is True
+    # 冲突必须留证
+    assert "Player_4" in payload["mapping_conflict_with_audit"]
+    assert payload["mapping_conflict_with_audit"]["Player_4"]["audit_confirmed"] is False
+    assert payload["mapping_conflict_with_audit"]["Player_4"]["registry_confirmed"] is True
+    assert payload["mapping_authority"] == "anchor_binding_audit"
+
+
+def test_roster_manifest_reports_no_conflict_when_sources_agree():
+    """7.3：两来源一致时不应虚报冲突。"""
+    storage = _RecordingStorage()
+    build_joint_roster_artifact(
+        storage=storage,
+        job_id="job-7-3-agree",
+        roster=_roster_entries(p4_frozen="Player_4"),
+        roster_map={},
+        expected_player_count=4,
+        status="confirmed",
+        confirmed_identity_only=True,
+        roster_hash="hash-1",
+        anchor_binding_audit=_audit(p4_confirmed=True, p4_formal="Player_4"),
+    )
+
+    payload = storage.read_payload()
+    assert payload["mapping_conflict_with_audit"] == {}
+    p4 = next(p for p in payload["players"] if p["frozen_player_id"] == "Player_4")
+    assert p4["mapping_confirmed"] is True
+    assert p4["mapping_method"] == "anchor_simultaneous_match"
+
+
+def test_roster_manifest_keeps_legacy_behaviour_without_audit():
+    """7.3：历史 Job 无审计产物时保持旧行为，不回填伪确认。"""
+    storage = _RecordingStorage()
+    build_joint_roster_artifact(
+        storage=storage,
+        job_id="job-legacy",
+        roster=_roster_entries(p4_frozen="Player_4"),
+        roster_map={},
+        expected_player_count=4,
+        status="confirmed",
+        confirmed_identity_only=True,
+        roster_hash=None,
+    )
+
+    payload = storage.read_payload()
+    assert payload["mapping_authority"] == "registry_snapshot"
+    assert payload["mapping_conflict_with_audit"] == {}

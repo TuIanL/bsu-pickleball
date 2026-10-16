@@ -161,7 +161,7 @@ function CameraVideoCard({
 
   return (
     <section className={`min-w-0 overflow-hidden rounded-2xl border bg-[var(--ui-surface)] shadow-[0_8px_24px_rgba(16,24,40,0.06)] ${selected ? "border-[var(--ui-brand)] ring-2 ring-[var(--ui-brand)]/15" : "border-[var(--ui-border-neutral)]"}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EEF2F0] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ui-hairline)] px-4 py-3">
         <button className="flex min-w-0 items-center gap-3 text-left" onClick={onSelect} type="button">
           <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--ui-surface-mint-soft)] text-[var(--ui-brand-deep)]"><Video size={17} aria-hidden="true" /></span>
           <span className="min-w-0">
@@ -172,7 +172,7 @@ function CameraVideoCard({
         <span className="rounded-full bg-[var(--ui-surface-mint-soft)] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[var(--ui-brand-deep)]">source_pts</span>
       </div>
 
-      <div className="bg-[#101828]">
+      <div className="bg-[var(--ui-display-panel)]">
         <video
           ref={videoRef}
           className="aspect-video w-full object-contain"
@@ -597,13 +597,13 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
           <div className="flex items-center gap-2 text-sm font-bold text-[var(--ui-danger-deeper)]"><AlertTriangle size={17} /> 工作台无法打开</div>
           <p className="mt-3 text-sm leading-6 text-[var(--ui-danger-deep)]">{loadError ?? "双摄 registered video 或 source timing 不完整。"}</p>
           {repairError && (
-            <p className="mt-3 rounded-xl border border-[var(--ui-danger-border)] bg-[#FEE2E2] p-3 text-sm leading-6 text-[var(--ui-danger-deeper)]">
+            <p className="mt-3 rounded-xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] p-3 text-sm leading-6 text-[var(--ui-danger-deeper)]">
               修复失败：{repairError}
             </p>
           )}
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
-              className="inline-flex items-center gap-2 rounded-xl bg-[var(--ui-brand-solid-deep)] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#116B28] disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-xl bg-[var(--ui-brand-solid-deep)] px-4 py-2 text-sm font-bold text-white transition hover:bg-[var(--ui-brand-solid-deep)] disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleRepairTiming}
               disabled={repairing}
               type="button"
@@ -707,15 +707,15 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
             </div>
             {notice && <div className="mt-3 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] px-3 py-2 text-xs font-semibold text-[var(--ui-brand-deep)]">{notice}</div>}
 
-            <div className="mt-5 overflow-x-auto rounded-xl border border-[#EAECF0]">
+            <div className="mt-5 overflow-x-auto rounded-xl border border-[var(--ui-border-neutral-2)]">
               <table className="w-full min-w-[720px] border-collapse text-left text-xs">
-                <thead className="bg-[#F9FAFB] text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
+                <thead className="bg-[var(--ui-surface-muted)] text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">
                   <tr><th className="px-3 py-3"># / 事件</th><th className="px-3 py-3">Camera {cameraIds[0]} 帧 · PTS</th><th className="px-3 py-3">Camera {cameraIds[1]} 帧 · PTS</th><th className="px-3 py-3">备注</th><th className="px-3 py-3 text-right">操作</th></tr>
                 </thead>
                 <tbody className="divide-y divide-[#EAECF0]">
                   {anchors.length === 0 && <tr><td className="px-3 py-8 text-center text-slate-400" colSpan={5}>还没有锚点</td></tr>}
                   {anchors.map((anchor, index) => (
-                    <tr className="hover:bg-[#FAFCF9]" key={anchor.id}>
+                    <tr className="hover:bg-[var(--ui-surface-paper)]" key={anchor.id}>
                       <td className="px-3 py-3"><button className="text-left font-bold text-[var(--ui-ink)] hover:text-[var(--ui-brand-deep)]" onClick={() => selectAnchor(anchor)} type="button">{index + 1}. {anchor.label}</button></td>
                       <td className="px-3 py-3 font-mono tabular-nums text-[var(--ui-neutral-strong)]">#{anchor.frameByCamera?.[cameraIds[0]] ?? "—"} · {formatPts(anchor.ptsByCamera?.[cameraIds[0]])}</td>
                       <td className="px-3 py-3 font-mono tabular-nums text-[var(--ui-neutral-strong)]">#{anchor.frameByCamera?.[cameraIds[1]] ?? "—"} · {formatPts(anchor.ptsByCamera?.[cameraIds[1]])}</td>
@@ -732,10 +732,10 @@ export function SyncCalibrationWorkbenchPage({ captureTakeId, onNavigate, return
             <section className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-5 shadow-[0_8px_24px_rgba(16,24,40,0.05)]">
               <div className="flex items-center gap-2 text-sm font-black text-[var(--ui-ink)]"><Clock3 size={16} className="text-[var(--ui-brand-deep)]" />锚点覆盖</div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                {[{ label: "前段", ok: coverage?.hasEarly }, { label: "中段", ok: coverage?.hasMiddle }, { label: "后段", ok: coverage?.hasLate }].map((item) => <div className={`rounded-xl border px-2 py-3 ${item.ok ? "border-[#B7E2C1] bg-[var(--ui-surface-soft)]" : "border-[#EAECF0] bg-[#F9FAFB]"}`} key={item.label}><div className={`mx-auto mb-1 grid size-5 place-items-center rounded-full ${item.ok ? "bg-[var(--ui-brand-cta)] text-white" : "bg-slate-200 text-slate-400"}`}>{item.ok ? <CheckCircle2 size={13} /> : <span className="text-[10px]">·</span>}</div><div className="text-xs font-bold text-slate-500">{item.label}</div></div>)}
+                {[{ label: "前段", ok: coverage?.hasEarly }, { label: "中段", ok: coverage?.hasMiddle }, { label: "后段", ok: coverage?.hasLate }].map((item) => <div className={`rounded-xl border px-2 py-3 ${item.ok ? "border-[var(--ui-success-border)] bg-[var(--ui-surface-soft)]" : "border-[var(--ui-border-neutral-2)] bg-[var(--ui-surface-muted)]"}`} key={item.label}><div className={`mx-auto mb-1 grid size-5 place-items-center rounded-full ${item.ok ? "bg-[var(--ui-brand-cta)] text-white" : "bg-slate-200 text-slate-400"}`}>{item.ok ? <CheckCircle2 size={13} /> : <span className="text-[10px]">·</span>}</div><div className="text-xs font-bold text-slate-500">{item.label}</div></div>)}
               </div>
               <div className="mt-4 space-y-2 text-xs text-slate-500"><div className="flex justify-between"><span>已记录</span><strong className={enoughAnchors ? "text-[var(--ui-brand-deep)]" : "text-[var(--ui-warning)]"}>{coverage?.count ?? 0} 组</strong></div><div className="flex justify-between"><span>参考时间跨度</span><strong className={broadCoverage ? "text-[var(--ui-brand-deep)]" : "text-[var(--ui-warning)]"}>{((coverage?.spanRatio ?? 0) * 100).toFixed(1)}%</strong></div></div>
-              <div className={`mt-4 rounded-xl border px-3 py-3 text-xs leading-5 ${enoughAnchors && broadCoverage ? "border-[#B7E2C1] bg-[var(--ui-surface-soft)] text-[var(--ui-brand-deep)]" : "border-[var(--ui-warning-border)] bg-[var(--ui-warning-soft-2)] text-[#8A5A00]"}`}>{enoughAnchors ? (broadCoverage ? "数量和跨时段覆盖已满足人工输入建议。" : "数量已满足；建议再补一个更靠前或更靠后的事件。") : "至少记录 3 组共同事件后再导出。"}</div>
+              <div className={`mt-4 rounded-xl border px-3 py-3 text-xs leading-5 ${enoughAnchors && broadCoverage ? "border-[var(--ui-success-border)] bg-[var(--ui-surface-soft)] text-[var(--ui-brand-deep)]" : "border-[var(--ui-warning-border)] bg-[var(--ui-warning-soft-2)] text-[var(--ui-warning-deep)]"}`}>{enoughAnchors ? (broadCoverage ? "数量和跨时段覆盖已满足人工输入建议。" : "数量已满足；建议再补一个更靠前或更靠后的事件。") : "至少记录 3 组共同事件后再导出。"}</div>
             </section>
 
             <section className="rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-5">

@@ -1216,6 +1216,88 @@ def _write_bootstrap_binding_audit(
     return audit
 
 
+def _persist_bootstrap_binding_audit_if_missing(
+    storage: StorageService,
+    job_id: str,
+    audit: Any | None,
+) -> bool:
+    """Keep the joint-run identity audit authoritative once it is published.
+
+    Rally/Shot still builds its own audit view to gate team semantics, but that
+    derived view must not replace the joint track-to-roster evidence artifact.
+
+    7.3：当权威审计已存在且与本次派生结论冲突时，不得静默跳过——把冲突写入
+    独立 sidecar 文件供下游 fail-closed 消费，避免"两个来源各说各话"再次发生。
+    """
+    if audit is None:
+        return False
+    path = storage.bootstrap_binding_audit_json_path(job_id)
+    payload = audit.model_dump(mode="json") if hasattr(audit, "model_dump") else audit
+    if path.exists():
+        _record_bootstrap_binding_audit_conflict(storage, job_id, path, payload)
+        return False
+    storage.write_json(path, payload)
+    return True
+
+
+def _record_bootstrap_binding_audit_conflict(
+    storage: StorageService,
+    job_id: str,
+    authoritative_path: Path,
+    derived_payload: object,
+) -> None:
+    """把 Rally/Shot 派生审计与权威审计的逐槽位分歧落盘，不改写权威文件。"""
+    try:
+        authoritative = json.loads(authoritative_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(authoritative, dict):
+        return
+
+    def _by_slot(document: object) -> dict[str, dict[str, object]]:
+        entries = document.get("entries") if isinstance(document, dict) else None
+        if not isinstance(entries, list):
+            return {}
+        return {
+            str(entry.get("canonical_player_id")): entry
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("canonical_player_id")
+        }
+
+    authoritative_slots = _by_slot(authoritative)
+    derived_slots = _by_slot(derived_payload)
+    conflicts: dict[str, dict[str, object]] = {}
+    for player_id, derived_entry in derived_slots.items():
+        authoritative_entry = authoritative_slots.get(player_id)
+        if authoritative_entry is None:
+            continue
+        authoritative_confirmed = authoritative_entry.get("confirmed") is True
+        derived_confirmed = derived_entry.get("confirmed") is True
+        if authoritative_confirmed == derived_confirmed:
+            continue
+        conflicts[player_id] = {
+            "authoritative_confirmed": authoritative_confirmed,
+            "derived_confirmed": derived_confirmed,
+            "authoritative_reason": authoritative_entry.get("reason"),
+            "derived_reason": derived_entry.get("reason"),
+            "authoritative_global_player_id": authoritative_entry.get("global_player_id"),
+            "derived_global_player_id": derived_entry.get("global_player_id"),
+        }
+    if not conflicts:
+        return
+    storage.write_json(
+        storage.bootstrap_binding_audit_conflict_json_path(job_id),
+        {
+            "schema_version": "bootstrap-binding-audit-conflict.v1",
+            "job_id": job_id,
+            "authoritative_path": str(authoritative_path),
+            "authoritative_status": authoritative.get("status"),
+            "derived_source": "canonical_shot_rally_events",
+            "conflicts": conflicts,
+        },
+    )
+
+
 def generate_and_persist_canonical_events(
     job: AnalysisJobSummary,
     result: AnalysisPipelineResult,
@@ -1366,12 +1448,10 @@ def generate_and_persist_canonical_events(
         kitchen_path = _kitchen_path(storage, job.id)
         if kitchen_path is not None:
             storage.write_json(kitchen_path, kitchen_artifact.model_dump(mode="json"))
-        # 身份连续性审计与 canonical artifact 一起产出，保证"绑定不成立即 unavailable"可追溯。
-        if binding_audit is not None:
-            storage.write_json(
-                storage.bootstrap_binding_audit_json_path(job.id),
-                binding_audit.model_dump(mode="json"),
-            )
+        # The independent joint-run audit owns this artifact when present.
+        # Canonical composition may fill it for legacy jobs, but may not replace
+        # the stronger source-track evidence with a derived roster projection.
+        _persist_bootstrap_binding_audit_if_missing(storage, job.id, binding_audit)
     except Exception as exc:  # noqa: BLE001 - optional post-processing must not fail the pipeline
         logger.exception("canonical shot/rally artifact generation failed for %s", job.id)
         events = ShotRallyEventsArtifact(

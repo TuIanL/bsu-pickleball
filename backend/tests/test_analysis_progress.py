@@ -144,3 +144,40 @@ def test_legacy_joint_job_is_read_as_joint_graph_without_empty_view_runs():
     assert normalized.stages[1].status == "active"
     assert normalized.stages[-1].status == "pending"
     assert normalized.viewRuns is None
+
+
+def test_success_normalization_only_completes_pending_or_active_stages():
+    stages = build_stage_snapshot("single_view", "upload")
+    stages[0] = stages[0].model_copy(update={"status": "done", "progress": 100})
+    stages[1] = stages[1].model_copy(update={"status": "failed", "progress": 35})
+    stages[2] = stages[2].model_copy(update={"status": "skipped", "progress": 0})
+    stages[3] = stages[3].model_copy(update={"status": "pending", "progress": 0})
+
+    job = AnalysisJobSummary(
+        id="job-success-stage-preservation",
+        status="completed",
+        canonicalStatus="succeeded",
+        stage="report",
+        progress=100,
+        createdAt="2026-10-05T00:00:00Z",
+        updatedAt="2026-10-05T00:00:01Z",
+        metadata={
+            "fileName": "match.mp4",
+            "matchTitle": "Test",
+            "venue": "Court",
+            "matchDate": "2026-10-05",
+            "matchFormat": "doubles",
+            "cameraAngle": "baseline",
+            "athleteLabel": "Test",
+            "level": "MVP",
+        },
+        analysisKind="single_view",
+        stages=stages,
+    )
+
+    normalized = normalize_job(job)
+    by_id = {stage.id: stage for stage in normalized.stages}
+    assert by_id[stages[1].id].status == "failed"
+    assert by_id[stages[2].id].status == "skipped"
+    assert by_id[stages[3].id].status == "done"
+    assert by_id[stages[3].id].progress == 100

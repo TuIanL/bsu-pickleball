@@ -92,4 +92,31 @@ describe("analysisRuntimeStore", () => {
     expect(listWatchedAnalysisJobs()).not.toContain("job-lost");
     expect(getAnalysisRuntimeSnapshot("job-lost")?.status).toBe("interrupted");
   });
+
+  it("does not schedule periodic wakeups while hidden and reconciles on resume", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    getAnalysisJob.mockResolvedValue({
+      id: "job-hidden",
+      status: "processing",
+      progress: 12,
+      stages: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      metadata: {},
+    });
+
+    watchAnalysisJob("job-hidden");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getAnalysisJob).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => expect(getAnalysisJob).toHaveBeenCalledWith("job-hidden"));
+
+    unwatchAnalysisJob("job-hidden");
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 });

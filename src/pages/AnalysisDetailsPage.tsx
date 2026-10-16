@@ -116,7 +116,7 @@ export function AnalysisDetailsPage({ jobId, onNavigate, embedded, onSelectView 
             </div>
             <div className="rounded-3xl border border-[var(--ui-brand)]/25 bg-[var(--ui-brand-solid)]/10 p-6">
               <span className="text-sm font-bold text-[var(--ui-brand-deep)]">状态摘要</span>
-              <strong className="mt-4 block text-4xl font-black text-[#13A12C]">{analysisStatusMeta(job.status).label}</strong>
+              <strong className="mt-4 block text-4xl font-black text-[var(--ui-success-deep)]">{analysisStatusMeta(job.status).label}</strong>
               <p className="mt-3 text-sm font-semibold leading-6 text-slate-600">
                 {stageSummary} 个阶段完成 · {trackIds.size} 条球员轨迹 · {trackCount} 个投影点
               </p>

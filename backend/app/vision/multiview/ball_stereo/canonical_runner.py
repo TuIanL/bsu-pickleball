@@ -55,7 +55,6 @@ from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
     BallSearchPolicy,
     MatchSemanticSnapshot,
     SemanticAuthority,
-    SemanticPhase,
     SemanticTimelineProvider,
     compute_semantic_shadow_metrics,
 )

@@ -16,7 +16,12 @@
  * 因此不依赖网络/定时器，运行速度快、确定性强。
  */
 import { describe, it, expect } from "vitest";
-import { captureRuntimeReducer, type RuntimeAction } from "../hooks/useCaptureRuntime";
+import {
+  beginCaptureRecoveryCycle,
+  captureRuntimeReducer,
+  resetCaptureRecoveryCycle,
+  type RuntimeAction,
+} from "../hooks/useCaptureRuntime";
 import type { NormalizedCaptureStopResult } from "../types/capture";
 
 describe("captureRuntimeReducer", () => {
@@ -59,7 +64,7 @@ describe("captureRuntimeReducer", () => {
   it("recording → cancel → canceled", () => {
     const rec = { phase: "recording" as const, session };
     let s = captureRuntimeReducer(rec, { type: "CANCEL_REQUESTED" });
-    expect(s.phase).toBe("recording"); // CANCEL_REQUESTED doesn't change phase
+    expect(s.phase).toBe("canceling");
     s = captureRuntimeReducer(s, { type: "CANCELED", session });
     expect(s.phase).toBe("canceled");
   });
@@ -84,7 +89,7 @@ describe("captureRuntimeReducer", () => {
   it("recovering → cancel → canceled", () => {
     const rec = { phase: "recovering" as const, session, operationError: "timeout" };
     let s = captureRuntimeReducer(rec, { type: "CANCEL_REQUESTED" });
-    expect(s.phase).toBe("recovering");
+    expect(s.phase).toBe("canceling");
     s = captureRuntimeReducer(s, { type: "CANCELED", session });
     expect(s.phase).toBe("canceled");
   });
@@ -114,5 +119,19 @@ describe("captureRuntimeReducer", () => {
       const s = captureRuntimeReducer(rec, { type: "RECOVERED", session, result: undefined });
       expect(s.phase).toBe("failed");
     });
+  });
+});
+
+describe("capture recovery cycle clock", () => {
+  it("starts a fresh timeout and attempt count when recovery is re-entered", () => {
+    const clock = { startedAt: 10_000, attemptCount: 4 };
+    resetCaptureRecoveryCycle(clock);
+    expect(clock).toEqual({ startedAt: 0, attemptCount: 0 });
+
+    expect(beginCaptureRecoveryCycle(clock, 90_000)).toBe(true);
+    expect(clock).toEqual({ startedAt: 90_000, attemptCount: 0 });
+    clock.attemptCount = 2;
+    expect(beginCaptureRecoveryCycle(clock, 91_000)).toBe(false);
+    expect(clock).toEqual({ startedAt: 90_000, attemptCount: 2 });
   });
 });

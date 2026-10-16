@@ -883,6 +883,9 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               )}
             />
             <VisualizationArtifactGallery
+              frozenRosterJob={Boolean(job?.rosterSnapshotHash)}
+              fourPlayerQualityStatus={result?.artifacts.four_player_identification_quality_status}
+              fourPlayerQualityDetail={result?.artifacts.four_player_identification_quality_detail}
               heatmapsManifest={heatmapsManifest ?? null}
               heatmapsLoadState={heatmapsLoadState}
               heatmapsStatus={result?.artifacts.position_visualizations_status}
@@ -1011,6 +1014,9 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
           />
           {analysis.source === "job" ? (
             <VisualizationArtifactGallery
+              frozenRosterJob={Boolean(job?.rosterSnapshotHash)}
+              fourPlayerQualityStatus={result?.artifacts.four_player_identification_quality_status}
+              fourPlayerQualityDetail={result?.artifacts.four_player_identification_quality_detail}
               heatmapsManifest={heatmapsManifest ?? null}
               heatmapsLoadState={heatmapsLoadState}
               heatmapsStatus={result?.artifacts.position_visualizations_status}
@@ -1077,6 +1083,9 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
 }
 
 function VisualizationArtifactGallery({
+  frozenRosterJob,
+  fourPlayerQualityStatus,
+  fourPlayerQualityDetail,
   heatmapsManifest,
   heatmapsLoadState,
   heatmapsStatus,
@@ -1098,6 +1107,9 @@ function VisualizationArtifactGallery({
   jobId,
   onSeekToMs,
 }: {
+  frozenRosterJob?: boolean;
+  fourPlayerQualityStatus?: string;
+  fourPlayerQualityDetail?: string;
   heatmapsManifest: VisualizationManifest | null;
   heatmapsLoadState: OverlayLoadState;
   heatmapsStatus?: string;
@@ -1131,7 +1143,9 @@ function VisualizationArtifactGallery({
       });
   }, [jobId]);
 
-  const hasStructuredHeatmap = !!(structuredViz?.heatmaps?.visual_grid?.cells.length);
+  const hasStructuredHeatmap = !!(
+    structuredViz?.heatmaps?.visual_grid?.cells.length || structuredViz?.heatmaps?.identity_slots?.length
+  );
   const hasStructuredScatter = !!(structuredViz?.scatter_plots.players?.length || structuredViz?.scatter_plots.ball?.length || structuredViz?.scatter_plots.bounces?.length);
   const hasZoneStats = !!(structuredViz?.zone_stats?.players?.length);
 
@@ -1181,6 +1195,12 @@ function VisualizationArtifactGallery({
         </div>
         <LineChart className="text-[var(--ui-brand-deep)]" size={22} aria-hidden="true" />
       </div>
+      {frozenRosterJob && (fourPlayerQualityStatus !== "available" || !fourPlayerQualityDetail?.includes("质量通过")) ? (
+        <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950" role="status">
+          <strong>四人识别质量不足</strong>
+          <p className="mt-1">{fourPlayerQualityDetail || "质量摘要尚不可用，个人身份与覆盖情况不能视为已确认。"}</p>
+        </div>
+      ) : null}
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         {groups.map((group) => {
           const status = overlayLayerStatus(group.loadState, group.manifest?.status ?? group.status);
@@ -1533,7 +1553,7 @@ function HighlightsCard({
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">关键片段</p>
           <h2 className="mt-2 text-xl font-black text-[var(--ui-ink)]">关键片段</h2>
         </div>
-        <Timer className="text-[#D9FF3F]" size={22} aria-hidden="true" />
+        <Timer className="text-[var(--ui-display-lime)]" size={22} aria-hidden="true" />
       </div>
       <div className="mt-5 grid gap-3">
         {highlights.map((highlight) => {

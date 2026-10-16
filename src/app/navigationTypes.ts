@@ -86,7 +86,7 @@ export type RouteState =
   | { name: "tasks"; path: "/tasks"; taskSource?: TaskListSource; taskSessionId?: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "new-analysis"; path: "/analysis/new"; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "analysis-tasks"; path: "/analysis/tasks"; taskSource?: TaskListSource; taskSessionId?: string; shellMode: "standard"; navigationSection: "analysis" }
-  | { name: "analysis-job"; path: `/analysis/${string}`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "analysis-job"; path: `/analysis/${string}`; jobId: string; returnParam?: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "analysis-details"; path: `/analysis/${string}/details`; jobId: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "vision"; path: "/vision"; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "vision"; path: `/analysis/${string}/vision`; jobId: string; seekToMs?: number; shellMode: "standard"; navigationSection: "analysis" }
@@ -98,11 +98,11 @@ export type RouteState =
   | { name: "training"; path: "/training"; shellMode: "standard"; navigationSection: "settings" }
   | { name: "hardware"; path: "/hardware"; shellMode: "standard"; navigationSection: "settings" }
   | { name: "recordingWorkspace"; path: `/recording/${string}`; sessionId: string; shellMode: "standard"; navigationSection: "videos" }
-  | { name: "recording-analyze"; path: `/capture/${string}/analyze`; sessionId: string; shellMode: "standard"; navigationSection: "analysis" }
-  | { name: "multiview-setup"; path: `/capture/takes/${string}/analyze`; captureTakeId: string; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "recording-analyze"; path: `/capture/${string}/analyze`; sessionId: string; cam?: TaskCameraSlot; shellMode: "standard"; navigationSection: "analysis" }
+  | { name: "multiview-setup"; path: `/capture/takes/${string}/analyze`; captureTakeId: string; routeSessionId?: string; returnParam?: string; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "sync-calibration"; path: "/sync-calibration"; captureTakeId: string; returnPath?: NavigatePath; shellMode: "standard"; navigationSection: "analysis" }
   | { name: "showcase"; path: `/showcase/${string}`; runtimeId: string; shellMode: "landing"; navigationSection: null }
   | { name: "library"; path: "/library"; shellMode: "standard"; navigationSection: "library" }
-  | { name: "library-item"; path: `/library/${string}/${string}`; kind: "upload" | "recording" | "sync_recording"; sourceId: string; view: string; shellMode: "standard"; navigationSection: "library" };
+  | { name: "library-item"; path: `/library/${string}/${string}`; kind: "upload" | "recording" | "sync_recording"; sourceId: string; view: string; analysisJobId?: string; querySearch?: string; shellMode: "standard"; navigationSection: "library" };
 
 export type NavigateFn = (path: NavigatePath, options?: NavigateOptions) => void;

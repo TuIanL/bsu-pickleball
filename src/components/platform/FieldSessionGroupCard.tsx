@@ -90,8 +90,8 @@ export function FieldSessionGroupCard({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate text-base font-black text-[var(--ui-ink)]">{title}</h3>
             {hasRecording && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-black text-red-500">
-                <span className="size-1.5 rounded-full bg-red-500" />
+              <span className="inline-flex items-center gap-1 rounded-full bg-[var(--ui-danger-soft)] px-2.5 py-0.5 text-xs font-black text-[var(--ui-danger)]">
+                <span className="size-1.5 rounded-full bg-[var(--ui-danger)]" />
                 录制中
               </span>
             )}
@@ -101,7 +101,7 @@ export function FieldSessionGroupCard({
               </span>
             )}
             {!isUncategorized && fieldSession?.display_mode === "showcase" && (
-              <span className="rounded-full bg-[#FFF1D6] px-2.5 py-0.5 text-xs font-bold text-[#9A5A00]">展示模式</span>
+              <span className="rounded-full bg-[var(--ui-warning-soft-2)] px-2.5 py-0.5 text-xs font-bold text-[var(--ui-warning-deep)]">展示模式</span>
             )}
           </div>
           <p className="mt-0.5 truncate text-xs text-slate-400">
@@ -117,7 +117,7 @@ export function FieldSessionGroupCard({
         {!isUncategorized && (
           <button
             type="button"
-            className="shrink-0 rounded-lg px-2 py-1 text-xs text-[var(--ui-danger)] hover:bg-red-50 transition"
+            className="shrink-0 rounded-lg px-2 py-1 text-xs text-[var(--ui-danger)] hover:bg-[var(--ui-danger-soft)] transition"
             onClick={(e) => {
               e.stopPropagation();
               if (fieldSession && onDeleteFieldSession) {

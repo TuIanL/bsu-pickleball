@@ -10,10 +10,11 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
+from app.sqlite_runtime import apply_sqlite_pragmas, sqlite_journal_mode
 
 
 class Base(DeclarativeBase):
@@ -35,13 +36,24 @@ def get_engine() -> Engine:
 
     settings = get_settings()
     db_path = settings.resolve_path(settings.database_path)
+    configured_control_path = settings.analysis_control_database_path
+    control_path = (
+        settings.resolve_path(configured_control_path)
+        if configured_control_path is not None
+        else settings.resolve_path(settings.outputs_dir).parent / "analysis_control.sqlite3"
+    )
+    journal_mode = sqlite_journal_mode(db_path, control_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
     _engine = create_engine(
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},  # SQLite 多线程访问需要
         echo=False,
     )
+
+    @event.listens_for(_engine, "connect")
+    def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+        apply_sqlite_pragmas(dbapi_connection, db_path, journal_mode=journal_mode)
+
     return _engine
 
 

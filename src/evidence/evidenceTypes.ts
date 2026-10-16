@@ -7,12 +7,12 @@
 import type { EstimatedBallTrajectory } from "../services/ballTrajectoryVisualization";
 import type {
   AnalysisReport,
+  CoachNote,
   HeatmapPlayerGrid,
   PlayerZoneStats,
   ProjectedFinding,
   ProjectedRecommendation,
   StructuredVisualizationData,
-  TrainingRecommendation,
 } from "../types/report";
 import type {
   MetricSnapshotArtifact,
@@ -146,7 +146,7 @@ export interface PlayerReportEvidence {
   insights: {
     findings: EvidenceValue<ProjectedFinding[]>;
     recommendations: EvidenceValue<ProjectedRecommendation[]>;
-    coachNotes: EvidenceValue<TrainingRecommendation[]>;
+    coachNotes: EvidenceValue<CoachNote[]>;
     thirdShot: EvidenceValue<ThirdShotStats>;
   };
   isDemo: boolean;

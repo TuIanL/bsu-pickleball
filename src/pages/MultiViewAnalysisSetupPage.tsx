@@ -37,6 +37,8 @@ import type { MetricCourtSceneCalibration, NetProfileControlPoint, SceneImagePoi
 
 interface MultiViewAnalysisSetupPageProps {
   captureTakeId: string;
+  routeSessionId?: string;
+  returnParam?: string;
   onNavigate: NavigateFn;
 }
 
@@ -302,7 +304,7 @@ function MaterialStatusBar({
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiViewAnalysisSetupPageProps) {
+export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, returnParam, onNavigate }: MultiViewAnalysisSetupPageProps) {
   const [take, setTake] = useState<CaptureTakeSummary | null>(null);
   const [session, setSession] = useState<SyncRecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -347,8 +349,6 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
   };
 
   // 路由带 `?session=`（录制卡片传入），缺失时回退到 take.source_session_id 反查
-  const routeSessionId = new URLSearchParams(window.location.search).get("session");
-  const returnParam = new URLSearchParams(window.location.search).get("return");
   const taskContext = {
     source: "sync_recording" as const,
     sessionId: session?.session_id ?? routeSessionId ?? undefined,
@@ -1048,7 +1048,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                   <span className="text-xs text-slate-400">双摄自动对齐，无需手动切帧；附加信息保持一致</span>
                 </div>
               )}
-              <label className={`mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${debugReplayEnabled ? "border-[#8FD39D] bg-[#EFFAF1]" : "border-[var(--ui-border)] bg-[var(--ui-surface)]"}`}>
+              <label className={`mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${debugReplayEnabled ? "border-[var(--ui-brand-selection-border-hover)] bg-[var(--ui-success-soft)]" : "border-[var(--ui-border)] bg-[var(--ui-surface)]"}`}>
                 <input
                   aria-label="生成 Debug Replay"
                   checked={debugReplayEnabled}
@@ -1089,7 +1089,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, onNavigate }: MultiV
                 />
               </>
             ) : (
-              <div className="mb-5 rounded-2xl border border-[var(--ui-warning-border)] bg-[#FFF8EA] p-4 text-sm leading-6 text-[#7A4A00]">
+              <div className="mb-5 rounded-2xl border border-[var(--ui-warning-border)] bg-[var(--ui-warning-surface)] p-4 text-sm leading-6 text-[var(--ui-text-warning-contrast)]">
                 已选择旧流程：本次任务不会冻结 P1–P4 名册和回合上下文。需要发球队网前到位率时，请切回新流程并确认名册。
               </div>
             )}

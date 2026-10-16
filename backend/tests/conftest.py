@@ -17,6 +17,10 @@ import pytest
 
 from app.core.config import Settings
 
+# Test collection imports the FastAPI app before per-test fixtures run. Explicitly
+# enable the documented isolated-test bypass; auth behavior is covered separately.
+os.environ["PICKLEBALL_AUTH_DISABLED"] = "true"
+
 _ISOLATION_ENV_KEYS = (
     "PICKLEBALL_DATA_DIR",
     "PICKLEBALL_DATABASE_PATH",
@@ -68,6 +72,27 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     root = getattr(config, "_pre_pickleball_test_root", None)
     if root:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _reset_capture_job_storage_registry():
+    """Keep process-wide artifact mappings isolated between tests.
+
+    Production job IDs are unique, but tests intentionally reuse short IDs
+    across temporary take directories. A stale mapping must not leak from one
+    test into another and turn that valid reuse into a session-change error.
+    """
+    from app.services.storage_service import StorageService
+
+    with StorageService._capture_job_roots_lock:
+        StorageService._capture_job_roots.clear()
+        StorageService._capture_job_session_dirs.clear()
+        StorageService._capture_job_degradation.clear()
+    yield
+    with StorageService._capture_job_roots_lock:
+        StorageService._capture_job_roots.clear()
+        StorageService._capture_job_session_dirs.clear()
+        StorageService._capture_job_degradation.clear()
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -89,7 +89,7 @@ export function L1OverviewBar({ summary, onStageClick }: { summary: MultiviewObs
         </div>
       </div>
 
-      <div className="mt-5 grid gap-px overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[#DDE9D6] sm:grid-cols-4">
+      <div className="mt-5 grid gap-px overflow-hidden rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-border)] sm:grid-cols-4">
         {STAGE_META.map((stage) => {
           const section = summary.sections[stage.id];
           const t = tone(section.availability);

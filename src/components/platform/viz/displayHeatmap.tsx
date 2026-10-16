@@ -196,7 +196,7 @@ export function DisplayHeatmap({ jobId, onSeek, debugAvailable }: DisplayHeatmap
         <span className="text-xs text-slate-500">{loading ? "读取中…" : `${ticks.length} 个 tick · ${rows.length} 行诊断`}</span>
       </div>
 
-      {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-3 rounded-xl border border-[var(--ui-danger-border)] bg-[var(--ui-danger-soft)] px-3 py-2 text-sm text-[var(--ui-danger-deep)]">{error}</p> : null}
 
       {!error && ticks.length === 0 && !loading ? (
         <p className="mt-3 rounded-2xl border border-dashed border-[var(--ui-border)] bg-[var(--ui-surface-subtle)] p-5 text-sm text-slate-600">该球员没有可用的显示诊断行（窗口内无数据或产物不存在）。</p>
@@ -209,8 +209,8 @@ export function DisplayHeatmap({ jobId, onSeek, debugAvailable }: DisplayHeatmap
           </div>
           <div className="mt-1 flex items-center gap-4 text-xs text-slate-500">
             <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded-sm" style={{ backgroundColor: VIZ_PALETTE.green }} aria-hidden="true" />通过</span>
-            <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded-sm" style={{ backgroundColor: "#F09595" }} aria-hidden="true" />卡住</span>
-            <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded-sm border border-[#D3D1C7] bg-[#F1EFE8]" aria-hidden="true" />未触发</span>
+            <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded-sm bg-[var(--ui-danger-soft)]" aria-hidden="true" />卡住</span>
+            <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded-sm border border-[var(--ui-border-neutral-2)] bg-[var(--ui-surface-neutral)]" aria-hidden="true" />未触发</span>
             {debugAvailable ? <span className="ml-auto">点击格子可定位到 Debug Replay</span> : null}
           </div>
         </>

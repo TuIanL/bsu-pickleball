@@ -76,6 +76,7 @@ class JointObservation:
     sync_quality: str = "unknown"
     view_status: str = "available"
     tracking_status: str = "detected"
+    local_identity_reason: str | None = None
     lock_state: str | None = None
     bbox: list[float] | None = None
     image_footpoint: tuple[float, float] | None = None
@@ -845,8 +846,15 @@ class GlobalPlayerAssociator:
                 if self._evaluate_reanchor(obs, historical, timestamp_s, tick, updates):
                     assigned_obs.add(id(obs))
                     continue
-            # 4c) 候选池（roster 未满） / unresolved（roster 已满）
-            if self.registry.roster_state == "ROSTER_ACTIVE" or len(self.registry.players) >= self.registry.expected_player_count:
+            # 4c) 候选池（roster 未满） / unresolved（legacy roster 已满）。
+            # Frozen double rosters keep candidates from a saturated end in a
+            # waitlist so they can accumulate recovery evidence without taking
+            # a slot on the other end.
+            side_capacity_waitlist = bool(getattr(self.registry, "side_capacity_enabled", False))
+            if (
+                not side_capacity_waitlist
+                and (self.registry.roster_state == "ROSTER_ACTIVE" or len(self.registry.players) >= self.registry.expected_player_count)
+            ):
                 self.diagnostics["unresolved_no_slot"] = self.diagnostics.get("unresolved_no_slot", 0) + 1
                 recovery_observations.append(obs)
                 self._record_decision(obs, "pending", reason="unresolved_recovery_evidence")
@@ -880,10 +888,11 @@ class GlobalPlayerAssociator:
             self.registry.roster_state == "ROSTER_ACTIVE"
             or len(self.registry.players) >= self.registry.expected_player_count
         )
+        keep_side_waitlist = bool(getattr(self.registry, "side_capacity_enabled", False))
         for obs in candidate_observations:
             if obs.track_id is not None and (obs.view_id, int(obs.track_id)) in formal_track_keys:
                 continue
-            if not roster_full:
+            if not roster_full or keep_side_waitlist:
                 cid = self.registry.find_or_create_candidate(
                     view_id=obs.view_id,
                     view_player_id=self.observation_key(obs),
@@ -937,8 +946,16 @@ class GlobalPlayerAssociator:
             if cand.dual_view_hit_count >= self.registry.candidate_promote_dual_ticks or (
                 cand.hit_count >= self.registry.candidate_promote_single_ticks
             ):
-                gid = self.registry.promote_candidate(cid, tick)
+                replacement_event_count = len(getattr(self.registry, "provisional_replacement_events", ()))
+                gid = self.registry.promote_candidate(cid, tick, now_s=timestamp_s)
                 if gid is not None:
+                    replacement_events = getattr(self.registry, "provisional_replacement_events", ())[replacement_event_count:]
+                    for event in replacement_events:
+                        if str(event.get("global_player_id")) == gid:
+                            self._clear_replaced_global_slot(gid, event)
+                            self.diagnostics["provisional_slot_replaced"] = (
+                                self.diagnostics.get("provisional_slot_replaced", 0) + 1
+                            )
                     self.diagnostics["candidate_promoted"] = self.diagnostics.get("candidate_promoted", 0) + 1
                     for view_id, binding in cand.local_bindings.items():
                         updates.append(
@@ -966,6 +983,10 @@ class GlobalPlayerAssociator:
                                 tentative=True,
                             )
                         )
+                elif getattr(self.registry, "side_capacity_enabled", False):
+                    self.diagnostics["candidate_waiting_for_end_capacity"] = (
+                        self.diagnostics.get("candidate_waiting_for_end_capacity", 0) + 1
+                    )
         self.registry.expire_candidates(tick)
         self._expire_pending_recovery(tick)
 
@@ -976,6 +997,26 @@ class GlobalPlayerAssociator:
             event.setdefault("timestamp_ms", float(timestamp_s) * 1000.0)
 
         return updates
+
+    def _clear_replaced_global_slot(self, global_id: str, event: dict[str, object]) -> None:
+        """Drop old local/global joins before a stale provisional slot is reused."""
+        old_bindings = event.get("replaced_bindings")
+        old_local_slots: set[tuple[str, str]] = set()
+        if isinstance(old_bindings, dict):
+            for view_id, binding in old_bindings.items():
+                if isinstance(binding, dict) and binding.get("view_player_id"):
+                    old_local_slots.add((str(view_id), str(binding["view_player_id"])))
+        removed_keys = [key for key, mapped in self.mapping.items() if mapped == global_id]
+        for key in removed_keys:
+            self.mapping.pop(key, None)
+            self._pending_reassoc.pop(key, None)
+        for key in list(self._local_slot_history):
+            if key in old_local_slots:
+                self._local_slot_history.pop(key, None)
+        for key in list(self._reanchor_tracker):
+            if key in old_local_slots:
+                self._reanchor_tracker.pop(key, None)
+        self._appearance_galleries.pop(global_id, None)
 
     def _recovery_key(self, obs: JointObservation) -> tuple[str, str, int, bool]:
         is_candidate = obs.tracking_status == "candidate"
@@ -1514,7 +1555,6 @@ class GlobalPlayerAssociator:
                     _pick("cam_1" if q1 > q2 else "cam_2", "intrinsic_arbitrated")
                 else:
                     # quality 仍接近 → continuity/binding tie-break(保留 incumbent)
-                    incumbent = {u.view_id: u for u in us}
                     bound = [u for u in us if self.mapping.get(self.mapping_key(u.observation)) == gid]
                     if bound:
                         us[:] = [bound[0]]

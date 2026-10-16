@@ -29,7 +29,7 @@ reference view 有 F0 strong observation（origin=base/guided_roi）
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 
@@ -39,6 +39,7 @@ from app.vision.multiview.fused_overlay_projection import (
     canonical_to_target_image,
 )
 from app.vision.multiview.fused_overlay_types import (
+    FusedAnonymousOverlayObservation,
     FusedPlayerOverlayFrame,
     FusedPlayerOverlayPlayer,
 )
@@ -420,6 +421,20 @@ class FusedPlayerOverlayBuilder:
                     frame_index=frame_index,
                     timestamp_seconds=now_ms / 1000.0,
                     players=players,
+                    anonymous_observations=[
+                        FusedAnonymousOverlayObservation(
+                            observation_id=str(item.get("observation_id") or f"anonymous-{index}"),
+                            bbox=item.get("bbox"),
+                            footpoint=item.get("footpoint"),
+                            source_confidence=float(item.get("source_confidence") or 0.0),
+                            evidence_type=(
+                                "guided_observed" if item.get("detection_origin") == "guided_roi" else "base_observed"
+                            ),
+                        )
+                        for index, item in enumerate(
+                            bundle.anonymous_observations.get((target, tick.canonical_tick), [])
+                        )
+                    ],
                 )
             )
         return frames
@@ -819,6 +834,9 @@ class FusedPlayerOverlayBuilder:
         now_ms: float,
     ) -> FusedPlayerOverlayPlayer | None:
         """分支决策链：返回展示实体或 None（不渲染）。"""
+        identity_start_ms = bundle.identity_start_ms_by_global.get(gid)
+        if identity_start_ms is not None and tick.canonical_timestamp_ms < identity_start_ms:
+            return None
         player_id = bundle.player_id_for(gid)
         if not player_id.startswith("Player_"):
             logger.warning("fused overlay: non-canonical public player id %r for %r", player_id, gid)

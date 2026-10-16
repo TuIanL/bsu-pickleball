@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisJobSummary } from "../types/report";
 import { AnalysisJobPage } from "./AnalysisJobPage";
 import * as analysisClient from "../services/analysisClient";
+import { parseLocation } from "../app/router";
+import type { NavigateFn } from "../app/navigationTypes";
 
 vi.mock("../services/analysisClient", () => ({
   getAnalysisJob: vi.fn(),
@@ -13,6 +15,8 @@ vi.mock("../services/analysisClient", () => ({
     metrics: { distances: [], speeds: [], kitchen_dwell: [] },
     artifacts: {},
   }),
+  getAnalysisRunTrace: vi.fn().mockResolvedValue(null),
+  getAnalysisJobLogs: vi.fn().mockResolvedValue(null),
   getFusedManifest: vi.fn().mockResolvedValue(null),
   getFusionDiagnostics: vi.fn().mockResolvedValue(null),
   isAnalysisApiError: () => false,
@@ -79,7 +83,13 @@ function renderPage(job: AnalysisJobSummary) {
     metrics: { distances: [], speeds: [], kitchen_dwell: [] },
     artifacts: {},
   } as never);
-  return render(<AnalysisJobPage jobId={job.id} onNavigate={vi.fn()} />);
+  const route = parseLocation(window.location.pathname, window.location.search);
+  return render(<AnalysisJobPage jobId={job.id} returnParam={route.name === "analysis-job" ? route.returnParam : undefined} onNavigate={vi.fn()} />);
+}
+
+function RoutedAnalysisJobPage({ jobId, onNavigate }: { jobId: string; onNavigate: NavigateFn }) {
+  const route = parseLocation(window.location.pathname, window.location.search);
+  return <AnalysisJobPage jobId={jobId} returnParam={route.name === "analysis-job" ? route.returnParam : undefined} onNavigate={onNavigate} />;
 }
 
 describe("AnalysisJobPage 进度展示", () => {
@@ -163,7 +173,7 @@ describe("AnalysisJobPage 进度展示", () => {
       .mockRejectedValueOnce(new Error("network unavailable"))
       .mockResolvedValueOnce({ ...job, progress: 35 });
 
-    render(<AnalysisJobPage jobId={job.id} onNavigate={vi.fn()} />);
+    render(<RoutedAnalysisJobPage jobId={job.id} onNavigate={vi.fn()} />);
     expect(await screen.findByText("34%")).toBeTruthy();
 
     await new Promise((resolve) => window.setTimeout(resolve, 1650));
@@ -199,7 +209,7 @@ describe("AnalysisJobPage 进度展示", () => {
       metrics: { distances: [], speeds: [], kitchen_dwell: [] }, artifacts: {},
     } as never);
     const onNavigate = vi.fn();
-    render(<AnalysisJobPage jobId={job.id} onNavigate={onNavigate} />);
+    render(<RoutedAnalysisJobPage jobId={job.id} onNavigate={onNavigate} />);
 
     expect(await screen.findByText(/暂无有效报告数据/)).toBeTruthy();
     const reportButton = screen.getByRole("button", { name: "本场表现报告" }) as HTMLButtonElement;
@@ -237,7 +247,7 @@ describe("AnalysisJobPage 进度展示", () => {
     });
     const onNavigate = vi.fn();
     vi.mocked(analysisClient.getAnalysisJob).mockResolvedValue(job);
-    render(<AnalysisJobPage jobId={job.id} onNavigate={onNavigate} />);
+    render(<RoutedAnalysisJobPage jobId={job.id} onNavigate={onNavigate} />);
 
     expect(await screen.findByText("任务失联 · 已保留最后进度")).toBeTruthy();
     expect(screen.getAllByText(/Worker 在规定时间内没有心跳/).length).toBeGreaterThanOrEqual(1);
@@ -291,7 +301,7 @@ describe("AnalysisJobPage origin 化导航", () => {
     libraryMocks.resolveLibraryItemByRef.mockResolvedValue(makeLibraryItem());
     const onNavigate = vi.fn();
 
-    render(<AnalysisJobPage jobId="job-test" onNavigate={onNavigate} />);
+    render(<RoutedAnalysisJobPage jobId="job-test" onNavigate={onNavigate} />);
 
     expect(await screen.findByRole("button", { name: /返回比赛详情/ })).toBeTruthy();
     const resultCta = await screen.findByRole("button", { name: /查看分析结果/ });
@@ -320,7 +330,7 @@ describe("AnalysisJobPage origin 化导航", () => {
     libraryMocks.resolveLibraryItemByRef.mockResolvedValue(makeLibraryItem());
     const onNavigate = vi.fn();
 
-    render(<AnalysisJobPage jobId="job-test" onNavigate={onNavigate} />);
+    render(<RoutedAnalysisJobPage jobId="job-test" onNavigate={onNavigate} />);
 
     // 头部 + TerminalSummary 各有一处「返回比赛详情」
     expect((await screen.findAllByRole("button", { name: /返回比赛详情/ })).length).toBeGreaterThanOrEqual(2);
@@ -335,12 +345,197 @@ describe("AnalysisJobPage origin 化导航", () => {
     );
     const onNavigate = vi.fn();
 
-    render(<AnalysisJobPage jobId="job-test" onNavigate={onNavigate} />);
+    render(<RoutedAnalysisJobPage jobId="job-test" onNavigate={onNavigate} />);
 
     const primary = await screen.findByRole("button", { name: /打开视频分析/ });
     fireEvent.click(primary);
     const [path] = onNavigate.mock.calls[0];
     expect(path).toContain("/library/recording/rec-1?view=analysis");
     expect(path).toContain("analysisJob=job-test");
+  });
+});
+
+describe("AnalysisJobPage 分析进程与失败归因", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    vi.mocked(analysisClient.getAnalysisRunTrace).mockResolvedValue(null);
+  });
+
+  function retryTrace(jobId: string, attempt = 1) {
+    return {
+      job_id: jobId,
+      availability: "available" as const,
+      reason: null,
+      target: `/Volumes/Elements/匹克球/analysis/${jobId}/run_trace.jsonl`,
+      event_count: 3,
+      events: [
+        {
+          schema_version: "analysis-run-trace.v1",
+          seq: 1,
+          ts: "2026-10-04T11:00:00Z",
+          job_id: jobId,
+          attempt,
+          stage: "video-read",
+          event: "start" as const,
+        },
+        {
+          schema_version: "analysis-run-trace.v1",
+          seq: 2,
+          ts: "2026-10-04T11:01:00Z",
+          job_id: jobId,
+          attempt,
+          stage: "video-read",
+          event: "retry" as const,
+          exception_type: "RuntimeError",
+          failure_class: "input_media" as const,
+          retry_index: 1,
+          retry_limit: 1,
+          will_retry: false,
+        },
+        {
+          schema_version: "analysis-run-trace.v1",
+          seq: 3,
+          ts: "2026-10-04T11:02:00Z",
+          job_id: jobId,
+          attempt,
+          stage: "video-read",
+          event: "fail" as const,
+          failure_class: "input_media" as const,
+        },
+      ],
+    };
+  }
+
+  const failureEvidence = {
+    errorCode: "ANALYSIS_STAGE_FAILED",
+    failureClass: "input_media" as const,
+    stage: "video-read",
+    attempt: 1,
+    at: "2026-10-04T11:01:00Z",
+  };
+
+  const retryHistory = [
+    {
+      stage: "video-read",
+      retryIndex: 1,
+      retryLimit: 1,
+      willRetry: false,
+      failureClass: "input_media" as const,
+      errorCode: "ANALYSIS_STAGE_FAILED",
+      exceptionType: "RuntimeError",
+      progressBefore: 18,
+    },
+  ];
+
+  it("失败任务展示重试次数、重试原因与是否继续重试", async () => {
+    const job = makeJob({
+      status: "failed",
+      stage: "video-read",
+      progress: 100,
+      attempt: 2,
+      publicErrorMessage: "分析任务执行失败，请检查输入视频和模型配置。",
+      failureEvidence,
+      retryHistory,
+      runTrace: { availability: "available", reason: null, target: "/x/run_trace.jsonl", eventCount: 3 },
+    });
+    vi.mocked(analysisClient.getAnalysisRunTrace).mockResolvedValue(retryTrace(job.id));
+
+    renderPage(job);
+
+    expect(await screen.findByRole("heading", { name: "分析进程" })).toBeTruthy();
+    expect(screen.getByText(/已尝试 2 次/)).toBeTruthy();
+    expect(screen.getByText("首次失败原因：输入或媒体问题")).toBeTruthy();
+    expect(screen.getByText(/阶段 video-read · 错误码 ANALYSIS_STAGE_FAILED/)).toBeTruthy();
+    expect(screen.getByText(/第 1\/1 次重试 · video-read/)).toBeTruthy();
+    expect(screen.getByText(/输入或媒体问题 · RuntimeError · ANALYSIS_STAGE_FAILED/)).toBeTruthy();
+    expect(screen.getByText(/重试次数已用尽，再次失败即终止 · 失败时进度 18%/)).toBeTruthy();
+  });
+
+  it("取消任务同时展示终态与历史失败（终态不抹除失败证据）", async () => {
+    const job = makeJob({
+      status: "canceled",
+      stage: "video-read",
+      progress: 100,
+      canceledAt: "2026-10-04T11:30:00Z",
+      errorCode: "ANALYSIS_JOB_CANCELED",
+      failureEvidence,
+      retryHistory,
+    });
+
+    renderPage(job);
+
+    expect(await screen.findByRole("heading", { name: "任务已取消" })).toBeTruthy();
+    // 终态是取消，但运行期间的真实失败原因仍然可见
+    expect(screen.getByText("首次失败原因：输入或媒体问题")).toBeTruthy();
+    expect(screen.getByText(/第 1\/1 次重试 · video-read/)).toBeTruthy();
+  });
+
+  it("技术详情折叠展示内部错误与轨迹可用性，并提供轨迹下载", async () => {
+    const job = makeJob({
+      status: "failed",
+      stage: "video-read",
+      progress: 100,
+      attempt: 2,
+      internalErrorMessage: "RuntimeError: moov atom not found",
+      failureEvidence,
+      retryHistory,
+      runTrace: { availability: "available", reason: null, target: "/x/run_trace.jsonl", eventCount: 3 },
+    });
+    vi.mocked(analysisClient.getAnalysisRunTrace).mockResolvedValue(retryTrace(job.id));
+
+    renderPage(job);
+
+    expect(await screen.findByText(/任务内部错误：RuntimeError: moov atom not found/)).toBeTruthy();
+    expect(await screen.findByText(/运行轨迹：可用（3 条事件）/)).toBeTruthy();
+    const downloadButton = screen.getByRole("button", { name: "下载轨迹 JSONL" }) as HTMLButtonElement;
+    expect(downloadButton.disabled).toBe(false);
+  });
+
+  it("轨迹不可用时展示原因、禁用下载且页面不报错", async () => {
+    const job = makeJob({
+      status: "canceled",
+      stage: "video-read",
+      progress: 100,
+      errorCode: "ANALYSIS_JOB_CANCELED",
+      failureEvidence,
+      retryHistory,
+    });
+    vi.mocked(analysisClient.getAnalysisRunTrace).mockResolvedValue({
+      job_id: job.id,
+      availability: "unavailable",
+      reason: "trace_sink_unwritable",
+      target: "/Volumes/Elements/匹克球/analysis/job-test/run_trace.jsonl",
+      event_count: 0,
+      events: [],
+    });
+
+    renderPage(job);
+
+    expect(await screen.findByRole("heading", { name: "任务已取消" })).toBeTruthy();
+    expect(await screen.findByText(/运行轨迹：不可用/)).toBeTruthy();
+    expect(screen.getByText(/轨迹目标位置不可写（例如外接存储未挂载）/)).toBeTruthy();
+    const downloadButton = screen.getByRole("button", { name: "下载轨迹 JSONL" }) as HTMLButtonElement;
+    const copyButton = screen.getByRole("button", { name: "复制轨迹" }) as HTMLButtonElement;
+    expect(downloadButton.disabled).toBe(true);
+    expect(copyButton.disabled).toBe(true);
+  });
+
+  it("历史任务无轨迹时降级为「未记录」，不影响其余信息", async () => {
+    const job = makeJob({ status: "failed", stage: "video-read", progress: 100 });
+    vi.mocked(analysisClient.getAnalysisRunTrace).mockResolvedValue({
+      job_id: job.id,
+      availability: "unavailable",
+      reason: "legacy_job_without_trace",
+      target: "/x/run_trace.jsonl",
+      event_count: 0,
+      events: [],
+    });
+
+    renderPage(job);
+
+    expect(await screen.findByRole("heading", { name: "分析进程" })).toBeTruthy();
+    expect(screen.getByText(/已尝试 1 次 · 未发生重试/)).toBeTruthy();
+    expect(await screen.findByText(/该任务创建于轨迹功能上线之前/)).toBeTruthy();
   });
 });

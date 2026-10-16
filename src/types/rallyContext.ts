@@ -204,6 +204,12 @@ export interface BootstrapBindingEvidence {
   multiview_corroborated?: boolean | null;
   competing_formal_players: number;
   competing_slots: number;
+  track_id?: number | null;
+  tracklet_lineage_id?: string | null;
+  local_identity_epoch?: number | null;
+  local_identity_reason?: string | null;
+  tracking_status?: string | null;
+  global_player_id?: string | null;
 }
 
 export interface BootstrapBindingAuditEntry {

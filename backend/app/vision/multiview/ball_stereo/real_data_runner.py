@@ -33,16 +33,9 @@ from app.vision.multiview.ball_stereo.artifact_builders import (
     build_stereo_evidence_v1,
     build_v3_trajectory,
 )
-from app.vision.multiview.ball_stereo.association import (
-    BallViewCandidate,
-    associate_views,
-)
-from app.vision.multiview.ball_stereo.landing_authority import resolve_landing
 from app.vision.multiview.ball_stereo.metrics import compute_metrics
 from app.vision.multiview.ball_stereo.segment_reconstruction import (
     Observation,
-    Reconstructed3DSegment,
-    Reconstructed3DSample,
     reconstruct_segment,
 )
 from app.vision.multiview.ball_stereo.stereo_measurement import BallStereoMeasurement, measure_stereo

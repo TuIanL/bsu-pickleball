@@ -551,4 +551,30 @@ describe("VideoAnalysisCard multiview display", () => {
     expect(card.getByText("P2")).toBeTruthy();
   });
 
+  it("renders real unbound observations anonymously without inventing a P label", () => {
+    const artifact = makeDualViewOverlay();
+    artifact.frames[0].anonymous_observations = [{
+      observation_id: "cam_1:tracklet-7",
+      bbox: [700, 120, 780, 320],
+      footpoint: [740, 320],
+      source_confidence: 0.88,
+      evidence_type: "base_observed",
+    }];
+    const { container } = render(
+      <VideoAnalysisCard
+        fusedPlayerOverlay={artifact}
+        fusedPlayerOverlayLoadState="available"
+        labels={emptyLabels}
+        match={match}
+        players={emptyPlayers}
+        timeline={emptyTimeline}
+        videoSrc="/test.mp4"
+      />,
+    );
+    const card = within(container);
+    expect(card.getByTestId("anonymous-player-observation")).toBeTruthy();
+    expect(card.getByText("未确认球员")).toBeTruthy();
+    expect(card.queryByText("P2")).toBeNull();
+  });
+
 });

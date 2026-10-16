@@ -27,15 +27,29 @@ from app.schemas.analysis import (
     ANALYSIS_ERROR_CODES,
     STABLE_ANALYSIS_STAGE_IDS,
     AnalysisCanonicalStatus,
+    AnalysisFailureEvidence,
     AnalysisJobCreate,
     AnalysisJobStatus,
     AnalysisJobSummary,
+    AnalysisRetryHistoryEntry,
+    AnalysisRunTraceStatus,
     AnalysisStage,
     AnalysisStageId,
     AnalysisStageStatus,
 )
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
 from app.services.analysis_control_plane import AnalysisControlPlane
+
+# 控制信号异常定义在 analysis_errors 中，以便 analysis_pipeline 在
+# `except Exception` 之前显式重抛而不形成循环依赖。此处 re-export
+# 保持既有 `from app.services.job_orchestration import JobCanceledError`
+# 之类的 import 路径继续可用。
+from app.services.analysis_errors import (
+    JobCanceledError,
+    StageTimeoutError,
+    WorkerLeaseLostError,
+)
+from app.services.analysis_failure_taxonomy import classify_failure
 from app.services.analysis_progress import (
     ProgressMode,
     StageTransitionError,
@@ -46,6 +60,12 @@ from app.services.analysis_progress import (
     resolve_progress_mode,
     stage_definition,
     stage_ids,
+)
+from app.services.analysis_run_trace import (
+    RunTraceSink,
+    describe_exception,
+    exception_summary,
+    redact_host_paths,
 )
 from app.services.storage_service import StorageService
 from app.vision.multiview.recovery_config import P1OnlineRecoveryConfig
@@ -277,6 +297,8 @@ def normalize_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
     if canonical == "succeeded":
         normalized_stages = [
             stage.model_copy(update={"status": "done", "progress": 100})
+            if stage.status in {"pending", "active"}
+            else stage
             for stage in normalized_stages
         ]
     payload["stages"] = normalized_stages
@@ -314,18 +336,23 @@ def stage_from_pipeline(stage: PipelineStageResult) -> AnalysisStage:
         progress = 100
     if progress == 0 and status == "active":
         progress = 10
+    public_detail = stage.public_message or stage.detail
+    internal_message = stage.internal_message
+    if redact_host_paths(public_detail) != public_detail:
+        internal_message = internal_message or public_detail
+        public_detail = "分析阶段执行失败，请检查输入视频和模型配置。"
     return AnalysisStage(
         id=stage.id,
         label=stage.label,
         status=status,
-        detail=stage.public_message or stage.detail,
+        detail=public_detail,
         startedAt=started,
         endedAt=finished,
         durationMs=stage.duration_ms,
         progress=progress,
         errorCode=stage.error_code,
-        publicMessage=stage.public_message or stage.detail,
-        internalMessage=stage.internal_message,
+        publicMessage=public_detail,
+        internalMessage=internal_message,
         retryCount=stage.retry_count,
         counters=stage.counters,
     )
@@ -475,7 +502,10 @@ class JobStore:
             if configured_path is not None
             else settings.resolve_path(settings.outputs_dir).parent / "analysis_control.sqlite3"
         )
-        self.control_plane = AnalysisControlPlane(control_path)
+        self.control_plane = AnalysisControlPlane(
+            control_path,
+            companion_paths=(settings.resolve_path(settings.database_path),),
+        )
         self._jobs: dict[str, AnalysisJobSummary] = {}
         self._import_legacy_jobs()
 
@@ -874,6 +904,35 @@ class JobStore:
         )
         return updated or self.get(job.id) or job
 
+    def record_failure_evidence(
+        self,
+        job: AnalysisJobSummary,
+        *,
+        failure: AnalysisFailureEvidence,
+        entry: AnalysisRetryHistoryEntry | None = None,
+    ) -> AnalysisJobSummary:
+        """记录失败证据，并可选追加一条重试历史。
+
+        - `failureEvidence` **只在首次失败时**写入，后续失败与重试都不覆盖它；
+        - `retryHistory` 只在传入 `entry` 时追加（有界保留最近 20 条）。
+
+        终态路径（`mark_canceled` / `mark_interrupted`）不会清空这两个字段，
+        因此「先因某原因失败并重试 N 次，最后被取消」可以同时被消费者看到。
+        """
+
+        def mutator(payload: dict[str, object]) -> dict[str, object] | None:
+            if entry is not None:
+                history = payload.get("retryHistory")
+                history_list = list(history) if isinstance(history, list) else []
+                history_list.append(entry.model_dump(mode="json"))
+                payload["retryHistory"] = history_list[-20:]
+            if not payload.get("failureEvidence"):
+                payload["failureEvidence"] = failure.model_dump(mode="json")
+            return self._payload(self._model(payload))
+
+        updated = self.control_plane.mutate(job.id, mutator)
+        return self._persist_payload(updated) or self.get(job.id) or job
+
     def mark_succeeded(self, job: AnalysisJobSummary, stages: list[AnalysisStage]) -> AnalysisJobSummary:
         mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         report_id = stage_ids(mode)[-1]
@@ -912,6 +971,7 @@ class JobStore:
     def mark_canceled(self, job: AnalysisJobSummary, *, message: str = "任务已取消") -> AnalysisJobSummary:
         mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         label, _detail = stage_details_for(mode, job.stage)
+        prior = next((stage for stage in job.stages if stage.id == job.stage), None)
         canceled_stage = AnalysisStage(
             id=job.stage,
             label=label,
@@ -919,6 +979,10 @@ class JobStore:
             detail=message,
             progress=100,
             errorCode=ANALYSIS_ERROR_CODES["job_canceled"],
+            # 取消是终态，但不得抹掉这次运行里已经发生的失败原因与重试次数。
+            internalMessage=prior.internalMessage if prior else None,
+            failureClass=prior.failureClass if prior else None,
+            retryCount=prior.retryCount if prior else 0,
         )
         stages = merge_stage_progress(job.stages, canceled_stage, mode=mode)
         return self._terminal_job(
@@ -1048,6 +1112,14 @@ class JobStore:
             # overwrite those references with stale defaults from the snapshot.
             payload = dict(current)
             payload.update(terminal_updates)
+            if canonical_status == "interrupted" and not payload.get("failureEvidence"):
+                payload["failureEvidence"] = AnalysisFailureEvidence(
+                    errorCode=error_code,
+                    failureClass="worker_lease",
+                    stage=job.stage,
+                    attempt=job.attempt,
+                    at=now,
+                ).model_dump(mode="json")
             return self._payload(self._model(payload))
 
         updated = self.control_plane.mutate(
@@ -1074,25 +1146,10 @@ class CancellationToken:
             raise JobCanceledError("Analysis job cancellation requested")
 
 
-class JobCanceledError(RuntimeError):
-    # 任务被取消时抛出的异常
-    pass
-
-
-class WorkerLeaseLostError(RuntimeError):
-    """Worker 无法继续证明自己拥有当前任务租约。"""
-
-
-class StageTimeoutError(RuntimeError):
-    # 某个阶段超时时抛出的异常
-    pass
-
-
 class ResourceLimiter:
-    # 资源限制器：用信号量（Semaphore）限制同时运行的 CPU/GPU 任务数。
-    def __init__(self, max_cpu_jobs: int = 1, max_gpu_jobs: int = 1) -> None:
+    # 当前推理链路使用 CPU；GPU 调度尚未实现，不暴露无效配置。
+    def __init__(self, max_cpu_jobs: int = 1) -> None:
         self.cpu = threading.Semaphore(max(1, max_cpu_jobs))
-        self.gpu = threading.Semaphore(max(1, max_gpu_jobs))
 
     def run_cpu(self, fn: Callable[[], AnalysisPipelineResult]) -> AnalysisPipelineResult:
         # 在 CPU 信号量保护下执行 fn（默认实现只用到 CPU 限制）
@@ -1119,7 +1176,7 @@ class AnalysisWorkerRuntime:
         self.on_completed = on_completed
         self.worker_id = worker_id
         self.settings = settings
-        self.resource_limiter = resource_limiter or ResourceLimiter(settings.max_cpu_jobs, settings.max_gpu_jobs)
+        self.resource_limiter = resource_limiter or ResourceLimiter(settings.max_cpu_jobs)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()  # 通知线程停止
         self._wake_event = threading.Event()  # 通知线程"有新活了，别睡了"
@@ -1203,39 +1260,117 @@ class AnalysisWorkerRuntime:
         stop_event: threading.Event,
         failed_event: threading.Event,
     ) -> None:
-        """heartbeat 不依赖阶段回调，覆盖长时间没有进度事件的模型阶段。"""
+        """heartbeat 不依赖阶段回调，覆盖长时间没有进度事件的模型阶段。
+
+        租约丢失只终止**本次运行**，通过 `failed_event` 表达；**不得**置
+        `self._stop_event`——后者是「整个 Worker 关停」语义（由 `stop()` 使用，
+        并作为 `_loop` 主循环的 `while` 条件），一旦置位 Worker 将永久不再领取
+        后续任务。常见触发：用户取消一个运行中的任务使 job 进入终态，
+        `mutate(expected_status="running")` 失配即返回 False。
+        """
         run_id = job.workerRunId
         if not run_id or not self.store.heartbeat(job.id, run_id):
             failed_event.set()
-            self._stop_event.set()
             logger.warning("Worker %s lost lease before executing job %s", self.worker_id, job.id)
             return
         while not stop_event.wait(self.settings.analysis_worker_heartbeat_interval_seconds):
             if not self.store.heartbeat(job.id, run_id):
                 failed_event.set()
-                self._stop_event.set()
                 logger.warning("Worker %s lost lease while executing job %s", self.worker_id, job.id)
                 return
+
+    def _open_run_trace(self, job: AnalysisJobSummary) -> RunTraceSink:
+        # 轨迹与其余产物同址；外接存储解析失败时由 StorageService 切到独立降级根。
+        # Worker 是独立进程，需靠 CaptureTake 的 session_dir 回源解析产物根。
+        target = self.store.storage.resolve_run_trace_path(job.id, job.metadata.capture_take_id)
+        degradation_reason = self.store.storage.capture_job_degradation_reason(job.id)
+        if degradation_reason:
+            self.store.update(
+                job.id,
+                artifactStorageStatus="degraded",
+                artifactStorageReason=degradation_reason,
+            )
+        return RunTraceSink(
+            target,
+            job_id=job.id,
+            attempt=job.attempt,
+            worker_id=job.workerId,
+            worker_run_id=job.workerRunId,
+        )
+
+    def _persist_run_trace_status(self, job_id: str, sink: RunTraceSink) -> None:
+        """把轨迹可用性写进任务摘要。
+
+        目标不可写时**不改写落盘位置**，只把「不可用 + 原因」记进控制面；
+        控制面总是可写，因此这条记录本身不会丢。
+        """
+        try:
+            unavailable = sink.sink_unavailable
+            status = AnalysisRunTraceStatus(
+                availability="unavailable" if unavailable else "available",
+                reason=(unavailable or {}).get("reason"),
+                target=self.store.storage.logical_run_trace_reference(job_id, sink.path),
+                eventCount=sink.seq,
+            )
+            updates = {"runTrace": status.model_dump(mode="json")}
+            degradation_reason = self.store.storage.capture_job_degradation_reason(job_id)
+            if degradation_reason:
+                updates.update(artifactStorageStatus="degraded", artifactStorageReason=degradation_reason)
+            self.store.update(job_id, **updates)
+        except Exception:  # noqa: BLE001 - 诊断信息写不进不能影响任务本身
+            logger.warning("Unable to persist run trace status for job %s", job_id, exc_info=True)
 
     def _execute_pipeline(
         self,
         job: AnalysisJobSummary,
         heartbeat_failed: threading.Event,
     ) -> AnalysisJobSummary:
+        """为一次执行包裹运行轨迹：不论成功/失败/取消，收尾都要落盘轨迹可用性。"""
+        sink = self._open_run_trace(job)
+        try:
+            return self._execute_pipeline_body(job, heartbeat_failed, sink)
+        finally:
+            self._persist_run_trace_status(job.id, sink)
+
+    def _execute_pipeline_body(
+        self,
+        job: AnalysisJobSummary,
+        heartbeat_failed: threading.Event,
+        sink: RunTraceSink,
+    ) -> AnalysisJobSummary:
         # 真正执行一个任务：构造取消令牌 → 跑流水线 → 根据结果更新任务状态。
         # 含重试、取消、超时、异常兜底。
         token = CancellationToken(self.store, job.id)
         latest = job
         retry_attempts = 0
+        traced_stage: str | None = job.stage
+        sink.record("start", job.stage, attempt=job.attempt, progress_after=job.progress)
 
         def progress_callback(stage_result: PipelineStageResult) -> None:
             # 流水线每完成一个阶段就回调这里，更新任务阶段进度。
-            nonlocal latest
+            nonlocal latest, traced_stage
             if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
                 raise WorkerLeaseLostError(f"Worker lease lost for job {job.id}")
             token.raise_if_cancelled()
             latest = self.store.mark_stage(latest, stage_from_pipeline(stage_result))
             self._raise_if_stage_timed_out(latest)
+            # 轨迹：记录本阶段结束，并在阶段推进时记录下一阶段开始。
+            sink.record(
+                "end",
+                stage_result.id,
+                outcome=stage_result.status,
+                duration_ms=stage_result.duration_ms,
+                progress_after=latest.progress,
+            )
+            active_stage = next((stage.id for stage in latest.stages if stage.status == "active"), None)
+            if active_stage and active_stage != traced_stage:
+                sink.record(
+                    "start",
+                    active_stage,
+                    from_stage=stage_result.id,
+                    progress_after=latest.progress,
+                )
+                traced_stage = active_stage
 
         def run_executor() -> AnalysisPipelineResult:
             # 按 analysisKind + executionMode 分发执行体（SingleView / MultiView late|joint）。
@@ -1252,6 +1387,11 @@ class AnalysisWorkerRuntime:
             token.raise_if_cancelled()
             while True:
                 try:
+                    self.store.storage.begin_artifact_attempt(
+                        job.id,
+                        attempt=job.attempt + retry_attempts,
+                        stage=str(latest.stage),
+                    )
                     result = self.resource_limiter.run_cpu(run_executor)
                     break
                 except WorkerLeaseLostError:
@@ -1260,27 +1400,108 @@ class AnalysisWorkerRuntime:
                     raise
                 except JobCanceledError:
                     raise
-                except Exception:
+                except Exception as exc:
                     # 可重试阶段才重试，超过最大次数就抛
                     if latest.stage not in RETRYABLE_STAGE_IDS or retry_attempts >= self.settings.job_max_retries:
                         raise
                     retry_attempts += 1
                     retry_mode = resolve_progress_mode(latest.analysisKind, latest.executionMode, latest.segmentationRequired)
                     retry_label, _detail = stage_details_for(retry_mode, latest.stage)
+                    will_retry = retry_attempts < self.settings.job_max_retries
+                    described = describe_exception(exc)
+                    failure_class = classify_failure(
+                        exception_type=described["exception_type"],
+                        message=described["exception_message"],
+                        error_code=latest.errorCode,
+                    )
+                    summary = exception_summary(exc)
+                    progress_before = latest.progress
+                    # 固定「失败发生在哪个阶段」：后面的 mark_stage 可能因阶段图约束
+                    # 而回退 job.stage，证据必须锚定在真正抛异常的那个阶段。
+                    failed_stage_id = str(latest.stage)
+                    stage_error_code = latest.errorCode or ANALYSIS_ERROR_CODES["stage_failed"]
+                    # 先留痕再重跑：过去这个分支直接吞掉异常，只写死一句通用文案，
+                    # 使「任务反复跑」但「为什么失败」在落盘数据上不可回答。
+                    sink.record(
+                        "retry",
+                        failed_stage_id,
+                        outcome="retrying",
+                        failure_class=failure_class,
+                        error_code=stage_error_code,
+                        retry_index=retry_attempts,
+                        retry_limit=self.settings.job_max_retries,
+                        will_retry=will_retry,
+                        progress_before=progress_before,
+                        **described,
+                    )
+                    logger.warning(
+                        "Analysis job %s stage %s failed (%s / %s), retry %s/%s: %s",
+                        job.id,
+                        failed_stage_id,
+                        failure_class,
+                        described["exception_type"],
+                        retry_attempts,
+                        self.settings.job_max_retries,
+                        summary,
+                    )
                     retry_stage = AnalysisStage(
-                        id=latest.stage,
+                        id=failed_stage_id,
                         label=retry_label,
                         status="active",
                         detail="阶段执行失败，正在按策略重试",
-                        progress=latest.progress,
+                        progress=progress_before,
                         retryCount=retry_attempts,
                         publicMessage="阶段执行失败，正在按策略重试",
+                        internalMessage=summary,
+                        failureClass=failure_class,
                     )
                     latest = self.store.mark_stage(latest, retry_stage)
+                    latest = self.store.record_failure_evidence(
+                        latest,
+                        entry=AnalysisRetryHistoryEntry(
+                            stage=failed_stage_id,
+                            retryIndex=retry_attempts,
+                            retryLimit=self.settings.job_max_retries,
+                            willRetry=will_retry,
+                            failureClass=failure_class,
+                            errorCode=stage_error_code,
+                            exceptionType=described["exception_type"],
+                            exceptionDigest=described["traceback_digest"],
+                            progressBefore=progress_before,
+                            progressAfter=latest.progress,
+                            at=utc_now(),
+                        ),
+                        failure=AnalysisFailureEvidence(
+                            errorCode=stage_error_code,
+                            failureClass=failure_class,
+                            stage=failed_stage_id,
+                            attempt=latest.attempt,
+                            at=utc_now(),
+                        ),
+                    )
+            degradation_reason = self.store.storage.capture_job_degradation_reason(job.id)
+            if degradation_reason:
+                artifacts = result.artifacts.model_copy(
+                    update={
+                        "artifact_storage_status": "degraded",
+                        "artifact_storage_reason": degradation_reason,
+                    }
+                )
+                result = result.model_copy(update={"artifacts": artifacts})
+                self.store.storage.write_json_atomic(
+                    self.store.storage.output_json_path(job.id),
+                    result.model_dump(mode="json"),
+                )
+                latest = self.store.update(
+                    job.id,
+                    artifactStorageStatus="degraded",
+                    artifactStorageReason=degradation_reason,
+                ) or latest
             if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
                 raise WorkerLeaseLostError(f"Worker lease lost for job {job.id}")
             if token.is_cancel_requested():
                 self._cleanup_tmp(job.id)
+                sink.record("canceled", latest.stage, progress_before=latest.progress)
                 return self._notify_terminal(self.store.mark_canceled(latest))
             progress_mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
             stages = analysis_stages_from_pipeline(result, mode=progress_mode)
@@ -1290,18 +1511,62 @@ class AnalysisWorkerRuntime:
                 if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
                     raise WorkerLeaseLostError(f"Worker lease lost for job {job.id}")
                 token.raise_if_cancelled()
+                self.store.storage.complete_artifact_attempt(job.id)
                 latest = self.store.mark_succeeded(latest, stages)
+                sink.record("end", str(latest.stage), outcome="succeeded", progress_after=latest.progress)
                 return self._notify_terminal(latest)
             self._cleanup_tmp(job.id)
-            return self._notify_terminal(self.store.mark_failed(latest, stages=stages, message=result.message))
+            result_failure_class = classify_failure(message=result.message)
+            sink.record(
+                "fail",
+                latest.stage,
+                outcome="failed",
+                detail=result.message,
+                failure_class=result_failure_class,
+            )
+            latest = self.store.record_failure_evidence(
+                latest,
+                failure=AnalysisFailureEvidence(
+                    errorCode=ANALYSIS_ERROR_CODES["stage_failed"],
+                    failureClass=result_failure_class,
+                    stage=str(latest.stage),
+                    attempt=latest.attempt,
+                    at=utc_now(),
+                ),
+            )
+            internal_message = next(
+                (stage.internalMessage for stage in stages if stage.internalMessage),
+                result.message,
+            )
+            public_message = result.message
+            if redact_host_paths(public_message) != public_message:
+                public_message = "分析任务执行失败，请检查输入视频和模型配置。"
+            return self._notify_terminal(
+                self.store.mark_failed(
+                    latest,
+                    stages=stages,
+                    message=public_message,
+                    internal_message=internal_message,
+                )
+            )
         except WorkerLeaseLostError as exc:
             logger.warning("Analysis job %s execution lease lost: %s", job.id, exc)
+            sink.record("lease_lost", latest.stage, outcome="lease_lost", failure_class="worker_lease", **describe_exception(exc))
             return self.store.get(job.id) or latest
         except JobCanceledError:
             self._cleanup_tmp(job.id)
+            sink.record("canceled", latest.stage, progress_before=latest.progress)
             return self._notify_terminal(self.store.mark_canceled(latest))
         except StageTimeoutError as exc:
             logger.warning("Analysis job %s timed out at stage %s", job.id, latest.stage)
+            sink.record(
+                "fail",
+                latest.stage,
+                outcome="timeout",
+                error_code=ANALYSIS_ERROR_CODES["stage_timeout"],
+                failure_class="resource_timeout",
+                **describe_exception(exc),
+            )
             mode = resolve_progress_mode(latest.analysisKind, latest.executionMode, latest.segmentationRequired)
             timeout_label, _detail = stage_details_for(mode, latest.stage)
             timed_out_stage = AnalysisStage(
@@ -1313,7 +1578,18 @@ class AnalysisWorkerRuntime:
                 errorCode=ANALYSIS_ERROR_CODES["stage_timeout"],
                 publicMessage="分析阶段超时，请缩短视频、提高抽帧间隔或检查模型运行环境。",
                 internalMessage=str(exc),
+                failureClass="resource_timeout",
                 retryCount=retry_attempts,
+            )
+            latest = self.store.record_failure_evidence(
+                latest,
+                failure=AnalysisFailureEvidence(
+                    errorCode=ANALYSIS_ERROR_CODES["stage_timeout"],
+                    failureClass="resource_timeout",
+                    stage=str(latest.stage),
+                    attempt=latest.attempt,
+                    at=utc_now(),
+                ),
             )
             stages = merge_stage_progress(latest.stages, timed_out_stage, mode=mode)
             self._cleanup_tmp(job.id)
@@ -1328,6 +1604,21 @@ class AnalysisWorkerRuntime:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Analysis job %s failed in worker", job.id)
+            described = describe_exception(exc)
+            failure_class = classify_failure(
+                exception_type=described["exception_type"],
+                message=described["exception_message"],
+                error_code=latest.errorCode,
+            )
+            sink.record(
+                "fail",
+                latest.stage,
+                outcome="failed",
+                error_code=ANALYSIS_ERROR_CODES["internal_error"],
+                failure_class=failure_class,
+                retry_count=retry_attempts,
+                **described,
+            )
             mode = resolve_progress_mode(latest.analysisKind, latest.executionMode, latest.segmentationRequired)
             failed_label, _detail = stage_details_for(mode, latest.stage)
             failed_stage = AnalysisStage(
@@ -1339,7 +1630,18 @@ class AnalysisWorkerRuntime:
                 errorCode=ANALYSIS_ERROR_CODES["internal_error"],
                 publicMessage="分析任务执行失败，请检查输入视频和模型配置。",
                 internalMessage=str(exc),
+                failureClass=failure_class,
                 retryCount=retry_attempts,
+            )
+            latest = self.store.record_failure_evidence(
+                latest,
+                failure=AnalysisFailureEvidence(
+                    errorCode=ANALYSIS_ERROR_CODES["internal_error"],
+                    failureClass=failure_class,
+                    stage=str(latest.stage),
+                    attempt=latest.attempt,
+                    at=utc_now(),
+                ),
             )
             stages = merge_stage_progress(latest.stages, failed_stage, mode=mode)
             self._cleanup_tmp(job.id)

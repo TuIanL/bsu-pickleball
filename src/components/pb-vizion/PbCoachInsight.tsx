@@ -25,7 +25,7 @@ export default function PbCoachInsight() {
     }
     const notes = evidence?.insights.coachNotes;
     if (notes?.status === "available" && notes.value.length > 0) {
-      const n = notes.value[0] as unknown as { body?: string; title?: string };
+      const n = notes.value[0];
       if (n?.body && n.body.trim()) return n.body.trim();
       if (n?.title && n.title.trim()) return n.title.trim();
     }

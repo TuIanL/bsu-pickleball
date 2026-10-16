@@ -297,6 +297,8 @@ export function LibraryCard({
   onUpdateTitle?: (item: LibraryItemViewModel, value: string) => void | Promise<unknown>;
   onUpdateDate?: (item: LibraryItemViewModel, value: string) => void | Promise<unknown>;
 }) {
+  const [failedThumbnailUrl, setFailedThumbnailUrl] = useState<string>();
+  const thumbnailUrl = item.thumbnailUrl === failedThumbnailUrl ? undefined : item.thumbnailUrl;
   const badge = stateBadge(item);
   const detailPath = `/library/${item.ref.kind}/${encodeURIComponent(item.ref.sourceId)}?view=overview` as const;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -345,10 +347,11 @@ export function LibraryCard({
         aria-label={`查看 ${displayTitle} 详情`}
       >
         {/* 视频缩略图区：有稳定图片端点用图；否则按来源分派渲染首帧封面（单画面 / 双摄左右拼接）；均带会话内缓存 */}
-        <div className="relative aspect-video bg-gradient-to-br from-[#E7EEEB] to-[#DCE7E2]">
-          {item.thumbnailUrl ? (
+        <div className="relative aspect-video bg-gradient-to-br from-[var(--ui-surface-subtle)] to-[var(--ui-border-soft)]">
+          {thumbnailUrl ? (
             <img
-              src={item.thumbnailUrl}
+              src={thumbnailUrl}
+              onError={() => setFailedThumbnailUrl(thumbnailUrl)}
               alt={displayTitle}
               loading="lazy"
               className="absolute inset-0 h-full w-full object-cover"
@@ -362,7 +365,7 @@ export function LibraryCard({
               <Video size={36} aria-hidden="true" />
             </div>
           )}
-          {!item.thumbnailUrl && !item.coverVideoUrl && !item.cameraCoverSources && (
+          {!thumbnailUrl && !item.coverVideoUrl && !item.cameraCoverSources && (
             /* 无真实封面时叠一层轻球场线纹理，克制占位 */
             <svg
               className="pointer-events-none absolute inset-0 h-full w-full opacity-15"
@@ -378,7 +381,7 @@ export function LibraryCard({
             </svg>
           )}
           {/* poster 分支（双摄用 merged poster 单图）不经过 LibraryCover，需自行补「双摄」角标 */}
-          {item.thumbnailUrl && item.cameraSetup === "dual" && (
+          {thumbnailUrl && item.cameraSetup === "dual" && (
             <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/45 px-2 py-0.5 text-[10px] font-bold text-white">
               双摄
             </span>
@@ -439,7 +442,7 @@ export function LibraryCard({
       {needsMerge && onMerge && (
         <div className="border-t border-[var(--capture-border-default,#d9e3dd)] px-3 py-2">
           <button
-            className="w-full rounded-lg bg-[var(--capture-status-merge-soft,#fff0da)] px-3 py-1.5 text-xs font-bold text-[var(--capture-status-merge,#9a5300)] transition hover:bg-[#FFEAC0]"
+            className="w-full rounded-lg bg-[var(--capture-status-merge-soft,#fff0da)] px-3 py-1.5 text-xs font-bold text-[var(--capture-status-merge,#9a5300)] transition hover:bg-[var(--ui-warning-soft-2)]"
             onClick={() => onMerge(item)}
             type="button"
           >

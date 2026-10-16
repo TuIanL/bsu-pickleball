@@ -1,5 +1,5 @@
-import type { AppShellMode, NavigatePath, NavigationSection, ReportType, RouteState } from "./navigationTypes";
-import { parseTaskListContext } from "./navigationContext";
+import type { AppShellMode, NavigatePath, NavigationSection, ReportType, RouteState, TaskCameraSlot } from "./navigationTypes";
+import { isValidReturnPath, parseTaskListContext } from "./navigationContext";
 
 export const supportedReportTypes: ReportType[] = ["performance", "movement", "diagnosis"];
 
@@ -296,6 +296,28 @@ export function parseLocation(pathname: string, search: string): RouteState {
     };
   }
 
+  if (route.name === "analysis-job") {
+    const returnParam = searchParams.get("return");
+    return returnParam ? { ...route, returnParam } : route;
+  }
+
+  if (route.name === "recording-analyze") {
+    const camera = searchParams.get("cam");
+    const cam: TaskCameraSlot | undefined = camera === "cam_1" || camera === "cam_2" ? camera : undefined;
+    return cam ? { ...route, cam } : route;
+  }
+
+  if (route.name === "multiview-setup") {
+    const routeSessionId = searchParams.get("session") ?? undefined;
+    const requestedReturnParam = searchParams.get("return");
+    const returnParam = requestedReturnParam && isValidReturnPath(requestedReturnParam) ? requestedReturnParam : undefined;
+    return {
+      ...route,
+      ...(routeSessionId ? { routeSessionId } : {}),
+      ...(returnParam ? { returnParam } : {}),
+    };
+  }
+
   if (route.name === "tasks" || route.name === "analysis-tasks") {
     const params = new URLSearchParams(search);
     if (!params.has("source") && !params.has("taskSource") && !params.has("session") && !params.has("taskSession") && !params.has("cam") && !params.has("taskCam")) {
@@ -334,11 +356,11 @@ export function parseLocation(pathname: string, search: string): RouteState {
   }
 
   if (route.name === "library-item") {
-    const params = new URLSearchParams(search);
-    const rawView = params.get("view");
+    const rawView = searchParams.get("view");
     const validViews = ["overview", "video", "analysis", "trajectory", "landing", "report", "technical"];
     const view = rawView && validViews.includes(rawView) ? rawView : "overview";
-    return { ...route, view };
+    const analysisJobId = searchParams.get("analysisJob")?.trim();
+    return { ...route, view, ...(analysisJobId ? { analysisJobId } : {}), ...(search ? { querySearch: search } : {}) };
   }
 
   return route;
