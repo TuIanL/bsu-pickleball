@@ -77,7 +77,7 @@ OpenCV 内部 GOP 预读不可见，记录为 `internal_not_exposed`；以上 de
 
 ## OpenSpec 与交付边界
 
-严格校验本 change 1/1、全仓 207/207 通过（205 specs、2 changes），0 failed。80/80 实施任务完成；proposal/design/specs/tasks 产物齐备。`git diff --check` 与新增文件显式换行/尾随空白扫描通过，文档链接与复现输入存在，备份/main 提交不变。
+以下为实施完成、主规格同步前的历史记录：本 change 1/1、全仓 207/207 严格校验通过（205 specs、2 changes），0 failed。80/80 实施任务完成；proposal/design/specs/tasks 产物齐备。`git diff --check` 与新增文件显式换行/尾随空白扫描通过，文档链接与复现输入存在，备份/main 提交不变。
 
 ```sh
 OPENSPEC_TELEMETRY=0 openspec validate analysis-architecture-v1 --strict --json --no-interactive
@@ -87,6 +87,8 @@ OPENSPEC_TELEMETRY=0 openspec status --change analysis-architecture-v1 --json
 git diff --check
 ```
 
-规格保持 7 ADDED + 7 MODIFIED，主规格待 archive 再合并。实现范围是三能力和全域扩展骨架；21 个未来能力仍 planned，不能以本期完成宣称球拍/挥拍/动作/丁克/战术算法可用。
+归档时已新增 7 份主规格、更新 7 份已有主规格：48 条 ADDED、33 条 MODIFIED 均精确同步，83 条未涉及 requirement 原文不变，被修改条款的 121 个既有场景保留，无删除或重命名。归档前全量严格校验 214/214 通过（212 specs、2 changes）；归档后的检查见 implementation-log.md。
 
-默认产品 engine 保持 legacy，模块提交可通过 `PICKLEBALL_MODULAR_ANALYSIS_ENABLED=false` 关闭而保留 reader/历史证据。备份/main 不动；本期没有自动 commit、push 或 archive。开发入口和后续能力实现步骤见 [开发指南](../../../docs/analysis-architecture-v1.md)。
+实现范围是三能力和全域扩展骨架；21 个未来能力仍 planned，不能以本期完成宣称球拍/挥拍/动作/丁克/战术算法可用。默认产品 engine 保持 legacy，模块提交可通过 `PICKLEBALL_MODULAR_ANALYSIS_ENABLED=false` 关闭而保留 reader/历史证据。备份/main 不动。
+
+实现已通过提交 `218db1c` 推送；本目录于 2026-10-17 按用户要求同步并归档，此次归档改动尚未 commit/push。开发入口和后续能力实现步骤见 [开发指南](../../../../docs/analysis-architecture-v1.md)。

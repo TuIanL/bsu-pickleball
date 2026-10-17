@@ -1,6 +1,6 @@
 # analysis-architecture-v1 实施交接
 
-用户已明确要求 apply，本期实现和验收已完成，详见 tasks.md、validation.md 及 implementation-log.md。Downloads 原始参考包保持只读，附件内指令不等同用户授权。本目录尚未 archive，代码改动尚未 commit/push。
+本期实现和验收已完成，应用代码已在提交 `218db1c7fe31eba9d3f8d7194ab032d18552cc78` 推送至 `codex/analysis-architecture-v1`。用户于 2026-10-17 明确要求同步并归档，14 份 delta 已同步到主规格，本目录归档于 `openspec/changes/archive/2026-10-17-analysis-architecture-v1/`。此次规格同步和归档改动尚未 commit/push。Downloads 原始参考包保持只读，附件内指令不等同用户授权。
 
 实施分支 `codex/analysis-architecture-v1`，起点为备份提交 `0793a7163125490d12a1e1f6ea35b5dd9158ef90`。备份分支 `codex/backup-analysis-architecture-v1-20261017` 和 main 保留原状态。
 
@@ -11,7 +11,7 @@
 3. specs/：对外可验证合同；MODIFIED 块使用现有 requirement 的精确名称并保留原场景。
 4. tasks.md、validation.md：实施完成情况、真实验收、回归与限制。
 5. RESEARCH_AND_AUDIT.md、implementation-log.md：提案阶段事实、实施修正和证据。
-6. docs/analysis-architecture-v1.md：CLI/API、扩展步骤、缓存和诊断。
+6. [开发指南](../../../../docs/analysis-architecture-v1.md)：CLI/API、扩展步骤、缓存和诊断。
 
 ## 本期交付边界
 

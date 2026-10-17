@@ -45,7 +45,7 @@
 - quality 只验证证据结构、像素单位、主体作用域、时间/机位映射和可读性；没有人工标签精度，未来模型仍 planned。
 - 模型 runtime_versions 身份增强发生在真实准备之后，归档明确将安装版本标为运行后记录，未篡改原冻结计划。
 
-## 最终 OpenSpec 和工作区检查
+## 实施验收结束时的 OpenSpec 和工作区检查
 
 - `openspec validate analysis-architecture-v1 --strict --json --no-interactive`：1/1 passed，0 failed。
 - `openspec validate --all --strict --json --no-interactive`：207/207 passed，205 specs + 2 changes。
@@ -53,3 +53,13 @@
 - `openspec instructions apply` 返回 all_done（80 complete/0 remaining），status 的四类产物均 done。当前 reader 只读核验真实验收的 5 个冻结计划及 5 个不可变产物全部有效，未导入 cv2/torch/ultralytics/mmpose。
 - `git diff --check`、全部改动/新增文本的末行换行与尾随空白、文档链接、真实复现输入路径均检查通过。
 - 当前分支 codex/analysis-architecture-v1；备份仍为 0793a7163125490d12a1e1f6ea35b5dd9158ef90，main 仍为 2665bc3b974656cec45cd54e875d03cd3a8994c6。无 identity/joint 内部修改，生成 runtime/dist/model 数据未纳入版本改动；未 commit/push/archive。
+
+## 2026-10-17：提交后的规格同步与归档
+
+- 实现已通过 `218db1c7fe31eba9d3f8d7194ab032d18552cc78` 推送至 `origin/codex/analysis-architecture-v1`；本节记录随后用户明确要求的规格同步与归档。
+- schema 为 spec-driven，四类提案产物 done，80/80 任务完成；没有未完成产物/任务警告。
+- 同步 14 份 delta：7 份新主规格、7 份已有主规格；48 条 ADDED、33 条 MODIFIED，无 REMOVED/RENAMED。独立核对全部修改块精确一致，83 条未涉及 requirement 原文保留，被修改条款的 121 个原 Scenario 保留。
+- 归档前全仓严格校验 214/214 passed（212 specs、2 changes）。最初新增窗口规格 Purpose 长度提示已补全；遥测 DNS 日志不影响校验结果。
+- 归档目录：`openspec/changes/archive/2026-10-17-analysis-architecture-v1/`。移动前后 23 个文件逐一 SHA-256 一致，包含 `.openspec.yaml`、全部 delta、任务及真实推理证据；随后仅更新交接/验收/本记录的归档状态与相对链接。
+- 同步修复 backend README、系统架构和开发指南指向验收/证据的链接。应用代码、模型权重、其他活跃 change 和备份/main 均未修改。本轮归档尚未 commit/push。
+- 归档后 `openspec validate --all --strict --json --no-interactive`：213/213 passed（212 specs、1 个其余活跃 change），0 failed；`openspec list --json` 不再列出本 change。再次精确比对 14 份 delta 与主规格、核验保留的 20 个原文件摘要、80 项任务、9 个文档链接、换行/尾随空白及改动范围，全部通过。此次仅规格/文档变更，沿用已归档的实现测试证据，未重跑模型或应用测试。

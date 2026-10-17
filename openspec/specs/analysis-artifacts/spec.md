@@ -5,6 +5,8 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 ## Requirements
 ### Requirement: Deterministic artifact paths
 
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
+
 系统 SHALL 为新增分析产物提供确定性的本地存储路径。对于关联 CaptureTake 的录制任务，路径 MUST 位于对应会话目录的 `analysis/<job_id>/` 下；对于无 CaptureTake 的旧任务或上传任务，继续使用兼容的 `outputs/<job_id>/` 目录。
 
 所有产物路径构造 SHALL 经过统一的越界校验：构造结果 MUST 落在该任务被授权的产物根目录之内。任何包含父目录跳转片段、绝对路径或符号链接逃逸的路径输入 MUST 被拒绝，MUST NOT 被静默拼接进产物路径。校验失败时系统 SHALL 返回可解释的拒绝原因，MUST NOT 读写该任务产物根目录之外的文件。
@@ -48,7 +50,20 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 - **THEN** 任务摘要与结果元数据 SHALL 标记该任务的产物处于降级状态及其原因
 - **AND** 该标记 MUST NOT 与正常本地任务的产物状态混淆
 
+#### Scenario: 模块共享产物位置
+- **WHEN** modular_v1 发布或跨 Job 读取 Artifact
+- **THEN** 系统 SHALL 通过 artifact_id 在获授权的共享产物根内定位，Job 私有清单/trace 仍使用 Job 根
+- **AND** 所有构造器 SHALL 经过统一越界校验，调用方不能提供绝对路径或逃逸根目录
+- **AND** legacy 根解析规则 SHALL 不被用于递归删除共享产物
+
+#### Scenario: 模块存储位置不可用
+- **WHEN** 已登记模块产物位置离线
+- **THEN** 系统 SHALL 返回 location_unavailable 及逻辑原因
+- **AND** SHALL 不套用 legacy degraded 路径静默改写共享结果
+
 ### Requirement: Pipeline result references new artifacts
+
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
 
 系统 SHALL 在 `AnalysisPipelineResult.artifacts` 中描述会话目录内新增分析产物的 path、url、status 和 detail 字段，且所有新增字段 MUST 可选以保持旧结果兼容。可选 artifact 即使没有文件，也 SHALL 保留可解释的状态。
 
@@ -77,6 +92,11 @@ Define stable storage paths, API artifact names, PipelineResult references, and 
 - **WHEN** artifact status 为 `skipped`、`unavailable` 或 `failed` 且没有对应文件
 - **THEN** `path` 和 `url` MAY 为 `null`
 - **AND** `status` 与 `detail` MUST NOT 被清空或根据 `path` 重新推导为 `null`
+
+#### Scenario: 模块结果使用通用引用
+- **WHEN** modular_v1 发布新增类型产物
+- **THEN** 系统 SHALL 在 ModularRunManifest 中记录 ArtifactRef 与可用性/质量
+- **AND** SHALL 不要求在 AnalysisPipelineResult.artifacts 为每种模块增加固定字段
 
 ### Requirement: Artifact API accepts new artifact names
 
@@ -793,3 +813,10 @@ WAL 模式依赖内存映射，其在某些可移动卷上存在数据损坏风�
 - **THEN** 系统 SHALL 仍读取该任务原有的降级产物
 - **AND** 降级状态与原因 SHALL 保留
 
+### Requirement: 模块产物读取保留旧 artifact API
+模块 SHALL 通过受控 artifact_id 入口读取通用类型，旧 job_id/artifact_name 入口 SHALL 保持 legacy 内容与缺失行为。新入口 MUST 避免既有动态 Literal 路由冲突；共享产物访问 SHALL 校验可见范围和逻辑引用。
+
+#### Scenario: 读取新旧产物
+- **WHEN** 客户端分别读取旧 pose-overlay 和新模块姿态 ArtifactRef
+- **THEN** 两者 SHALL 按各自 schema 正常返回
+- **AND** SHALL 不要求旧结果迁移到新 Manifest 或暴露物理路径

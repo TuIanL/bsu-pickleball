@@ -471,7 +471,7 @@ of downstream motion, shot, or tactical conclusions.
 
 真实短窗口验收脚本为 `scripts/validate_modular_analysis.py`，必须指定隔离
 `--output-root`；结果、媒体/模型摘要和性能限制见
-[本期验收记录](../openspec/changes/analysis-architecture-v1/validation.md)。
+[本期验收记录](../openspec/changes/archive/2026-10-17-analysis-architecture-v1/validation.md)。
 
 ## Test
 

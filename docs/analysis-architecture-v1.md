@@ -117,4 +117,4 @@
 
 回滚新提交：设置 `PICKLEBALL_MODULAR_ANALYSIS_ENABLED=false` 并按通常方式重启服务；已有模块记录、reader 和运行计划保留。对正在运行的任务可调用既有取消接口，等待 Worker 退出或以 interrupted 对账；不要删除 schema、共享根或来源 pin。完整产品仍走 legacy，未来模型和产品迁移分别提出 change。
 
-本期验收记录见 [validation.md](../openspec/changes/analysis-architecture-v1/validation.md)，真实 60–90s 单/双摄记录见 [real-window-validation.json](../openspec/changes/analysis-architecture-v1/evidence/real-window-validation.json)。未做带人工标签的检测/动作/战术准确率评估。
+本期验收记录见 [validation.md](../openspec/changes/archive/2026-10-17-analysis-architecture-v1/validation.md)，真实 60–90s 单/双摄记录见 [real-window-validation.json](../openspec/changes/archive/2026-10-17-analysis-architecture-v1/evidence/real-window-validation.json)。未做带人工标签的检测/动作/战术准确率评估。

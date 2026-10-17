@@ -90,7 +90,7 @@ flowchart LR
 
 ## 6. 验收记录与限制
 
-- 每次变更的实际命令和结果以该 change 的 validation 为准；本期见 [analysis-architecture-v1 验收](../openspec/changes/analysis-architecture-v1/validation.md)，不把历史测试数量作为永久质量基线。
+- 每次变更的实际命令和结果以该 change 的 validation 为准；本期见 [analysis-architecture-v1 验收](../openspec/changes/archive/2026-10-17-analysis-architecture-v1/validation.md)，不把历史测试数量作为永久质量基线。
 - 已完成真实 60–90s 单摄三能力、双摄 raw ball、全缓存及姿态参数窄重算。节点间允许有界重新解码；OpenCV 的内部 GOP 预读未暴露，计数只覆盖应用层 read/grab。
 - 全缓存仍核验源文件强摘要；长视频文件的读盘成本和首次 ML 依赖初始化尚有优化空间。未完成人工标签精度、完整长时运行及跨硬件性能评估。
 - 模块提交开关关闭后保留 reader、计划、产物和来源引用；不通过删表或删共享根回滚。完整产品模块化及未来模型分别提出后续 change。
