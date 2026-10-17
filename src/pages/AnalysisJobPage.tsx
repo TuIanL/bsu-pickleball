@@ -20,6 +20,7 @@ import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { getReportCapability, type ReportCapability } from "../services/reportCapability";
 import type { AnalysisPipelineResult } from "../types/report";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
+import { ModularAnalysisRunView } from "./ModularAnalysisRunView";
 
 const VIEW_LABELS: Record<string, string> = { cam_1: "A 机位", cam_2: "B 机位" };
 
@@ -91,7 +92,7 @@ export function AnalysisJobPage({ jobId, returnParam, onNavigate }: { jobId: str
 
   // library origin terminal：定向解析素材，门控「查看球路/报告/技术详情」与「再次分析」
   useEffect(() => {
-    if (!libraryOrigin || !job || !isTerminal) {
+    if (!libraryOrigin || !job || !isTerminal || job.analysisEngine === "modular_v1") {
       return;
     }
     let alive = true;
@@ -130,7 +131,7 @@ export function AnalysisJobPage({ jobId, returnParam, onNavigate }: { jobId: str
   }, [runTraceKey, isTerminal]);
 
   const terminalLibraryItem = libraryOrigin && job && isTerminal ? libraryItem : null;
-  const completedJobId = job?.status === "completed" ? job.id : undefined;
+  const completedJobId = job?.status === "completed" && job.analysisEngine !== "modular_v1" ? job.id : undefined;
   useEffect(() => {
     if (!completedJobId) return;
     let alive = true;
@@ -260,6 +261,10 @@ export function AnalysisJobPage({ jobId, returnParam, onNavigate }: { jobId: str
 
   if (!job) {
     return <StatusState title="没有找到分析任务" body={`任务 ${jobId} 不存在，可能是本地记录已清空。`} onNavigate={onNavigate} backPath={backPath} />;
+  }
+
+  if (job.analysisEngine === "modular_v1") {
+    return <ModularAnalysisRunView key={job.id} job={job} onNavigate={onNavigate} backPath={backPath} />;
   }
 
   const statusCopy = {

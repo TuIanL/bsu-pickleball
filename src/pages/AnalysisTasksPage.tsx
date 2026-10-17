@@ -517,8 +517,8 @@ export function AnalysisTasksPage({
 
   useEffect(() => {
     // Keep selections valid after the server-side job list changes.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- removes deleted/ineligible selections.
     const eligibleIds = new Set(eligibleJobIds);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- removes deleted/ineligible selections.
     setSelectedJobIds((current) => current.filter((jobId) => eligibleIds.has(jobId)));
   }, [eligibleJobKey]);
 
@@ -1171,7 +1171,9 @@ export function AnalysisTaskCard({
               <span className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 px-3 py-1 text-xs font-bold text-slate-500">
                 {analysisModeLabel(job.analysisMode)}
               </span>
-              {job.enableModelInference !== undefined || job.enablePoseInference !== undefined ? (
+              {job.analysisEngine === "modular_v1" ? (
+                <span className="text-xs font-bold">模块分析 · {job.nodeRuns?.map((node) => node.capability_id).join(" / ")}</span>
+              ) : job.enableModelInference !== undefined || job.enablePoseInference !== undefined ? (
                 <span className="rounded-full border border-[var(--ui-border)] bg-[var(--ui-surface)]/80 px-3 py-1 text-xs font-bold text-slate-500">
                   检测{job.enableModelInference ? "开" : "关"} · 姿态{job.enablePoseInference ? "开" : "关"}
                 </span>
@@ -1274,16 +1276,16 @@ export function AnalysisTaskCard({
           <div className="mt-4 flex flex-wrap gap-2">
             {job.status === "completed" ? (
               <>
-                <button className="green-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/vision`)} type="button">
+                <button className="green-button px-4 py-2.5" onClick={() => onNavigate(job.analysisEngine === "modular_v1" ? `/analysis/${job.id}` : `/analysis/${job.id}/vision`)} type="button">
                   查看分析结果
                 </button>
-                <button
+                {job.analysisEngine !== "modular_v1" ? <button
                   className="quiet-button px-4 py-2.5"
                   onClick={() => onNavigate(`/analysis/${job.id}/reports/performance`)}
                   type="button"
                 >
                   本场表现报告
-                </button>
+                </button> : null}
                 <button className="quiet-button px-4 py-2.5" onClick={() => onNavigate(`/analysis/${job.id}/details`)} type="button">
                   分析详情
                 </button>
@@ -1434,8 +1436,8 @@ export function SyncRecordingTaskCard({
     return (
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
         {job.status === "completed" && (
-          <button className="green-button px-2.5 py-1.5 text-xs" onClick={() => navigateWithTaskContext(`/analysis/${job.id}/vision`)} type="button">
-            查看{label}报告
+          <button className="green-button px-2.5 py-1.5 text-xs" onClick={() => navigateWithTaskContext(job.analysisEngine === "modular_v1" ? `/analysis/${job.id}` : `/analysis/${job.id}/vision`)} type="button">
+            {job.analysisEngine === "modular_v1" ? "查看能力结果" : <>查看{label}报告</>}
           </button>
         )}
         {(job.status === "failed" || job.status === "canceled") && (

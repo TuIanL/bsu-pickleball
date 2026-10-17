@@ -37,6 +37,12 @@ class CaptureCleanupService:
             if take.status in ("recording", "starting"):
                 return {"status": "blocked", "detail": "录制进行中，无法删除"}
 
+            from app.analysis_runtime.retention import references
+            from app.core.config import get_settings
+            settings = get_settings()
+            if any(references(settings, path=Path(path)) for path in [video_path, output_dir] if path):
+                return {"status": "blocked", "detail": "媒体仍被模块分析证据引用，无法删除"}
+
             self._check_analysis_references(db, capture_take_id)
 
             self._delete_db_records(db, capture_take_id)
@@ -76,6 +82,10 @@ class CaptureCleanupService:
         video_ids = [t.video_id for t in tracks if t.video_id]
         if not video_ids:
             return
+        from app.analysis_runtime.retention import references
+        from app.core.config import get_settings
+        if references(get_settings(), video_ids=video_ids):
+            raise AnalysisReferenceError("视频仍被模块分析证据引用，无法删除")
         try:
             from app.models.analysis_job import AnalysisJob
 

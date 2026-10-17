@@ -35,6 +35,8 @@ class Settings(BaseModel):
     data_dir: Path = Path("data")  # 总数据目录
     database_path: Path = Path("data/app.sqlite3")  # 本地 SQLite 数据库文件
     analysis_control_database_path: Path | None = None  # 分析任务控制面；缺省与 database_path 同目录
+    modular_analysis_enabled: bool = True  # 仅显式 modular_v1 请求使用；可关闭新提交
+    modular_artifacts_dir: Path | None = None
     uploads_dir: Path = Path("data/uploads")  # 上传视频存放目录
     outputs_dir: Path = Path("data/outputs")  # 分析结果输出目录
     calibrations_dir: Path = Path("data/calibrations")  # 标定文件目录
@@ -378,6 +380,8 @@ def get_settings() -> Settings:
         ),
         uploads_dir=Path(os.getenv("PICKLEBALL_UPLOADS_DIR", "data/uploads")),
         outputs_dir=Path(os.getenv("PICKLEBALL_OUTPUTS_DIR", "data/outputs")),
+        modular_analysis_enabled=os.getenv("PICKLEBALL_MODULAR_ANALYSIS_ENABLED", "true").lower() in {"1", "true", "yes"},
+        modular_artifacts_dir=Path(os.environ["PICKLEBALL_MODULAR_ARTIFACTS_DIR"]) if os.getenv("PICKLEBALL_MODULAR_ARTIFACTS_DIR") else None,
         calibrations_dir=Path(os.getenv("PICKLEBALL_CALIBRATIONS_DIR", "data/calibrations")),
         recordings_dir=Path(os.getenv("PICKLEBALL_RECORDINGS_DIR", "data/recordings")),
         match_state_candidate_dir=Path(

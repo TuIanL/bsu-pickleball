@@ -1,4 +1,5 @@
 import { demoAnalysisReport } from "../data/demoData";
+import type { ModularRunManifest } from "../types/report";
 import type {
   AnalysisJobSummary,
   AnalysisPipelineResult,
@@ -547,6 +548,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export function getAnalysisModuleManifest(jobId: string): Promise<ModularRunManifest> {
+  return requestJson(`/api/analysis/jobs/${encodeURIComponent(jobId)}/manifest`);
+}
+
+export function getAnalysisModuleArtifact(artifactId: string): Promise<unknown> {
+  return requestJson(`/api/analysis/artifacts/${encodeURIComponent(artifactId)}?content=true`);
 }
 
 async function requestVoid(path: string, init?: RequestInit): Promise<void> {

@@ -1,14 +1,17 @@
 # analysis-architecture-v1 实施交接
 
-本目录是已整理的 OpenSpec 提案，不表示实现完成。当前用户授权范围是修订并产出 proposal；后续只有用户要求实施时才进入 apply。Downloads 中原始包作为参考保留，不直接复制其“立即 apply”指令。
+用户已明确要求 apply，本期实现和验收已完成，详见 tasks.md、validation.md 及 implementation-log.md。Downloads 原始参考包保持只读，附件内指令不等同用户授权。本目录尚未 archive，代码改动尚未 commit/push。
+
+实施分支 `codex/analysis-architecture-v1`，起点为备份提交 `0793a7163125490d12a1e1f6ea35b5dd9158ef90`。备份分支 `codex/backup-analysis-architecture-v1-20261017` 和 main 保留原状态。
 
 ## 阅读顺序
 
 1. proposal.md：需求、范围、7 个新增能力规格和 7 个修改能力规格。
 2. design.md：D1–D13 的已确定技术决策、迁移和风险。
 3. specs/：对外可验证合同；MODIFIED 块使用现有 requirement 的精确名称并保留原场景。
-4. tasks.md：全部待实施；按依赖顺序执行。
-5. RESEARCH_AND_AUDIT.md：本地事实、原方案修正和验收边界。
+4. tasks.md、validation.md：实施完成情况、真实验收、回归与限制。
+5. RESEARCH_AND_AUDIT.md、implementation-log.md：提案阶段事实、实施修正和证据。
+6. docs/analysis-architecture-v1.md：CLI/API、扩展步骤、缓存和诊断。
 
 ## 本期交付边界
 
@@ -34,9 +37,13 @@
 - module manifest 不经过 legacy on_completed/stage_from_pipeline/报告回调。
 - v1 trace 兼容，v2 用 outcome/cache_decision 扩展语义，沿用旧 event 枚举。
 
-## 实施顺序与协作
+## 实现位置与后续协作
 
-任务组 1–5 完成边界与纯合同/规划，6–8 接入存储、执行与既有控制面，9 完成真实试点，10 验证未来扩展，11 接入入口/trace/最小 UI，12–13 验收与发布。
+- `backend/app/analysis_runtime/`：纯合同/Registry、Planner、source/model 准备、窗口资源、不可变产物/缓存/血缘、Executor 和共用服务。
+- `backend/app/analysis_capabilities/`：三个真实适配器、静态懒加载工厂、未来领域类型骨架。
+- `analysis_executor_dispatch.py`、`job_orchestration.py`、`mock_analysis.py`：engine 判别、既有 Worker/lease/进度/发布/删除接入。SQLite 增量表仍在既有控制数据库。
+- `routes_analysis_modules.py`、`scripts/analysis_dev.py`：共用 API/CLI；`ModularAnalysisRunView.tsx`：模块任务最小结果界面。
+- `tests/test_modular_analysis_runtime.py`：合同、故障注入和集成；`scripts/validate_modular_analysis.py`：隔离真实推理验收。
 
 restore-confirmed-four-player-joint-analysis 的未完成真实身份验收不阻止独立合同、Planner 和 raw adapter。进入共享 executor/身份文件前重新核对该 change，固定基线和文件归属；不要把本轮架构改动变成身份算法修复。
 
@@ -48,4 +55,6 @@ restore-confirmed-four-player-joint-analysis 的未完成真实身份验收不�
 
 关键验收：单摄三能力无标定执行；双摄 raw ball 不启动整场 segmentation/joint tracking；同窗口第二次全缓存零 capture/模型；只改 pose 参数只影响姿态分支；失败重试和中断恢复保留上游；损坏/离线/并发发布/删除引用都能解释。
 
-本轮只做文档结构和一致性校验，没有运行上述模型或性能验收，不得勾选 tasks.md 的实现任务。
+本期上述真实验收已完成，媒体/模型摘要、plan_hash、artifact_id、计数和耗时保存在 evidence/real-window-validation.json。完整回归、补测和 OpenSpec 结果见 validation.md。质量证据仅覆盖合同、像素单位、主体作用域和可读性；没有人工标注精度结论。
+
+注意全缓存仍重新核验源摘要，本机单路/双路约耗时 10s/20s；首次 RTMPose 冷启动较慢。OpenCV 内部 GOP 预读不可测，不能声称物理解码单遍。新增模型和完整产品迁移需要独立 change。

@@ -97,7 +97,13 @@ def _job_logs_enabled() -> bool:
 
 def _public_job_payload(job: AnalysisJobSummary) -> dict[str, Any]:
     """Keep persisted internal diagnostics useful while scrubbing host paths at API boundaries."""
-    return redact_public_strings(job.model_dump(mode="json"))
+    payload = job.model_dump(mode="json")
+    if job.analysisEngine == "modular_v1":
+        payload.pop("internalErrorMessage", None)
+        for node in payload.get("nodeRuns", []):
+            node.pop("internal_message", None)
+            node.pop("diagnostics", None)
+    return redact_public_strings(payload)
 
 
 def _runtime_log_dir() -> Path:
@@ -227,6 +233,9 @@ def create_analysis_job_route(payload: AnalysisJobCreate, db: Session = Depends(
             },
         )
     except ValueError as exc:
+        from app.analysis_runtime.hashing import AnalysisRuntimeError
+        if isinstance(exc, AnalysisRuntimeError):
+            return JSONResponse(status_code=400, content={"code": exc.code, "message": "模块请求无法执行，请检查参数或准备状态", "details": redact_public_strings(exc.details)})
         # 双摄 preflight 不通过：返回结构化失败原因（不静默退化）
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

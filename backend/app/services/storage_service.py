@@ -375,6 +375,8 @@ class StorageService:
         # 删除一个文件或目录（目录用递归删除）；不存在则视为"已删除成功"
         if not path.exists():
             return False
+        from app.analysis_runtime.retention import assert_unpinned
+        assert_unpinned(get_settings(), path)
         if path.is_dir():
             try:
                 shutil.rmtree(path)

@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobSummary, build_match_context
 from app.schemas.pipeline import AnalysisPipelineResult, PipelineStageResult
+from app.analysis_runtime.contracts import ModularRunManifest
 from app.services.multiview_result_composer import MultiViewResultComposer, build_fallback_fused_artifact
 from app.services.storage_service import StorageService
 from app.vision.multiview.artifact import (
@@ -71,7 +72,7 @@ class AnalysisJobExecutor(Protocol):
         job: AnalysisJobSummary,
         token: object,
         progress_callback: Callable[[object], None],
-    ) -> AnalysisPipelineResult:
+    ) -> AnalysisPipelineResult | ModularRunManifest:
         ...
 
 
@@ -136,6 +137,8 @@ class SingleViewAnalysisExecutor:
     ) -> AnalysisPipelineResult:
         payload = AnalysisJobCreate(
             metadata=job.metadata,
+            enableModelInference=job.enableModelInference,
+            enablePoseInference=job.enablePoseInference,
             videoId=job.videoId,
             calibrationId=job.calibrationId,
             frameStride=job.frameStride,
@@ -878,8 +881,14 @@ def resolve_executor(
     pipeline_factory: Callable[..., object],
     execution_mode: str | None = None,
     job_role: str | None = None,
+    analysis_engine: str = "legacy_v1",
 ) -> AnalysisJobExecutor:
     """按 analysisKind 选择执行体(single_view / multiview);multiview 再按 executionMode 分发。"""
+    if analysis_engine == "modular_v1":
+        from app.analysis_runtime.executor import ModularAnalysisExecutor
+        return ModularAnalysisExecutor(store)
+    if analysis_engine != "legacy_v1":
+        raise ValueError(f"unknown analysisEngine: {analysis_engine!r}")
     if job_role == "segmentation_prerequisite":
         return SegmentationPrerequisiteExecutor(store)
     if analysis_kind == "single_view":

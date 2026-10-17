@@ -4,7 +4,7 @@
 
 审查基线：2665bc3b974656cec45cd54e875d03cd3a8994c6。参考源为 /Users/tuian/Downloads/analysis-architecture-v1 的完整解压包及本轮对话中的架构建议。原包只读保留；本目录是根据实际代码重新编写的提案。
 
-结论来自静态代码/规格检查和 OpenSpec 校验，没有执行真实模型、视频分析、算法准确率或性能基准。本地代码比报告中的抽象描述优先；不将附件内的操作指令自动提升为用户授权。当前未改应用代码、未 commit/push。
+本节记录提案阶段：结论当时来自静态代码/规格检查和 OpenSpec 校验，未执行真实模型或性能基准、未改应用代码。本地代码比报告中的抽象描述优先；不将附件内的操作指令自动提升为用户授权。用户随后明确要求 apply，实施结果见末节及 validation.md。
 
 ## 代码事实及架构影响
 
@@ -77,4 +77,15 @@ export_swing_skeleton.py 是导出验证，action_classification_preprocessing �
 
 OpenSpec 校验通过只证明提案结构有效，不证明实现正确、分析提速或模型质量。后续任务必须提交真实单摄/双摄短窗口证据，不能将 mock、缺模型、空占位产物计为真实通过。
 
-本轮文件与规格一致性检查结果见 validation.md。所有实施任务保持未完成。
+提案阶段的上述限制保留作为历史记录；当前实施与验收结果见 validation.md 和 tasks.md。
+
+## 2026-10-17 实施补充
+
+本期已按用户明确授权完成模块 engine、共用局部入口、不可变产物与三能力适配，见 implementation-log.md。未改动 Downloads 参考包、四人身份裁决、joint 内部算法或主规格；主规格待用户要求 archive 时再合并 delta。
+
+- RTMPose 原适配器输出已经是像素坐标，模块直接保留，不能再次乘分辨率；行为测试验证像素值和 visibility 不跨 observation 串用。
+- 模型仅 cache miss 后构造；运行缓存指向可写 tmp 根，避免只读用户字体/模型配置目录引起冷启动阻塞。真实首次 RTMPose 初始化仍明显较慢。
+- 强来源核验覆盖媒体、原 PTS sidecar 与准备快照，同路径替换被拒绝；全缓存仍读源摘要，所以零 capture/model 不等于零 I/O。
+- 真实单摄三能力和双摄 raw ball 均通过 60–90s 窗口验收，包含全缓存及姿态参数窄重算；完整机器记录在 evidence/real-window-validation.json。
+- OpenCV 内部 GOP 预读不可见，计数只代表应用 read/grab。没有长片单遍流式共享、人工标签模型精度或未来动作/战术模型完成的结论。
+- ESLint 最初误扫 `.runtime` 中 MPEG-TS 测试片段；仅将生成目录排除。全仓剩余 3 个错误在备份 HEAD 的两个未修改组件中可复现；本期六个 TS 文件 0 error，详见 validation.md。
