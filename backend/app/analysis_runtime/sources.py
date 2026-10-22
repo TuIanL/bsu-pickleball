@@ -1,7 +1,6 @@
 """显式准备媒体/模型身份；preview 只读取这些已登记快照。"""
 from __future__ import annotations
 
-import json
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 

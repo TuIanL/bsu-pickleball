@@ -1,7 +1,6 @@
 """同一规划器供 CLI/API 使用；只读准备索引，不打开媒体或模型。"""
 from __future__ import annotations
 
-import json
 from typing import Callable
 
 from app.analysis_runtime.contracts import (

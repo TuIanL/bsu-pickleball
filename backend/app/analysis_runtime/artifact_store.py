@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from app.analysis_runtime.contracts import (
     AnalysisPlan, ArtifactManifest, ArtifactRef, ModelSnapshot, NodeRun,
-    SourceSnapshot, now,
+    SourceSnapshot,
 )
 from app.analysis_runtime.hashing import AnalysisRuntimeError, canonical_json, digest, file_digest
 from app.analysis_runtime.planner import model_identity, source_identity, verify_plan
