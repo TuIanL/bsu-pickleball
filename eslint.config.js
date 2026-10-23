@@ -26,11 +26,11 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true }
       ],
-      // eslint-plugin-react-hooks v6 起把 React Compiler 的规则纳入 recommended。
-      // "props 变化时重置本地 state" 是本代码库的既有模式（如分析名册确认页），
-      // 改写为渲染期派生会牵动业务语义，风险高于收益：先降级为 warn，逐步迁移。
-      // 注意 refs 仍是 error —— 渲染期读写 ref 在并发渲染下是真实缺陷，应修代码。
-      "react-hooks/set-state-in-effect": "warn",
+      // 注意：不要为了让 CI 变绿而全局降级 react-hooks v6 的规则。
+      // 存量不符合项在具体代码行上用 eslint-disable-next-line 显式豁免并写明
+      // 原因与重构方向，这样新代码仍会被拦，存量也不会被几十条 warning 淹没。
+      // （react-hooks/exhaustive-deps 在 recommended 里本就是 warn，那是既有基线；
+      //  set-state-in-effect 是 error，保持 error。）
     },
   }
 );

@@ -198,6 +198,10 @@ export function AnalysisRosterConfirmation({
   // 自动候选只是预检结果：默认按建议槽位填充，但用户随时可以交换/替换。
   useEffect(() => {
     if (!bootstrap) {
+      // 存量写法：slotsInitialized 是独立 state，随预检结果重置。
+      // 计划改为「建议槽位由 useMemo 从 bootstrap 派生 + 用户操作只存 overrides」，
+      // 届时这个 state 与本次 setState 一并消失。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSlotsInitialized(false);
       return;
     }
@@ -231,6 +235,9 @@ export function AnalysisRosterConfirmation({
   useEffect(() => {
     let cancelled = false;
     if (!captureTakeId && !videoId) {
+      // 存量写法：源标识消失时清空预检结果。
+      // 计划改为渲染期按 hasSource 派生 bootstrap，不再在 effect 里回写 state。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBootstrap(null);
       return () => {
         cancelled = true;
