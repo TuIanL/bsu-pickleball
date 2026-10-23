@@ -21,11 +21,12 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Ensure FFmpeg
         run: |
-          # ubuntu-latest 镜像本身带 ffmpeg，优先直接用。apt 在此 runner 上偶发卡死
-          # （实测两次各卡 20 分钟以上，直接把 job 顶到 30 分钟超时），所以只在缺失
-          # 时才走安装路径。
+          # 部分 runner 镜像自带 ffmpeg，有就直接用，缺失才安装。
+          # apt 在该 runner 上偶发卡死（实测两次各卡 20 分钟以上，把 job 顶到
+          # 30 分钟超时被 cancelled），所以安装路径要放在探测之后，绝不无条件执行。
+          # 注：当前的 ubuntu-latest 实测未预装（探测后仍走了安装，约 22s）。
           if command -v ffmpeg >/dev/null 2>&1; then
-            echo "已预装：$(ffmpeg -version | head -1)"
+            echo "已存在：$(ffmpeg -version | head -1)"
           else
             sudo apt-get update
             sudo apt-get install --yes ffmpeg
