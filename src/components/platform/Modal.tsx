@@ -14,7 +14,13 @@ export function Modal({ isOpen, onClose, title, children, size = "md" }: ModalPr
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   const titleId = useId();
-  onCloseRef.current = onClose;
+
+  // 保持 ref 指向最新的 onClose，供只挂一次的事件监听读取。
+  // 必须在提交后写入：渲染期改 ref 在并发渲染下可能被丢弃，React 也明确禁止。
+  // 该 effect 声明在下方的焦点 effect 之前，保证监听挂载时 ref 已是最新值。
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   // 打开时将焦点限制在对话框中；关闭后恢复到打开前的控件。
   useEffect(() => {
