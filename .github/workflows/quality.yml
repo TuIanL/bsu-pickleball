@@ -40,17 +40,17 @@ jobs:
       - name: Backend tests
         working-directory: backend
         run: |
-          set -o pipefail
-          # 这两个用例硬编码外接盘路径（/Volumes/...），CI 上没有该盘，必然失败。
-          # 本地全量验证时同样需要排除它们。
+          # Actions 的 run 默认是 bash -e，必须关掉，否则 pytest 一失败就直接跳出，
+          # 下面的诊断代码永远执行不到。
+          set +e
           python -m pytest -q \
             --ignore=tests/test_hybrid_ball_regression_fixture.py \
             --ignore=tests/test_sync_recording.py 2>&1 | tee pytest.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            # 把失败清单暴露为注解：无 Actions 日志权限时也能从 check-run API 读到
-            echo "::error::pytest 失败，失败用例摘要："
-            grep -E '^(FAILED|ERROR)' pytest.log | head -15 | sed 's/^/::error::/'
+            # 把失败摘要暴露为注解：无 Actions 日志权限时也能从 check-run API 读到
+            echo "::error::pytest 退出码 $status，末段输出："
+            tail -30 pytest.log | sed 's/^/::error::/'
           fi
           exit "$status"
 
