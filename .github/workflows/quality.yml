@@ -48,9 +48,12 @@ jobs:
             --ignore=tests/test_sync_recording.py 2>&1 | tee pytest.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            # 把失败摘要暴露为注解：无 Actions 日志权限时也能从 check-run API 读到
-            echo "::error::pytest 退出码 $status，末段输出："
-            tail -30 pytest.log | sed 's/^/::error::/'
+            # 把失败清单与末段输出暴露为注解：无 Actions 日志权限时也能从
+            # check-run API 读到具体失败用例
+            echo "::error::pytest 退出码 $status，失败清单："
+            grep -E '^(FAILED|ERROR)' pytest.log | head -20 | sed 's/^/::error::/'
+            echo "::error::末段输出："
+            tail -12 pytest.log | sed 's/^/::error::/'
           fi
           exit "$status"
 
