@@ -246,6 +246,7 @@ class AnalysisJobCreate(BaseModel):
     metadata: AnalysisUploadMetadata
     analysisEngine: Literal["legacy_v1", "modular_v1"] = "legacy_v1"
     modularRequest: AnalysisRequest | None = None
+    expectedPlanHash: str | None = None
 
     @model_validator(mode="after")
     def validate_engine_payload(self):
@@ -307,6 +308,7 @@ class AnalysisJobSummary(BaseModel):
     planId: str | None = None
     planHash: str | None = None
     resultKind: Literal["legacy", "modular"] = "legacy"
+    analysisTargets: list[str] = Field(default_factory=list)
     nodeRuns: list[NodeRun] = Field(default_factory=list)
     resultCompleteness: Literal["complete", "partial", "none"] | None = None
     status: AnalysisJobStatus

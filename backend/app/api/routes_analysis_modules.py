@@ -1,7 +1,9 @@
 """能力级开发验证入口，与既有 /jobs 共用控制面。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from app.database import get_db
 from pydantic import BaseModel, Field
 
 from app.analysis_runtime.contracts import AnalysisRequest
@@ -46,6 +48,20 @@ def capabilities():
     return builtin_registry().catalog()
 
 
+@router.get("/runtime-status")
+def runtime_status():
+    return {"modular_submission_enabled": jobs().storage.settings.modular_analysis_enabled}
+
+
+@router.post("/takes/{take_id}/sources/prepare")
+def prepare_take(take_id: str, db: Session = Depends(get_db)):
+    from app.analysis_runtime.web_sources import prepare_take_sources
+    try:
+        return public(prepare_take_sources(artifact_store(jobs()), db, take_id))
+    except AnalysisRuntimeError as exc:
+        raise runtime_error(exc) from exc
+
+
 @router.post("/sources/prepare")
 def prepare_registered_source(request: SourcePreparation):
     from pathlib import Path
@@ -70,9 +86,9 @@ def prepare_registered_models():
 
 
 @router.post("/plans/preview")
-def preview(request: AnalysisRequest):
+def preview(request: AnalysisRequest, db: Session = Depends(get_db)):
     try:
-        return public(planner(jobs()).plan(request).model_dump(mode="json"))
+        return public(planner(jobs(), db=db).plan(request).model_dump(mode="json"))
     except AnalysisRuntimeError as exc:
         raise runtime_error(exc) from exc
 

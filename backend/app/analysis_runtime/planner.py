@@ -72,12 +72,14 @@ class Planner:
         model_reader: Callable[[str], ModelSnapshot | None],
         artifact_reader: Callable[[str], ArtifactManifest | None],
         cache_reader: Callable[[str], object] | None = None,
+        binding_validator: Callable | None = None,
     ):
         self.registry = registry
         self.source_reader = source_reader
         self.model_reader = model_reader
         self.artifact_reader = artifact_reader
         self.cache_reader = cache_reader
+        self.binding_validator = binding_validator
 
     def plan(self, request: AnalysisRequest) -> AnalysisPlan:
         # 深拷贝调用方可变字典；队列中另以 hash 核验冻结合同。
@@ -127,6 +129,10 @@ class Planner:
             if source is None:
                 raise AnalysisRuntimeError("preparation_required", "来源尚未准备", details={"source_id": source_id})
             sources.append(source)
+        if request.source_binding is not None:
+            if self.binding_validator is None:
+                raise AnalysisRuntimeError("source_binding_unavailable", "来源绑定校验不可用")
+            self.binding_validator(request, sources)
         if len({s.view_id for s in sources}) != len(sources):
             raise AnalysisRuntimeError("duplicate_view", "机位标识必须互异")
         reference = request.reference_view_id or sources[0].view_id

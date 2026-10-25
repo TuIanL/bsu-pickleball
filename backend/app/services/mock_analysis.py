@@ -246,7 +246,8 @@ def create_analysis_job(
     if payload.analysisEngine == "modular_v1":
         from app.analysis_runtime.service import submit
         request = payload.modularRequest.model_copy(update={"new_version": payload.modularRequest.new_version or payload.requestNewVersion})
-        job = submit(_JOB_STORE, request, payload.metadata, priority=payload.priority)
+        job = submit(_JOB_STORE, request, payload.metadata, priority=payload.priority,
+                     expected_plan_hash=payload.expectedPlanHash, db=db)
         if _WORKER is not None:
             _WORKER.notify()
         return job

@@ -341,6 +341,8 @@ def test_api_preview_and_module_submission_share_contract(runtime, isolated_sett
     preview=client.post("/api/analysis/plans/preview",json=req.model_dump(mode="json"))
     assert preview.status_code==200,preview.text
     assert preview.json()["plan_hash"]==runtime[2].plan(req).plan_hash
+    conflict=client.post("/api/analysis/jobs",json={"metadata":metadata().model_dump(),"analysisEngine":"modular_v1","modularRequest":req.model_dump(mode="json"),"expectedPlanHash":"stale"})
+    assert conflict.status_code==409 and conflict.json()["code"]=="plan_preview_stale"
     with jobs.control_plane._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM analysis_jobs").fetchone()[0]==0
     created=client.post("/api/analysis/jobs",json={"metadata":metadata().model_dump(),"analysisEngine":"modular_v1","modularRequest":req.model_dump(mode="json")})
@@ -736,3 +738,44 @@ def test_queued_module_cancel_does_not_build_legacy_stages(runtime,isolated_sett
     assert reason=="canceled" and canceled.stages==[]
     assert canceled.canonicalStatus=="canceled"
     assert inspect_run(jobs,job.id)["nodes"][0]["status"]=="canceled"
+
+
+def test_web_preview_hash_conflict_has_no_job(runtime, isolated_settings):
+    from app.analysis_runtime.service import submit
+    jobs = module_jobs(runtime, isolated_settings)
+    with pytest.raises(AnalysisRuntimeError) as error:
+        submit(jobs, request(), metadata(), expected_plan_hash="stale")
+    assert error.value.code == "plan_preview_stale"
+    assert jobs.list() == []
+    plan = runtime[2].plan(request())
+    a = submit(jobs, request(), metadata(), expected_plan_hash=plan.plan_hash)
+    b = submit(jobs, request(), metadata(), expected_plan_hash=plan.plan_hash)
+    assert a.id == b.id
+    assert a.analysisTargets == ["ball.detect"]
+
+
+def test_web_binding_requires_validator_and_checks_before_plan(runtime):
+    _store, _registry, planner, _source = runtime
+    req = request(source_binding={"take_id": "take-1", "sync_revision": 2, "provenance_fingerprint": "fp"})
+    with pytest.raises(AnalysisRuntimeError) as error:
+        planner.plan(req)
+    assert error.value.code == "source_binding_unavailable"
+    def reject(*args):
+        raise AnalysisRuntimeError("source_binding_stale", "stale")
+    planner.binding_validator = reject
+    with pytest.raises(AnalysisRuntimeError) as error:
+        planner.plan(req)
+    assert error.value.code == "source_binding_stale"
+
+
+def test_runtime_status_preserves_catalog_and_disables_new_jobs(runtime, isolated_settings, monkeypatch):
+    from app.api import routes_analysis_modules as routes
+    from app.analysis_runtime.service import submit
+    jobs = module_jobs(runtime, isolated_settings)
+    monkeypatch.setattr(routes, "jobs", lambda: jobs)
+    monkeypatch.setattr(jobs.storage.settings, "modular_analysis_enabled", False)
+    assert routes.runtime_status() == {"modular_submission_enabled": False}
+    assert isinstance(routes.capabilities(), list)
+    with pytest.raises(AnalysisRuntimeError) as error:
+        submit(jobs, request(), metadata())
+    assert error.value.code == "modular_submission_disabled"

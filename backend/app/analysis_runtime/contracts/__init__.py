@@ -144,7 +144,14 @@ class ContextSnapshot(Contract):
         return {key: self.values[key] for key in sorted(fields) if key in self.values}
 
 
+class SourceBinding(Contract):
+    take_id: str
+    sync_revision: int = Field(ge=0)
+    provenance_fingerprint: str
+
+
 class AnalysisRequest(Contract):
+    source_binding: SourceBinding | None = None
     source_ids: tuple[str, ...] = Field(min_length=1, max_length=2)
     targets: tuple[str, ...] = Field(min_length=1)
     window: Window

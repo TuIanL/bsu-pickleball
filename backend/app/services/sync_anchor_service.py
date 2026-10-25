@@ -101,15 +101,16 @@ class SyncAnchorAssetService:
             raise SyncAnchorNotFoundError(f"CaptureTake {capture_take_id} 不存在")
         return take
 
-    def _timeline(self, take: CaptureTake) -> Path:
+    def _timeline(self, take: CaptureTake, *, create: bool = True) -> Path:
         if not take.session_dir:
             raise SyncAnchorNotFoundError(f"CaptureTake {take.id} 没有可用 session_dir")
         path = Path(take.session_dir).expanduser().resolve(strict=False) / "timeline"
-        path.mkdir(parents=True, exist_ok=True)
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _paths(self, take: CaptureTake) -> dict[str, Path]:
-        timeline = self._timeline(take)
+    def _paths(self, take: CaptureTake, *, create: bool = True) -> dict[str, Path]:
+        timeline = self._timeline(take, create=create)
         return {
             "draft": timeline / ANCHOR_DRAFT_FILENAME,
             "anchors": timeline / ANCHORS_FILENAME,
@@ -302,7 +303,7 @@ class SyncAnchorAssetService:
             reason=reference_mapping.get("reason"),
         )
 
-    def status(self, capture_take_id: str, *, require_manual: bool = False) -> SyncAnchorStatus:
+    def status(self, capture_take_id: str, *, require_manual: bool = False, allow_migration: bool = True) -> SyncAnchorStatus:
         take = self._take(capture_take_id)
         if _enum_value(take.capture_mode) != "dual":
             return SyncAnchorStatus(
@@ -311,14 +312,14 @@ class SyncAnchorAssetService:
                 analysis_allowed=True,
                 reason_codes=["single_camera_take"],
             )
-        paths = self._paths(take)
+        paths = self._paths(take, create=allow_migration)
         current = self.current_provenance(take.id)
         current_dump = [item.model_dump(mode="json") for item in current]
         current_fingerprint = _fingerprint(current_dump)
         draft_payload = self._load_draft(paths)
         confirmation = _read_json(paths["confirmation"])
         calibration = _read_json(paths["calibration"])
-        if confirmation is None and calibration is not None:
+        if allow_migration and confirmation is None and calibration is not None:
             confirmation = self._try_lazy_migrate_legacy_confirmation(paths, calibration, current)
         revision = self._current_revision(paths)
         draft = self._draft_model(draft_payload, int(draft_payload.get("revision", 0))) if draft_payload else None

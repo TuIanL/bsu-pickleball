@@ -259,3 +259,75 @@ def test_missing_video_does_not_fingerprint_current_directory(tmp_path):
     assert provenance[0].media_identity["path"] is None
     assert provenance[0].media_identity["exists"] is False
     assert provenance[0].timing_sidecar_identity["path"] is None
+
+
+def test_readonly_status_never_creates_timeline_or_migrates(tmp_path, monkeypatch):
+    take, service = _service(tmp_path)
+    timeline = Path(take.session_dir) / "timeline"
+    timeline.rmdir()
+    service.status(take.id, require_manual=True, allow_migration=False)
+    assert not timeline.exists()
+    timeline.mkdir()
+    (timeline / CALIBRATION_FILENAME).write_text('{"source":"manual_anchors"}')
+    monkeypatch.setattr(service, "_try_lazy_migrate_legacy_confirmation", lambda *a: pytest.fail("read-only migrated"))
+    service.status(take.id, require_manual=True, allow_migration=False)
+    assert not (timeline / CONFIRMATION_FILENAME).exists()
+
+
+def test_module_binding_uses_real_cameras_and_detects_sync_changes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.analysis_runtime import web_sources
+    from app.analysis_runtime.contracts import AnalysisRequest
+    from app.analysis_runtime.hashing import AnalysisRuntimeError
+    take, service = _service(tmp_path)
+    service.confirm(take.id, _confirm())
+    monkeypatch.setattr(web_sources, "SyncAnchorAssetService", lambda db: service)
+    _, status, sync = web_sources.take_context(service.db, take.id)
+    sources = [SimpleNamespace(video_id=p.registered_video_id, view_id=p.slot, camera_id=p.camera_id) for p in status.provenance]
+    req = AnalysisRequest(source_ids=("a", "b"), targets=("ball.detect",), window={"start_ms": 0, "end_ms": 1000},
+        source_binding={"take_id": take.id, "sync_revision": status.revision, "provenance_fingerprint": status.provenance_fingerprint}, sync=sync)
+    before = {p: p.read_bytes() for p in Path(take.session_dir).rglob('*') if p.is_file()}
+    web_sources.validate_binding(req, sources, db=service.db)
+    assert before == {p: p.read_bytes() for p in Path(take.session_dir).rglob('*') if p.is_file()}
+    sources[0].camera_id = 'wrong-camera'
+    with pytest.raises(AnalysisRuntimeError, match="重新准备"):
+        web_sources.validate_binding(req, sources, db=service.db)
+
+
+def test_web_take_preparation_and_verified_ownership(tmp_path, monkeypatch):
+    from app.analysis_runtime import web_sources
+    from app.analysis_runtime.contracts import SourceSnapshot, SourceBinding
+    from app.analysis_runtime.hashing import AnalysisRuntimeError
+    from app.schemas.analysis import AnalysisUploadMetadata
+    from app.api.routes_analysis_modules import public
+    take, service = _service(tmp_path)
+    service.confirm(take.id, _confirm())
+    monkeypatch.setattr(web_sources, "SyncAnchorAssetService", lambda db: service)
+    calls = []
+    def prepare(store, path, **kwargs):
+        calls.append(kwargs)
+        return SourceSnapshot(source_id="src-" + kwargs["view_id"], video_id=kwargs["video_id"], view_id=kwargs["view_id"], camera_id=kwargs["camera_id"], media_path=str(path), media_sha256="a", timing_path=str(path)+".pts.jsonl", timing_sha256="b", timing_authority="source_pts", frame_count=3, fps=30, duration_ms=100000, width=640, height=360)
+    monkeypatch.setattr(web_sources, "prepare_source", prepare)
+    result = web_sources.prepare_take_sources(None, service.db, take.id)
+    assert [c["camera_id"] for c in calls] == ["camera-a", "camera-b"]
+    assert all(c["require_pts"] for c in calls)
+    assert result["reference_view_id"] == "cam_1"
+    assert result["recording_session_id"] == "sync-1"
+    assert "media_path" not in public(result)["sources"][0]
+    sources = [SourceSnapshot.model_validate(s) for s in result["sources"]]
+    metadata = AnalysisUploadMetadata(fileName="test",matchTitle="test",venue="",matchDate="",matchFormat="doubles",cameraAngle="unknown",athleteLabel="",level="")
+    binding = SourceBinding.model_validate(result["source_binding"])
+    checked = web_sources.verified_metadata(metadata, sources, binding, db=service.db)
+    assert checked.capture_take_id == take.id and checked.recording_session_id == take.source_session_id
+    for changes in [{"capture_take_id": "forged"}, {"recording_session_id": "other-session"}, {"camera_slot": "cam_2"}]:
+        with pytest.raises(AnalysisRuntimeError) as error:
+            web_sources.verified_metadata(metadata.model_copy(update=changes), sources, binding, db=service.db)
+        assert error.value.code == "source_ownership_mismatch"
+    with pytest.raises(AnalysisRuntimeError):
+        web_sources.verified_metadata(metadata, [sources[0].model_copy(update={"video_id": "foreign-video"})], binding, db=service.db)
+    single = web_sources.verified_metadata(metadata.model_copy(update={"capture_take_id": take.id, "camera_slot": "cam_2"}), [sources[1]], None, db=service.db)
+    assert single.camera_slot == "cam_2"
+    service.video_service.values["video-b"] = None
+    with pytest.raises(AnalysisRuntimeError) as error:
+        web_sources.prepare_take_sources(None, service.db, take.id)
+    assert error.value.code == "authoritative_sync_required"

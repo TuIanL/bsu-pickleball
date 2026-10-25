@@ -235,7 +235,7 @@ def create_analysis_job_route(payload: AnalysisJobCreate, db: Session = Depends(
     except ValueError as exc:
         from app.analysis_runtime.hashing import AnalysisRuntimeError
         if isinstance(exc, AnalysisRuntimeError):
-            return JSONResponse(status_code=400, content={"code": exc.code, "message": "模块请求无法执行，请检查参数或准备状态", "details": redact_public_strings(exc.details)})
+            return JSONResponse(status_code=409 if exc.code == "plan_preview_stale" else 400, content={"code": exc.code, "message": "模块请求无法执行，请检查参数或准备状态", "details": redact_public_strings(exc.details)})
         # 双摄 preflight 不通过：返回结构化失败原因（不静默退化）
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -16,16 +16,22 @@ def artifact_store(jobs) -> ArtifactStore:
     return ArtifactStore(jobs.control_plane, root)
 
 
-def planner(jobs):
+def planner(jobs, db=None):
     artifacts = artifact_store(jobs)
-    return Planner(builtin_registry(), artifacts.source, artifacts.model, artifacts.manifest, artifacts.cached)
+    from app.analysis_runtime.web_sources import validate_binding
+    return Planner(builtin_registry(), artifacts.source, artifacts.model, artifacts.manifest, artifacts.cached,
+                   binding_validator=lambda request, sources: validate_binding(request, sources, db=db))
 
 
-def submit(jobs, request: AnalysisRequest, metadata, *, priority=0):
+def submit(jobs, request: AnalysisRequest, metadata, *, priority=0, expected_plan_hash=None, db=None):
     from app.schemas.analysis import AnalysisJobSummary
     if not jobs.storage.settings.modular_analysis_enabled:
         raise AnalysisRuntimeError("modular_submission_disabled", "模块任务提交已关闭")
-    plan = planner(jobs).plan(request)
+    plan = planner(jobs, db=db).plan(request)
+    if expected_plan_hash is not None and plan.plan_hash != expected_plan_hash:
+        raise AnalysisRuntimeError("plan_preview_stale", "分析计划已变化，请重新预览")
+    from app.analysis_runtime.web_sources import verified_metadata
+    metadata = verified_metadata(metadata, plan.sources, request.source_binding, db=db)
     timestamp = now()
     job = AnalysisJobSummary(
         id="job-" + uuid4().hex[:12], status="queued", canonicalStatus="queued",
@@ -37,6 +43,8 @@ def submit(jobs, request: AnalysisRequest, metadata, *, priority=0):
         clipStartMs=plan.requested_window.start_ms, clipEndMs=plan.requested_window.end_ms,
         inputSignature=plan.plan_hash, configSignature="modular_v1",
         videoId=next((s.video_id for s in plan.sources if s.view_id==plan.reference_view_id), None),
+        recordingSessionId=metadata.recording_session_id, cameraSlot=metadata.camera_slot,
+        analysisTargets=list(plan.targets),
         reportId=None, referenceViewId=plan.reference_view_id, nodeRuns=[
             NodeRun(node_key=n.node_key, capability_id=n.capability_id,
                     implementation_id=n.implementation.implementation_id, implementation_version=n.implementation.version,
