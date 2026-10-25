@@ -1,3 +1,4 @@
+import { capabilityName } from "../../services/analysisModeConfig";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { NavigateFn } from "../../app/navigationTypes";
@@ -166,10 +167,10 @@ export function LibraryItemWorkspace({ kind, sourceId, view, analysisJobId, quer
 
   // 非法 view：修正 URL 回到 overview，避免 URL/UI 二次不一致
   useEffect(() => {
-    if (item && view !== "overview" && resolution === "invalid") {
+    if (item && !selection?.moduleJobId && view !== "overview" && resolution === "invalid") {
       onNavigate(buildLibraryWorkspacePath(ref, { view: "overview", search: querySearch }), { replace: true });
     }
-  }, [item, resolution, view, ref, querySearch, onNavigate]);
+  }, [item, resolution, view, ref, querySearch, onNavigate, selection?.moduleJobId]);
 
   // Fail closed: invalid/cross-material/internal/deleted IDs are never used to load artifacts.
   useEffect(() => {
@@ -177,6 +178,12 @@ export function LibraryItemWorkspace({ kind, sourceId, view, analysisJobId, quer
       onNavigate(buildLibraryWorkspacePath(ref, { analysisJobId: null, search: querySearch }), { replace: true });
     }
   }, [item, selection?.invalidRequestedJob, ref, querySearch, onNavigate]);
+
+  useEffect(() => {
+    if (item && selection?.moduleJobId) {
+      onNavigate(buildAnalysisProgressPath(selection.moduleJobId, libraryItemOverviewPath(item)), { replace: true });
+    }
+  }, [item, selection?.moduleJobId, onNavigate]);
 
   const goView = (v: LibraryView) => {
     if (v !== "overview" && caps && caps[v] !== "available") {
@@ -191,6 +198,8 @@ export function LibraryItemWorkspace({ kind, sourceId, view, analysisJobId, quer
   };
 
   const title = item?.displayTitle ?? item?.title ?? (ref.kind === "upload" ? "上传视频" : ref.kind === "recording" ? "录制" : "双摄录制");
+
+  if (selection?.moduleJobId) return <p role="status" className="p-6">正在打开专项结果…</p>;
 
   if (loading) {
     return <div className="grid min-h-[60vh] place-items-center text-sm text-[var(--capture-text-muted,#8f9d96)]">加载素材…</div>;
@@ -290,7 +299,9 @@ export function LibraryItemWorkspace({ kind, sourceId, view, analysisJobId, quer
             onRefresh={() => setReloadToken((t) => t + 1)}
             selectedJobId={selectedJobId}
             explicitSelection={Boolean(selection?.explicit)}
-            onSelectJob={(job) => onNavigate(buildLibraryWorkspacePath(ref, {
+            onSelectJob={(job) => job.analysisEngine === "modular_v1"
+              ? onNavigate(buildAnalysisProgressPath(job.id, libraryItemOverviewPath(item)))
+              : onNavigate(buildLibraryWorkspacePath(ref, {
               view: job.status === "completed" ? "analysis" : "technical",
               analysisJobId: job.id,
               search: querySearch,
@@ -513,7 +524,7 @@ function OverviewView({ item, hasAnalysis, onNavigate, onRefresh, selectedJobId,
                           onClick={() => onSelectJob(job)}
                           type="button"
                         >
-                          {job.status === "completed" ? "查看结果" : "查看详情"}
+                          {job.analysisEngine === "modular_v1" ? "查看专项结果" : job.status === "completed" ? "查看结果" : "查看详情"}
                         </button>
                       ) : null}
                       <button
@@ -553,6 +564,7 @@ function OverviewView({ item, hasAnalysis, onNavigate, onRefresh, selectedJobId,
 }
 
 function analysisJobKindLabel(job: LibraryAnalysisJobView): string {
+  if (job.analysisEngine === "modular_v1") return `专项分析 · ${(job.analysisTargets ?? []).map(capabilityName).join("、") || "模块任务"} · ${job.analysisKind === "multiview" ? "双摄" : job.cameraSlot === "cam_2" ? "B 机位" : job.cameraSlot === "cam_1" ? "A 机位" : "单摄"}`;
   if (job.analysisKind === "multiview") return "双摄协同分析";
   if (job.analysisKind === "single_view") return "单视角分析";
   return "分析任务";
@@ -582,7 +594,7 @@ function formatAnalysisJobMeta(job: LibraryAnalysisJobView): string {
   const parts: string[] = [];
   const created = new Date(job.createdAt);
   if (!Number.isNaN(created.getTime())) parts.push(created.toLocaleString("zh-CN", { hour12: false }));
-  if (job.executionMode) parts.push(job.executionMode === "joint_tracking_v2" ? "联合跟踪" : "后融合");
+  if (job.analysisEngine !== "modular_v1" && job.executionMode) parts.push(job.executionMode === "joint_tracking_v2" ? "联合跟踪" : "后融合");
   if (job.clipStartMs != null || job.clipEndMs != null) {
     const start = Math.max(0, (job.clipStartMs ?? 0) / 1000).toFixed(1);
     const end = job.clipEndMs == null ? "末尾" : `${Math.max(0, job.clipEndMs / 1000).toFixed(1)}s`;

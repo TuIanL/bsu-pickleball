@@ -358,3 +358,13 @@ describe("LibraryItemWorkspace 分析入口", () => {
     expect(onNavigate.mock.calls.flat().join(" ")).not.toContain("analysisJob=old");
   });
 });
+
+it("redirects an owned module deep link with a library return and never loads a legacy result", async () => {
+  const onNavigate = vi.fn();
+  (resolveLibraryItemByRef as Mock).mockResolvedValue(item({ analysisState: "succeeded", analysisJobs: [{ id: "module-1", analysisEngine: "modular_v1", status: "completed", createdAt: "2026-10-20", analysisTargets: ["player.detect"] }] }));
+  window.history.replaceState({}, "", "/library/upload/video-1?view=report&analysisJob=module-1");
+  render(<RoutedLibraryItemWorkspace kind="upload" sourceId="video-1" view="report" onNavigate={onNavigate} />);
+  await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("/analysis/module-1?return="), { replace: true }));
+  expect(onNavigate.mock.calls[0][0]).toContain(encodeURIComponent("/library/upload/video-1?view=overview"));
+  expect(getAnalysisResult).not.toHaveBeenCalled();
+});

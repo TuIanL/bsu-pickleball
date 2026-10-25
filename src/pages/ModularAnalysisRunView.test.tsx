@@ -59,3 +59,18 @@ describe("模块任务结果入口", () => {
     expect(client.getAnalysisResult).not.toHaveBeenCalled();
   });
 });
+
+it("separates completeness, artifact quality and availability, with lazy loading and retries", async () => {
+  vi.mocked(client.getAnalysisJob).mockResolvedValue(job);
+  vi.mocked(client.getAnalysisModuleManifest).mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ ...manifest, artifact_details: [{ manifest: { ref: manifest.artifacts[0], quality: "no_candidates" }, availability: "location_unavailable" }] });
+  render(<AnalysisJobPage jobId={job.id} onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "重试读取清单" }));
+  expect(await screen.findByText(/执行完成，未检测到候选 · 存储暂不可用/)).toBeInTheDocument();
+  expect(client.getAnalysisModuleArtifact).not.toHaveBeenCalled();
+  vi.mocked(client.getAnalysisModuleArtifact).mockRejectedValueOnce(new Error("missing")).mockResolvedValueOnce({ observations: [] });
+  fireEvent.click(screen.getByRole("button", { name: "查看观测产物" }));
+  expect(await screen.findByText("观测产物暂时不可读，请检查存储可用性。")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "查看观测产物" }));
+  expect(await screen.findByText(/"observations": \[\]/)).toBeInTheDocument();
+  expect(client.getAnalysisResult).not.toHaveBeenCalled();
+});

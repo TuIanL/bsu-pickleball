@@ -117,6 +117,9 @@ export interface LibraryItemViewModel {
 /** 素材历史分析任务的轻量视图（仅需渲染与删除/取消所需字段） */
 export interface LibraryAnalysisJobView {
   id: string;
+  analysisEngine?: AnalysisJobSummary["analysisEngine"];
+  analysisTargets?: string[];
+  cameraSlot?: string;
   status: AnalysisJobSummary["status"];
   analysisKind?: AnalysisJobSummary["analysisKind"];
   executionMode?: AnalysisJobSummary["executionMode"];
@@ -134,6 +137,9 @@ export interface LibraryAnalysisJobView {
 function toAnalysisJobViews(jobs: AnalysisJobSummary[]): LibraryAnalysisJobView[] {
   return newestFirst(jobs.filter((j) => !isInternalChild(j))).map((j) => ({
     id: j.id,
+    analysisEngine: j.analysisEngine,
+    analysisTargets: j.analysisTargets,
+    cameraSlot: j.cameraSlot ?? j.metadata.camera_slot,
     status: j.status,
     analysisKind: j.analysisKind,
     executionMode: j.executionMode,
@@ -262,7 +268,7 @@ export interface LibraryAnalysisSelection {
 
 function selectLibraryAnalysisState(jobs: AnalysisJobSummary[]): LibraryAnalysisSelection {
   const active = newestFirst(jobs.filter((j) => !isInternalChild(j) && isActiveJob(j)))[0];
-  const result = newestFirst(jobs.filter((j) => !isInternalChild(j) && j.status === "completed"))[0];
+  const result = newestFirst(jobs.filter((j) => !isInternalChild(j) && j.analysisEngine !== "modular_v1" && j.status === "completed"))[0];
   const interrupted = newestFirst(jobs.filter((j) => !isInternalChild(j) && j.status === "interrupted"))[0];
   const currentStage =
     active?.stages.find((s) => s.status === "active") ?? active?.stages.find((s) => s.status === "failed");
@@ -270,7 +276,7 @@ function selectLibraryAnalysisState(jobs: AnalysisJobSummary[]): LibraryAnalysis
   let analysisState: LibraryAnalysisState;
   if (active) {
     analysisState = active.status === "queued" || active.status === "uploaded" ? "queued" : "running";
-  } else if (result) {
+  } else if (result || jobs.some((j) => !isInternalChild(j) && j.analysisEngine === "modular_v1" && j.status === "completed")) {
     analysisState = "succeeded";
   } else if (jobs.some(isActiveJob)) {
     analysisState = "running";
@@ -346,8 +352,9 @@ export async function buildLibraryItems(
     // 双摄只取公开 multiview Parent（A/B 工程单摄不参与 primary/历史主视图/进度）
     const multiviewParents = owned.filter((j) => j.analysisKind === "multiview" && !isInternalChild(j));
     const titleJob = newestFirst(multiviewParents)[0] ?? newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
-    const selection = selectLibraryAnalysisState(multiviewParents);
-    const historyCount = multiviewParents.length;
+    const publicAnalysis = owned.filter((j) => !isInternalChild(j) && (j.analysisKind === "multiview" || j.analysisEngine === "modular_v1"));
+    const selection = selectLibraryAnalysisState(publicAnalysis);
+    const historyCount = publicAnalysis.length;
     const { mediaState, requiredAction } = mapMediaAndRequired("sync_recording", sync);
     items.push({
       ref: { kind: "sync_recording", sourceId: sync.session_id },
@@ -495,7 +502,8 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
     const owned = jobs.filter((job) => isAnalysisJobForSyncRecording(job, sync));
     const multiviewParents = owned.filter((j) => j.analysisKind === "multiview" && !isInternalChild(j));
     const titleJob = newestFirst(multiviewParents)[0] ?? newestFirst(owned.filter((j) => !isInternalChild(j)))[0];
-    const selection = selectLibraryAnalysisState(multiviewParents);
+    const publicAnalysis = owned.filter((j) => !isInternalChild(j) && (j.analysisKind === "multiview" || j.analysisEngine === "modular_v1"));
+    const selection = selectLibraryAnalysisState(publicAnalysis);
     const { mediaState, requiredAction } = mapMediaAndRequired("sync_recording", sync);
     return {
       ref,
@@ -527,7 +535,7 @@ export async function resolveLibraryItemByRef(ref: LibraryItemRef): Promise<Libr
       activeAnalysisJobId: selection.activeAnalysisJobId,
       analysisProgress: selection.analysisProgress,
       analysisStage: selection.analysisStage,
-      analysisHistoryCount: multiviewParents.length,
+      analysisHistoryCount: publicAnalysis.length,
       analysisJobs: toAnalysisJobViews(owned),
       cameraSetup: "dual",
       matchFormat: sync.match_format === "doubles" || sync.match_format === "singles" ? sync.match_format : undefined,

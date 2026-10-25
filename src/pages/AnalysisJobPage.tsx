@@ -264,7 +264,7 @@ export function AnalysisJobPage({ jobId, returnParam, onNavigate }: { jobId: str
   }
 
   if (job.analysisEngine === "modular_v1") {
-    return <ModularAnalysisRunView key={job.id} job={job} onNavigate={onNavigate} backPath={backPath} />;
+    return <ModularAnalysisRunView key={job.id} job={job} onNavigate={onNavigate} backPath={backPath} backLabel={backLabel} />;
   }
 
   const statusCopy = {

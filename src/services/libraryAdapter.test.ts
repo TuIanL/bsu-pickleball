@@ -418,3 +418,25 @@ describe("buildLibraryItems", () => {
     expect(items.find((i) => i.ref.sourceId === "rec-2")?.displayTitle).toBe("乙");
   });
 });
+
+describe("module history keeps legacy report selection", () => {
+  it("keeps completed full report A while recording completed module B and active C", async () => {
+    const jobs = [job({ id: "A", videoId: "video-1", analysisEngine: "legacy_v1" }), job({ id: "B", videoId: "video-1", analysisEngine: "modular_v1", analysisTargets: ["ball.detect"], createdAt: "2026-08-21" }), job({ id: "C", videoId: "video-1", analysisEngine: "modular_v1", status: "processing", createdAt: "2026-08-22" })];
+    const [item] = await buildLibraryItems({ videos: [video({})], recordings: [], syncRecordings: [], jobs });
+    expect(item.primaryResultAnalysisJobId).toBe("A");
+    expect(item.analysisJobs.map((j) => j.id)).toEqual(expect.arrayContaining(["A", "B", "C"]));
+    expect(item.analysisJobs.find((j) => j.id === "B")).toMatchObject({ analysisEngine: "modular_v1", analysisTargets: ["ball.detect"] });
+    expect(item.activeAnalysisJobId).toBe("C");
+  });
+  it("does not mistake a module-only completion for a full report or a failed analysis", async () => {
+    const [item] = await buildLibraryItems({ videos: [video({})], recordings: [], syncRecordings: [], jobs: [job({ videoId: "video-1", analysisEngine: "modular_v1" })] });
+    expect(item.primaryResultAnalysisJobId).toBeUndefined();
+    expect(item.analysisState).toBe("succeeded");
+  });
+  it("retains A/B module jobs in a dual recording history without promoting a single camera report", async () => {
+    const jobs = [job({ id: "module-b", recordingSessionId: "sync-1", videoId: "video-b", cameraSlot: "cam_2", analysisEngine: "modular_v1", analysisTargets: ["player.detect"], metadata: meta({ recording_session_id: "sync-1", camera_slot: "cam_2" }) })];
+    const [item] = await buildLibraryItems({ videos: [], recordings: [], syncRecordings: [sync({ registered_video_ids: { cam_1: "video-a", cam_2: "video-b" } })], jobs });
+    expect(item.analysisJobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: "module-b", cameraSlot: "cam_2" })]));
+    expect(item.primaryResultAnalysisJobId).toBeUndefined();
+  });
+});
