@@ -200,7 +200,7 @@ type LegacyAnalysisJobSummary = AnalysisJobSummary & {
   };
 };
 
-function normalizeAnalysisJobSummary(job: AnalysisJobSummary): AnalysisJobSummary {
+export function normalizeAnalysisJobSummary(job: AnalysisJobSummary): AnalysisJobSummary {
   const raw = job as LegacyAnalysisJobSummary;
   const recordingSessionId = job.recordingSessionId
     ?? raw.recording_session_id
@@ -482,7 +482,6 @@ async function parseErrorBody(response: Response): Promise<string | undefined> {
         payload
         && typeof payload === "object"
         && "code" in payload
-        && ("issues" in payload || "diagnostics" in payload || "current_revision" in payload)
       ) {
         return JSON.stringify(payload);
       }
@@ -527,7 +526,7 @@ function toNetworkError(path: string, url: string, error: unknown): AnalysisApiE
   });
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const url = toApiUrl(path);
   let response: Response;
 

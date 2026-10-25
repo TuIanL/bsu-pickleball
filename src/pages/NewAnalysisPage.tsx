@@ -1,3 +1,7 @@
+import { AnalysisModeSelector } from "../components/analysis/AnalysisModeSelector";
+import { ModularAnalysisCreator } from "../components/analysis/ModularAnalysisCreator";
+import { readAnalysisMode } from "../services/analysisModeConfig";
+import { prepareModuleVideo } from "../services/analysisModuleClient";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Camera, Upload } from "lucide-react";
 import type { NavigateFn } from "../app/navigationTypes";
@@ -20,6 +24,8 @@ import {
 import { errorToNotice } from "../utils/analysisHelpers";
 
 export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
+  const [creationMode, setCreationMode] = useState(readAnalysisMode);
+  const uploadRevisionRef = useRef(0);
   const today = new Date().toISOString().slice(0, 10);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null);
@@ -118,12 +124,17 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
     if (!selectedFile) {
       throw new Error("No selected file");
     }
+    const revision = uploadRevisionRef.current;
     uploadPromiseRef.current = (async () => {
       const upload = await uploadVideo(selectedFile);
+      if (uploadRevisionRef.current !== revision) throw new Error("视频已更换，请重新准备。");
       uploadedVideoIdRef.current = upload.video.id;
       setUploadedVideoId(upload.video.id);
       return upload.video.id;
-    })();
+    })().catch((cause) => {
+      if (uploadRevisionRef.current === revision) uploadPromiseRef.current = null;
+      throw cause;
+    });
     return uploadPromiseRef.current;
   };
 
@@ -191,6 +202,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
         <ArrowLeft size={16} aria-hidden="true" />
         返回比赛库
       </button>
+      <AnalysisModeSelector value={creationMode} onChange={setCreationMode} />
       <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <div>
           <p className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-[var(--ui-brand-deep)]">
@@ -199,15 +211,15 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
           </p>
           <h1 className="mt-3 text-4xl font-black text-[var(--ui-ink)] sm:text-5xl">创建视觉分析任务</h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
-            上传视频会进入本地 Python 后端，四角标定后创建持久化任务，由 worker 执行视觉分析，先输出移动、速度、热力图等真实可追溯反馈。
+            {creationMode === "full" ? "上传视频并完成四角标定，创建完整比赛分析，查看移动、速度和热力图等反馈。" : "选择视频片段和所需能力，预览步骤后创建专项任务。结果保留在原素材的分析历史中。"}
           </p>
 
           <div className="mt-6 grid gap-3 rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-4">
-            {[
+            {(creationMode === "full" ? [
               ["1", "上传视频", "保留原始文件和基础比赛信息"],
               ["2", "四角标定", "把画面坐标映射到标准匹克球场"],
               ["3", "生成报告", "输出移动轨迹、速度、热力图和有限诊断"],
-            ].map(([index, title, body]) => (
+            ] : [["1", "选择视频", "上传或复用已有素材"], ["2", "配置专项分析", "选择片段，准备来源并预览步骤"], ["3", "查看专项结果", "按能力查看执行状态和观测结果"]]).map(([index, title, body]) => (
               <div className="flex gap-3 rounded-2xl bg-[var(--ui-surface-soft)] p-3" key={index}>
                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--ui-brand-solid)] text-sm font-black text-[var(--ui-display-ink)]">
                   {index}
@@ -231,7 +243,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 </span>
                 <strong className="mt-4 block text-lg text-[var(--ui-ink)]">已选择视频</strong>
                 <p className="mt-2 text-sm text-slate-500">
-                  跳过文件上传步骤，直接进行四角标定
+                  {creationMode === "full" ? "跳过文件上传步骤，直接进行四角标定" : "复用已有视频，直接准备专项分析"}
                 </p>
               </div>
             ) : (
@@ -241,6 +253,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
                 className="sr-only"
                 onChange={(event) => {
                   const nextFile = event.target.files?.[0] ?? null;
+                  uploadRevisionRef.current += 1;
                   setSelectedFile(nextFile);
                   setUploadedVideoId(null);
                   uploadedVideoIdRef.current = null;
@@ -262,6 +275,7 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
             )}
           </div>
 
+          {creationMode === "full" ? <>
           {videoPreviewUrl ? (
             <CourtCornerCalibrator
               videoSrc={videoPreviewUrl}
@@ -420,6 +434,17 @@ export function NewAnalysisPage({ onNavigate }: { onNavigate: NavigateFn }) {
               <p className="mt-2 text-xs text-[var(--ui-warning)]">完成视频选择与四角标定后，人体检测与姿态识别才会真正运行。</p>
             ) : null}
           </div>
+
+          </> : <ModularAnalysisCreator
+            key={videoIdParam ?? `${selectedFile?.name}:${selectedFile?.size}:${selectedFile?.lastModified}`}
+            mode={creationMode} sourceKey={videoIdParam ?? `${selectedFile?.name}:${selectedFile?.size}:${selectedFile?.lastModified}`}
+            sourceReady={Boolean(selectedFile || uploadedVideoId)}
+            prepare={async () => prepareModuleVideo(await ensureUploadedVideo())}
+            metadata={{ ...metadata, fileName: selectedFile?.name ?? `video-${videoIdParam}.mp4`, fileSize: selectedFile?.size,
+              recording_session_id: searchParams.get("sessionId") ?? undefined }}
+            onCreated={(job, sources) => onNavigate(buildAnalysisProgressPath(job.id,
+              returnParam ?? `/library/${searchParams.get("sessionId") ? `recording/${encodeURIComponent(searchParams.get("sessionId")!)}` : `upload/${encodeURIComponent(sources.sources[0].video_id!)}`}?view=overview`), { replace: true })}
+          />}
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             <button className="quiet-button" onClick={() => onNavigate("/vision")} type="button">

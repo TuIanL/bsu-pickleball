@@ -1,3 +1,7 @@
+import { AnalysisModeSelector } from "../components/analysis/AnalysisModeSelector";
+import { ModularAnalysisCreator } from "../components/analysis/ModularAnalysisCreator";
+import { readAnalysisMode } from "../services/analysisModeConfig";
+import { prepareModuleVideo } from "../services/analysisModuleClient";
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, Camera } from "lucide-react";
 import type { SyncRecordingSession } from "../types/report";
@@ -50,6 +54,7 @@ function formatDate(iso?: string): string {
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAnalyzePageProps) {
+  const [creationMode, setCreationMode] = useState(readAnalysisMode);
   const [session, setSession] = useState<SyncRecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -257,6 +262,8 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           </div>
         </div>
 
+        <AnalysisModeSelector value={creationMode} onChange={setCreationMode} />
+        {creationMode === "full" ? <>
         <AnalysisFlowSelector value={analysisFlow} onChange={handleAnalysisFlowChange} />
 
         {/* Roster / court-end confirmation（可跳过，不阻塞普通分析） */}
@@ -280,6 +287,15 @@ export function RecordingAnalyzePage({ sessionId, cam, onNavigate }: RecordingAn
           onCancel={() => goReturn()}
           isSubmitting={isSubmitting}
         />
+
+        </> : <ModularAnalysisCreator key={`${sessionId}:${camSlot}`} mode={creationMode} sourceKey={`${sessionId}:${camSlot}`}
+          prepare={() => prepareModuleVideo(videoId!, camSlot)} sourceReady={Boolean(videoId)}
+          metadata={{ fileName: `${sessionId}-${camSlot}.mp4`, matchTitle: session.court_name || "录制专项分析", venue: session.court_name || "未知球场",
+            matchDate: session.started_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+            matchFormat: session.match_format === "singles" ? "singles" : "doubles", cameraAngle: "unknown", athleteLabel: "球馆采集", level: "大众进阶",
+            recording_session_id: sessionId, camera_slot: camSlot }}
+          onCreated={(job) => onNavigate(buildAnalysisProgressPath(job.id, returnParam ?? `/capture/${encodeURIComponent(sessionId)}`), { replace: true })}
+        />}
 
         {/* Submit error */}
         {submitError && (

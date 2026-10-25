@@ -893,6 +893,7 @@ export interface AnalysisJobSummary {
   planId?: string | null;
   planHash?: string | null;
   resultKind?: "legacy" | "modular";
+  analysisTargets?: string[];
   nodeRuns?: AnalysisNodeRun[];
   resultCompleteness?: "complete" | "partial" | "none" | null;
   status: AnalysisJobStatus;
@@ -2629,4 +2630,5 @@ export interface ModularRunManifest {
   targets: string[];
   nodes: AnalysisNodeRun[];
   artifacts: AnalysisArtifactRef[];
+  artifact_details?: Array<{ manifest: { ref: AnalysisArtifactRef; quality: string }; availability: string }>;
 }

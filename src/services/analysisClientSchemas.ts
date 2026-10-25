@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const analysisJobSummarySchema = z.object({
+export const analysisJobSummarySchema = z.object({
   id: z.string().min(1),
   status: z.enum(["uploaded", "queued", "processing", "failed", "completed", "canceled", "interrupted"]),
   stage: z.string(),
