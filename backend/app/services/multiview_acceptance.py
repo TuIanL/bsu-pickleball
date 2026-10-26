@@ -339,6 +339,8 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
             json.dump(payload, handle, ensure_ascii=True, indent=2)
             handle.write("\n")
             handle.flush()
+            handle.close()
             os.replace(temporary, path)
         finally:
+            handle.close()
             temporary.unlink(missing_ok=True)

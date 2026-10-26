@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from app.vision.image_io import write_image
+
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -416,7 +418,7 @@ class AutomaticCalibrationService:
 
         path = self.storage.automatic_calibration_preview_path(suggestion_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(path), output):
+        if not write_image(cv2, path, output):
             return None
         return f"/calibration/automatic/previews/{suggestion_id}"
 

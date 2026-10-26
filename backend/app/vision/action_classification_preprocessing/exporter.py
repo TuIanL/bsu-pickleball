@@ -12,6 +12,8 @@
 # `from __future__ import annotations`：兼容较新类型写法。
 from __future__ import annotations
 
+from app.vision.image_io import write_image
+
 import json  # 把清单写成 JSON 文件
 from dataclasses import asdict  # 把 dataclass 转 dict
 from datetime import UTC, datetime  # 生成清单的创建时间（带时区）
@@ -394,7 +396,7 @@ def _write_clip_outputs(
                 write_failed = True
                 break
             # 用 OpenCV 把裁剪图写成 JPEG（带质量参数）
-            ok = cv2.imwrite(str(frame_path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), int(config.jpeg_quality)])
+            ok = write_image(cv2, frame_path, crop, [int(cv2.IMWRITE_JPEG_QUALITY), int(config.jpeg_quality)])
             if not ok:
                 entry.errors.append({"message": f"Could not write frame: {frame_path}"})
                 write_failed = True

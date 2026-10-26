@@ -77,7 +77,9 @@ def load_frame(image_path: Path | None) -> Any:
 
     import cv2  # type: ignore
 
-    frame = cv2.imread(str(image_path))
+    from app.vision.image_io import read_image
+
+    frame = read_image(cv2, image_path)
     if frame is None:
         raise RuntimeError(f"Could not read image frame: {image_path}")
     return frame

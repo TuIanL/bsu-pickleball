@@ -138,7 +138,7 @@ class TrackRecorder:
             )
             self._pid = self._process.pid or 0
             try:
-                self._pgid = os.getpgid(self._process.pid) if self._process.pid else 0
+                self._pgid = os.getpgid(self._process.pid) if self._process.pid and os.name != "nt" else 0
             except (ProcessLookupError, OSError):
                 self._pgid = 0
             self._start_ms = int(self._clock.monotonic_ms())

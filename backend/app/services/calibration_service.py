@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from app.vision.image_io import read_image, write_image
+
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -214,7 +216,7 @@ class CalibrationService:
         except ImportError as exc:
             raise ValueError("OpenCV is required to generate calibration previews") from exc
 
-        if not cv2.imwrite(str(path), output):
+        if not write_image(cv2, path, output):
             raise ValueError("Failed to write calibration preview image")
 
         return CalibrationPreviewResponse(calibration_id=calibration_id, preview_image_path=str(path))
@@ -259,7 +261,7 @@ class CalibrationService:
             path = Path(frame_path)
             if not path.exists():
                 raise ValueError("Provided frame_path does not exist")
-            frame = cv2.imread(str(path))
+            frame = read_image(cv2, path)
             if frame is None:
                 raise ValueError("Provided frame_path could not be read as an image")
             return frame

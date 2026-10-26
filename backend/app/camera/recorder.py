@@ -147,7 +147,7 @@ class Recorder:
             start_new_session=True,
         )
         self.pid = self._process.pid
-        self.pgid = os.getpgid(self._process.pid) if self._process.pid else None
+        self.pgid = os.getpgid(self._process.pid) if self._process.pid and os.name != "nt" else None
         self.command_fingerprint = hashlib.sha256(cmd_fingerprint.encode()).hexdigest()[:16]
 
         self._monitor_thread = threading.Thread(

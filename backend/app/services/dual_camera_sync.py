@@ -133,8 +133,11 @@ def write_frame_timing_sidecar(
             if count == 0:
                 raise ValueError("ffprobe returned no video frames with usable PTS")
             handle.flush()
+            # Windows cannot replace or unlink an open temporary file.
+            handle.close()
             os.replace(temp_path, target)
         finally:
+            handle.close()
             temp_path.unlink(missing_ok=True)
 
     duration = (last - first) if first is not None and last is not None else 0.0

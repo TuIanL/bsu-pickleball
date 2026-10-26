@@ -18,6 +18,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -338,7 +339,17 @@ class StorageService:
                 handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp_path, path)
+            for attempt in range(6):
+                try:
+                    os.replace(tmp_path, path)
+                    break
+                except PermissionError as exc:
+                    # Concurrent readers/writers can temporarily deny DELETE
+                    # sharing on Windows. Keep the unique temporary file and
+                    # bound the retry rather than failing the worker heartbeat.
+                    if os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
         except Exception:
             try:
                 tmp_path.unlink()

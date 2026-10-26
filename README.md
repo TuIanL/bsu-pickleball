@@ -17,6 +17,8 @@
 
 ## 技术栈
 
+Windows 本机接手、模型清单与断点调试说明见 [本地接手说明](docs/本地接手说明.md)。已配置环境可双击根目录 `start-pickleball.cmd` / `stop-pickleball.cmd`，或运行 `npm run app:start:windows` / `npm run app:stop:windows`。
+
 | 层级 | 技术 |
 |------|------|
 | 前端 | React 19, TypeScript 5.9, Vite 7, Tailwind CSS 4, D3.js（热力图/散点图）, lucide-react（图标） |

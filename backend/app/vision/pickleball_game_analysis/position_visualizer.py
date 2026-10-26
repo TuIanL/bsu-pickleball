@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.vision.image_io import write_image
+
 # defaultdict：热力图网格计数；Path：文件路径；Iterable：可接受任意可迭代点集合。
 from collections import defaultdict
 from collections.abc import Iterable
@@ -122,7 +124,7 @@ class PositionVisualizer:
 
         file_name = "player_positions_heatmap.png"
         image = self._heatmap_image(valid, grid=visual_grid)
-        cv2.imwrite(str(output_dir / file_name), image)
+        write_image(cv2, output_dir / file_name, image)
         items.append(
             ManifestItem(
                 id="player-positions-heatmap",
@@ -144,7 +146,7 @@ class PositionVisualizer:
             safe_label = _safe_file_label(label)
             player_file_name = f"player_positions_heatmap_{safe_label}.png"
             player_image = self._heatmap_image(points, heat_color=player_color(index))
-            cv2.imwrite(str(output_dir / player_file_name), player_image)
+            write_image(cv2, output_dir / player_file_name, player_image)
             items.append(
                 ManifestItem(
                     id=f"player-positions-heatmap-{safe_label}",
@@ -295,7 +297,7 @@ class PositionVisualizer:
             bounce_points=bounce_points,
             limit_player_trails=False,
         )
-        cv2.imwrite(str(path), image)
+        write_image(cv2, path, image)
         return ManifestItem(
             id=item_id,
             kind="scatter",

@@ -12,6 +12,8 @@
 # `from __future__ import annotations`：兼容较新类型写法。
 from __future__ import annotations
 
+from app.vision.image_io import write_image
+
 import json  # 写 manifest JSON
 import re  # 正则（用于清洗文件名）
 
@@ -233,7 +235,7 @@ def _extract_one_video(
                 break
 
             # 写出 JPEG 图片
-            written = cv2.imwrite(
+            written = write_image(cv2,
                 str(frame_path),
                 frame,
                 [int(cv2.IMWRITE_JPEG_QUALITY), int(settings.jpeg_quality)],

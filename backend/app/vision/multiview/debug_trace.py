@@ -166,8 +166,10 @@ def write_joint_debug_trace(path: str | os.PathLike[str], payload: dict[str, obj
             json.dump(payload, handle, ensure_ascii=True, indent=2, default=str)
             handle.write("\n")
             handle.flush()
+            handle.close()
             os.replace(temporary, target)
         finally:
+            handle.close()
             temporary.unlink(missing_ok=True)
     return target
 

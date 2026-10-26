@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from app.vision.image_io import read_image, write_image
+
 import json
 import os
 import re
@@ -467,7 +469,7 @@ def _write_annotation_previews(
             source_path = _resolve_image_path(root, split, str(image.get("file_name", "")))
             if source_path is None:
                 continue
-            frame = cv2.imread(str(source_path))
+            frame = read_image(cv2, source_path)
             if frame is None:
                 continue
             # 复制一份用于画半透明叠加层
@@ -477,7 +479,7 @@ def _write_annotation_previews(
             # addWeighted 把彩色标注层与原始图按 0.55/0.45 混合，得到半透明效果
             output = cv2.addWeighted(overlay, 0.55, frame, 0.45, 0)
             output_path = output_root / f"{split}-{written + 1:02d}-{Path(str(image.get('file_name'))).stem}.jpg"
-            if cv2.imwrite(str(output_path), output):
+            if write_image(cv2, output_path, output):
                 previews.append(
                     {
                         "split": split,

@@ -183,11 +183,18 @@ def test_concurrent_legacy_json_snapshots_use_independent_temp_files(tmp_path, m
 
     barrier = threading.Barrier(2)
     replace_sources: list[Path] = []
+    source_lock = threading.Lock()
     real_replace = storage_module.os.replace
 
     def synchronized_replace(source: str | bytes | Path, destination: str | bytes | Path) -> None:
-        replace_sources.append(Path(source))
-        barrier.wait(timeout=2)
+        # Synchronize each writer's first attempt; Windows may legitimately
+        # retry the same source after a transient sharing violation.
+        with source_lock:
+            first_attempt = Path(source) not in replace_sources
+            if first_attempt:
+                replace_sources.append(Path(source))
+        if first_attempt:
+            barrier.wait(timeout=2)
         real_replace(source, destination)
 
     monkeypatch.setattr(storage_module.os, "replace", synchronized_replace)

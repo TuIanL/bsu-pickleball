@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -23,6 +24,22 @@ from app.models.media_fragment import MediaFragment
 from app.models.track_finalization import FinalizationStatus, TrackFinalization
 from app.models.vidat_annotation import VidatAnnotationPackage, VidatImportAudit, VidatImportPreview
 from app.services.video_service import video_service
+
+
+def _link_video(source: Path, target: Path) -> None:
+    """Use a symlink, or an NTFS hard link without administrator privileges."""
+    source = source.resolve()
+    try:
+        target.symlink_to(source)
+    except OSError as exc:
+        if os.name != "nt" or getattr(exc, "winerror", None) != 1314:
+            raise
+        try:
+            os.link(source, target)
+        except OSError as link_error:
+            if link_error.errno != errno.EXDEV:
+                raise
+            shutil.copy2(source, target)
 
 VIDAT_SCHEMA_VERSION = "pickleball-vidat-v1"
 EVENT_LABELS = {
@@ -1071,7 +1088,7 @@ def _create_derived_package(
         video_path = package_dir / video_name
         # 派生包指向真实视频，而不是指向来源包目录中的中间 symlink；这样来源
         # 包被逻辑删除/清理后，仍不会悄悄破坏派生包的内容基线。
-        os.symlink(source_video.resolve(), video_path)
+        _link_video(source_video, video_path)
         copied_annotation = json.loads(json.dumps(annotation, ensure_ascii=False))
         annotation_video = copied_annotation.setdefault("annotation", {}).setdefault("video", {})
         annotation_video["src"] = f"video/{video_name}"
@@ -1166,7 +1183,7 @@ def create_annotation_package(
     if copy_video:
         shutil.copy2(video, video_path)
     else:
-        os.symlink(video.resolve(), video_path)
+        _link_video(video, video_path)
     actions = _event_actions(db, take.id, info["fps"])
     frames = max(1, round(info["duration"] * info["fps"]))
     actions = [action for action in actions if action["start"] < info["duration"]]
@@ -1286,7 +1303,7 @@ def publish_annotation_package(package: VidatAnnotationPackage, dist_root: Path)
         if target.exists() or target.is_symlink():
             target.unlink()
         if content is None:
-            target.symlink_to(source)
+            _link_video(source, target)
         else:
             target.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
     # Vidat resolves query parameters from the static site root. Include the
