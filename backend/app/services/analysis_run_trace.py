@@ -150,15 +150,27 @@ class RunTraceSink:
         attempt: int,
         worker_id: str | None = None,
         worker_run_id: str | None = None,
+        schema_version: str = TRACE_SCHEMA_VERSION,
+        context: dict[str, Any] | None = None,
     ) -> None:
         self.path = Path(path)
         self.job_id = job_id
         self.attempt = attempt
         self.worker_id = worker_id
         self.worker_run_id = worker_run_id
+        self.schema_version = schema_version
+        self.context = context or {}
         self._lock = threading.Lock()
         self._seq = 0
         self._unavailable: dict[str, Any] | None = None
+        try:
+            if self.path.is_file():
+                for line in self.path.read_text(encoding="utf-8").splitlines():
+                    event = _parse_trace_event(line)
+                    if event:
+                        self._seq = max(self._seq, int(event.get("seq", 0)))
+        except (OSError, ValueError):
+            pass  # 目标不可写仍通过既有 sink_unavailable 路径表达。
 
     @property
     def seq(self) -> int:
@@ -176,7 +188,7 @@ class RunTraceSink:
         with self._lock:
             self._seq += 1
             payload: dict[str, Any] = {
-                "schema_version": TRACE_SCHEMA_VERSION,
+                "schema_version": self.schema_version,
                 "seq": self._seq,
                 "ts": utc_now(),
                 "job_id": self.job_id,
@@ -186,6 +198,7 @@ class RunTraceSink:
                 "stage": stage,
                 "event": event,
             }
+            payload.update(self.context)
             payload.update({key: value for key, value in fields.items() if value is not None})
             if self._append_line(payload):
                 return payload

@@ -143,6 +143,8 @@ def _on_worker_completed(job: AnalysisJobSummary, result: AnalysisPipelineResult
 
 
 def _on_worker_terminal(job: AnalysisJobSummary) -> None:
+    if job.analysisEngine == "modular_v1":
+        return
     # 任一 job 进入终态时通知编排层：
     # - 双摄 child 终态 → 推进其 Parent（waiting_sources → fusion_ready / fallback_ready / failed）；
     # - 双摄 Parent 成功 → 编排状态置 completed。
@@ -240,6 +242,15 @@ def create_analysis_job(
     #   - 无 videoId（demo）：直接返回一个已完成任务 + 样例报告。
     _sync_orchestration_storage()
     now = utc_now()
+
+    if payload.analysisEngine == "modular_v1":
+        from app.analysis_runtime.service import submit
+        request = payload.modularRequest.model_copy(update={"new_version": payload.modularRequest.new_version or payload.requestNewVersion})
+        job = submit(_JOB_STORE, request, payload.metadata, priority=payload.priority,
+                     expected_plan_hash=payload.expectedPlanHash, db=db)
+        if _WORKER is not None:
+            _WORKER.notify()
+        return job
 
     if payload.analysisKind == "multiview":
         multiview_context_plan: dict | None = None
@@ -620,8 +631,14 @@ def delete_analysis_job(job_id: str, *, allow_internal: bool = False) -> Analysi
     if job.status in ACTIVE_COMPAT_STATUSES:
         return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="Active analysis jobs cannot be deleted")
 
+    from app.analysis_runtime.service import artifact_store
+    module_artifacts = artifact_store(_JOB_STORE)
+    private_root = _STORAGE.capture_job_root(job_id) or (_STORAGE.outputs_dir / job_id)
+    if module_artifacts.source_pins(private_root, excluding_job=job_id):
+        return AnalysisDeleteResult(job_id=job_id, status="blocked", detail="私有目录含仍被使用的源文件，请先保留这些证据")
+
     # 双摄 Parent：先级联删除 owned child 分析产物 + fusion run 产物（绝不碰录制资产）
-    if job.analysisKind == "multiview":
+    if job.analysisKind == "multiview" and job.analysisEngine == "legacy_v1":
         _get_coordinator().delete_cascade(job)
 
     _STORAGE.resolve_capture_job_root(job_id, job.metadata.capture_take_id)
@@ -632,6 +649,7 @@ def delete_analysis_job(job_id: str, *, allow_internal: bool = False) -> Analysi
         RESULTS.pop(job_id, None)
 
     # 同时从 JobStore 删除，防止 list_analysis_jobs 重新加载
+    module_artifacts.unlink_job(job_id)
     _JOB_STORE.delete(job_id)
 
     # 逐个删除各类产物文件，并记录被删路径
@@ -800,11 +818,17 @@ def _cleanup_shared_video_artifacts(video_id: str | None, *, excluded_job_id: st
     if any(job.videoId == video_id for job in _remaining_jobs(excluded_job_id)):
         return
 
+    from app.analysis_runtime.retention import references
+    if references(_STORAGE.settings, video_ids=[video_id], excluding_job=excluded_job_id):
+        return
+
     metadata_path = _STORAGE.video_metadata_path(video_id)
     if metadata_path.exists():
         try:
             metadata = _STORAGE.read_json(metadata_path)
             raw_video_path = Path(str(metadata.get("path", "")))
+            if references(_STORAGE.settings, path=raw_video_path, excluding_job=excluded_job_id):
+                return
             if raw_video_path.exists():
                 raw_video_path.unlink()
         except Exception:  # noqa: BLE001 - fallback to cached video metadata below.
@@ -813,6 +837,8 @@ def _cleanup_shared_video_artifacts(video_id: str | None, *, excluded_job_id: st
     video = video_service.get_video(video_id)
     if video is not None:
         video_path = Path(video.path)
+        if references(_STORAGE.settings, path=video_path, excluding_job=excluded_job_id):
+            return
         if video_path.exists():
             video_path.unlink()
 

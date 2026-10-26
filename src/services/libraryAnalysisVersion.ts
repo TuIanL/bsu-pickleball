@@ -4,6 +4,7 @@ import type { NavigatePath } from "../app/navigationTypes";
 
 export interface SelectedAnalysisResolution {
   requestedJobId?: string;
+  moduleJobId?: string;
   selectedJob?: LibraryAnalysisJobView;
   selectedJobId?: string;
   explicit: boolean;
@@ -28,6 +29,9 @@ export function resolveSelectedAnalysisJob(
       invalidRequestedJob: false,
     };
   }
+
+  const moduleJob = item.analysisJobs.find((job) => job.id === requested && job.analysisEngine === "modular_v1");
+  if (moduleJob) return { requestedJobId: requested, moduleJobId: moduleJob.id, explicit: true, invalidRequestedJob: false };
 
   const ownedPublicTerminal = item.analysisJobs.find(
     (job) => job.id === requested && TERMINAL_STATUSES.has(job.status),

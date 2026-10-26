@@ -889,6 +889,13 @@ export interface AnalysisStage {
 
 export interface AnalysisJobSummary {
   id: string;
+  analysisEngine?: "legacy_v1" | "modular_v1";
+  planId?: string | null;
+  planHash?: string | null;
+  resultKind?: "legacy" | "modular";
+  analysisTargets?: string[];
+  nodeRuns?: AnalysisNodeRun[];
+  resultCompleteness?: "complete" | "partial" | "none" | null;
   status: AnalysisJobStatus;
   canonicalStatus?: AnalysisCanonicalStatus;
   displayStatus?: AnalysisJobStatus;
@@ -2591,3 +2598,37 @@ export const DEFAULT_COURT_VISUAL_THEME_V1: CourtVisualizationStyleProfile = {
   radius_min_px: 2.0,
   radius_max_px: 6.0,
 };
+
+export interface AnalysisArtifactRef {
+  artifact_id: string;
+  artifact_type: string;
+  schema_version: string;
+}
+
+export interface AnalysisNodeRun {
+  node_key: string;
+  capability_id: string;
+  implementation_id?: string | null;
+  implementation_version?: string | null;
+  configuration_digest?: string | null;
+  status: "pending" | "running" | "cached" | "completed" | "failed" | "blocked" | "canceled" | "skipped";
+  node_attempt: number;
+  artifact?: AnalysisArtifactRef | null;
+  error_code?: string | null;
+  message?: string | null;
+  counters: Record<string, unknown>;
+}
+
+export interface ModularRunManifest {
+  schema_version: "modular-run.v1";
+  result_kind: "modular";
+  job_id: string;
+  plan_id: string;
+  plan_hash: string;
+  status: AnalysisCanonicalStatus;
+  completeness: "complete" | "partial" | "none";
+  targets: string[];
+  nodes: AnalysisNodeRun[];
+  artifacts: AnalysisArtifactRef[];
+  artifact_details?: Array<{ manifest: { ref: AnalysisArtifactRef; quality: string }; availability: string }>;
+}

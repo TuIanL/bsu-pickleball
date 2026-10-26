@@ -29,7 +29,7 @@
 
 #### Scenario: Job succeeds
 
-- **WHEN** 所有必需分析阶段和报告生成完成
+- **WHEN** legacy_v1 的所有必需分析阶段和报告生成完成
 - **THEN** 系统 SHALL 标记 job 为 succeeded，记录完成时间，保存结果/报告 artifact 引用，并保留阶段遥测
 
 #### Scenario: Job fails
@@ -55,7 +55,19 @@
 - **THEN** 系统 SHALL 表达租约丢失结论，SHALL NOT 归因为 `internal_defect`
 - **AND** 不得把该结论表述为算法阶段失败
 
+#### Scenario: 模块任务按目标成功
+- **WHEN** modular_v1 的全部请求目标 completed/cached，或显式 best_effort 满足至少一个目标完成
+- **THEN** 系统 SHALL 根据冻结失败策略记录 succeeded 与 complete/partial 完整性
+- **AND** SHALL 保存运行清单与产物引用，不要求生成报告
+
+#### Scenario: 模块目标失败但保留独立结果
+- **WHEN** all_targets 的某个请求目标失败或被阻断
+- **THEN** Job SHALL 为 failed，运行清单 SHALL 表达部分完成
+- **AND** 独立完成产物 SHALL 保留并可检查
+
 ### Requirement: Stage telemetry
+
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
 
 阶段遥测 MUST 保持既有 `AnalysisStage` 结构，并由当前分析模式的规范化阶段图生成。`single_view` MUST 继续使用既有单摄稳定阶段。需要正式双摄回合切分的 `late_fusion_v1` 与 `joint_tracking_v2` Parent MUST 将“回合自动切分”作为第一个聚合阶段；它先于素材与同步检查以及任一 A/B 或 joint 视觉执行。后续阶段仍分别按“素材与同步检查 / A 机位视觉分析 / B 机位视觉分析 / 多视角融合 / 指标重算 / 可视化输出 / 报告生成”和“素材与同步检查 / 双摄协同跟踪 / 双摄球路分析 / 指标重算 / 可视化输出 / 报告生成”顺序表达。双摄子阶段进度 MUST 经 `viewRuns` 暴露，运行中应反映最近可用的 child 或内部 `ViewRun` 状态；双摄专用阶段 MUST NOT 被追加到单摄阶段列表末尾。
 
@@ -95,6 +107,12 @@
 - **AND** 产物状态 MUST NOT 在阶段记录之后被无条件改写为 `skipped`
 - **AND** 前端展示的阶段状态与产物状态 MUST 一致
 
+#### Scenario: 模块任务节点进度
+- **WHEN** 查询 modular_v1 任务进度
+- **THEN** 系统 SHALL 暴露独立的 nodeRuns，使用冻结计划的稳定权重聚合进度
+- **AND** SHALL 不把任意节点映射为固定 AnalysisStage 或补建报告阶段
+- **AND** 已完成或缓存节点 SHALL 不因另一个节点重试被重置，总体展示进度 SHALL 单调递增
+
 ### Requirement: API and worker execution separation
 
 系统 SHALL 将任务创建/查询/取消 API 与重型分析执行彻底分离。真实分析请求 SHALL 只在控制面创建 queued job 并通知或等待 external Worker 领取，不得在 Web 请求处理器或 FastAPI lifespan thread 中运行完整 Pipeline。
@@ -107,7 +125,7 @@
 #### Scenario: Worker executes a job
 
 - **WHEN** external Worker 找到可执行 queued job
-- **THEN** Worker SHALL 执行 Pipeline，通过 JobStore 写入 heartbeat/阶段进度，并持久化 terminal job/result/report 状态
+- **THEN** Worker SHALL 通过 registry 执行对应 engine 的 Executor，通过 JobStore 写入 heartbeat 与阶段/节点进度，并按 engine 持久化 terminal Job 及结果/报告或模块清单
 
 #### Scenario: API reads status during execution
 
@@ -193,23 +211,25 @@ The system SHALL limit local concurrent analysis work according to configured CP
 - **AND** 失败归因 MUST NOT 为 `internal_defect`
 
 ### Requirement: Timeout and retry policy
-The system SHALL support bounded timeout and retry behavior for explicitly configured stages.
+系统 SHALL 对显式配置的阶段提供有界超时与重试。
+
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
 
 阶段超时 MUST 作为控制信号到达编排层，SHALL NOT 被转成普通任务失败。
 
 重试 SHALL 是幂等的：每次重试 SHALL 是对执行体的一次完整重新执行，而不是从失败阶段续跑。系统在进入下一次重试尝试前 MUST 清理上一次尝试已写出的产物，或写入显式的「未完成」标记。磁盘上已写出的产物与控制面记录的任务状态 MUST NOT 永久分叉：不得出现控制面记录为 failed/canceled/interrupted、而磁盘上却存在一份声明 `completed` 的结果文件的组合。
 
 #### Scenario: Stage exceeds timeout
-- **WHEN** a stage exceeds its configured timeout
-- **THEN** the system records a timeout error code and either retries the stage if it is retryable or fails the job with a user-facing timeout message
+- **WHEN** 阶段超过已配置的超时限制
+- **THEN** 系统 SHALL 记录超时错误码；可重试时按策略重试，否则将任务置为失败并提供用户可读的超时说明
 
 #### Scenario: Retryable stage fails
-- **WHEN** a retryable stage fails with a retryable error and retry attempts remain
-- **THEN** the system records the failed attempt, increments the retry count, and retries the stage according to the configured policy
+- **WHEN** 可重试阶段发生可重试错误且还有重试预算
+- **THEN** 系统 SHALL 记录失败尝试、增加重试计数，并按已配置策略重试
 
 #### Scenario: Non-retryable stage fails
-- **WHEN** a non-retryable stage fails
-- **THEN** the system fails the job without retrying and preserves the diagnostic context
+- **WHEN** 不可重试阶段失败
+- **THEN** 系统 SHALL 将任务置为失败并保留诊断上下文，不进行重试
 
 #### Scenario: 阶段超时作为控制信号
 
@@ -230,25 +250,47 @@ The system SHALL support bounded timeout and retry behavior for explicitly confi
 - **THEN** 读取该任务结果的接口 MUST NOT 把该文件作为本次运行的完整成功报告返回
 - **AND** 若该文件因任何原因仍存在，其内容 MUST 明确表达「本次运行未完成」
 
+#### Scenario: 模块节点有限重试
+- **WHEN** modular_v1 的一个可重试节点失败且尚有预算
+- **THEN** 系统 SHALL 从该节点起始状态重新执行，不要求节点内部 checkpoint
+- **AND** SHALL 保留并核验已发布上游与独立分支，不完整重跑整个 Executor
+
+#### Scenario: 模块部分结果不伪装完整成功
+- **WHEN** 模块 Job 终态为 failed、canceled 或 interrupted
+- **THEN** 清单 SHALL 表达终态与未完成目标，已发布 Artifact SHALL 保持其真实完成事实
+- **AND** API SHALL 不将部分清单返回为完整成功报告
+
 ### Requirement: Idempotent job submission
-The system SHALL support idempotent real-analysis job submission based on stable input and configuration signatures. 对于声明或消费正式 Team A/B 语义的任务，签名 MUST 包含 `AnalysisRosterSnapshot` hash、analysis-rally-context-set hash 与适用 formal plan input hash。
+系统 SHALL 基于稳定输入和配置签名支持真实分析任务的幂等提交。 对于声明或消费正式 Team A/B 语义的任务，签名 MUST 包含 `AnalysisRosterSnapshot` hash、analysis-rally-context-set hash 与适用 formal plan input hash。
+
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
 
 #### Scenario: Duplicate submission is detected
-- **WHEN** a client submits the same input video, calibration, analysis options, model/runtime configuration, roster/context signature without requesting a new version
-- **THEN** the system returns or references the existing queued, running, or succeeded job rather than starting duplicate work
+- **WHEN** 客户端以相同视频、标定、分析选项、模型/运行配置和 roster/context 签名提交，且未要求新版本
+- **THEN** 系统 SHALL 返回或引用已有 queued、running 或 succeeded 任务，避免重复执行
 
 #### Scenario: New version is requested
-- **WHEN** a client explicitly requests a new analysis version for an otherwise identical input signature
-- **THEN** the system creates a new job version and records the relationship to the previous signature-compatible job
+- **WHEN** 客户端对相同输入签名显式请求新的分析版本
+- **THEN** 系统 SHALL 创建新任务版本，并记录与之前签名兼容任务的关系
 
 #### Scenario: Configuration changes
-- **WHEN** the same video is submitted with materially different analysis options or model/runtime configuration
-- **THEN** the system treats it as a distinct analysis signature and may create a separate job
+- **WHEN** 同一视频使用实质不同的分析选项或模型/运行配置提交
+- **THEN** 系统 SHALL 将其视为不同分析签名，并可创建独立任务
 
 #### Scenario: 名册或回合上下文不同
 - **WHEN** 相同媒体使用不同 roster snapshot 或 analysis-rally-context-set hash 提交
 - **THEN** 系统 SHALL 视其为不同输入
 - **AND** MUST NOT 返回采用旧身份、队伍或端位结果的 Job/artifact
+
+#### Scenario: 模块任务按合同去重
+- **WHEN** 相同 analysisEngine=modular_v1 与 plan_hash 被重复提交且未请求新版本
+- **THEN** 系统 SHALL 复用或引用匹配的 queued/running/succeeded Job
+- **AND** plan_hash SHALL 包含目标、已消费上下文、窗口、采样与失败策略，排除缓存提示和随机 ID
+
+#### Scenario: 模块未消费名册
+- **WHEN** 纯图像检测未消费 roster/context 且这些字段变化
+- **THEN** 系统 SHALL 不因此改变该模块计划身份
+- **AND** SHALL 不使用 legacy 的全量任务签名代替模块缓存键
 
 ### Requirement: Research-grade execution record
 The system SHALL preserve enough execution metadata to support product debugging and research reproducibility.
@@ -285,6 +327,8 @@ The system SHALL preserve enough execution metadata to support product debugging
 ### Requirement: 任务调度保留并传递源 FPS
 系统 SHALL 在分析任务创建、持久化、签名和 worker 执行过程中保留用户确认的源 FPS。
 
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
+
 #### Scenario: 创建任务保存 FPS
 - **WHEN** API 收到包含源 FPS 的分析任务创建请求
 - **THEN** JobStore MUST 将该 FPS 保存到任务摘要或任务输入中
@@ -300,7 +344,14 @@ The system SHALL preserve enough execution metadata to support product debugging
 - **THEN** 签名输入 MUST 包含源 FPS 或其规范化等价值
 - **AND** 不同源 FPS 的任务 MUST 产生不同签名
 
+#### Scenario: 模块时间元数据冻结
+- **WHEN** modular_v1 消费来源 FPS、PTS 或同步信息
+- **THEN** 系统 SHALL 在计划与产物中保留实际消费的时间元数据及版本
+- **AND** 正式双摄 SHALL 使用既有权威 PTS/clock 映射，不以 FPS 替代
+
 ### Requirement: 分析任务支持时间裁剪与预热区间
+
+本条既有行为与场景 SHALL 适用于 analysisEngine=legacy_v1（含未声明 engine 的历史任务）。modular_v1 SHALL 遵循独立的冻结计划与运行清单合同。
 
 系统 MUST 在 AnalysisJob JSON Schema 中支持 clip 参数（非数据库列），并在所有实际执行和派生可视化阶段使用统一的窗口语义。Pipeline 执行时使用预热区间，但正式指标、融合统计和用户可见叠加视频 MUST 只对应请求窗口。
 
@@ -342,9 +393,15 @@ The system SHALL preserve enough execution metadata to support product debugging
 - **THEN** Pipeline、叠加视频和统计 SHALL 按完整源视频执行
 - **AND** 结果 SHALL 将窗口字段标记为未启用或省略
 
+#### Scenario: 模块局部范围不继承整场默认
+- **WHEN** modular_v1 提交局部验证任务
+- **THEN** 请求 SHALL 提供成对的有限窗口，并按 analysis-window-planning 解析上下文和输出选择
+- **AND** 缺失或非法窗口 SHALL 被拒绝，不采用 legacy 的全场默认
+- **AND** legacy 的默认 1500/500ms 预热 SHALL 不被自动加入无上下文需求的模块
+
 ### Requirement: 可执行判定统一为 is_runnable
 
-`JobStore.claim_next()` / `claim` 的可执行判定 MUST 收口为 `is_runnable(job)`：`canonicalStatus != "queued"` → False；`analysisKind=single_view` → True；`analysisKind=multiview` → `orchestrationStatus ∈ {fusion_ready, fallback_ready}`。MUST NOT 再直接按 `canonicalStatus == "queued"` 领取。
+JobStore.claim_next()/claim 的可执行判定 MUST 收口为 is_runnable(job)。canonicalStatus != queued SHALL 返回 False。analysisEngine=modular_v1 SHALL 仅在冻结计划已持久化、来源/输入准备完成且计划可执行时返回 True，不受 legacy Parent 的 fusion_ready 条件约束；缺省或 legacy_v1 SHALL 保留 single_view 可执行、multiview 仅在 orchestrationStatus 属于 fusion_ready/fallback_ready 时可执行的规则。MUST NOT 仅按 canonicalStatus == queued 领取。
 
 #### Scenario: waiting_sources 不被领取
 
@@ -353,32 +410,49 @@ The system SHALL preserve enough execution metadata to support product debugging
 
 #### Scenario: fusion_ready 正常领取
 
-- **WHEN** Parent `orchestrationStatus=fusion_ready`
+- **WHEN** Parent 的 orchestrationStatus=fusion_ready
 - **THEN** `claim_next()` SHALL 按既有优先级/排队规则领取
+
+#### Scenario: 模块双摄原始检测可领取
+- **WHEN** modular_v1 的双摄 ball.detect 计划与输入已就绪且 queued
+- **THEN** Worker SHALL 可领取该任务
+- **AND** SHALL 不等待无关的 child、正式切分或 fusion_ready
 
 ### Requirement: Worker 经 Executor registry 分发
 
-`AnalysisWorkerRuntime._execute` MUST 通过 `executor_registry.resolve(job.analysisKind)` 解析执行体并调用 `execute(job, token, progress_callback)`，MUST NOT 在 Worker 主循环内按 `analysisKind` 硬编码分支。第一版 registry 仅含 SingleView / MultiView 两个执行体（不做插件框架）。取消/重试/超时兜底逻辑归属与行为保持不变。
+AnalysisWorkerRuntime._execute MUST 通过统一 resolve_executor 入口先按 analysisEngine、再在 legacy 分支按 analysisKind/模式/角色解析执行体，并调用 execute(job, token, progress_callback)。Worker 主循环 MUST NOT 硬编码具体能力或算法。静态 registry SHALL 保留 SingleView/MultiView 与现有 prerequisite/联合执行角色，并增加 ModularAnalysisExecutor，不引入动态插件框架。取消/超时兜底继续归属 Worker；legacy 整体重试和 modular 节点重试 SHALL 按各自合同执行。
 
 #### Scenario: 单摄执行不变
 
-- **WHEN** 执行 `analysisKind=single_view` 任务
+- **WHEN** 执行 legacy_v1 的 analysisKind=single_view 任务
 - **THEN** 行为 SHALL 与改造前一致（SingleViewAnalysisExecutor 封装现有 Pipeline）
 - **AND** 现有单摄回归测试 SHALL 通过
 
 #### Scenario: 双摄执行链路
 
-- **WHEN** 执行 `analysisKind=multiview` 的 Parent
+- **WHEN** 执行 legacy_v1、analysisKind=multiview、late_fusion_v1 的 Parent
 - **THEN** MultiViewAnalysisExecutor SHALL 读 child 产物 → 执行 Fusion → Composer → 返回 Parent 结果
+
+#### Scenario: 模块执行链路
+- **WHEN** 执行 analysisEngine=modular_v1 的任务
+- **THEN** Worker SHALL 调用 ModularAnalysisExecutor 并按 ModularRunManifest 发布
+- **AND** SHALL 不强制生成 PipelineResult
 
 ### Requirement: 新增编排字段兼容读取
 
 `AnalysisJobSummary` MUST 支持新增字段（`analysisKind` / `visibility` / `parentJobId` / `analysisScope` / `orchestrationStatus` / `fusionRunId` / `sourceJobs` / `viewRuns` / `referenceViewId` / `clipStartMs` / `clipEndMs`）的历史兼容读取：缺省按 `single_view` / `public` / `none` 解析，不破坏既有任务。
 
+新增 analysisEngine、planId、planHash、resultKind 和 nodeRuns SHALL 兼容缺省读取；缺失 analysisEngine MUST 为 legacy_v1。历史任务不要求补建计划。
+
 #### Scenario: 历史任务读取
 
 - **WHEN** 读取不含新字段的历史 job
 - **THEN** 系统 SHALL 按缺省值解析并正常渲染
+
+#### Scenario: 历史 engine 缺省
+- **WHEN** 读取没有 analysisEngine 或 planId 的历史 Job
+- **THEN** 系统 SHALL 按 legacy_v1 正常读取
+- **AND** SHALL 不启动模型、生成计划或改变历史文件
 
 ### Requirement: 历史迁移与运行期读取分离
 
@@ -428,3 +502,18 @@ The system SHALL preserve enough execution metadata to support product debugging
 - **THEN** reconciliation SHALL 使用已绑定的 run id 和 plan hash 推进 Parent
 - **AND** SHALL 不重复创建 algorithm Segments 或 supersede 同一 run
 
+### Requirement: 模块计划入队前冻结并持久化
+模块请求 SHALL 在来源准备、能力/实现与必需输入校验、窗口解析后冻结计算合同，并在同一控制面中持久化计划和 queued Job。preview MUST 不持久化。Worker SHALL 读取冻结计划，不能根据最新默认配置重新规划。
+
+#### Scenario: 排队期间配置变化
+- **WHEN** 有效计划已入队而全局模型开关或默认实现变化
+- **THEN** Worker SHALL 执行原冻结合同
+- **AND** 无法核验原实现/模型时 SHALL 明确失败，不静默替换
+
+### Requirement: 模块恢复复用节点发布记录
+显式恢复 interrupted/failed 模块任务 SHALL 保留原计划和尝试证据，核验已发布输入/输出后仅重新调度必要节点。没有有效租约的旧运行 SHALL 不得继续发布。模块恢复 MUST 不调用 legacy 的整任务清理逻辑删除共享产物。
+
+#### Scenario: 重启后恢复
+- **WHEN** Worker 重启并将失联模块任务对账为 interrupted，随后收到显式恢复
+- **THEN** 新尝试 SHALL 在原计划上复用有效节点
+- **AND** SHALL 不重复发布有效完成产物或清空历史失败证据

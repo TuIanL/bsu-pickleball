@@ -50,3 +50,9 @@ describe("library analysis version", () => {
     })).toContain("view=trajectory&t=4&foo=bar");
   });
 });
+
+it.each(["processing", "completed", "failed"])("routes owned modular %s jobs outside the legacy workspace", (status) => {
+  const item = { ...baseItem, analysisJobs: [...baseItem.analysisJobs, { id: "module", analysisEngine: "modular_v1", status }] } as LibraryItemViewModel;
+  expect(resolveSelectedAnalysisJob(item, "module")).toMatchObject({ moduleJobId: "module", explicit: true, invalidRequestedJob: false });
+  expect(resolveSelectedAnalysisJob(item, "foreign-module")).toMatchObject({ selectedJobId: "new", invalidRequestedJob: true });
+});

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.performance_insights import ReportPerformanceInsights
 from app.schemas.rally_context import RosterConfirmationRequest
+from app.analysis_runtime.contracts import AnalysisRequest, NodeRun
 
 # 比赛制式
 MatchFormat = Literal["singles", "doubles"]
@@ -243,6 +244,15 @@ class AnalysisJobCreate(BaseModel):
     """创建分析任务的请求。"""
 
     metadata: AnalysisUploadMetadata
+    analysisEngine: Literal["legacy_v1", "modular_v1"] = "legacy_v1"
+    modularRequest: AnalysisRequest | None = None
+    expectedPlanHash: str | None = None
+
+    @model_validator(mode="after")
+    def validate_engine_payload(self):
+        if (self.analysisEngine == "modular_v1") != (self.modularRequest is not None):
+            raise ValueError("modular_v1 requires modularRequest; legacy_v1 must omit it")
+        return self
     videoId: str | None = None
     calibrationId: str | None = None
     frameStride: int = Field(default=1, ge=1)
@@ -294,6 +304,13 @@ class AnalysisJobSummary(BaseModel):
     """任务摘要：前端轮询进度时返回的核心信息。"""
 
     id: str
+    analysisEngine: Literal["legacy_v1", "modular_v1"] = "legacy_v1"
+    planId: str | None = None
+    planHash: str | None = None
+    resultKind: Literal["legacy", "modular"] = "legacy"
+    analysisTargets: list[str] = Field(default_factory=list)
+    nodeRuns: list[NodeRun] = Field(default_factory=list)
+    resultCompleteness: Literal["complete", "partial", "none"] | None = None
     status: AnalysisJobStatus
     canonicalStatus: AnalysisCanonicalStatus = "queued"
     displayStatus: AnalysisJobStatus | None = None

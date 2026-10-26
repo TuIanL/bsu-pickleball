@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from app.schemas.analysis import AnalysisJobCreate, AnalysisUploadMetadata, MultiViewCreateRequest, MultiViewViewPayload, build_match_context
 from app.schemas.tracking import Detection
@@ -37,6 +38,13 @@ REAL_TAKE_DIR = (
     / "captures"
     / "2026-07-18"
     / "take_sync_20260718_095421_f7d52a"
+)
+
+# 真实录制素材按 .gitignore 约定不入库（体积大且含原始影像），所以这组 smoke
+# 只在本地保留素材时执行，CI 等环境下显式跳过，避免把环境差异当成回归。
+pytestmark = pytest.mark.skipif(
+    not (REAL_TAKE_DIR / "metadata" / "recording_session.json").is_file(),
+    reason=f"需要本地真实双摄录制素材（未入库）：{REAL_TAKE_DIR}",
 )
 
 

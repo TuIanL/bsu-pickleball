@@ -73,7 +73,8 @@ class YoloBallDetectorAdapter(BallDetectorProtocol):
     def detect(self, frame: Any, conf: float = 0.18) -> list[BallCandidate]:
         model = self._ensure_model()
         threshold = conf if conf and conf > 0 else self.confidence_threshold
-        results = model.predict(frame, conf=threshold, verbose=False)
+        options = {"device": self.device} if self.device is not None else {}
+        results = model.predict(frame, conf=threshold, verbose=False, **options)
         candidates: list[BallCandidate] = []
         for result in results:
             boxes = getattr(result, "boxes", None)

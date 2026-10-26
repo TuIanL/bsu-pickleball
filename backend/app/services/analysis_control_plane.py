@@ -36,6 +36,9 @@ class AnalysisControlPlane:
 
     def ensure_schema(self) -> None:
         with self._connect() as connection:
+            from app.analysis_runtime.artifact_store import SCHEMA_SQL
+
+            connection.executescript(SCHEMA_SQL)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analysis_jobs (

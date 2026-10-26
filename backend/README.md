@@ -454,11 +454,24 @@ model/runtime availability, per-stage timing, error codes, and output artifacts.
 records are the basis for reproducible experiments, model comparison, court-calibration
 evaluation, movement-metric validation, and later paper or report materials.
 
-Do not claim unavailable research conclusions from current artifacts. The current
-real pipeline supports player/person overlays, optional pose overlays, projected
-movement tracks, and movement metrics. Ball tracking, hit events, rally segmentation,
-shot classification, and tactical semantics remain out of scope until their models
-and validation records exist.
+Treat each legacy artifact according to its own availability, input requirements,
+and validation record. Modular observation evidence does not establish the accuracy
+of downstream motion, shot, or tactical conclusions.
+
+## 能力级局部验证（analysis-architecture-v1）
+
+使用 `scripts/analysis_dev.py` 的 `prepare-source`、`prepare-models`、`plan`、
+`run --wait` 和 `inspect`，可对指定短窗口运行人框、原始球检测或姿态，
+共用既有 JobStore/Worker。CLI 和 API 使用同一 Planner；默认产品 engine
+继续为 `legacy_v1`，开发请求显式选 `modular_v1`。
+
+完整命令、双摄 PTS/同步准备、API 请求、新能力注册、缓存规则、诊断及回滚见
+[开发指南](../docs/analysis-architecture-v1.md)。未来球拍/挥拍/动作/Shot/落点/语义/战术
+条目当前为 planned，仅有类型骨架和扩展合同。
+
+真实短窗口验收脚本为 `scripts/validate_modular_analysis.py`，必须指定隔离
+`--output-root`；结果、媒体/模型摘要和性能限制见
+[本期验收记录](../openspec/changes/archive/2026-10-17-analysis-architecture-v1/validation.md)。
 
 ## Test
 
@@ -467,7 +480,7 @@ cd backend
 pytest
 ```
 
-The core tests cover standard court geometry, homography, footpoint projection,
-movement metrics, player-focused multi-target schemas, deletion cleanup, and
-API smoke behavior. They do not require YOLO weights, CUDA, uploaded sample
-videos, or OpenCV runtime usage.
+Tests cover court geometry, movement metrics, legacy orchestration, API behavior,
+modular planning/cache/publication, cancellation/recovery, and source retention.
+Fixture-based tests do not establish real model quality; run the isolated acceptance
+script with actual media, PTS/sync and installed model assets separately.

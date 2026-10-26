@@ -1,4 +1,5 @@
 import { demoAnalysisReport } from "../data/demoData";
+import type { ModularRunManifest } from "../types/report";
 import type {
   AnalysisJobSummary,
   AnalysisPipelineResult,
@@ -199,7 +200,7 @@ type LegacyAnalysisJobSummary = AnalysisJobSummary & {
   };
 };
 
-function normalizeAnalysisJobSummary(job: AnalysisJobSummary): AnalysisJobSummary {
+export function normalizeAnalysisJobSummary(job: AnalysisJobSummary): AnalysisJobSummary {
   const raw = job as LegacyAnalysisJobSummary;
   const recordingSessionId = job.recordingSessionId
     ?? raw.recording_session_id
@@ -481,7 +482,6 @@ async function parseErrorBody(response: Response): Promise<string | undefined> {
         payload
         && typeof payload === "object"
         && "code" in payload
-        && ("issues" in payload || "diagnostics" in payload || "current_revision" in payload)
       ) {
         return JSON.stringify(payload);
       }
@@ -526,7 +526,7 @@ function toNetworkError(path: string, url: string, error: unknown): AnalysisApiE
   });
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const url = toApiUrl(path);
   let response: Response;
 
@@ -547,6 +547,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export function getAnalysisModuleManifest(jobId: string): Promise<ModularRunManifest> {
+  return requestJson(`/api/analysis/jobs/${encodeURIComponent(jobId)}/manifest`);
+}
+
+export function getAnalysisModuleArtifact(artifactId: string): Promise<unknown> {
+  return requestJson(`/api/analysis/artifacts/${encodeURIComponent(artifactId)}?content=true`);
 }
 
 async function requestVoid(path: string, init?: RequestInit): Promise<void> {

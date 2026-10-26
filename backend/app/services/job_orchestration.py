@@ -21,6 +21,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+from typing import TypeVar
+
+ExecutorResult = TypeVar("ExecutorResult")
 
 from app.core.config import get_settings, rally_context_enabled_for
 from app.schemas.analysis import (
@@ -290,6 +293,11 @@ def normalize_job(job: AnalysisJobSummary) -> AnalysisJobSummary:
     payload["canonicalStatus"] = canonical
     payload["status"] = display
     payload["displayStatus"] = display
+    if job.analysisEngine == "modular_v1":
+        payload["stages"] = []
+        payload["stage"] = "modular"
+        payload["reportId"] = None
+        return AnalysisJobSummary.model_validate(payload)
     mode = resolve_progress_mode(
         payload.get("analysisKind"), payload.get("executionMode"), bool(payload.get("segmentationRequired"))
     )
@@ -714,6 +722,10 @@ class JobStore:
     def is_runnable(self, job: AnalysisJobSummary) -> bool:
         if job.canonicalStatus != "queued":
             return False
+        if job.analysisEngine == "modular_v1":
+            from app.analysis_runtime.service import artifact_store
+            plan = artifact_store(self).plan(job.planId) if job.planId else None
+            return bool(plan and plan.plan_hash == job.planHash)
         if job.jobRole == "segmentation_prerequisite":
             return job.orchestrationStatus in {"none", "waiting_segmentation"}
         if job.analysisKind == "single_view":
@@ -747,6 +759,16 @@ class JobStore:
         self, job: AnalysisJobSummary, worker_id: str, worker_run_id: str | None = None
     ) -> AnalysisJobSummary:
         now = utc_now()
+        if job.analysisEngine == "modular_v1":
+            payload = job.model_dump(mode="json")
+            payload.update(
+                canonicalStatus="running", status="processing", displayStatus="processing",
+                stage="modular", stages=[], reportId=None, startedAt=now, updatedAt=now,
+                workerId=worker_id, workerPid=os.getpid(), workerRunId=worker_run_id or f"{worker_id}-{uuid4().hex}",
+                claimedAt=now, workerHeartbeatAt=now, lastProgressAt=now, attempt=job.attempt+1,
+                interruptedAt=None, interruptionCode=None,
+            )
+            return self._model(payload)
         mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
         claim_stage_id = "video-read" if mode == "single_view" else stage_ids(mode)[0]
         claim_label, claim_detail = stage_details_for(mode, claim_stage_id)
@@ -832,6 +854,13 @@ class JobStore:
             return job, "terminal"
         now = utc_now()
         if job.canonicalStatus == "queued":
+            if job.analysisEngine == "modular_v1":
+                updated = self._terminal_job(
+                    job, "canceled", stages=[], stage="modular",
+                    error_code=ANALYSIS_ERROR_CODES["job_canceled"], message="任务已取消",
+                    finished_at=now, canceled_at=now, cancel_requested_at=now,
+                )
+                return updated, "canceled"
             mode = resolve_progress_mode(job.analysisKind, job.executionMode, job.segmentationRequired)
             label, _detail = stage_details_for(mode, job.stage)
             canceled_stages = merge_stage_progress(
@@ -930,7 +959,11 @@ class JobStore:
                 payload["failureEvidence"] = failure.model_dump(mode="json")
             return self._payload(self._model(payload))
 
-        updated = self.control_plane.mutate(job.id, mutator)
+        updated = self.control_plane.mutate(
+            job.id, mutator,
+            expected_status="running" if job.analysisEngine == "modular_v1" else None,
+            expected_worker_run_id=job.workerRunId if job.analysisEngine == "modular_v1" else None,
+        )
         return self._persist_payload(updated) or self.get(job.id) or job
 
     def mark_succeeded(self, job: AnalysisJobSummary, stages: list[AnalysisStage]) -> AnalysisJobSummary:
@@ -1112,6 +1145,12 @@ class JobStore:
             # overwrite those references with stale defaults from the snapshot.
             payload = dict(current)
             payload.update(terminal_updates)
+            if job.analysisEngine == "modular_v1":
+                unfinished_status = "canceled" if canonical_status == "canceled" else "blocked"
+                payload["nodeRuns"] = [
+                    {**run, "status": unfinished_status} if run.get("status") in {"pending", "running"} else run
+                    for run in current.get("nodeRuns", [])
+                ]
             if canonical_status == "interrupted" and not payload.get("failureEvidence"):
                 payload["failureEvidence"] = AnalysisFailureEvidence(
                     errorCode=error_code,
@@ -1151,7 +1190,7 @@ class ResourceLimiter:
     def __init__(self, max_cpu_jobs: int = 1) -> None:
         self.cpu = threading.Semaphore(max(1, max_cpu_jobs))
 
-    def run_cpu(self, fn: Callable[[], AnalysisPipelineResult]) -> AnalysisPipelineResult:
+    def run_cpu(self, fn: Callable[[], ExecutorResult]) -> ExecutorResult:
         # 在 CPU 信号量保护下执行 fn（默认实现只用到 CPU 限制）
         with self.cpu:
             return fn()
@@ -1296,6 +1335,9 @@ class AnalysisWorkerRuntime:
             attempt=job.attempt,
             worker_id=job.workerId,
             worker_run_id=job.workerRunId,
+            schema_version="analysis-run-trace.v2" if job.analysisEngine == "modular_v1" else "analysis-run-trace.v1",
+            context={"plan_id": job.planId, "node_id": None, "capability_id": None,
+                     "implementation_id": None, "node_attempt": None} if job.analysisEngine == "modular_v1" else None,
         )
 
     def _persist_run_trace_status(self, job_id: str, sink: RunTraceSink) -> None:
@@ -1338,6 +1380,8 @@ class AnalysisWorkerRuntime:
         heartbeat_failed: threading.Event,
         sink: RunTraceSink,
     ) -> AnalysisJobSummary:
+        if job.analysisEngine == "modular_v1":
+            return self._execute_modular(job, heartbeat_failed, sink)
         # 真正执行一个任务：构造取消令牌 → 跑流水线 → 根据结果更新任务状态。
         # 含重试、取消、超时、异常兜底。
         token = CancellationToken(self.store, job.id)
@@ -1654,6 +1698,85 @@ class AnalysisWorkerRuntime:
                     internal_message=str(exc),
                 )
             )
+
+    def _execute_modular(self, job, heartbeat_failed, sink):
+        """复用 Worker 控制信号，模块结果不触发产品完成回调。"""
+        from app.analysis_runtime.hashing import AnalysisRuntimeError
+        from app.analysis_runtime.service import artifact_store
+        from app.services.analysis_executor_dispatch import resolve_executor
+
+        artifacts = artifact_store(self.store)
+        token = CancellationToken(self.store, job.id)
+        latest = job
+        sink.record("start", "modular", outcome="running")
+
+        def guard():
+            if heartbeat_failed.is_set() or not self.store.is_lease_current(job.id, job.workerRunId):
+                raise WorkerLeaseLostError("module worker lease lost")
+            token.raise_if_cancelled()
+
+        def progress(run):
+            nonlocal latest
+            guard()
+            runs = {r.node_key: r for r in latest.nodeRuns}
+            runs[run.node_key] = run
+            plan = artifacts.plan(job.planId)
+            implementations = {n.node_key: n.implementation for n in plan.nodes}
+            terminal = lambda r: r.status in {"cached", "completed", "blocked", "skipped"} or (r.status == "failed" and r.node_attempt > implementations[r.node_key].max_retries)
+            finished = sum(implementations[r.node_key].progress_weight for r in runs.values() if terminal(r))
+            total = sum(impl.progress_weight for impl in implementations.values())
+            latest = self.store.update(
+                job.id, nodeRuns=list(runs.values()), progress=max(latest.progress, round(100*finished/total)),
+                lastProgressAt=utc_now(), _expected_canonical_status="running", _expected_worker_run_id=job.workerRunId,
+            ) or latest
+            if run.status == "failed":
+                plan = artifacts.plan(job.planId)
+                impl = next(n.implementation for n in plan.nodes if n.node_key == run.node_key)
+                entry = AnalysisRetryHistoryEntry(
+                    stage=run.node_key, retryIndex=run.node_attempt, retryLimit=impl.max_retries,
+                    willRetry=True, failureClass=run.failure_class,
+                    errorCode=run.error_code, exceptionType=run.diagnostics.get("exception_type"),
+                    exceptionDigest=run.diagnostics.get("traceback_digest"), at=utc_now(),
+                ) if run.node_attempt <= impl.max_retries else None
+                latest = self.store.record_failure_evidence(
+                    latest, failure=AnalysisFailureEvidence(errorCode=run.error_code, failureClass=run.failure_class,
+                                                           stage=run.node_key, attempt=job.attempt, at=utc_now()), entry=entry)
+
+        try:
+            guard()
+            executor = resolve_executor(job.analysisKind, self.store, self.pipeline_factory, analysis_engine=job.analysisEngine)
+            executor.sink, executor.guard = sink, guard
+            result = self.resource_limiter.run_cpu(lambda: executor.execute(job, token, progress))
+            guard()
+            latest = self.store.update(
+                job.id, resultCompleteness=result.completeness, nodeRuns=list(result.nodes),
+                _expected_canonical_status="running", _expected_worker_run_id=job.workerRunId,
+            ) or latest
+            sink.record("end", "modular", outcome=result.status, completeness=result.completeness)
+            return self._notify_terminal(self.store._terminal_job(
+                latest, result.status, stages=[], stage="modular", progress=100,
+                error_code=None if result.status=="succeeded" else "module_targets_failed",
+                message=None if result.status=="succeeded" else "部分请求目标未完成，请查看节点详情",
+            ))
+        except WorkerLeaseLostError as exc:
+            sink.record("lease_lost", "modular", outcome="interrupted", failure_class="worker_lease", **describe_exception(exc))
+            return self.store.get(job.id) or latest
+        except JobCanceledError:
+            sink.record("canceled", "modular", outcome="canceled")
+            return self._notify_terminal(self.store._terminal_job(
+                latest, "canceled", stages=[], stage="modular", error_code=ANALYSIS_ERROR_CODES["job_canceled"],
+                message="任务已取消，已保留完成产物", canceled_at=utc_now()))
+        except Exception as exc:
+            described = describe_exception(exc)
+            code = exc.code if isinstance(exc, AnalysisRuntimeError) else ANALYSIS_ERROR_CODES["stage_timeout"] if isinstance(exc, StageTimeoutError) else "module_execution_failed"
+            category = "input_media" if code.startswith(("source_", "window_")) else "resource_timeout" if isinstance(exc, StageTimeoutError) else classify_failure(exception_type=type(exc).__name__, message=str(exc))
+            sink.record("fail", "modular", outcome="failed", error_code=code, failure_class=category, **described)
+            latest = self.store.record_failure_evidence(
+                latest, failure=AnalysisFailureEvidence(errorCode=code, failureClass=category,
+                                                       stage="modular", attempt=job.attempt, at=utc_now()))
+            return self._notify_terminal(self.store._terminal_job(
+                latest, "failed", stages=[], stage="modular", error_code=code,
+                message="模块任务未完成，请检查来源或模型环境", internal_message=str(exc)))
 
     def _notify_terminal(self, job: AnalysisJobSummary) -> AnalysisJobSummary:
         """任一 job 进入终态时通知编排层（如推进双摄 Parent），失败不影响主流程。"""

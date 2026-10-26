@@ -1,0 +1,445 @@
+{
+  "status": "passed",
+  "evidence_type": "real_inference",
+  "requested_window": {
+    "start_ms": 60000,
+    "end_ms": 62000
+  },
+  "sampling_stride": 30,
+  "sources": [
+    {
+      "source_id": "source-10e0fba49474ff53e136d58773e4f3b0",
+      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+      "timing_authority": "source_pts"
+    },
+    {
+      "source_id": "source-96bb93ae657746122038ee0145e12628",
+      "media_sha256": "bb4b4c671d13e0d5298fbddb6f2cd2d1b03a4de7c10eb8926be4ac8c598fc742",
+      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+      "timing_authority": "source_pts"
+    }
+  ],
+  "models": {
+    "player.yolo.v1": {
+      "status": "prepared",
+      "assets": {
+        "weights": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+      }
+    },
+    "ball.yolo.v1": {
+      "status": "prepared",
+      "assets": {
+        "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+      }
+    },
+    "pose.rtmpose26.v1": {
+      "status": "prepared",
+      "assets": {
+        "config": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+        "support:_base_/datasets/halpe26.py": "b0a82a7971116d68b037dc72640edb00878a7df1a51607915f5e0d438762085b",
+        "support:_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+        "support:body_2d_keypoint/_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+        "support:body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+        "weights": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "single_three_capabilities",
+      "job_id": "job-b8c5d5f3f17c",
+      "plan_hash": "53daeb59af118125fa1a45cbaeb78c4fb65b7ad9fe658b64597e6616053fbfbc",
+      "status": "succeeded",
+      "completeness": "complete",
+      "wall_seconds": 33.282,
+      "nodes": [
+        {
+          "capability_id": "ball.detect",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 1,
+            "decoded_frames": 91,
+            "sampled_frames": 4,
+            "model_constructors": 1,
+            "model_executions": 4,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 4
+            },
+            "seek_frames": [
+              3600
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                3600,
+                3690
+              ]
+            },
+            "duration_ms": 16555
+          }
+        },
+        {
+          "capability_id": "player.detect",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 1,
+            "decoded_frames": 91,
+            "sampled_frames": 4,
+            "model_constructors": 1,
+            "model_executions": 4,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 4
+            },
+            "seek_frames": [
+              3600
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                3600,
+                3690
+              ]
+            },
+            "duration_ms": 1404
+          }
+        },
+        {
+          "capability_id": "pose.sequence",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 1,
+            "decoded_frames": 91,
+            "sampled_frames": 4,
+            "model_constructors": 1,
+            "model_executions": 4,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 4
+            },
+            "seek_frames": [
+              3600
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                3600,
+                3690
+              ]
+            },
+            "duration_ms": 5025
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "artifact-6ec2c38ce798462b8d9cbf6d8f5dbae5",
+          "quality": "sufficient",
+          "availability": "available"
+        },
+        {
+          "artifact_id": "artifact-50621a3b482c4cfe9f5dc276c35f8dc5",
+          "quality": "sufficient",
+          "availability": "available"
+        },
+        {
+          "artifact_id": "artifact-95d84ffc77df4708b0d28b2b96d9033b",
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    },
+    {
+      "name": "single_cached",
+      "job_id": "job-83c73a5c854f",
+      "plan_hash": "53daeb59af118125fa1a45cbaeb78c4fb65b7ad9fe658b64597e6616053fbfbc",
+      "status": "succeeded",
+      "completeness": "complete",
+      "wall_seconds": 10.364,
+      "nodes": [
+        {
+          "capability_id": "ball.detect",
+          "status": "cached",
+          "counters": {
+            "capture_opens": 0,
+            "model_constructors": 0,
+            "model_executions": 0
+          }
+        },
+        {
+          "capability_id": "player.detect",
+          "status": "cached",
+          "counters": {
+            "capture_opens": 0,
+            "model_constructors": 0,
+            "model_executions": 0
+          }
+        },
+        {
+          "capability_id": "pose.sequence",
+          "status": "cached",
+          "counters": {
+            "capture_opens": 0,
+            "model_constructors": 0,
+            "model_executions": 0
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "artifact-6ec2c38ce798462b8d9cbf6d8f5dbae5",
+          "quality": "sufficient",
+          "availability": "available"
+        },
+        {
+          "artifact_id": "artifact-50621a3b482c4cfe9f5dc276c35f8dc5",
+          "quality": "sufficient",
+          "availability": "available"
+        },
+        {
+          "artifact_id": "artifact-95d84ffc77df4708b0d28b2b96d9033b",
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    },
+    {
+      "name": "pose_parameter_only",
+      "job_id": "job-66023ce859d7",
+      "plan_hash": "d8230c959a36d81686f2b6243ceae56a9d4819e65aad077918428d795c38616f",
+      "status": "succeeded",
+      "completeness": "complete",
+      "wall_seconds": 10.382,
+      "nodes": [
+        {
+          "capability_id": "ball.detect",
+          "status": "cached",
+          "counters": {
+            "capture_opens": 0,
+            "model_constructors": 0,
+            "model_executions": 0
+          }
+        },
+        {
+          "capability_id": "player.detect",
+          "status": "cached",
+          "counters": {
+            "capture_opens": 0,
+            "model_constructors": 0,
+            "model_executions": 0
+          }
+        },
+        {
+          "capability_id": "pose.sequence",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 1,
+            "decoded_frames": 91,
+            "sampled_frames": 4,
+            "model_constructors": 1,
+            "model_executions": 4,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 4
+            },
+            "seek_frames": [
+              3600
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                3600,
+                3690
+              ]
+            },
+            "duration_ms": 2672
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "artifact-6ec2c38ce798462b8d9cbf6d8f5dbae5",
+          "quality": "sufficient",
+          "availability": "available"
+        },
+        {
+          "artifact_id": "artifact-50621a3b482c4cfe9f5dc276c35f8dc5",
+          "quality": "sufficient",
+          "availability": "available"
+        },
+        {
+          "artifact_id": "artifact-d0c7cf28488c478096b7b3a6214e7eef",
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    },
+    {
+      "name": "dual_raw_ball",
+      "job_id": "job-ad0f16aed176",
+      "plan_hash": "c6676bdd7ebc3f67909b4881ba7d79d65cf790b9b5302abcdde81367563d8f8b",
+      "status": "succeeded",
+      "completeness": "complete",
+      "wall_seconds": 23.648,
+      "nodes": [
+        {
+          "capability_id": "ball.detect",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 2,
+            "decoded_frames": 182,
+            "sampled_frames": 8,
+            "model_constructors": 1,
+            "model_executions": 8,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 4,
+              "cam_2:available": 4
+            },
+            "seek_frames": [
+              3600,
+              3598
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                3600,
+                3690
+              ],
+              "cam_2": [
+                3598,
+                3688
+              ]
+            },
+            "duration_ms": 13187
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "artifact-679cd40cd4434554ab48c99bf631938c",
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    },
+    {
+      "name": "dual_cached",
+      "job_id": "job-9e26dd88cfd7",
+      "plan_hash": "c6676bdd7ebc3f67909b4881ba7d79d65cf790b9b5302abcdde81367563d8f8b",
+      "status": "succeeded",
+      "completeness": "complete",
+      "wall_seconds": 19.823,
+      "nodes": [
+        {
+          "capability_id": "ball.detect",
+          "status": "cached",
+          "counters": {
+            "capture_opens": 0,
+            "model_constructors": 0,
+            "model_executions": 0
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "artifact-679cd40cd4434554ab48c99bf631938c",
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    }
+  ],
+  "browser_cases": [
+    {
+      "case": "web_single",
+      "job_id": "job-b29ef8ca80f7",
+      "plan_hash": "807c7d81fa0085c869a7bdb0b3d03b52a23ea0ae81da66636469d924f03cff3c",
+      "status": "succeeded",
+      "completeness": "complete",
+      "nodes": [
+        {
+          "capability_id": "player.detect",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 1,
+            "decoded_frames": 211,
+            "sampled_frames": 8,
+            "model_constructors": 1,
+            "model_executions": 8,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 8
+            },
+            "seek_frames": [
+              0
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                0,
+                210
+              ]
+            },
+            "duration_ms": 15931
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    },
+    {
+      "case": "web_dual",
+      "job_id": "job-3ab864d7a694",
+      "plan_hash": "c6676bdd7ebc3f67909b4881ba7d79d65cf790b9b5302abcdde81367563d8f8b",
+      "status": "succeeded",
+      "completeness": "complete",
+      "nodes": [
+        {
+          "capability_id": "ball.detect",
+          "status": "completed",
+          "counters": {
+            "capture_opens": 2,
+            "decoded_frames": 182,
+            "sampled_frames": 8,
+            "model_constructors": 1,
+            "model_executions": 8,
+            "decoder_backend": "opencv",
+            "backend_gop_preread": "internal_not_exposed",
+            "mapping_status_counts": {
+              "cam_1:available": 4,
+              "cam_2:available": 4
+            },
+            "seek_frames": [
+              3600,
+              3598
+            ],
+            "read_frame_ranges": {
+              "cam_1": [
+                3600,
+                3690
+              ],
+              "cam_2": [
+                3598,
+                3688
+              ]
+            },
+            "duration_ms": 21407
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "quality": "sufficient",
+          "availability": "available"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,2008 @@
+{
+  "evidence_type": "real_inference",
+  "requested_window": {
+    "start_ms": 60000,
+    "end_ms": 90000
+  },
+  "sampling_stride": 30,
+  "cases": [
+    {
+      "name": "single_three_capabilities",
+      "job_id": "job-8d39b9f18304",
+      "plan_hash": "f973a191eefe160aef588927463c3ebd6172ee2cd72d72993895573978c9fe82",
+      "wall_seconds": 204.916,
+      "manifest": {
+        "schema_version": "modular-run.v1",
+        "result_kind": "modular",
+        "analysis_engine": "modular_v1",
+        "job_id": "job-8d39b9f18304",
+        "plan_id": "plan-df11cca388184377bfbd9c1045890517",
+        "plan_hash": "f973a191eefe160aef588927463c3ebd6172ee2cd72d72993895573978c9fe82",
+        "status": "succeeded",
+        "completeness": "complete",
+        "targets": [
+          "ball.detect",
+          "pose.sequence"
+        ],
+        "nodes": [
+          {
+            "node_key": "ball.detect",
+            "capability_id": "ball.detect",
+            "implementation_id": "ball.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "a730ca1f6ef135143cf6f5ec862ec26d4a6b5bd801ad56f5fd54304678780583",
+            "status": "completed",
+            "node_attempt": 1,
+            "artifact": {
+              "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+              "artifact_type": "ball.observations_2d",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 1,
+              "decoded_frames": 1771,
+              "sampled_frames": 60,
+              "model_constructors": 1,
+              "model_executions": 60,
+              "decoder_backend": "opencv",
+              "backend_gop_preread": "internal_not_exposed",
+              "mapping_status_counts": {
+                "cam_1:available": 60
+              },
+              "seek_frames": [
+                3600
+              ],
+              "read_frame_ranges": {
+                "cam_1": [
+                  3600,
+                  5370
+                ]
+              },
+              "duration_ms": 17213
+            },
+            "diagnostics": {}
+          },
+          {
+            "node_key": "player.detect",
+            "capability_id": "player.detect",
+            "implementation_id": "player.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "0050b702960583da002cce6ef56d60493e9b77daddccb0e307336bd8c4286021",
+            "status": "completed",
+            "node_attempt": 1,
+            "artifact": {
+              "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+              "artifact_type": "player.observations",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 1,
+              "decoded_frames": 1771,
+              "sampled_frames": 60,
+              "model_constructors": 1,
+              "model_executions": 60,
+              "decoder_backend": "opencv",
+              "backend_gop_preread": "internal_not_exposed",
+              "mapping_status_counts": {
+                "cam_1:available": 60
+              },
+              "seek_frames": [
+                3600
+              ],
+              "read_frame_ranges": {
+                "cam_1": [
+                  3600,
+                  5370
+                ]
+              },
+              "duration_ms": 8200
+            },
+            "diagnostics": {}
+          },
+          {
+            "node_key": "pose.sequence",
+            "capability_id": "pose.sequence",
+            "implementation_id": "pose.rtmpose26.v1",
+            "implementation_version": "1",
+            "configuration_digest": "18ad4aad0e77d6c9214f4dabda66c594f4d38792a0a425f594f1e24e6edfe6eb",
+            "status": "completed",
+            "node_attempt": 1,
+            "artifact": {
+              "artifact_id": "artifact-3baa8868dc96403eb878d638bc2e3110",
+              "artifact_type": "pose.observations",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 1,
+              "decoded_frames": 1771,
+              "sampled_frames": 60,
+              "model_constructors": 1,
+              "model_executions": 60,
+              "decoder_backend": "opencv",
+              "backend_gop_preread": "internal_not_exposed",
+              "mapping_status_counts": {
+                "cam_1:available": 60
+              },
+              "seek_frames": [
+                3600
+              ],
+              "read_frame_ranges": {
+                "cam_1": [
+                  3600,
+                  5370
+                ]
+              },
+              "duration_ms": 169421
+            },
+            "diagnostics": {}
+          }
+        ],
+        "artifacts": [
+          {
+            "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+            "artifact_type": "ball.observations_2d",
+            "schema_version": "1"
+          },
+          {
+            "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+            "artifact_type": "player.observations",
+            "schema_version": "1"
+          },
+          {
+            "artifact_id": "artifact-3baa8868dc96403eb878d638bc2e3110",
+            "artifact_type": "pose.observations",
+            "schema_version": "1"
+          }
+        ],
+        "created_at": "2026-10-17T03:56:50.254116+00:00",
+        "artifact_details": [
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+                "artifact_type": "ball.observations_2d",
+                "schema_version": "1"
+              },
+              "cache_key": "89f22c3a6a85169410c970a305df78409cc802d74a5305e7871a087f2722dd2d",
+              "content_sha256": "d88bab9ede2d6d2cd9ee31fa918a1c1b3adaaa3badcc195ff17e37ae2981c387",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-585cbd27212c48f59183ab16c948f587/payload.json",
+              "created_at": "2026-10-17T03:53:52.601138+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "ball.detect",
+              "implementation_id": "ball.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.18
+                },
+                "model": {
+                  "implementation_id": "ball.yolo.v1",
+                  "assets": {
+                    "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 17213
+              }
+            },
+            "availability": "available"
+          },
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+                "artifact_type": "player.observations",
+                "schema_version": "1"
+              },
+              "cache_key": "2e8083a584ada2b293c289a19c64894df684f45d049d13f5daad00f17dd07946",
+              "content_sha256": "0a5afeb881917825aa117d1e6e734ae37abe92431c9118e9d44fb08436a27b3b",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-ada518791bcf49a484d3e501490d1152/payload.json",
+              "created_at": "2026-10-17T03:54:00.808104+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "player.detect",
+              "implementation_id": "player.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.15
+                },
+                "model": {
+                  "implementation_id": "player.yolo.v1",
+                  "assets": {
+                    "weights": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 8200
+              }
+            },
+            "availability": "available"
+          },
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-3baa8868dc96403eb878d638bc2e3110",
+                "artifact_type": "pose.observations",
+                "schema_version": "1"
+              },
+              "cache_key": "045a27ab495093059833c8bca0f5ea792de31cf65343242afd9370b49c3f20e0",
+              "content_sha256": "5a241b7803893c2b9d1070e569cf7f0a36f9ba935b817e6640b9829c9ab2633a",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-3baa8868dc96403eb878d638bc2e3110/payload.json",
+              "created_at": "2026-10-17T03:56:50.250876+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "pose.sequence",
+              "implementation_id": "pose.rtmpose26.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.3,
+                  "exit_confidence": 0.2
+                },
+                "model": {
+                  "implementation_id": "pose.rtmpose26.v1",
+                  "assets": {
+                    "config": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+                    "support:_base_/datasets/halpe26.py": "b0a82a7971116d68b037dc72640edb00878a7df1a51607915f5e0d438762085b",
+                    "support:_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+                    "support:body_2d_keypoint/_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+                    "support:body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+                    "weights": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [
+                {
+                  "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+                  "artifact_type": "player.observations",
+                  "schema_version": "1"
+                }
+              ],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 169421
+              }
+            },
+            "availability": "available"
+          }
+        ]
+      }
+    },
+    {
+      "name": "single_cached",
+      "job_id": "job-d897c15f551a",
+      "plan_hash": "f973a191eefe160aef588927463c3ebd6172ee2cd72d72993895573978c9fe82",
+      "wall_seconds": 10.313,
+      "manifest": {
+        "schema_version": "modular-run.v1",
+        "result_kind": "modular",
+        "analysis_engine": "modular_v1",
+        "job_id": "job-d897c15f551a",
+        "plan_id": "plan-29d668556e2f4316bc1109e13f27a727",
+        "plan_hash": "f973a191eefe160aef588927463c3ebd6172ee2cd72d72993895573978c9fe82",
+        "status": "succeeded",
+        "completeness": "complete",
+        "targets": [
+          "ball.detect",
+          "pose.sequence"
+        ],
+        "nodes": [
+          {
+            "node_key": "ball.detect",
+            "capability_id": "ball.detect",
+            "implementation_id": "ball.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "a730ca1f6ef135143cf6f5ec862ec26d4a6b5bd801ad56f5fd54304678780583",
+            "status": "cached",
+            "node_attempt": 0,
+            "artifact": {
+              "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+              "artifact_type": "ball.observations_2d",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 0,
+              "model_constructors": 0,
+              "model_executions": 0
+            },
+            "diagnostics": {}
+          },
+          {
+            "node_key": "player.detect",
+            "capability_id": "player.detect",
+            "implementation_id": "player.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "0050b702960583da002cce6ef56d60493e9b77daddccb0e307336bd8c4286021",
+            "status": "cached",
+            "node_attempt": 0,
+            "artifact": {
+              "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+              "artifact_type": "player.observations",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 0,
+              "model_constructors": 0,
+              "model_executions": 0
+            },
+            "diagnostics": {}
+          },
+          {
+            "node_key": "pose.sequence",
+            "capability_id": "pose.sequence",
+            "implementation_id": "pose.rtmpose26.v1",
+            "implementation_version": "1",
+            "configuration_digest": "18ad4aad0e77d6c9214f4dabda66c594f4d38792a0a425f594f1e24e6edfe6eb",
+            "status": "cached",
+            "node_attempt": 0,
+            "artifact": {
+              "artifact_id": "artifact-3baa8868dc96403eb878d638bc2e3110",
+              "artifact_type": "pose.observations",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 0,
+              "model_constructors": 0,
+              "model_executions": 0
+            },
+            "diagnostics": {}
+          }
+        ],
+        "artifacts": [
+          {
+            "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+            "artifact_type": "ball.observations_2d",
+            "schema_version": "1"
+          },
+          {
+            "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+            "artifact_type": "player.observations",
+            "schema_version": "1"
+          },
+          {
+            "artifact_id": "artifact-3baa8868dc96403eb878d638bc2e3110",
+            "artifact_type": "pose.observations",
+            "schema_version": "1"
+          }
+        ],
+        "created_at": "2026-10-17T03:57:00.569700+00:00",
+        "artifact_details": [
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+                "artifact_type": "ball.observations_2d",
+                "schema_version": "1"
+              },
+              "cache_key": "89f22c3a6a85169410c970a305df78409cc802d74a5305e7871a087f2722dd2d",
+              "content_sha256": "d88bab9ede2d6d2cd9ee31fa918a1c1b3adaaa3badcc195ff17e37ae2981c387",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-585cbd27212c48f59183ab16c948f587/payload.json",
+              "created_at": "2026-10-17T03:53:52.601138+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "ball.detect",
+              "implementation_id": "ball.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.18
+                },
+                "model": {
+                  "implementation_id": "ball.yolo.v1",
+                  "assets": {
+                    "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 17213
+              }
+            },
+            "availability": "available"
+          },
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+                "artifact_type": "player.observations",
+                "schema_version": "1"
+              },
+              "cache_key": "2e8083a584ada2b293c289a19c64894df684f45d049d13f5daad00f17dd07946",
+              "content_sha256": "0a5afeb881917825aa117d1e6e734ae37abe92431c9118e9d44fb08436a27b3b",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-ada518791bcf49a484d3e501490d1152/payload.json",
+              "created_at": "2026-10-17T03:54:00.808104+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "player.detect",
+              "implementation_id": "player.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.15
+                },
+                "model": {
+                  "implementation_id": "player.yolo.v1",
+                  "assets": {
+                    "weights": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 8200
+              }
+            },
+            "availability": "available"
+          },
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-3baa8868dc96403eb878d638bc2e3110",
+                "artifact_type": "pose.observations",
+                "schema_version": "1"
+              },
+              "cache_key": "045a27ab495093059833c8bca0f5ea792de31cf65343242afd9370b49c3f20e0",
+              "content_sha256": "5a241b7803893c2b9d1070e569cf7f0a36f9ba935b817e6640b9829c9ab2633a",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-3baa8868dc96403eb878d638bc2e3110/payload.json",
+              "created_at": "2026-10-17T03:56:50.250876+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "pose.sequence",
+              "implementation_id": "pose.rtmpose26.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.3,
+                  "exit_confidence": 0.2
+                },
+                "model": {
+                  "implementation_id": "pose.rtmpose26.v1",
+                  "assets": {
+                    "config": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+                    "support:_base_/datasets/halpe26.py": "b0a82a7971116d68b037dc72640edb00878a7df1a51607915f5e0d438762085b",
+                    "support:_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+                    "support:body_2d_keypoint/_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+                    "support:body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+                    "weights": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [
+                {
+                  "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+                  "artifact_type": "player.observations",
+                  "schema_version": "1"
+                }
+              ],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 169421
+              }
+            },
+            "availability": "available"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pose_parameter_only",
+      "job_id": "job-9096b32d3741",
+      "plan_hash": "1e6e47612640b67311c89c4eb9cf528ee4e2f2e4b9b7aa204fb15cca70709d35",
+      "wall_seconds": 27.601,
+      "manifest": {
+        "schema_version": "modular-run.v1",
+        "result_kind": "modular",
+        "analysis_engine": "modular_v1",
+        "job_id": "job-9096b32d3741",
+        "plan_id": "plan-349bf3b88e69447aa7f60d2bb6d02d4e",
+        "plan_hash": "1e6e47612640b67311c89c4eb9cf528ee4e2f2e4b9b7aa204fb15cca70709d35",
+        "status": "succeeded",
+        "completeness": "complete",
+        "targets": [
+          "ball.detect",
+          "pose.sequence"
+        ],
+        "nodes": [
+          {
+            "node_key": "ball.detect",
+            "capability_id": "ball.detect",
+            "implementation_id": "ball.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "a730ca1f6ef135143cf6f5ec862ec26d4a6b5bd801ad56f5fd54304678780583",
+            "status": "cached",
+            "node_attempt": 0,
+            "artifact": {
+              "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+              "artifact_type": "ball.observations_2d",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 0,
+              "model_constructors": 0,
+              "model_executions": 0
+            },
+            "diagnostics": {}
+          },
+          {
+            "node_key": "player.detect",
+            "capability_id": "player.detect",
+            "implementation_id": "player.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "0050b702960583da002cce6ef56d60493e9b77daddccb0e307336bd8c4286021",
+            "status": "cached",
+            "node_attempt": 0,
+            "artifact": {
+              "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+              "artifact_type": "player.observations",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 0,
+              "model_constructors": 0,
+              "model_executions": 0
+            },
+            "diagnostics": {}
+          },
+          {
+            "node_key": "pose.sequence",
+            "capability_id": "pose.sequence",
+            "implementation_id": "pose.rtmpose26.v1",
+            "implementation_version": "1",
+            "configuration_digest": "aa47cc02197de2b483cce2ad4f4e6569632da9e310fbaaca7f76759013c2159d",
+            "status": "completed",
+            "node_attempt": 1,
+            "artifact": {
+              "artifact_id": "artifact-623e6070d8c543738177dec400f43554",
+              "artifact_type": "pose.observations",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 1,
+              "decoded_frames": 1771,
+              "sampled_frames": 60,
+              "model_constructors": 1,
+              "model_executions": 60,
+              "decoder_backend": "opencv",
+              "backend_gop_preread": "internal_not_exposed",
+              "mapping_status_counts": {
+                "cam_1:available": 60
+              },
+              "seek_frames": [
+                3600
+              ],
+              "read_frame_ranges": {
+                "cam_1": [
+                  3600,
+                  5370
+                ]
+              },
+              "duration_ms": 24658
+            },
+            "diagnostics": {}
+          }
+        ],
+        "artifacts": [
+          {
+            "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+            "artifact_type": "ball.observations_2d",
+            "schema_version": "1"
+          },
+          {
+            "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+            "artifact_type": "player.observations",
+            "schema_version": "1"
+          },
+          {
+            "artifact_id": "artifact-623e6070d8c543738177dec400f43554",
+            "artifact_type": "pose.observations",
+            "schema_version": "1"
+          }
+        ],
+        "created_at": "2026-10-17T03:57:28.168960+00:00",
+        "artifact_details": [
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-585cbd27212c48f59183ab16c948f587",
+                "artifact_type": "ball.observations_2d",
+                "schema_version": "1"
+              },
+              "cache_key": "89f22c3a6a85169410c970a305df78409cc802d74a5305e7871a087f2722dd2d",
+              "content_sha256": "d88bab9ede2d6d2cd9ee31fa918a1c1b3adaaa3badcc195ff17e37ae2981c387",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-585cbd27212c48f59183ab16c948f587/payload.json",
+              "created_at": "2026-10-17T03:53:52.601138+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "ball.detect",
+              "implementation_id": "ball.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.18
+                },
+                "model": {
+                  "implementation_id": "ball.yolo.v1",
+                  "assets": {
+                    "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 17213
+              }
+            },
+            "availability": "available"
+          },
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+                "artifact_type": "player.observations",
+                "schema_version": "1"
+              },
+              "cache_key": "2e8083a584ada2b293c289a19c64894df684f45d049d13f5daad00f17dd07946",
+              "content_sha256": "0a5afeb881917825aa117d1e6e734ae37abe92431c9118e9d44fb08436a27b3b",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-ada518791bcf49a484d3e501490d1152/payload.json",
+              "created_at": "2026-10-17T03:54:00.808104+00:00",
+              "created_by_job_id": "job-8d39b9f18304",
+              "node_key": "player.detect",
+              "implementation_id": "player.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.15
+                },
+                "model": {
+                  "implementation_id": "player.yolo.v1",
+                  "assets": {
+                    "weights": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 8200
+              }
+            },
+            "availability": "available"
+          },
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-623e6070d8c543738177dec400f43554",
+                "artifact_type": "pose.observations",
+                "schema_version": "1"
+              },
+              "cache_key": "7f88458bf019ba49277e847df3e1048baf67459d9777b3f98d1fcfbf3c36a848",
+              "content_sha256": "99169b460cb9436b308574dbbbcc7a1cf0e09078d87602897195d4624d066223",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-623e6070d8c543738177dec400f43554/payload.json",
+              "created_at": "2026-10-17T03:57:28.146035+00:00",
+              "created_by_job_id": "job-9096b32d3741",
+              "node_key": "pose.sequence",
+              "implementation_id": "pose.rtmpose26.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": null,
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.45,
+                  "exit_confidence": 0.2
+                },
+                "model": {
+                  "implementation_id": "pose.rtmpose26.v1",
+                  "assets": {
+                    "config": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+                    "support:_base_/datasets/halpe26.py": "b0a82a7971116d68b037dc72640edb00878a7df1a51607915f5e0d438762085b",
+                    "support:_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+                    "support:body_2d_keypoint/_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+                    "support:body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+                    "weights": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [
+                {
+                  "artifact_id": "artifact-ada518791bcf49a484d3e501490d1152",
+                  "artifact_type": "player.observations",
+                  "schema_version": "1"
+                }
+              ],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 1,
+                "decoded_frames": 1771,
+                "sampled_frames": 60,
+                "model_constructors": 1,
+                "model_executions": 60,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60
+                },
+                "seek_frames": [
+                  3600
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ]
+                },
+                "duration_ms": 24658
+              }
+            },
+            "availability": "available"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dual_raw_ball",
+      "job_id": "job-517dd55d5b66",
+      "plan_hash": "08be2e71ba0be617b46eb4b25ae67fa3968f5cb8b96e719d968b030d85c13576",
+      "wall_seconds": 27.001,
+      "manifest": {
+        "schema_version": "modular-run.v1",
+        "result_kind": "modular",
+        "analysis_engine": "modular_v1",
+        "job_id": "job-517dd55d5b66",
+        "plan_id": "plan-1e3d8cb85845496284dc42f7e5717349",
+        "plan_hash": "08be2e71ba0be617b46eb4b25ae67fa3968f5cb8b96e719d968b030d85c13576",
+        "status": "succeeded",
+        "completeness": "complete",
+        "targets": [
+          "ball.detect"
+        ],
+        "nodes": [
+          {
+            "node_key": "ball.detect",
+            "capability_id": "ball.detect",
+            "implementation_id": "ball.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "a730ca1f6ef135143cf6f5ec862ec26d4a6b5bd801ad56f5fd54304678780583",
+            "status": "completed",
+            "node_attempt": 1,
+            "artifact": {
+              "artifact_id": "artifact-f2c03e907daa4867a2bfc8f68df24ce7",
+              "artifact_type": "ball.observations_2d",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 2,
+              "decoded_frames": 3542,
+              "sampled_frames": 120,
+              "model_constructors": 1,
+              "model_executions": 120,
+              "decoder_backend": "opencv",
+              "backend_gop_preread": "internal_not_exposed",
+              "mapping_status_counts": {
+                "cam_1:available": 60,
+                "cam_2:available": 60
+              },
+              "seek_frames": [
+                3600,
+                3598
+              ],
+              "read_frame_ranges": {
+                "cam_1": [
+                  3600,
+                  5370
+                ],
+                "cam_2": [
+                  3598,
+                  5368
+                ]
+              },
+              "duration_ms": 10475
+            },
+            "diagnostics": {}
+          }
+        ],
+        "artifacts": [
+          {
+            "artifact_id": "artifact-f2c03e907daa4867a2bfc8f68df24ce7",
+            "artifact_type": "ball.observations_2d",
+            "schema_version": "1"
+          }
+        ],
+        "created_at": "2026-10-17T03:57:55.246045+00:00",
+        "artifact_details": [
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-f2c03e907daa4867a2bfc8f68df24ce7",
+                "artifact_type": "ball.observations_2d",
+                "schema_version": "1"
+              },
+              "cache_key": "2e119050662d8156dba861b4fc323ada0f0c573553d840e83b3526a6a337f650",
+              "content_sha256": "afbf2d71f9861f7cbf6ac49bba855881f3659fc8982eb41695770574e81787c1",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-f2c03e907daa4867a2bfc8f68df24ce7/payload.json",
+              "created_at": "2026-10-17T03:57:55.241836+00:00",
+              "created_by_job_id": "job-517dd55d5b66",
+              "node_key": "ball.detect",
+              "implementation_id": "ball.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  },
+                  {
+                    "view_id": "cam_2",
+                    "camera_id": "175",
+                    "media_sha256": "bb4b4c671d13e0d5298fbddb6f2cd2d1b03a4de7c10eb8926be4ac8c598fc742",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": {
+                      "schema_version": "dual_camera_sync_calibration.v1",
+                      "reference_camera": "174",
+                      "anchor_count": 3,
+                      "source": "manual_anchors",
+                      "anchor_validation": {
+                        "valid": true,
+                        "issues": []
+                      },
+                      "revision": 0,
+                      "mappings": {
+                        "174": {
+                          "reference_camera": "174",
+                          "camera_id": "174",
+                          "offset_ms": 0.0,
+                          "rate": 1.0,
+                          "drift_ppm": 0.0,
+                          "residual_rms_ms": 0.0,
+                          "anchor_count": 3,
+                          "quality": "good",
+                          "reason": null,
+                          "valid_start_seconds": 53.85,
+                          "valid_end_seconds": 450.583333
+                        },
+                        "175": {
+                          "reference_camera": "174",
+                          "camera_id": "175",
+                          "offset_ms": -37.64961779711484,
+                          "rate": 0.9999952964380577,
+                          "drift_ppm": -4.703561942265289,
+                          "residual_rms_ms": 7.8195229817177925,
+                          "anchor_count": 3,
+                          "quality": "good",
+                          "reason": null,
+                          "valid_start_seconds": 53.85,
+                          "valid_end_seconds": 450.583333
+                        }
+                      }
+                    },
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    },
+                    {
+                      "view_id": "cam_2",
+                      "camera_id": "175",
+                      "media_sha256": "bb4b4c671d13e0d5298fbddb6f2cd2d1b03a4de7c10eb8926be4ac8c598fc742",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.18
+                },
+                "model": {
+                  "implementation_id": "ball.yolo.v1",
+                  "assets": {
+                    "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 2,
+                "decoded_frames": 3542,
+                "sampled_frames": 120,
+                "model_constructors": 1,
+                "model_executions": 120,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60,
+                  "cam_2:available": 60
+                },
+                "seek_frames": [
+                  3600,
+                  3598
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ],
+                  "cam_2": [
+                    3598,
+                    5368
+                  ]
+                },
+                "duration_ms": 10475
+              }
+            },
+            "availability": "available"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dual_cached",
+      "job_id": "job-4d07f26798b5",
+      "plan_hash": "08be2e71ba0be617b46eb4b25ae67fa3968f5cb8b96e719d968b030d85c13576",
+      "wall_seconds": 20.077,
+      "manifest": {
+        "schema_version": "modular-run.v1",
+        "result_kind": "modular",
+        "analysis_engine": "modular_v1",
+        "job_id": "job-4d07f26798b5",
+        "plan_id": "plan-c98ce56315b7474baa67530a0b1217d2",
+        "plan_hash": "08be2e71ba0be617b46eb4b25ae67fa3968f5cb8b96e719d968b030d85c13576",
+        "status": "succeeded",
+        "completeness": "complete",
+        "targets": [
+          "ball.detect"
+        ],
+        "nodes": [
+          {
+            "node_key": "ball.detect",
+            "capability_id": "ball.detect",
+            "implementation_id": "ball.yolo.v1",
+            "implementation_version": "1",
+            "configuration_digest": "a730ca1f6ef135143cf6f5ec862ec26d4a6b5bd801ad56f5fd54304678780583",
+            "status": "cached",
+            "node_attempt": 0,
+            "artifact": {
+              "artifact_id": "artifact-f2c03e907daa4867a2bfc8f68df24ce7",
+              "artifact_type": "ball.observations_2d",
+              "schema_version": "1"
+            },
+            "error_code": null,
+            "failure_class": null,
+            "message": null,
+            "internal_message": null,
+            "counters": {
+              "capture_opens": 0,
+              "model_constructors": 0,
+              "model_executions": 0
+            },
+            "diagnostics": {}
+          }
+        ],
+        "artifacts": [
+          {
+            "artifact_id": "artifact-f2c03e907daa4867a2bfc8f68df24ce7",
+            "artifact_type": "ball.observations_2d",
+            "schema_version": "1"
+          }
+        ],
+        "created_at": "2026-10-17T03:58:15.326171+00:00",
+        "artifact_details": [
+          {
+            "manifest": {
+              "schema_version": "analysis-artifact.v1",
+              "ref": {
+                "artifact_id": "artifact-f2c03e907daa4867a2bfc8f68df24ce7",
+                "artifact_type": "ball.observations_2d",
+                "schema_version": "1"
+              },
+              "cache_key": "2e119050662d8156dba861b4fc323ada0f0c573553d840e83b3526a6a337f650",
+              "content_sha256": "afbf2d71f9861f7cbf6ac49bba855881f3659fc8982eb41695770574e81787c1",
+              "storage_id": "shared-4dc90718189cdb9c2de79367",
+              "relative_key": "artifact-f2c03e907daa4867a2bfc8f68df24ce7/payload.json",
+              "created_at": "2026-10-17T03:57:55.241836+00:00",
+              "created_by_job_id": "job-517dd55d5b66",
+              "node_key": "ball.detect",
+              "implementation_id": "ball.yolo.v1",
+              "implementation_version": "1",
+              "provenance": {
+                "sources": [
+                  {
+                    "view_id": "cam_1",
+                    "camera_id": "174",
+                    "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  },
+                  {
+                    "view_id": "cam_2",
+                    "camera_id": "175",
+                    "media_sha256": "bb4b4c671d13e0d5298fbddb6f2cd2d1b03a4de7c10eb8926be4ac8c598fc742",
+                    "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                    "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                    "timing_authority": "source_pts",
+                    "frame_count": 35230,
+                    "fps": 60.0,
+                    "duration_ms": 587167,
+                    "width": 1920,
+                    "height": 1080
+                  }
+                ],
+                "sampling": {
+                  "stride": 30,
+                  "phase": 0,
+                  "anchor": "source_frame_0",
+                  "initialization": "window_reset"
+                },
+                "compute_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "output_window": {
+                  "start_ms": 60000,
+                  "end_ms": 90000
+                },
+                "consumed_context": {
+                  "frame_time": {
+                    "sync": {
+                      "schema_version": "dual_camera_sync_calibration.v1",
+                      "reference_camera": "174",
+                      "anchor_count": 3,
+                      "source": "manual_anchors",
+                      "anchor_validation": {
+                        "valid": true,
+                        "issues": []
+                      },
+                      "revision": 0,
+                      "mappings": {
+                        "174": {
+                          "reference_camera": "174",
+                          "camera_id": "174",
+                          "offset_ms": 0.0,
+                          "rate": 1.0,
+                          "drift_ppm": 0.0,
+                          "residual_rms_ms": 0.0,
+                          "anchor_count": 3,
+                          "quality": "good",
+                          "reason": null,
+                          "valid_start_seconds": 53.85,
+                          "valid_end_seconds": 450.583333
+                        },
+                        "175": {
+                          "reference_camera": "174",
+                          "camera_id": "175",
+                          "offset_ms": -37.64961779711484,
+                          "rate": 0.9999952964380577,
+                          "drift_ppm": -4.703561942265289,
+                          "residual_rms_ms": 7.8195229817177925,
+                          "anchor_count": 3,
+                          "quality": "good",
+                          "reason": null,
+                          "valid_start_seconds": 53.85,
+                          "valid_end_seconds": 450.583333
+                        }
+                      }
+                    },
+                    "reference_view_id": "cam_1"
+                  },
+                  "media": [
+                    {
+                      "view_id": "cam_1",
+                      "camera_id": "174",
+                      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    },
+                    {
+                      "view_id": "cam_2",
+                      "camera_id": "175",
+                      "media_sha256": "bb4b4c671d13e0d5298fbddb6f2cd2d1b03a4de7c10eb8926be4ac8c598fc742",
+                      "sidecar_sha256": "a9d0772235e466de850fd0beb1aa8860497662a079c46bc2163248b15c51c371",
+                      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+                      "timing_authority": "source_pts",
+                      "frame_count": 35230,
+                      "fps": 60.0,
+                      "duration_ms": 587167,
+                      "width": 1920,
+                      "height": 1080
+                    }
+                  ]
+                },
+                "parameters": {
+                  "confidence": 0.18
+                },
+                "model": {
+                  "implementation_id": "ball.yolo.v1",
+                  "assets": {
+                    "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+                  },
+                  "configuration": {
+                    "device": "cpu"
+                  }
+                },
+                "selector": "sample_time.v1"
+              },
+              "inputs": [],
+              "quality": "sufficient",
+              "coordinates": "image_px",
+              "units": "px",
+              "diagnostics": {
+                "capture_opens": 2,
+                "decoded_frames": 3542,
+                "sampled_frames": 120,
+                "model_constructors": 1,
+                "model_executions": 120,
+                "decoder_backend": "opencv",
+                "backend_gop_preread": "internal_not_exposed",
+                "mapping_status_counts": {
+                  "cam_1:available": 60,
+                  "cam_2:available": 60
+                },
+                "seek_frames": [
+                  3600,
+                  3598
+                ],
+                "read_frame_ranges": {
+                  "cam_1": [
+                    3600,
+                    5370
+                  ],
+                  "cam_2": [
+                    3598,
+                    5368
+                  ]
+                },
+                "duration_ms": 10475
+              }
+            },
+            "availability": "available"
+          }
+        ]
+      }
+    }
+  ],
+  "status": "passed",
+  "models": {
+    "player.yolo.v1": {
+      "status": "prepared",
+      "assets": {
+        "weights": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+      }
+    },
+    "ball.yolo.v1": {
+      "status": "prepared",
+      "assets": {
+        "weights": "cf638f6cc06e05ccad04a1e03e023d3236a353a7dd8e1bf9b016fc0dcdcc40fa"
+      }
+    },
+    "pose.rtmpose26.v1": {
+      "status": "prepared",
+      "assets": {
+        "config": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+        "support:_base_/datasets/halpe26.py": "b0a82a7971116d68b037dc72640edb00878a7df1a51607915f5e0d438762085b",
+        "support:_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+        "support:body_2d_keypoint/_base_/default_runtime.py": "0211d635518ba4ab6ee14142b38486702d78ac9161d7fab37e7917d84631be3e",
+        "support:body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb512-700e_body8-halpe26-256x192.py": "d19d2c30d21a2bbc682792d290f87b1880b08b2e81475790b976ea1def103c77",
+        "weights": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+      }
+    }
+  },
+  "preparation_seconds": 28.943,
+  "sources": [
+    {
+      "source_id": "source-10e0fba49474ff53e136d58773e4f3b0",
+      "media_sha256": "551d58864b5bc93fd8e9689afc23e19cc80fed5ef5c498c448a44fc6add807e1",
+      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+      "timing_authority": "source_pts"
+    },
+    {
+      "source_id": "source-96bb93ae657746122038ee0145e12628",
+      "media_sha256": "bb4b4c671d13e0d5298fbddb6f2cd2d1b03a4de7c10eb8926be4ac8c598fc742",
+      "timing_sha256": "c04bb8c49b6be283bf23673eefa25e17c01b809d6f760f04f92239934c23a5c9",
+      "timing_authority": "source_pts"
+    }
+  ],
+  "recorded_on": "2026-10-17",
+  "runtime_versions_recorded_after_run": {
+    "opencv-python": "4.11.0.86",
+    "torch": "2.13.0",
+    "ultralytics": "8.4.115",
+    "mmpose": "1.3.2",
+    "mmcv": "2.1.0",
+    "mmengine": "0.10.7",
+    "numpy": "1.26.4"
+  },
+  "limitations": [
+    "No labeled precision/recall or motion/shot/tactics accuracy evaluation.",
+    "OpenCV hidden GOP preroll is not exposed; decoded_frames counts application read/grab only.",
+    "All-cache wall time includes strong source digest verification; zero captures/models does not mean zero media I/O.",
+    "Models were prepared before runtime_versions snapshot metadata was added; versions above were recorded after this run.",
+    "Node-level artifact boundaries permit bounded redecoding; no single-pass streaming claim."
+  ]
+}

@@ -1,3 +1,7 @@
+import { AnalysisModeSelector } from "../components/analysis/AnalysisModeSelector";
+import { ModularAnalysisCreator } from "../components/analysis/ModularAnalysisCreator";
+import { readAnalysisMode } from "../services/analysisModeConfig";
+import { prepareModuleTake } from "../services/analysisModuleClient";
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, ArrowLeft, ArrowRight, Bug, Camera, CheckCircle2, Link2, Radio, Settings2, ShieldAlert, Video } from "lucide-react";
 import type { NavigateFn, NavigatePath } from "../app/navigationTypes";
@@ -308,6 +312,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
   const [take, setTake] = useState<CaptureTakeSummary | null>(null);
   const [session, setSession] = useState<SyncRecordingSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [creationMode, setCreationMode] = useState(readAnalysisMode);
   const [step, setStep] = useState<SetupStep>(0);
   const [calibrationA, setCalibrationA] = useState<string | null>(null);
   const [calibrationB, setCalibrationB] = useState<string | null>(null);
@@ -812,6 +817,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
           </div>
         </div>
 
+        <AnalysisModeSelector value={creationMode} onChange={setCreationMode} />
+        {creationMode === "full" ? <>
         <StepBar step={step} />
 
         <MaterialStatusBar
@@ -1125,6 +1132,15 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
             </div>
           </div>
         )}
+        </> : <ModularAnalysisCreator key={captureTakeId} mode={creationMode} sourceKey={captureTakeId}
+          sourceReady={videosReady} prepare={() => prepareModuleTake(captureTakeId)}
+          metadata={{ fileName: `${captureTakeId}.mp4`, matchTitle: session.court_name || "双摄专项分析", venue: session.court_name || "未知球场",
+            matchDate: session.started_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+            matchFormat: session.match_format === "singles" ? "singles" : "doubles", cameraAngle: "unknown", athleteLabel: "球馆采集", level: "大众进阶",
+            capture_take_id: captureTakeId, recording_session_id: session.session_id }}
+          onOpenSync={(back) => onNavigate(`/sync-calibration?take=${encodeURIComponent(captureTakeId)}&return=${encodeURIComponent(back)}` as NavigatePath)}
+          onCreated={(job) => onNavigate(buildAnalysisProgressPath(job.id, returnParam ?? `/capture/${encodeURIComponent(session.session_id)}`), { replace: true })}
+        />}
       </section>
     </PageFrame>
   );
