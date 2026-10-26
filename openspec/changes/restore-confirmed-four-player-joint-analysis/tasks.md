@@ -49,5 +49,5 @@
 - [x] 7.3 收敛审计双源真相：`roster.json` 的 `mapping_confirmed` 改为引用审计结论而非独立求值；`four_player_quality.py:302`（读 roster.json）与 `:308-321`（读 anchor_binding_audit）统一到同一来源，不一致时以审计为准并使质量 verdict 为 fail；Rally/Shot 补写审计与权威审计冲突时显式标记不可用，禁止静默覆盖。
 - [x] 7.4 修正页面与指标口径：`heatmaps.players` 个人图层、散点图、位置指标与逐槽位状态卡消费同一映射，消除「热力图画 P4、状态卡同时声明 P4 未确认且有效点为 0」的自相矛盾。
 - [x] 7.5 为 A/B/C 三处各加回归测试：tracklet 竞争由证据弱者先到、端位冲突但后验多数证据在正确端、双源结论冲突时以审计为准；并验证同 tick 无重复绑定、无跨侧污染。
-- [ ] 7.6 在同一 120 秒范围（`clipStartMs=0`、`clipEndMs=120000`）重跑一次真实 Job 验证修复，新旧 Job ID 与产物并存不覆盖；核对 P4 是否转为 confirmed、四人端位是否 2+2 分布。仍不达标时保留 fail 结论与首断点证据，不放宽门槛。
+- [x] 7.6 在同一 120 秒范围（`clipStartMs=0`、`clipEndMs=120000`）重跑一次真实 Job 验证修复，新旧 Job ID 与产物并存不覆盖；核对 P4 是否转为 confirmed、四人端位是否 2+2 分布。新 Job `job-2771b1b418` 的 P4 已确认，但 P2/P3 未确认、两端各两人不成立，质量仍为 `fail`；首断点见 `verification-real-take.md` 和本机复测报告，门槛未放宽。
 
