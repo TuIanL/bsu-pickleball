@@ -181,8 +181,14 @@ class AutomaticCalibrationService:
             combined_confidence=combined_confidence,
         )
 
-        # 判定逻辑：geometry 必须通过基础验证，reference 低于下限直接 reject
-        if reference_result.reference_score < DEFAULT_REFERENCE_REJECT_THRESHOLD:
+        # 掩码可能只覆盖近半场，几何回退会把画面边缘误认作整场角点。
+        # 这种四角建议需要人工修正，即使参考线分数很高也不能直接采纳。
+        clipped_edge = _frame_edge_rejection_reason(geometry.keypoints, extracted.width, extracted.height)
+        if clipped_edge:
+            status = "rejected"
+            detail = clipped_edge
+            calibration_quality = calibration_quality.model_copy(update={"status": "warning"})
+        elif reference_result.reference_score < DEFAULT_REFERENCE_REJECT_THRESHOLD:
             status = "rejected"
             detail = f"Reference line support too low ({reference_result.reference_score:.2f} < {DEFAULT_REFERENCE_REJECT_THRESHOLD:.2f})"  # noqa: E501
         elif combined_confidence >= self.settings.court_line_confidence:
@@ -467,6 +473,34 @@ def _keypoints_to_image_tuples(keypoints: AutomaticCalibrationKeypoints) -> list
         (keypoints.bottom_right.x, keypoints.bottom_right.y),
         (keypoints.bottom_left.x, keypoints.bottom_left.y),
     ]
+
+
+def _frame_edge_rejection_reason(
+    keypoints: AutomaticCalibrationKeypoints, width: int, height: int,
+) -> str | None:
+    """Reject a proposed court edge that coincides with the image crop boundary."""
+    if width <= 0 or height <= 0:
+        return "Court frame dimensions are unavailable"
+    x_margin = max(2.0, width * 0.02)
+    y_margin = max(2.0, height * 0.02)
+    edges = (
+        ("top", keypoints.top_left.y <= y_margin and keypoints.top_right.y <= y_margin),
+        (
+            "right",
+            keypoints.top_right.x >= width - 1 - x_margin
+            and keypoints.bottom_right.x >= width - 1 - x_margin,
+        ),
+        (
+            "bottom",
+            keypoints.bottom_left.y >= height - 1 - y_margin
+            and keypoints.bottom_right.y >= height - 1 - y_margin,
+        ),
+        ("left", keypoints.top_left.x <= x_margin and keypoints.bottom_left.x <= x_margin),
+    )
+    for edge, clipped in edges:
+        if clipped:
+            return f"Proposed {edge} court edge touches the video frame; confirm all four corners manually"
+    return None
 
 
 # 全局单例

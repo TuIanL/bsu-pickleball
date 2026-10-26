@@ -2,11 +2,16 @@ import numpy as np
 
 from app.core.config import Settings
 from app.schemas.calibration import (
+    AutomaticCalibrationKeypoints,
     AutomaticCalibrationRequest,
+    ImagePoint,
     ManualImageKeypoints,
     SemiAutomaticCalibrationAcceptRequest,
 )
-from app.services.automatic_calibration_service import AutomaticCalibrationService
+from app.services.automatic_calibration_service import (
+    AutomaticCalibrationService,
+    _frame_edge_rejection_reason,
+)
 from app.services.calibration_service import CALIBRATIONS, CalibrationService
 from app.services.storage_service import StorageService
 from app.services.video_service import VideoService
@@ -27,6 +32,19 @@ def test_mask_to_court_keypoints_extracts_synthetic_court_boundary():
     assert result.confidence > 0.4
     assert result.keypoints.top_left.x < result.keypoints.top_right.x
     assert result.keypoints.top_left.y < result.keypoints.bottom_left.y
+
+
+def test_automatic_court_edge_at_frame_boundary_needs_manual_confirmation():
+    def points(bottom_y: float) -> AutomaticCalibrationKeypoints:
+        return AutomaticCalibrationKeypoints(
+            top_left=ImagePoint(x=120, y=300),
+            top_right=ImagePoint(x=1600, y=300),
+            bottom_right=ImagePoint(x=1600, y=bottom_y),
+            bottom_left=ImagePoint(x=120, y=bottom_y),
+        )
+
+    assert "bottom" in _frame_edge_rejection_reason(points(1072), 1920, 1080)
+    assert _frame_edge_rejection_reason(points(980), 1920, 1080) is None
 
 
 def test_automatic_calibration_service_returns_unavailable_without_model(tmp_path):
