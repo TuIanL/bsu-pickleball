@@ -1,0 +1,367 @@
+{
+  "schema_version": "opening-sync-verification.v1",
+  "date": "2026-10-27",
+  "capture_take_id": "ct_9997fa5aedf7",
+  "take_directory": "D:\\匹克球\\2026-07-20\\take_sync_20260720_121319_e7f03b",
+  "source_video_audio_tracks": {
+    "174": 0,
+    "175": 0
+  },
+  "method": {
+    "feature": "Canonical x-coordinate difference between left and right mean(heel,big_toe), RTMPose26, source frames at 60fps",
+    "person_detections": "Local yolo11n.pt, imgsz=1280, person class, confidence>=0.25",
+    "keypoint_min_confidence": 0.3,
+    "smoothing": "Savitzky-Golay 9-frame window, order 2; interpolate missing keypoints for diagnostic correlation only",
+    "lag_search_frames": [
+      -60,
+      60
+    ],
+    "frame_pair_resolution_note": "Opening P3 best=-2 frames, P4 best=-3 frames. Selected pair=-2 frames with approximately +/-1-frame measurement uncertainty; fit residual is not physical synchronization accuracy.",
+    "source_time_authority": "Existing source_pts sidecars; burned-in camera clock not used as shared-event authority.",
+    "calibration_ids": {
+      "174": "calib-9e7061dc5e",
+      "175": "calib-bd8374516c"
+    }
+  },
+  "added_anchor_frames": {
+    "174": 6,
+    "175": 4
+  },
+  "added_anchor_pts": {
+    "174": 0.1,
+    "175": 0.066667
+  },
+  "old_anchors_preserved": [
+    {
+      "174": 53.85,
+      "175": 53.816667
+    },
+    {
+      "174": 285.85,
+      "175": 285.8
+    },
+    {
+      "174": 450.583333,
+      "175": 450.55
+    }
+  ],
+  "motion_windows": [
+    {
+      "start_frame": 0,
+      "end_frame": 299,
+      "player": "P3",
+      "valid_frames": {
+        "174": 300,
+        "175": 299
+      },
+      "status": "measured",
+      "best_lag_frames": -2,
+      "best_correlation": 0.9988507888584308,
+      "lag_convention": "camera175_frame = camera174_frame + lag",
+      "selected_lags": {
+        "-4": 0.9947231787764764,
+        "-3": 0.9977779547637351,
+        "-2": 0.9988507888584308,
+        "-1": 0.9978336161662906,
+        "0": 0.9946387525483497,
+        "1": 0.9894911239750521,
+        "2": 0.9825052633361846,
+        "30": 0.4139213581828323,
+        "-30": 0.5134297276828207,
+        "60": 0.012189241119719956,
+        "-60": 0.02266850724112028
+      },
+      "strongest_outside_100ms": 0.9548784838010201,
+      "subwindow_lags": [
+        -2,
+        -2
+      ],
+      "used_to_confirm_opening_offset": true
+    },
+    {
+      "start_frame": 0,
+      "end_frame": 299,
+      "player": "P4",
+      "valid_frames": {
+        "174": 300,
+        "175": 299
+      },
+      "status": "measured",
+      "best_lag_frames": -3,
+      "best_correlation": 0.9646842637272725,
+      "lag_convention": "camera175_frame = camera174_frame + lag",
+      "selected_lags": {
+        "-4": 0.9635682076098184,
+        "-3": 0.9646842637272725,
+        "-2": 0.9641226129984284,
+        "-1": 0.9618540874271534,
+        "0": 0.9578841742858591,
+        "1": 0.9519360439160158,
+        "2": 0.9442787067185189,
+        "30": 0.5068392700129944,
+        "-30": 0.6031496819688411,
+        "60": 0.00602939608270223,
+        "-60": -0.13867762021318208
+      },
+      "strongest_outside_100ms": 0.9265073610543164,
+      "subwindow_lags": [
+        -3,
+        -2
+      ],
+      "used_to_confirm_opening_offset": true
+    },
+    {
+      "start_frame": 1080,
+      "end_frame": 1379,
+      "player": "P3",
+      "valid_frames": {
+        "174": 300,
+        "175": 299
+      },
+      "status": "measured",
+      "best_lag_frames": 0,
+      "best_correlation": 0.9852640800369793,
+      "lag_convention": "camera175_frame = camera174_frame + lag",
+      "selected_lags": {
+        "-4": 0.9797652249928844,
+        "-3": 0.982281116417063,
+        "-2": 0.9840277241485197,
+        "-1": 0.9850153985830163,
+        "0": 0.9852640800369793,
+        "1": 0.9847936059173646,
+        "2": 0.983613055709391,
+        "30": 0.8430878743469404,
+        "-30": 0.8103799300209364,
+        "60": 0.654612170500147,
+        "-60": 0.5682189378330282
+      },
+      "strongest_outside_100ms": 0.9683193874191417,
+      "subwindow_lags": [
+        60,
+        -1
+      ],
+      "used_to_confirm_opening_offset": false,
+      "exclusion_reason": "Subwindow lags inconsistent or low correlation; not used as a synchronization anchor."
+    },
+    {
+      "start_frame": 1080,
+      "end_frame": 1379,
+      "player": "P4",
+      "valid_frames": {
+        "174": 300,
+        "175": 299
+      },
+      "status": "measured",
+      "best_lag_frames": 58,
+      "best_correlation": 0.2086050077280267,
+      "lag_convention": "camera175_frame = camera174_frame + lag",
+      "selected_lags": {
+        "-4": -0.36464694406321385,
+        "-3": -0.37390438187195707,
+        "-2": -0.3867500251275235,
+        "-1": -0.40204146454804274,
+        "0": -0.416973396557698,
+        "1": -0.42801171418242956,
+        "2": -0.4404915477206589,
+        "30": -0.26896477280274966,
+        "-30": -0.13950218897882957,
+        "60": 0.19216618214931797,
+        "-60": -0.4858270837623124
+      },
+      "strongest_outside_100ms": 0.12298059887808445,
+      "subwindow_lags": [
+        -25,
+        60
+      ],
+      "used_to_confirm_opening_offset": false,
+      "exclusion_reason": "Subwindow lags inconsistent or low correlation; not used as a synchronization anchor."
+    },
+    {
+      "start_frame": 2580,
+      "end_frame": 2879,
+      "player": "P3",
+      "valid_frames": {
+        "174": 300,
+        "175": 298
+      },
+      "status": "measured",
+      "best_lag_frames": -2,
+      "best_correlation": 0.9959080557541254,
+      "lag_convention": "camera175_frame = camera174_frame + lag",
+      "selected_lags": {
+        "-4": 0.9797761251227931,
+        "-3": 0.9907335964015191,
+        "-2": 0.9959080557541254,
+        "-1": 0.9952540357321094,
+        "0": 0.9887761594395849,
+        "1": 0.976489639603449,
+        "2": 0.9584969017960747,
+        "30": -0.49702540556875396,
+        "-30": -0.331233330020201,
+        "60": -0.1871346240203057,
+        "-60": -0.3076251787337595
+      },
+      "strongest_outside_100ms": 0.8724563509721966,
+      "subwindow_lags": [
+        -2,
+        -1
+      ],
+      "used_to_confirm_opening_offset": true
+    },
+    {
+      "start_frame": 2580,
+      "end_frame": 2879,
+      "player": "P4",
+      "valid_frames": {
+        "174": 300,
+        "175": 298
+      },
+      "status": "measured",
+      "best_lag_frames": -2,
+      "best_correlation": 0.9443938722767028,
+      "lag_convention": "camera175_frame = camera174_frame + lag",
+      "selected_lags": {
+        "-4": 0.9284804352854963,
+        "-3": 0.9400235731440751,
+        "-2": 0.9443938722767028,
+        "-1": 0.9413402359679566,
+        "0": 0.9308115749699125,
+        "1": 0.9126828604103437,
+        "2": 0.8877724491382838,
+        "30": -0.5222717680789806,
+        "-30": -0.3702794773070445,
+        "60": -0.08751036873126451,
+        "-60": -0.17375352345913944
+      },
+      "strongest_outside_100ms": 0.7838914069121191,
+      "subwindow_lags": [
+        -2,
+        -2
+      ],
+      "used_to_confirm_opening_offset": true
+    }
+  ],
+  "clock_before": {
+    "attempted_ticks": 3615,
+    "cam_2_status_counts": {
+      "unavailable_out_of_media_range": 2,
+      "available_extrapolated": 1614,
+      "available": 1999
+    },
+    "first_formal_available_ms": 53866.667,
+    "maximum_pairing_error_ms": 4.883083438798508,
+    "strictly_monotonic_no_repeated_source_frames": true
+  },
+  "clock_after_published": {
+    "clock_status_counts": {
+      "unavailable_out_of_media_range": 2,
+      "available_extrapolated": 1,
+      "available": 3612
+    },
+    "maximum_pairing_error_ms": 3.3033564220374956,
+    "monotonic_source_frames": true,
+    "sampled_frame_pairs": {
+      "0": {
+        "reference_seconds": 0.0,
+        "status": "unavailable_out_of_media_range",
+        "secondary_frame": null
+      },
+      "2": {
+        "reference_seconds": 0.033333,
+        "status": "unavailable_out_of_media_range",
+        "secondary_frame": null
+      },
+      "4": {
+        "reference_seconds": 0.066667,
+        "status": "available_extrapolated",
+        "secondary_frame": 2
+      },
+      "6": {
+        "reference_seconds": 0.1,
+        "status": "available",
+        "secondary_frame": 4
+      },
+      "60": {
+        "reference_seconds": 1.0,
+        "status": "available",
+        "secondary_frame": 58
+      },
+      "600": {
+        "reference_seconds": 10.0,
+        "status": "available",
+        "secondary_frame": 598
+      },
+      "1800": {
+        "reference_seconds": 30.0,
+        "status": "available",
+        "secondary_frame": 1798
+      },
+      "3000": {
+        "reference_seconds": 50.0,
+        "status": "available",
+        "secondary_frame": 2998
+      },
+      "3600": {
+        "reference_seconds": 60.0,
+        "status": "available",
+        "secondary_frame": 3598
+      },
+      "7200": {
+        "reference_seconds": 120.0,
+        "status": "available",
+        "secondary_frame": 7198
+      }
+    }
+  },
+  "published_revision": 1,
+  "published_mapping_175": {
+    "reference_camera": "174",
+    "camera_id": "175",
+    "offset_ms": -35.28879295600973,
+    "rate": 0.9999888107101874,
+    "drift_ppm": -11.189289812585379,
+    "residual_rms_ms": 6.926091612532514,
+    "anchor_count": 4,
+    "quality": "good",
+    "reason": null,
+    "valid_start_seconds": 0.1,
+    "valid_end_seconds": 450.583333
+  },
+  "publication_state": "confirmed",
+  "analysis_allowed": true,
+  "normal_multiview_preflight": true,
+  "old_sync_backup_directory": "D:\\匹克球\\bsu-pickleball\\.runtime\\sync-opening-20261027\\original-timeline",
+  "backup_sha256": {
+    "sync_anchors.v1.json": "f3040049f70ae8494ee4e05769b1c70db6d1fb8a38db6969dab80a820edfec52",
+    "sync_calibration.json": "bd2d83e8e55d6d931d7b100f45d4510165d7e2c3f2ae357e2b2da1701e4ff84d",
+    "sync_anchor_confirmation.json": "f320f5f3a6e4e5b593dd3a69755eed73cc0e198c5c623162b010659cd53b742e"
+  },
+  "published_asset_sha256": {
+    "sync_anchors.v1.json": "b51208245a4a4ba55bd52e7f962ecc94f8d29d8ec461bc20963d4739e4d5bbee",
+    "sync_calibration.json": "08acd73837ca73b1be4baa8612ee175af3e55f62f5860ef2dd0c5340b24c87a3",
+    "sync_anchor_confirmation.json": "59c6dc8b73ad6f0382bf11720dca8fd9022d94be872cda41efedfd6e71c31d35",
+    "sync_anchor_draft.json": "f7eb80ebc92df4fea56f39f435456c7c82c630b6daaab9a98e352b90e686cd41"
+  },
+  "evidence_file_sha256": {
+    "opening-pose-evidence.json": "d2a55be2018728554f7dacf16ed8494481da6fdbba0d1c29c29ea48dab8be262",
+    "opening-pose-evidence-1080.json": "6944d1fb40a0e210d0df51d2401e28180effa57022e331c2922539d43e989025",
+    "opening-pose-evidence-2580.json": "2817e4e1099f1fab4aaea2e0e7261a99db3683d60ecb9cb7960c83e214690062",
+    "opening-motion-validation.json": "2ec633338c4db1ad5048713788db000ad9d6a0b7c15bd42564fc41e75115596c",
+    "verified-opening-frame-pairs.jpg": "79f4e2ceb6bdd138db2f2252cb01cf047aa767a895a20d3431d8dc4a96f893f0",
+    "opening-motion-alignment.png": "f7987846a3efbe161f5dde2cf0d608500e5b0af1405390b3ec2d5460fcb08968",
+    "measure_opening_pose.py": "ddc7cfe781fc04bbe52fd1ccea5357e98d59356311a7db3c58fb18aed7e25741",
+    "analyze_opening_motion.py": "f3b28f7b0e2d21a3f827922b94023f4ec12a5c575e246e385481fcb35cc501d8",
+    "prepare_sync_candidate.py": "98ea0834f385ac3293b8be3f22fab753c381ac24eefb6b3048b3027b5275ff79",
+    "confirm_opening_sync.py": "c3eb81c4700b7cb2abde8aa51b68eafa4d528d1ac9647501b3ea01171b7dbf29",
+    "verify_published_sync.py": "7b3950dcf7dbbb4b47053c2ef3dbf9b5f2e88c22b6991c025518a904d9a21000"
+  },
+  "model_sha256": {
+    "models\\yolo11n.pt": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
+    "models\\rtmpose\\rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+  },
+  "tests": {
+    "targeted_sync_and_clock_regressions": 78,
+    "passed": 78
+  },
+  "scope_limit": "This verifies opening synchronization and input availability only. No new 120-second detection/tracking job was created; job-603e082be8 remains the most recent real identity quality result and is still fail. Valid end remains 450.583333 seconds."
+}
