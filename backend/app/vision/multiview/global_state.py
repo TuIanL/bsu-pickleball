@@ -673,12 +673,15 @@ class GlobalPlayerRegistry:
         eligible: list[GlobalPlayerState] = []
         for state in self.players.values():
             if (
-                state.roster_status != "provisional"
+                state.roster_status not in ("provisional", "confirmed")
                 or state.roster_end != canonical_end
                 or state.frozen_identity_confirmed
                 or state.cross_view_anchored
             ):
                 continue
+            # Motion stability is not confirmation against the frozen roster.
+            # In this path side_capacity_enabled already requires that roster;
+            # its confirmed P identities and cross-view anchors stay protected.
             last_evidence_s = state.last_seen_s if state.last_seen_s is not None else state.provisional_created_s
             if last_evidence_s is None or now_s - last_evidence_s < self.provisional_replace_after_s:
                 continue

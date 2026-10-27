@@ -322,6 +322,7 @@ def build_joint_roster_artifact(
                 audited = (
                     audit_entry.get("confirmed") is True
                     and audit_entry.get("formal_canonical_player_id") == frozen_player_id
+                    and audit_entry.get("global_player_id") == global_player_id
                 )
                 if audited != mapping_confirmed:
                     conflicts[frozen_player_id] = {
@@ -361,7 +362,11 @@ def build_joint_roster_artifact(
         "schema_version": "global-player-roster.v1",
         "expected_player_count": expected_player_count,
         "roster_occupied_count": len(roster),
-        "confirmed_player_count": sum(1 for r in roster if r.get("status") == "confirmed"),
+        "confirmed_player_count": (
+            sum(player["mapping_confirmed"] is True for player in players)
+            if confirmed_identity_only
+            else sum(1 for r in roster if r.get("status") == "confirmed")
+        ),
         "status": status,
         "roster_hash": roster_hash,
         "players": players,

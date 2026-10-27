@@ -110,6 +110,8 @@ def test_ambiguous_local_slot_reassociation_is_quarantined() -> None:
     assert associator.last_tick_local_slot_events[-1]["reason"] == "reassociation_margin_insufficient"
     assert associator.fuse_assignments(update) == {}
     assert registry.reference_slot_occupant("cam_2", "Player_2") == "global_player_1"
+    assert registry.players["global_player_1"].view_bindings["cam_2"].local_identity_epoch == 0
+    assert associator.mapping_key(update[0].observation) not in associator.mapping
 
 
 def test_confirmed_reassociation_is_atomic_and_keeps_slot_bijection() -> None:

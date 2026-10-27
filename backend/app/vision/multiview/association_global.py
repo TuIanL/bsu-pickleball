@@ -77,6 +77,7 @@ class JointObservation:
     view_status: str = "available"
     tracking_status: str = "detected"
     local_identity_reason: str | None = None
+    source_local_player_id: str | None = None
     lock_state: str | None = None
     bbox: list[float] | None = None
     image_footpoint: tuple[float, float] | None = None
@@ -881,6 +882,9 @@ class GlobalPlayerAssociator:
             self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
             self._record_decision(obs, "candidate", reason="candidate_admitted")
 
+            if len(self.registry.players) >= self.registry.expected_player_count:
+                recovery_observations.append(obs)
+
         # Candidate tracks are admitted to the roster candidate pool only
         # while it is still being built. Once full, they enter a separate
         # recovery ledger and can target existing globals only.
@@ -914,7 +918,7 @@ class GlobalPlayerAssociator:
                 )
                 self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
                 self._record_decision(obs, "candidate", reason="candidate_admitted")
-            else:
+            if roster_full:
                 recovery_observations.append(obs)
 
         if recovery_observations:
@@ -1142,7 +1146,10 @@ class GlobalPlayerAssociator:
                     if incumbent is not None and gid != incumbent:
                         continue
                     binding = state.view_bindings.get(view_id)
-                    if binding is not None and binding.visibility == "observed":
+                    if (
+                        binding is not None and binding.visibility == "observed"
+                        and binding.track_id != obs.track_id
+                    ):
                         continue
                     pinned_global = entry.get("recovered_global_id")
                     if pinned_global and gid != pinned_global:
@@ -1217,6 +1224,7 @@ class GlobalPlayerAssociator:
                             recovered_binding = replace(
                                 previous_binding,
                                 track_id=obs.track_id,
+                                tracklet_lineage_id=obs.tracklet_lineage_id,
                                 last_seen_take_timestamp_ms=obs.take_timestamp_ms,
                                 last_source_frame_index=obs.source_frame_index,
                                 quality=obs.intrinsic_quality or obs.confidence,
@@ -1367,7 +1375,7 @@ class GlobalPlayerAssociator:
             return True
         # 连续 N 帧达成 → reanchor 决策
         self._reanchor_tracker.pop(key, None)
-        self.mapping[key] = historical
+        self.mapping[self.mapping_key(obs)] = historical
         self.diagnostics["reanchor_succeeded"] = self.diagnostics.get("reanchor_succeeded", 0) + 1
         updates.append(
             AssociationUpdate(historical, obs.view_id, obs, obs.confidence, reanchor=True)
@@ -1395,6 +1403,11 @@ class GlobalPlayerAssociator:
         local 身份应从 incumbent 切换到 challenger 时，先 release 旧槽位再绑定，
         否则唯一性保护会错误拦截合法切换。
         """
+        if quarantined:
+            # Diagnostic evidence must not install a new epoch/track binding:
+            # frozen-anchor confirmation reads these bindings later this tick.
+            updates.append(AssociationUpdate(gid, obs.view_id, obs, 0.0, tentative=True, quarantined=True))
+            return True
         binding_ok = self.registry.set_binding(
             gid,
             obs.view_id,
@@ -1420,6 +1433,8 @@ class GlobalPlayerAssociator:
             )
             return False
         self.mapping[self.mapping_key(obs)] = gid
+        if not tentative:
+            self.registry.historical_bindings[(obs.view_id, self.observation_key(obs))] = gid
         self._remember_local_slot(obs, gid)
         dist = max(0.0, feasibility_value) * self.base_gate_ft  # 归一化距离还原（仅诊断）
         updates.append(

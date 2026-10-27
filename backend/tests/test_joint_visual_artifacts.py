@@ -744,7 +744,7 @@ def _audit(*, p4_confirmed: bool, p4_formal: str | None) -> dict[str, object]:
             "canonical_end": "end_b",
             "confirmed": p4_confirmed,
             "formal_canonical_player_id": p4_formal,
-            "global_player_id": "global_player_2",
+            "global_player_id": "global_player_4",
             "reason": None if p4_confirmed else "anchor_global_end_conflict",
         },
     ]
@@ -777,6 +777,7 @@ def test_roster_manifest_defers_to_anchor_audit_over_registry_snapshot():
     assert payload["mapping_conflict_with_audit"]["Player_4"]["audit_confirmed"] is False
     assert payload["mapping_conflict_with_audit"]["Player_4"]["registry_confirmed"] is True
     assert payload["mapping_authority"] == "anchor_binding_audit"
+    assert payload["confirmed_player_count"] == 1
 
 
 def test_roster_manifest_reports_no_conflict_when_sources_agree():
@@ -799,6 +800,21 @@ def test_roster_manifest_reports_no_conflict_when_sources_agree():
     p4 = next(p for p in payload["players"] if p["frozen_player_id"] == "Player_4")
     assert p4["mapping_confirmed"] is True
     assert p4["mapping_method"] == "anchor_simultaneous_match"
+    assert payload["confirmed_player_count"] == 2
+
+
+def test_roster_rejects_audit_confirming_a_different_global_for_the_same_slot():
+    storage = _RecordingStorage()
+    audit = _audit(p4_confirmed=True, p4_formal="Player_4")
+    audit["entries"][1]["global_player_id"] = "global_player_2"
+    build_joint_roster_artifact(
+        storage=storage, job_id="wrong-global", roster=_roster_entries(p4_frozen="Player_4"),
+        roster_map={}, expected_player_count=4, status="confirmed",
+        confirmed_identity_only=True, roster_hash="hash-1", anchor_binding_audit=audit,
+    )
+    payload = storage.read_payload()
+    assert payload["confirmed_player_count"] == 1
+    assert "Player_4" in payload["mapping_conflict_with_audit"]
 
 
 def test_roster_manifest_keeps_legacy_behaviour_without_audit():

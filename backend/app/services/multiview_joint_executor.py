@@ -1177,7 +1177,11 @@ class MultiViewJointExecutor:
             # Debug Replay is rendered only after the authoritative result and
             # refinement artifacts are published. Rendering consumes persisted
             # trace evidence and must never change the analysis conclusion.
-            if getattr(parent, "debugTraceEnabled", False) and run_dir is not None:
+            if (
+                getattr(parent, "debugTraceEnabled", False)
+                and run_dir is not None
+                and os.getenv("PICKLEBALL_JOINT_DEBUG_RENDER_ENABLED", "true").lower() not in {"0", "false", "no"}
+            ):
                 try:
                     trace_path = run_dir / JOINT_DEBUG_TRACE_FILENAME
                     trajectory_path = run_dir / "fused_player_trajectory.f1.v2.json"
