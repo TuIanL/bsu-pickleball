@@ -13,7 +13,7 @@ from app.services.joint_debug_renderer import (
     render_joint_debug_artifacts,
 )
 from app.vision.multiview.analysis_clock import CanonicalAnalysisClock
-from app.vision.multiview.association_global import GlobalPlayerAssociator
+from app.vision.multiview.association_global import AssociationUpdate, GlobalPlayerAssociator, JointObservation
 from app.vision.multiview.court_frame import CanonicalCourtFrameDefinition, CourtOrientation
 from app.vision.multiview.debug_trace import (
     build_joint_debug_manifest,
@@ -161,6 +161,37 @@ def test_joint_run_trace_is_opt_in_and_preserves_unavailable_status():
     assert tick["views"]["cam_2"]["status"] == "unavailable_no_sync"
     assert tick["views"]["cam_2"]["observation_status"] == "unavailable"
     assert tick["recovery"] == {}
+
+
+@pytest.mark.parametrize("accepted_tentative", [False, True])
+def test_quarantined_diagnostic_cannot_replace_sample_provenance_or_taint_identity(monkeypatch, accepted_tentative):
+    """July 90s: an isolated challenger and a valid same-view track coexist."""
+    run = _make_joint_run(debug_trace_enabled=True)
+    gid = "global_player_1"
+    run.registry.ensure(gid)
+    wrong = JointObservation(
+        view_id="cam_1", source_frame_index=0, take_timestamp_ms=0,
+        local_x_ft=8, local_y_ft=20, canonical_x_ft=8, canonical_y_ft=20,
+        track_id=999, confidence=0.9,
+    )
+    accepted = JointObservation(
+        view_id="cam_1", source_frame_index=0, take_timestamp_ms=0,
+        local_x_ft=5, local_y_ft=8, canonical_x_ft=5, canonical_y_ft=8,
+        track_id=42, confidence=0.9,
+    )
+    updates = [
+        AssociationUpdate(gid, "cam_1", wrong, 0.9, tentative=True, quarantined=True),
+        AssociationUpdate(gid, "cam_1", accepted, 0.9, tentative=accepted_tentative),
+    ]
+    monkeypatch.setattr(run.associator, "process_tick", lambda *args, **kwargs: updates)
+    output = run.run(reference_frame_count=1, reference_fps=30.0)
+    sample = output.trajectory["samples"][0]
+    assert sample["x_ft"] == pytest.approx(5)
+    assert sample["view_observations"]["cam_1"]["source_track_id"] == 42
+    assert sample["binding_provenance"]["cam_1"]["source_track_id"] == 42
+    assert sample["metric_eligible"] is (not accepted_tentative)
+    assert sample["identity_status"] == ("ambiguous" if accepted_tentative else "confirmed_observed")
+    assert len(output.debug_trace["ticks"][0]["canonical_observations"]) == 2
 
 
 def _write_video(path, colors):

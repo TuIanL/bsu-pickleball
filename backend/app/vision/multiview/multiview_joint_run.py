@@ -714,6 +714,12 @@ class MultiViewJointRun:
                     self.orientations,
                     tick=tick_number,
                 )
+            # Quarantined challengers remain in the trace, but are not evidence
+            # for end assignment, visibility, sample provenance or identity.
+            # Otherwise an isolated challenger can taint a valid same-tick
+            # observation and replace its source track in the exported sample.
+            diagnostic_updates = updates
+            updates = [update for update in updates if not getattr(update, "quarantined", False)]
             candidate_observation_ids = {id(observation) for observation in candidate_obs}
             for observation in [*all_obs, *candidate_obs]:
                 end = self._canonical_end_for_y(observation.canonical_y_ft)
@@ -766,7 +772,7 @@ class MultiViewJointRun:
             )
             # D1:conflict 仲裁使用 pre-tick prediction（tick barrier 前冻结,含 uncertainty）
             fused = self.associator.fuse_assignments(
-                updates, include_tentative=True, predictions=predictions,
+                diagnostic_updates, include_tentative=True, predictions=predictions,
             )
             self._record_perception_trace_window(
                 timestamp_s=take_ms / 1000.0,
@@ -1006,7 +1012,7 @@ class MultiViewJointRun:
                         view_results=view_results,
                         guidance_by_view=guidance_by_view,
                         predictions=predictions,
-                        updates=updates,
+                        updates=diagnostic_updates,
                         fused=fused,
                         funnel_before=funnel_before,
                         input_observations=[*all_obs, *candidate_obs],
