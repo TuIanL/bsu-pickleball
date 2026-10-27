@@ -612,7 +612,13 @@ class GlobalPlayerRegistry:
         gid = self._allocate_roster_slot(cand.canonical_end)
         replaced_state: GlobalPlayerState | None = None
         if gid is None and self.side_capacity_enabled:
-            replaced_state = self._stale_provisional_for_end(cand.canonical_end, now_s=now_s)
+            replaced_state = self._stale_provisional_for_end(
+                cand.canonical_end, now_s=now_s,
+                current_dual_candidate=(
+                    cand.last_dual_tick == tick
+                    and cand.dual_view_hit_count >= self.candidate_promote_dual_ticks
+                ),
+            )
             if replaced_state is not None:
                 gid = replaced_state.global_player_id
         if gid is None:
@@ -633,7 +639,12 @@ class GlobalPlayerRegistry:
                 "canonical_end": cand.canonical_end,
                 "replacement_candidate_id": candidate_id,
                 "replaced_bindings": previous_bindings,
-                "reason": "stale_unconfirmed_provisional_replaced",
+                "reason": (
+                    "stale_anonymous_cross_view_anchor_replaced"
+                    if replaced_state.cross_view_anchored else "stale_unconfirmed_provisional_replaced"
+                ),
+                "replaced_cross_view_anchored": replaced_state.cross_view_anchored,
+                "replacement_dual_view_hit_count": cand.dual_view_hit_count,
                 "replaced_after_seconds": self.provisional_replace_after_s,
                 "replaced_last_seen_s": replaced_state.last_seen_s,
                 "replacement_timestamp_s": now_s,
@@ -667,7 +678,10 @@ class GlobalPlayerRegistry:
         self.candidates.pop(candidate_id, None)
         return gid
 
-    def _stale_provisional_for_end(self, canonical_end: str | None, *, now_s: float | None) -> GlobalPlayerState | None:
+    def _stale_provisional_for_end(
+        self, canonical_end: str | None, *, now_s: float | None,
+        current_dual_candidate: bool = False,
+    ) -> GlobalPlayerState | None:
         if canonical_end not in {"end_a", "end_b"} or now_s is None:
             return None
         eligible: list[GlobalPlayerState] = []
@@ -676,13 +690,26 @@ class GlobalPlayerRegistry:
                 state.roster_status not in ("provisional", "confirmed")
                 or state.roster_end != canonical_end
                 or state.frozen_identity_confirmed
-                or state.cross_view_anchored
+                or state.frozen_player_id is not None
             ):
                 continue
-            # Motion stability is not confirmation against the frozen roster.
-            # In this path side_capacity_enabled already requires that roster;
-            # its confirmed P identities and cross-view anchors stay protected.
+            if state.cross_view_anchored and (
+                not current_dual_candidate
+                or state.association_eligible
+                or not state.view_bindings
+                or any(b.visibility not in {"lost", "missing"} for b in state.view_bindings.values())
+            ):
+                continue
+            # Historical dual-view stability is not a frozen P identity. An
+            # abandoned anonymous slot requires current dual evidence to replace;
+            # any recent measurement or view binding still protects its owner.
             last_evidence_s = state.last_seen_s if state.last_seen_s is not None else state.provisional_created_s
+            binding_times = [
+                b.last_seen_take_timestamp_ms / 1000.0 for b in state.view_bindings.values()
+                if b.last_seen_take_timestamp_ms is not None
+            ]
+            if binding_times:
+                last_evidence_s = max([*binding_times, *([last_evidence_s] if last_evidence_s is not None else [])])
             if last_evidence_s is None or now_s - last_evidence_s < self.provisional_replace_after_s:
                 continue
             # At least one real observation must once have filled the slot; a

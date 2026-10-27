@@ -1008,8 +1008,10 @@ class GlobalPlayerAssociator:
         old_local_slots: set[tuple[str, str]] = set()
         if isinstance(old_bindings, dict):
             for view_id, binding in old_bindings.items():
-                if isinstance(binding, dict) and binding.get("view_player_id"):
-                    old_local_slots.add((str(view_id), str(binding["view_player_id"])))
+                if isinstance(binding, dict):
+                    local_key = binding.get("view_player_id") or binding.get("track_id")
+                    if local_key is not None:
+                        old_local_slots.add((str(view_id), str(local_key)))
         removed_keys = [key for key, mapped in self.mapping.items() if mapped == global_id]
         for key in removed_keys:
             self.mapping.pop(key, None)

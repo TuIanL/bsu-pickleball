@@ -391,6 +391,7 @@ class MultiViewJointRun:
         f0_global_positions: dict[str, dict[int, tuple[float, float]]] = {}
         f0_predictions: dict[int, dict[str, tuple[float, float]]] = {}
         f0_tick_metadata: dict[int, dict[str, Any]] = {}
+        processed_replacement_events = len(self.registry.provisional_replacement_events)
 
         for tick_number, ref_idx in enumerate(tick_indices):
             if cancellation_token is not None:
@@ -714,6 +715,22 @@ class MultiViewJointRun:
                     self.orientations,
                     tick=tick_number,
                 )
+            # A recycled anonymous slot has a new lifetime. Discard the prior
+            # lifetime from formal samples/refinement before it can inherit a P
+            # label; the original debug trace remains available for diagnosis.
+            replacements = self.registry.provisional_replacement_events
+            for event in replacements[processed_replacement_events:]:
+                replaced_gid = str(event["global_player_id"])
+                old_count = len(samples)
+                samples[:] = [sample for sample in samples if sample.global_player_id != replaced_gid]
+                self.counter["replaced_slot_samples_discarded"] = (
+                    self.counter.get("replaced_slot_samples_discarded", 0) + old_count - len(samples)
+                )
+                f0_trace.pop(replaced_gid, None)
+                f0_global_positions.pop(replaced_gid, None)
+                for prediction in f0_predictions.values():
+                    prediction.pop(replaced_gid, None)
+            processed_replacement_events = len(replacements)
             # Quarantined challengers remain in the trace, but are not evidence
             # for end assignment, visibility, sample provenance or identity.
             # Otherwise an isolated challenger can taint a valid same-tick

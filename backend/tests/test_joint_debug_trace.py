@@ -194,6 +194,25 @@ def test_quarantined_diagnostic_cannot_replace_sample_provenance_or_taint_identi
     assert len(output.debug_trace["ticks"][0]["canonical_observations"]) == 2
 
 
+def test_recycled_anonymous_slot_does_not_export_previous_lifetime_as_new_identity(monkeypatch):
+    run=_make_joint_run(debug_trace_enabled=True)
+    gid="global_player_1"
+    run.registry.ensure(gid)
+    def process(observations,timestamp_s,orientations,*,tick,**kwargs):
+        if tick==1:
+            run.registry.provisional_replacement_events.append({"global_player_id":gid,"replacement_timestamp_s":timestamp_s})
+        obs=JointObservation(view_id="cam_1",source_frame_index=tick,take_timestamp_ms=timestamp_s*1000,
+            local_x_ft=5,local_y_ft=8,canonical_x_ft=5,canonical_y_ft=8,track_id=999 if tick==0 else 42,confidence=.9)
+        return [AssociationUpdate(gid,"cam_1",obs,.9)]
+    monkeypatch.setattr(run.associator,"process_tick",process)
+    output=run.run(reference_frame_count=2,reference_fps=30)
+    assert len(output.trajectory["samples"])==1
+    assert output.trajectory["samples"][0]["view_observations"]["cam_1"]["source_track_id"]==42
+    assert not output.f0_snapshot.ticks[0].observations
+    assert not output.f0_snapshot.ticks[0].global_positions
+    assert len(output.debug_trace["ticks"][0]["canonical_observations"])==1
+
+
 def _write_video(path, colors):
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 48))
     assert writer.isOpened()

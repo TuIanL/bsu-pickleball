@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import pytest
 
 from app.schemas.tracking import PlayerFramePosition
 from app.vision.multiview.association_global import GlobalPlayerAssociator, JointObservation
@@ -59,6 +60,38 @@ def test_motion_confirmed_anonymous_slot_can_expire_without_evicting_frozen_iden
     assert registry.promote_candidate(candidate, 30, now_s=20.0) == "global_player_1"
     assert registry.players["global_player_1"].roster_status == "provisional"
     assert registry.players["global_player_2"].frozen_identity_confirmed
+
+
+@pytest.mark.parametrize("protected", [None, "frozen", "recent", "single_view", "old_dual"])
+def test_long_lost_anonymous_cross_view_slot_requires_current_dual_evidence(protected):
+    ends={f"Player_{i}": "end_a" if i<=2 else "end_b" for i in range(1,5)}
+    registry=GlobalPlayerRegistry(frozen_player_end_by_id=ends)
+    for i in range(1,5):
+        state=registry.ensure(f"global_player_{i}")
+        state.roster_status="confirmed"
+        state.roster_end=ends[f"Player_{i}"]
+        state.last_seen_s=4.4
+        state.frozen_identity_confirmed=i!=1
+    old=registry.players["global_player_1"]
+    old.cross_view_anchored=True
+    old.association_eligible=False
+    old.view_bindings={"cam_2":ViewBinding(track_id=26,visibility="lost",last_seen_take_timestamp_ms=4400)}
+    if protected=="frozen":old.frozen_identity_confirmed=True
+    if protected=="recent":old.view_bindings["cam_2"].last_seen_take_timestamp_ms=56_000
+    cid=registry.find_or_create_candidate(view_id="cam_1",view_player_id="290",identity_epoch=0,canonical_x_ft=15.2,canonical_y_ft=2.1,tick=1719)
+    for tick in (1719,1720):
+        registry.note_candidate_observation(cid,view_id="cam_1",view_player_id="290",identity_epoch=0,canonical_x_ft=15.2,canonical_y_ft=2.1,tick=tick)
+        if protected!="single_view":
+            registry.note_candidate_observation(cid,view_id="cam_2",view_player_id="91",identity_epoch=0,canonical_x_ft=15.8,canonical_y_ft=1.4,tick=tick)
+    gid=registry.promote_candidate(cid,1721 if protected=="old_dual" else 1720,now_s=57.5)
+    if protected:
+        assert gid is None
+        assert registry.players["global_player_1"] is old
+    else:
+        assert gid=="global_player_1"
+        assert registry.players[gid].cross_view_anchored is False
+        assert registry.players[gid].view_bindings=={}
+        assert registry.provisional_replacement_events[-1]["reason"]=="stale_anonymous_cross_view_anchor_replaced"
 
 
 def test_raw_track_mode_keeps_formal_player_visible_behind_baseline():
