@@ -667,7 +667,10 @@ class MultiViewJointRun:
                     view_id, result, take_ms,
                     use_raw_track_keys=bool(self.runtime_roster and self.runtime_roster.available),
                 ))
-                view_candidates = self._result_to_candidate_observations(view_id, result, take_ms)
+                view_candidates = self._result_to_candidate_observations(
+                    view_id, result, take_ms,
+                    allow_visible_outside=bool(self.runtime_roster and self.runtime_roster.available),
+                )
                 candidate_obs.extend(view_candidates)
                 funnel["global_candidate_observation_count"] += len(view_candidates)
                 guided_obs_count = sum(
@@ -1909,6 +1912,7 @@ class MultiViewJointRun:
             "timing_authority": observation.timing_authority,
             "sync_quality": observation.sync_quality,
             "tracking_status": observation.tracking_status,
+            "roster_admission_eligible": observation.roster_admission_eligible,
             "lock_state": observation.lock_state,
             "bbox": list(observation.bbox) if observation.bbox is not None else None,
             "image_footpoint": list(observation.image_footpoint)
@@ -2332,6 +2336,8 @@ class MultiViewJointRun:
         view_id: str,
         result: Any,
         take_ms: float,
+        *,
+        allow_visible_outside: bool = False,
     ) -> list[JointObservation]:
         """保留 lock_only 之外的真实场内 track，作为独立恢复证据。"""
         candidate_positions = getattr(result, "candidate_positions", None)
@@ -2350,14 +2356,26 @@ class MultiViewJointRun:
             except (TypeError, ValueError):
                 continue
             position = positions_by_track.get(track_id)
-            if (
-                position is None
-                or position.court_position is None
-                or not bool(getattr(position, "valid", False))
-                or not bool(getattr(position, "is_inside_court", False))
-                or getattr(position, "projection_status", None) != "inside_court"
-            ):
+            if position is None or position.court_position is None:
                 continue
+            inside = (
+                bool(getattr(position, "valid", False))
+                and bool(getattr(position, "is_inside_court", False))
+                and getattr(position, "projection_status", None) == "inside_court"
+            )
+            visible_outside = (
+                allow_visible_outside
+                and getattr(position, "projection_status", None) == "outside_court_visible"
+            )
+            if not inside and not visible_outside:
+                continue
+            x_ft, y_ft = map(float, position.court_position)
+            # Baseline buffer initialization requires dual-camera evidence in
+            # the associator; sideline candidates remain recovery-only.
+            baseline_buffer = (
+                visible_outside and 0.0 <= x_ft <= 20.0
+                and (-6.0 <= y_ft < 0.0 or 44.0 < y_ft <= 50.0)
+            )
             # Guided detections have an expected-global safety contract. Keep
             # them on the formal guided path instead of treating them as an
             # unanchored candidate that could be matched to another player.
@@ -2407,6 +2425,8 @@ class MultiViewJointRun:
                     sync_quality=getattr(result, "sync_quality", "unknown"),
                     tracking_status="candidate",
                     local_identity_reason="unlocked_candidate",
+                    roster_admission_eligible=inside or baseline_buffer,
+                    appearance_descriptor=getattr(result, "appearance_by_track", {}).get(track_id),
                 )
             )
         return candidates

@@ -82,6 +82,7 @@ class JointObservation:
     bbox: list[float] | None = None
     image_footpoint: tuple[float, float] | None = None
     appearance_descriptor: PlayerAppearanceDescriptor | None = None
+    roster_admission_eligible: bool = True
 
 
 @dataclass
@@ -897,7 +898,19 @@ class GlobalPlayerAssociator:
         for obs in candidate_observations:
             if obs.track_id is not None and (obs.view_id, int(obs.track_id)) in formal_track_keys:
                 continue
-            if not roster_full or keep_side_waitlist:
+            known_gid = self.registry.historical_bindings.get((obs.view_id, self.observation_key(obs)))
+            known_state = self.registry.players.get(known_gid) if known_gid else None
+            known_binding = known_state.view_bindings.get(obs.view_id) if known_state else None
+            fresh_lineage = (
+                keep_side_waitlist and known_state is not None
+                and known_state.association_eligible and known_state.last_seen_s is not None
+                and 0.0 <= timestamp_s - known_state.last_seen_s <= 1.0
+                and (known_binding is None or (
+                    known_binding.track_id == obs.track_id
+                    and known_binding.local_identity_epoch == obs.local_identity_epoch
+                ))
+            )
+            if obs.roster_admission_eligible and not fresh_lineage and (not roster_full or keep_side_waitlist):
                 cid = self.registry.find_or_create_candidate(
                     view_id=obs.view_id,
                     view_player_id=self.observation_key(obs),
@@ -930,6 +943,19 @@ class GlobalPlayerAssociator:
                 predictions=predictions,
                 updates=updates,
             )
+        # A recovered observation already belongs to a roster occupant. Leaving
+        # its waitlist entry alive can promote a duplicate into an empty slot.
+        recovered_keys = {
+            (u.view_id, self.observation_key(u.observation), int(u.observation.local_identity_epoch))
+            for u in updates if not u.tentative and not u.quarantined
+        }
+        for cid, candidate in list(self.registry.candidates.items()):
+            if any(
+                (view, str(binding.get("view_player_id") or ""), int(binding.get("identity_epoch") or 0)) in recovered_keys
+                for view, binding in candidate.local_bindings.items()
+            ):
+                self.registry.candidates.pop(cid, None)
+                self.diagnostics["candidate_pool_recovered_removed"] = self.diagnostics.get("candidate_pool_recovered_removed", 0) + 1
         if available_views is not None:
             active_recovery_keys = {self._recovery_key(obs) for obs in recovery_observations}
             absent_keys = [
@@ -950,6 +976,7 @@ class GlobalPlayerAssociator:
                 continue
             if cand.dual_view_hit_count >= self.registry.candidate_promote_dual_ticks or (
                 cand.hit_count >= self.registry.candidate_promote_single_ticks
+                and (not getattr(self.registry, "side_capacity_enabled", False) or 0.0 <= cand.canonical_y_ft <= 44.0)
             ):
                 replacement_event_count = len(getattr(self.registry, "provisional_replacement_events", ()))
                 gid = self.registry.promote_candidate(cid, tick, now_s=timestamp_s)

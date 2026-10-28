@@ -510,6 +510,16 @@ class GlobalPlayerRegistry:
 
     # ---- 候选池（GlobalRosterCandidate）----
 
+    @staticmethod
+    def _candidate_end(x_ft: float, y_ft: float) -> str | None:
+        # Serving players can stand behind a baseline. This admission hint
+        # never widens the projector's tracking area or includes side benches.
+        if 0.0 <= x_ft <= 20.0 and -6.0 <= y_ft < 0.0:
+            return "end_a"
+        if 0.0 <= x_ft <= 20.0 and 44.0 < y_ft <= 50.0:
+            return "end_b"
+        return GlobalPlayerRegistry._canonical_end(y_ft)
+
     def find_or_create_candidate(
         self,
         *,
@@ -563,7 +573,7 @@ class GlobalPlayerRegistry:
             },
             last_views_tick=tick,
             tick_views={view_id},
-            canonical_end=self._canonical_end(canonical_y_ft) if self.side_capacity_enabled else None,
+            canonical_end=self._candidate_end(canonical_x_ft, canonical_y_ft) if self.side_capacity_enabled else None,
         )
         return cid  # ④ 新建
 
@@ -588,7 +598,7 @@ class GlobalPlayerRegistry:
         cand.canonical_x_ft = canonical_x_ft
         cand.canonical_y_ft = canonical_y_ft
         if self.side_capacity_enabled and cand.canonical_end is None:
-            cand.canonical_end = self._canonical_end(canonical_y_ft)
+            cand.canonical_end = self._candidate_end(canonical_x_ft, canonical_y_ft)
         if cand.last_views_tick != tick:
             cand.last_views_tick = tick
             cand.tick_views = {view_id}
