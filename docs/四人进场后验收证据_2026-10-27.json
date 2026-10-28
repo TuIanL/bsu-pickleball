@@ -1,0 +1,590 @@
+{
+  "schema_version": "four-player-post-entry-acceptance.v1",
+  "launched_date": "2026-10-27",
+  "completed_at": "2026-10-28T08:31:58.057387+00:00",
+  "job_id": "job-2b677c38af",
+  "joint_run_id": "mvr_10ff3fadb402",
+  "pipeline_status": "succeeded",
+  "git_head_at_launch": "2da6d131df435ce7e2cf55da4db03a234ca502fd",
+  "repair_commits": [
+    "0f71057",
+    "2da6d13"
+  ],
+  "scope": "User-selected 30-120s post-entry clip; normal pre-roll from28.5s and post-roll to120.466667s retained. Original 0-120s job is a historical baseline with different scope, not a controlled percentage comparison.",
+  "scope_authorization": "User selected post-entry gameplay first; original 0-120s failed jobs remain unchanged.",
+  "requested_window_ms": [
+    30000,
+    120000
+  ],
+  "actual_processed_window_seconds": [
+    28.5,
+    120.466667
+  ],
+  "attempted_ticks": 2760,
+  "unchanged_thresholds": {
+    "min_player_coverage": 0.7,
+    "max_gap_seconds": 2.0,
+    "confirmed_roster": 4,
+    "max_duplicate_bindings": 0,
+    "max_identity_switches": 0,
+    "max_cross_side_samples": 0
+  },
+  "input_signature": "b04cad48a862f078df045690f381fdc82c7db9aba26bd3a81637bdbff02e25db",
+  "config_signature": "ddb35eb744e7feb8ae54857570e8e365b5ae2a164a49843191929d7144184c80",
+  "roster_hash": "0abcee71db2a9a89a617faf6d2323588aa9decb231391a259c078b7403929ae5",
+  "sync_revision": 1,
+  "sync_file_sha256": {
+    "sync_calibration.json": "08acd73837ca73b1be4baa8612ee175af3e55f62f5860ef2dd0c5340b24c87a3",
+    "sync_anchors.v1.json": "b51208245a4a4ba55bd52e7f962ecc94f8d29d8ec461bc20963d4739e4d5bbee",
+    "sync_anchor_confirmation.json": "59c6dc8b73ad6f0382bf11720dca8fd9022d94be872cda41efedfd6e71c31d35"
+  },
+  "sync_unchanged_during_run": true,
+  "signature_scope_note": "Current job signatures do not include sync asset content. Use the separate revision and SHA-256 here, plus runtime trace, to establish sync version.",
+  "candidate_result": {
+    "verdict": "pass",
+    "confirmed_count": 4,
+    "roster_confirmed_count": 4,
+    "hard_invariants": {
+      "confirmed_roster": true,
+      "duplicate_binding_zero": true,
+      "cross_side_zero": true,
+      "identity_switch_zero": true,
+      "local_slot_reassociation_zero": true,
+      "canonical_identity_anchors_confirmed": true,
+      "identity_audit_single_source": true,
+      "two_confirmed_players_per_canonical_end": true
+    },
+    "absolute_gates": {
+      "Player_1.coverage": true,
+      "Player_1.longest_gap": true,
+      "Player_1.display_topology_stable": true,
+      "Player_2.coverage": true,
+      "Player_2.longest_gap": true,
+      "Player_2.display_topology_stable": true,
+      "Player_3.coverage": true,
+      "Player_3.longest_gap": true,
+      "Player_3.display_topology_stable": true,
+      "Player_4.coverage": true,
+      "Player_4.longest_gap": true,
+      "Player_4.display_topology_stable": true
+    },
+    "failure_reasons": [],
+    "players": {
+      "Player_1": {
+        "canonical_coverage": 0.9764492753623188,
+        "longest_gap_seconds": 1.5,
+        "canonical_ticks": 2695,
+        "cross_side_count": 0,
+        "identity_switch_count": 0,
+        "duplicate_binding_count": 0,
+        "display_topology_transition_count": 8
+      },
+      "Player_2": {
+        "canonical_coverage": 0.9532608695652174,
+        "longest_gap_seconds": 1.5,
+        "canonical_ticks": 2631,
+        "cross_side_count": 0,
+        "identity_switch_count": 0,
+        "duplicate_binding_count": 0,
+        "display_topology_transition_count": 5
+      },
+      "Player_3": {
+        "canonical_coverage": 0.9692028985507246,
+        "longest_gap_seconds": 1.5,
+        "canonical_ticks": 2675,
+        "cross_side_count": 0,
+        "identity_switch_count": 0,
+        "duplicate_binding_count": 0,
+        "display_topology_transition_count": 6
+      },
+      "Player_4": {
+        "canonical_coverage": 0.9648550724637681,
+        "longest_gap_seconds": 1.5,
+        "canonical_ticks": 2663,
+        "cross_side_count": 0,
+        "identity_switch_count": 0,
+        "duplicate_binding_count": 0,
+        "display_topology_transition_count": 6
+      }
+    },
+    "mapping": {
+      "global_player_1": "Player_1",
+      "global_player_2": "Player_2",
+      "global_player_3": "Player_3",
+      "global_player_4": "Player_4"
+    },
+    "anchors": [
+      {
+        "canonical_player_id": "Player_1",
+        "global_player_id": "global_player_1",
+        "confirmed": true,
+        "reason": null,
+        "evidence": {
+          "view_id": "cam_1",
+          "time_delta_ms": 400,
+          "bbox_iou": 0.8428,
+          "bbox_center_distance_px": null,
+          "court_distance_ft": 3.096,
+          "appearance_distance": null,
+          "multiview_corroborated": null,
+          "competing_formal_players": 0,
+          "competing_slots": 0,
+          "track_id": 132,
+          "tracklet_lineage_id": "cam_1:track:132",
+          "local_identity_epoch": 0,
+          "local_identity_reason": "no_local_player_identity",
+          "tracking_status": "unassigned_formal",
+          "global_player_id": "global_player_1"
+        }
+      },
+      {
+        "canonical_player_id": "Player_2",
+        "global_player_id": "global_player_2",
+        "confirmed": true,
+        "reason": null,
+        "evidence": {
+          "view_id": "cam_1",
+          "time_delta_ms": 400,
+          "bbox_iou": 0.532,
+          "bbox_center_distance_px": null,
+          "court_distance_ft": 1.4683,
+          "appearance_distance": null,
+          "multiview_corroborated": null,
+          "competing_formal_players": 0,
+          "competing_slots": 0,
+          "track_id": 134,
+          "tracklet_lineage_id": "cam_1:track:134",
+          "local_identity_epoch": 0,
+          "local_identity_reason": "no_local_player_identity",
+          "tracking_status": "unassigned_formal",
+          "global_player_id": "global_player_2"
+        }
+      },
+      {
+        "canonical_player_id": "Player_3",
+        "global_player_id": "global_player_3",
+        "confirmed": true,
+        "reason": null,
+        "evidence": {
+          "view_id": "cam_1",
+          "time_delta_ms": 367,
+          "bbox_iou": 0.8295,
+          "bbox_center_distance_px": null,
+          "court_distance_ft": 0.6534,
+          "appearance_distance": null,
+          "multiview_corroborated": null,
+          "competing_formal_players": 0,
+          "competing_slots": 0,
+          "track_id": 158,
+          "tracklet_lineage_id": "cam_1:track:158",
+          "local_identity_epoch": 0,
+          "local_identity_reason": "no_local_player_identity",
+          "tracking_status": "unassigned_formal",
+          "global_player_id": "global_player_3"
+        }
+      },
+      {
+        "canonical_player_id": "Player_4",
+        "global_player_id": "global_player_4",
+        "confirmed": true,
+        "reason": null,
+        "evidence": {
+          "view_id": "cam_1",
+          "time_delta_ms": 400,
+          "bbox_iou": 0.8589,
+          "bbox_center_distance_px": null,
+          "court_distance_ft": 0.661,
+          "appearance_distance": null,
+          "multiview_corroborated": null,
+          "competing_formal_players": 0,
+          "competing_slots": 0,
+          "track_id": 2,
+          "tracklet_lineage_id": "cam_1:track:2",
+          "local_identity_epoch": 0,
+          "local_identity_reason": "no_local_player_identity",
+          "tracking_status": "unassigned_formal",
+          "global_player_id": "global_player_4"
+        }
+      }
+    ],
+    "largest_gaps": {
+      "Player_1": [
+        {
+          "start": 28.5,
+          "end": 30.0,
+          "seconds": 1.5
+        },
+        {
+          "start": 119.966667,
+          "end": 120.466667,
+          "seconds": 0.5
+        },
+        {
+          "start": 103.033333,
+          "end": 103.133333,
+          "seconds": 0.09999999999999432
+        },
+        {
+          "start": 69.633333,
+          "end": 69.7,
+          "seconds": 0.06666700000000958
+        },
+        {
+          "start": 50.433333,
+          "end": 50.5,
+          "seconds": 0.06666700000000247
+        }
+      ],
+      "Player_2": [
+        {
+          "start": 28.5,
+          "end": 30.0,
+          "seconds": 1.5
+        },
+        {
+          "start": 102.0,
+          "end": 103.133333,
+          "seconds": 1.1333329999999933
+        },
+        {
+          "start": 119.966667,
+          "end": 120.466667,
+          "seconds": 0.5
+        },
+        {
+          "start": 89.1,
+          "end": 89.4,
+          "seconds": 0.30000000000001137
+        },
+        {
+          "start": 101.133333,
+          "end": 101.4,
+          "seconds": 0.2666670000000124
+        }
+      ],
+      "Player_3": [
+        {
+          "start": 28.5,
+          "end": 30.0,
+          "seconds": 1.5
+        },
+        {
+          "start": 119.966667,
+          "end": 120.466667,
+          "seconds": 0.5
+        },
+        {
+          "start": 94.8,
+          "end": 94.9,
+          "seconds": 0.10000000000000853
+        },
+        {
+          "start": 98.133333,
+          "end": 98.233333,
+          "seconds": 0.10000000000000853
+        },
+        {
+          "start": 99.133333,
+          "end": 99.233333,
+          "seconds": 0.10000000000000853
+        }
+      ],
+      "Player_4": [
+        {
+          "start": 28.5,
+          "end": 30.0,
+          "seconds": 1.5
+        },
+        {
+          "start": 117.9,
+          "end": 118.833333,
+          "seconds": 0.9333329999999904
+        },
+        {
+          "start": 119.966667,
+          "end": 120.466667,
+          "seconds": 0.5
+        },
+        {
+          "start": 87.566667,
+          "end": 87.666667,
+          "seconds": 0.10000000000000853
+        },
+        {
+          "start": 74.633333,
+          "end": 74.7,
+          "seconds": 0.06666700000000958
+        }
+      ]
+    },
+    "windows_diagnostic_only": {
+      "0-30s": {
+        "Player_1": {
+          "coverage": 0.0,
+          "longest_gap_seconds": 1.466667000000001
+        },
+        "Player_2": {
+          "coverage": 0.0,
+          "longest_gap_seconds": 1.466667000000001
+        },
+        "Player_3": {
+          "coverage": 0.0,
+          "longest_gap_seconds": 1.466667000000001
+        },
+        "Player_4": {
+          "coverage": 0.0,
+          "longest_gap_seconds": 1.466667000000001
+        }
+      },
+      "30-60s": {
+        "Player_1": {
+          "coverage": 0.9988888888888889,
+          "longest_gap_seconds": 0.06666700000000247
+        },
+        "Player_2": {
+          "coverage": 0.9944444444444445,
+          "longest_gap_seconds": 0.10000000000000142
+        },
+        "Player_3": {
+          "coverage": 1.0,
+          "longest_gap_seconds": 0.03333400000000353
+        },
+        "Player_4": {
+          "coverage": 1.0,
+          "longest_gap_seconds": 0.03333400000000353
+        }
+      },
+      "60-90s": {
+        "Player_1": {
+          "coverage": 0.9977777777777778,
+          "longest_gap_seconds": 0.06666700000000958
+        },
+        "Player_2": {
+          "coverage": 0.9866666666666667,
+          "longest_gap_seconds": 0.30000000000001137
+        },
+        "Player_3": {
+          "coverage": 0.9988888888888889,
+          "longest_gap_seconds": 0.06666700000000958
+        },
+        "Player_4": {
+          "coverage": 0.9922222222222222,
+          "longest_gap_seconds": 0.10000000000000853
+        }
+      },
+      "90-120s": {
+        "Player_1": {
+          "coverage": 0.9977777777777778,
+          "longest_gap_seconds": 0.09999999999999432
+        },
+        "Player_2": {
+          "coverage": 0.9422222222222222,
+          "longest_gap_seconds": 1.1333329999999933
+        },
+        "Player_3": {
+          "coverage": 0.9733333333333334,
+          "longest_gap_seconds": 0.10000000000000853
+        },
+        "Player_4": {
+          "coverage": 0.9666666666666667,
+          "longest_gap_seconds": 0.9333329999999904
+        }
+      },
+      "65-120s": {
+        "Player_1": {
+          "coverage": 0.9975757575757576,
+          "longest_gap_seconds": 0.09999999999999432
+        },
+        "Player_2": {
+          "coverage": 0.9612121212121212,
+          "longest_gap_seconds": 1.1333329999999933
+        },
+        "Player_3": {
+          "coverage": 0.9848484848484849,
+          "longest_gap_seconds": 0.10000000000000853
+        },
+        "Player_4": {
+          "coverage": 0.9775757575757575,
+          "longest_gap_seconds": 0.9333329999999904
+        }
+      },
+      "30-120s": {
+        "Player_1": {
+          "coverage": 0.9981481481481481,
+          "longest_gap_seconds": 0.09999999999999432
+        },
+        "Player_2": {
+          "coverage": 0.9744444444444444,
+          "longest_gap_seconds": 1.1333329999999933
+        },
+        "Player_3": {
+          "coverage": 0.9907407407407407,
+          "longest_gap_seconds": 0.10000000000000853
+        },
+        "Player_4": {
+          "coverage": 0.9862962962962963,
+          "longest_gap_seconds": 0.9333329999999904
+        }
+      }
+    }
+  },
+  "initialization": {
+    "trace_start_ms": 28500.0,
+    "first_assigned_ms_by_final_player": {
+      "Player_3": 28566.666999999998,
+      "Player_4": 28566.666999999998,
+      "Player_1": 28566.666999999998,
+      "Player_2": 28566.666999999998
+    },
+    "initialization_delay_ms": {
+      "Player_3": 66.66699999999764,
+      "Player_4": 66.66699999999764,
+      "Player_1": 66.66699999999764,
+      "Player_2": 66.66699999999764
+    },
+    "first_assignment_reason": {
+      "Player_3": "matched",
+      "Player_4": "matched",
+      "Player_1": "matched",
+      "Player_2": "matched"
+    },
+    "candidate_observations_behind_baselines": 677,
+    "association_counters": {
+      "candidate_admitted": 881,
+      "candidate_promoted": 4,
+      "appearance_unavailable": 74,
+      "appearance_shadow_observations": 7363,
+      "appearance_non_discriminative": 12176,
+      "appearance_supports": 19150,
+      "unmatched_recovery_evidence_seen": 2793,
+      "unmatched_recovery_pending": 1176,
+      "unmatched_recovery_track_absent": 564,
+      "appearance_conflicts": 161,
+      "candidate_pool_recovered_removed": 138,
+      "unmatched_recovery_accepted": 1198,
+      "unmatched_recovery_rejected_geometry": 419,
+      "fusion_conflict": 179,
+      "fusion_conflict_cam1_selected": 87,
+      "fusion_conflict_prediction_selected": 22,
+      "fusion_conflict_cam2_selected": 70,
+      "guided_expected_preserved": 90,
+      "candidate_waiting_for_end_capacity": 1332,
+      "guided_expected_rejected": 1,
+      "continuity_rejected_geometry": 5,
+      "reassociation_ambiguous": 112,
+      "quarantined_fusion_sample": 112,
+      "candidate_lineage_continuity": 4,
+      "historical_reacquired": 2
+    },
+    "scope": [
+      30000,
+      120000
+    ]
+  },
+  "actual_runtime_sync": {
+    "cam_2_status_counts": {
+      "available": 2760
+    },
+    "first_formal_available_ms": 28500.0,
+    "first_available_source_frame": 1708,
+    "cam_2_ticks_with_formal_or_candidate_detections": 2760,
+    "cam_2_first_54s_association_input_count": 3097
+  },
+  "manual_review": {
+    "reviewed_times_seconds": [
+      28.566667,
+      29,
+      30,
+      30.5,
+      45,
+      55,
+      65,
+      90,
+      110
+    ],
+    "views": [
+      "cam_1",
+      "cam_2"
+    ],
+    "result": "Displayed labels match gray sleeveless P1, pink P2, white/blue P3, black P4 in sampled frames. No observed identity swap in these samples. This is sampled review, not frame-by-frame ground truth.",
+    "formal_overlay_times_seconds": [
+      65,
+      90,
+      110
+    ],
+    "diagnostic_only_times_seconds": [
+      28.566667,
+      29,
+      30,
+      30.5,
+      45,
+      55
+    ],
+    "per_view_limit": "At 90s P2 is near/outside cam_2 frame and no artificial P2 box is required. PROJ overlays are explicitly not real detections.",
+    "initialization_note": "P3 earliest accepted association is 28.566667s, 66.667ms after trace start; this is track association, not frozen P confirmation."
+  },
+  "tests": {
+    "targeted_passed": 198,
+    "existing_deprecation_warnings": 2,
+    "full_backend_or_frontend_rerun": false,
+    "openspec_cli_rerun": false
+  },
+  "historical_0_120_job": {
+    "id": "job-748791d3c8",
+    "verdict": "fail",
+    "preserved": true,
+    "not_same_scope_comparison": true
+  },
+  "canceled_intermediate_job": "job-69856333d9",
+  "known_limits": [
+    "Off-court preparation before30s remains unresolved. Prior job retrospective G1 maps to pink P2 at15s and gray P1 later; automatic identity-switch count does not certify physical identity.",
+    "No full587s take acceptance. No default-web-database switch. No GitHub push.",
+    "Shot/rally derived audit cannot find formal observations for allfour slots; conflict artifact preserved and authoritative joint audit remains available. Shot/rally accuracy is outside this acceptance."
+  ],
+  "derived_audit_conflict": {
+    "schema_version": "bootstrap-binding-audit-conflict.v1",
+    "job_id": "job-2b677c38af",
+    "authoritative_path": "D:\\匹克球\\2026-07-20\\take_sync_20260720_121319_e7f03b\\analysis\\job-2b677c38af\\bootstrap_binding_audit.json",
+    "authoritative_status": "available",
+    "derived_source": "canonical_shot_rally_events",
+    "conflicts": {
+      "Player_1": {
+        "authoritative_confirmed": true,
+        "derived_confirmed": false,
+        "authoritative_reason": null,
+        "derived_reason": "bootstrap_binding_no_formal_observation",
+        "authoritative_global_player_id": "global_player_1",
+        "derived_global_player_id": null
+      },
+      "Player_2": {
+        "authoritative_confirmed": true,
+        "derived_confirmed": false,
+        "authoritative_reason": null,
+        "derived_reason": "bootstrap_binding_no_formal_observation",
+        "authoritative_global_player_id": "global_player_2",
+        "derived_global_player_id": null
+      },
+      "Player_3": {
+        "authoritative_confirmed": true,
+        "derived_confirmed": false,
+        "authoritative_reason": null,
+        "derived_reason": "bootstrap_binding_no_formal_observation",
+        "authoritative_global_player_id": "global_player_3",
+        "derived_global_player_id": null
+      },
+      "Player_4": {
+        "authoritative_confirmed": true,
+        "derived_confirmed": false,
+        "authoritative_reason": null,
+        "derived_reason": "bootstrap_binding_no_formal_observation",
+        "authoritative_global_player_id": "global_player_4",
+        "derived_global_player_id": null
+      }
+    }
+  },
+  "result_artifact_sha256": {
+    "four_player_identification_quality.json": "e46b64a9d9e0f18fbbe27d17d613055c713e9782b573885b2605fdf60f5e1915",
+    "roster.json": "8ea7098da6ed551401938dcde5b2dc28da0b4cbb448282a5bbd0c8f7afff61ed",
+    "bootstrap_binding_audit.json": "84a3214f03d4f793d3aa9c728f3c952ea08edf7ef048996d647153ec4fd49630"
+  }
+}
