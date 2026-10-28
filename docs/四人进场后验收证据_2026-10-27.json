@@ -538,7 +538,7 @@
   "canceled_intermediate_job": "job-69856333d9",
   "known_limits": [
     "Off-court preparation before30s remains unresolved. Prior job retrospective G1 maps to pink P2 at15s and gray P1 later; automatic identity-switch count does not certify physical identity.",
-    "No full587s take acceptance. No default-web-database switch. No GitHub push.",
+    "No full587s take acceptance. No default-web-database switch. Original media and full run artifacts remain local.",
     "Shot/rally derived audit cannot find formal observations for allfour slots; conflict artifact preserved and authoritative joint audit remains available. Shot/rally accuracy is outside this acceptance."
   ],
   "derived_audit_conflict": {
@@ -586,5 +586,11 @@
     "four_player_identification_quality.json": "e46b64a9d9e0f18fbbe27d17d613055c713e9782b573885b2605fdf60f5e1915",
     "roster.json": "8ea7098da6ed551401938dcde5b2dc28da0b4cbb448282a5bbd0c8f7afff61ed",
     "bootstrap_binding_audit.json": "84a3214f03d4f793d3aa9c728f3c952ea08edf7ef048996d647153ec4fd49630"
+  },
+  "repository_evidence_images": {
+    "docs/assets/four-player-20261028/four-player-real-samples.jpg": "a11e50654ae0052ed3354d69fa04ab3f75eb4e47ef8626623947c16a2c9e783e",
+    "docs/assets/four-player-20261028/handover-diagnostic-samples.jpg": "81c592494400d4b9fa9799f1d2334898da466646168c450b07a2b473c4b698f0",
+    "docs/assets/four-player-20261028/initialization-diagnostic-samples.jpg": "fae74f05daa72979467d3b8721a2291cc7d631c933d2dc6fc50f6a0d14a5b6cc",
+    "docs/assets/four-player-20261028/preanchor-diagnostic-samples.jpg": "6f24c2a7c864c8974394cc9e8bf92971e47921537d2b60bbb863002e9693ad27"
   }
 }
