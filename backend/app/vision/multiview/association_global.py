@@ -882,12 +882,13 @@ class GlobalPlayerAssociator:
             self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
             self._record_decision(obs, "candidate", reason="candidate_admitted")
 
-            if len(self.registry.players) >= self.registry.expected_player_count:
+            if len(self.registry.players) >= self.registry.expected_player_count or (
+                side_capacity_waitlist and self.registry.players
+            ):
                 recovery_observations.append(obs)
 
-        # Candidate tracks are admitted to the roster candidate pool only
-        # while it is still being built. Once full, they enter a separate
-        # recovery ledger and can target existing globals only.
+        # Frozen-roster candidates can also continue existing raw lineages
+        # before every slot fills. Recovery never creates another global.
         roster_full = (
             self.registry.roster_state == "ROSTER_ACTIVE"
             or len(self.registry.players) >= self.registry.expected_player_count
@@ -918,7 +919,7 @@ class GlobalPlayerAssociator:
                 )
                 self.diagnostics["candidate_admitted"] = self.diagnostics.get("candidate_admitted", 0) + 1
                 self._record_decision(obs, "candidate", reason="candidate_admitted")
-            if roster_full:
+            if roster_full or (keep_side_waitlist and self.registry.players):
                 recovery_observations.append(obs)
 
         if recovery_observations:
@@ -1090,9 +1091,9 @@ class GlobalPlayerAssociator:
             if int(entry["hit_count"]) < min_ticks:
                 self._record_decision(obs, "pending", reason="unmatched_recovery_stability")
 
-        # Only a formal, non-quarantined observation from the other camera in
-        # this tick can support a recovered identity. This keeps stale-only
-        # geometry from assigning a candidate to the wrong doubles player.
+        # Other-camera support must be formal and non-quarantined. A fresh
+        # exact raw-track history can also support candidate continuation below;
+        # stale-only geometry cannot identify a new candidate.
         supported_globals_by_view: dict[str, dict[str, tuple[float, float]]] = defaultdict(dict)
         occupied_globals_by_view: dict[str, set[str]] = defaultdict(set)
         for update in updates:
@@ -1122,6 +1123,7 @@ class GlobalPlayerAssociator:
 
         for view_id, entries in by_view.items():
             options_by_key: dict[str, dict[str, float]] = {}
+            history_supported_pairs: set[tuple[str, str]] = set()
             feasible_by_key: dict[str, dict[str, float]] = {}
             observation_by_match_key: dict[str, JointObservation] = {}
             entry_by_match_key: dict[str, tuple[tuple[str, str, int, bool], dict[str, object]]] = {}
@@ -1143,8 +1145,30 @@ class GlobalPlayerAssociator:
                         for other_view, positions in supported_globals_by_view.items()
                         if other_view != view_id and gid in positions
                     ]
+                    history_support = False
                     if not other_positions:
-                        continue
+                        binding = state.view_bindings.get(view_id)
+                        # A previously admitted raw track can continue while
+                        # the other roster slots are still bootstrapping. This
+                        # does not identify a new candidate from stale geometry.
+                        age = timestamp_s - state.last_seen_s if state.last_seen_s is not None else float("inf")
+                        historical = self.registry.historical_bindings.get((view_id, self.observation_key(obs)))
+                        observed_end = self.registry._canonical_end(float(obs.canonical_y_ft))
+                        history_support = (
+                            bool(entry.get("candidate"))
+                            and getattr(self.registry, "side_capacity_enabled", False)
+                            and historical == gid and gid in predictions
+                            and state.association_eligible and 0.0 <= age <= 1.0
+                            and obs.confidence >= 0.5
+                            and (binding is None or (
+                                binding.track_id == obs.track_id
+                                and binding.local_identity_epoch == obs.local_identity_epoch
+                            ))
+                            and not (state.roster_end and observed_end and state.roster_end != observed_end)
+                        )
+                        if not history_support:
+                            continue
+                        other_positions = [predictions[gid][:2]]
                     if incumbent is not None and gid != incumbent:
                         continue
                     binding = state.view_bindings.get(view_id)
@@ -1169,9 +1193,13 @@ class GlobalPlayerAssociator:
                         else self.max_association_distance_ft,
                         self.max_association_distance_ft,
                     )
+                    if history_support:
+                        gate = min(gate, 3.0)
                     if residual <= gate:
                         residuals[gid] = residual
                         normalized[gid] = residual / max(gate, 1e-3)
+                        if history_support:
+                            history_supported_pairs.add((match_key, gid))
                 if not residuals:
                     self.diagnostics["unmatched_recovery_rejected_geometry"] = (
                         self.diagnostics.get("unmatched_recovery_rejected_geometry", 0) + 1
@@ -1260,6 +1288,10 @@ class GlobalPlayerAssociator:
                     self._record_decision(obs, "rejected", global_id=gid, reason="reference_slot_conflict")
                     continue
                 entry["recovered_global_id"] = gid
+                self.registry.historical_bindings[(obs.view_id, self.observation_key(obs))] = gid
+                history_support = (match_key, gid) in history_supported_pairs
+                if history_support:
+                    self.diagnostics["candidate_lineage_continuity"] = self.diagnostics.get("candidate_lineage_continuity", 0) + 1
                 self.diagnostics["unmatched_recovery_accepted"] = (
                     self.diagnostics.get("unmatched_recovery_accepted", 0) + 1
                 )
@@ -1267,7 +1299,8 @@ class GlobalPlayerAssociator:
                     obs,
                     "assigned",
                     global_id=gid,
-                    reason="candidate_recovered" if is_candidate else "unresolved_recovered",
+                    reason=("candidate_lineage_continuity" if history_support else
+                            "candidate_recovered" if is_candidate else "unresolved_recovered"),
                 )
                 if not is_candidate:
                     self._pending_recovery.pop(recovery_key, None)
