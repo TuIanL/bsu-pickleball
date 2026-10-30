@@ -363,10 +363,14 @@ class PlayerIdentityManager:
             is_interpolated=False,
             source="detector",
         )
-        player.trajectory.extend(inserted)
-        player.trajectory.append(sample)
-        player.trajectory.sort(key=lambda item: (item.frame_index, item.timestamp_seconds))
-        return [*inserted, sample]
+        additions = [*inserted, sample]
+        key = lambda item: (item.frame_index, item.timestamp_seconds)
+        needs_sort = bool(player.trajectory and key(player.trajectory[-1]) > key(additions[0]))
+        needs_sort = needs_sort or any(key(a) > key(b) for a, b in zip(additions, additions[1:]))
+        player.trajectory.extend(additions)
+        if needs_sort:
+            player.trajectory.sort(key=key)
+        return additions
 
     def _interpolate(self, player: PlayerState, observation: PlayerObservation) -> list[PlayerTrajectorySample]:
         # 当两次观测之间缺失若干帧（且间隔在可插值范围内）时，做线性插值补齐中间帧（interpolated 样本）。

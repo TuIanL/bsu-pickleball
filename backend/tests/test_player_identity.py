@@ -95,6 +95,27 @@ def test_identity_consumes_canonical_lock_hints_and_reuses_binding():
     assert manager.track_to_player[1] == "Player_1"
 
 
+def test_monotonic_identity_updates_do_not_resort_full_match_history():
+    class OrderedHistory(list):
+        def sort(self, *args, **kwargs):
+            raise AssertionError("sequential observation re-sorted full history")
+    manager = PlayerIdentityManager()
+    manager.update(0, [position(1, 0, 10, 20)], track_identity_hints={1: "Player_1"})
+    player = manager.players["Player_1"]
+    player.trajectory = OrderedHistory(player.trajectory)
+    for frame in range(1, 100):
+        manager.update(frame, [position(1, frame, 10, 20)], track_identity_hints={1: "Player_1"})
+    assert [p.frame_index for p in player.trajectory] == list(range(100))
+
+
+def test_out_of_order_identity_observation_still_keeps_sorted_history():
+    manager = PlayerIdentityManager()
+    for frame in (0, 2, 1):
+        manager.update(frame, [position(1, frame, 10, 20)], track_identity_hints={1: "Player_1"})
+    keys = [(p.frame_index, p.timestamp_seconds) for p in manager.players["Player_1"].trajectory]
+    assert keys == sorted(keys)
+
+
 def test_identity_binds_lost_slot_new_track_to_same_player_via_hint():
     manager = PlayerIdentityManager(PlayerIdentityConfig(max_players=1))
 

@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-30",
+  "baseline_job": "job-64b09b5b37",
+  "worker_launch_commit": "5dc892e",
+  "cpu_identity_update_benchmark": {
+    "old": 4.014912799932063,
+    "optimized": 0.08155460003763437,
+    "sample_count": 10000,
+    "identical_trajectory": true,
+    "speedup": 49.22975280461595,
+    "scope": "CPU sequential identity-update benchmark; not video throughput or tracking acceptance"
+  },
+  "profile_samples": 998,
+  "profile_errors": 0,
+  "related_backend_tests_passed": 255,
+  "existing_warnings": 2,
+  "typescript_check": "passed",
+  "optimized_real_video_run": "pending"
+}

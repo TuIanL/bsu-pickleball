@@ -163,6 +163,21 @@ def test_joint_run_trace_is_opt_in_and_preserves_unavailable_status():
     assert tick["recovery"] == {}
 
 
+def test_guidance_diagnostics_are_bounded_to_current_tick_and_keep_both_views(monkeypatch):
+    run = _make_joint_run(debug_trace_enabled=False)
+    lengths = []
+    def generate(**kwargs):
+        lengths.append(len(run.guidance_generator.last_decisions))
+        run.guidance_generator.last_decisions.append(SimpleNamespace(
+            global_player_id="g", target_view=kwargs["target_view"], tick=kwargs["tick"],
+        ))
+        return []
+    monkeypatch.setattr(run.guidance_generator, "generate_for_view", generate)
+    run.run(reference_frame_count=3, reference_fps=30.)
+    assert lengths == [0, 1, 0, 1, 0, 1]
+    assert len(run.guidance_generator.last_decisions) == 2
+
+
 @pytest.mark.parametrize("accepted_tentative", [False, True])
 def test_quarantined_diagnostic_cannot_replace_sample_provenance_or_taint_identity(monkeypatch, accepted_tentative):
     """July 90s: an isolated challenger and a valid same-view track coexist."""

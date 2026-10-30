@@ -396,6 +396,8 @@ class MultiViewJointRun:
         for tick_number, ref_idx in enumerate(tick_indices):
             if cancellation_token is not None:
                 cancellation_token.raise_if_cancelled()
+            # Diagnostics are per-tick; old decisions must not grow the scan or leak stale reasons.
+            self.guidance_generator.last_decisions.clear()
             timestamp_s = (
                 self.reference_timing_provider.take_timestamp_for_frame(ref_idx)
                 if self.reference_timing_provider is not None
