@@ -1,0 +1,282 @@
+{
+  "date": "2026-10-30",
+  "step": 1,
+  "status": "complete",
+  "capture_take_id": "ct_9997fa5aedf7",
+  "window": {
+    "requested_window_ms": [
+      30000,
+      587150
+    ],
+    "processed_pre_roll_start_seconds": 28.5,
+    "attempted_ticks": 16760,
+    "cam_2_status_counts": {
+      "available": 16760
+    },
+    "source_frames_monotonic_without_repeats": true,
+    "maximum_pairing_error_ms": 3.545856925370572,
+    "sync_revision": 2,
+    "end_scope": "Full remaining recorded take, including end-of-match gathering; no tail silently discarded."
+  },
+  "sync": {
+    "revision": 2,
+    "status": {
+      "capture_take_id": "ct_9997fa5aedf7",
+      "state": "confirmed",
+      "analysis_allowed": true,
+      "reason_codes": [
+        "manual_confirmation_valid"
+      ],
+      "source": "manual_anchors",
+      "revision": 2,
+      "quality": {
+        "anchor_count": 5,
+        "coverage_ratio": 0.9998296857702461,
+        "residual_rms_ms": 6.665036829792609,
+        "quality": "good",
+        "valid_start_seconds": 0.1,
+        "valid_end_seconds": 587.15,
+        "reason": null
+      },
+      "provenance": [
+        {
+          "capture_take_id": "ct_9997fa5aedf7",
+          "slot": "cam_1",
+          "camera_id": "174",
+          "registered_video_id": "rec-db6e9e990a",
+          "media_identity": {
+            "path": "D:\\匹克球\\2026-07-20\\take_sync_20260720_121319_e7f03b\\174_merged.mp4",
+            "exists": true,
+            "size_bytes": 1040266860,
+            "mtime_ns": 1784710588530000000
+          },
+          "timing_sidecar_identity": {
+            "path": "D:\\匹克球\\2026-07-20\\take_sync_20260720_121319_e7f03b\\174_merged.mp4.pts.jsonl",
+            "exists": true,
+            "size_bytes": 3002528,
+            "mtime_ns": 1787018769260000000
+          },
+          "timing_authority": "source_pts",
+          "frame_count": 35230,
+          "first_pts_seconds": 0.0,
+          "last_pts_seconds": 587.15
+        },
+        {
+          "capture_take_id": "ct_9997fa5aedf7",
+          "slot": "cam_2",
+          "camera_id": "175",
+          "registered_video_id": "rec-8c69adad75",
+          "media_identity": {
+            "path": "D:\\匹克球\\2026-07-20\\take_sync_20260720_121319_e7f03b\\175_merged.mp4",
+            "exists": true,
+            "size_bytes": 1038380343,
+            "mtime_ns": 1784710830980000000
+          },
+          "timing_sidecar_identity": {
+            "path": "D:\\匹克球\\2026-07-20\\take_sync_20260720_121319_e7f03b\\175_merged.mp4.pts.jsonl",
+            "exists": true,
+            "size_bytes": 3002528,
+            "mtime_ns": 1787022224520000000
+          },
+          "timing_authority": "source_pts",
+          "frame_count": 35230,
+          "first_pts_seconds": 0.0,
+          "last_pts_seconds": 587.15
+        }
+      ],
+      "provenance_fingerprint": "c308ff91a2ebc490d52701cfdad6a8611fe35dd7f04737abd2e2859abea9044b",
+      "invalidation_reasons": [],
+      "confirmed_at": "2026-10-30T13:11:04.901655Z",
+      "draft": {
+        "reference_camera": "174",
+        "cameras": [
+          "174",
+          "175"
+        ],
+        "anchors": [
+          {
+            "id": "preserved-0",
+            "label": "Preserved anchor0",
+            "note": "",
+            "frame_by_camera": {},
+            "pts_by_camera": {
+              "174": 0.1,
+              "175": 0.066667
+            },
+            "created_at": null
+          },
+          {
+            "id": "preserved-1",
+            "label": "Preserved anchor1",
+            "note": "",
+            "frame_by_camera": {},
+            "pts_by_camera": {
+              "174": 53.85,
+              "175": 53.816667
+            },
+            "created_at": null
+          },
+          {
+            "id": "preserved-2",
+            "label": "Preserved anchor2",
+            "note": "",
+            "frame_by_camera": {},
+            "pts_by_camera": {
+              "174": 285.85,
+              "175": 285.8
+            },
+            "created_at": null
+          },
+          {
+            "id": "preserved-3",
+            "label": "Preserved anchor3",
+            "note": "",
+            "frame_by_camera": {},
+            "pts_by_camera": {
+              "174": 450.583333,
+              "175": 450.55
+            },
+            "created_at": null
+          },
+          {
+            "id": "tail-motion-20261030",
+            "label": "Tail shared motion, approximately +/-1frame",
+            "note": "Last source frame pair follows -2-frame lag corroborated by570-575s foot/shoulder motion and582-587s shoulder velocity. Approximately +/-1frame precision; not audio or OSD synchronization.",
+            "frame_by_camera": {
+              "174": 35229,
+              "175": 35227
+            },
+            "pts_by_camera": {
+              "174": 587.15,
+              "175": 587.116667
+            },
+            "created_at": null
+          }
+        ],
+        "expected_revision": 2
+      }
+    },
+    "mapping": {
+      "reference_camera": "174",
+      "camera_id": "175",
+      "offset_ms": -36.478568515576626,
+      "rate": 0.9999993182325252,
+      "drift_ppm": -0.6817674748083036,
+      "residual_rms_ms": 6.665036829792609,
+      "anchor_count": 5,
+      "quality": "good",
+      "reason": null,
+      "valid_start_seconds": 0.1,
+      "valid_end_seconds": 587.15
+    },
+    "hashes": {
+      "sync_anchors.v1.json": "5e89c0b3051805434b3cdfb349628780cda8d2f5afef40cecdf51df78c258dcf",
+      "sync_anchor_confirmation.json": "a05dbcae3cfdd9bd6622b814146dbe36dfce8dd77d33910f5430091f4b6827de",
+      "sync_anchor_draft.json": "2493ce5ce056696ff5c7c05f586a62407261124928a4d4e62f78057956f5a045",
+      "sync_calibration.json": "458768fca46d549dcc968c047636dd0b2500d581c8bca2375225f6af27870ef7"
+    },
+    "original_anchor_count": 4,
+    "old_jobs_preserved": true
+  },
+  "roster": {
+    "skipped": false,
+    "initial_team_a_end": "end_a",
+    "entries": [
+      {
+        "canonical_player_id": "Player_1",
+        "candidate_id": null,
+        "slot_index": null,
+        "display_name": "P1 Gray",
+        "team_id": "A",
+        "source_view_id": "cam_2",
+        "anchor_timestamp_ms": 30000,
+        "anchor_bbox": [
+          1256.6497802734375,
+          499.3818054199219,
+          1432.058837890625,
+          894.9151611328125
+        ],
+        "anchor_court_xy": [
+          3.9025573166362086,
+          -0.6325417474632786
+        ],
+        "bootstrap_run_id": null,
+        "bootstrap_model_version": null,
+        "bootstrap_confidence": 0.9237843155860901
+      },
+      {
+        "canonical_player_id": "Player_2",
+        "candidate_id": null,
+        "slot_index": null,
+        "display_name": "P2 Pink",
+        "team_id": "A",
+        "source_view_id": "cam_2",
+        "anchor_timestamp_ms": 30000,
+        "anchor_bbox": [
+          240.27713012695312,
+          599.4315185546875,
+          442.1033020019531,
+          1027.05419921875
+        ],
+        "anchor_court_xy": [
+          16.98144541825672,
+          -2.8477699956983713
+        ],
+        "bootstrap_run_id": null,
+        "bootstrap_model_version": null,
+        "bootstrap_confidence": 0.8939146995544434
+      },
+      {
+        "canonical_player_id": "Player_3",
+        "candidate_id": null,
+        "slot_index": null,
+        "display_name": "P3 White/Blue",
+        "team_id": "B",
+        "source_view_id": "cam_1",
+        "anchor_timestamp_ms": 30000,
+        "anchor_bbox": [
+          775.6027221679688,
+          420.8602294921875,
+          935.5449829101562,
+          816.960205078125
+        ],
+        "anchor_court_xy": [
+          8.33195247114453,
+          45.98167720243568
+        ],
+        "bootstrap_run_id": null,
+        "bootstrap_model_version": null,
+        "bootstrap_confidence": 0.9050956964492798
+      },
+      {
+        "canonical_player_id": "Player_4",
+        "candidate_id": null,
+        "slot_index": null,
+        "display_name": "P4 Black",
+        "team_id": "B",
+        "source_view_id": "cam_1",
+        "anchor_timestamp_ms": 30000,
+        "anchor_bbox": [
+          1304.86962890625,
+          459.4468688964844,
+          1421.93408203125,
+          835.9305419921875
+        ],
+        "anchor_court_xy": [
+          16.055286887761344,
+          46.24047912314929
+        ],
+        "bootstrap_run_id": null,
+        "bootstrap_model_version": null,
+        "bootstrap_confidence": 0.8927706480026245
+      }
+    ],
+    "bootstrap_run_id": null,
+    "bootstrap_model_version": null
+  },
+  "library_url": "http://127.0.0.1:5173/library/sync_recording/sync_20260720_121319_e7f03b?view=overview",
+  "profile_directory": "D:\\匹克球\\bsu-pickleball\\.runtime\\identity-audit\\recovered-data",
+  "backup_directory": "D:\\匹克球\\bsu-pickleball\\.runtime\\full-match-20261030\\profile-before",
+  "evidence_note": "570-575s feet/shoulder motion supports camera175 offset approximately-2frames;582-587s shoulder velocity independently supports-2frames. Heel/toe signals near net are unreliable and not treated as decisive. Last source pair35229/35227 is approximately+/-1frame. No audio or device OSD used.",
+  "quality_note": "Clock pairing and manual start roster only; not whole-match tracking, pose or ball acceptance."
+}

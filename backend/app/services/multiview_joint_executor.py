@@ -331,6 +331,12 @@ def _build_canonical_ball_processor(
 ):
     """构造共享 canonical tick 的球 detector/tracker；模型或几何不可用时返回降级处理器。"""
     from app.vision.multiview.ball_stereo.canonical_runner import CanonicalBallStereoProcessor
+    if not getattr(settings, "enable_ball_detection", True):
+        return CanonicalBallStereoProcessor.unavailable(
+            job_id=parent.id,
+            take_id=parent.metadata.capture_take_id or "",
+            reason="当前配置未启用球检测；本次仅运行球员跟踪",
+        )
     from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
         BallSearchPolicy,
         BallSemanticPolicyConfig,
