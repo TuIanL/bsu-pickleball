@@ -337,6 +337,9 @@ def _build_canonical_ball_processor(
             take_id=parent.metadata.capture_take_id or "",
             reason="当前配置未启用球检测；本次仅运行球员跟踪",
         )
+    if not getattr(settings, "enable_ball_reconstruction", True):
+        # Basic 2D detections are published after tracking; do not create stereo/3D work.
+        return None
     from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
         BallSearchPolicy,
         BallSemanticPolicyConfig,
@@ -1172,6 +1175,12 @@ class MultiViewJointExecutor:
                     if out.diagnostics.get("effective_mode") == "multiview_fused"
                     else "双摄分析完成，但副摄证据不可用或覆盖不足，结果按降级模式展示。"
                 ), refinement=refinement, ball_analysis=getattr(out, "ball_analysis", None),
+            )
+            from app.services.joint_basic_visuals import publish_joint_basic_visuals
+            publish_joint_basic_visuals(
+                job=parent, result=result, storage=storage, settings=settings, videos=videos,
+                reference_view_id=reference_view_id, cancellation_token=token,
+                progress_callback=progress_callback,
             )
             _publish_joint_serve_candidates(
                 job=parent, result=result, runtime=runtimes[reference_view_id],

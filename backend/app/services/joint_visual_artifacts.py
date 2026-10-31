@@ -7,8 +7,8 @@ joint run 自身产物聚合生成：
   对齐单摄 `TrackingOverlayArtifact` 契约（bbox / footpoint / player_id / timestamp）。
 - `build_joint_position_visualizations`: 从 fused metric tracks 生成 heatmaps / scatter
   （复用 PositionVisualizer），供 VisualizationArtifactGallery 消费。
-- `JOINT_POSE_UNAVAILABLE` / `JOINT_RENDER_TRAJECTORY_UNAVAILABLE`: 无法真实生成的
-  产物（骨架 / 逐帧渲染轨迹）显式 unavailable + 结构化 reason，而非静默缺失。
+- 骨架由 executor 的可选真实推理后处理发布；关闭时显式 unavailable。
+- 独立逐帧渲染轨迹仍显式 unavailable + reason，而非静默缺失。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from app.vision.pickleball_game_analysis.visualization_schemas import Visualizat
 
 logger = logging.getLogger(__name__)
 
-JOINT_POSE_UNAVAILABLE = "joint_tracking_v2 未接入 RTMPose 姿态推理，无法生成骨架产物"
+JOINT_POSE_UNAVAILABLE = "本次双摄分析未启用骨架推理"
 JOINT_RENDER_TRAJECTORY_UNAVAILABLE = "joint 模式无逐帧图像坐标，渲染轨迹未生成"
 JOINT_DETECTIONS_UNAVAILABLE = "joint 模式不产出逐帧检测 jsonl（检测框见 tracking overlay）"
 

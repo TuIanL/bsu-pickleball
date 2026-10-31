@@ -812,7 +812,8 @@ class MultiViewResultComposer:
         - tracking_overlay（框架）：从 debug trace 聚合 reference view 检测，写 Parent 命名空间；
         - heatmaps / scatter / structured data：从 fused metric tracks 生成（canonical Player_N）；
         - roster.v1（诊断 / 映射 contract）：Global → Player_N 映射；
-        - pose_overlay / render_trajectory / detections：joint 模式无法真实生成，显式 unavailable + reason。
+        - pose_overlay：先标为未启用，由 executor 的可选真实推理后处理发布；
+        - render_trajectory / detections：未生成时显式 unavailable + reason。
         """
         from app.core.config import get_settings
         from app.services.joint_visual_artifacts import (

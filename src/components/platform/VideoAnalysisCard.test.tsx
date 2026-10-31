@@ -13,6 +13,7 @@ import type {
   TrackingOverlayArtifact,
   VideoOverlayLabel,
   FusedPlayerOverlayArtifact,
+  PoseOverlayArtifact,
 } from "../../types/report";
 import type { DisplayViewGeometry } from "../../types/videoCourtOverlay";
 
@@ -31,6 +32,41 @@ const match: MatchSummary = {
 const emptyPlayers: PlayerMarker[] = [];
 const emptyTimeline: TimelineMarker[] = [];
 const emptyLabels: VideoOverlayLabel[] = [];
+
+it("renders poses and 2D ball observations from the selected camera only", () => {
+  const frame = (x: number) => ({ frame_index: 0, timestamp_seconds: 0, subjects: [{
+    track_id: "Player_1", bbox: [x, 10, x + 20, 80], confidence: .9,
+    keypoints: [{ name: "nose", x, y: 20, confidence: .9, visible: true }],
+  }] });
+  const pose: PoseOverlayArtifact = {
+    job_id: "j", status: "available", detail: "poses", keypoint_schema: "rtmpose26",
+    source: { width: 1000, height: 500 }, skeleton_edges: [], frames: [frame(100)],
+    reference_view_id: "cam_1", views: { cam_2: {
+      source: { width: 1000, height: 500 }, status: "available", frames: [frame(700)],
+    } },
+  };
+  const ball: BallTrajectoryArtifact = {
+    schema_version: "ball_trajectory.v1", job_id: "j", status: "available", detail: "ball",
+    samples: [{ frame_index: 0, timestamp_sec: 0, image_xy: [120, 30], accepted: true }],
+    reference_view_id: "cam_1", views: { cam_2: {
+      status: "available", detail: "secondary", samples: [{ frame_index: 0, timestamp_sec: 0, image_xy: [720, 40], accepted: true }],
+    } },
+  };
+  const { container, rerender } = render(<VideoAnalysisCard
+    labels={emptyLabels} match={match} players={emptyPlayers} timeline={emptyTimeline}
+    videoSrc="/test.mp4" displayViewId="cam_2" poseOverlay={pose} poseOverlayLoadState="available"
+    ballTrajectory={ball} ballTrajectoryLoadState="available"
+  />);
+  expect(container.querySelector('circle[fill="#D9FF3F"]')?.getAttribute("cx")).toBe("700");
+  expect(within(container).getByTestId("video-ball-current").querySelector("circle")?.getAttribute("cx")).toBe("720");
+  rerender(<VideoAnalysisCard
+    labels={emptyLabels} match={match} players={emptyPlayers} timeline={emptyTimeline}
+    videoSrc="/test.mp4" displayViewId="cam_3" poseOverlay={pose} poseOverlayLoadState="available"
+    ballTrajectory={ball} ballTrajectoryLoadState="available"
+  />);
+  expect(container.querySelector('circle[fill="#D9FF3F"]')).toBeNull();
+  expect(within(container).queryByTestId("video-ball-current")).toBeNull();
+});
 
 function makeTrackOverlay(
   detections: Array<{ player_id?: string; track_id?: string; confidence?: number }>

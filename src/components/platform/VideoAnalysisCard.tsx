@@ -19,6 +19,7 @@ import type {
 import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 import { CourtMinimap } from "./CourtMinimap";
 import { formatPlayerId } from "../../utils/analysisHelpers";
+import { selectVisualOverlay } from "../../services/visualOverlayViews";
 import { serveRallyStripEnabled } from "../../config/featureFlags";
 import {
   resolveDisplayGeometry,
@@ -588,7 +589,15 @@ function RealVideoOverlay({
     && displayViewId !== fusedPlayerOverlay.reference_view_id
     ? null
     : trackingOverlay;
-  const source = selectedFusedOverlay?.source ?? trackingOverlay?.source ?? poseOverlay?.source ?? naturalSize;
+  const selectedPoseOverlay = useMemo(
+    () => selectVisualOverlay(poseOverlay, displayViewId, fusedPlayerOverlay?.reference_view_id),
+    [poseOverlay, displayViewId, fusedPlayerOverlay?.reference_view_id],
+  );
+  const selectedBallTrajectory = useMemo(
+    () => selectVisualOverlay(ballTrajectory, trajectoryViewId ?? displayViewId, fusedPlayerOverlay?.reference_view_id),
+    [ballTrajectory, trajectoryViewId, displayViewId, fusedPlayerOverlay?.reference_view_id],
+  );
+  const source = selectedFusedOverlay?.source ?? targetTrackingOverlay?.source ?? selectedPoseOverlay?.source ?? selectedBallTrajectory?.source ?? naturalSize;
   const geometryForActiveView = displayViewGeometry && geometryIdentity === activeGeometryIdentity
     ? displayViewGeometry
     : null;
@@ -625,8 +634,8 @@ function RealVideoOverlay({
     [canonicalTime, targetTrackingOverlay]
   );
   const poseRenderFrame = useMemo(
-    () => resolvePoseFrame(poseOverlay?.frames ?? [], canonicalTime),
-    [canonicalTime, poseOverlay]
+    () => resolvePoseFrame(selectedPoseOverlay?.frames ?? [], canonicalTime),
+    [canonicalTime, selectedPoseOverlay]
   );
 
   const boxCount = useFusedOverlay
@@ -643,8 +652,8 @@ function RealVideoOverlay({
       ? hybridBallPathSegments
       : reconstructedBallTrajectory
         ? []
-        : resolveBallPathSegments(ballTrajectory, canonicalTime),
-    [ballTrajectory, canonicalTime, hybridBallPathSegments, reconstructedBallTrajectory],
+        : resolveBallPathSegments(selectedBallTrajectory, canonicalTime),
+    [selectedBallTrajectory, canonicalTime, hybridBallPathSegments, reconstructedBallTrajectory],
   );
   const ballSamples = useMemo(() => ballPathSegments.flat(), [ballPathSegments]);
   const allBounceMarkers = useMemo(() => {
@@ -664,16 +673,16 @@ function RealVideoOverlay({
   const boxesAvailable = useFusedOverlay
     ? Boolean(selectedFusedOverlay?.frames.some((frame) => frame.players.length > 0))
     : Boolean(targetTrackingOverlay?.frames.some((frame) => frame.detections.length > 0));
-  const skeletonAvailable = Boolean(poseOverlay?.frames.length);
-  const ballAvailable = hasUsableHybridBallSamples(reconstructedBallTrajectory, trajectoryViewId) || hasUsableBallSamples(ballTrajectory);
+  const skeletonAvailable = Boolean(selectedPoseOverlay?.frames.some((frame) => frame.subjects.length));
+  const ballAvailable = hasUsableHybridBallSamples(reconstructedBallTrajectory, trajectoryViewId) || hasUsableBallSamples(selectedBallTrajectory);
   const bounceAvailable = Boolean(allBounceMarkers.length);
   const trackingStatusLabel = useFusedOverlay
     ? resolveLayerStatus(fusedPlayerOverlayLoadState, selectedFusedOverlay?.status ?? fusedPlayerOverlayStatus)
     : resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
-  const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, poseOverlay?.status ?? poseOverlayStatus);
+  const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, selectedPoseOverlay?.status ?? (poseOverlay ? "unavailable" : poseOverlayStatus));
   const ballStatusLabel = resolveLayerStatus(
     ballTrajectoryLoadState,
-    reconstructedBallTrajectory?.display_trajectory_status ?? ballTrajectory?.status ?? ballTrajectoryStatus,
+    reconstructedBallTrajectory?.display_trajectory_status ?? selectedBallTrajectory?.status ?? (ballTrajectory ? "unavailable" : ballTrajectoryStatus),
   );
   const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   const trackingDetail = useFusedOverlay
@@ -681,10 +690,10 @@ function RealVideoOverlay({
       ? "该产物只有时间帧记录，没有可用人物框；需要重新计算人物跟踪。"
       : layerDetail(fusedPlayerOverlayLoadState, selectedFusedOverlay?.detail ?? fusedPlayerOverlayDetail, "融合球员 overlay")
     : layerDetail(trackingOverlayLoadState, trackingOverlay?.detail ?? trackingOverlayDetail, "人体框 overlay");
-  const poseDetail = layerDetail(poseOverlayLoadState, poseOverlay?.detail ?? poseOverlayDetail, "RTMPose 骨架 overlay");
+  const poseDetail = poseOverlay && !selectedPoseOverlay ? "当前机位没有骨架观测" : layerDetail(poseOverlayLoadState, selectedPoseOverlay?.detail ?? poseOverlayDetail, "球员骨架");
   const ballDetail = layerDetail(
     ballTrajectoryLoadState,
-    reconstructedBallTrajectory?.detail ?? ballTrajectory?.detail ?? ballTrajectoryDetail,
+    reconstructedBallTrajectory?.detail ?? selectedBallTrajectory?.detail ?? ballTrajectoryDetail,
     "球轨迹 layer",
   );
   const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
@@ -1082,7 +1091,7 @@ function RealVideoOverlay({
             opacity={poseInGap ? 0 : 1}
             style={{ transition: "opacity 0.3s ease-in-out" }}
           >
-            {poseOverlay?.skeleton_edges.map((edge) => {
+            {selectedPoseOverlay?.skeleton_edges.map((edge) => {
               const from = subject.keypoints.find((keypoint) => keypoint.name === edge.from_keypoint && keypoint.visible);
               const to = subject.keypoints.find((keypoint) => keypoint.name === edge.to_keypoint && keypoint.visible);
               if (!from || !to) {

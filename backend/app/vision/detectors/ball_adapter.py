@@ -43,11 +43,13 @@ class YoloBallDetectorAdapter(BallDetectorProtocol):
         confidence_threshold: float = 0.18,
         device: str | None = None,
         class_index: int = 0,
+        image_size: int | None = None,
     ) -> None:
         self.model_path = model_path
         self.confidence_threshold = float(confidence_threshold)
         self.device = device
         self.class_index = int(class_index)
+        self.image_size = image_size
         self._model: Any | None = None
 
     def _ensure_model(self) -> Any:
@@ -74,6 +76,8 @@ class YoloBallDetectorAdapter(BallDetectorProtocol):
         model = self._ensure_model()
         threshold = conf if conf and conf > 0 else self.confidence_threshold
         options = {"device": self.device} if self.device is not None else {}
+        if self.image_size is not None:
+            options["imgsz"] = self.image_size
         results = model.predict(frame, conf=threshold, verbose=False, **options)
         candidates: list[BallCandidate] = []
         for result in results:

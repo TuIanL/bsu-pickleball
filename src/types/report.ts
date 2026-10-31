@@ -1452,6 +1452,9 @@ export interface PoseOverlayArtifact {
   source: FrameSourceSize;
   skeleton_edges: SkeletonEdge[];
   frames: PoseOverlayFrame[];
+  reference_view_id?: string;
+  timing_provenance?: Record<string, unknown>;
+  views?: Record<string, Pick<PoseOverlayArtifact, "video_id" | "source" | "status" | "frames"> & { detail?: string }>;
 }
 
 export interface BallTrajectorySample {
@@ -1481,6 +1484,9 @@ export interface BallTrajectoryArtifact {
   };
   filtering?: Record<string, unknown>;
   samples: BallTrajectorySample[];
+  reference_view_id?: string;
+  source?: FrameSourceSize;
+  views?: Record<string, Pick<BallTrajectoryArtifact, "status" | "detail" | "source" | "samples">>;
 }
 
 export interface BounceEventCandidate {

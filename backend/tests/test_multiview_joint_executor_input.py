@@ -14,6 +14,16 @@ def test_joint_respects_disabled_ball_detection_before_opening_models():
     assert processor.counters["detector_calls"] == 0
 
 
+def test_joint_2d_ball_mode_does_not_open_stereo_or_scene_models():
+    from types import SimpleNamespace
+    from app.services.multiview_joint_executor import _build_canonical_ball_processor
+    assert _build_canonical_ball_processor(
+        parent=SimpleNamespace(id="basic", metadata=SimpleNamespace(capture_take_id="take")),
+        settings=SimpleNamespace(enable_ball_detection=True, enable_ball_reconstruction=False),
+        view_inputs=[], runtimes={}, calibrations={},
+    ) is None
+
+
 def test_joint_serve_candidates_publish_tracking_only_status(tmp_path):
     from types import SimpleNamespace
     from app.schemas.pipeline import AnalysisArtifacts
