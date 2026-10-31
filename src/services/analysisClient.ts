@@ -801,6 +801,8 @@ export interface MultiViewCreateViewPayload {
 export interface MultiviewAnalysisJobRequest {
   metadata: AnalysisUploadMetadata;
   frameStride?: number;
+  enableModelInference?: boolean;
+  enablePoseInference?: boolean;
   referenceViewId: string;
   views: MultiViewCreateViewPayload[];
   executionMode?: "late_fusion_v1" | "joint_tracking_v2";
@@ -830,6 +832,8 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
     body: JSON.stringify({
       metadata: request.metadata,
       frameStride: request.frameStride ?? 2,
+      enableModelInference: request.enableModelInference,
+      enablePoseInference: request.enablePoseInference,
       clipStartMs: request.clipStartMs,
       clipEndMs: request.clipEndMs,
       analysisKind: "multiview",

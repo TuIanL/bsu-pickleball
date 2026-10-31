@@ -338,6 +338,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
   // 窗口默认结束点由录制时长决定；在录制时长加载前不伪造 60 秒默认值。
   const [clipEndSec, setClipEndSec] = useState<number | null>(null);
   const [debugReplayEnabled, setDebugReplayEnabled] = useState(false);
+  const [poseEnabled, setPoseEnabled] = useState(true);
+  const [segmentationRequired, setSegmentationRequired] = useState(false);
   const [analysisFlow, setAnalysisFlow] = useState<AnalysisFlowMode>("new");
   const [rosterConfirmation, setRosterConfirmation] = useState<RosterConfirmationRequest>({
     skipped: false,
@@ -345,6 +347,8 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
   });
   const [syncAnchorStatus, setSyncAnchorStatus] = useState<SyncAnchorStatus | null>(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
+  const [savedScene, setSavedScene] = useState<MetricCourtSceneCalibration | null>(null);
+  const [usingSavedCalibration, setUsingSavedCalibration] = useState(false);
 
   const handleAnalysisFlowChange = (next: AnalysisFlowMode) => {
     setAnalysisFlow(next);
@@ -386,6 +390,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
         try {
           const sceneDraft = await getMetricCourtSceneDraft(captureTakeId);
           if (!cancelled && sceneDraft) {
+            setSavedScene(sceneDraft);
             const sharedValue = restoreNetProfileValue(sceneDraft);
             const sharedProfile = buildNetProfile(
               sharedValue.mode,
@@ -457,6 +462,13 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
 
   const takeCompleted = take?.status === "completed";
   const videosReady = Boolean(videoIdA && videoIdB);
+  const savedA = savedScene?.views.find((view) => view.view_id === "cam_1");
+  const savedB = savedScene?.views.find((view) => view.view_id === "cam_2");
+  const savedCalibrationReusable = savedScene?.status === "ready"
+    && savedA?.video_id === videoIdA && savedB?.video_id === videoIdB
+    && Boolean(savedA?.calibration_id && savedB?.calibration_id)
+    && ((savedA?.court_orientation === "identity" && savedB?.court_orientation === "rotate_180")
+      || (savedA?.court_orientation === "rotate_180" && savedB?.court_orientation === "identity"));
   // 素材就绪只取决于双视频已注册；take.status（如 failed/partial）不作为硬闸——
   // 深层校验（take 目录 / sync / 朝向）由后端 preflight 在启动时执行。
   const manualSyncState = syncAnchorStatus?.state;
@@ -583,6 +595,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
   // 只记录结果、不跳步：两路都完成由底部按钮放行。
   const handleCalibrationComplete = (slot: "cam_1" | "cam_2") => {
     return (calibrationId: string, points: CalibrationPointDraft[]) => {
+      setUsingSavedCalibration(false);
       if (slot === "cam_1") {
         setCalibrationA(calibrationId);
         setCalibrationPointsA(points);
@@ -608,6 +621,7 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
   const handleOrientationChange = (nextCam1AtEndA: boolean) => {
     if (nextCam1AtEndA === cam1AtEndA) return;
     setCam1AtEndA(nextCam1AtEndA);
+    setUsingSavedCalibration(false);
     // 朝向决定球网左右端的 canonical 语义，翻转后旧的球网点位不再有意义。
     if (netAnnotationA || netAnnotationB) {
       setNetAnnotationA(null);
@@ -719,8 +733,10 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
         // 双摄协同分析的正式展示链路统一走 canonical joint；Debug Replay 只是
         // 在同一条链路上额外保留四联诊断回放，不再决定是否启用球路分析。
         executionMode: "joint_tracking_v2",
-        // 正式比赛分析必须先生成并绑定模型回合窗口计划。
-        segmentationRequired: true,
+        // 基础识别可独立运行；按回合统计由用户选择。
+        segmentationRequired,
+        enableModelInference: true,
+        enablePoseInference: poseEnabled,
         useRallyContext: analysisFlow === "new",
         rosterConfirmation,
         debugTraceEnabled: debugReplayEnabled,
@@ -841,6 +857,21 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
         {/* ── Step 0: 球场标定（两路同页） ── */}
         {step === 0 && (
           <div className="rounded-3xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/70 p-4 sm:p-6">
+            {savedCalibrationReusable && (
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
+                <p className="text-sm text-slate-600">{usingSavedCalibration ? "已复用这份素材的双摄标定，可直接进入下一步。" : "这份素材已有确认的双摄标定，可继续使用。"}</p>
+                <button className="quiet-button px-4 py-2 text-sm" type="button" onClick={() => {
+                  if (!savedA?.calibration_id || !savedB?.calibration_id || !savedScene) return;
+                  setCalibrationA(savedA.calibration_id);
+                  setCalibrationB(savedB.calibration_id);
+                  setCam1AtEndA(savedA.court_orientation === "identity");
+                  setNetProfile(restoreNetProfileValue(savedScene));
+                  setNetAnnotationA(restoreNetDraft(savedScene, "cam_1"));
+                  setNetAnnotationB(restoreNetDraft(savedScene, "cam_2"));
+                  setUsingSavedCalibration(true);
+                }}>复用已保存的场地标定</button>
+              </div>
+            )}
             {/* 机位朝向前置：它决定球网左右端的 canonical 语义，必须先于任一标定确认 */}
             <div className="mb-5 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4">
               <div className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-[var(--ui-brand-deep)]">机位朝向</div>
@@ -1011,6 +1042,15 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
             {/* 分析配置（原素材检查步骤迁入）：窗口 / Debug Replay / 分析流程 */}
             <div className="mb-5 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] p-4" data-testid="analysis-config">
               <div className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-[var(--ui-brand-deep)]">分析配置</div>
+              <p className="mb-3 text-xs leading-5 text-slate-500">先完成整段人物识别与回放。可从四人上场后开始，准备阶段无需计入。</p>
+              <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm font-bold text-[var(--ui-ink)]">
+                <input checked={poseEnabled} onChange={(event) => setPoseEnabled(event.target.checked)} type="checkbox" />
+                识别球员骨架
+              </label>
+              <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm font-bold text-[var(--ui-ink)]">
+                <input checked={segmentationRequired} onChange={(event) => setSegmentationRequired(event.target.checked)} type="checkbox" />
+                同时按回合统计（增加处理时间）
+              </label>
               <label className="flex cursor-pointer items-center gap-2 text-sm font-bold text-[var(--ui-ink)]">
                 <input
                   checked={clipEnabled}

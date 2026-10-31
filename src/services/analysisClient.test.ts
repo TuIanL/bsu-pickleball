@@ -296,6 +296,9 @@ describe("analysis job compatibility", () => {
       referenceViewId: "cam_1",
       clipStartMs: 2000,
       clipEndMs: 4000,
+      enableModelInference: true,
+      enablePoseInference: false,
+      segmentationRequired: false,
       views: [
         { viewId: "cam_1", videoId: "v1", calibrationId: "c1", courtOrientation: "identity" },
         { viewId: "cam_2", videoId: "v2", calibrationId: "c2", courtOrientation: "rotate_180" },
@@ -304,6 +307,9 @@ describe("analysis job compatibility", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(body.clipStartMs).toBe(2000);
     expect(body.clipEndMs).toBe(4000);
+    expect(body.enableModelInference).toBe(true);
+    expect(body.enablePoseInference).toBe(false);
+    expect(body.segmentationRequired).toBe(false);
     expect(body.multiview.executionMode).toBe("late_fusion_v1");
 
     fetchMock.mockResolvedValueOnce(
