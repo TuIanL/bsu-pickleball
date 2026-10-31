@@ -23,7 +23,7 @@ def run_reentry(guard=None):
         registry.estimator.update(state.global_player_id, x, y, state.last_seen_s)
         if i == 3:
             state.view_bindings = {v: ViewBinding(track_id=3, visibility="lost") for v in ("cam_1", "cam_2")}
-    if guard == "foreign_history":
+    if guard in {"transferred_same_end", "foreign_history"}:
         registry.historical_bindings[("cam_1", "100")] = "global_player_4"
         registry.historical_bindings[("cam_2", "200")] = "global_player_4"
     if guard == "transferred_opposite_track":
@@ -39,6 +39,8 @@ def run_reentry(guard=None):
             JointObservation(v, tick, ts * 1000, 17, 36, track_id=40 + i, confidence=.9)
             for i, v in enumerate(("cam_1", "cam_2"))
         ]
+        if guard == "foreign_history":
+            donor = donor[:1]
         if guard == "transferred_opposite_track":
             donor.extend(JointObservation(v, tick, ts * 1000, 5, 8,
                 track_id=10 + i, confidence=.9)
@@ -69,7 +71,7 @@ def run_reentry(guard=None):
     return registry, associator, recovered
 
 
-@pytest.mark.parametrize("guard", [None, "weak_distant_view", "transferred_opposite_track"])
+@pytest.mark.parametrize("guard", [None, "weak_distant_view", "transferred_opposite_track", "transferred_same_end"])
 def test_returning_frozen_player_can_reacquire_new_raw_tracks_with_unique_current_dual_evidence(guard):
     registry, associator, recovered = run_reentry(guard)
     assert {u.view_id for u in recovered if u.reanchor} == {"cam_1", "cam_2"}
@@ -86,3 +88,43 @@ def test_returning_frozen_player_can_reacquire_new_raw_tracks_with_unique_curren
 def test_frozen_reentry_does_not_guess_without_unique_trusted_dual_evidence(guard):
     _, _, recovered = run_reentry(guard)
     assert not recovered
+
+
+@pytest.mark.parametrize("first_tentative,second_tentative,accepted", [
+    (False, True, False), (False, False, False), (True, False, True),
+])
+def test_one_real_person_per_global_and_view_in_each_tick(first_tentative, second_tentative, accepted):
+    registry = GlobalPlayerRegistry()
+    registry.ensure("global_player_1")
+    associator = GlobalPlayerAssociator(registry)
+    updates = []
+    def observation(track):
+        return JointObservation("cam_1", 30, 1000., 5., 8., track_id=track, confidence=.9)
+    assert associator._accept_pair(observation(1), "global_player_1", 0., updates, tentative=first_tentative)
+    assert associator._accept_pair(observation(2), "global_player_1", 0., updates, tentative=second_tentative) is accepted
+    assert len(updates) == 1
+    expected_track = 2 if accepted else 1
+    assert updates[0].observation.track_id == expected_track
+    assert registry.players["global_player_1"].view_bindings["cam_1"].track_id == expected_track
+
+
+
+def test_continuity_fallback_does_not_duplicate_current_formal_global_view():
+    registry = GlobalPlayerRegistry(expected_player_count=1)
+    state = registry.ensure("global_player_1")
+    state.roster_status = state.lifecycle = "confirmed"
+    state.x_ft, state.y_ft, state.last_seen_s = 5., 8., 0.
+    registry.estimator.update(state.global_player_id, 5., 8., 0.)
+    associator = GlobalPlayerAssociator(registry)
+    observations = [JointObservation("cam_1", 1, 33.333, x, 8., track_id=i, confidence=.9)
+                    for i, x in ((1, 5.), (2, 6.))]
+    for obs in observations:
+        associator.mapping[associator.mapping_key(obs)] = state.global_player_id
+        registry.historical_bindings[(obs.view_id, associator.observation_key(obs))] = state.global_player_id
+    updates = associator.process_tick(observations, 1 / 30, {"cam_1": CourtOrientation.identity}, tick=1)
+    real = [u for u in updates if not u.quarantined]
+    assert len(real) == 1 and not real[0].tentative
+    assert real[0].observation.track_id == 1
+    assert state.view_bindings["cam_1"].track_id == 1
+
+

@@ -753,6 +753,9 @@ class GlobalPlayerAssociator:
             key = self.mapping_key(obs)
             # 4a) 强绑定 continuity（保留既有 mapping 的几何门）
             existing = self.mapping.get(key)
+            if any(u.global_id == existing and u.view_id == obs.view_id and not u.quarantined
+                   for u in updates):
+                existing = None
             if existing is not None and existing in self.registry.players:
                 pred = self.registry.predict_for(existing, timestamp_s)
                 if pred is None or _dist(
@@ -800,6 +803,9 @@ class GlobalPlayerAssociator:
                     continue
             # 4b) 弱历史绑定（D4）：epoch reset 后经 geometry 重新证明回原 global（可含 stale 玩家）
             historical = self.registry.historical_bindings.get((obs.view_id, self.observation_key(obs)))
+            if any(u.global_id == historical and u.view_id == obs.view_id and not u.quarantined
+                   for u in updates):
+                historical = None
             if historical is not None and historical in self.registry.players:
                 pred = self.registry.predict_for(historical, timestamp_s)
                 if pred is not None and _dist(
@@ -1395,8 +1401,8 @@ class GlobalPlayerAssociator:
                 if history is not None and history != gid:
                     # Local tracker IDs can transfer between people after an
                     # occlusion. Override that history only when its former
-                    # owner is independently visible in both cameras, on the
-                    # opposite end, using different observations.
+                    # owner is independently visible in both cameras at a
+                    # consistent, separate location, using other observations.
                     owner = states.get(history)
                     owner_updates = [u for u in updates if u.global_id == history
                                      and not u.tentative and not u.quarantined
@@ -1404,15 +1410,12 @@ class GlobalPlayerAssociator:
                                      and u.observation.confidence >= .5
                                      and (available_views is None or u.view_id in available_views)]
                     if (owner is None
-                            or self.registry.frozen_player_end_by_id.get(owner.frozen_player_id) == end
                             or len({u.view_id for u in owner_updates}) < 2
                             or any(_dist((a.observation.canonical_x_ft, a.observation.canonical_y_ft),
                                          (b.observation.canonical_x_ft, b.observation.canonical_y_ft)) > radius
                                    for a in owner_updates for b in owner_updates)
-                            or any(self.registry._candidate_end(u.observation.canonical_x_ft,
-                                                                u.observation.canonical_y_ft) == end
-                                   or _dist(xy, (u.observation.canonical_x_ft,
-                                                 u.observation.canonical_y_ft)) <= radius
+                            or any(_dist(xy, (u.observation.canonical_x_ft,
+                                              u.observation.canonical_y_ft)) <= radius
                                    for u in owner_updates)):
                         continue
                 if obs.view_player_id:
@@ -1601,6 +1604,15 @@ class GlobalPlayerAssociator:
             # frozen-anchor confirmation reads these bindings later this tick.
             updates.append(AssociationUpdate(gid, obs.view_id, obs, 0.0, tentative=True, quarantined=True))
             return True
+        existing = [u for u in updates if u.global_id == gid and u.view_id == obs.view_id
+                    and not u.quarantined]
+        if existing and (tentative or any(not u.tentative for u in existing)):
+            # A fallback incumbent must not overwrite a real observation that
+            # already owns this global/view in the current tick. Keep the other
+            # observation unmatched so it can recover its own missing identity.
+            self.diagnostics["duplicate_global_view_rejected"] = (
+                self.diagnostics.get("duplicate_global_view_rejected", 0) + 1)
+            return False
         binding_ok = self.registry.set_binding(
             gid,
             obs.view_id,
@@ -1625,6 +1637,8 @@ class GlobalPlayerAssociator:
                 self.diagnostics.get("reference_slot_conflict", 0) + 1
             )
             return False
+        if existing:
+            updates[:] = [u for u in updates if all(u is not old for old in existing)]
         self.mapping[self.mapping_key(obs)] = gid
         if not tentative:
             self.registry.historical_bindings[(obs.view_id, self.observation_key(obs))] = gid
