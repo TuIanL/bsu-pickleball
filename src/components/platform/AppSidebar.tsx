@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  Brain,
   Library,
   Loader2,
   Monitor,
@@ -22,6 +23,8 @@ interface NavItem {
 const navItems: NavItem[] = [
   { section: "library", label: "比赛库", icon: Library, path: "/library" },
   { section: "capture", label: "现场采集", icon: Video, path: "/capture" },
+  // 教学助教：进入样例复盘页；从具体任务的报告页进入时该项同样高亮（section = reports）
+  { section: "reports", label: "教学助教", icon: Brain, path: "/reports/performance" as AppPath },
   { section: "devices", label: "设备管理", icon: Monitor, path: "/camera" },
 ];
 

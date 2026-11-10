@@ -786,6 +786,20 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
+              <button
+                className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={reportCapability.state !== "available"}
+                title={
+                  reportCapability.state === "available"
+                    ? "打开教学助教：读取本次证据、生成并可连续改写训练计划"
+                    : reportCapability.reason
+                }
+                onClick={() => onNavigate(reportPath("performance"))}
+                type="button"
+              >
+                <Brain size={17} aria-hidden="true" />
+                AI 教学助教
+              </button>
               {job?.analysisKind === "multiview" && job?.status === "completed" && (
                 <button
                   className="green-button inline-flex min-h-11 items-center justify-center gap-2 px-4 py-2.5 lg:shrink-0"
@@ -954,6 +968,14 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
           ) : null}
         </div>
         <div className="flex flex-wrap gap-3">
+          <button
+            className="green-button inline-flex items-center gap-2 px-4 py-2.5"
+            onClick={() => onNavigate("/reports/performance" as AppPath)}
+            type="button"
+          >
+            <Brain size={17} aria-hidden="true" />
+            AI 教学助教（样例）
+          </button>
           {supportedActions.map((action) => (
             <button
               className="quiet-button px-4 py-2.5"
