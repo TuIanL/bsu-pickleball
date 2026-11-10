@@ -374,31 +374,58 @@ def _maximum_cardinality_min_cost_assignment(
     track_ids: list[int],
     edges: dict[int, list[tuple[int, float]]],
 ) -> list[tuple[int, int]]:
-    """Exact deterministic assignment; detections are few in a court ROI."""
+    """Exact assignment, partitioned into independent spatially gated components.
 
-    @lru_cache(maxsize=None)
-    def solve(track_index: int, used_mask: int) -> tuple[int, float, tuple[tuple[int, int], ...]]:
-        if track_index >= len(track_ids):
-            return 0, 0.0, ()
-        best_count, best_cost, best_pairs = solve(track_index + 1, used_mask)
-        track_id = track_ids[track_index]
-        for detection_index, edge_cost in edges.get(track_index, []):
-            bit = 1 << detection_index
-            if used_mask & bit:
+    Keep maximum cardinality, cost and deterministic tie rules. Spectators with
+    no shared feasible edge must not multiply the state space for court players.
+    """
+    by_detection: dict[int, set[int]] = {}
+    remaining = {i for i in range(len(track_ids)) if edges.get(i)}
+    for i in remaining:
+        for detection, _ in edges[i]:
+            by_detection.setdefault(detection, set()).add(i)
+    result = []
+    while remaining:
+        pending = [min(remaining)]
+        component: set[int] = set()
+        detections: set[int] = set()
+        while pending:
+            i = pending.pop()
+            if i in component:
                 continue
-            count, cost, pairs = solve(track_index + 1, used_mask | bit)
-            candidate = (count + 1, cost + edge_cost, ((track_id, detection_index),) + pairs)
-            best = (best_count, best_cost, best_pairs)
-            if candidate[0] > best[0] or (
-                candidate[0] == best[0]
-                and (candidate[1] < best[1] - 1e-12 or (
-                    abs(candidate[1] - best[1]) <= 1e-12 and candidate[2] < best[2]
-                ))
-            ):
-                best_count, best_cost, best_pairs = candidate
-        return best_count, best_cost, best_pairs
+            component.add(i)
+            remaining.discard(i)
+            for detection, _ in edges[i]:
+                if detection not in detections:
+                    detections.add(detection)
+                    pending.extend(by_detection[detection] - component)
+        ordered = sorted(component)
 
-    return list(solve(0, 0)[2])
+        @lru_cache(maxsize=None)
+        def solve(index: int, used_mask: int) -> tuple[int, float, tuple[tuple[int, int], ...]]:
+            if index >= len(ordered):
+                return 0, 0., ()
+            best_count, best_cost, best_pairs = solve(index + 1, used_mask)
+            track_index = ordered[index]
+            for detection_index, edge_cost in edges[track_index]:
+                bit = 1 << detection_index
+                if used_mask & bit:
+                    continue
+                count, cost, pairs = solve(index + 1, used_mask | bit)
+                candidate = (count + 1, cost + edge_cost, ((track_ids[track_index], detection_index),) + pairs)
+                if candidate[0] > best_count or (
+                    candidate[0] == best_count and (
+                        candidate[1] < best_cost - 1e-12 or (
+                            abs(candidate[1] - best_cost) <= 1e-12 and candidate[2] < best_pairs
+                        )
+                    )
+                ):
+                    best_count, best_cost, best_pairs = candidate
+            return best_count, best_cost, best_pairs
+
+        result.extend(solve(0, 0)[2])
+    order = {track_id: i for i, track_id in enumerate(track_ids)}
+    return sorted(result, key=lambda pair: order[pair[0]])
 
 
 def _footpoint(bbox: list[float]) -> tuple[float, float]:

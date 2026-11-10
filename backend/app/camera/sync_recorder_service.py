@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from app.vision.image_io import write_image
+
 import json
 import logging
 import os
@@ -129,18 +131,18 @@ def _extract_first_and_last_frames(video_file: str) -> tuple[str | None, str | N
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         ret, first_frame = cap.read()
         if ret:
-            first_written = bool(cv2.imwrite(first_frame_file, first_frame))
+            first_written = write_image(cv2, first_frame_file, first_frame)
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames // 2)
         ret, middle_frame = cap.read()
         if ret:
-            cv2.imwrite(middle_frame_file, middle_frame)
+            write_image(cv2, middle_frame_file, middle_frame)
 
         last_written = False
         cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames - 1)
         ret, last_frame = cap.read()
         if ret:
-            last_written = bool(cv2.imwrite(last_frame_file, last_frame))
+            last_written = write_image(cv2, last_frame_file, last_frame)
 
         cap.release()
         return first_frame_file if first_written else None, last_frame_file if last_written else None

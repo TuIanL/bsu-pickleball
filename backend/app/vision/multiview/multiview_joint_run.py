@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import time
+from math import isfinite
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -391,10 +392,13 @@ class MultiViewJointRun:
         f0_global_positions: dict[str, dict[int, tuple[float, float]]] = {}
         f0_predictions: dict[int, dict[str, tuple[float, float]]] = {}
         f0_tick_metadata: dict[int, dict[str, Any]] = {}
+        processed_replacement_events = len(self.registry.provisional_replacement_events)
 
         for tick_number, ref_idx in enumerate(tick_indices):
             if cancellation_token is not None:
                 cancellation_token.raise_if_cancelled()
+            # Diagnostics are per-tick; old decisions must not grow the scan or leak stale reasons.
+            self.guidance_generator.last_decisions.clear()
             timestamp_s = (
                 self.reference_timing_provider.take_timestamp_for_frame(ref_idx)
                 if self.reference_timing_provider is not None
@@ -662,8 +666,14 @@ class MultiViewJointRun:
                     self.counter[f"{view_id}:recovery_reject_{reason}"] = (
                         self.counter.get(f"{view_id}:recovery_reject_{reason}", 0) + int(count)
                     )
-                all_obs.extend(self._result_to_observations(view_id, result, take_ms))
-                view_candidates = self._result_to_candidate_observations(view_id, result, take_ms)
+                all_obs.extend(self._result_to_observations(
+                    view_id, result, take_ms,
+                    use_raw_track_keys=bool(self.runtime_roster and self.runtime_roster.available),
+                ))
+                view_candidates = self._result_to_candidate_observations(
+                    view_id, result, take_ms,
+                    allow_visible_outside=bool(self.runtime_roster and self.runtime_roster.available),
+                )
                 candidate_obs.extend(view_candidates)
                 funnel["global_candidate_observation_count"] += len(view_candidates)
                 guided_obs_count = sum(
@@ -711,6 +721,28 @@ class MultiViewJointRun:
                     self.orientations,
                     tick=tick_number,
                 )
+            # A recycled anonymous slot has a new lifetime. Discard the prior
+            # lifetime from formal samples/refinement before it can inherit a P
+            # label; the original debug trace remains available for diagnosis.
+            replacements = self.registry.provisional_replacement_events
+            for event in replacements[processed_replacement_events:]:
+                replaced_gid = str(event["global_player_id"])
+                old_count = len(samples)
+                samples[:] = [sample for sample in samples if sample.global_player_id != replaced_gid]
+                self.counter["replaced_slot_samples_discarded"] = (
+                    self.counter.get("replaced_slot_samples_discarded", 0) + old_count - len(samples)
+                )
+                f0_trace.pop(replaced_gid, None)
+                f0_global_positions.pop(replaced_gid, None)
+                for prediction in f0_predictions.values():
+                    prediction.pop(replaced_gid, None)
+            processed_replacement_events = len(replacements)
+            # Quarantined challengers remain in the trace, but are not evidence
+            # for end assignment, visibility, sample provenance or identity.
+            # Otherwise an isolated challenger can taint a valid same-tick
+            # observation and replace its source track in the exported sample.
+            diagnostic_updates = updates
+            updates = [update for update in updates if not getattr(update, "quarantined", False)]
             candidate_observation_ids = {id(observation) for observation in candidate_obs}
             for observation in [*all_obs, *candidate_obs]:
                 end = self._canonical_end_for_y(observation.canonical_y_ft)
@@ -724,6 +756,7 @@ class MultiViewJointRun:
                 self.registry.observe_roster_end_evidence(update.global_id, end)
             self._process_frozen_roster_anchors(
                 observations=[*all_obs, *candidate_obs],
+                accepted_updates=updates,
                 anchor_evidence_observations=[
                     observation
                     for view_id, result in view_results.items()
@@ -762,7 +795,7 @@ class MultiViewJointRun:
             )
             # D1:conflict 仲裁使用 pre-tick prediction（tick barrier 前冻结,含 uncertainty）
             fused = self.associator.fuse_assignments(
-                updates, include_tentative=True, predictions=predictions,
+                diagnostic_updates, include_tentative=True, predictions=predictions,
             )
             self._record_perception_trace_window(
                 timestamp_s=take_ms / 1000.0,
@@ -1002,9 +1035,10 @@ class MultiViewJointRun:
                         view_results=view_results,
                         guidance_by_view=guidance_by_view,
                         predictions=predictions,
-                        updates=updates,
+                        updates=diagnostic_updates,
                         fused=fused,
                         funnel_before=funnel_before,
+                        input_observations=[*all_obs, *candidate_obs],
                     )
                 )
             recovery = {
@@ -1169,6 +1203,7 @@ class MultiViewJointRun:
                 "association": self.associator.appearance_diagnostics(),
                 "per_view": per_view_appearance,
             },
+            "joint_position_evidence": "raw-projection-before-association.v1",
             # fix-multiview-reacquire-after-fusion-pollution：joint 侧 estimator/reanchor 计数
             # （D2 innovation guard 拒绝、D3 reanchor 执行），与 association_counters 分层。
             "joint_counters": dict(self.counter),
@@ -1355,6 +1390,7 @@ class MultiViewJointRun:
         observations: list[JointObservation],
         take_timestamp_ms: float,
         anchor_evidence_observations: list[JointObservation] | None = None,
+        accepted_updates: list[Any] | None = None,
     ) -> None:
         roster = self.runtime_roster
         if roster is None or not getattr(roster, "available", False):
@@ -1441,7 +1477,7 @@ class MultiViewJointRun:
                 "tracking_status": observation.tracking_status,
             }
             self._frozen_anchor_track_keys[local_key] = (anchor.player_id, enriched_match)
-            self._frozen_anchor_audit[anchor.player_id] = {
+            pending_audit = {
                 "canonical_player_id": anchor.player_id,
                 "candidate_id": anchor.candidate_id,
                 "bootstrap_run_id": anchor.bootstrap_run_id,
@@ -1457,15 +1493,29 @@ class MultiViewJointRun:
                 "reason": "bootstrap_binding_waiting_global_association",
                 "evidence": enriched_match,
             }
+            # A later geometrically matching but unaccepted detection does not
+            # undo an earlier witnessed confirmation. Explicit conflicting
+            # accepted assignments are still evaluated and recorded below.
+            if not (self._frozen_anchor_audit.get(anchor.player_id) or {}).get("confirmed"):
+                self._frozen_anchor_audit[anchor.player_id] = pending_audit
 
+        accepted_by_observation = (
+            {id(update.observation): update.global_id for update in accepted_updates
+             if not update.tentative and not update.quarantined}
+            if accepted_updates is not None else None
+        )
         for observation in observations:
             local_key = self._frozen_anchor_track_key(observation)
             assignment = self._frozen_anchor_track_keys.get(local_key)
             if assignment is None:
                 continue
             player_id, evidence = assignment
-            global_id = self.associator.mapping.get(self.associator.mapping_key(observation))
-            if not global_id:
+            global_id = (
+                accepted_by_observation.get(id(observation))
+                if accepted_by_observation is not None
+                else self.associator.mapping.get(self.associator.mapping_key(observation))
+            )
+            if not global_id and accepted_by_observation is None:
                 global_id = self.registry.historical_bindings.get(
                     (observation.view_id, self.associator.observation_key(observation))
                 )
@@ -1473,6 +1523,17 @@ class MultiViewJointRun:
                 continue
             anchor = next((item for item in anchors if item.player_id == player_id), None)
             if anchor is None:
+                continue
+            prior_confirmation = self._frozen_anchor_audit.get(player_id) or {}
+            if prior_confirmation.get("confirmed") and (
+                prior_confirmation.get("global_player_id") == global_id
+                or take_timestamp_ms > anchor.timestamp_ms + 400.0
+            ):
+                # The anchor certifies the initial identity, not the player's
+                # current court end or the lifetime of a raw tracker ID. A later
+                # ID reuse is handled by association, not by retroactively hiding
+                # the entire initial identity. Conflicts during the simultaneous
+                # anchor window are still evaluated below.
                 continue
             enriched_evidence = {
                 **evidence,
@@ -1692,6 +1753,7 @@ class MultiViewJointRun:
         updates: list[Any],
         fused: dict[str, tuple[float, float, list[str]]],
         funnel_before: dict[str, int],
+        input_observations: list[JointObservation] | None = None,
     ) -> dict[str, object]:
         views: dict[str, object] = {}
         for view_id in self.runtimes:
@@ -1803,6 +1865,14 @@ class MultiViewJointRun:
                 self._observation_debug_row(update.global_id, update.observation)
                 for update in updates
             ],
+            "association_inputs": [
+                self._observation_debug_row("", observation)
+                for observation in (input_observations or [])
+            ],
+            "association_decisions": [
+                dict(vars(decision))
+                for decision in (getattr(self.associator, "last_tick_decisions", ()) or ())
+            ],
             "fused": {
                 global_id: {"x_ft": x, "y_ft": y, "views": list(views_for_player)}
                 for global_id, (x, y, views_for_player) in fused.items()
@@ -1849,6 +1919,7 @@ class MultiViewJointRun:
             "canonical_x_ft": observation.canonical_x_ft,
             "canonical_y_ft": observation.canonical_y_ft,
             "view_player_id": observation.view_player_id,
+            "source_local_player_id": observation.source_local_player_id,
             "local_identity_reason": observation.local_identity_reason,
             "local_identity_epoch": observation.local_identity_epoch,
             "track_id": observation.track_id,
@@ -1861,6 +1932,8 @@ class MultiViewJointRun:
             "timing_authority": observation.timing_authority,
             "sync_quality": observation.sync_quality,
             "tracking_status": observation.tracking_status,
+            "roster_admission_eligible": observation.roster_admission_eligible,
+            "court_position_source": observation.court_position_source,
             "lock_state": observation.lock_state,
             "bbox": list(observation.bbox) if observation.bbox is not None else None,
             "image_footpoint": list(observation.image_footpoint)
@@ -2143,10 +2216,31 @@ class MultiViewJointRun:
         return out
 
     @staticmethod
+    def _joint_court_measurement(result: Any, position: Any):
+        """Associate current measured feet, before any local-track smoothing.
+
+        A raw tracker can transfer between bodies. Its smoothed coordinates then
+        describe an earlier body while the bbox/feet already describe the current
+        frame. Global identity association must precede its own motion estimator.
+        """
+        raw = (getattr(result, "render_raw_by_track", None) or {}).get(int(position.track_id))
+        if raw is not None:
+            xy = (raw.get("x_ft"), raw.get("y_ft"))
+            source = "raw_projection"
+        else:
+            xy = position.court_position
+            source = "legacy_position"
+        if xy is None or len(xy) != 2 or not all(isinstance(v, (int, float)) and isfinite(v) for v in xy):
+            return None
+        return float(xy[0]), float(xy[1]), source
+
+    @staticmethod
     def _result_to_observations(
         view_id: str,
         result: Any,
         take_ms: float,
+        *,
+        use_raw_track_keys: bool = False,
     ) -> list[JointObservation]:
         """把 ViewFrameResult 的球场位置转成 JointObservation(canonical 由 associator 归一化)。"""
         obs: list[JointObservation] = []
@@ -2188,12 +2282,21 @@ class MultiViewJointRun:
             player_id = "" if tentative else (
                 getattr(item, "player_id", None) or identity_by_track.get(track_id, "")
             )
+            source_local_player_id = str(player_id) if player_id else None
+            if use_raw_track_keys:
+                # Local Player_N slots are mutable hints. A frozen global P
+                # identity must follow actual tracks and calibrated geometry.
+                player_id = ""
             if not player_id and formal_detections and (
                 not bool(getattr(pos, "valid", False))
                 or not bool(getattr(pos, "is_inside_court", False))
                 or getattr(pos, "projection_status", None) != "inside_court"
             ):
-                continue
+                # A formal tracked player stepping behind a baseline remains
+                # visible. Ignoring the local P hint must not remove this
+                # existing tracking-area evidence from association.
+                if not (use_raw_track_keys and getattr(pos, "projection_status", None) == "outside_court_visible"):
+                    continue
             local_reason = (
                 str(reason_by_track.get(track_id))
                 if reason_by_track.get(track_id)
@@ -2210,6 +2313,9 @@ class MultiViewJointRun:
                 int(getattr(result, "local_identity_epoch_by_track", {}).get(track_id, 0))
                 if player_id else 0
             )
+            measurement = MultiViewJointRun._joint_court_measurement(result, pos)
+            if measurement is None:
+                continue
             obs.append(
                 JointObservation(
                     view_id=view_id,
@@ -2219,8 +2325,9 @@ class MultiViewJointRun:
                         if result.mapped_take_timestamp_ms is not None
                         else take_ms
                     ),
-                    local_x_ft=pos.court_position[0],
-                    local_y_ft=pos.court_position[1],
+                    local_x_ft=measurement[0],
+                    local_y_ft=measurement[1],
+                    court_position_source=measurement[2],
                     canonical_x_ft=None,
                     canonical_y_ft=None,
                     view_player_id=str(player_id),
@@ -2263,6 +2370,7 @@ class MultiViewJointRun:
                         else "unassigned_formal"
                     ),
                     local_identity_reason=local_reason,
+                    source_local_player_id=source_local_player_id if use_raw_track_keys else None,
                 )
             )
         return obs
@@ -2272,6 +2380,8 @@ class MultiViewJointRun:
         view_id: str,
         result: Any,
         take_ms: float,
+        *,
+        allow_visible_outside: bool = False,
     ) -> list[JointObservation]:
         """保留 lock_only 之外的真实场内 track，作为独立恢复证据。"""
         candidate_positions = getattr(result, "candidate_positions", None)
@@ -2290,14 +2400,29 @@ class MultiViewJointRun:
             except (TypeError, ValueError):
                 continue
             position = positions_by_track.get(track_id)
-            if (
-                position is None
-                or position.court_position is None
-                or not bool(getattr(position, "valid", False))
-                or not bool(getattr(position, "is_inside_court", False))
-                or getattr(position, "projection_status", None) != "inside_court"
-            ):
+            if position is None or position.court_position is None:
                 continue
+            inside = (
+                bool(getattr(position, "valid", False))
+                and bool(getattr(position, "is_inside_court", False))
+                and getattr(position, "projection_status", None) == "inside_court"
+            )
+            visible_outside = (
+                allow_visible_outside
+                and getattr(position, "projection_status", None) == "outside_court_visible"
+            )
+            if not inside and not visible_outside:
+                continue
+            measurement = MultiViewJointRun._joint_court_measurement(result, position)
+            if measurement is None:
+                continue
+            x_ft, y_ft = measurement[:2]
+            # Baseline buffer initialization requires dual-camera evidence in
+            # the associator; sideline candidates remain recovery-only.
+            baseline_buffer = (
+                visible_outside and 0.0 <= x_ft <= 20.0
+                and (-6.0 <= y_ft < 0.0 or 44.0 < y_ft <= 50.0)
+            )
             # Guided detections have an expected-global safety contract. Keep
             # them on the formal guided path instead of treating them as an
             # unanchored candidate that could be matched to another player.
@@ -2314,8 +2439,9 @@ class MultiViewJointRun:
                         if getattr(result, "mapped_take_timestamp_ms", None) is not None
                         else take_ms
                     ),
-                    local_x_ft=float(position.court_position[0]),
-                    local_y_ft=float(position.court_position[1]),
+                    local_x_ft=x_ft,
+                    local_y_ft=y_ft,
+                    court_position_source=measurement[2],
                     view_player_id="",
                     tracklet_lineage_id=candidate_lineage,
                     track_id=track_id,
@@ -2347,6 +2473,8 @@ class MultiViewJointRun:
                     sync_quality=getattr(result, "sync_quality", "unknown"),
                     tracking_status="candidate",
                     local_identity_reason="unlocked_candidate",
+                    roster_admission_eligible=inside or baseline_buffer,
+                    appearance_descriptor=getattr(result, "appearance_by_track", {}).get(track_id),
                 )
             )
         return candidates

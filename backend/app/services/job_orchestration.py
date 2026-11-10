@@ -86,6 +86,12 @@ def _is_local_process_alive(pid: int | None) -> bool:
     """
     if pid is None or pid <= 0:
         return False
+    if os.name == "nt":
+        # Windows os.kill(pid, 0) calls TerminateProcess; it is not a probe.
+        # Use a read-only process query so a delayed heartbeat cannot kill the
+        # external worker while it is running a CPU-bound native operation.
+        import psutil
+        return psutil.pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -455,6 +461,17 @@ def analysis_signature(
     if payload.multiview and payload.multiview.executionMode == "joint_tracking_v2":
         config_payload["p1OnlineRecovery"] = P1OnlineRecoveryConfig().snapshot()
         config_payload["debugTraceEnabled"] = bool(payload.multiview.debugTraceEnabled)
+        config_payload["fourPlayerAppearanceMode"] = getattr(settings, "four_player_appearance_mode", "shadow")
+        config_payload["frozenAppearanceGuard"] = "frozen-central-clothing.v2"
+        config_payload["nestedObservationGuard"] = "same-view-containment.v1"
+        config_payload["jointBasicVisuals"] = "same-view-real-box.v3"
+        config_payload["promotionEvidence"] = "actual-view-observation.v1"
+        config_payload["anchorAudit"] = "simultaneous-historical-confirmation.v4"
+        config_payload["imageTrackHandoff"] = "short-image-handoff.v2"
+        config_payload["netCrowdGuard"] = "near-net-overlap-abstention.v2"
+        config_payload["jointPositionEvidence"] = "raw-projection-before-association.v1"
+        config_payload["frozenNetEndGuard"] = "ambiguous-net-track-end.v1"
+        config_payload["isolatedRosterRecovery"] = "unique-in-court-three-witness.v1"
     if payload.multiview:
         config_payload["sceneCalibrationMode"] = payload.multiview.sceneCalibrationMode
         config_payload["sceneCalibrationRevision"] = payload.multiview.sceneCalibrationRevision

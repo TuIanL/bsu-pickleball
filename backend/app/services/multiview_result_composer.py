@@ -812,7 +812,8 @@ class MultiViewResultComposer:
         - tracking_overlay（框架）：从 debug trace 聚合 reference view 检测，写 Parent 命名空间；
         - heatmaps / scatter / structured data：从 fused metric tracks 生成（canonical Player_N）；
         - roster.v1（诊断 / 映射 contract）：Global → Player_N 映射；
-        - pose_overlay / render_trajectory / detections：joint 模式无法真实生成，显式 unavailable + reason。
+        - pose_overlay：先标为未启用，由 executor 的可选真实推理后处理发布；
+        - render_trajectory / detections：未生成时显式 unavailable + reason。
         """
         from app.core.config import get_settings
         from app.services.joint_visual_artifacts import (
@@ -1266,15 +1267,17 @@ class MultiViewResultComposer:
             )
             overlay_path = self.storage.fused_player_overlay_json_path(job.id)
             overlay_path.parent.mkdir(parents=True, exist_ok=True)
-            self.storage.write_json(overlay_path, payload)
+            self.storage.write_json_atomic(overlay_path, payload)
+            from app.services.overlay_playback import publish_overlay_playback
+            publish_overlay_playback(overlay_path, payload, artifact_name="fused-player-overlay")
             artifacts.fused_player_overlay_json_path = str(overlay_path)
             artifacts.fused_player_overlay_url = f"/api/analysis/jobs/{job.id}/artifacts/fused-player-overlay"
             artifacts.fused_player_overlay_status = payload["status"]
             artifacts.fused_player_overlay_detail = payload["detail"]
         except Exception as exc:  # noqa: BLE001 - fused overlay 失败不中断 compose
-            logger.warning("joint fused player overlay build failed: %s", exc)
+            logger.exception("joint fused player overlay build failed (%s)", type(exc).__name__)
             artifacts.fused_player_overlay_status = "unavailable"
-            artifacts.fused_player_overlay_detail = f"fused player overlay 生成失败：{exc}"
+            artifacts.fused_player_overlay_detail = f"fused player overlay 生成失败：{type(exc).__name__}: {exc}"
 
     def _publish_joint_player_display_diagnostics(
         self,
@@ -1354,7 +1357,11 @@ class MultiViewResultComposer:
                     self.storage.read_json(diagnostics_path) if diagnostics_path.exists() else None
                 ),
                 runtime_diagnostics=getattr(joint_output, "diagnostics", None),
-                algorithm_version="motion-aware-v1+clothing-hsv-lab.v1",
+                algorithm_version="joint_tracking_v2+" + str(
+                    (getattr(joint_output, "diagnostics", None) or {}).get("appearance", {})
+                    .get("association", {}).get("frozen_guard", {}).get("version", "unversioned")
+                ),
+                config_signature=job.configSignature,
             )
             path = self.storage.four_player_identification_quality_json_path(job.id)
             self.storage.write_json_atomic(path, quality.model_dump(mode="json"))

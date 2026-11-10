@@ -331,6 +331,15 @@ def _build_canonical_ball_processor(
 ):
     """构造共享 canonical tick 的球 detector/tracker；模型或几何不可用时返回降级处理器。"""
     from app.vision.multiview.ball_stereo.canonical_runner import CanonicalBallStereoProcessor
+    if not getattr(settings, "enable_ball_detection", True):
+        return CanonicalBallStereoProcessor.unavailable(
+            job_id=parent.id,
+            take_id=parent.metadata.capture_take_id or "",
+            reason="当前配置未启用球检测；本次仅运行球员跟踪",
+        )
+    if not getattr(settings, "enable_ball_reconstruction", True):
+        # Basic 2D detections are published after tracking; do not create stereo/3D work.
+        return None
     from app.vision.pickleball_game_analysis.ball_semantic_search_policy import (
         BallSearchPolicy,
         BallSemanticPolicyConfig,
@@ -591,6 +600,25 @@ class MultiViewJointExecutor:
                 calibrations[vi.camera_slot] = (
                     cal_svc.get_calibration(vi.calibration_id) if vi.calibration_id else None
                 )
+
+            from app.services.joint_visual_checkpoint import load_joint_visual_checkpoint, report_reused_tracking
+            storage.resolve_capture_job_root(parent.id, capture_take_id)
+            # A tracking-only checkpoint cannot satisfy newly requested stereo
+            # inference. Reuse is deliberately limited to the basic 2D profile.
+            checkpoint = (load_joint_visual_checkpoint(job=parent, storage=storage, videos=videos)
+                          if not getattr(settings, "enable_ball_reconstruction", True) else None)
+            if checkpoint is not None:
+                from app.services.joint_basic_visuals import publish_joint_basic_visuals
+                report_reused_tracking(progress_callback, checkpoint)
+                publish_joint_basic_visuals(
+                    job=parent, result=checkpoint, storage=storage, settings=settings, videos=videos,
+                    reference_view_id=reference_view_id, cancellation_token=token,
+                    progress_callback=progress_callback,
+                )
+                result = storage.publicize_pipeline_result(checkpoint)
+                storage.write_json_atomic(storage.output_json_path(parent.id), result.model_dump(mode="json"))
+                self.store.update(parent.id, orchestrationStatus="completed")
+                return result
 
             import cv2  # noqa: PLC0415
 
@@ -1038,6 +1066,13 @@ class MultiViewJointExecutor:
                     else:
                         snapshot_artifact = None
 
+                    if out.f0_snapshot is not None:
+                        from app.services.joint_visual_checkpoint import save_joint_f0_checkpoint
+                        save_joint_f0_checkpoint(
+                            job=parent.model_copy(update={"jointRunId":run_id}),
+                            diagnostics=out.diagnostics,storage=storage,videos=videos,run_dir=run_dir,
+                        )
+
                     contexts = {}
                     for view_id in runtimes:
                         geometry = view_geometry.get(view_id, {})
@@ -1159,6 +1194,11 @@ class MultiViewJointExecutor:
             except Exception as exc:  # noqa: BLE001 - 回填失败不中断 compose
                 logger.warning("bootstrap display backfill 构建失败（不影响主流程）：%s", exc)
             composer = MultiViewResultComposer(storage)
+            if progress_callback:
+                progress_callback(PipelineStageResult(
+                    id="multiview-metrics", label="运动指标重算", status="active", progress=1,
+                    detail="整理最终人物轨迹及正式人体叠加产物",
+                ))
             result = composer.compose_joint_result(
                 job=parent, joint_output=compose_output, reference_view_id=reference_view_id,
                 message=(
@@ -1167,6 +1207,26 @@ class MultiViewJointExecutor:
                     else "双摄分析完成，但副摄证据不可用或覆盖不足，结果按降级模式展示。"
                 ), refinement=refinement, ball_analysis=getattr(out, "ball_analysis", None),
             )
+            from app.services.joint_basic_visuals import publish_joint_basic_visuals
+            from app.services.joint_visual_checkpoint import save_joint_visual_checkpoint
+            # Bind the checkpoint to the persisted run ID also on the first attempt.
+            checkpoint_job = parent.model_copy(update={"jointRunId": run_id})
+            if not getattr(settings, "enable_ball_reconstruction", True) and (
+                    getattr(parent, "enablePoseInference", None) is True
+                    or getattr(settings, "enable_pose_inference", False)
+                    or getattr(settings, "enable_ball_detection", False)):
+                save_joint_visual_checkpoint(job=checkpoint_job, result=result, storage=storage, videos=videos)
+            publish_joint_basic_visuals(
+                job=parent, result=result, storage=storage, settings=settings, videos=videos,
+                reference_view_id=reference_view_id, cancellation_token=token,
+                progress_callback=progress_callback,
+            )
+            if progress_callback:
+                progress_callback(PipelineStageResult(
+                    id="multiview-report", label="报告生成", status="active", progress=0,
+                    detail="人物、骨架与二维球已完成，正在生成发球导航与报告",
+                    started_at=datetime.now(UTC),
+                ))
             _publish_joint_serve_candidates(
                 job=parent, result=result, runtime=runtimes[reference_view_id],
                 storage=storage, fps=fps, frame_count=frame_count,
@@ -1177,7 +1237,11 @@ class MultiViewJointExecutor:
             # Debug Replay is rendered only after the authoritative result and
             # refinement artifacts are published. Rendering consumes persisted
             # trace evidence and must never change the analysis conclusion.
-            if getattr(parent, "debugTraceEnabled", False) and run_dir is not None:
+            if (
+                getattr(parent, "debugTraceEnabled", False)
+                and run_dir is not None
+                and os.getenv("PICKLEBALL_JOINT_DEBUG_RENDER_ENABLED", "true").lower() not in {"0", "false", "no"}
+            ):
                 try:
                     trace_path = run_dir / JOINT_DEBUG_TRACE_FILENAME
                     trajectory_path = run_dir / "fused_player_trajectory.f1.v2.json"

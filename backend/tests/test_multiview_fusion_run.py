@@ -51,7 +51,7 @@ def test_run_holds_inputs_and_output_ownership():
     assert set(run.view_ids()) == {"cam_1", "cam_2"}
     assert run.view_input("cam_2").analysis_job_id == "job_cam_2"
     # fused artifact 归属 Run 自身产物目录，不挂任何 cam job / take。
-    assert str(run.output_dir).endswith("analysis/multiview/mvf_abc")
+    assert run.output_dir.as_posix().endswith("analysis/multiview/mvf_abc")
 
 
 def test_eligibility_ready_when_orientations_and_sync_ok():

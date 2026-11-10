@@ -69,7 +69,11 @@ def min_cost_matching(
                 pairs: list[tuple[str, str]] = []
                 for a, b in zip(chosen, perm, strict=False):
                     ref_key, sec_key = (b, a) if flip else (a, b)
-                    if gate[ref_key][sec_key] > max_feasibility_cost:
+                    if (
+                        sec_key not in gate.get(ref_key, {})
+                        or sec_key not in ranking_cost.get(ref_key, {})
+                        or gate[ref_key][sec_key] > max_feasibility_cost
+                    ):
                         feasible = False
                         break
                     total += ranking_cost[ref_key][sec_key]

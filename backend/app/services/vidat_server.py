@@ -51,6 +51,9 @@ def _clear_state() -> None:
 def _pid_alive(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
+    if os.name == "nt":
+        import psutil
+        return psutil.pid_exists(pid)
     try:
         os.kill(pid, 0)
     except OSError:

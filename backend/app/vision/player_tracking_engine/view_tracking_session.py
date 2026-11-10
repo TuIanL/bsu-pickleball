@@ -50,6 +50,7 @@ from app.vision.player_tracking_engine.multi_object_tracker import (
 )
 from app.vision.player_tracking_engine.player_appearance import (
     ClothingAppearanceExtractor,
+    CentralClothingAppearanceExtractor,
     PlayerAppearanceDescriptor,
     PlayerAppearanceExtractor,
 )
@@ -1248,5 +1249,6 @@ def build_view_tracking_session(
         primary_player_selector=primary_player_selector,
         player_lock_manager=player_lock_manager,
         identity_manager=identity_manager,
-        appearance_extractor=ClothingAppearanceExtractor(),
+        appearance_extractor=(CentralClothingAppearanceExtractor() if config.player_lock_enable_appearance_score
+                              else ClothingAppearanceExtractor()),
     )

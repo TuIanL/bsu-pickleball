@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame } from "./videoOverlayPlayback";
+import { resolveDetectionFrame, resolveFusedPlayerOverlayFrame, resolvePoseFrame } from "./videoOverlayPlayback";
 import { buildVideoOverlayHud } from "../../services/videoOverlayHud";
 import type { DetectionOverlayFrame, FusedPlayerOverlayEntity, FusedPlayerOverlayFrame, PipelineTrackPoint } from "../../types/report";
+
+it("does not show a future skeleton before analysis or hold it after pose evidence ends", () => {
+  const frames = [{ frame_index: 900, timestamp_seconds: 30, subjects: [] }];
+  expect(resolvePoseFrame(frames, 29).frame).toBeUndefined();
+  expect(resolvePoseFrame(frames, 30.1).inGap).toBe(false);
+  expect(resolvePoseFrame(frames, 31).inGap).toBe(true);
+});
+
+it("does not move the first analyzed person box into the excluded preparation interval", () => {
+  expect(resolveDetectionFrame([{ frame_index: 900, timestamp_seconds: 30, detections: [] }], 29)).toBeUndefined();
+  expect(resolveFusedPlayerOverlayFrame([{ frame_index: 900, timestamp_seconds: 30, players: [] }], 29).frame).toBeUndefined();
+  expect(resolveFusedPlayerOverlayFrame([{ frame_index: 900, timestamp_seconds: 30, players: [] }], 31).inGap).toBe(true);
+});
 
 function detection(
   trackId: string,

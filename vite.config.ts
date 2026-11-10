@@ -11,7 +11,11 @@ export default defineConfig(({ mode }) => {
   const proxy = localApiProxy(env);
   return {
     plugins: [react(), tailwindcss(), proxy.plugin],
-    server: { host: "127.0.0.1", proxy: proxy.routes },
+    server: {
+      host: "127.0.0.1",
+      proxy: proxy.routes,
+      watch: { ignored: ["**/.runtime/**", "**/.venv/**", "**/backend/.venv/**", "**/backend/data/**", "**/models/**"] },
+    },
     preview: { host: "127.0.0.1", proxy: proxy.routes },
     build: { manifest: true },
     test: { environment: "jsdom" },

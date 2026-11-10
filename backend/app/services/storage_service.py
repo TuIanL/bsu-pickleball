@@ -18,6 +18,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -86,7 +87,10 @@ class StorageService:
     def write_json(self, path: Path, payload: dict[str, Any]) -> Path:
         # 普通写 JSON：先建目录，再写文件（ensure_ascii=False 保留中文）
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Stream large whole-match artifacts instead of allocating a second,
+        # potentially gigabyte-sized JSON string beside the tracking evidence.
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
         return path
 
     @classmethod
@@ -335,10 +339,20 @@ class StorageService:
         tmp_path = Path(tmp_name)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp_path, path)
+            for attempt in range(6):
+                try:
+                    os.replace(tmp_path, path)
+                    break
+                except PermissionError as exc:
+                    # Concurrent readers/writers can temporarily deny DELETE
+                    # sharing on Windows. Keep the unique temporary file and
+                    # bound the retry rather than failing the worker heartbeat.
+                    if os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
         except Exception:
             try:
                 tmp_path.unlink()
@@ -349,7 +363,8 @@ class StorageService:
 
     def read_json(self, path: Path) -> dict[str, Any]:
         # 读取并解析 JSON 文件
-        return json.loads(path.read_text(encoding="utf-8"))
+        with path.open(encoding="utf-8") as handle:
+            return json.load(handle)
 
     def write_jsonl(self, path: Path, rows: list[dict[str, Any]]) -> Path:
         # 写入 JSON Lines：每行一个 JSON 对象（逐帧检测/球轨迹等共享合同）。

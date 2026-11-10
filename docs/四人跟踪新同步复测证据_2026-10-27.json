@@ -1,0 +1,797 @@
+{
+  "schema_version": "four-player-real-acceptance.v1",
+  "date": "2026-10-27",
+  "job_id": "job-900d0790f7",
+  "joint_run_id": "mvr_774d46d8d0a0",
+  "pipeline_status": "succeeded",
+  "requested_window_ms": [
+    0,
+    120000
+  ],
+  "quality_timeline_end_seconds": 120.466667,
+  "code_git_head_at_launch": "dd827b206d50e5c966bf28491b2b1c71a2846627",
+  "algorithm_fix_commit": "bf2ea6e",
+  "input_signature": "05fc94fd3c9f853b0a13da762a9d5b950e703154b86f69e0baad24d691b9486c",
+  "config_signature": "ddb35eb744e7feb8ae54857570e8e365b5ae2a164a49843191929d7144184c80",
+  "roster_hash": "0abcee71db2a9a89a617faf6d2323588aa9decb231391a259c078b7403929ae5",
+  "signature_scope_note": "Current job signatures do not include sync asset content. Use the separate revision and SHA-256 here, plus runtime trace, to establish sync version.",
+  "sync_revision": 1,
+  "sync_asset_sha256": {
+    "sync_calibration.json": "08acd73837ca73b1be4baa8612ee175af3e55f62f5860ef2dd0c5340b24c87a3",
+    "sync_anchors.v1.json": "b51208245a4a4ba55bd52e7f962ecc94f8d29d8ec461bc20963d4739e4d5bbee",
+    "sync_anchor_confirmation.json": "59c6dc8b73ad6f0382bf11720dca8fd9022d94be872cda41efedfd6e71c31d35"
+  },
+  "sync_assets_unchanged_during_run": true,
+  "thresholds": {
+    "min_player_coverage": 0.7,
+    "max_gap_seconds": 2.0,
+    "confirmed_roster": 4,
+    "max_duplicate_bindings": 0,
+    "max_identity_switches": 0,
+    "max_cross_side_samples": 0
+  },
+  "baseline_and_candidate": {
+    "job-603e082be8": {
+      "verdict": "fail",
+      "confirmed_count": 4,
+      "roster_confirmed_count": 4,
+      "hard_invariants": {
+        "confirmed_roster": true,
+        "duplicate_binding_zero": true,
+        "cross_side_zero": true,
+        "identity_switch_zero": true,
+        "local_slot_reassociation_zero": true,
+        "canonical_identity_anchors_confirmed": true,
+        "identity_audit_single_source": true,
+        "two_confirmed_players_per_canonical_end": true
+      },
+      "absolute_gates": {
+        "Player_1.coverage": true,
+        "Player_1.longest_gap": false,
+        "Player_1.display_topology_stable": true,
+        "Player_2.coverage": false,
+        "Player_2.longest_gap": false,
+        "Player_2.display_topology_stable": true,
+        "Player_3.coverage": true,
+        "Player_3.longest_gap": false,
+        "Player_3.display_topology_stable": true,
+        "Player_4.coverage": true,
+        "Player_4.longest_gap": false,
+        "Player_4.display_topology_stable": true
+      },
+      "failure_reasons": [
+        "Player_1.longest_gap",
+        "Player_2.coverage",
+        "Player_2.longest_gap",
+        "Player_3.longest_gap",
+        "Player_4.longest_gap"
+      ],
+      "players": {
+        "Player_1": {
+          "canonical_coverage": 0.7767634854771784,
+          "longest_gap_seconds": 10.133334000000001,
+          "canonical_ticks": 2808,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 5
+        },
+        "Player_2": {
+          "canonical_coverage": 0.5795297372060858,
+          "longest_gap_seconds": 11.066666999999999,
+          "canonical_ticks": 2095,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 4
+        },
+        "Player_3": {
+          "canonical_coverage": 0.9687413554633472,
+          "longest_gap_seconds": 3.0,
+          "canonical_ticks": 3502,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 5
+        },
+        "Player_4": {
+          "canonical_coverage": 0.9455048409405256,
+          "longest_gap_seconds": 3.633334000000005,
+          "canonical_ticks": 3418,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 6
+        }
+      },
+      "mapping": {
+        "global_player_1": "Player_2",
+        "global_player_2": "Player_1",
+        "global_player_3": "Player_4",
+        "global_player_4": "Player_3"
+      },
+      "anchors": [
+        {
+          "canonical_player_id": "Player_1",
+          "global_player_id": "global_player_2",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 400,
+            "bbox_iou": 0.8428,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 3.096,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 274,
+            "tracklet_lineage_id": "cam_1:track:274",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "unlocked_candidate",
+            "tracking_status": "candidate",
+            "global_player_id": "global_player_2"
+          }
+        },
+        {
+          "canonical_player_id": "Player_2",
+          "global_player_id": "global_player_1",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 400,
+            "bbox_iou": 0.532,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 1.4683,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 284,
+            "tracklet_lineage_id": "cam_1:track:284",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "no_local_player_identity",
+            "tracking_status": "unassigned_formal",
+            "global_player_id": "global_player_1"
+          }
+        },
+        {
+          "canonical_player_id": "Player_3",
+          "global_player_id": "global_player_4",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 367,
+            "bbox_iou": 0.8295,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 0.6534,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 304,
+            "tracklet_lineage_id": "cam_1:track:304",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "no_local_player_identity",
+            "tracking_status": "unassigned_formal",
+            "global_player_id": "global_player_4"
+          }
+        },
+        {
+          "canonical_player_id": "Player_4",
+          "global_player_id": "global_player_3",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 400,
+            "bbox_iou": 0.8589,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 0.661,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 1,
+            "tracklet_lineage_id": "cam_1:track:1",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "no_local_player_identity",
+            "tracking_status": "unassigned_formal",
+            "global_player_id": "global_player_3"
+          }
+        }
+      ],
+      "largest_gaps": {
+        "Player_2": [
+          {
+            "start": 24.933333,
+            "end": 36.0,
+            "seconds": 11.066666999999999
+          },
+          {
+            "start": 39.9,
+            "end": 50.066667,
+            "seconds": 10.166667000000004
+          },
+          {
+            "start": 12.033333,
+            "end": 22.133333,
+            "seconds": 10.1
+          },
+          {
+            "start": 4.2,
+            "end": 10.333333,
+            "seconds": 6.1333329999999995
+          },
+          {
+            "start": 0.0,
+            "end": 3.033333,
+            "seconds": 3.033333
+          }
+        ],
+        "Player_1": [
+          {
+            "start": 11.833333,
+            "end": 21.966667,
+            "seconds": 10.133334000000001
+          },
+          {
+            "start": 0.0,
+            "end": 3.866667,
+            "seconds": 3.866667
+          },
+          {
+            "start": 45.6,
+            "end": 47.2,
+            "seconds": 1.6000000000000014
+          },
+          {
+            "start": 6.433333,
+            "end": 7.8,
+            "seconds": 1.3666669999999996
+          },
+          {
+            "start": 52.8,
+            "end": 53.8,
+            "seconds": 1.0
+          }
+        ],
+        "Player_4": [
+          {
+            "start": 88.633333,
+            "end": 92.266667,
+            "seconds": 3.633334000000005
+          },
+          {
+            "start": 0.0,
+            "end": 1.0,
+            "seconds": 1.0
+          },
+          {
+            "start": 117.9,
+            "end": 118.833333,
+            "seconds": 0.9333329999999904
+          },
+          {
+            "start": 119.966667,
+            "end": 120.466667,
+            "seconds": 0.5
+          },
+          {
+            "start": 74.7,
+            "end": 74.933333,
+            "seconds": 0.2333330000000018
+          }
+        ],
+        "Player_3": [
+          {
+            "start": 0.0,
+            "end": 3.0,
+            "seconds": 3.0
+          },
+          {
+            "start": 119.966667,
+            "end": 120.466667,
+            "seconds": 0.5
+          },
+          {
+            "start": 114.3,
+            "end": 114.4,
+            "seconds": 0.10000000000000853
+          },
+          {
+            "start": 78.3,
+            "end": 78.366667,
+            "seconds": 0.06666700000000958
+          },
+          {
+            "start": 117.1,
+            "end": 117.166667,
+            "seconds": 0.06666700000000958
+          }
+        ]
+      },
+      "windows_diagnostic_only": {
+        "0-30s": {
+          "Player_2": {
+            "coverage": 0.09222222222222222,
+            "longest_gap_seconds": 10.1
+          },
+          "Player_1": {
+            "coverage": 0.2922222222222222,
+            "longest_gap_seconds": 10.133334000000001
+          },
+          "Player_4": {
+            "coverage": 0.9666666666666667,
+            "longest_gap_seconds": 1.0
+          },
+          "Player_3": {
+            "coverage": 0.8988888888888888,
+            "longest_gap_seconds": 3.0
+          }
+        },
+        "30-60s": {
+          "Player_2": {
+            "coverage": 0.30777777777777776,
+            "longest_gap_seconds": 10.166667000000004
+          },
+          "Player_1": {
+            "coverage": 0.8366666666666667,
+            "longest_gap_seconds": 1.6000000000000014
+          },
+          "Player_4": {
+            "coverage": 0.9966666666666667,
+            "longest_gap_seconds": 0.06666699999999537
+          },
+          "Player_3": {
+            "coverage": 0.9988888888888889,
+            "longest_gap_seconds": 0.06666700000000247
+          }
+        },
+        "60-90s": {
+          "Player_2": {
+            "coverage": 0.9888888888888889,
+            "longest_gap_seconds": 0.36666700000000674
+          },
+          "Player_1": {
+            "coverage": 0.9933333333333333,
+            "longest_gap_seconds": 0.1666670000000039
+          },
+          "Player_4": {
+            "coverage": 0.9433333333333334,
+            "longest_gap_seconds": 1.3333340000000078
+          },
+          "Player_3": {
+            "coverage": 0.9988888888888889,
+            "longest_gap_seconds": 0.06666700000000958
+          }
+        },
+        "90-120s": {
+          "Player_2": {
+            "coverage": 0.9388888888888889,
+            "longest_gap_seconds": 1.3666670000000067
+          },
+          "Player_1": {
+            "coverage": 0.9977777777777778,
+            "longest_gap_seconds": 0.09999999999999432
+          },
+          "Player_4": {
+            "coverage": 0.8911111111111111,
+            "longest_gap_seconds": 2.266666999999998
+          },
+          "Player_3": {
+            "coverage": 0.9944444444444445,
+            "longest_gap_seconds": 0.10000000000000853
+          }
+        },
+        "65-120s": {
+          "Player_2": {
+            "coverage": 0.9606060606060606,
+            "longest_gap_seconds": 1.3666670000000067
+          },
+          "Player_1": {
+            "coverage": 0.9951515151515151,
+            "longest_gap_seconds": 0.1666670000000039
+          },
+          "Player_4": {
+            "coverage": 0.9096969696969697,
+            "longest_gap_seconds": 3.633334000000005
+          },
+          "Player_3": {
+            "coverage": 0.9963636363636363,
+            "longest_gap_seconds": 0.10000000000000853
+          }
+        }
+      }
+    },
+    "job-900d0790f7": {
+      "verdict": "fail",
+      "confirmed_count": 3,
+      "roster_confirmed_count": 3,
+      "hard_invariants": {
+        "confirmed_roster": false,
+        "duplicate_binding_zero": true,
+        "cross_side_zero": true,
+        "identity_switch_zero": true,
+        "local_slot_reassociation_zero": true,
+        "canonical_identity_anchors_confirmed": false,
+        "identity_audit_single_source": true,
+        "two_confirmed_players_per_canonical_end": false
+      },
+      "absolute_gates": {
+        "Player_1.coverage": true,
+        "Player_1.longest_gap": false,
+        "Player_1.display_topology_stable": true,
+        "Player_2.coverage": false,
+        "Player_2.longest_gap": false,
+        "Player_2.display_topology_stable": true,
+        "Player_3.coverage": true,
+        "Player_3.longest_gap": false,
+        "Player_3.display_topology_stable": true,
+        "Player_4.coverage": true,
+        "Player_4.longest_gap": true,
+        "Player_4.display_topology_stable": true
+      },
+      "failure_reasons": [
+        "confirmed_roster",
+        "canonical_identity_anchors_confirmed",
+        "two_confirmed_players_per_canonical_end",
+        "Player_1.longest_gap",
+        "Player_2.coverage",
+        "Player_2.longest_gap",
+        "Player_3.longest_gap"
+      ],
+      "players": {
+        "Player_1": {
+          "canonical_coverage": 0.8013831258644537,
+          "longest_gap_seconds": 9.7,
+          "canonical_ticks": 2897,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 5
+        },
+        "Player_2": {
+          "canonical_coverage": 0.0,
+          "longest_gap_seconds": 120.466667,
+          "canonical_ticks": 0,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 0
+        },
+        "Player_3": {
+          "canonical_coverage": 0.9676348547717842,
+          "longest_gap_seconds": 3.0,
+          "canonical_ticks": 3498,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 4
+        },
+        "Player_4": {
+          "canonical_coverage": 0.9853388658367912,
+          "longest_gap_seconds": 1.0,
+          "canonical_ticks": 3562,
+          "cross_side_count": 0,
+          "identity_switch_count": 0,
+          "duplicate_binding_count": 0,
+          "display_topology_transition_count": 3
+        }
+      },
+      "mapping": {
+        "global_player_2": "Player_1",
+        "global_player_3": "Player_4",
+        "global_player_4": "Player_3"
+      },
+      "anchors": [
+        {
+          "canonical_player_id": "Player_1",
+          "global_player_id": "global_player_2",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 400,
+            "bbox_iou": 0.8428,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 3.096,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 288,
+            "tracklet_lineage_id": "cam_1:track:288",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "unlocked_candidate",
+            "tracking_status": "candidate",
+            "global_player_id": "global_player_2"
+          }
+        },
+        {
+          "canonical_player_id": "Player_2",
+          "global_player_id": null,
+          "confirmed": false,
+          "reason": "bootstrap_binding_waiting_global_association",
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 400,
+            "bbox_iou": 0.532,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 1.4683,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 290,
+            "tracklet_lineage_id": "cam_1:track:290",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "unlocked_candidate",
+            "tracking_status": "candidate",
+            "global_player_id": null
+          }
+        },
+        {
+          "canonical_player_id": "Player_3",
+          "global_player_id": "global_player_4",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 367,
+            "bbox_iou": 0.8295,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 0.6534,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 320,
+            "tracklet_lineage_id": "cam_1:track:320",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "no_local_player_identity",
+            "tracking_status": "unassigned_formal",
+            "global_player_id": "global_player_4"
+          }
+        },
+        {
+          "canonical_player_id": "Player_4",
+          "global_player_id": "global_player_3",
+          "confirmed": true,
+          "reason": null,
+          "evidence": {
+            "view_id": "cam_1",
+            "time_delta_ms": 400,
+            "bbox_iou": 0.8589,
+            "bbox_center_distance_px": null,
+            "court_distance_ft": 0.661,
+            "appearance_distance": null,
+            "multiview_corroborated": null,
+            "competing_formal_players": 0,
+            "competing_slots": 0,
+            "track_id": 1,
+            "tracklet_lineage_id": "cam_1:track:1",
+            "local_identity_epoch": 0,
+            "local_identity_reason": "no_local_player_identity",
+            "tracking_status": "unassigned_formal",
+            "global_player_id": "global_player_3"
+          }
+        }
+      ],
+      "largest_gaps": {
+        "Player_1": [
+          {
+            "start": 12.0,
+            "end": 21.7,
+            "seconds": 9.7
+          },
+          {
+            "start": 0.0,
+            "end": 3.866667,
+            "seconds": 3.866667
+          },
+          {
+            "start": 6.433333,
+            "end": 7.8,
+            "seconds": 1.3666669999999996
+          },
+          {
+            "start": 8.433333,
+            "end": 9.266667,
+            "seconds": 0.8333340000000007
+          },
+          {
+            "start": 9.3,
+            "end": 10.066667,
+            "seconds": 0.766667
+          }
+        ],
+        "Player_4": [
+          {
+            "start": 0.0,
+            "end": 1.0,
+            "seconds": 1.0
+          },
+          {
+            "start": 119.966667,
+            "end": 120.466667,
+            "seconds": 0.5
+          },
+          {
+            "start": 87.666667,
+            "end": 87.833333,
+            "seconds": 0.1666659999999922
+          },
+          {
+            "start": 44.6,
+            "end": 44.666667,
+            "seconds": 0.06666699999999537
+          },
+          {
+            "start": 45.6,
+            "end": 45.666667,
+            "seconds": 0.06666699999999537
+          }
+        ],
+        "Player_3": [
+          {
+            "start": 0.0,
+            "end": 3.0,
+            "seconds": 3.0
+          },
+          {
+            "start": 119.966667,
+            "end": 120.466667,
+            "seconds": 0.5
+          },
+          {
+            "start": 62.9,
+            "end": 63.1,
+            "seconds": 0.20000000000000284
+          },
+          {
+            "start": 5.833333,
+            "end": 6.033333,
+            "seconds": 0.20000000000000018
+          },
+          {
+            "start": 25.733333,
+            "end": 25.8,
+            "seconds": 0.06666700000000247
+          }
+        ]
+      },
+      "windows_diagnostic_only": {
+        "0-30s": {
+          "Player_1": {
+            "coverage": 0.36777777777777776,
+            "longest_gap_seconds": 9.7
+          },
+          "Player_4": {
+            "coverage": 0.9666666666666667,
+            "longest_gap_seconds": 1.0
+          },
+          "Player_3": {
+            "coverage": 0.8922222222222222,
+            "longest_gap_seconds": 3.0
+          }
+        },
+        "30-60s": {
+          "Player_1": {
+            "coverage": 1.0,
+            "longest_gap_seconds": 0.03333400000000353
+          },
+          "Player_4": {
+            "coverage": 0.9966666666666667,
+            "longest_gap_seconds": 0.06666699999999537
+          },
+          "Player_3": {
+            "coverage": 1.0,
+            "longest_gap_seconds": 0.03333400000000353
+          }
+        },
+        "60-90s": {
+          "Player_1": {
+            "coverage": 0.9444444444444444,
+            "longest_gap_seconds": 0.46666700000000105
+          },
+          "Player_4": {
+            "coverage": 0.9944444444444445,
+            "longest_gap_seconds": 0.1666659999999922
+          },
+          "Player_3": {
+            "coverage": 0.9944444444444445,
+            "longest_gap_seconds": 0.20000000000000284
+          }
+        },
+        "90-120s": {
+          "Player_1": {
+            "coverage": 0.9066666666666666,
+            "longest_gap_seconds": 0.6999999999999886
+          },
+          "Player_4": {
+            "coverage": 1.0,
+            "longest_gap_seconds": 0.03333400000001063
+          },
+          "Player_3": {
+            "coverage": 1.0,
+            "longest_gap_seconds": 0.03333400000001063
+          }
+        },
+        "65-120s": {
+          "Player_1": {
+            "coverage": 0.9187878787878788,
+            "longest_gap_seconds": 0.6999999999999886
+          },
+          "Player_4": {
+            "coverage": 0.996969696969697,
+            "longest_gap_seconds": 0.1666659999999922
+          },
+          "Player_3": {
+            "coverage": 1.0,
+            "longest_gap_seconds": 0.03333400000001063
+          }
+        }
+      }
+    }
+  },
+  "actual_runtime_sync": {
+    "cam_2_status_counts": {
+      "unavailable_out_of_media_range": 2,
+      "available_extrapolated": 1,
+      "available": 3612
+    },
+    "first_formal_available_ms": 100.0,
+    "first_available_source_frame": 4,
+    "cam_2_ticks_with_formal_or_candidate_detections": 3612,
+    "cam_2_first_54s_association_input_count": 5388
+  },
+  "root_cause_evidence": {
+    "anonymous_slot": "global_player_1",
+    "first_fused_ms": 2733.333,
+    "last_fused_ms": 4400.0,
+    "fused_tick_count": 51,
+    "final_cross_view_anchored": true,
+    "frozen_identity_confirmed": false,
+    "final_camera2_binding_visibility": "lost",
+    "at_ms": 57500,
+    "p2_camera1": {
+      "track_id": 290,
+      "canonical_xy_ft": [
+        15.212654422807205,
+        2.0722873950729683
+      ]
+    },
+    "p2_camera2": {
+      "track_id": 91,
+      "canonical_xy_ft": [
+        15.820794472945913,
+        1.3771922213034458
+      ]
+    },
+    "association_reason": "unmatched_recovery_no_eligible_global",
+    "anchor_audit_reason": "bootstrap_binding_waiting_global_association",
+    "code_branch": "GlobalPlayerRegistry._stale_provisional_for_end excludes every cross_view_anchored state, including long-lost anonymous states."
+  },
+  "p4_at_90s": {
+    "identity_status": "confirmed_observed",
+    "metric_eligible": true,
+    "source_tracks": {
+      "cam_1": 379,
+      "cam_2": 269
+    }
+  },
+  "manual_review": {
+    "formal_overlay_seconds": [
+      65,
+      90,
+      110
+    ],
+    "observations": "P1/P3/P4 labels match grey sleeveless/white top/black top. Pink-top P2 is visible without a formal P2 label. Pre-anchor final-map diagnostic frames at 10/30/50s reviewed separately; they are not formal identity confirmation before the anchor."
+  },
+  "local_evidence_directory": "D:\\匹克球\\bsu-pickleball\\.runtime\\identity-fix\\opening-sync-r1",
+  "scope_limit": "Full requested 120-second quality remains fail. No new algorithm patch or whole-take run performed in this verification."
+}

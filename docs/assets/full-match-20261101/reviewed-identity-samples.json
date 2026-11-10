@@ -1,0 +1,384 @@
+{
+  "schema_version": "sparse-reviewed-identity-boxes.v1",
+  "reviewer": "assistant_visual_review_of_source_frames",
+  "notice": "Boxes proposed by earlier detector outputs and reviewed on source images. Sparse regression evidence, not independent full-video truth. Excludes ambiguous handshake merged bodies.",
+  "samples": [
+    {
+      "timestamp_seconds": 37.566667,
+      "view_id": "cam_2",
+      "source_frame_index": 2252,
+      "player_id": "Player_1",
+      "bbox": [
+        1265.110595703125,
+        533.585205078125,
+        1485.244384765625,
+        923.477783203125
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 37.566667,
+      "view_id": "cam_2",
+      "source_frame_index": 2252,
+      "player_id": "Player_2",
+      "bbox": [
+        473.97491455078125,
+        248.06448364257812,
+        592.70849609375,
+        524.8932495117188
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 37.566667,
+      "view_id": "cam_1",
+      "source_frame_index": 2254,
+      "player_id": "Player_3",
+      "bbox": [
+        822.111328125,
+        494.14892578125,
+        1009.3749389648438,
+        894.9512329101562
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 37.566667,
+      "view_id": "cam_1",
+      "source_frame_index": 2254,
+      "player_id": "Player_4",
+      "bbox": [
+        1306.035400390625,
+        518.175048828125,
+        1472.4766845703125,
+        882.77734375
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 108.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 6480,
+      "player_id": "Player_1",
+      "bbox": [
+        1210.462646484375,
+        479.009765625,
+        1408.3385009765625,
+        901.2321166992188
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 108.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 6480,
+      "player_id": "Player_2",
+      "bbox": [
+        339.37005615234375,
+        557.6911010742188,
+        518.28955078125,
+        984.6828002929688
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 108.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 6482,
+      "player_id": "Player_3",
+      "bbox": [
+        714.1607666015625,
+        244.8474884033203,
+        840.4714965820312,
+        522.968017578125
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 108.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 6482,
+      "player_id": "Player_4",
+      "bbox": [
+        1343.1888427734375,
+        454.9115295410156,
+        1471.7603759765625,
+        730.986572265625
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 371.5,
+      "view_id": "cam_2",
+      "source_frame_index": 22288,
+      "player_id": "Player_1",
+      "bbox": [
+        800.7050170898438,
+        289.9759521484375,
+        902.3582153320312,
+        578.7752075195312
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 371.5,
+      "view_id": "cam_2",
+      "source_frame_index": 22288,
+      "player_id": "Player_2",
+      "bbox": [
+        674.3864135742188,
+        251.0884552001953,
+        826.4734497070312,
+        494.9522705078125
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 371.5,
+      "view_id": "cam_1",
+      "source_frame_index": 22290,
+      "player_id": "Player_3",
+      "bbox": [
+        873.0535888671875,
+        432.90838623046875,
+        1006.8699951171875,
+        807.895751953125
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 371.5,
+      "view_id": "cam_1",
+      "source_frame_index": 22290,
+      "player_id": "Player_4",
+      "bbox": [
+        1272.1337890625,
+        573.3524780273438,
+        1474.8399658203125,
+        947.572265625
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 372.5,
+      "view_id": "cam_2",
+      "source_frame_index": 22348,
+      "player_id": "Player_1",
+      "bbox": [
+        807.818115234375,
+        381.40484619140625,
+        925.5503540039062,
+        713.7996826171875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 372.5,
+      "view_id": "cam_2",
+      "source_frame_index": 22348,
+      "player_id": "Player_2",
+      "bbox": [
+        722.1209716796875,
+        306.796875,
+        830.53662109375,
+        605.1123046875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 372.5,
+      "view_id": "cam_1",
+      "source_frame_index": 22350,
+      "player_id": "Player_3",
+      "bbox": [
+        767.3696899414062,
+        508.83270263671875,
+        920.5030517578125,
+        908.2060546875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 372.5,
+      "view_id": "cam_1",
+      "source_frame_index": 22350,
+      "player_id": "Player_4",
+      "bbox": [
+        1269.56982421875,
+        822.8355102539062,
+        1466.0328369140625,
+        1018.7147827148438
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 375.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 22500,
+      "player_id": "Player_1",
+      "bbox": [
+        1248.249755859375,
+        541.6115112304688,
+        1408.29931640625,
+        964.8601684570312
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 375.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 22500,
+      "player_id": "Player_2",
+      "bbox": [
+        636.08642578125,
+        538.45703125,
+        754.4656982421875,
+        959.8515625
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 375.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 22502,
+      "player_id": "Player_3",
+      "bbox": [
+        614.30908203125,
+        507.6722717285156,
+        811.896728515625,
+        951.2684326171875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 375.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 22502,
+      "player_id": "Player_4",
+      "bbox": [
+        1129.503662109375,
+        519.6724853515625,
+        1318.36865234375,
+        912.7371826171875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 450.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 27000,
+      "player_id": "Player_1",
+      "bbox": [
+        1184.3046875,
+        387.50408935546875,
+        1335.211181640625,
+        726.752685546875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 450.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 27000,
+      "player_id": "Player_2",
+      "bbox": [
+        0.19672393798828125,
+        781.0118408203125,
+        264.756591796875,
+        1078.661865234375
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 450.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 27002,
+      "player_id": "Player_3",
+      "bbox": [
+        275.4207763671875,
+        400.584228515625,
+        489.7167663574219,
+        782.98974609375
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 450.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 27002,
+      "player_id": "Player_4",
+      "bbox": [
+        1095.28369140625,
+        486.0660095214844,
+        1239.466064453125,
+        829.8956298828125
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 550.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 33000,
+      "player_id": "Player_1",
+      "bbox": [
+        654.526611328125,
+        723.8441772460938,
+        917.91943359375,
+        1079.0057373046875
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 550.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 33000,
+      "player_id": "Player_2",
+      "bbox": [
+        474.4541931152344,
+        491.6311340332031,
+        586.6876220703125,
+        903.896240234375
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 550.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 33002,
+      "player_id": "Player_3",
+      "bbox": [
+        759.8040161132812,
+        362.99078369140625,
+        871.7559814453125,
+        726.4578247070312
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 550.033333,
+      "view_id": "cam_1",
+      "source_frame_index": 33002,
+      "player_id": "Player_4",
+      "bbox": [
+        1026.666748046875,
+        451.1534729003906,
+        1138.580322265625,
+        805.2415771484375
+      ],
+      "proposal_source_job": "job-c8f5b539f7"
+    },
+    {
+      "timestamp_seconds": 389.033333,
+      "view_id": "cam_2",
+      "source_frame_index": 23340,
+      "player_id": "Player_2",
+      "bbox": [
+        604.321044921875,
+        216.90032958984375,
+        702.994384765625,
+        364.6293640136719
+      ],
+      "proposal_source_job": "job-7d0dd7601e"
+    }
+  ]
+}

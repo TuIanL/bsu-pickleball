@@ -5,6 +5,7 @@ import type { NavigateFn } from "../app/navigationTypes";
 
 const mocks = vi.hoisted(() => ({
   getCaptureTake: vi.fn(),
+  getCurrentMetricCourtScene: vi.fn(),
   getMetricCourtSceneDraft: vi.fn(),
   saveMetricCourtSceneDraft: vi.fn(),
   validateMetricCourtScene: vi.fn(),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../services/analysisClient", () => ({
   getCaptureTake: mocks.getCaptureTake,
+  getCurrentMetricCourtScene: mocks.getCurrentMetricCourtScene,
   getMetricCourtSceneDraft: mocks.getMetricCourtSceneDraft,
   saveMetricCourtSceneDraft: mocks.saveMetricCourtSceneDraft,
   validateMetricCourtScene: mocks.validateMetricCourtScene,
@@ -188,6 +190,8 @@ describe("MultiViewAnalysisSetupPage", () => {
 
   beforeEach(() => {
     mocks.getCaptureTake.mockReset();
+    mocks.getCurrentMetricCourtScene.mockReset();
+    mocks.getCurrentMetricCourtScene.mockResolvedValue(null);
     mocks.getMetricCourtSceneDraft.mockReset();
     mocks.saveMetricCourtSceneDraft.mockReset();
     mocks.validateMetricCourtScene.mockReset();
@@ -203,6 +207,28 @@ describe("MultiViewAnalysisSetupPage", () => {
     mocks.publishMetricCourtScene.mockResolvedValue({ revision: 1 });
     mocks.getFusedManifest.mockResolvedValue(null);
     mocks.getFusionDiagnostics.mockResolvedValue(null);
+  });
+
+  it.each(["matching", "other_video", "draft"])("only reuses confirmed calibration for the current videos: %s", async (mode) => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+    mocks.getMetricCourtSceneDraft.mockResolvedValue({
+      status: mode === "draft" ? "draft" : "ready", net_profile: NET_DRAFT.profile,
+      views: [
+        { view_id: "cam_1", video_id: mode === "other_video" ? "unrelated" : "video-a", calibration_id: "saved-a", court_orientation: "identity", net_annotations: NET_DRAFT.annotations },
+        { view_id: "cam_2", video_id: "video-b", calibration_id: "saved-b", court_orientation: "rotate_180", net_annotations: NET_DRAFT.annotations },
+      ],
+    });
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
+    await screen.findByTestId("court-calibration-panel");
+    const reuse = screen.queryByRole("button", { name: "复用已保存的场地标定" });
+    if (mode !== "matching") { expect(reuse).toBeNull(); return; }
+    expect(reuse).toBeTruthy(); fireEvent.click(reuse!);
+    expect((screen.getByRole("button", { name: "下一步：球网标定" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "下一步：球网标定" }));
+    expect((screen.getByRole("button", { name: "下一步：名册与确认" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("uses the ?session= route param (not the take id) to load the sync session", async () => {
@@ -435,6 +461,29 @@ describe("MultiViewAnalysisSetupPage", () => {
     const request = mocks.createMultiviewAnalysisJob.mock.calls[0][0];
     expect(request.executionMode).toBe("joint_tracking_v2");
     expect(request.debugTraceEnabled).toBe(true);
+    expect(request.enableModelInference).toBe(true);
+    expect(request.enablePoseInference).toBe(true);
+    expect(request.segmentationRequired).toBe(false);
+  });
+
+  it("allows pose to be disabled independently of optional rally statistics", async () => {
+    window.history.replaceState({}, "", `/capture/takes/${TAKE_ID}/analyze?session=${SYNC_SESSION_ID}`);
+    mocks.getCaptureTake.mockResolvedValue(makeTake(SYNC_SESSION_ID));
+    mocks.getSyncAnchorStatus.mockResolvedValue(makeSyncStatus());
+    mocks.getSyncRecording.mockResolvedValue(makeSession(SYNC_SESSION_ID));
+    mocks.createMultiviewAnalysisJob.mockResolvedValue({ id: "job-optional-rallies" });
+    render(<RoutedMultiViewAnalysisSetupPage onNavigate={vi.fn()} />);
+    await screen.findByTestId("court-calibration-panel");
+    completeCourtStep();
+    completeNetStep();
+    fireEvent.click(screen.getByRole("checkbox", { name: "识别球员骨架" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "同时按回合统计（增加处理时间）" }));
+    fireEvent.click(screen.getByRole("button", { name: /旧流程/ }));
+    fireEvent.click(screen.getByRole("button", { name: "开始双摄协同分析" }));
+    await waitFor(() => expect(mocks.createMultiviewAnalysisJob).toHaveBeenCalled());
+    expect(mocks.createMultiviewAnalysisJob.mock.calls[0][0]).toMatchObject({
+      enablePoseInference: false, segmentationRequired: true,
+    });
   });
 
   it("publishes the shared net height profile for both views", async () => {

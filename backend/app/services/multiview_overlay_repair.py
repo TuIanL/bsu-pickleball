@@ -205,11 +205,19 @@ def repair_persisted_multiview_overlay(
         f0_snapshot=snapshot,
         reference_view_id=job.referenceViewId,
         roster_map=roster_map,
+        identity_start_ms_by_global={
+            str(item['global_player_id']): float(item['frozen_identity_confirmed_from_ms'])
+            for item in roster.get('players', [])
+            if isinstance(item, Mapping) and item.get('global_player_id')
+            and item.get('mapping_confirmed') is True
+            and item.get('frozen_identity_confirmed_from_ms') is not None
+        },
         view_geometry=geometry,
         fused_trajectory=trajectory,
         recovered_observations=_load_recovered_observations(run_dir / "recovered_view_observations.v1.json"),
         final_source=final_source,
-        bootstrap_backfill=_load_bootstrap_backfill(root / "bootstrap_display_backfill.json"),
+        bootstrap_backfill=(None if job.rosterSnapshotHash else
+                            _load_bootstrap_backfill(root / "bootstrap_display_backfill.json")),
     )
     expected_player_count = int(roster.get("expected_player_count") or len(roster_map) or 4)
     view_payloads: dict[str, FusedPlayerOverlayView] = {}
@@ -269,4 +277,6 @@ def repair_persisted_multiview_overlay(
     output_path = storage.fused_player_overlay_json_path(job.id)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     storage.write_json_atomic(output_path, payload)
+    from app.services.overlay_playback import publish_overlay_playback
+    publish_overlay_playback(output_path, payload, artifact_name="fused-player-overlay")
     return payload

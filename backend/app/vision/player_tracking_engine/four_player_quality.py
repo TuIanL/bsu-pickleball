@@ -105,6 +105,7 @@ class FourPlayerIdentificationQuality(BaseModel):
     per_canonical_end_funnel: dict[str, dict[str, Any]] = Field(default_factory=dict)
     identity_slots: dict[str, dict[str, Any]] = Field(default_factory=dict)
     mapping_confirmation_available: bool = False
+    runtime_diagnostics_complete: bool | None = None
     mapping_confirmed_by_player: dict[str, bool | None] = Field(default_factory=dict)
     # 7.3：roster.json 与 anchor_binding_audit 对同一槽位给出互斥结论时的证据。
     # 非空即表示身份审计存在双源真相冲突，质量 verdict 必须 fail-closed。
@@ -164,6 +165,8 @@ def evaluate_quality(artifact: FourPlayerIdentificationQuality) -> FourPlayerIde
             local_reassociation_violations <= thresholds.max_local_slot_reassociation_violations
         ),
     }
+    if artifact.runtime_diagnostics_complete is False:
+        hard["runtime_diagnostic_evidence_complete"] = False
     if artifact.mapping_confirmation_available:
         hard["canonical_identity_anchors_confirmed"] = (
             set(artifact.mapping_confirmed_by_player) == set(CANONICAL_PLAYERS)
@@ -293,6 +296,7 @@ def build_quality_from_joint_artifacts(
     display_diagnostics: dict[str, Any] | None = None,
     runtime_diagnostics: dict[str, Any] | None = None,
     algorithm_version: str = "legacy-joint-tracking-v2",
+    config_signature: str | None = None,
     thresholds: IdentificationThresholds | None = None,
 ) -> FourPlayerIdentificationQuality:
     """Build a conservative baseline summary from published joint artifacts."""
@@ -595,6 +599,7 @@ def build_quality_from_joint_artifacts(
     artifact = FourPlayerIdentificationQuality(
         job_id=job_id,
         algorithm_version=algorithm_version,
+        config_signature=config_signature,
         thresholds=thresholds or IdentificationThresholds(),
         attempted_ticks=attempted,
         duration_seconds=duration,
@@ -645,6 +650,8 @@ def build_quality_from_joint_artifacts(
         ),
         camera_profiles=dict(association_appearance.get("profiles") or {}),
     )
+    if (runtime_diagnostics or {}).get("runtime_diagnostics_complete") is False:
+        artifact = artifact.model_copy(update={"runtime_diagnostics_complete": False})
     return evaluate_quality(artifact)
 
 

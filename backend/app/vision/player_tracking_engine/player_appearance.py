@@ -156,6 +156,7 @@ class ClothingAppearanceExtractor:
         return PlayerAppearanceDescriptor(
             upper=upper_feature,
             lower=lower_feature,
+            extractor_version=self.version,
             quality=quality,
             status=status,
             provenance=provenance,
@@ -207,6 +208,18 @@ class ClothingAppearanceExtractor:
             edges = cv2.Canny(gray, 60, 120)
             texture = (float(np.mean(edges > 0)),)
         return AppearanceRegionFeature(tuple(histograms), moments, texture), stats
+
+
+class CentralClothingAppearanceExtractor(ClothingAppearanceExtractor):
+    """Keep the central garment even when its color resembles skin.
+
+    Broad skin masking removed pale clothing along with arms. Narrowing the
+    crop reduces arms/background without deleting the shirt's actual color.
+    """
+    version = "clothing-central-hsv-lab.v2"
+
+    def __init__(self):
+        super().__init__(AppearanceExtractorConfig(skin_mask_enabled=False, edge_inset_ratio=.25))
 
 
 def appearance_distance(

@@ -29,7 +29,7 @@ vi.mock("../services/analysisClient", () => ({
 }));
 
 // 重型展示组件在本次测试中不关心，渲染为空避免额外依赖
-vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: ({ headerInfo }: { headerInfo?: ReactNode }) => <div data-testid="video-analysis-card">{headerInfo}</div> }));
+vi.mock("../components/platform/VideoAnalysisCard", () => ({ VideoAnalysisCard: ({ headerInfo, seekToMs }: { headerInfo?: ReactNode; seekToMs?: number }) => <div data-testid="video-analysis-card" data-seek-ms={seekToMs}>{headerInfo}</div> }));
 vi.mock("../components/platform/MetricCard", () => ({ MetricCard: () => <div /> }));
 vi.mock("../components/platform/SkillRatings", () => ({ SkillRatings: () => <div /> }));
 vi.mock("../components/RecommendedDrills", () => ({ RecommendedDrills: () => <div /> }));
@@ -78,6 +78,11 @@ describe("VisionPage 双摄协同详情快捷入口", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("opens the result at the requested analysis start rather than the excluded preparation", async () => {
+    renderPage(makeJob({ clipStartMs: 30000 }));
+    expect((await screen.findByTestId('video-analysis-card')).getAttribute('data-seek-ms')).toBe('30000');
   });
 
   it("双摄协同完成态展示入口，点击直达协同详情", async () => {

@@ -1,0 +1,14 @@
+{
+  "run_id": "mvr_325be3ae6548",
+  "scope": "Current real image footpoint vs configured camera homography; this does not prove identity or calibration accuracy.",
+  "counts": {
+    "checked": 135965
+  },
+  "sources": {
+    "raw_projection": 135965
+  },
+  "maximum_error_ft": 2.1972320632906738e-14,
+  "mean_error_ft": 2.7234889821219915e-15,
+  "verdict": "pass",
+  "examples": []
+}

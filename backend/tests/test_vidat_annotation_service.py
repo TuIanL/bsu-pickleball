@@ -74,7 +74,7 @@ def test_create_package_is_versioned_and_keeps_prior_snapshot(db, tmp_path, monk
     assert (first.version, second.version) == (1, 2)
     assert Path(first.package_dir, "manifest.json").is_file()
     assert Path(first.package_dir, "annotation.json").is_file()
-    assert Path(first.package_dir, "video.mp4").is_symlink()
+    assert Path(first.package_dir, "video.mp4").samefile(tmp_path / "match.mp4")
     assert db.query(VidatAnnotationPackage).filter_by(capture_take_id=take.id).count() == 2
 
 
@@ -139,7 +139,7 @@ def test_publish_package_links_only_managed_artifacts(db, tmp_path, monkeypatch)
     assert f"video/{package.id}.mp4" in query
     assert "decoder=v2" in query
     assert "defaultfps=30" in query
-    assert (dist / "video" / f"{package.id}.mp4").is_symlink()
+    assert (dist / "video" / f"{package.id}.mp4").samefile(tmp_path / "match.mp4")
     assert (dist / "annotation" / f"{package.id}.json").is_file()
     assert (dist / "config" / f"{package.id}.json").is_file()
     config = service.json.loads((dist / "config" / f"{package.id}.json").read_text())

@@ -48,7 +48,7 @@ export function findFrameWindow<T extends OverlayFrame>(
   frames: T[],
   currentTime: number
 ): FrameWindow<T> {
-  if (!frames.length) {
+  if (!frames.length || currentTime < frames[0].timestamp_seconds) {
     return { ratio: 0 };
   }
 
@@ -108,12 +108,15 @@ export function resolveDetectionFrame(frames: DetectionOverlayFrame[], currentTi
 }
 
 export function resolvePoseFrame(frames: PoseOverlayFrame[], currentTime: number): PoseResolutionResult {
+  if (frames.length && currentTime < frames[0].timestamp_seconds) {
+    return { frame: undefined, inGap: false };
+  }
   const window = findFrameWindow(frames, currentTime);
   if (!window.current) {
     return { frame: undefined, inGap: false };
   }
   if (!window.next) {
-    return { frame: window.current, inGap: false };
+    return { frame: window.current, inGap: currentTime - window.current.timestamp_seconds > MAX_POSE_GAP_SECONDS };
   }
 
   // 检测空洞：当前帧与下一帧间隔超过阈值 → 标记骨架应隐藏
@@ -154,7 +157,7 @@ export function resolveFusedPlayerOverlayFrame(
     return { frame: undefined, inGap: false };
   }
   if (!window.next) {
-    return { frame: window.current, inGap: false };
+    return { frame: window.current, inGap: currentTime - window.current.timestamp_seconds > MAX_OVERLAY_GAP_SECONDS };
   }
 
   // gap 语义：跨 gap 禁止插值（spec video-overlay-hud）

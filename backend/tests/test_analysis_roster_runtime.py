@@ -11,7 +11,7 @@ from app.services.analysis_roster_runtime import (
     validate_runtime_roster,
 )
 from app.vision.multiview.multiview_joint_run import MultiViewJointRun, build_perception_trace_windows
-from app.vision.multiview.association_global import JointObservation
+from app.vision.multiview.association_global import AssociationUpdate, JointObservation
 
 
 def _snapshot() -> AnalysisRosterSnapshotPayload:
@@ -247,6 +247,39 @@ def test_anchor_follows_raw_track_from_candidate_to_formal_with_changed_local_la
     assert run._frozen_anchor_audit["Player_1"]["track_id"] == 293
 
 
+def test_unaccepted_later_anchor_match_preserves_confirmation_but_explicit_conflict_does_not():
+    from dataclasses import replace
+    from app.vision.multiview.association_global import AssociationUpdate
+    anchor=RosterAnchor(player_id='Player_1',team_id='A',end='end_a',view_id='cam_1',
+        timestamp_ms=100000,bbox=(100.,100.,160.,260.),canonical_xy=(5.,5.),candidate_id=None)
+    run=_anchor_run((anchor,))
+    obs=JointObservation('cam_1',6000,100000,5.,5.,source_timestamp_ms=100000,
+        bbox=[100.,100.,160.,260.],track_id=293)
+    run._process_frozen_roster_anchors(observations=[obs],
+        accepted_updates=[AssociationUpdate('g1','cam_1',obs,.9)],take_timestamp_ms=100000)
+    confirmed=dict(run._frozen_anchor_audit['Player_1'])
+    assert confirmed['confirmed']
+    run._process_frozen_roster_anchors(observations=[obs],accepted_updates=[],take_timestamp_ms=100000)
+    assert run._frozen_anchor_audit['Player_1']==confirmed
+    # The same confirmed global lineage may change court ends later (handshake).
+    # Its historical anchor must not be rechecked against the current end.
+    run.registry.confirm_frozen_identity=lambda *args,**kwargs:(False,'anchor_global_end_conflict')
+    late=replace(obs,source_frame_index=6900,take_timestamp_ms=115000,source_timestamp_ms=115000)
+    run._process_frozen_roster_anchors(observations=[late],
+        accepted_updates=[AssociationUpdate('g1','cam_1',late,.9)],take_timestamp_ms=115000)
+    assert run._frozen_anchor_audit['Player_1']==confirmed
+    # Raw tracker IDs can be recycled after the simultaneous anchor window.
+    # Their later owner is not evidence against the earlier witnessed identity.
+    run._process_frozen_roster_anchors(observations=[late],
+        accepted_updates=[AssociationUpdate('g2','cam_1',late,.9)],take_timestamp_ms=115000)
+    assert run._frozen_anchor_audit['Player_1']==confirmed
+    run.registry.confirm_frozen_identity=lambda *args,**kwargs:(False,'frozen_player_already_bound')
+    run._process_frozen_roster_anchors(observations=[obs],
+        accepted_updates=[AssociationUpdate('g2','cam_1',obs,.9)],take_timestamp_ms=100000)
+    assert not run._frozen_anchor_audit['Player_1']['confirmed']
+    assert run._frozen_anchor_audit['Player_1']['reason']=='frozen_player_already_bound'
+
+
 def test_distinct_raw_tracks_reusing_one_player_label_keep_separate_anchor_keys():
     anchors = tuple(
         RosterAnchor(
@@ -274,6 +307,31 @@ def test_distinct_raw_tracks_reusing_one_player_label_keep_separate_anchor_keys(
     assert run._frozen_anchor_track_keys[("cam_1", "track:12", 0)][0] == "Player_2"
     assert run._frozen_anchor_audit["Player_1"]["reason"] == "bootstrap_binding_waiting_global_association"
     assert run._frozen_anchor_audit["Player_2"]["reason"] == "bootstrap_binding_waiting_global_association"
+
+
+def test_live_anchor_confirmation_requires_current_unquarantined_assignment():
+    anchor = RosterAnchor(
+        player_id="Player_1", team_id="A", end="end_a", view_id="cam_1",
+        timestamp_ms=100_000, bbox=(100.0, 100.0, 160.0, 260.0),
+        canonical_xy=(5.0, 5.0), candidate_id="candidate-1",
+    )
+    run = _anchor_run((anchor,))
+    observation = JointObservation(
+        "cam_1", 1, 100_000, 5.0, 5.0, track_id=274,
+        bbox=[100, 100, 160, 260], source_timestamp_ms=100_000,
+    )
+    run.associator.mapping[run.associator.mapping_key(observation)] = "stale-global"
+    quarantined = AssociationUpdate("stale-global", "cam_1", observation, 0.9, quarantined=True)
+    run._process_frozen_roster_anchors(
+        observations=[observation], accepted_updates=[quarantined], take_timestamp_ms=100_000,
+    )
+    assert run.registry.confirmed == []
+    assert not run._frozen_anchor_audit["Player_1"]["confirmed"]
+    accepted = AssociationUpdate("actual-global", "cam_1", observation, 0.9)
+    run._process_frozen_roster_anchors(
+        observations=[observation], accepted_updates=[accepted], take_timestamp_ms=100_000,
+    )
+    assert run.registry.confirmed[0][:2] == ("actual-global", "Player_1")
 
 
 def test_perception_trace_windows_follow_short_clip_range_and_roster_anchors():

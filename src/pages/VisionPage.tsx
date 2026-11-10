@@ -579,8 +579,8 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
     const hasVideo = Boolean(input?.videoId ?? (viewId === referenceViewId ? job?.videoId : undefined));
     const targetView = fusedPlayerOverlay?.views?.[viewId];
     const hasProjection = viewId === referenceViewId
-      ? Boolean(fusedPlayerOverlay?.frames.length)
-      : Boolean(targetView?.frames.length) && targetView?.status === "available";
+      ? Boolean(fusedPlayerOverlay?.frames.length || fusedPlayerOverlay?.playback?.chunks[viewId]?.length)
+      : Boolean(targetView?.frames.length || fusedPlayerOverlay?.playback?.chunks[viewId]?.length) && targetView?.status === "available";
     const mappingAvailable = input?.sourceTimestampMappingStatus !== "unavailable";
     return {
       id: viewId,
@@ -852,7 +852,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
               videoSrc={displayVideoSrc ?? undefined}
               fallbackVideoSrc={displayFallbackVideoSrc}
               pipelineTracks={result?.tracks}
-              seekToMs={seekToMs}
+              seekToMs={seekToMs ?? job?.clipStartMs ?? undefined}
               autoRallySegments={autoRallySegments}
               autoSkipUnavailableReason={autoSkipUnavailableReason}
               rallyNavigationRequest={rallyNavigationRequest}
@@ -1011,6 +1011,7 @@ export function VisionPage({ jobId, onNavigate, recentJob, seekToMs, embedded, o
             videoSrc={displayVideoSrc ?? undefined}
             fallbackVideoSrc={displayFallbackVideoSrc}
             pipelineTracks={result?.tracks}
+            seekToMs={seekToMs ?? job?.clipStartMs ?? undefined}
           />
           {analysis.source === "job" ? (
             <VisualizationArtifactGallery

@@ -28,6 +28,37 @@ def sample(frame, time, x, y, *, player_id="Player_1", track_id=1, unit="m"):
     )
 
 
+def test_time_window_scores_match_exhaustive_reference_with_duplicate_boundaries():
+    detector = ServeStartDetector()
+    rows = [sample(i, i//2*.1, (i%13)*.02, (i%5)*.01) for i in range(2000)]
+    peers = {'Player_1':rows, 'Player_2':[
+        sample(i,r.timestamp_seconds,r.court_x*.3,r.court_y,player_id='Player_2') for i,r in enumerate(rows)]}
+
+    def speeds(window):
+        return [detector._sample_speed(a,b) for a,b in zip(window,window[1:])]
+
+    for index in [0,1,2,30,400,999,1999]:
+        ts=rows[index].timestamp_seconds
+        start,end=ts-detector.config.pre_still_window_seconds,ts-detector.config.pre_still_gap_seconds
+        window=[r for r in rows[:index+1] if start<=r.timestamp_seconds<=end]
+        if len(window)<2 and index>=2:window=rows[max(0,index-2):index]
+        rates=speeds(window)
+        still=detector._clamp01(1-sum(rates)/len(rates)/max(.001,detector.config.still_speed_threshold)) if rates else 0.
+        assert detector._pre_stillness_score(rows,index) == pytest.approx(still)
+        active=waiting=considered=0
+        for pid,group in peers.items():
+            post=[r for r in group if ts<=r.timestamp_seconds<=ts+detector.config.post_rally_window_seconds]
+            rates=speeds(post)
+            if rates and sum(rates)/len(rates)>=detector.config.rally_speed_threshold:active+=1
+            if pid=='Player_1':continue
+            pre=[r for r in group if start<=r.timestamp_seconds<=end]
+            if len(pre)>=2:
+                considered+=1;rates=speeds(pre)
+                if rates and sum(rates)/len(rates)<=detector.config.still_speed_threshold:waiting+=1
+        assert detector._rally_after_score(peers,ts) == detector._clamp01(active/2)
+        assert detector._receiver_waiting_score(peers,ts,'Player_1') == (waiting/considered if considered else 0.)
+
+
 def tracking():
     return TrackingResult(fps=5, frame_count=80, processed_frame_count=8, frame_stride=1)
 

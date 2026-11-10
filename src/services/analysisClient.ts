@@ -801,6 +801,8 @@ export interface MultiViewCreateViewPayload {
 export interface MultiviewAnalysisJobRequest {
   metadata: AnalysisUploadMetadata;
   frameStride?: number;
+  enableModelInference?: boolean;
+  enablePoseInference?: boolean;
   referenceViewId: string;
   views: MultiViewCreateViewPayload[];
   executionMode?: "late_fusion_v1" | "joint_tracking_v2";
@@ -830,6 +832,8 @@ export async function createMultiviewAnalysisJob(request: MultiviewAnalysisJobRe
     body: JSON.stringify({
       metadata: request.metadata,
       frameStride: request.frameStride ?? 2,
+      enableModelInference: request.enableModelInference,
+      enablePoseInference: request.enablePoseInference,
       clipStartMs: request.clipStartMs,
       clipEndMs: request.clipEndMs,
       analysisKind: "multiview",
@@ -1134,7 +1138,7 @@ export async function getFusedPlayerOverlay(
   result: AnalysisPipelineResult,
 ): Promise<FusedPlayerOverlayArtifact | null> {
   const path = result.artifacts.fused_player_overlay_url;
-  return path ? requestJson<FusedPlayerOverlayArtifact>(path) : null;
+  return path ? requestJson<FusedPlayerOverlayArtifact>(`${path}${path.includes("?") ? "&" : "?"}playback=true`) : null;
 }
 
 export async function getFourPlayerIdentificationQuality(
@@ -1162,7 +1166,7 @@ export async function getPlayerDisplayDiagnostics(
 
 export async function getPoseOverlay(result: AnalysisPipelineResult): Promise<PoseOverlayArtifact | null> {
   const path = result.artifacts.pose_overlay_url;
-  return path ? requestJson<PoseOverlayArtifact>(path) : null;
+  return path ? requestJson<PoseOverlayArtifact>(`${path}${path.includes("?") ? "&" : "?"}playback=true`) : null;
 }
 
 export async function getServeEvents(result: AnalysisPipelineResult): Promise<ServeEventsArtifact | null> {
