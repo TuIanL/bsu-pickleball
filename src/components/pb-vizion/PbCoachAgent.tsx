@@ -43,8 +43,8 @@ function ToolCallRow({ call }: { call: CoachToolCall }) {
         ) : (
           <Check size={12} className="text-[var(--pb-success)]" aria-hidden="true" />
         )}
-        <span className="text-[11px] font-bold text-[var(--pb-text-primary)]">{call.title}</span>
-        <span className="min-w-0 truncate text-[10.5px] text-[var(--pb-text-muted)]">{call.argument}</span>
+        <span className="shrink-0 text-[11px] font-bold text-[var(--pb-text-primary)]">{call.title}</span>
+        <span className="min-w-0 flex-1 truncate text-[10.5px] text-[var(--pb-text-muted)]">{call.argument}</span>
       </div>
       {call.result ? (
         <p className="mt-0.5 pl-[18px] text-[10.5px] leading-[1.4] text-[var(--pb-text-secondary)]">{call.result}</p>
@@ -242,9 +242,9 @@ export default function PbCoachAgent({
         </span>
       </div>
 
-      <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1.16fr)_minmax(0,0.84fr)]">
+      <div className="grid min-w-0 grid-cols-1 gap-4 p-5 lg:grid-cols-[minmax(0,1.16fr)_minmax(0,0.84fr)]">
         {/* 左：对话 */}
-        <div className="flex min-h-[420px] flex-col">
+        <div className="flex min-h-[420px] min-w-0 flex-col">
           <div ref={scrollRef} className="max-h-[430px] min-h-[300px] flex-1 space-y-3 overflow-y-auto pr-1">
             {messages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-[var(--pb-card-border)] bg-[var(--pb-page-bg)]/60 p-4">
