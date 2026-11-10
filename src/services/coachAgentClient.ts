@@ -24,7 +24,9 @@ import type {
 export type CoachAgentMode = "demo" | "live";
 
 /** 与 analysisClient 保持同一后端入口：dev 下由 vite 代理到 127.0.0.1:8000 并注入 token */
-const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "/__analysis_api";
+const API_BASE_URL = (
+  import.meta.env.VITE_COACH_API_URL ?? import.meta.env.VITE_ANALYSIS_API_URL ?? "/__analysis_api"
+).replace(/\/$/, "");
 
 /** 默认走真实模型；显式设置 VITE_COACH_AGENT_MODE=demo 可退回本地剧本 */
 export const coachAgentDefaultMode: CoachAgentMode =
@@ -149,14 +151,19 @@ async function* streamLiveTurn(
     signal,
   });
   if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null) as { detail?: unknown } | null;
+    const cloudDetail = typeof body?.detail === "string" ? body.detail : null;
     // 503 通常表示本地代理缺 PICKLEBALL_API_TOKEN；404 表示后端未启动
     const hint =
-      response.status === 503
+      cloudDetail ?? (response.status === 503
         ? "本地代理未配置访问令牌，请用 npm run app:start 启动"
         : response.status === 404
           ? "后端未启动或未注册教学助教路由"
-          : "请检查后端日志";
+          : "请检查后端日志");
     throw new Error(`教学助教接口返回 ${response.status}（${hint}）`);
+  }
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    throw new Error("教学助教地址未返回模型事件流，请检查云端接口配置。");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

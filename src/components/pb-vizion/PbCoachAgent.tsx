@@ -195,7 +195,7 @@ export default function PbCoachAgent({
         <div className="flex items-center gap-2">
           <div
             className="flex items-center rounded-lg border border-[var(--pb-card-border)] p-0.5 text-[10.5px] font-semibold"
-            title="模型模式：调用 DeepSeek V4.1-Flash 并执行工具；演示模式：回放本地剧本"
+            title="模型模式：调用在线大模型并执行工具；演示模式：回放本地剧本"
           >
             {([
               { key: "live" as const, label: "模型" },
@@ -204,6 +204,7 @@ export default function PbCoachAgent({
               <button
                 key={item.key}
                 type="button"
+                aria-pressed={mode === item.key}
                 onClick={() => switchMode(item.key)}
                 className={
                   mode === item.key

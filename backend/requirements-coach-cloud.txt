@@ -1,0 +1,4 @@
+# Teaching API only: video inference dependencies are intentionally separate.
+fastapi>=0.115,<1
+httpx>=0.27,<0.29
+uvicorn[standard]>=0.30,<1

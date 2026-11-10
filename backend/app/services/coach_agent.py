@@ -225,11 +225,16 @@ async def stream_coach_chat(payload: dict[str, Any], signal: Any = None) -> Asyn
                     json={**body_base, "messages": messages},
                 ) as response:
                     if response.status_code >= 400:
-                        raw = await response.aread()
-                        detail = raw.decode("utf-8", "ignore")[:300]
+                        await response.aread()
+                        hint = {
+                            400: "请检查服务端模型配置",
+                            401: "服务端模型凭证不可用",
+                            402: "模型账户余额不足",
+                            429: "模型请求频繁，请稍后重试",
+                        }.get(response.status_code, "模型服务暂时不可用，请稍后重试")
                         yield {
                             "type": "error",
-                            "message": f"模型接口返回 {response.status_code}：{detail}",
+                            "message": f"模型接口返回 {response.status_code}：{hint}",
                         }
                         return
 
@@ -275,7 +280,7 @@ async def stream_coach_chat(payload: dict[str, Any], signal: Any = None) -> Asyn
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
             except httpx.HTTPError as error:
-                yield {"type": "error", "message": f"模型请求失败：{error.__class__.__name__} {error}"}
+                yield {"type": "error", "message": f"模型请求失败：{error.__class__.__name__}，请稍后重试"}
                 return
 
             if text_buffer:
