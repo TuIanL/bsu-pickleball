@@ -130,6 +130,39 @@ def wrist_speed_series(kp: np.ndarray, visible: np.ndarray, t: np.ndarray, idx: 
     return speed
 
 
+def shoulder_angle_series(kp: np.ndarray, vis: np.ndarray, names: list[str]) -> np.ndarray:
+    """肩线朝向角（度，图像坐标）。用于衡量挥拍时的躯干转动。"""
+    if "left_shoulder" not in names or "right_shoulder" not in names:
+        return np.full(kp.shape[0], np.nan)
+    li, ri = names.index("left_shoulder"), names.index("right_shoulder")
+    out = np.full(kp.shape[0], np.nan)
+    for i in range(kp.shape[0]):
+        if not (vis[i][li] and vis[i][ri]):
+            continue
+        dx = kp[i][li][0] - kp[i][ri][0]
+        dy = kp[i][li][1] - kp[i][ri][1]
+        if np.isfinite(dx) and np.isfinite(dy):
+            out[i] = math.degrees(math.atan2(dy, dx))
+    return out
+
+
+def angle_delta_deg(a: float, b: float) -> float:
+    """两个角度之间的最小夹角（度）。"""
+    if not (np.isfinite(a) and np.isfinite(b)):
+        return float("nan")
+    d = abs(a - b) % 360.0
+    return 360.0 - d if d > 180.0 else d
+
+
+def value_at(t: np.ndarray, series: np.ndarray, target: float, tol: float) -> float:
+    """取距目标时刻最近的有效值；超出容差返回 NaN。"""
+    idx = np.where(np.isfinite(series))[0]
+    if not len(idx):
+        return float("nan")
+    j = idx[np.argmin(np.abs(t[idx] - target))]
+    return float(series[j]) if abs(t[j] - target) <= tol else float("nan")
+
+
 def detect_swings(speed: np.ndarray, t: np.ndarray, threshold: float, prominence_floor: float):
     """局部极大 + 显著度 + 非极大抑制，返回 (时间, 峰值) 列表。"""
     peaks = []
@@ -215,6 +248,12 @@ def main() -> int:
     ap.add_argument("--min-bbox-height", type=float, default=150.0, help="最小可用人体框高 px")
     ap.add_argument("--min-peak", type=float, default=MIN_NORMALIZED_PEAK,
                     help="归一化腕速峰值下限 px/s")
+    ap.add_argument("--min-impulse", type=float, default=0.45,
+                    help="峰后 0.35s 内的速度回落比例下限（1 - 谷值/峰值）")
+    ap.add_argument("--min-dominance", type=float, default=1.5,
+                    help="持拍腕速与另一腕速之比下限")
+    ap.add_argument("--min-torso-deg", type=float, default=8.0,
+                    help="峰前后各 0.2s 的肩线转角下限（度）")
     args = ap.parse_args()
 
     features_mod, RawPoseSample = load_feature_module()
@@ -232,6 +271,7 @@ def main() -> int:
 
     rows = []
     diagnostics = []
+    gate_rejects: dict[str, int] = defaultdict(int)
     for track_id, bucket in tracks.items():
         frame_index = np.array(bucket["frame"], dtype=int)
         ts = np.array(bucket["t"], dtype=float)
@@ -272,14 +312,55 @@ def main() -> int:
             continue
         thr = max(float(np.percentile(finite, SPEED_PERCENTILE)), args.min_peak)
         prominence = PROMINENCE_RATIO * float(np.nanmedian(finite))
-        peaks = detect_swings(combined, ts, thr, prominence)
-        if not peaks:
+        raw_peaks = detect_swings(combined, ts, thr, prominence)
+        if not raw_peaks:
             diagnostics.append({"track_id": track_id, "skipped": "no_swing_detected",
                                 "bbox_height_median": round(track_h, 1),
                                 "threshold_norm_px_s": round(thr, 1)})
             continue
 
-        for k, (contact_t, peak_speed) in enumerate(peaks):
+        # 三个判别器：冲量形态、双腕主导、肩线转动
+        shoulder = shoulder_angle_series(kp, vis, names)
+        sides = list(series)
+        peaks = []
+        rejected = defaultdict(int)
+        for contact_t, peak_speed in raw_peaks:
+            i_peak = int(np.argmin(np.abs(ts - contact_t)))
+            tail_n = max(1, int(round(0.35 * fps)))
+            tail = combined[i_peak:i_peak + tail_n]
+            tail = tail[np.isfinite(tail)]
+            impulse = 1.0 - (float(tail.min()) / peak_speed) if len(tail) and peak_speed > 0 else 0.0
+            vals = [float(series[s][i_peak]) for s in sides if np.isfinite(series[s][i_peak])]
+            if len(vals) >= 2:
+                ordered = sorted(vals, reverse=True)
+                dominance = ordered[0] / max(ordered[1], 1.0)
+            else:
+                dominance = float("inf")
+            torso = angle_delta_deg(
+                value_at(ts, shoulder, contact_t + 0.2, 0.15),
+                value_at(ts, shoulder, contact_t - 0.2, 0.15),
+            )
+            if impulse < args.min_impulse:
+                rejected["impulse"] += 1
+                continue
+            if np.isfinite(dominance) and dominance < args.min_dominance:
+                rejected["dominance"] += 1
+                continue
+            if np.isfinite(torso) and torso < args.min_torso_deg:
+                rejected["torso"] += 1
+                continue
+            peaks.append((contact_t, peak_speed, impulse, dominance, torso))
+
+        for gate_name, count in rejected.items():
+            gate_rejects[gate_name] += count
+
+        if not peaks:
+            diagnostics.append({"track_id": track_id, "skipped": "gated_out",
+                                "bbox_height_median": round(track_h, 1),
+                                "rejected": dict(rejected)})
+            continue
+
+        for k, (contact_t, peak_speed, impulse, dominance, torso) in enumerate(peaks):
             t0 = max(ts[0], contact_t - args.pre)
             t1 = min(ts[-1], contact_t + args.post)
             built = build_window_sample(RawPoseSample, bucket, names, halpe_index,
@@ -299,6 +380,9 @@ def main() -> int:
                 "side": side,
                 "threshold_norm_px_s": round(thr, 1),
                 "peak_speed_norm_px_s": round(peak_speed, 1),
+                "impulse_ratio": round(impulse, 3),
+                "wrist_dominance": round(dominance, 3) if np.isfinite(dominance) else None,
+                "torso_rotation_deg": round(torso, 1) if np.isfinite(torso) else None,
                 "bbox_height_px": round(bbox_h, 1),
                 "scale_factor": round(scale, 4),
                 "n_frames": int(sample.keypoints.shape[0]),
@@ -326,6 +410,7 @@ def main() -> int:
         "n_tracks": len(tracks),
         "n_windows": len(rows),
         "n_tracks_with_windows": len({r["track_id"] for r in rows}),
+        "gate_rejects": dict(gate_rejects),
         "windows_per_track": {str(k): v for k, v in
                               __import__("collections").Counter(r["track_id"] for r in rows).items()},
         "bbox_height_px": {"median": round(float(np.median(bbox_hs)), 1),
@@ -335,8 +420,10 @@ def main() -> int:
                          "min": round(float(scales.min()), 3),
                          "max": round(float(scales.max()), 3)},
         "params": {"pre_s": args.pre, "post_s": args.post, "nms_s": NMS_SECONDS,
-                   "speed_percentile": SPEED_PERCENTILE, "min_normalized_peak": MIN_NORMALIZED_PEAK,
+                   "speed_percentile": SPEED_PERCENTILE, "min_normalized_peak": args.min_peak,
                    "prominence_ratio": PROMINENCE_RATIO, "min_bbox_height": args.min_bbox_height,
+                   "min_impulse": args.min_impulse, "min_dominance": args.min_dominance,
+                   "min_torso_deg": args.min_torso_deg,
                    "train_reference_bbox_px": TRAIN_REFERENCE_BBOX_PX},
         "diagnostics": diagnostics,
     }
