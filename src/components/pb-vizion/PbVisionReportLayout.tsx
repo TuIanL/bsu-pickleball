@@ -69,13 +69,15 @@ const PbLegalThirds = lazy(() =>
 );
 
 // 主内容区域（读取 drawerOpen 决定 padding）
-function MainContentInner() {
+function MainContentInner({ topSlot }: { topSlot?: ReactNode }) {
   const { drawerOpen } = usePbReport();
   const pl = drawerOpen ? "pl-[260px]" : "pl-0";
 
   return (
     <div className={"min-h-screen transition-[padding] duration-200 " + pl}>
       <div className="max-w-[1400px] mx-auto px-6 py-8 flex flex-col gap-6">
+        {/* 页首插槽：教学助教等需要与抽屉联动缩进的外部模块 */}
+        {topSlot}
         {/* 7.1 按顺序渲染：顶卡 → 3D Court → Filter → Skill Rating → 两列栅格 → 两列栅格 */}
         <Suspense fallback={<AsyncPlaceholder title="球员顶卡" />}>
           <PbPlayerHeaderCard />
@@ -121,8 +123,10 @@ function MainContentInner() {
 export default function PbVisionReportLayout(props: {
   report: AnalysisReport;
   trajectoryArtifact?: ReconstructedBallTrajectoryArtifact | null;
+  /** 报告页页首插槽（教学助教面板等），随球员抽屉折叠联动缩进 */
+  topSlot?: ReactNode;
 }) {
-  const { report, trajectoryArtifact } = props;
+  const { report, trajectoryArtifact, topSlot } = props;
   return (
     <PbReportProvider report={report} trajectoryArtifact={trajectoryArtifact}>
       <div
@@ -131,7 +135,7 @@ export default function PbVisionReportLayout(props: {
       >
         <PbPlayerDrawer />
         <PbDrawerExpander />
-        <MainContentInner />
+        <MainContentInner topSlot={topSlot} />
       </div>
     </PbReportProvider>
   );

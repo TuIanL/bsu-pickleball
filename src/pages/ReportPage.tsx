@@ -21,6 +21,8 @@ import { isPipelineResult } from "../services/pipelineReportAdapter";
 import { PerformanceInsightsPanel } from "../components/platform/PerformanceInsightsPanel";
 import { formatDateTime, toneStyles, errorToNotice } from "../utils/analysisHelpers";
 import PbVisionReportLayout from "../components/pb-vizion/PbVisionReportLayout";
+import PbCoachAgent from "../components/pb-vizion/PbCoachAgent";
+import PbCoachAgentStandalone from "../components/pb-vizion/PbCoachAgentStandalone";
 import { getReportCapability } from "../services/reportCapability";
 
 function useJobReport(jobId?: string) {
@@ -227,7 +229,27 @@ export function ReportPage({
 
   // —— 默认：渲染 PB Vision 风格（新布局）
   if (!useLegacyLayout) {
-    return <PbVisionReportLayout report={analysis} trajectoryArtifact={trajectoryArtifact ?? null} />;
+    const playerSubjects = (analysis.performanceInsights?.subjects ?? []).filter((item) => item.kind === "player");
+
+    // 没有可报告球员时（样例报告 / 未完成球员确认），仍保留教学助教入口，避免整页只剩一句空态
+    if (!playerSubjects.length) {
+      return (
+        <div
+          className="pb-vision-theme min-h-screen w-full"
+          style={{ background: "var(--pb-page-bg, #f0f4f2)" }}
+        >
+          <PbCoachAgentStandalone report={analysis} />
+        </div>
+      );
+    }
+
+    return (
+      <PbVisionReportLayout
+        report={analysis}
+        trajectoryArtifact={trajectoryArtifact ?? null}
+        topSlot={<PbCoachAgent report={analysis} />}
+      />
+    );
   }
 
   // —— legacy=true：渲染旧布局（深绿风格）
