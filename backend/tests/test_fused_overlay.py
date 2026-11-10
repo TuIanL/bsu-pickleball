@@ -138,6 +138,38 @@ def _make_bundle(
 # ===========================================================================
 
 
+def test_builder_retains_target_source_frame_separately_from_reference_index():
+    from dataclasses import replace
+    tick = _make_tick(observations=(
+        ("global_player_1", "cam_1", _make_state()),
+        ("global_player_1", "cam_2", replace(_make_state(), source_frame_index=8)),
+    ))
+    snapshot = F0RefinementSnapshot(ticks=(tick,), global_player_ids=("global_player_1",))
+    bundle = _make_bundle(f0_snapshot=snapshot)
+    frames = FusedPlayerOverlayBuilder().build(bundle=bundle, target_view_id="cam_2")
+    assert frames[0].frame_index == 10
+    assert frames[0].source_frame_index == 8
+    payload = build_fused_player_overlay_payload(
+        job_id="j", video_id="v", reference_view_id="cam_2", frame_size=None, frames=frames,
+    )
+    assert payload["frames"][0]["source_frame_index"] == 8
+
+
+def test_real_detection_replaces_small_guided_box_before_pose_cropping():
+    small = (100., 260., 120., 320.)
+    full = (80., 110., 150., 320.)
+    snapshot = F0RefinementSnapshot(global_player_ids=("global_player_1",), ticks=(
+        _make_tick(observations=(("global_player_1", "cam_1", _make_state(origin="guided_roi", bbox=small)),)),
+        _make_tick(canonical_tick=2, reference_frame_index=12, canonical_timestamp_ms=1033.,
+            observations=(("global_player_1", "cam_1", _make_state(origin="base", bbox=full, mapped_take_timestamp_ms=1033.)),)),
+    ))
+    frames = FusedPlayerOverlayBuilder().build(bundle=_make_bundle(f0_snapshot=snapshot))
+    assert frames[0].players[0].bbox == list(small)
+    assert frames[1].players[0].bbox == list(full)
+    assert frames[1].players[0].evidence_type == 'base_observed'
+    assert frames[1].players[0].display_reason is None
+
+
 class TestContractSchema:
     def test_valid_payload(self) -> None:
         payload = build_fused_player_overlay_payload(

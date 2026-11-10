@@ -61,13 +61,25 @@ def build(views, estimator=None, **kwargs):
 
 def test_pose_uses_each_views_source_frame_with_shared_canonical_time_and_identity():
     estimator = Estimator()
-    artifact = build({"cam_1": view(10, [player()]), "cam_2": view(8, [player()])}, estimator)
+    views = {"cam_1": view(10, [player()]), "cam_2": view(10, [player()])}
+    views["cam_2"]["frames"][0]["source_frame_index"] = 8
+    artifact = build(views, estimator)
     assert [c[0] for c in estimator.calls] == [10, 8]
     assert [c[2] for c in estimator.calls] == [30., 30.]
     assert [c[1][0].track_id for c in estimator.calls] == ["cam_1:Player_1", "cam_2:Player_1"]
     assert artifact["frames"][0]["subjects"][0]["track_id"] == "Player_1"
     assert artifact["views"]["cam_2"]["frames"][0]["frame_index"] == 8
     assert artifact["views"]["cam_2"]["frames"][0]["subjects"][0]["track_id"] == "Player_1"
+
+
+def test_pose_missing_source_index_never_infers_on_reference_camera_frame():
+    estimator = Estimator()
+    camera = view(10, [player()])
+    camera["frames"][0]["source_frame_index"] = None
+    artifact = build({"cam_1": camera}, estimator)
+    assert not estimator.calls
+    assert artifact["frames"][0]["subjects"] == []
+    assert artifact["timing_provenance"]["counters"]["source_frame_missing"] == 1
 
 
 @pytest.mark.parametrize("evidence,pid", [

@@ -247,6 +247,39 @@ def test_anchor_follows_raw_track_from_candidate_to_formal_with_changed_local_la
     assert run._frozen_anchor_audit["Player_1"]["track_id"] == 293
 
 
+def test_unaccepted_later_anchor_match_preserves_confirmation_but_explicit_conflict_does_not():
+    from dataclasses import replace
+    from app.vision.multiview.association_global import AssociationUpdate
+    anchor=RosterAnchor(player_id='Player_1',team_id='A',end='end_a',view_id='cam_1',
+        timestamp_ms=100000,bbox=(100.,100.,160.,260.),canonical_xy=(5.,5.),candidate_id=None)
+    run=_anchor_run((anchor,))
+    obs=JointObservation('cam_1',6000,100000,5.,5.,source_timestamp_ms=100000,
+        bbox=[100.,100.,160.,260.],track_id=293)
+    run._process_frozen_roster_anchors(observations=[obs],
+        accepted_updates=[AssociationUpdate('g1','cam_1',obs,.9)],take_timestamp_ms=100000)
+    confirmed=dict(run._frozen_anchor_audit['Player_1'])
+    assert confirmed['confirmed']
+    run._process_frozen_roster_anchors(observations=[obs],accepted_updates=[],take_timestamp_ms=100000)
+    assert run._frozen_anchor_audit['Player_1']==confirmed
+    # The same confirmed global lineage may change court ends later (handshake).
+    # Its historical anchor must not be rechecked against the current end.
+    run.registry.confirm_frozen_identity=lambda *args,**kwargs:(False,'anchor_global_end_conflict')
+    late=replace(obs,source_frame_index=6900,take_timestamp_ms=115000,source_timestamp_ms=115000)
+    run._process_frozen_roster_anchors(observations=[late],
+        accepted_updates=[AssociationUpdate('g1','cam_1',late,.9)],take_timestamp_ms=115000)
+    assert run._frozen_anchor_audit['Player_1']==confirmed
+    # Raw tracker IDs can be recycled after the simultaneous anchor window.
+    # Their later owner is not evidence against the earlier witnessed identity.
+    run._process_frozen_roster_anchors(observations=[late],
+        accepted_updates=[AssociationUpdate('g2','cam_1',late,.9)],take_timestamp_ms=115000)
+    assert run._frozen_anchor_audit['Player_1']==confirmed
+    run.registry.confirm_frozen_identity=lambda *args,**kwargs:(False,'frozen_player_already_bound')
+    run._process_frozen_roster_anchors(observations=[obs],
+        accepted_updates=[AssociationUpdate('g2','cam_1',obs,.9)],take_timestamp_ms=100000)
+    assert not run._frozen_anchor_audit['Player_1']['confirmed']
+    assert run._frozen_anchor_audit['Player_1']['reason']=='frozen_player_already_bound'
+
+
 def test_distinct_raw_tracks_reusing_one_player_label_keep_separate_anchor_keys():
     anchors = tuple(
         RosterAnchor(

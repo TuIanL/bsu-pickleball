@@ -5,6 +5,7 @@ import type { NavigateFn } from "../app/navigationTypes";
 
 const mocks = vi.hoisted(() => ({
   getCaptureTake: vi.fn(),
+  getCurrentMetricCourtScene: vi.fn(),
   getMetricCourtSceneDraft: vi.fn(),
   saveMetricCourtSceneDraft: vi.fn(),
   validateMetricCourtScene: vi.fn(),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../services/analysisClient", () => ({
   getCaptureTake: mocks.getCaptureTake,
+  getCurrentMetricCourtScene: mocks.getCurrentMetricCourtScene,
   getMetricCourtSceneDraft: mocks.getMetricCourtSceneDraft,
   saveMetricCourtSceneDraft: mocks.saveMetricCourtSceneDraft,
   validateMetricCourtScene: mocks.validateMetricCourtScene,
@@ -188,6 +190,8 @@ describe("MultiViewAnalysisSetupPage", () => {
 
   beforeEach(() => {
     mocks.getCaptureTake.mockReset();
+    mocks.getCurrentMetricCourtScene.mockReset();
+    mocks.getCurrentMetricCourtScene.mockResolvedValue(null);
     mocks.getMetricCourtSceneDraft.mockReset();
     mocks.saveMetricCourtSceneDraft.mockReset();
     mocks.validateMetricCourtScene.mockReset();

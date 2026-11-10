@@ -47,6 +47,7 @@ it("renders poses and 2D ball observations from the selected camera only", () =>
   };
   const ball: BallTrajectoryArtifact = {
     schema_version: "ball_trajectory.v1", job_id: "j", status: "available", detail: "ball",
+    coordinate_system: { court: "unavailable_2d_only" },
     samples: [{ frame_index: 0, timestamp_sec: 0, image_xy: [120, 30], accepted: true }],
     reference_view_id: "cam_1", views: { cam_2: {
       status: "available", detail: "secondary", samples: [{ frame_index: 0, timestamp_sec: 0, image_xy: [720, 40], accepted: true }],
@@ -56,6 +57,8 @@ it("renders poses and 2D ball observations from the selected camera only", () =>
     labels={emptyLabels} match={match} players={emptyPlayers} timeline={emptyTimeline}
     videoSrc="/test.mp4" displayViewId="cam_2" poseOverlay={pose} poseOverlayLoadState="available"
     ballTrajectory={ball} ballTrajectoryLoadState="available"
+    reconstructedBallTrajectory={{ schema_version: "unavailable", job_id: "j", status: "unavailable",
+      detail: "3D disabled", reconstruction_mode: "unavailable", events: [], segments: [] }}
   />);
   expect(container.querySelector('circle[fill="#D9FF3F"]')?.getAttribute("cx")).toBe("700");
   expect(within(container).getByTestId("video-ball-current").querySelector("circle")?.getAttribute("cx")).toBe("720");
@@ -66,6 +69,32 @@ it("renders poses and 2D ball observations from the selected camera only", () =>
   />);
   expect(container.querySelector('circle[fill="#D9FF3F"]')).toBeNull();
   expect(within(container).queryByTestId("video-ball-current")).toBeNull();
+});
+
+it("hides a missing measured ball immediately and keeps gaps out of its historical trail", () => {
+  const ball: BallTrajectoryArtifact = {
+    schema_version:"ball_trajectory.v1",job_id:"j",status:"available",detail:"2D",
+    coordinate_system:{court:"unavailable_2d_only"},samples:[
+      {frame_index:0,timestamp_sec:0,image_xy:[10,20],accepted:true},
+      {frame_index:2,timestamp_sec:.033333,image_xy:[20,20],accepted:true},
+      {frame_index:4,timestamp_sec:.066667,image_xy:null,accepted:false},
+      {frame_index:8,timestamp_sec:.133333,image_xy:[50,20],accepted:true},
+    ],
+  };
+  const {container}=render(<VideoAnalysisCard labels={emptyLabels} match={match} players={emptyPlayers}
+    timeline={emptyTimeline} videoSrc="/test.mp4" ballTrajectory={ball} ballTrajectoryLoadState="available" />);
+  const video=container.querySelector('video')!;
+  video.currentTime=.04;fireEvent.seeked(video);
+  expect(within(container).getByTestId('video-ball-current')).toBeTruthy();
+  video.currentTime=.07;fireEvent.seeked(video);
+  expect(within(container).queryByTestId('video-ball-current')).toBeNull();
+  expect(within(container).getByText(/球层无当前点/)).toBeTruthy();
+  video.currentTime=.14;fireEvent.seeked(video);
+  expect(within(container).getByTestId('video-ball-current').querySelector('circle')?.getAttribute('cx')).toBe('50');
+  // One segment for the first two observations; none bridges the missing frame.
+  expect(container.querySelectorAll('line[stroke="#D9FF3F"]')).toHaveLength(1);
+  video.currentTime=.20;fireEvent.seeked(video);
+  expect(within(container).queryByTestId('video-ball-current')).toBeNull();
 });
 
 function makeTrackOverlay(
@@ -101,6 +130,32 @@ function makeTrackOverlay(
 }
 
 describe("VideoAnalysisCard detection labels", () => {
+  it("keeps the current playhead when initial-seek callbacks refresh and when switching cameras", async () => {
+    function Harness() {
+      const [view,setView]=useState('cam_1');
+      return <VideoAnalysisCard labels={emptyLabels} match={match} players={emptyPlayers} timeline={emptyTimeline}
+        videoSrc={view==='cam_1'?'/a.mp4':'/b.mp4'} displayViewId={view} seekToMs={30000}
+        displayTimeMapping={{offsetMs:view==='cam_1'?0:-36,rate:1}}
+        displayViewOptions={[{id:'cam_1',label:'A 机位',available:true},{id:'cam_2',label:'B 机位',available:true}]}
+        onDisplayViewChange={setView} autoRallySegments={[]} />;
+    }
+    const {container}=render(<Harness />);
+    let video=container.querySelector('video')!;
+    Object.defineProperty(video,'duration',{configurable:true,value:600});
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(30);
+    video.currentTime=37;fireEvent.seeking(video);
+    fireEvent.click(within(container).getByRole('button',{name:'B 机位'}));
+    await waitFor(()=>expect(container.querySelector('video')?.getAttribute('src')).toBe('/b.mp4'));
+    video=container.querySelector('video')!;
+    Object.defineProperty(video,'duration',{configurable:true,value:600});
+    fireEvent.loadedMetadata(video);fireEvent.seeked(video);
+    expect(video.currentTime).toBeCloseTo(36.964,3);
+    // Metadata/callback refresh must not reapply the original 30-second start.
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBeCloseTo(36.964,3);
+  });
+
   it("keeps the optional rally controls absent for existing call sites", () => {
     const { container } = render(
       <VideoAnalysisCard labels={emptyLabels} match={match} players={emptyPlayers} timeline={emptyTimeline} videoSrc="/test.mp4" />,
@@ -486,6 +541,21 @@ describe("VideoAnalysisCard multiview display", () => {
       },
     };
   }
+
+  it("shows the first analyzed frame after browser quantization of the secondary-camera seek", () => {
+    const artifact=makeDualViewOverlay();
+    artifact.frames[0].timestamp_seconds=30;
+    for(const view of Object.values(artifact.views ?? {}))view.frames[0].timestamp_seconds=30;
+    const {container}=render(<VideoAnalysisCard labels={emptyLabels} match={match} players={emptyPlayers}
+      timeline={emptyTimeline} videoSrc="/b.mp4" displayViewId="cam_2" seekToMs={30000}
+      displayTimeMapping={{offsetMs:-36.478568515576626,rate:.9999993182325252}}
+      fusedPlayerOverlay={artifact} fusedPlayerOverlayLoadState="available" />);
+    const video=container.querySelector('video')!;
+    fireEvent.loadedMetadata(video);
+    video.currentTime=29.9635;fireEvent.seeked(video);
+    expect(within(container).getByTestId('fused-player-Player_1')).toBeTruthy();
+    expect(container.textContent).toContain('00:30');
+  });
 
   it("switches Player overlay and minimap together to the selected view", () => {
     function Harness() {

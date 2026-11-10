@@ -1,0 +1,18 @@
+[
+  {
+    "artifact": "fused-player-overlay",
+    "metadata_bytes": 1217,
+    "metadata_seconds": 0.063,
+    "cam_2_chunk_bytes": 2244577,
+    "chunk_seconds": 0.062,
+    "frames": 600
+  },
+  {
+    "artifact": "pose-overlay",
+    "metadata_bytes": 2678,
+    "metadata_seconds": 0.047,
+    "cam_2_chunk_bytes": 3506260,
+    "chunk_seconds": 0.063,
+    "frames": 300
+  }
+]

@@ -1,5 +1,6 @@
 import { Bone, Box, CircleDot, CirclePause, Diamond, FastForward, Map, Maximize2, Minimize2, Pause, Play, Route, Ruler, Volume2, VolumeX } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
+import { useOverlayPlayback } from "../../hooks/useOverlayPlayback";
 import type {
   BallTrajectoryArtifact,
   BounceEventsArtifact,
@@ -486,6 +487,7 @@ function RealVideoOverlay({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const seekAppliedRef = useRef(false);
+  const lastExplicitSeekMsRef = useRef<number | undefined>(undefined);
   const pendingDisplaySwitchRef = useRef<{
     canonicalSeekMs: number;
     resumePlayback: boolean;
@@ -523,7 +525,9 @@ function RealVideoOverlay({
   const mappingOffsetSeconds = Number(displayTimeMapping?.offsetMs ?? 0) / 1000;
   const mappingRate = Number(displayTimeMapping?.rate ?? 1) > 0 ? Number(displayTimeMapping?.rate ?? 1) : 1;
   // Player/球路/小地图都消费 canonical 时间；video.currentTime 仍是目标媒体时间。
-  const canonicalTime = sourceTimeToCanonicalTimeMs(currentTime * 1000, displayTimeMapping) / 1000;
+  // Media currentTime is quantized by the browser. Round to milliseconds so a
+  // mapped 29.999999s does not hide the first 30s frame or select the old shard.
+  const canonicalTime = Math.round(sourceTimeToCanonicalTimeMs(currentTime * 1000, displayTimeMapping)) / 1000;
   const canonicalToSourceSeconds = React.useCallback(
     (value: number) => canonicalTimeToSourceTimeMs(value * 1000, { offsetMs: mappingOffsetSeconds * 1000, rate: mappingRate }) / 1000,
     [mappingOffsetSeconds, mappingRate],
@@ -578,20 +582,23 @@ function RealVideoOverlay({
       : null);
   }, [activeRallyCause, activeRallyId, activeRallyOrdinal, onActiveRallyChange]);
 
+  const fusedPlayback = useOverlayPlayback(fusedPlayerOverlay, displayViewId, canonicalTime);
+  const posePlayback = useOverlayPlayback(poseOverlay, displayViewId, canonicalTime);
   const selectedFusedOverlay = useMemo(() => {
-    if (!fusedPlayerOverlay) return null;
-    const target = displayViewId ?? fusedPlayerOverlay.reference_view_id;
-    if (target === fusedPlayerOverlay.reference_view_id) return fusedPlayerOverlay;
-    return fusedPlayerOverlay.views?.[target] ?? null;
-  }, [displayViewId, fusedPlayerOverlay]);
+    const overlay = fusedPlayback.artifact;
+    if (!overlay) return null;
+    const target = displayViewId ?? overlay.reference_view_id;
+    if (target === overlay.reference_view_id) return overlay;
+    return overlay.views?.[target] ?? null;
+  }, [displayViewId, fusedPlayback.artifact]);
   const targetTrackingOverlay = displayViewId
     && fusedPlayerOverlay
     && displayViewId !== fusedPlayerOverlay.reference_view_id
     ? null
     : trackingOverlay;
   const selectedPoseOverlay = useMemo(
-    () => selectVisualOverlay(poseOverlay, displayViewId, fusedPlayerOverlay?.reference_view_id),
-    [poseOverlay, displayViewId, fusedPlayerOverlay?.reference_view_id],
+    () => selectVisualOverlay(posePlayback.artifact, displayViewId, fusedPlayerOverlay?.reference_view_id),
+    [posePlayback.artifact, displayViewId, fusedPlayerOverlay?.reference_view_id],
   );
   const selectedBallTrajectory = useMemo(
     () => selectVisualOverlay(ballTrajectory, trajectoryViewId ?? displayViewId, fusedPlayerOverlay?.reference_view_id),
@@ -624,7 +631,7 @@ function RealVideoOverlay({
   const netOverlayAvailable = Boolean(netOverlayPoints);
   // 加载优先级（spec multiview-fused-player-overlay）：joint 模式 fused overlay 优先，
   // 不可用/无数据时 fallback 到 trackingOverlay（单摄行为完全不变）。
-  const useFusedOverlay = Boolean(selectedFusedOverlay?.frames.length);
+  const useFusedOverlay = Boolean(fusedPlayerOverlay?.playback || selectedFusedOverlay?.frames.length);
   const fusedRenderFrame = useMemo(
     () => resolveFusedPlayerOverlayFrame(selectedFusedOverlay?.frames ?? [], canonicalTime),
     [selectedFusedOverlay, canonicalTime]
@@ -643,19 +650,26 @@ function RealVideoOverlay({
     : (detectionRenderFrame?.detections.length ?? 0);
   const skeletonCount = poseRenderFrame?.frame?.subjects.length ?? 0;
   const poseInGap = poseRenderFrame?.inGap ?? false;
+  // Basic 2D jobs deliberately publish no 3D reconstruction. Its unavailable
+  // placeholder must not suppress the measured points from the selected view.
+  const activeReconstructedBallTrajectory = selectedBallTrajectory?.coordinate_system?.court === "unavailable_2d_only"
+    ? null : reconstructedBallTrajectory;
   const hybridBallPathSegments = useMemo(
-    () => resolveHybridBallPathSegments(reconstructedBallTrajectory, canonicalTime, trajectoryViewId),
-    [canonicalTime, reconstructedBallTrajectory, trajectoryViewId],
+    () => resolveHybridBallPathSegments(activeReconstructedBallTrajectory, canonicalTime, trajectoryViewId),
+    [canonicalTime, activeReconstructedBallTrajectory, trajectoryViewId],
   );
   const ballPathSegments = useMemo(
     () => hybridBallPathSegments.length
       ? hybridBallPathSegments
-      : reconstructedBallTrajectory
+      : activeReconstructedBallTrajectory
         ? []
         : resolveBallPathSegments(selectedBallTrajectory, canonicalTime),
-    [selectedBallTrajectory, canonicalTime, hybridBallPathSegments, reconstructedBallTrajectory],
+    [selectedBallTrajectory, canonicalTime, hybridBallPathSegments, activeReconstructedBallTrajectory],
   );
   const ballSamples = useMemo(() => ballPathSegments.flat(), [ballPathSegments]);
+  const currentBallSamples = useMemo(() => selectedBallTrajectory?.coordinate_system?.court === "unavailable_2d_only"
+    ? resolveCurrentMeasuredBallSamples(selectedBallTrajectory, canonicalTime)
+    : ballSamples.slice(-1), [selectedBallTrajectory, canonicalTime, ballSamples]);
   const allBounceMarkers = useMemo(() => {
     if (!reconstructedBallTrajectory) return resolveBounceMarkers(bounceEvents);
     const viewId = resolveHybridRenderViewId(reconstructedBallTrajectory, trajectoryViewId);
@@ -669,7 +683,7 @@ function RealVideoOverlay({
     () => resolveVisibleBounceMarkers(allBounceMarkers, canonicalTime),
     [allBounceMarkers, canonicalTime]
   );
-  const ballCount = ballSamples.length;
+  const ballCount = currentBallSamples.length;
   const boxesAvailable = useFusedOverlay
     ? Boolean(selectedFusedOverlay?.frames.some((frame) => frame.players.length > 0))
     : Boolean(targetTrackingOverlay?.frames.some((frame) => frame.detections.length > 0));
@@ -677,12 +691,12 @@ function RealVideoOverlay({
   const ballAvailable = hasUsableHybridBallSamples(reconstructedBallTrajectory, trajectoryViewId) || hasUsableBallSamples(selectedBallTrajectory);
   const bounceAvailable = Boolean(allBounceMarkers.length);
   const trackingStatusLabel = useFusedOverlay
-    ? resolveLayerStatus(fusedPlayerOverlayLoadState, selectedFusedOverlay?.status ?? fusedPlayerOverlayStatus)
+    ? resolveLayerStatus(fusedPlayback.error ? "failed" : fusedPlayback.loading ? "loading" : fusedPlayerOverlayLoadState, selectedFusedOverlay?.status ?? fusedPlayerOverlayStatus)
     : resolveLayerStatus(trackingOverlayLoadState, trackingOverlay?.status ?? trackingOverlayStatus);
-  const poseStatusLabel = resolveLayerStatus(poseOverlayLoadState, selectedPoseOverlay?.status ?? (poseOverlay ? "unavailable" : poseOverlayStatus));
+  const poseStatusLabel = resolveLayerStatus(posePlayback.error ? "failed" : posePlayback.loading ? "loading" : poseOverlayLoadState, selectedPoseOverlay?.status ?? (poseOverlay ? "unavailable" : poseOverlayStatus));
   const ballStatusLabel = resolveLayerStatus(
     ballTrajectoryLoadState,
-    reconstructedBallTrajectory?.display_trajectory_status ?? selectedBallTrajectory?.status ?? (ballTrajectory ? "unavailable" : ballTrajectoryStatus),
+    activeReconstructedBallTrajectory?.display_trajectory_status ?? selectedBallTrajectory?.status ?? (ballTrajectory ? "unavailable" : ballTrajectoryStatus),
   );
   const bounceStatusLabel = resolveLayerStatus(bounceEventsLoadState, bounceEvents?.status ?? bounceEventsStatus);
   const trackingDetail = useFusedOverlay
@@ -693,7 +707,7 @@ function RealVideoOverlay({
   const poseDetail = poseOverlay && !selectedPoseOverlay ? "当前机位没有骨架观测" : layerDetail(poseOverlayLoadState, selectedPoseOverlay?.detail ?? poseOverlayDetail, "球员骨架");
   const ballDetail = layerDetail(
     ballTrajectoryLoadState,
-    reconstructedBallTrajectory?.detail ?? selectedBallTrajectory?.detail ?? ballTrajectoryDetail,
+    activeReconstructedBallTrajectory?.detail ?? selectedBallTrajectory?.detail ?? ballTrajectoryDetail,
     "球轨迹 layer",
   );
   const bounceDetail = layerDetail(bounceEventsLoadState, bounceEvents?.detail ?? bounceEventsDetail, "弹跳候选 marker");
@@ -828,11 +842,16 @@ function RealVideoOverlay({
       if (switchTargetIsMounted && pendingSwitch && pendingSwitch.source !== activeVideoSrc) {
         pendingSwitch.source = activeVideoSrc;
       }
-      const requestedSeekMs = seekToMs ?? (switchTargetIsMounted ? pendingSwitch?.canonicalSeekMs : undefined);
+      const requestedSeekMs = pendingSwitch
+        ? switchTargetIsMounted ? pendingSwitch.canonicalSeekMs : undefined
+        : lastExplicitSeekMsRef.current !== seekToMs ? seekToMs : undefined;
       if (requestedSeekMs !== undefined && !seekAppliedRef.current && requestedSeekMs >= 0) {
         seekAppliedRef.current = true;
         if (pendingSwitch) pendingSwitch.seekApplied = true;
-        if (seekToMs !== undefined) markUserNavigation(requestedSeekMs);
+        if (!pendingSwitch) {
+          lastExplicitSeekMsRef.current = seekToMs;
+          markUserNavigation(requestedSeekMs);
+        }
         const targetSeconds = canonicalToSourceSeconds(requestedSeekMs / 1000);
         const alreadyAtTarget = Math.abs(video.currentTime - targetSeconds) < 0.05;
         if (Number.isFinite(video.duration) && video.duration > 0) {
@@ -1152,7 +1171,7 @@ function RealVideoOverlay({
           );
         })) : null}
 
-        {showBallPoint ? ballSamples.slice(-1).map((sample) => {
+        {showBallPoint ? currentBallSamples.map((sample) => {
           const [x, y] = sample.image_xy;
           return (
             <g data-testid="video-ball-current" key={`${sample.frame_index}-${sample.timestamp_sec}`}>
@@ -1228,9 +1247,9 @@ function RealVideoOverlay({
             ))}
           </div>
         ) : null}
-        {displayViewNotice ? (
+        {displayViewNotice || fusedPlayback.error || posePlayback.error ? (
           <p className="absolute left-4 top-[7.8rem] z-20 max-w-[18rem] rounded-lg bg-black/55 px-2 py-1 text-[0.65rem] font-semibold text-[var(--ui-display-amber)]">
-            {displayViewNotice}
+            {fusedPlayback.error || posePlayback.error || displayViewNotice}
           </p>
         ) : null}
 
@@ -1384,7 +1403,7 @@ function RealVideoOverlay({
               {isMuted ? <VolumeX size={17} aria-hidden="true" /> : <Volume2 size={17} aria-hidden="true" />}
             </button>
             <span className="w-24 text-xs font-bold text-slate-200">
-              {formatSeconds(currentTime)} / {formatSeconds(duration)}
+              {formatSeconds(canonicalTime)} / {formatSeconds(canonicalDurationMs / 1000)}
             </span>
             <div className="relative flex-1">
               {autoRallyBandsEnabled ? (
@@ -1779,16 +1798,23 @@ function resolveBallPathSegments(
   currentTime: number,
 ): ImageBallSample[][] {
   const cutoff = currentTime - BALL_TRAIL_SECONDS;
+  const measured2D = ballTrajectory?.coordinate_system?.court === "unavailable_2d_only";
   const samples = (ballTrajectory?.samples ?? [])
-    .filter(hasImagePoint)
     .filter((sample) => sample.timestamp_sec >= cutoff && sample.timestamp_sec <= currentTime)
     .sort((left, right) => left.timestamp_sec - right.timestamp_sec);
   const segments: ImageBallSample[][] = [];
   let active: ImageBallSample[] = [];
 
   for (const sample of samples) {
+    if (!hasImagePoint(sample)) {
+      if (measured2D && active.length) {
+        segments.push(sampleBallPathEvenly(active, MAX_BALL_PATH_POINTS));
+        active = [];
+      }
+      continue;
+    }
     const previous = active.at(-1);
-    if (previous && sample.timestamp_sec - previous.timestamp_sec > BALL_PATH_GAP_SECONDS) {
+    if (previous && sample.timestamp_sec - previous.timestamp_sec > (measured2D ? .05 : BALL_PATH_GAP_SECONDS)) {
       if (active.length) segments.push(sampleBallPathEvenly(active, MAX_BALL_PATH_POINTS));
       active = [];
     }
@@ -1797,6 +1823,15 @@ function resolveBallPathSegments(
 
   if (active.length) segments.push(sampleBallPathEvenly(active, MAX_BALL_PATH_POINTS));
   return segments;
+}
+
+function resolveCurrentMeasuredBallSamples(artifact: BallTrajectoryArtifact, time: number): ImageBallSample[] {
+  // The trail is historical. An explicit missing frame must hide its old endpoint.
+  let latest: BallTrajectoryArtifact["samples"][number] | undefined;
+  for (const sample of artifact.samples) {
+    if (sample.timestamp_sec <= time + 1e-6 && (!latest || sample.timestamp_sec > latest.timestamp_sec)) latest = sample;
+  }
+  return latest && time - latest.timestamp_sec <= .05 && hasImagePoint(latest) ? [latest] : [];
 }
 
 function resolveBounceMarkers(bounceEvents: BounceEventsArtifact | null | undefined) {

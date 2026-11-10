@@ -1259,6 +1259,7 @@ export interface FusedPlayerOverlayEntity {
 
 export interface FusedPlayerOverlayFrame {
   frame_index: number;
+  source_frame_index?: number | null;
   timestamp_seconds: number;
   players: FusedPlayerOverlayEntity[];
   anonymous_observations?: Array<{
@@ -1279,7 +1280,16 @@ export interface FusedPlayerOverlayView {
   frames: FusedPlayerOverlayFrame[];
 }
 
+export interface OverlayPlaybackIndex {
+  schema_version: "overlay-playback.v1";
+  chunk_seconds: number;
+  generation: string;
+  url: string;
+  chunks: Record<string, number[]>;
+}
+
 export interface FusedPlayerOverlayArtifact {
+  playback?: OverlayPlaybackIndex;
   schema_version: "multiview-fused-player-overlay.v1" | "multiview-fused-player-overlay.v2";
   job_id: string;
   video_id?: string;
@@ -1444,6 +1454,7 @@ export interface PoseOverlayFrame {
 }
 
 export interface PoseOverlayArtifact {
+  playback?: OverlayPlaybackIndex;
   job_id: string;
   video_id?: string;
   status: "available" | "no_poses" | "unavailable";

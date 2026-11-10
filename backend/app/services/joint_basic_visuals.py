@@ -18,18 +18,26 @@ def publish_joint_basic_visuals(
                            and not getattr(settings, "enable_ball_reconstruction", True))
     if not pose_enabled and not ball_2d_enabled:
         return
-    overlay = storage.read_json(storage.fused_player_overlay_json_path(job.id))
-    paths = {key: Path(video.path) for key, video in videos.items()}
-    ids = {key: video.id for key, video in videos.items()}
-    phases = int(pose_enabled) + int(ball_2d_enabled)
-    phase_index = 0
-    phase_results = []
     visual_started = datetime.now(UTC)
     if progress_callback:
         progress_callback(PipelineStageResult(
             id="multiview-metrics", label="运动指标重算", status="done", progress=100,
             detail="已基于最终球员轨迹生成运动指标",
         ))
+        progress_callback(PipelineStageResult(
+            id="multiview-visualization", label="基础识别叠加", status="active", progress=0,
+            detail="读取正式人体叠加，准备骨架与二维球推理", started_at=visual_started,
+        ))
+    try:
+        overlay = storage.read_json(storage.fused_player_overlay_json_path(job.id))
+    except FileNotFoundError as exc:
+        detail = getattr(result.artifacts, "fused_player_overlay_detail", None)
+        raise RuntimeError(f"基础识别缺少正式人体叠加产物：{detail or '人体叠加未生成'}") from exc
+    paths = {key: Path(video.path) for key, video in videos.items()}
+    ids = {key: video.id for key, video in videos.items()}
+    phases = int(pose_enabled) + int(ball_2d_enabled)
+    phase_index = 0
+    phase_results = []
 
     def cancel():
         if cancellation_token is not None:
@@ -54,6 +62,9 @@ def publish_joint_basic_visuals(
         # Requested inference failures propagate: a successful tracking pass is not successful pose.
         artifact = builder(cancel, progress)
         storage.write_json_atomic(path, artifact)
+        if artifact_prefix == "pose_overlay":
+            from app.services.overlay_playback import publish_overlay_playback
+            publish_overlay_playback(path, artifact, artifact_name=route)
         setattr(result.artifacts, f"{artifact_prefix}_json_path", str(path))
         setattr(result.artifacts, f"{artifact_prefix}_url", f"/api/analysis/jobs/{job.id}/artifacts/{route}")
         setattr(result.artifacts, f"{artifact_prefix}_status", artifact["status"])

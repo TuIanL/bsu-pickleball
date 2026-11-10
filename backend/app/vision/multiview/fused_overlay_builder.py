@@ -371,6 +371,13 @@ class FusedPlayerOverlayBuilder:
 
         for tick in snapshot.ticks:
             frame_index = tick.reference_frame_index
+            source_indices = {
+                state.source_frame_index for _, view_id, state in tick.observations
+                if view_id == target and state.source_frame_index is not None
+            }
+            if len(source_indices) > 1:
+                raise ValueError(f"Conflicting source frames for {target} at tick {tick.canonical_tick}")
+            source_frame_index = next(iter(source_indices), None)
             now_ms = tick.canonical_timestamp_ms
             self._current_reference_real_bboxes = self._reference_real_bboxes(
                 tick=tick,
@@ -419,6 +426,7 @@ class FusedPlayerOverlayBuilder:
             frames.append(
                 FusedPlayerOverlayFrame(
                     frame_index=frame_index,
+                    source_frame_index=source_frame_index,
                     timestamp_seconds=now_ms / 1000.0,
                     players=players,
                     anonymous_observations=[
@@ -586,41 +594,6 @@ class FusedPlayerOverlayBuilder:
             return "projection_geometry_jump"
         return None
 
-    def _stabilize_real_bbox(
-        self,
-        *,
-        gid: str,
-        view_id: str,
-        evidence_type: str,
-        bbox: list[float],
-        now_ms: float,
-    ) -> tuple[list[float], str | None]:
-        """在 evidence 来源切换时限制 presentation geometry 的异常跳变。"""
-        key = (gid, view_id)
-        previous = self._last_presentation_bbox.get(key)
-        previous_evidence = self._last_presentation_evidence.get(key)
-        if previous is None or previous_evidence == evidence_type:
-            return bbox, None
-        previous_bbox, previous_ts = previous
-        elapsed_s = max((now_ms - previous_ts) / 1000.0, 1.0 / 60.0)
-        previous_foot = ((previous_bbox[0] + previous_bbox[2]) / 2.0, previous_bbox[3])
-        current_foot = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
-        speed = ((current_foot[0] - previous_foot[0]) ** 2 + (current_foot[1] - previous_foot[1]) ** 2) ** 0.5 / elapsed_s
-        previous_width = max(previous_bbox[2] - previous_bbox[0], 1.0)
-        previous_height = max(previous_bbox[3] - previous_bbox[1], 1.0)
-        current_width = max(bbox[2] - bbox[0], 1.0)
-        current_height = max(bbox[3] - bbox[1], 1.0)
-        scale_ratio = max(
-            current_width / previous_width,
-            previous_width / current_width,
-            current_height / previous_height,
-            previous_height / current_height,
-        )
-        if speed > self.config.presentation_max_step_px_per_s or scale_ratio > self.config.presentation_max_scale_ratio:
-            self.diagnostics["presentation_geometry_held"] = self.diagnostics.get("presentation_geometry_held", 0) + 1
-            return list(previous_bbox), "presentation_geometry_held"
-        return bbox, None
-
     def _build_scale_profiles(self, snapshot, bundle: JointOverlayEvidenceBundle) -> None:
         """Pass 1：整场收集该 view 真实 bbox 样本并冻结 scale profile。
 
@@ -776,13 +749,10 @@ class FusedPlayerOverlayBuilder:
 
         # ---- 按 DisplayPlan materialize ----
         if raw is not None and plan.state in ("REAL_BOX", "ASSISTED_BOX") and has_real_bbox:
-            stable_bbox, display_reason = self._stabilize_real_bbox(
-                gid=gid,
-                view_id=reference_view_id,
-                evidence_type=str(raw.evidence_type),
-                bbox=list(raw.bbox or []),
-                now_ms=now_ms,
-            )
+            # Pose inference consumes this box as current-frame detector evidence.
+            # A display hold must never replace real pixels with an older box
+            # while retaining base/guided/refined provenance.
+            stable_bbox, display_reason = list(raw.bbox or []), None
             stable_footpoint = [(stable_bbox[0] + stable_bbox[2]) / 2.0, stable_bbox[3]]
             entity = raw.model_copy(update={
                 "bbox": stable_bbox,

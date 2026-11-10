@@ -50,12 +50,17 @@ def build_joint_pose_artifact(
             for row in rows:
                 if cancellation_check:
                     cancellation_check()
-                index, timestamp = int(row["frame_index"]), float(row["timestamp_seconds"])
+                source_index = row.get("source_frame_index", row["frame_index"])
+                index = int(source_index if source_index is not None else row["frame_index"])
+                timestamp = float(row["timestamp_seconds"])
                 players = [p for p in row.get("players", [])
                            if p.get("player_id") in {"Player_1", "Player_2", "Player_3", "Player_4"}
                            and p.get("evidence_type") in {"base_observed", "guided_observed", "refined_observed"}]
                 counts = Counter(p["player_id"] for p in players)
                 players = [p for p in players if counts[p["player_id"]] == 1]
+                if source_index is None:
+                    counters["source_frame_missing"] += 1
+                    players = []
                 counters["duplicate_identity_rejected"] += sum(n for n in counts.values() if n > 1)
                 result = PoseOverlayFrame(frame_index=index, timestamp_seconds=timestamp)
                 if players:

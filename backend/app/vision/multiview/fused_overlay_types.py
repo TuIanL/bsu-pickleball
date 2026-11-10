@@ -168,6 +168,9 @@ class FusedPlayerOverlayFrame(BaseModel):
     """参考画面一个 canonical tick 的叠加帧。"""
 
     frame_index: int = Field(ge=0)
+    # frame_index remains the canonical reference index for legacy consumers.
+    # Pixel inference must use this view's synchronized source index.
+    source_frame_index: int | None = Field(default=None, ge=0)
     timestamp_seconds: float = Field(ge=0)
     players: list[FusedPlayerOverlayPlayer] = Field(default_factory=list)
     anonymous_observations: list[FusedAnonymousOverlayObservation] = Field(default_factory=list)
@@ -296,6 +299,7 @@ def build_fused_player_overlay_payload(
         "frames": [
             {
                 "frame_index": frame.frame_index,
+                "source_frame_index": frame.source_frame_index,
                 "timestamp_seconds": frame.timestamp_seconds,
                 "players": [player.model_dump(mode="json") for player in frame.players],
             }

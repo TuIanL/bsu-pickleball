@@ -1,0 +1,123 @@
+[
+  {
+    "player": "Player_3",
+    "start": 152.1,
+    "end": 162.8,
+    "tracks": {
+      "cam_1": 239,
+      "cam_2": 279
+    },
+    "counts": {
+      "cam_1:detections:outside_court_visible": 1,
+      "cam_2:candidate_detections:outside_tracking_area": 10,
+      "cam_1:candidate_detections:outside_tracking_area": 67,
+      "cam_1:candidate_detections:outside_court_visible": 1
+    },
+    "samples": [
+      {
+        "time": 152.1,
+        "view": "cam_1",
+        "source_frame": 9126,
+        "track": 239,
+        "layer": "detections",
+        "bbox": [
+          487.71942138671875,
+          107.61467742919922,
+          557.0671997070312,
+          309.41534423828125
+        ],
+        "local_xy": [
+          -3.7768538607176128,
+          23.888152841926438
+        ],
+        "spatial_status": "outside_court_visible"
+      },
+      {
+        "time": 153.0,
+        "view": "cam_1",
+        "source_frame": 9180,
+        "track": 239,
+        "layer": "candidate_detections",
+        "bbox": [
+          485.0393371582031,
+          62.17488098144531,
+          548.8646240234375,
+          217.38198852539062
+        ],
+        "local_xy": [
+          -7.210206055959859,
+          13.819748797742216
+        ],
+        "spatial_status": "outside_tracking_area"
+      },
+      {
+        "time": 153.9,
+        "view": "cam_1",
+        "source_frame": 9234,
+        "track": 239,
+        "layer": "candidate_detections",
+        "bbox": [
+          553.167236328125,
+          29.760726928710938,
+          600.29541015625,
+          185.20069885253906
+        ],
+        "local_xy": [
+          -6.388990886110655,
+          8.833257905922338
+        ],
+        "spatial_status": "outside_tracking_area"
+      },
+      {
+        "time": 156.3,
+        "view": "cam_1",
+        "source_frame": 9378,
+        "track": 239,
+        "layer": "candidate_detections",
+        "bbox": [
+          766.1390380859375,
+          4.895233154296875,
+          838.6123046875,
+          136.97857666015625
+        ],
+        "local_xy": [
+          1.5786256686611484,
+          -1.557134958439974
+        ],
+        "spatial_status": "outside_court_visible"
+      }
+    ]
+  },
+  {
+    "player": "Player_2",
+    "start": 300.966667,
+    "end": 310.3,
+    "tracks": {
+      "cam_2": 708
+    },
+    "counts": {
+      "cam_2:detections:outside_court_visible": 1,
+      "cam_2:candidate_detections:outside_tracking_area": 11
+    },
+    "samples": [
+      {
+        "time": 300.966667,
+        "view": "cam_2",
+        "source_frame": 18056,
+        "track": 708,
+        "layer": "detections",
+        "bbox": [
+          216.3072052001953,
+          222.7467498779297,
+          366.6461181640625,
+          469.16510009765625
+        ],
+        "local_xy": [
+          -3.995789393497657,
+          31.49257883834593
+        ],
+        "spatial_status": "outside_court_visible"
+      }
+    ]
+  }
+]

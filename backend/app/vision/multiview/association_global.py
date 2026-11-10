@@ -83,6 +83,7 @@ class JointObservation:
     image_footpoint: tuple[float, float] | None = None
     appearance_descriptor: PlayerAppearanceDescriptor | None = None
     roster_admission_eligible: bool = True
+    court_position_source: str = "legacy_position"
 
 
 @dataclass
@@ -209,6 +210,13 @@ class GlobalPlayerAssociator:
         self._appearance_galleries: dict[str, dict[str, AppearanceTemplateGallery]] = defaultdict(dict)
         self._appearance_pairs: dict[tuple[str, str], deque[tuple[PlayerAppearanceDescriptor, PlayerAppearanceDescriptor]]] = defaultdict(lambda: deque(maxlen=48))
         self._camera_color_profiles: dict[tuple[str, str], CameraColorProfile] = {}
+        from app.vision.multiview.frozen_appearance_guard import FrozenAppearanceGuard
+        self._frozen_appearance_guard = FrozenAppearanceGuard()
+        self._frozen_appearance_owners: dict[int, str] = {}
+        self._image_handoff_observations: dict[tuple[str, str], JointObservation] = {}
+        self._image_handoff_pending: dict[tuple[str, str, str], tuple[int, int, int]] = {}
+        self._isolated_roster_pending: dict[tuple[str, str, str], tuple[int, int, int, tuple[float,float]]] = {}
+        self._roster_witness_ms: dict[str,float] = {}
 
     @staticmethod
     def observation_key(obs: JointObservation) -> str:
@@ -252,6 +260,9 @@ class GlobalPlayerAssociator:
         a new epoch. The registry slot and the short lineage history are the
         authoritative continuity sources in that case.
         """
+        appearance_owner = self._frozen_appearance_owners.get(id(obs))
+        if appearance_owner is not None:
+            return appearance_owner
         mapped = self.mapping.get(self.mapping_key(obs))
         if mapped in self.registry.players:
             return mapped
@@ -273,6 +284,20 @@ class GlobalPlayerAssociator:
             "tracklet_lineage_id": obs.tracklet_lineage_id,
             "last_seen_take_timestamp_ms": obs.take_timestamp_ms,
         }
+
+    def _frozen_end_conflict(self, obs: JointObservation, gid: str | None) -> bool:
+        state = self.registry.players.get(gid)
+        if state is None or not state.frozen_identity_confirmed:
+            return False
+        expected = self.registry.frozen_player_end_by_id.get(state.frozen_player_id)
+        y = obs.canonical_y_ft
+        if y is None or not 0 <= y <= 44 or abs(y-22) <= 1.5:
+            return False
+        return expected in {'end_a','end_b'} and expected != ('end_a' if y < 22 else 'end_b')
+
+    def _identity_allowed(self, obs: JointObservation, gid: str | None) -> bool:
+        return (self._frozen_appearance_owners.get(id(obs), gid) == gid
+                and not self._frozen_end_conflict(obs, gid))
 
     def _slot_lineage_compatible(self, obs: JointObservation, incumbent: str, challenger: str) -> bool:
         """Reject a track-fragment takeover without a new identity epoch/lineage."""
@@ -342,6 +367,10 @@ class GlobalPlayerAssociator:
         return min(self.max_reacquire_gate_ft, self.base_gate_ft + self.uncertainty_scale * unc)
 
     def _appearance_distance(self, obs: JointObservation, gid: str) -> float | None:
+        if self.appearance_mode == "enabled":
+            frozen_distance = self._frozen_appearance_guard.distances(obs, [gid]).get(gid)
+            if frozen_distance is not None:
+                return frozen_distance
         descriptor = obs.appearance_descriptor
         if descriptor is None or descriptor.status != "available":
             return None
@@ -380,6 +409,20 @@ class GlobalPlayerAssociator:
             )
             gallery.update(descriptor, confirmed_observed=True)
             grouped[update.global_id][update.view_id] = descriptor
+            state = self.registry.players.get(update.global_id)
+            peers = [u for u in confirmed if u.global_id == update.global_id and u.view_id != update.view_id
+                     and u.observation.detection_origin == "base"]
+            if (self.appearance_mode == "enabled" and state is not None and state.frozen_identity_confirmed
+                    and state.frozen_identity_confirmed_from_ms is not None
+                    and update.observation.detection_origin == "base" and update.observation.confidence >= .5
+                    and any(p.observation.confidence >= .5 and _dist(
+                        (p.observation.canonical_x_ft or 0., p.observation.canonical_y_ft or 0.),
+                        (update.observation.canonical_x_ft or 0., update.observation.canonical_y_ft or 0.)) <= 3. for p in peers)):
+                self._frozen_appearance_guard.enroll(
+                    global_id=update.global_id, view_id=update.view_id, descriptor=descriptor,
+                    timestamp_ms=update.observation.take_timestamp_ms,
+                    anchor_ms=state.frozen_identity_confirmed_from_ms,
+                )
         for descriptors_by_view in grouped.values():
             views = sorted(descriptors_by_view)
             for source_view in views:
@@ -397,7 +440,18 @@ class GlobalPlayerAssociator:
                     )
 
     def appearance_diagnostics(self) -> dict[str, object]:
+        from app.vision.multiview.image_track_handoff import VERSION as handoff_version
+        from app.vision.multiview.nested_observation_guard import NET_CROWD_VERSION
         return {
+            "short_image_handoff": {"version": handoff_version, "accepted": self.diagnostics.get("short_image_handoff", 0)},
+            "net_crowd_guard": {"version": NET_CROWD_VERSION, "rejected_observations": self.diagnostics.get("ambiguous_net_crowd_box", 0)},
+            "frozen_net_end_guard": {"version": "ambiguous-net-track-end.v1", "rejected_observations": self.diagnostics.get("frozen_net_end_conflict", 0)},
+            "frozen_guard": {
+                "version": self._frozen_appearance_guard.version,
+                "samples": {gid: {v: g.accepted_updates for v, g in views.items()}
+                            for gid, views in self._frozen_appearance_guard.galleries.items()},
+                "history_rejected": self.diagnostics.get("frozen_appearance_history_rejected", 0),
+            },
             "profiles": {
                 f"{source}->{target}": profile.diagnostics()
                 for (source, target), profile in self._camera_color_profiles.items()
@@ -442,9 +496,31 @@ class GlobalPlayerAssociator:
         tick = tick if tick is not None else (
             max((o.source_frame_index for o in [*observations, *candidate_observations]), default=0)
         )
+        self._frozen_appearance_owners = {}
         # 只读决策可观测：每 tick 重置，供 display diagnostics 消费
         self.last_tick_decisions = []
         self.last_tick_local_slot_events = []
+        if (self.appearance_mode == "enabled" and len(self.registry.players) == 4
+                and all(st.frozen_identity_confirmed for st in self.registry.players.values())):
+            from app.vision.multiview.nested_observation_guard import (
+                ambiguous_nested_observations, ambiguous_net_crowd_observations,
+            )
+            all_observations = [*observations, *candidate_observations]
+            histories = {id(obs): owner for obs in all_observations
+                if (owner := self.mapping.get(self.mapping_key(obs)) or self.registry.historical_bindings.get(
+                    (obs.view_id,self.observation_key(obs)))) in self.registry.players}
+            crowd_rejected = ambiguous_net_crowd_observations(all_observations, histories)
+            rejected = ambiguous_nested_observations(all_observations) | crowd_rejected
+            for obs in [*observations, *candidate_observations]:
+                if id(obs) in rejected:
+                    self.mapping.pop(self.mapping_key(obs), None)
+                    self.registry.historical_bindings.pop((obs.view_id, self.observation_key(obs)), None)
+                    self._record_decision(obs, "rejected", reason=(
+                        "ambiguous_net_crowd_box" if id(obs) in crowd_rejected else "ambiguous_nested_person_box"))
+            observations = [obs for obs in observations if id(obs) not in rejected]
+            candidate_observations = [obs for obs in candidate_observations if id(obs) not in rejected]
+            self.diagnostics['ambiguous_nested_person_box'] = self.diagnostics.get('ambiguous_nested_person_box', 0) + len(rejected)
+            self.diagnostics['ambiguous_net_crowd_box'] = self.diagnostics.get('ambiguous_net_crowd_box', 0) + len(crowd_rejected)
         # 1) canonical 化 + 清理失效强绑定
         for obs in observations:
             identity_key = self.observation_key(obs)
@@ -472,6 +548,39 @@ class GlobalPlayerAssociator:
                 )
                 obs.canonical_x_ft, obs.canonical_y_ft = cx, cy
 
+        # A merged net-side box can inherit a raw track from the player behind
+        # it while its feet belong to the opponent in front. This is ambiguous
+        # identity evidence, not permission to move a frozen participant through
+        # the net or hand the same merged box to the opposing roster slot.
+        net_conflicts = set()
+        for obs in [*observations, *candidate_observations]:
+            prior = self.mapping.get(self.mapping_key(obs)) or self.registry.historical_bindings.get(
+                (obs.view_id, self.observation_key(obs)))
+            if abs(obs.canonical_y_ft-22.) <= 6. and self._frozen_end_conflict(obs, prior):
+                net_conflicts.add(id(obs))
+                self._record_decision(obs, 'rejected', global_id=prior, reason='frozen_net_end_conflict')
+        observations = [o for o in observations if id(o) not in net_conflicts]
+        candidate_observations = [o for o in candidate_observations if id(o) not in net_conflicts]
+        self.diagnostics['frozen_net_end_conflict'] = self.diagnostics.get('frozen_net_end_conflict', 0)+len(net_conflicts)
+
+        # Real runtime inputs initially contain camera-local coordinates, while
+        # persisted replay inputs already contain canonical coordinates. Resolve
+        # the court end only after both formal and candidate inputs are mapped.
+        if self.appearance_mode == "enabled":
+            self._frozen_appearance_guard.expire(tick)
+            for obs in [*observations, *candidate_observations]:
+                end = self.registry._canonical_end(float(obs.canonical_y_ft))
+                confirmed = [gid for gid, st in self.registry.players.items() if st.frozen_identity_confirmed
+                             and self.registry.frozen_player_end_by_id.get(st.frozen_player_id) == end]
+                owner = self._frozen_appearance_guard.owner(obs, confirmed, tick)
+                if owner is not None:
+                    self._frozen_appearance_owners[id(obs)] = owner
+                    history_key = (obs.view_id, self.observation_key(obs))
+                    old = self.mapping.get(self.mapping_key(obs)) or self.registry.historical_bindings.get(history_key)
+                    if old is not None and old != owner:
+                        self.mapping.pop(self.mapping_key(obs), None)
+                        self.registry.historical_bindings.pop(history_key, None)
+                        self.diagnostics["frozen_appearance_history_rejected"] = self.diagnostics.get("frozen_appearance_history_rejected", 0) + 1
         predictions = self.registry.predict_all(timestamp_s)
         updates: list[AssociationUpdate] = []
         assigned_obs: set[int] = set()  # id(obs)
@@ -501,6 +610,10 @@ class GlobalPlayerAssociator:
             if obs.detection_origin != "guided_roi" or not obs.expected_global_player_id:
                 continue
             expected = obs.expected_global_player_id
+            if not self._identity_allowed(obs, expected):
+                self._record_decision(obs, "rejected", reason="frozen_appearance_conflict")
+                assigned_obs.add(id(obs))
+                continue
             if expected not in self.registry.players or expected not in predictions:
                 self.diagnostics["guided_expected_missing"] = self.diagnostics.get("guided_expected_missing", 0) + 1
                 self._record_decision(obs, "rejected", reason="guided_expected_missing")
@@ -571,6 +684,8 @@ class GlobalPlayerAssociator:
                     geometry = _dist((obs.canonical_x_ft or 0.0, obs.canonical_y_ft or 0.0), (px, py))
                     gate = self._pair_gate_ft(obs, gid, predictions)
                     feasibility[key][gid] = geometry / max(gate, 1e-3)  # 归一化门：<=1 可行
+                    if not self._identity_allowed(obs, gid):
+                        feasibility[key][gid] = float("inf")
                     cost = geometry + self.prediction_bias_ft * geometry
                     if self.mapping.get(self.mapping_key(obs)) not in (None, gid):
                         cost += self.local_identity_switch_penalty
@@ -753,6 +868,8 @@ class GlobalPlayerAssociator:
             key = self.mapping_key(obs)
             # 4a) 强绑定 continuity（保留既有 mapping 的几何门）
             existing = self.mapping.get(key)
+            if not self._identity_allowed(obs, existing):
+                existing = None
             if any(u.global_id == existing and u.view_id == obs.view_id and not u.quarantined
                    for u in updates):
                 existing = None
@@ -803,6 +920,8 @@ class GlobalPlayerAssociator:
                     continue
             # 4b) 弱历史绑定（D4）：epoch reset 后经 geometry 重新证明回原 global（可含 stale 玩家）
             historical = self.registry.historical_bindings.get((obs.view_id, self.observation_key(obs)))
+            if not self._identity_allowed(obs, historical):
+                historical = None
             if any(u.global_id == historical and u.view_id == obs.view_id and not u.quarantined
                    for u in updates):
                 historical = None
@@ -950,6 +1069,14 @@ class GlobalPlayerAssociator:
                 updates=updates,
                 available_views=available_views,
             )
+            self._recover_short_image_handoffs(
+                recovery_observations, updates=updates, timestamp_s=timestamp_s,
+                tick=tick, available_views=available_views,
+            )
+            self._recover_isolated_roster_measurements(
+                recovery_observations, updates=updates,timestamp_s=timestamp_s,
+                tick=tick,available_views=available_views,
+            )
         # A recovered observation already belongs to a roster occupant. Leaving
         # its waitlist entry alive can promote a duplicate into an empty slot.
         recovered_keys = {
@@ -997,31 +1124,18 @@ class GlobalPlayerAssociator:
                             )
                     self.diagnostics["candidate_promoted"] = self.diagnostics.get("candidate_promoted", 0) + 1
                     for view_id, binding in cand.local_bindings.items():
-                        updates.append(
-                            AssociationUpdate(
-                                gid, view_id,
-                                JointObservation(
-                                    view_id=view_id,
-                                    source_frame_index=tick,
-                                    take_timestamp_ms=0.0,
-                                    local_x_ft=0.0,
-                                    local_y_ft=0.0,
-                                    canonical_x_ft=cand.canonical_x_ft,
-                                    canonical_y_ft=cand.canonical_y_ft,
-                                    view_player_id=str(binding.get("view_player_id") or ""),
-                                    local_identity_epoch=int(binding.get("identity_epoch") or 0),
-                                    tracklet_lineage_id=(
-                                        str(binding.get("tracklet_lineage_id"))
-                                        if binding.get("tracklet_lineage_id") is not None
-                                        else None
-                                    ),
-                                    track_id=int(binding.get("track_id") or 0) or None,
-                                    confidence=0.5,
-                                ),
-                                0.0,
-                                tentative=True,
-                            )
-                        )
+                        # A promotion changes roster state; it does not create
+                        # pixels. Reuse the actual current view observation,
+                        # including its source index, timestamp, and real box.
+                        # The canonical tick is an ordinal, not a video frame.
+                        matches = [obs for obs in [*observations, *candidate_observations]
+                            if obs.view_id == view_id
+                            and obs.local_identity_epoch == int(binding.get("identity_epoch") or 0)
+                            and (obs.track_id == binding.get("track_id") if binding.get("track_id") is not None
+                                 else self.observation_key(obs) == str(binding.get("view_player_id") or ""))
+                            and not any(id(u.observation) == id(obs) and not u.quarantined for u in updates)]
+                        if len(matches) == 1:
+                            updates.append(AssociationUpdate(gid, view_id, matches[0], 0.0, tentative=True))
                 elif getattr(self.registry, "side_capacity_enabled", False):
                     self.diagnostics["candidate_waiting_for_end_capacity"] = (
                         self.diagnostics.get("candidate_waiting_for_end_capacity", 0) + 1
@@ -1030,12 +1144,139 @@ class GlobalPlayerAssociator:
         self._expire_pending_recovery(tick)
 
         self._update_appearance_models(updates)
+        self._image_handoff_pending = {k: v for k, v in self._image_handoff_pending.items() if v[0] == tick}
+        self._isolated_roster_pending = {k:v for k,v in self._isolated_roster_pending.items() if v[0]==tick}
+        self._image_handoff_observations = {
+            k: o for k, o in self._image_handoff_observations.items()
+            if 0 <= timestamp_s*1000-o.take_timestamp_ms <= 250
+        }
+        for update in updates:
+            obs = update.observation
+            if (not update.tentative and not update.quarantined and obs.detection_origin == "base"
+                    and obs.confidence >= .5 and obs.bbox
+                    and self.registry.players[update.global_id].frozen_identity_confirmed):
+                self._image_handoff_observations[update.global_id, obs.view_id] = obs
 
         for event in self.last_tick_local_slot_events:
             event.setdefault("canonical_tick", tick)
             event.setdefault("timestamp_ms", float(timestamp_s) * 1000.0)
 
         return updates
+
+    def _recover_isolated_roster_measurements(self, observations, *, updates, timestamp_s, tick, available_views):
+        """Recover a missing camera measurement with three independent roster witnesses.
+
+        Unlike image handoff, this also covers a fragmented camera track while
+        another camera intermittently sees the same frozen person. Only one
+        isolated in-court candidate at that end may qualify for three source
+        frames. No new roster slot is created and conflicting history is vetoed.
+        """
+        from app.vision.multiview.image_track_handoff import bbox_iou
+        states=self.registry.players
+        if (self.appearance_mode!='enabled' or len(states)!=4
+                or not all(s.frozen_identity_confirmed for s in states.values())):
+            return
+        measured=[u for u in updates if not u.tentative and not u.quarantined
+                  and u.observation.detection_origin=='base']
+        for update in measured:
+            if update.observation.confidence>=.5:
+                self._roster_witness_ms[update.global_id]=timestamp_s*1000
+        real=[u for u in measured if u.observation.confidence>=.4
+              and 0<=timestamp_s*1000-self._roster_witness_ms.get(u.global_id,float('-inf'))<=200]
+        used={id(u.observation) for u in updates if not u.quarantined}
+        for gid,state in states.items():
+            if (len({u.global_id for u in real if u.global_id!=gid})!=3 or state.last_seen_s is None
+                    or not 0<=timestamp_s-state.last_seen_s<=2.):
+                continue
+            end=self.registry.frozen_player_end_by_id.get(state.frozen_player_id)
+            by_view=defaultdict(list)
+            for obs in observations:
+                peers=[u for u in real if u.view_id==obs.view_id and u.global_id!=gid]
+                teammate=[u for u in peers if self.registry.frozen_player_end_by_id.get(states[u.global_id].frozen_player_id)==end]
+                history=self.registry.historical_bindings.get((obs.view_id,self.observation_key(obs)))
+                xy=(obs.canonical_x_ft,obs.canonical_y_ft)
+                if (id(obs) in used or obs.detection_origin!='base' or obs.confidence<.75
+                        or obs.court_position_source!='raw_projection' or not obs.roster_admission_eligible
+                        or bbox_iou(obs.bbox,obs.bbox)<1.
+                        or history not in (None,gid) or not teammate
+                        or any(u.global_id==gid and u.view_id==obs.view_id for u in real)
+                        or (available_views is not None and obs.view_id not in available_views)
+                        or abs(obs.take_timestamp_ms-timestamp_s*1000)>1
+                        or not self._identity_allowed(obs,gid) or not 0<=xy[0]<=20
+                        or self.registry._candidate_end(*xy)!=end
+                        or _dist(xy,(state.x_ft,state.y_ft))>15
+                        or any(bbox_iou(obs.bbox,u.observation.bbox)>.05 for u in peers)
+                        or any(_dist(xy,(u.observation.canonical_x_ft,u.observation.canonical_y_ft))<=3 for u in teammate)):
+                    continue
+                by_view[obs.view_id].append(obs)
+            for view,matches in by_view.items():
+                if len(matches)!=1:
+                    continue
+                obs=matches[0];xy=(obs.canonical_x_ft,obs.canonical_y_ft)
+                key=(gid,view,self.observation_key(obs))
+                old_tick,count,old_frame,old_xy=self._isolated_roster_pending.get(key,(-2,0,-1,xy))
+                count=count+1 if old_tick==tick-1 and obs.source_frame_index>old_frame and _dist(xy,old_xy)<=1 else 1
+                self._isolated_roster_pending[key]=(tick,count,obs.source_frame_index,xy)
+                if count>=3 and self._accept_pair(obs,gid,0.,updates):
+                    updates[-1].reanchor=True
+                    used.add(id(obs))
+                    self._record_decision(obs,'assigned',global_id=gid,reason='isolated_roster_reacquired')
+                    self.diagnostics['isolated_roster_reacquired']=self.diagnostics.get('isolated_roster_reacquired',0)+1
+                    break
+
+    def _recover_short_image_handoffs(self, observations, *, updates, timestamp_s, tick, available_views):
+        """Bridge one missing identity using two unique consecutive image matches.
+
+        This path needs all three other frozen participants independently visible,
+        a recent measured box, an advancing source frame, no nearby competing body,
+        and no foreign track history. It cannot reconnect an occlusion or long gap.
+        """
+        from app.vision.multiview.image_track_handoff import bbox_iou, continuous_image_box
+        states = self.registry.players
+        if (self.appearance_mode != "enabled" or len(states) != 4
+                or not all(s.frozen_identity_confirmed for s in states.values())):
+            return
+        real = [u for u in updates if not u.tentative and not u.quarantined]
+        observed = {u.global_id for u in real}
+        if len(observed) != 3:
+            return
+        gid = next(g for g in states if g not in observed)
+        state = states[gid]
+        used = {id(u.observation) for u in updates if not u.quarantined}
+        by_view = defaultdict(list)
+        for obs in observations:
+            previous = self._image_handoff_observations.get((gid, obs.view_id))
+            history = self.registry.historical_bindings.get((obs.view_id, self.observation_key(obs)))
+            end = self.registry.frozen_player_end_by_id.get(state.frozen_player_id)
+            peers = [u.observation for u in real if u.view_id == obs.view_id]
+            if (previous is None or id(obs) in used or history not in (None, gid)
+                    or not obs.roster_admission_eligible
+                    or (available_views is not None and obs.view_id not in available_views)
+                    or abs(obs.take_timestamp_ms-timestamp_s*1000) > 1
+                    or not self._identity_allowed(obs, gid)
+                    or self.registry._candidate_end(obs.canonical_x_ft, obs.canonical_y_ft) != end
+                    or _dist((obs.canonical_x_ft, obs.canonical_y_ft), (state.x_ft, state.y_ft)) > 15
+                    or not peers or any(bbox_iou(obs.bbox, peer.bbox) > .1 for peer in peers)
+                    or not continuous_image_box(previous, obs)):
+                continue
+            by_view[obs.view_id].append(obs)
+        ready = []
+        for view, matches in by_view.items():
+            if len(matches) != 1:
+                continue
+            obs = matches[0]
+            key = (gid, view, self.observation_key(obs))
+            prior_tick, prior_count, prior_frame = self._image_handoff_pending.get(key, (-2, 0, -1))
+            count = prior_count+1 if prior_tick == tick-1 and obs.source_frame_index > prior_frame else 1
+            self._image_handoff_pending[key] = tick, count, obs.source_frame_index
+            if count >= 2:
+                ready.append(obs)
+        if ready:
+            obs = max(ready, key=lambda o: o.confidence)
+            if self._accept_pair(obs, gid, 0., updates):
+                updates[-1].reanchor = True
+                self._record_decision(obs, "assigned", global_id=gid, reason="short_image_handoff")
+                self.diagnostics["short_image_handoff"] = self.diagnostics.get("short_image_handoff", 0)+1
 
     def _clear_replaced_global_slot(self, global_id: str, event: dict[str, object]) -> None:
         """Drop old local/global joins before a stale provisional slot is reused."""
@@ -1155,6 +1396,11 @@ class GlobalPlayerAssociator:
             available_views=available_views,
         )
         stable_entries = [(key, entry) for key, entry in stable_entries if key not in claimed]
+        appearance_claimed = self._recover_missing_frozen_appearance(
+            stable_entries, updates=updates, timestamp_s=timestamp_s,
+            available_views=available_views,
+        )
+        stable_entries = [(key, entry) for key, entry in stable_entries if key not in appearance_claimed]
         for update in updates:
             if not update.quarantined:
                 occupied_globals_by_view[update.view_id].add(update.global_id)
@@ -1180,6 +1426,8 @@ class GlobalPlayerAssociator:
                 residuals: dict[str, float] = {}
                 normalized: dict[str, float] = {}
                 for gid, state in self.registry.players.items():
+                    if not self._identity_allowed(obs, gid):
+                        continue
                     if state.roster_status not in ("provisional", "confirmed"):
                         continue
                     if gid in occupied_globals_by_view.get(view_id, set()):
@@ -1349,6 +1597,66 @@ class GlobalPlayerAssociator:
                 if not is_candidate:
                     self._pending_recovery.pop(recovery_key, None)
 
+    def _recover_missing_frozen_appearance(self, entries, *, updates, timestamp_s, available_views):
+        """Reacquire one missing participant from unique, frozen clothing evidence.
+
+        Far-view footpoints can disagree during a bend. A discriminative same-view
+        anchor template may identify a real detection without requiring that bad
+        projection to agree. Never use this path for an already observed person,
+        two missing teammates, an ambiguous template, or an unbounded relocation.
+        """
+        states = self.registry.players
+        if (self.appearance_mode != "enabled" or not self.registry.side_capacity_enabled
+                or len(states) != 4 or not all(s.frozen_identity_confirmed for s in states.values())):
+            return set()
+        real = [u for u in updates if not u.tentative and not u.quarantined]
+        observed = {u.global_id for u in real}
+        used = {(u.view_id, self.observation_key(u.observation)) for u in updates if not u.quarantined}
+        claimed = set()
+        for gid, state in states.items():
+            if (gid in observed or state.last_seen_s is None
+                    or not .5 <= timestamp_s - state.last_seen_s <= 20.):
+                continue
+            end = self.registry.frozen_player_end_by_id.get(state.frozen_player_id)
+            teammates = [other for other, s in states.items() if other != gid
+                         and self.registry.frozen_player_end_by_id.get(s.frozen_player_id) == end]
+            if len(teammates) != 1 or teammates[0] not in observed:
+                continue
+            candidates = defaultdict(dict)
+            for key, entry in entries:
+                obs = entry["observation"]
+                xy = (obs.canonical_x_ft, obs.canonical_y_ft)
+                peers = [u for u in real if u.global_id == teammates[0] and u.view_id == obs.view_id
+                         and u.observation.detection_origin == "base" and u.observation.confidence >= .5]
+                if (self._frozen_appearance_owners.get(id(obs)) != gid
+                        or obs.detection_origin != "base" or obs.confidence < .65
+                        or not obs.roster_admission_eligible or not peers
+                        or (available_views is not None and obs.view_id not in available_views)
+                        or abs(obs.take_timestamp_ms - timestamp_s * 1000) > 1.
+                        or (obs.view_id, self.observation_key(obs)) in used
+                        or self.registry._candidate_end(*xy) != end
+                        or _dist(xy, (state.x_ft, state.y_ft)) > 15.
+                        or any(_dist(xy, (p.observation.canonical_x_ft, p.observation.canonical_y_ft)) <= 3.
+                               for p in peers)):
+                    continue
+                candidates[obs.view_id][self.observation_key(obs)] = (key, entry)
+            # Only one view is used to reseed; the next ordinary tick can add
+            # the other view. Do not fuse two inconsistent feet into a new anchor.
+            unique = [next(iter(items.values())) for items in candidates.values() if len(items) == 1]
+            if not unique:
+                continue
+            key, entry = max(unique, key=lambda item: item[1]["observation"].confidence)
+            obs = entry["observation"]
+            if self._accept_pair(obs, gid, 0., updates):
+                updates[-1].reanchor = True
+                entry["recovered_global_id"] = gid
+                claimed.add(key)
+                used.add((obs.view_id, self.observation_key(obs)))
+                observed.add(gid)
+                self.diagnostics["frozen_appearance_reacquired"] = self.diagnostics.get("frozen_appearance_reacquired", 0) + 1
+                self._record_decision(obs, "assigned", global_id=gid, reason="frozen_appearance_reacquired")
+        return claimed
+
     def _recover_missing_frozen_dual(
         self, entries, *, updates: list[AssociationUpdate], timestamp_s: float, tick: int,
         available_views: set[str] | None,
@@ -1386,6 +1694,8 @@ class GlobalPlayerAssociator:
             by_view = defaultdict(list)
             for key, entry in entries:
                 obs = entry["observation"]
+                if not self._identity_allowed(obs, gid):
+                    continue
                 if (available_views is not None and obs.view_id not in available_views):
                     continue
                 if ((obs.view_id, self.observation_key(obs)) in used or obs.confidence < .25
@@ -1604,6 +1914,9 @@ class GlobalPlayerAssociator:
             # frozen-anchor confirmation reads these bindings later this tick.
             updates.append(AssociationUpdate(gid, obs.view_id, obs, 0.0, tentative=True, quarantined=True))
             return True
+        if not self._identity_allowed(obs, gid):
+            self.diagnostics["frozen_appearance_conflict"] = self.diagnostics.get("frozen_appearance_conflict", 0) + 1
+            return False
         existing = [u for u in updates if u.global_id == gid and u.view_id == obs.view_id
                     and not u.quarantined]
         if existing and (tentative or any(not u.tentative for u in existing)):

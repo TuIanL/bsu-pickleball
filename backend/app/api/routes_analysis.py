@@ -636,6 +636,10 @@ def read_analysis_artifact(
         "court-view-roi",  # 场地视角 ROI（感兴趣区域）
         "calibration-diagnostics",  # 标定质量诊断
     ],
+    playback: bool = False,
+    chunk: int | None = None,
+    view_id: str | None = None,
+    generation: str | None = None,
 ) -> JSONResponse | FileResponse | PlainTextResponse:
     """
     读取浏览器可消费的分析 overlay 产物
@@ -732,6 +736,24 @@ def read_analysis_artifact(
     else:
         # 上面没显式列出的（如 serve-debug-overlay）走这个兜底分支
         path = _STORAGE.serve_debug_overlay_video_path(job_id)
+
+    if (playback or chunk is not None) and artifact_name in {"fused-player-overlay", "pose-overlay"}:
+        if chunk is not None and chunk < 0:
+            raise HTTPException(status_code=422, detail="Overlay playback chunk must be nonnegative")
+        from app.services.overlay_playback import read_playback_manifest, playback_chunk_path
+        manifest = read_playback_manifest(path)
+        if manifest is not None:
+            metadata = manifest["metadata"]
+            if generation is not None and generation != manifest["source_signature"]:
+                raise HTTPException(status_code=409, detail="Overlay playback generation changed; reload analysis")
+            if chunk is None:
+                return JSONResponse(metadata)
+            if view_id not in manifest["chunks"]:
+                raise HTTPException(status_code=404, detail="Overlay playback view not found")
+            part = playback_chunk_path(path, manifest, view_id=view_id, chunk=chunk)
+            return FileResponse(part, media_type="application/json") if part is not None else JSONResponse({"frames": []})
+        if chunk is not None:
+            raise HTTPException(status_code=409, detail="Overlay playback index unavailable; reload analysis")
 
     # 旧版 joint overlay 只有 reference view 的 v1 frames。已有 joint run
     # 会持久化 F0/F1 + 标定几何，因此可在读取时安全升级为包含所有展示视角的 v2，

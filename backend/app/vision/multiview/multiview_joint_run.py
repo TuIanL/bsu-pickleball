@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import time
+from math import isfinite
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -1202,6 +1203,7 @@ class MultiViewJointRun:
                 "association": self.associator.appearance_diagnostics(),
                 "per_view": per_view_appearance,
             },
+            "joint_position_evidence": "raw-projection-before-association.v1",
             # fix-multiview-reacquire-after-fusion-pollution：joint 侧 estimator/reanchor 计数
             # （D2 innovation guard 拒绝、D3 reanchor 执行），与 association_counters 分层。
             "joint_counters": dict(self.counter),
@@ -1475,7 +1477,7 @@ class MultiViewJointRun:
                 "tracking_status": observation.tracking_status,
             }
             self._frozen_anchor_track_keys[local_key] = (anchor.player_id, enriched_match)
-            self._frozen_anchor_audit[anchor.player_id] = {
+            pending_audit = {
                 "canonical_player_id": anchor.player_id,
                 "candidate_id": anchor.candidate_id,
                 "bootstrap_run_id": anchor.bootstrap_run_id,
@@ -1491,6 +1493,11 @@ class MultiViewJointRun:
                 "reason": "bootstrap_binding_waiting_global_association",
                 "evidence": enriched_match,
             }
+            # A later geometrically matching but unaccepted detection does not
+            # undo an earlier witnessed confirmation. Explicit conflicting
+            # accepted assignments are still evaluated and recorded below.
+            if not (self._frozen_anchor_audit.get(anchor.player_id) or {}).get("confirmed"):
+                self._frozen_anchor_audit[anchor.player_id] = pending_audit
 
         accepted_by_observation = (
             {id(update.observation): update.global_id for update in accepted_updates
@@ -1516,6 +1523,17 @@ class MultiViewJointRun:
                 continue
             anchor = next((item for item in anchors if item.player_id == player_id), None)
             if anchor is None:
+                continue
+            prior_confirmation = self._frozen_anchor_audit.get(player_id) or {}
+            if prior_confirmation.get("confirmed") and (
+                prior_confirmation.get("global_player_id") == global_id
+                or take_timestamp_ms > anchor.timestamp_ms + 400.0
+            ):
+                # The anchor certifies the initial identity, not the player's
+                # current court end or the lifetime of a raw tracker ID. A later
+                # ID reuse is handled by association, not by retroactively hiding
+                # the entire initial identity. Conflicts during the simultaneous
+                # anchor window are still evaluated below.
                 continue
             enriched_evidence = {
                 **evidence,
@@ -1915,6 +1933,7 @@ class MultiViewJointRun:
             "sync_quality": observation.sync_quality,
             "tracking_status": observation.tracking_status,
             "roster_admission_eligible": observation.roster_admission_eligible,
+            "court_position_source": observation.court_position_source,
             "lock_state": observation.lock_state,
             "bbox": list(observation.bbox) if observation.bbox is not None else None,
             "image_footpoint": list(observation.image_footpoint)
@@ -2197,6 +2216,25 @@ class MultiViewJointRun:
         return out
 
     @staticmethod
+    def _joint_court_measurement(result: Any, position: Any):
+        """Associate current measured feet, before any local-track smoothing.
+
+        A raw tracker can transfer between bodies. Its smoothed coordinates then
+        describe an earlier body while the bbox/feet already describe the current
+        frame. Global identity association must precede its own motion estimator.
+        """
+        raw = (getattr(result, "render_raw_by_track", None) or {}).get(int(position.track_id))
+        if raw is not None:
+            xy = (raw.get("x_ft"), raw.get("y_ft"))
+            source = "raw_projection"
+        else:
+            xy = position.court_position
+            source = "legacy_position"
+        if xy is None or len(xy) != 2 or not all(isinstance(v, (int, float)) and isfinite(v) for v in xy):
+            return None
+        return float(xy[0]), float(xy[1]), source
+
+    @staticmethod
     def _result_to_observations(
         view_id: str,
         result: Any,
@@ -2275,6 +2313,9 @@ class MultiViewJointRun:
                 int(getattr(result, "local_identity_epoch_by_track", {}).get(track_id, 0))
                 if player_id else 0
             )
+            measurement = MultiViewJointRun._joint_court_measurement(result, pos)
+            if measurement is None:
+                continue
             obs.append(
                 JointObservation(
                     view_id=view_id,
@@ -2284,8 +2325,9 @@ class MultiViewJointRun:
                         if result.mapped_take_timestamp_ms is not None
                         else take_ms
                     ),
-                    local_x_ft=pos.court_position[0],
-                    local_y_ft=pos.court_position[1],
+                    local_x_ft=measurement[0],
+                    local_y_ft=measurement[1],
+                    court_position_source=measurement[2],
                     canonical_x_ft=None,
                     canonical_y_ft=None,
                     view_player_id=str(player_id),
@@ -2371,7 +2413,10 @@ class MultiViewJointRun:
             )
             if not inside and not visible_outside:
                 continue
-            x_ft, y_ft = map(float, position.court_position)
+            measurement = MultiViewJointRun._joint_court_measurement(result, position)
+            if measurement is None:
+                continue
+            x_ft, y_ft = measurement[:2]
             # Baseline buffer initialization requires dual-camera evidence in
             # the associator; sideline candidates remain recovery-only.
             baseline_buffer = (
@@ -2394,8 +2439,9 @@ class MultiViewJointRun:
                         if getattr(result, "mapped_take_timestamp_ms", None) is not None
                         else take_ms
                     ),
-                    local_x_ft=float(position.court_position[0]),
-                    local_y_ft=float(position.court_position[1]),
+                    local_x_ft=x_ft,
+                    local_y_ft=y_ft,
+                    court_position_source=measurement[2],
                     view_player_id="",
                     tracklet_lineage_id=candidate_lineage,
                     track_id=track_id,

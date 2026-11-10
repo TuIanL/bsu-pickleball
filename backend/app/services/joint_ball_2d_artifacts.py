@@ -30,9 +30,13 @@ def build_joint_ball_2d_artifact(
             for row in view.get("frames") or []:
                 if cancellation_check:
                     cancellation_check()
-                index, timestamp = int(row["frame_index"]), float(row["timestamp_seconds"])
-                failed_grab = False
-                if next_index is not None and 0 <= index - next_index <= 16:
+                source_index = row.get("source_frame_index", row["frame_index"])
+                index = int(source_index if source_index is not None else row["frame_index"])
+                timestamp = float(row["timestamp_seconds"])
+                failed_grab = source_index is None
+                if failed_grab:
+                    pass
+                elif next_index is not None and 0 <= index - next_index <= 16:
                     for _ in range(index - next_index):
                         if not capture.grab():
                             failed_grab = True

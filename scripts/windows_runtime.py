@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import webbrowser
 
 import psutil
 from dotenv import dotenv_values
@@ -140,30 +141,38 @@ def check_assets(env: dict[str, str]) -> None:
 
 
 def start(env: dict[str, str]) -> None:
+    frontend_port = int(env.get("PICKLEBALL_FRONTEND_PORT", "5173"))
+    if not 1 <= frontend_port <= 65535 or frontend_port == 8000:
+        raise RuntimeError("Choose a frontend port between 1 and 65535, other than the API port 8000.")
+    frontend_url = f"http://127.0.0.1:{frontend_port}"
     existing = records()
-    if set(existing) == {"backend", "analysis-worker", "frontend"} and all(owned_process(record) for record in existing.values()):
-        print("Already running: http://127.0.0.1:5173")
+    live_existing = {name: record for name, record in existing.items() if owned_process(record)}
+    if set(live_existing) == {"backend", "analysis-worker", "frontend"}:
+        print(f"Already running: {frontend_url}")
         return
-    if any(owned_process(record) for record in existing.values()):
-        raise RuntimeError("A recorded service is running. Stop it before starting again.")
-    for port in (8000, 5173):
+    missing_ports = ([8000] if "backend" not in live_existing else []) + (
+        [frontend_port] if "frontend" not in live_existing else [])
+    for port in missing_ports:
         with socket.socket() as probe:
             try:
                 probe.bind(("127.0.0.1", port))
             except OSError as exc:
                 raise RuntimeError(f"Port {port} is in use. Stop the existing service first.") from exc
-    check_assets(env)
+    if "backend" not in live_existing or "analysis-worker" not in live_existing:
+        check_assets(env)
     node = shutil.which("node")
-    if not node:
+    if not node and "frontend" not in live_existing:
         raise RuntimeError("Node.js is not on PATH.")
     commands = {
         "backend": ([sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload", "--reload-dir", "app"], ROOT / "backend"),
         "analysis-worker": ([sys.executable, "-m", "app.analysis_worker"], ROOT / "backend"),
-        "frontend": ([node, str(ROOT / "node_modules/vite/bin/vite.js"), "--host", "127.0.0.1", "--port", "5173", "--strictPort"], ROOT),
+        "frontend": ([sys.executable, str(ROOT / "scripts/frontend_runtime.py"), "--port", str(frontend_port)], ROOT),
     }
     started = {}
     try:
         for name, (command, cwd) in commands.items():
+            if name in live_existing:
+                continue
             child_env = {**env, "PICKLEBALL_ENABLE_JOB_WORKER": "true" if name == "analysis-worker" else "false"}
             if name == "frontend":
                 # Vite otherwise treats a detached process's closed stdin as
@@ -173,12 +182,12 @@ def start(env: dict[str, str]) -> None:
                 flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_BREAKAWAY_FROM_JOB
                 process = subprocess.Popen(command, cwd=cwd, env=child_env, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=flags)
             started[name] = {"pid": process.pid, "created": psutil.Process(process.pid).create_time()}
-            STATE.write_text(json.dumps(started, indent=2), encoding="utf-8")
+            STATE.write_text(json.dumps({**live_existing, **started}, indent=2), encoding="utf-8")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        for name, url in (("backend", "http://127.0.0.1:8000/health"), ("frontend", "http://127.0.0.1:5173/__analysis_api/health")):
+        for name, url in (("backend", "http://127.0.0.1:8000/health"), ("frontend", f"{frontend_url}/__analysis_api/health")):
             deadline = time.monotonic() + 60
             while True:
-                if not all(owned_process(record) for record in started.values()):
+                if not all(owned_process(record) for record in {**live_existing, **started}.values()):
                     raise RuntimeError("A service exited. See .runtime/logs/.")
                 try:
                     with opener.open(url, timeout=2) as response:
@@ -189,12 +198,25 @@ def start(env: dict[str, str]) -> None:
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"{name} did not become ready. See .runtime/logs/.")
                 time.sleep(0.5)
-        print("Ready: http://127.0.0.1:5173")
+        print(f"Ready: {frontend_url}")
         print("API docs: http://127.0.0.1:8000/docs")
         print("Logs: .runtime/logs/; settings: .env.local")
         print("Worker changes require a stop/start; API and frontend reload automatically.")
     except BaseException:
-        stop()
+        # A failed frontend recovery must preserve an existing long analysis.
+        for record in started.values():
+            process = owned_process(record)
+            if process:
+                processes = process.children(recursive=True) + [process]
+                for child in reversed(processes):
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                _, alive = psutil.wait_procs(processes, timeout=5)
+                for child in alive:
+                    child.kill()
+        STATE.write_text(json.dumps(live_existing, indent=2), encoding="utf-8")
         raise
 
 
@@ -202,6 +224,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("start", "stop", "status", "prepare"))
     parser.add_argument("--no-models", action="store_true", help="Start the base application while model dependencies are being installed.")
+    parser.add_argument("--open-browser", action="store_true", help="Open the configured frontend after starting.")
     args = parser.parse_args()
     if args.action == "stop":
         stop()
@@ -214,6 +237,8 @@ def main() -> None:
             env.update(PICKLEBALL_ENABLE_MODEL_INFERENCE="false", PICKLEBALL_ENABLE_POSE_INFERENCE="false", PICKLEBALL_COURT_LINE_MODEL_PATH="", PICKLEBALL_MATCH_STATE_SEGMENTATION_ENABLED="false")
         if args.action == "start":
             start(env)
+            if args.open_browser:
+                webbrowser.open(f"http://127.0.0.1:{int(env.get('PICKLEBALL_FRONTEND_PORT', '5173'))}/library")
         else:
             print("Prepared .env.local for Windows and VS Code.")
 

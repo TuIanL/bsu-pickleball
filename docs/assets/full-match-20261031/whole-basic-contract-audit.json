@@ -1,0 +1,192 @@
+{
+  "job_id": "job-c8f5b539f7",
+  "requested_window_seconds": [
+    30.0,
+    587.15
+  ],
+  "physical_identity_verdict": "requires_source_video_review",
+  "notice": "Contract checks do not prove physical identity or ball detection precision.",
+  "tracking_reused": false,
+  "errors": {},
+  "original_four_player_verdict": "fail",
+  "original_failure_reasons": [
+    "cross_side_zero",
+    "Player_2.longest_gap",
+    "Player_3.longest_gap"
+  ],
+  "players": {
+    "Player_1": {
+      "detection_coverage": 0.9843675417661097,
+      "canonical_coverage": 0.9892601431980907,
+      "longest_gap_seconds": 1.5,
+      "cross_side_count": 2,
+      "missing_spans_over_half_second": [
+        {
+          "start": 403.733333,
+          "end": 404.266667,
+          "seconds": 0.533334
+        },
+        {
+          "start": 508.5,
+          "end": 509.633333,
+          "seconds": 1.133333
+        },
+        {
+          "start": 579.1,
+          "end": 579.833333,
+          "seconds": 0.733333
+        },
+        {
+          "start": 584.766667,
+          "end": 585.433333,
+          "seconds": 0.666666
+        }
+      ]
+    },
+    "Player_2": {
+      "detection_coverage": 0.9668257756563245,
+      "canonical_coverage": 0.9700477326968974,
+      "longest_gap_seconds": 9.266666000000043,
+      "cross_side_count": 4,
+      "missing_spans_over_half_second": [
+        {
+          "start": 102.0,
+          "end": 103.133333,
+          "seconds": 1.133333
+        },
+        {
+          "start": 300.966667,
+          "end": 310.233333,
+          "seconds": 9.266666
+        },
+        {
+          "start": 388.3,
+          "end": 389.8,
+          "seconds": 1.5
+        }
+      ]
+    },
+    "Player_3": {
+      "detection_coverage": 0.9748806682577565,
+      "canonical_coverage": 0.9752983293556086,
+      "longest_gap_seconds": 11.900000000000006,
+      "cross_side_count": 0,
+      "missing_spans_over_half_second": [
+        {
+          "start": 152.1,
+          "end": 164.0,
+          "seconds": 11.9
+        }
+      ]
+    },
+    "Player_4": {
+      "detection_coverage": 0.9945704057279237,
+      "canonical_coverage": 0.994928400954654,
+      "longest_gap_seconds": 1.5,
+      "cross_side_count": 0,
+      "missing_spans_over_half_second": [
+        {
+          "start": 444.866667,
+          "end": 446.1,
+          "seconds": 1.233333
+        }
+      ]
+    }
+  },
+  "views": {
+    "cam_1": {
+      "pose_frames": 8357,
+      "pose_subjects": 29975,
+      "ball_frames": 16715,
+      "accepted_ball_frames": 8254,
+      "people_frames": 16715,
+      "pose_subjects_by_player": {
+        "Player_1": 6322,
+        "Player_2": 7236,
+        "Player_3": 8135,
+        "Player_4": 8282
+      },
+      "keypoints_by_player": {
+        "Player_1": {
+          "count": 164372,
+          "visible_count": 162518,
+          "mean_confidence": 0.690811
+        },
+        "Player_2": {
+          "count": 188136,
+          "visible_count": 187343,
+          "mean_confidence": 0.693192
+        },
+        "Player_3": {
+          "count": 211510,
+          "visible_count": 210737,
+          "mean_confidence": 0.740096
+        },
+        "Player_4": {
+          "count": 215332,
+          "visible_count": 215014,
+          "mean_confidence": 0.739472
+        }
+      }
+    },
+    "cam_2": {
+      "pose_frames": 8357,
+      "pose_subjects": 31819,
+      "ball_frames": 16715,
+      "accepted_ball_frames": 9562,
+      "people_frames": 16715,
+      "pose_subjects_by_player": {
+        "Player_1": 8148,
+        "Player_2": 7897,
+        "Player_3": 7859,
+        "Player_4": 7915
+      },
+      "keypoints_by_player": {
+        "Player_1": {
+          "count": 211848,
+          "visible_count": 210454,
+          "mean_confidence": 0.747716
+        },
+        "Player_2": {
+          "count": 205322,
+          "visible_count": 199658,
+          "mean_confidence": 0.706067
+        },
+        "Player_3": {
+          "count": 204334,
+          "visible_count": 203926,
+          "mean_confidence": 0.704023
+        },
+        "Player_4": {
+          "count": 205790,
+          "visible_count": 204585,
+          "mean_confidence": 0.685279
+        }
+      }
+    }
+  },
+  "pose_sampling_stride": 2,
+  "pose_presence_any_camera": {
+    "Player_1": {
+      "sampled_timestamps": 8250,
+      "timeline_timestamps": 8357,
+      "fraction": 0.9871963623309801
+    },
+    "Player_2": {
+      "sampled_timestamps": 8108,
+      "timeline_timestamps": 8357,
+      "fraction": 0.9702046188823741
+    },
+    "Player_3": {
+      "sampled_timestamps": 8175,
+      "timeline_timestamps": 8357,
+      "fraction": 0.9782218499461529
+    },
+    "Player_4": {
+      "sampled_timestamps": 8333,
+      "timeline_timestamps": 8357,
+      "fraction": 0.9971281560368553
+    }
+  },
+  "basic_contract_verdict": "pass"
+}

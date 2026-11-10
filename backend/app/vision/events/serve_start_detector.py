@@ -30,6 +30,7 @@
 from __future__ import annotations  # 允许使用较新的类型注解写法（如 list[int]），兼容旧版本 Python
 
 from collections import defaultdict  # 带默认值的字典，用于按 track_id 分组
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field  # 数据类装饰器：用更简洁的方式定义"只装数据"的类
 from math import hypot  # 计算两点间直线距离（勾股定理）
 from typing import Any  # 任意类型，主要用于调试信息字典
@@ -690,7 +691,9 @@ class ServeStartDetector:
         current = samples[index]
         start = current.timestamp_seconds - self.config.pre_still_window_seconds
         end = current.timestamp_seconds - self.config.pre_still_gap_seconds
-        window = [sample for sample in samples[: index + 1] if start <= sample.timestamp_seconds <= end]
+        lo = bisect_left(samples, start, hi=index+1, key=lambda s: s.timestamp_seconds)
+        hi = bisect_right(samples, end, hi=index+1, key=lambda s: s.timestamp_seconds)
+        window = samples[lo:hi]
         if len(window) < 2 and index >= 2:
             window = samples[max(0, index - 2) : index]
         if len(window) < 2:
@@ -723,11 +726,9 @@ class ServeStartDetector:
         """
         active_players = 0
         for samples in samples_by_player.values():
-            window = [
-                sample
-                for sample in samples
-                if timestamp <= sample.timestamp_seconds <= timestamp + self.config.post_rally_window_seconds
-            ]
+            lo = bisect_left(samples, timestamp, key=lambda s: s.timestamp_seconds)
+            hi = bisect_right(samples, timestamp + self.config.post_rally_window_seconds, key=lambda s: s.timestamp_seconds)
+            window = samples[lo:hi]
             if len(window) < 2:
                 continue
             speeds = [self._sample_speed(a, b) for a, b in zip(window, window[1:], strict=False)]
@@ -755,7 +756,9 @@ class ServeStartDetector:
         for player_id, samples in samples_by_player.items():
             if player_id == server_player_id:
                 continue
-            window = [sample for sample in samples if start <= sample.timestamp_seconds <= end]
+            lo = bisect_left(samples, start, key=lambda s: s.timestamp_seconds)
+            hi = bisect_right(samples, end, key=lambda s: s.timestamp_seconds)
+            window = samples[lo:hi]
             if len(window) < 2:
                 continue
             considered += 1

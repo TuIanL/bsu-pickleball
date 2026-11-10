@@ -22,6 +22,7 @@ import type { RosterConfirmationRequest } from "../types/rallyContext";
 import {
   createMultiviewAnalysisJob,
   getCaptureTake,
+  getCurrentMetricCourtScene,
   getMetricCourtSceneDraft,
   publishMetricCourtScene,
   saveMetricCourtSceneDraft,
@@ -388,9 +389,12 @@ export function MultiViewAnalysisSetupPage({ captureTakeId, routeSessionId, retu
         if (cancelled) return;
         setTake(takeData);
         try {
-          const sceneDraft = await getMetricCourtSceneDraft(captureTakeId);
+          const [sceneDraft, publishedScene] = await Promise.all([
+            getMetricCourtSceneDraft(captureTakeId),
+            getCurrentMetricCourtScene(captureTakeId).catch(() => null),
+          ]);
+          if (!cancelled) setSavedScene(publishedScene ?? sceneDraft);
           if (!cancelled && sceneDraft) {
-            setSavedScene(sceneDraft);
             const sharedValue = restoreNetProfileValue(sceneDraft);
             const sharedProfile = buildNetProfile(
               sharedValue.mode,

@@ -1,0 +1,412 @@
+{
+  "schema_version": "four-player-identification-quality.v1",
+  "job_id": "job-09fca45fa6",
+  "baseline_job_id": null,
+  "status": "available",
+  "detail": "",
+  "algorithm_version": "joint_tracking_v2+frozen-central-clothing.v2",
+  "config_signature": "99a278810df79788a921037d9463ad48a11ad71ee411161915b7829480c3d763",
+  "thresholds": {
+    "min_player_coverage": 0.7,
+    "max_gap_seconds": 2.0,
+    "required_confirmed_roster": 4,
+    "max_identity_switches": 0,
+    "max_duplicate_bindings": 0,
+    "max_cross_side_samples": 0,
+    "max_local_slot_reassociation_violations": 0,
+    "max_display_topology_transitions": 12
+  },
+  "attempted_ticks": 560,
+  "duration_seconds": 18.633332999999993,
+  "confirmed_roster_count": 4,
+  "players": {
+    "Player_1": {
+      "player_id": "Player_1",
+      "detection_ticks": 499,
+      "canonical_ticks": 503,
+      "detection_coverage": 0.8910714285714286,
+      "canonical_coverage": 0.8982142857142857,
+      "longest_gap_seconds": 1.5,
+      "source_track_history": {
+        "cam_1": [
+          18,
+          26,
+          30,
+          31,
+          32,
+          34,
+          36,
+          41,
+          50,
+          59,
+          63,
+          74,
+          79,
+          86,
+          92
+        ],
+        "cam_2": [
+          2,
+          16,
+          59,
+          61,
+          63,
+          67
+        ]
+      },
+      "source_track_count": 21,
+      "reconnect_count": 0,
+      "identity_switch_count": 0,
+      "duplicate_binding_count": 0,
+      "cross_side_count": 1,
+      "ambiguous_count": 0,
+      "quarantined_count": 0,
+      "accepted_count": 503,
+      "local_slot_reassociation_violation_count": 0,
+      "display_topology_transition_count": 7,
+      "appearance": {
+        "descriptor_attempts": 8587,
+        "descriptor_available": 8531,
+        "mean_quality": null,
+        "template_updates": 890,
+        "template_freezes": 0,
+        "template_age_ticks": 539,
+        "decision_contributions": 1043,
+        "decision_supports": 3443,
+        "decision_conflicts": 516,
+        "effective_weight": 0.0,
+        "fallback_reason": "non_discriminative_samples:3037"
+      }
+    },
+    "Player_2": {
+      "player_id": "Player_2",
+      "detection_ticks": 514,
+      "canonical_ticks": 515,
+      "detection_coverage": 0.9178571428571428,
+      "canonical_coverage": 0.9196428571428571,
+      "longest_gap_seconds": 1.5,
+      "source_track_history": {
+        "cam_1": [
+          3,
+          39,
+          54,
+          65,
+          71,
+          76,
+          79,
+          83,
+          84,
+          85,
+          87
+        ],
+        "cam_2": [
+          1,
+          16,
+          27,
+          69
+        ]
+      },
+      "source_track_count": 15,
+      "reconnect_count": 0,
+      "identity_switch_count": 0,
+      "duplicate_binding_count": 0,
+      "cross_side_count": 1,
+      "ambiguous_count": 0,
+      "quarantined_count": 0,
+      "accepted_count": 515,
+      "local_slot_reassociation_violation_count": 0,
+      "display_topology_transition_count": 4,
+      "appearance": {
+        "descriptor_attempts": 8587,
+        "descriptor_available": 8531,
+        "mean_quality": null,
+        "template_updates": 1001,
+        "template_freezes": 0,
+        "template_age_ticks": 555,
+        "decision_contributions": 1043,
+        "decision_supports": 3443,
+        "decision_conflicts": 516,
+        "effective_weight": 0.0,
+        "fallback_reason": "non_discriminative_samples:3037"
+      }
+    },
+    "Player_3": {
+      "player_id": "Player_3",
+      "detection_ticks": 513,
+      "canonical_ticks": 515,
+      "detection_coverage": 0.9160714285714285,
+      "canonical_coverage": 0.9196428571428571,
+      "longest_gap_seconds": 1.5,
+      "source_track_history": {
+        "cam_1": [
+          2,
+          61,
+          70,
+          76,
+          88
+        ],
+        "cam_2": [
+          2,
+          11,
+          42,
+          66
+        ]
+      },
+      "source_track_count": 9,
+      "reconnect_count": 0,
+      "identity_switch_count": 0,
+      "duplicate_binding_count": 0,
+      "cross_side_count": 1,
+      "ambiguous_count": 0,
+      "quarantined_count": 0,
+      "accepted_count": 515,
+      "local_slot_reassociation_violation_count": 0,
+      "display_topology_transition_count": 4,
+      "appearance": {
+        "descriptor_attempts": 8587,
+        "descriptor_available": 8531,
+        "mean_quality": null,
+        "template_updates": 1067,
+        "template_freezes": 0,
+        "template_age_ticks": 551,
+        "decision_contributions": 1043,
+        "decision_supports": 3443,
+        "decision_conflicts": 516,
+        "effective_weight": 0.0,
+        "fallback_reason": "non_discriminative_samples:3037"
+      }
+    },
+    "Player_4": {
+      "player_id": "Player_4",
+      "detection_ticks": 514,
+      "canonical_ticks": 515,
+      "detection_coverage": 0.9178571428571428,
+      "canonical_coverage": 0.9196428571428571,
+      "longest_gap_seconds": 1.5,
+      "source_track_history": {
+        "cam_1": [
+          1,
+          52,
+          84,
+          85
+        ],
+        "cam_2": [
+          4,
+          14,
+          26,
+          31,
+          33,
+          34,
+          42,
+          51,
+          60,
+          65,
+          68,
+          70
+        ]
+      },
+      "source_track_count": 16,
+      "reconnect_count": 0,
+      "identity_switch_count": 0,
+      "duplicate_binding_count": 0,
+      "cross_side_count": 0,
+      "ambiguous_count": 0,
+      "quarantined_count": 0,
+      "accepted_count": 515,
+      "local_slot_reassociation_violation_count": 0,
+      "display_topology_transition_count": 5,
+      "appearance": {
+        "descriptor_attempts": 8587,
+        "descriptor_available": 8531,
+        "mean_quality": null,
+        "template_updates": 1027,
+        "template_freezes": 0,
+        "template_age_ticks": 550,
+        "decision_contributions": 1043,
+        "decision_supports": 3443,
+        "decision_conflicts": 516,
+        "effective_weight": 0.0,
+        "fallback_reason": "non_discriminative_samples:3037"
+      }
+    }
+  },
+  "funnel": {
+    "attempted_ticks": 560,
+    "base_detection_ticks": 1030,
+    "roi_attempts": 0,
+    "roi_hits": 0,
+    "tracker_fragments": 54,
+    "duplicate_binding_count": 0,
+    "cross_side_count": 0,
+    "quarantined_count": 0,
+    "identity_switch_count": 0,
+    "local_slot_reassociation_violation_count": 0,
+    "display_topology_transition_count": 20,
+    "bbox_footpoint_inconsistency_count": 0
+  },
+  "candidate_recovery": {
+    "available": true,
+    "enabled": true,
+    "detail": null,
+    "minimum_consecutive_ticks": 3,
+    "maximum_step_ft": 6.0,
+    "unique_match_margin_ft": 2.0,
+    "evidence_ttl_ticks": 60,
+    "pending_evidence_count": 3,
+    "counters": {
+      "unmatched_recovery_evidence_seen": 572,
+      "unmatched_recovery_pending": 357,
+      "unmatched_recovery_track_absent": 195,
+      "unmatched_recovery_rejected_geometry": 175,
+      "unmatched_recovery_accepted": 40
+    }
+  },
+  "per_view_funnel": {
+    "cam_2": {
+      "available_ticks": 560,
+      "raw_detection_count": 4195,
+      "roi_filtered_base_count": 4195,
+      "local_track_count": 2146,
+      "local_candidate_count": 1878,
+      "global_candidate_observation_count": 211,
+      "global_metric_eligible_sample_count": 515,
+      "raw_detection_trace_available": true
+    },
+    "cam_1": {
+      "available_ticks": 560,
+      "raw_detection_count": 4341,
+      "roi_filtered_base_count": 4341,
+      "local_track_count": 2017,
+      "local_candidate_count": 2105,
+      "global_candidate_observation_count": 305,
+      "global_metric_eligible_sample_count": 515,
+      "raw_detection_trace_available": true
+    }
+  },
+  "per_canonical_end_funnel": {
+    "end_a": {
+      "global_input_observation_count": 1981,
+      "global_candidate_observation_count": 273,
+      "assigned_observation_count": 1640,
+      "metric_eligible_sample_count": 856
+    },
+    "end_b": {
+      "global_input_observation_count": 1350,
+      "global_candidate_observation_count": 80,
+      "assigned_observation_count": 1247,
+      "metric_eligible_sample_count": 678
+    },
+    "unknown": {
+      "global_input_observation_count": 1348,
+      "global_candidate_observation_count": 163,
+      "assigned_observation_count": 1128,
+      "metric_eligible_sample_count": 514
+    }
+  },
+  "identity_slots": {
+    "Player_1": {
+      "status": "confirmed",
+      "reason": null,
+      "canonical_end": "end_a",
+      "global_player_id": "global_player_2",
+      "tracklet_lineage_id": "cam_2:track:2",
+      "anchor_timestamp_ms": 570000,
+      "raw_detection_count": null,
+      "local_track_count": null,
+      "metric_eligible_sample_count": 503,
+      "conflicts_with_roster_json": false
+    },
+    "Player_2": {
+      "status": "confirmed",
+      "reason": null,
+      "canonical_end": "end_a",
+      "global_player_id": "global_player_1",
+      "tracklet_lineage_id": "cam_2:track:1",
+      "anchor_timestamp_ms": 570000,
+      "raw_detection_count": null,
+      "local_track_count": null,
+      "metric_eligible_sample_count": 515,
+      "conflicts_with_roster_json": false
+    },
+    "Player_3": {
+      "status": "confirmed",
+      "reason": null,
+      "canonical_end": "end_b",
+      "global_player_id": "global_player_4",
+      "tracklet_lineage_id": "cam_1:track:2",
+      "anchor_timestamp_ms": 570000,
+      "raw_detection_count": null,
+      "local_track_count": null,
+      "metric_eligible_sample_count": 515,
+      "conflicts_with_roster_json": false
+    },
+    "Player_4": {
+      "status": "confirmed",
+      "reason": null,
+      "canonical_end": "end_b",
+      "global_player_id": "global_player_3",
+      "tracklet_lineage_id": "cam_1:track:1",
+      "anchor_timestamp_ms": 570000,
+      "raw_detection_count": null,
+      "local_track_count": null,
+      "metric_eligible_sample_count": 515,
+      "conflicts_with_roster_json": false
+    }
+  },
+  "mapping_confirmation_available": true,
+  "mapping_confirmed_by_player": {
+    "Player_1": true,
+    "Player_2": true,
+    "Player_3": true,
+    "Player_4": true
+  },
+  "mapping_conflict_with_audit": {},
+  "camera_profiles": {
+    "cam_1->cam_2": {
+      "version": "descriptor-affine.v1",
+      "source_view": "cam_1",
+      "target_view": "cam_2",
+      "sample_count": 48,
+      "residual": 0.07428296655416489,
+      "confidence": 0.787762952702386,
+      "available": true
+    },
+    "cam_2->cam_1": {
+      "version": "descriptor-affine.v1",
+      "source_view": "cam_2",
+      "target_view": "cam_1",
+      "sample_count": 48,
+      "residual": 0.09794125705957413,
+      "confidence": 0.7201678369726454,
+      "available": true
+    }
+  },
+  "hard_invariants": {
+    "confirmed_roster": true,
+    "duplicate_binding_zero": true,
+    "cross_side_zero": false,
+    "identity_switch_zero": true,
+    "local_slot_reassociation_zero": true,
+    "canonical_identity_anchors_confirmed": true,
+    "identity_audit_single_source": true,
+    "two_confirmed_players_per_canonical_end": true
+  },
+  "absolute_gates": {
+    "Player_1.coverage": true,
+    "Player_1.longest_gap": true,
+    "Player_1.display_topology_stable": true,
+    "Player_2.coverage": true,
+    "Player_2.longest_gap": true,
+    "Player_2.display_topology_stable": true,
+    "Player_3.coverage": true,
+    "Player_3.longest_gap": true,
+    "Player_3.display_topology_stable": true,
+    "Player_4.coverage": true,
+    "Player_4.longest_gap": true,
+    "Player_4.display_topology_stable": true
+  },
+  "verdict": "fail",
+  "failure_reasons": [
+    "cross_side_zero"
+  ]
+}

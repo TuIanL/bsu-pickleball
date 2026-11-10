@@ -296,6 +296,38 @@ def test_stale_heartbeat_does_not_interrupt_live_external_worker(tmp_path, monke
     assert retained.workerRunId == claimed.workerRunId
 
 
+def test_process_liveness_query_keeps_real_child_running():
+    import os
+    import subprocess
+    import sys
+    from app.services.job_orchestration import _is_local_process_alive
+    from app.services.vidat_server import _pid_alive
+    child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(15)'],
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+    try:
+        for _ in range(3):
+            assert _is_local_process_alive(child.pid)
+            assert _pid_alive(child.pid)
+            assert child.poll() is None
+    finally:
+        child.terminate();child.wait(timeout=5)
+    assert not _is_local_process_alive(child.pid)
+    assert not _pid_alive(child.pid)
+
+
+def test_windows_liveness_probe_never_sends_a_kill_signal(monkeypatch):
+    import pytest
+    psutil=pytest.importorskip('psutil')
+    from types import SimpleNamespace
+    import app.services.job_orchestration as orchestration
+    def unsafe(*args):
+        raise AssertionError('A Windows liveness query must not call os.kill')
+    monkeypatch.setattr(orchestration,'os',SimpleNamespace(name='nt',kill=unsafe))
+    monkeypatch.setattr(psutil,'pid_exists',lambda pid:pid==123)
+    assert orchestration._is_local_process_alive(123)
+    assert not orchestration._is_local_process_alive(456)
+
+
 def test_worker_heartbeat_runs_without_stage_progress_callbacks(tmp_path):
     storage = make_storage(tmp_path)
     store = JobStore(storage)

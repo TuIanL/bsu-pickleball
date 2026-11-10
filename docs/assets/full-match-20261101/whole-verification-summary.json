@@ -1,0 +1,30 @@
+{
+  "job_id": "job-0d8ec77a76",
+  "run_id": "mvr_325be3ae6548",
+  "status": "succeeded",
+  "config_signature": "998d8f3e52fcd2ce5761e49a1f011e6064f5d6e32e09106af0ddb4895035563d",
+  "created": "2026-11-01T11:06:14.849228+00:00",
+  "finished": "2026-11-01T12:03:59.803924+00:00",
+  "final-whole-basic-audit.json": {
+    "errors": {},
+    "original_four_player_verdict": "fail",
+    "original_failure_reasons": [
+      "Player_2.longest_gap",
+      "Player_3.longest_gap"
+    ],
+    "basic_contract_verdict": "pass"
+  },
+  "final-whole-reviewed-identity-audit.json": {
+    "sample_count": 29,
+    "passed_samples": 29,
+    "verdict": "pass",
+    "failures": []
+  },
+  "final-whole-projection-input-audit.json": {
+    "counts": {
+      "checked": 135965
+    },
+    "maximum_error_ft": 2.1972320632906738e-14,
+    "verdict": "pass"
+  }
+}

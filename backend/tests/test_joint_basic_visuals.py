@@ -87,3 +87,15 @@ def test_requested_pose_failure_does_not_turn_into_success(tmp_path, monkeypatch
                                    videos={}, reference_view_id="cam_1")
     assert not written
     assert result.artifacts.pose_overlay_status is None
+
+
+def test_missing_formal_overlay_reports_generation_failure_not_input_media(tmp_path):
+    settings, result, storage, job, written = setup_case(tmp_path)
+    result.artifacts.fused_player_overlay_detail = "MemoryError: output allocation"
+    def missing(_):
+        raise FileNotFoundError("fused.json")
+    storage.read_json = missing
+    with pytest.raises(RuntimeError, match="MemoryError"):
+        publish_joint_basic_visuals(job=job, result=result, storage=storage, settings=settings,
+                                   videos={}, reference_view_id="cam_1")
+    assert not written

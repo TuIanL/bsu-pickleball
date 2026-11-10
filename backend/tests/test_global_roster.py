@@ -53,6 +53,26 @@ def _seed_roster(n: int = 2, *, positions: list[tuple[float, float]] | None = No
     return reg
 
 
+def test_candidate_promotion_preserves_actual_source_frames_in_mid_video_clip():
+    reg=GlobalPlayerRegistry(expected_player_count=4,candidate_promote_dual_ticks=2)
+    assoc=GlobalPlayerAssociator(reg)
+    for tick in range(3):
+        real=[]
+        for view,offset in [('cam_1',0),('cam_2',-2)]:
+            obs=_obs(view,5.,8.,pid='P1',tid=1,ts=568.5+tick/30,frame=34110+tick*2+offset)
+            obs.bbox=[100.,100.,150.,300.]
+            real.append(obs)
+        updates=assoc.process_tick(real,568.5+tick/30,{'cam_1':IDENTITY,'cam_2':IDENTITY},tick=tick)
+        assert all(u.observation in real for u in updates)
+        assert all(u.observation.source_frame_index >=34108 for u in updates)
+        if assoc.diagnostics.get('candidate_promoted'):
+            assert len(updates)==2
+            assert {u.observation.source_frame_index for u in updates}=={34110+tick*2,34108+tick*2}
+            break
+    else:
+        raise AssertionError('Fixture must exercise actual candidate promotion')
+
+
 # ---- Registry roster 化（tasks 1.5）----
 
 

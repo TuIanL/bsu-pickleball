@@ -42,6 +42,14 @@ def test_quality_schema_requires_all_four_players():
         raise AssertionError("missing Player_2 must fail closed")
 
 
+def test_recovered_missing_runtime_diagnostics_cannot_report_identity_acceptance_pass():
+    artifact=_artifact().model_copy(update={"runtime_diagnostics_complete":False})
+    result=evaluate_quality(artifact)
+    assert result.verdict=='fail'
+    assert 'runtime_diagnostic_evidence_complete' in result.failure_reasons
+    assert all(result.absolute_gates.values())
+
+
 def test_evaluate_quality_reports_per_player_absolute_gate():
     artifact = _artifact()
     artifact.players["Player_2"].canonical_coverage = 0.4
@@ -91,6 +99,15 @@ def test_old_job_without_artifact_is_structured_unavailable():
     artifact = unavailable_quality("legacy-job", "artifact missing")
     assert artifact.status == "unavailable"
     assert artifact.verdict == "unavailable"
+
+
+def test_joint_quality_records_the_actual_configuration_signature():
+    quality=build_quality_from_joint_artifacts(job_id='j',trajectory={'samples':[]},
+        roster={'players':[]}, algorithm_version='joint_tracking_v2+frozen-central-clothing.v2',
+        config_signature='run-configuration-hash')
+    assert quality.config_signature == 'run-configuration-hash'
+    assert quality.algorithm_version == 'joint_tracking_v2+frozen-central-clothing.v2'
+    assert quality.verdict != 'pass'
 
 
 def test_quality_round_trip_is_stable():

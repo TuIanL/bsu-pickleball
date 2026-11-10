@@ -25,8 +25,8 @@ def test_ball_2d_keeps_view_clock_identity_and_does_not_publish_predictions():
                 source="detector", reject_reason=None, quality_status="accepted",
             )
     views = {k: {"source": {"width": 100, "height": 100}, "frames": [
-        {"frame_index": i, "timestamp_seconds": 30.},
-        {"frame_index": i + 2, "timestamp_seconds": 30.033333},
+        {"frame_index": 10, "source_frame_index": i, "timestamp_seconds": 30.},
+        {"frame_index": 12, "source_frame_index": i + 2, "timestamp_seconds": 30.033333},
     ]} for k, i in [("cam_1", 10), ("cam_2", 8)]}
     artifact = build_joint_ball_2d_artifact(
         job_id="j", reference_view_id="cam_1", timing_overlay={"views": views},
@@ -54,3 +54,15 @@ def test_ball_tentative_points_and_pre_window_context_are_not_real_detections():
     )
     assert artifact["status"] == "no_detections"
     assert artifact["samples"][0]["image_xy"] is None
+
+
+def test_missing_source_frame_is_not_replaced_with_reference_frame_pixels():
+    def forbidden(*args, **kwargs):
+        raise AssertionError('inference used an unavailable source frame')
+    artifact=build_joint_ball_2d_artifact(
+        job_id='j',reference_view_id='cam_1',video_paths={'cam_1':Path('x')},
+        timing_overlay={'views':{'cam_1':{'frames':[
+            {'frame_index':10,'source_frame_index':None,'timestamp_seconds':30.}]}}},
+        tracker_factory=lambda _:SimpleNamespace(update=forbidden),capture_factory=Capture)
+    assert not artifact['samples'][0]['accepted']
+    assert artifact['samples'][0]['image_xy'] is None
