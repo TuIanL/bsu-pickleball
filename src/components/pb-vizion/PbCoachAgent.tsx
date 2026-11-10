@@ -18,11 +18,12 @@ import {
 } from "lucide-react";
 import { useCoachAgent } from "../../hooks/useCoachAgent";
 import { usePlayerReportEvidence } from "../../hooks/usePlayerReportEvidence";
-import { coachSuggestedQuestions } from "../../services/coachAgentClient";
+import { coachAgentDefaultMode, coachSuggestedQuestions, type CoachAgentMode } from "../../services/coachAgentClient";
 import { buildCoachContext } from "../../services/coachAgentContext";
 import type { AnalysisReport } from "../../types/report";
 import type { CoachEvidenceItem, CoachMessage, CoachToolCall } from "../../types/coachAgent";
 import PbCoachPlanCard from "./PbCoachPlanCard";
+import PbCoachRichText from "./PbCoachRichText";
 
 function QualityDot({ quality }: { quality: CoachEvidenceItem["quality"] }) {
   const color =
@@ -89,10 +90,7 @@ function AssistantBubble({ message, evidence }: { message: CoachMessage; evidenc
         ) : null}
 
         {message.text ? (
-          <p className="whitespace-pre-wrap text-[13px] leading-[1.7] text-[var(--pb-text-primary)]">
-            {message.text}
-            {message.streaming ? <span className="pb-coach-cursor">▍</span> : null}
-          </p>
+          <PbCoachRichText text={message.text} streaming={message.streaming} />
         ) : message.streaming ? (
           <p className="text-[12px] text-[var(--pb-text-muted)]">正在读取证据…</p>
         ) : null}
@@ -119,7 +117,14 @@ function AssistantBubble({ message, evidence }: { message: CoachMessage; evidenc
   );
 }
 
-export default function PbCoachAgent({ report }: { report: AnalysisReport }) {
+export default function PbCoachAgent({
+  report,
+  initialMode = coachAgentDefaultMode,
+}: {
+  report: AnalysisReport;
+  /** 默认模式：模型模式调后端工具链；演示模式回放本地剧本（也是测试入口） */
+  initialMode?: CoachAgentMode;
+}) {
   const subject = useMemo(() => {
     const players = report.performanceInsights?.subjects?.filter((item) => item.kind === "player") ?? [];
     const first = players[0];
@@ -135,7 +140,8 @@ export default function PbCoachAgent({ report }: { report: AnalysisReport }) {
     [report, subject, evidence]
   );
 
-  const { messages, plan, busy, error, send, reset, stop } = useCoachAgent(context);
+  const [mode, setMode] = useState<CoachAgentMode>(initialMode);
+  const { messages, plan, busy, error, send, reset, stop } = useCoachAgent(context, mode);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const isDemo = context.source === "demo";
@@ -144,6 +150,12 @@ export default function PbCoachAgent({ report }: { report: AnalysisReport }) {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [messages]);
+
+  const switchMode = (next: CoachAgentMode) => {
+    if (next === mode) return;
+    reset();
+    setMode(next);
+  };
 
   const submit = (text: string) => {
     if (!text.trim() || busy) return;
@@ -180,14 +192,38 @@ export default function PbCoachAgent({ report }: { report: AnalysisReport }) {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={reset}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--pb-card-border)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--pb-text-secondary)] transition hover:border-[var(--pb-primary)]/40 hover:text-[var(--pb-primary-dark)]"
-        >
-          <RotateCcw size={12} aria-hidden="true" />
-          重新开始
-        </button>
+        <div className="flex items-center gap-2">
+          <div
+            className="flex items-center rounded-lg border border-[var(--pb-card-border)] p-0.5 text-[10.5px] font-semibold"
+            title="模型模式：调用 DeepSeek V4.1-Flash 并执行工具；演示模式：回放本地剧本"
+          >
+            {([
+              { key: "live" as const, label: "模型" },
+              { key: "demo" as const, label: "演示" },
+            ]).map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => switchMode(item.key)}
+                className={
+                  mode === item.key
+                    ? "rounded-md bg-[var(--pb-primary)]/14 px-2 py-1 text-[var(--pb-primary-dark)]"
+                    : "rounded-md px-2 py-1 text-[var(--pb-text-muted)] transition hover:text-[var(--pb-text-secondary)]"
+                }
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={reset}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--pb-card-border)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--pb-text-secondary)] transition hover:border-[var(--pb-primary)]/40 hover:text-[var(--pb-primary-dark)]"
+          >
+            <RotateCcw size={12} aria-hidden="true" />
+            重新开始
+          </button>
+        </div>
       </div>
 
       {/* 上下文条：让教师知道 Agent 读的是哪份数据 */}

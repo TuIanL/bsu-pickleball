@@ -130,4 +130,5 @@ export type CoachStreamEvent =
   | { type: "text_delta"; delta: string }
   | { type: "evidence"; items: CoachEvidenceItem[] }
   | { type: "plan"; plan: CoachTrainingPlan }
-  | { type: "limitation"; text: string };
+  | { type: "limitation"; text: string }
+  | { type: "error"; message: string };

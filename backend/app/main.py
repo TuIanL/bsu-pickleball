@@ -15,6 +15,7 @@ from app.api.routes_calibration import manual_router as manual_calibration_route
 from app.api.routes_calibration import router as calibration_router
 from app.api.routes_camera import router as camera_router
 from app.api.routes_coding_actions import router as coding_actions_router
+from app.api.routes_coach_agent import router as coach_agent_router
 from app.api.routes_field_sessions import router as field_sessions_router
 from app.api.routes_metric_court_scene import router as metric_court_scene_router
 from app.api.routes_recording import router as recording_router
@@ -133,6 +134,7 @@ app.include_router(coding_actions_router)
 app.include_router(segment_editing_router)
 app.include_router(analysis_batch_router)
 app.include_router(scoring_calibration_router)
+app.include_router(coach_agent_router)
 
 # 挂载双摄短录测试首帧静态目录
 _TEST_FRAMES_DIR = str(settings.resolved_static_test_frames_dir)

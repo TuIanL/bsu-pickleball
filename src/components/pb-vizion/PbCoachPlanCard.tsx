@@ -130,7 +130,7 @@ export default function PbCoachPlanCard({
           下次复测
         </p>
         <ul className="mt-1.5 space-y-1">
-          {plan.reassess.map((item) => (
+          {(plan.reassess.length > 0 ? plan.reassess : ["本轮未给出复测阈值，可在下一轮补充"]).map((item) => (
             <li key={item} className="flex gap-1.5 text-[11.5px] leading-[1.45] text-[var(--pb-text-secondary)]">
               <span className="mt-[5px] size-1 shrink-0 rounded-full bg-[var(--pb-primary)]" />
               <span>{item}</span>

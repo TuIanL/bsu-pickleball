@@ -17,7 +17,7 @@ function askChip(text: string) {
 
 describe("PbCoachAgent", () => {
   it("未提问时展示示例问题与计划空态，并标注演示数据", () => {
-    render(<PbCoachAgent report={demoAnalysisReport} />);
+    render(<PbCoachAgent report={demoAnalysisReport} initialMode="demo" />);
 
     expect(screen.getByText("AI 教学助教")).toBeTruthy();
     expect(screen.getByText("演示样例数据")).toBeTruthy();
@@ -27,7 +27,7 @@ describe("PbCoachAgent", () => {
   });
 
   it("回答先展示工具调用，再给出带证据引用的结论", async () => {
-    render(<PbCoachAgent report={demoAnalysisReport} />);
+    render(<PbCoachAgent report={demoAnalysisReport} initialMode="demo" />);
 
     askChip(MOVEMENT_QUESTION);
 
@@ -38,7 +38,7 @@ describe("PbCoachAgent", () => {
   }, 20000);
 
   it("训练计划按对话版本递增：v1 生成后改成 v2 并保留原目标", async () => {
-    render(<PbCoachAgent report={demoAnalysisReport} />);
+    render(<PbCoachAgent report={demoAnalysisReport} initialMode="demo" />);
 
     askChip(PLAN_QUESTION);
     await waitFor(() => expect(screen.getByText("v1")).toBeTruthy(), { timeout: 12000 });

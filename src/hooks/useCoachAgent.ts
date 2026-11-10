@@ -5,7 +5,7 @@
 // 不做：任何业务判断（证据与计划都来自 client 事件）。
 // =============================================================
 import { useCallback, useEffect, useRef, useState } from "react";
-import { coachAgentMode, streamCoachTurn } from "../services/coachAgentClient";
+import { coachAgentDefaultMode, streamCoachTurn, type CoachAgentMode } from "../services/coachAgentClient";
 import type {
   CoachContext,
   CoachMessage,
@@ -29,7 +29,10 @@ export interface UseCoachAgentResult {
   reset: () => void;
 }
 
-export function useCoachAgent(context: CoachContext): UseCoachAgentResult {
+export function useCoachAgent(
+  context: CoachContext,
+  mode: CoachAgentMode = coachAgentDefaultMode
+): UseCoachAgentResult {
   const [messages, setMessages] = useState<CoachMessage[]>([]);
   const [plan, setPlan] = useState<CoachTrainingPlan | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,7 +87,7 @@ export function useCoachAgent(context: CoachContext): UseCoachAgentResult {
         try {
           const stream = streamCoachTurn(
             { message: text, context, plan: planRef.current, history },
-            coachAgentMode,
+            mode,
             controller.signal
           );
           for await (const event of stream) {
@@ -119,6 +122,9 @@ export function useCoachAgent(context: CoachContext): UseCoachAgentResult {
               case "limitation":
                 patchMessage(assistantId, (prev) => ({ ...prev, limitation: event.text }));
                 break;
+              case "error":
+                setError(event.message);
+                break;
               default:
                 break;
             }
@@ -143,7 +149,7 @@ export function useCoachAgent(context: CoachContext): UseCoachAgentResult {
 
       void run();
     },
-    [busy, context, patchMessage]
+    [busy, context, mode, patchMessage]
   );
 
   const reset = useCallback(() => {

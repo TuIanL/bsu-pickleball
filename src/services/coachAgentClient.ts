@@ -23,8 +23,15 @@ import type {
 
 export type CoachAgentMode = "demo" | "live";
 
-export const coachAgentMode: CoachAgentMode =
-  (import.meta.env.VITE_COACH_AGENT_MODE as CoachAgentMode | undefined) === "live" ? "live" : "demo";
+/** 与 analysisClient 保持同一后端入口：dev 下由 vite 代理到 127.0.0.1:8000 并注入 token */
+const API_BASE_URL = import.meta.env.VITE_ANALYSIS_API_URL ?? "/__analysis_api";
+
+/** 默认走真实模型；显式设置 VITE_COACH_AGENT_MODE=demo 可退回本地剧本 */
+export const coachAgentDefaultMode: CoachAgentMode =
+  (import.meta.env.VITE_COACH_AGENT_MODE as CoachAgentMode | undefined) === "demo" ? "demo" : "live";
+
+/** @deprecated 使用 coachAgentDefaultMode；保留别名避免旧引用断裂 */
+export const coachAgentMode = coachAgentDefaultMode;
 
 /** 面板上的快捷问题（与剧本一一对应，保证演示顺序可控） */
 export const coachSuggestedQuestions = coachDemoScenes.map((scene) => ({
@@ -135,14 +142,21 @@ async function* streamLiveTurn(
   request: CoachTurnRequest,
   signal?: AbortSignal
 ): AsyncGenerator<CoachStreamEvent> {
-  const response = await fetch("/api/coach/chat", {
+  const response = await fetch(`${API_BASE_URL}/api/coach/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
     signal,
   });
   if (!response.ok || !response.body) {
-    throw new Error(`教学助教接口返回 ${response.status}`);
+    // 503 通常表示本地代理缺 PICKLEBALL_API_TOKEN；404 表示后端未启动
+    const hint =
+      response.status === 503
+        ? "本地代理未配置访问令牌，请用 npm run app:start 启动"
+        : response.status === 404
+          ? "后端未启动或未注册教学助教路由"
+          : "请检查后端日志";
+    throw new Error(`教学助教接口返回 ${response.status}（${hint}）`);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -169,7 +183,7 @@ async function* streamLiveTurn(
 /** 统一入口：UI 只调它 */
 export function streamCoachTurn(
   request: CoachTurnRequest,
-  mode: CoachAgentMode = coachAgentMode,
+  mode: CoachAgentMode = coachAgentDefaultMode,
   signal?: AbortSignal
 ): AsyncGenerator<CoachStreamEvent> {
   return mode === "live" ? streamLiveTurn(request, signal) : streamDemoTurn(request, signal);
