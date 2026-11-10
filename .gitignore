@@ -3,6 +3,8 @@ dist
 .DS_Store
 *.local
 coverage
+# Local presentation outputs, including .build caches and validation previews
+/output/presentations/
 .runtime/
 /runs/
 /datasets/*
