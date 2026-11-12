@@ -276,3 +276,54 @@ def test_text_file_is_not_probed_as_video(tmp_path):
     fake = _write(tmp_path / "fake.mp4", b"definitely not a video")
 
     assert probe_media(fake).status in {"error", "skipped"}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+def test_state_matrix_matches_documented_rules(tmp_path):
+    """Verify every row of the 状态映射 table in research-evidence-contract.md."""
+    payload = b"state matrix"
+    expected_digest = hashlib.sha256(payload).hexdigest()
+
+    # 路径不存在
+    absent = inspect_file(tmp_path / "absent.mp4")
+    assert (absent.availability, absent.verification) == ("missing", "unknown")
+
+    # 存在但权限不足
+    locked = _write(tmp_path / "locked.mp4", payload)
+    locked.chmod(0o000)
+    try:
+        unreachable = inspect_file(locked)
+    finally:
+        locked.chmod(0o644)
+    assert (unreachable.availability, unreachable.verification) == (
+        "unreachable",
+        "not_checked",
+    )
+
+    target = _write(tmp_path / "clip.mp4", payload)
+
+    # 摘要计算超时
+    timed_out = inspect_file(target, timeout_seconds=-1)
+    assert (timed_out.availability, timed_out.verification) == (
+        "present",
+        "not_checked",
+    )
+
+    # 摘要计算被取消
+    cancelled = inspect_file(target, cancel=lambda: True)
+    assert (cancelled.availability, cancelled.verification) == (
+        "present",
+        "not_checked",
+    )
+
+    # 摘要与期望值不符
+    mismatch = inspect_file(target, expected_sha256="b" * 64)
+    assert (mismatch.availability, mismatch.verification) == ("present", "mismatch")
+
+    # 摘要与期望值相符
+    verified = inspect_file(target, expected_sha256=expected_digest)
+    assert (verified.availability, verified.verification) == ("present", "verified")
+
+    # 算出摘要但无期望值
+    unknown = inspect_file(target)
+    assert (unknown.availability, unknown.verification) == ("present", "unknown")

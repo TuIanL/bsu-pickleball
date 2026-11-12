@@ -85,6 +85,61 @@
 - `algorithm_verdict.result` 与 `completeness` 无关：`complete` + `fail` 是合法且常见的组合，表示「证据齐全，但质量确实没过」。
 - 历史产物缺版本时写 `status=unknown`、`commit=null`，禁止用当前 HEAD 补齐。
 
+## 核验等级
+
+四级检查严格递增，**上一级通过永远不蕴含下一级通过**。
+
+| 等级 | 检查内容 | 能证明 | 不能证明 |
+| --- | --- | --- | --- |
+| L0 存在性 | 路径能否解析 | 文件在该位置存在 | 内容正确、可读 |
+| L1 元数据 | 只读文件头 + 容器探测 | 容器类型、声明的时长/分辨率/帧率 | 能完整解码 |
+| L2 摘要 | 全文件分块 SHA-256 | 字节与期望值一致、读取期间未被修改 | 内容语义正确 |
+| L3 全解码 | 逐帧解码 | 每一帧都可解 | 算法质量、身份正确 |
+
+因此 `media_metadata.probe_status=ok` 只代表 L1 通过。写入 manifest 时必须配 `decode_not_performed` 这类 limitation，不得表述为「媒体检查通过」。
+
+## 状态映射
+
+| 实际情形 | `availability` | `verification` |
+| --- | --- | --- |
+| 路径不存在 | `missing` | `unknown` |
+| 存在但权限不足或 IO 失败 | `unreachable` | `not_checked` |
+| 摘要计算超时 | `present` | `not_checked` |
+| 摘要计算被取消 | `present` | `not_checked` |
+| 摘要与期望值不符 | `present` | `mismatch` |
+| 摘要与期望值相符 | `present` | `verified` |
+| 算出摘要但无期望值可比对 | `present` | `unknown` |
+| 尚未发起任何检查 | `not_checked` | `not_checked` |
+
+**未完成的检查永远是 `not_checked`。** 它既不是 `mismatch`（没有比对过），也不是 `verified`（没有比对成功）。把超时写成 `mismatch` 会让一次磁盘休眠变成一条「文件损坏」的错误结论。
+
+该矩阵由 `backend/tests/test_research_evidence_inspection.py::test_state_matrix_matches_documented_rules` 逐格验证。
+
+## 超时排查
+
+按顺序排查，不要跳步：
+
+1. **确认授权根是否挂载**。外接盘休眠时首次读取会超时，重试即恢复；此时文件本身没有问题。
+2. **用 `probe_container` 区分「读不了」与「读得慢」**。它只读 4 KB 文件头，能立刻返回结果就说明盘是响应的，问题在吞吐而非可达性。
+3. **提高 `timeout_seconds` 重试一次并记录两次结果**。两次都超时才谈性能问题，一次超时不足以定性。
+4. **不要因为超时改写 `verification`**。超时记 `not_checked`，等重试有结果再更新。
+5. **exFAT 上注意 `._*` sidecar**。macOS 会为每个真实文件生成同名资源分支，用 `iter_quality_reports` 或 `is_metadata_sidecar` 过滤，否则会把资源分支当 JSON 读。
+
+## 旧格式限制
+
+历史产物早于本契约，缺失是结构性的，不是数据损坏。
+
+| 产物 | 缺失内容 | 处理方式 |
+| --- | --- | --- |
+| `result.json` | `code_revision`、`sync_digest`、**显式运行窗口** | 范围由 track 时间戳推导，标 `derivation=observed_tracks_span` |
+| `four_player_identification_quality.json` | `code_revision`、`sync_digest` | 每次导入都列入 `missing_fields` |
+| 同上 | `config_signature`、`baseline_job_id` 常为 `null` | 保持 `null` 并列入 `missing_fields` |
+| 任意 exFAT 产物 | — | 跳过 `._*` 资源分支 |
+
+`NEVER_RECORDED_FIELDS` 把 `code_revision` 与 `sync_digest` 固定在缺失列表中，因此不存在「用当前 HEAD 补齐历史版本」的代码路径。
+
+已知后果：参考 take 中 `job-7ab0b2ea60`（pass）与 `job-934cb696fd`（fail）覆盖**完全相同**的 7.0–13.0 秒区间，却给出相反结论，而两者都没有 `config_signature` 可用于解释差异。这类矛盾在补齐配置签名之前无法归因，只能并列保留。
+
 ## 覆盖矩阵
 
 所有示例位于 `backend/contracts/research_evidence/v1/fixtures/`。
