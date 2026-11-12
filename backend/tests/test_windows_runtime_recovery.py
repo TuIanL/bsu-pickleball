@@ -30,6 +30,9 @@ def test_frontend_recovery_preserves_existing_backend_and_long_running_worker(tm
     launched=[];ports=[]
     def spawn(command,**kwargs):launched.append(command);return processes[3]
     monkeypatch.setattr(runtime.subprocess,'Popen',spawn)
+    # Popen is a test double; provide distinct Windows-only flag sentinels on POSIX.
+    for bit,name in enumerate(('DETACHED_PROCESS','CREATE_NEW_PROCESS_GROUP','CREATE_BREAKAWAY_FROM_JOB')):
+        monkeypatch.setattr(runtime.subprocess,name,1 << bit,raising=False)
     monkeypatch.setattr(runtime.psutil,'Process',lambda pid:processes[pid])
     monkeypatch.setattr(runtime.psutil,'wait_procs',lambda children,timeout:(children,[]))
     class Socket:

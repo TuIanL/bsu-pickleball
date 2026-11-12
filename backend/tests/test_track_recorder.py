@@ -214,11 +214,21 @@ class TestBehavioralBaseline:
             take_start_offset_ms=0,
         )
 
-        fake = FakeProcess(exit_code=0)
+        exited = threading.Event()
+
+        class RunningProcess(FakeProcess):
+            def wait(self, timeout=None):
+                assert exited.wait(timeout=timeout if timeout is not None else 5)
+                return self.returncode
+
+            def kill(self):
+                super().kill()
+                exited.set()
+
+        fake = RunningProcess()
         with patch("subprocess.Popen", return_value=_mock_popen(fake)):
             handle = recorder.start_fragment(spec, lambda e: None)
             handle.cancel()
-            time.sleep(0.05)
             result = handle.wait(timeout=5)
 
         assert result.status == "discarded"

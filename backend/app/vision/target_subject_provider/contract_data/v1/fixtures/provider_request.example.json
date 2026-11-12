@@ -1,0 +1,33 @@
+{
+  "schema_version": "pb.target-candidate-request.v1.0",
+  "request_id": "pilot-v1-clip-000001",
+  "run_mode": "pilot",
+  "sample_id": "clip_000001",
+  "video": {
+    "path": "videos/youtube/clip_000001.mp4",
+    "sha256": "89b3008f8836b713545c0c528bad4d2bf97f223371f4dc5b6794a9d497e3d706",
+    "fps": 30.0,
+    "frame_count": 28,
+    "width": 1920,
+    "height": 1080
+  },
+  "origin_long_video_id": "origin_01",
+  "calibration": {
+    "requested_mode": "fallback_image_space",
+    "calibration_id": null,
+    "calibration_sha256": null,
+    "homography": null
+  },
+  "configuration": {
+    "detector_model_path": "models/yolo11n.pt",
+    "detector_confidence": 0.5,
+    "detector_device": null,
+    "tracker_iou_threshold": 0.3,
+    "tracker_max_lost": 15,
+    "candidate_merge_max_gap": 8,
+    "candidate_merge_min_iou": 0.1,
+    "pose_scoring_enabled": false,
+    "pose_config_path": null,
+    "pose_checkpoint_path": null
+  }
+}

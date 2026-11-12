@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teng-i.local/schemas/target-subject/provider-run-manifest.v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "run_mode", "dataset", "platform", "provider", "configuration_sha256", "models", "runtime_versions", "samples"],
+  "properties": {
+    "schema_version": {"const": "pb.target-provider-run-manifest.v1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "run_mode": {"enum": ["development", "pilot", "formal"]},
+    "dataset": {"$ref": "#/$defs/repository"},
+    "platform": {"$ref": "#/$defs/repository"},
+    "provider": {"const": "pb.target-candidate-provider.v1.0"},
+    "configuration_sha256": {"$ref": "#/$defs/sha256"},
+    "models": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}},
+    "runtime_versions": {"type": "object", "additionalProperties": {"type": "string"}},
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sample_id", "video_sha256", "status", "result_path", "result_sha256"],
+        "properties": {
+          "sample_id": {"type": "string", "pattern": "^clip_[0-9]{6}$"},
+          "video_sha256": {"$ref": "#/$defs/sha256"},
+          "status": {"enum": ["pending", "completed", "failed"]},
+          "result_path": {"type": ["string", "null"]},
+          "result_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+          "error_code": {"type": ["string", "null"]}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "worktree_clean"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "worktree_clean": {"type": "boolean"},
+        "release_manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}
