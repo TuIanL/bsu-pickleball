@@ -28,7 +28,19 @@
 
 ## 交付状态
 
-本地验证已通过；远端CI与main合并仍待完成，任务5.1/5.2保持未勾选。只有准确提交的CI通过后才能按授权合并，之后补充最终SHA、CI链接及原分支/worktree核对结果。本记录不把待执行操作写成完成。
+[PR #3](https://github.com/TuIanL/bsu-pickleball/pull/3)的准确提交为b128bdd011380b6e39b4b2a771054aaae88e6bca；[PR CI](https://github.com/TuIanL/bsu-pickleball/actions/runs/43158737250)及[分支push CI](https://github.com/TuIanL/bsu-pickleball/actions/runs/43158707537)全部成功后，按负责人本轮授权合入main，合并提交为49a553255eb598871a4c92b29676778fc40e9c3f。远端基础后端为1985 passed、5 skipped、22 warnings（62.22秒），quality、backend-lint、openspec三项门禁均通过。
+
+合并后核对：原provider提交155fbb4已是origin/main祖先；其他原有分支及两个归档标签均与操作前快照一致，三个原worktree的HEAD保持f6a1d53、ea2224e、155fbb4，原主工作区仍为干净的演示分支。任务5.1/5.2据此完成；本记录与任务勾选作为合并后的纯文档补充，不改动已验证代码。临时集成worktree将在文档推送并同步本地主线后回收。
+
+| 验证维度 | 结果 |
+| --- | --- |
+| 完整性 | 10/10实施任务，5/5新增Requirement有实现与测试证据 |
+| 正确性 | 5/5Requirement映射，8/8Scenario覆盖；媒体异常不发布，配置与分发回归通过 |
+| 一致性 | 隔离整合、单一依赖源、包资源、固定默认算法与CFR边界符合design；沿用现有pytest与质量门禁模式 |
+
+本Change的规格/任务/设计核验未发现Critical、Warning或Suggestion；完成Verify不自动触发Archive或主规格同步。上述检查仅覆盖本Change明确的工程行为，不扩展为真实科研准确率结论。
+
+远端5项跳过有明确原因：三项真实双摄take素材未提供；一项RTMPose测试所需torch不在基础环境；一项脱敏真实任务包未提供。另两份依赖外部材料的测试文件仍按原CI命令排除，未新增排除项。
 
 ## 限制
 
