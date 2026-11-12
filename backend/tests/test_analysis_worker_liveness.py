@@ -335,11 +335,15 @@ def test_worker_heartbeat_runs_without_stage_progress_callbacks(tmp_path):
     assert claimed is not None
 
     calls: list[str] = []
+    enough_heartbeats = threading.Event()
     original_heartbeat = store.heartbeat
 
     def record_heartbeat(job_id: str, run_id: str, *, heartbeat_at: str | None = None) -> bool:
         calls.append(run_id)
-        return original_heartbeat(job_id, run_id, heartbeat_at=heartbeat_at)
+        result = original_heartbeat(job_id, run_id, heartbeat_at=heartbeat_at)
+        if len(calls) >= 3:
+            enough_heartbeats.set()
+        return result
 
     store.heartbeat = record_heartbeat  # type: ignore[method-assign]
     runtime = AnalysisWorkerRuntime(
@@ -357,9 +361,11 @@ def test_worker_heartbeat_runs_without_stage_progress_callbacks(tmp_path):
         daemon=True,
     )
     thread.start()
-    time.sleep(0.05)
-    stop_event.set()
-    thread.join(timeout=1)
+    try:
+        assert enough_heartbeats.wait(timeout=3), "worker did not persist three heartbeats"
+    finally:
+        stop_event.set()
+        thread.join(timeout=3)
 
     assert thread.is_alive() is False
     assert failed_event.is_set() is False
