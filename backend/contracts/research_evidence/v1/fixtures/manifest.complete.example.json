@@ -1,0 +1,282 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_7f3a9c21b4de",
+  "generated_at": "2026-11-12T21:50:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": "合并后科研候选基线；合并提交 CI 43161071725 与最终主线 CI 43161180806 均通过。"
+    },
+    "reference_revisions": [
+      {
+        "label": "audit_snapshot",
+        "status": "known",
+        "commit": "99c0f19d1371bd76b8cc00654bbb8f0cc105aab8",
+        "worktree_clean": true,
+        "dirty_patch": {
+          "status": "known",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "note": "11/10 审计快照，仅作历史对照，不构成候选基线。"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "asset_id": "a_src_174",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+      "size_bytes": 1237383185,
+      "digest": {
+        "status": "known",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": {
+        "duration_seconds": 698.8,
+        "width": 1920,
+        "height": 1080,
+        "fps_nominal": 60,
+        "frame_count": null,
+        "probe_status": "ok"
+      },
+      "notes": [
+        "本 fixtures 中除 rtmpose 权重外的 sha256 均为占位值（重复字符），仅用于契约验证，不是真实文件摘要。size_bytes 与 media_metadata 为真实探测值。"
+      ]
+    },
+    {
+      "asset_id": "a_src_175",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
+      "size_bytes": 1237170373,
+      "digest": {
+        "status": "known",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": {
+        "duration_seconds": 698.8,
+        "width": 1920,
+        "height": 1080,
+        "fps_nominal": 60,
+        "frame_count": null,
+        "probe_status": "ok"
+      },
+      "notes": [
+        "2026-11-12 复测：外接盘挂载后 ffprobe 一次性成功，未复现设计阶段记录的 15 秒探测超时。"
+      ]
+    },
+    {
+      "asset_id": "a_pts_174",
+      "kind": "pts_sidecar",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
+      "size_bytes": 3578004,
+      "digest": {
+        "status": "known",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": ["实际 PTS 用于 run_ref.range.time_base=pts_actual。"]
+    },
+    {
+      "asset_id": "a_sync_take",
+      "kind": "sync_manifest",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/manifest.json",
+      "size_bytes": 681,
+      "digest": {
+        "status": "known",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_model_rtmpose",
+      "kind": "model_weight",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
+      "size_bytes": 55864812,
+      "digest": {
+        "status": "known",
+        "sha256": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_models",
+        "source_kind": "repository",
+        "originated_at": null,
+        "note": "位于主工作区 demo 分支工作目录，模型本身不随分支变化；代码基线仍为 selected_baseline。"
+      },
+      "media_metadata": null,
+      "notes": ["摘要取自 MODEL_MANIFEST.json 登记值。"]
+    },
+    {
+      "asset_id": "a_model_ball",
+      "kind": "model_weight",
+      "usage_kind": "real",
+      "requirement": "optional",
+      "locator": "asset://root_models/ball/pickleball-ball.pt",
+      "size_bytes": 20242432,
+      "digest": {
+        "status": "known",
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "availability": "present",
+      "verification": "not_checked",
+      "provenance": {
+        "source_root_id": "root_models",
+        "source_kind": "repository",
+        "originated_at": null,
+        "note": "MODEL_MANIFEST.json 未登记该项，台账待补（PB-020）。"
+      },
+      "media_metadata": null,
+      "notes": ["optional 资产未核验不影响 completeness=complete。"]
+    }
+  ],
+  "run_refs": [
+    {
+      "run_id": "job-96a28d6ff0",
+      "origin": "product_job",
+      "code_revision": {
+        "label": "runtime",
+        "status": "known",
+        "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+        "worktree_clean": true,
+        "dirty_patch": {
+          "status": "known",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "note": null
+      },
+      "consumes": ["a_src_174", "a_src_175", "a_pts_174", "a_sync_take", "a_model_rtmpose"],
+      "range": {
+        "start_seconds": 30,
+        "end_seconds": 587.15,
+        "frame_start": null,
+        "frame_end": null,
+        "time_base": "pts_actual"
+      },
+      "algorithm_verdict": {
+        "result": "fail",
+        "scope": "整段 30-587.15s 严格四人覆盖与身份唯一性",
+        "recorded_source": "quality_report",
+        "detail": "索引与核验完整不等于算法质量通过；本项保留原始 fail 结论。"
+      }
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "c_src_174_existence",
+      "target_asset_id": "a_src_174",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析成功",
+      "detail": null
+    },
+    {
+      "check_id": "c_src_174_digest",
+      "target_asset_id": "a_src_174",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": null
+    },
+    {
+      "check_id": "c_src_174_probe",
+      "target_asset_id": "a_src_174",
+      "kind": "metadata_probe",
+      "status": "passed",
+      "scope": "ffprobe 读取容器元数据，未全解码",
+      "detail": "1920x1080 60fps 698.8s"
+    },
+    {
+      "check_id": "c_src_175_probe",
+      "target_asset_id": "a_src_175",
+      "kind": "metadata_probe",
+      "status": "passed",
+      "scope": "ffprobe 读取容器元数据，未全解码",
+      "detail": "1920x1080 60fps 698.8s"
+    },
+    {
+      "check_id": "c_pts_174_digest",
+      "target_asset_id": "a_pts_174",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件 SHA-256",
+      "detail": null
+    },
+    {
+      "check_id": "c_sync_digest",
+      "target_asset_id": "a_sync_take",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件 SHA-256",
+      "detail": null
+    },
+    {
+      "check_id": "c_model_rtmpose_digest",
+      "target_asset_id": "a_model_rtmpose",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件 SHA-256",
+      "detail": null
+    }
+  ],
+  "completeness": "complete",
+  "limitations": [
+    {
+      "code": "decode_not_performed",
+      "message": "本次仅做存在性、元数据与摘要核验，未执行全解码；元数据探测成功不得升级为全解码通过。",
+      "block_completeness": false,
+      "affects": ["a_src_174", "a_src_175"],
+      "notion_task": "PB-005"
+    }
+  ]
+}

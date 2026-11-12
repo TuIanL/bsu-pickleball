@@ -1,0 +1,92 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_9d7c3f18b52e",
+  "generated_at": "2026-11-12T21:57:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "reference_revisions": []
+  },
+  "assets": [
+    {
+      "asset_id": "a_synthetic_avi",
+      "kind": "source_video",
+      "usage_kind": "fixture",
+      "requirement": "optional",
+      "locator": "asset://root_repo_tests/fixtures/synthetic_two_player.avi",
+      "size_bytes": 20480,
+      "digest": {
+        "status": "known",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_repo_tests",
+        "source_kind": "repository",
+        "originated_at": null,
+        "note": "本地合成上传夹具，不是正式科研素材。"
+      },
+      "media_metadata": {
+        "duration_seconds": 2,
+        "width": 320,
+        "height": 240,
+        "fps_nominal": 25,
+        "frame_count": 50,
+        "probe_status": "ok"
+      },
+      "notes": ["usage_kind=fixture 使其可被识别并排除在正式科研输入之外。"]
+    },
+    {
+      "asset_id": "a_src_174",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+      "size_bytes": 1237383185,
+      "digest": {
+        "status": "known",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": {
+        "duration_seconds": 698.8,
+        "width": 1920,
+        "height": 1080,
+        "fps_nominal": 60,
+        "frame_count": null,
+        "probe_status": "ok"
+      },
+      "notes": []
+    }
+  ],
+  "run_refs": [],
+  "checks": [
+    {
+      "check_id": "c_fixture_digest",
+      "target_asset_id": "a_synthetic_avi",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件 SHA-256",
+      "detail": null
+    }
+  ],
+  "completeness": "complete",
+  "limitations": []
+}
