@@ -1,0 +1,59 @@
+{
+  "schema_version": "pb.target-candidate-result.v1.0",
+  "request_id": "pilot-v1-clip-000001",
+  "sample_id": "clip_000001",
+  "video_sha256": "89b3008f8836b713545c0c528bad4d2bf97f223371f4dc5b6794a9d497e3d706",
+  "provider": {
+    "contract_version": "pb.target-candidate-provider.v1.0",
+    "platform_commit": "99e944bbfaedeb908a68eaccd12980279fef2319",
+    "worktree_clean": true,
+    "configuration_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "models": {"person_detector": "2222222222222222222222222222222222222222222222222222222222222222"},
+    "runtime_versions": {"python": "3.13.5", "opencv": "4.10.0"}
+  },
+  "calibration": {
+    "mode": "fallback_image_space",
+    "status": "fallback",
+    "calibration_id": null,
+    "calibration_sha256": null,
+    "reason": "origin calibration not configured"
+  },
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_seconds": 0.0,
+      "status": "observed",
+      "roi_transform": {"version": "source-roi-affine.v1.0", "offset_x": 0, "offset_y": 0, "scale_x": 1, "scale_y": 1},
+      "detections": [
+        {"detection_id": "f000000-d001", "track_id": 1, "bbox_source": [100, 200, 300, 700], "bbox_roi": [100, 200, 300, 700], "confidence": 0.92, "observation_source": "detected"},
+        {"detection_id": "f000000-d002", "track_id": 2, "bbox_source": [900, 250, 1040, 620], "bbox_roi": [900, 250, 1040, 620], "confidence": 0.85, "observation_source": "detected"}
+      ],
+      "error_code": null
+    }
+  ],
+  "tracklets": [
+    {"tracklet_id": "tracklet_001", "source_track_ids": [1], "first_frame": 0, "last_frame": 0, "detection_ids": ["f000000-d001"], "identity_diagnostics": []},
+    {"tracklet_id": "tracklet_002", "source_track_ids": [2], "first_frame": 0, "last_frame": 0, "detection_ids": ["f000000-d002"], "identity_diagnostics": []}
+  ],
+  "candidates": [
+    {
+      "candidate_id": "candidate_001",
+      "tracklet_ids": ["tracklet_001"],
+      "source_track_ids": [1],
+      "rank": 1,
+      "score": 0.88,
+      "score_evidence": {"coverage": 1.0, "mean_confidence": 0.92, "motion": 0.0, "continuity": 1.0, "geometry": 0.5, "pose_motion": null},
+      "observations": [{"frame_index": 0, "timestamp_seconds": 0.0, "status": "detected", "bbox_source": [100, 200, 300, 700], "confidence": 0.92, "source_tracklet_id": "tracklet_001", "source_track_id": 1}]
+    },
+    {
+      "candidate_id": "candidate_002",
+      "tracklet_ids": ["tracklet_002"],
+      "source_track_ids": [2],
+      "rank": 2,
+      "score": 0.82,
+      "score_evidence": {"coverage": 1.0, "mean_confidence": 0.85, "motion": 0.0, "continuity": 1.0, "geometry": 0.4, "pose_motion": null},
+      "observations": [{"frame_index": 0, "timestamp_seconds": 0.0, "status": "detected", "bbox_source": [900, 250, 1040, 620], "confidence": 0.85, "source_tracklet_id": "tracklet_002", "source_track_id": 2}]
+    }
+  ],
+  "errors": []
+}
