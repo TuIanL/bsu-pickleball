@@ -516,8 +516,17 @@ def _check_schema(manifest: Any) -> VerifyCheck:
     )
 
 
-def verify_package(package_dir: Path) -> VerifyReport:
-    """Structurally verify a package without recomputing any digest."""
+def verify_package(
+    package_dir: Path,
+    *,
+    deep: bool = False,
+    require_locations: bool = True,
+) -> VerifyReport:
+    """Verify a package. ``deep`` also recomputes digests from the local mapping.
+
+    ``require_locations=False`` is used for shareable packages, which contain no
+    local mapping by design.
+    """
     target = Path(package_dir)
     if not target.is_dir():
         raise VerifyError(f"包目录不存在: {target}")
@@ -594,23 +603,30 @@ def verify_package(package_dir: Path) -> VerifyReport:
         )
     )
 
+    locations_payload: dict[str, Any] | None = None
     locations_path = target / LOCATIONS_FILENAME
     if not locations_path.is_file():
         checks.append(
             VerifyCheck(
                 "locations_present",
-                False,
-                f"缺少 {LOCATIONS_FILENAME}（本机映射应当与包一同保留，但不随包分享）",
+                not require_locations,
+                (
+                    f"缺少 {LOCATIONS_FILENAME}（本机映射应保留在本机）"
+                    if require_locations
+                    else "分享包按约定不含本机映射"
+                ),
             )
         )
     else:
         try:
-            locations = json.loads(locations_path.read_text(encoding="utf-8"))
+            locations_payload = json.loads(locations_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             checks.append(VerifyCheck("locations_json", False, str(error)))
         else:
             checks.append(VerifyCheck("locations_json", True))
-            same_package = locations.get("package_id") == manifest.get("package_id")
+            same_package = (
+                locations_payload.get("package_id") == manifest.get("package_id")
+            )
             checks.append(
                 VerifyCheck(
                     "locations_package_matches",
@@ -618,7 +634,7 @@ def verify_package(package_dir: Path) -> VerifyReport:
                     None if same_package else "package_id 不一致",
                 )
             )
-            mapped = set((locations.get("assets") or {}).keys())
+            mapped = set((locations_payload.get("assets") or {}).keys())
             missing = sorted(known - mapped)
             extra = sorted(mapped - known)
             checks.append(
@@ -633,4 +649,149 @@ def verify_package(package_dir: Path) -> VerifyReport:
                 )
             )
 
+    # 必需项与非必需项必须区别对待：只有 required 不达标才否定 complete。
+    required_gaps = [
+        asset.get("asset_id")
+        for asset in assets
+        if isinstance(asset, dict)
+        and asset.get("requirement") == "required"
+        and (
+            asset.get("availability") != "present"
+            or asset.get("verification") != "verified"
+        )
+    ]
+    declared_complete = manifest.get("completeness") == "complete"
+    checks.append(
+        VerifyCheck(
+            "completeness_consistent",
+            not (declared_complete and required_gaps),
+            (
+                f"声称完整但必需项未达标: {required_gaps[:3]}"
+                if declared_complete and required_gaps
+                else None
+            ),
+        )
+    )
+
+    if deep:
+        if locations_payload is None:
+            checks.append(
+                VerifyCheck("deep_digest_match", False, "缺少本机映射，无法重算摘要")
+            )
+        else:
+            mismatched, unreadable = _deep_check(manifest, locations_payload)
+            checks.append(
+                VerifyCheck(
+                    "deep_digest_match",
+                    not mismatched,
+                    f"内容已变更: {mismatched[:3]}" if mismatched else None,
+                )
+            )
+            checks.append(
+                VerifyCheck(
+                    "deep_assets_readable",
+                    not unreadable,
+                    f"重新核验未通过: {unreadable[:3]}" if unreadable else None,
+                )
+            )
+
     return VerifyReport(all(check.ok for check in checks), tuple(checks))
+
+
+def _deep_check(
+    manifest: dict[str, Any], locations: dict[str, Any]
+) -> tuple[list[str], list[str]]:
+    """Recompute digests from the local mapping.
+
+    Returns (content changed, could not be verified). The two are deliberately
+    separated: a changed file is evidence of tampering, while an unreadable file
+    may simply be an unmounted disk.
+    """
+    roots = {
+        root_id: entry.get("path")
+        for root_id, entry in (locations.get("source_roots") or {}).items()
+        if isinstance(entry, dict)
+    }
+    mismatched: list[str] = []
+    unreadable: list[str] = []
+
+    for asset in manifest.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        if asset.get("availability") != "present":
+            continue
+        expected = (asset.get("digest") or {}).get("sha256")
+        if not expected:
+            continue
+
+        asset_id = str(asset.get("asset_id"))
+        try:
+            resolved = resolve_locator(asset.get("locator", ""), roots)
+        except Exception:
+            unreadable.append(f"{asset_id}:无法解析定位")
+            continue
+
+        result = inspect_file(resolved, expected_sha256=expected)
+        if result.verification == "mismatch":
+            mismatched.append(asset_id)
+        elif result.verification != "verified":
+            unreadable.append(f"{asset_id}:{result.verification}")
+
+    return mismatched, unreadable
+
+
+def export_shareable_package(
+    package_dir: Path, output_dir: Path
+) -> tuple[Path, Path]:
+    """Copy only the shareable part of a package.
+
+    ``locations.local.json`` stays behind by construction: a shared index must not
+    carry the author's directory layout. The manifest is re-checked for absolute
+    paths on the way out, so a package built by an older version cannot leak one.
+    """
+    source = Path(package_dir)
+    manifest_path = source / MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        raise BuildError(f"缺少 {MANIFEST_FILENAME}: {source}")
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise BuildError(f"{MANIFEST_FILENAME} 不是合法 JSON") from error
+
+    offenders = find_local_paths(manifest)
+    if offenders:
+        raise BuildError(
+            f"manifest 含本机绝对路径，拒绝导出: {'; '.join(offenders[:3])}"
+        )
+
+    checks_source = source / CHECKS_FILENAME
+    checks_payload: Any = {"checks": manifest.get("checks", [])}
+    if checks_source.is_file():
+        try:
+            checks_payload = json.loads(checks_source.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise BuildError(f"{CHECKS_FILENAME} 不是合法 JSON") from error
+        checks_offenders = find_local_paths(checks_payload)
+        if checks_offenders:
+            raise BuildError(
+                f"checks 含本机绝对路径，拒绝导出: {'; '.join(checks_offenders[:3])}"
+            )
+
+    target = Path(output_dir)
+    assert_output_is_safe(target, {})
+    target.mkdir(parents=True, exist_ok=True)
+
+    manifest_out = target / MANIFEST_FILENAME
+    checks_out = target / CHECKS_FILENAME
+    for path in (manifest_out, checks_out):
+        if path.exists():
+            raise BuildError(f"目标文件已存在，拒绝覆写: {path}")
+
+    manifest_out.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    checks_out.write_text(
+        json.dumps(checks_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return manifest_out, checks_out

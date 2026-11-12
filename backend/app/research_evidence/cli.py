@@ -21,6 +21,7 @@ from .builder import (
     VerifyError,
     assert_output_is_safe,
     build_manifest,
+    export_shareable_package,
     load_build_config,
     verify_package,
     write_package,
@@ -55,6 +56,24 @@ def build_parser() -> argparse.ArgumentParser:
         "verify", help="校验已有证据包", description="校验结构、引用与路径泄露"
     )
     verify.add_argument("--package", required=True, type=Path, help="包目录")
+    verify.add_argument(
+        "--deep",
+        action="store_true",
+        help="按本机映射重算摘要，检测内容是否被改动",
+    )
+    verify.add_argument(
+        "--shareable",
+        action="store_true",
+        help="按分享包口径校验：允许缺少本机映射",
+    )
+
+    publish = subparsers.add_parser(
+        "publish",
+        help="导出可分享副本",
+        description="只复制 manifest 与 checks，本机映射留在原处",
+    )
+    publish.add_argument("--package", required=True, type=Path, help="本机包目录")
+    publish.add_argument("--output", required=True, type=Path, help="新的空输出目录")
 
     return parser
 
@@ -84,7 +103,9 @@ def _run_build(args: argparse.Namespace) -> int:
 
 def _run_verify(args: argparse.Namespace) -> int:
     try:
-        report = verify_package(args.package)
+        report = verify_package(
+            args.package, deep=args.deep, require_locations=not args.shareable
+        )
     except VerifyError as error:
         print(f"verify 失败: {error}", file=sys.stderr)
         return EXIT_ERROR
@@ -102,11 +123,28 @@ def _run_verify(args: argparse.Namespace) -> int:
     return EXIT_VERIFY_FAILED
 
 
+def _run_publish(args: argparse.Namespace) -> int:
+    try:
+        manifest_path, checks_path = export_shareable_package(
+            args.package, args.output
+        )
+    except BuildError as error:
+        print(f"publish 失败: {error}", file=sys.stderr)
+        return EXIT_ERROR
+
+    print(f"分享包已导出: {args.output}")
+    print(f"  {manifest_path.name}、{checks_path.name}")
+    print("  locations.local.json 未导出（本机路径不随包分享）")
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "build":
             return _run_build(args)
+        if args.command == "publish":
+            return _run_publish(args)
         return _run_verify(args)
     except KeyboardInterrupt:
         print("已中断；源资产未被修改", file=sys.stderr)
