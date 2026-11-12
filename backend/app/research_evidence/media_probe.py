@@ -66,6 +66,15 @@ def _parse_int(value: object) -> int | None:
         return None
 
 
+def _redact_input_path(text: str, path: Path) -> str:
+    """ffprobe echoes the input path in errors; a shareable manifest must not carry it."""
+    redacted = text
+    for candidate in {str(path), str(Path(path).resolve())}:
+        if candidate:
+            redacted = redacted.replace(candidate, "<source>")
+    return redacted
+
+
 def probe_media(
     path: Path,
     *,
@@ -104,9 +113,10 @@ def probe_media(
 
     if completed.returncode != 0:
         stderr = completed.stderr.decode("utf-8", "replace").strip()
+        raw_detail = stderr.splitlines()[-1] if stderr else "ffprobe 返回非零状态"
         return MediaProbe(
             status="error",
-            detail=stderr.splitlines()[-1] if stderr else "ffprobe 返回非零状态",
+            detail=_redact_input_path(raw_detail, path),
         )
 
     try:

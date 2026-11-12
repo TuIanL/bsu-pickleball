@@ -160,8 +160,14 @@ def inspect_file(
             "unreachable", "not_checked", None, None, "权限不足，无法读取", True
         )
     except OSError as error:
+        # The exception text may embed the absolute path; keep only its type.
         return FileInspection(
-            "unreachable", "not_checked", None, None, f"读取失败: {error}", True
+            "unreachable",
+            "not_checked",
+            None,
+            None,
+            f"读取失败（{type(error).__name__}）",
+            True,
         )
 
     after = snapshot_file(path)
