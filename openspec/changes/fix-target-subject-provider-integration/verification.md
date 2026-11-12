@@ -34,7 +34,7 @@
 
 | 验证维度 | 结果 |
 | --- | --- |
-| 完整性 | 原10/10实施任务完成，5/5新增Requirement有实现与测试证据；新增合并后稳定性任务6.1仍待远端CI及合并 |
+| 完整性 | 11/11实施任务完成（含合并后稳定性补充），5/5新增Requirement有实现与测试证据 |
 | 正确性 | 5/5Requirement映射，8/8Scenario覆盖；媒体异常不发布，配置与分发回归通过 |
 | 一致性 | 隔离整合、单一依赖源、包资源、固定默认算法与CFR边界符合design；沿用现有pytest与质量门禁模式 |
 
@@ -46,7 +46,13 @@
 
 [主线合并复跑43159321161](https://github.com/TuIanL/bsu-pickleball/actions/runs/43159321161)出现既有心跳测试失败：1984 passed、1 failed、5 skipped，质量步骤中其他测试未失败。`test_worker_heartbeat_runs_without_stage_progress_callbacks`固定睡眠50ms后要求至少三次心跳，持久化/调度开销使实际仅两次；该测试和生产Worker在原集成中均未修改。
 
-补充仅修改测试：用事件确认至少三次持久化心跳，最多等待3秒，并在finally停止及join线程；保留心跳次数、租约ID和线程结束断言。生产Worker及Provider行为不变，使用同一临时集成分支，不修改原有分支。相关心跳/provider/契约/分发46 passed，完整基础后端1985 passed、5 skipped、22 warnings（37.54秒）。新增6.1任务保持未勾选，待准确提交CI通过并按既有授权合入main后记录完成。本次补充不撤销原PR在合并前实际通过的CI证据，也不把合并后的失败写成通过。
+补充仅修改测试：用事件确认至少三次持久化心跳，最多等待3秒，并在finally停止及join线程；保留心跳次数、租约ID和线程结束断言。生产Worker及Provider行为不变，使用同一临时集成分支，不修改原有分支。相关心跳/provider/契约/分发46 passed，完整基础后端1985 passed、5 skipped、22 warnings（37.54秒）。新增6.1任务已在准确提交CI通过并按既有授权合入main后记录完成。本次补充不撤销原PR在合并前实际通过的CI证据，也不把合并后的失败写成通过。
+
+## 稳定性补充交付
+
+[PR #4](https://github.com/TuIanL/bsu-pickleball/pull/4)准确提交03a5d766e7c9e2f7c3d021cb9e9e70683ed7cda0的[PR CI](https://github.com/TuIanL/bsu-pickleball/actions/runs/43160386613)及[分支CI](https://github.com/TuIanL/bsu-pickleball/actions/runs/43160353061)均全部成功；前端803通过，完整基础后端1985通过、5跳过（PR 75.81秒、分支65.57秒）。按授权合入main，合并提交34c2cea7426343938e95413ba67c7beb52ae087f；合并后的完整Git tree与已测试03a5d76相同。任务11/11完成，本次后续只更新验收文档与任务勾选。
+
+为保留失败历史：[旧纯文档提交2e15f86的CI](https://github.com/TuIanL/bsu-pickleball/actions/runs/43159946307)曾在VideoAnalysisCard的机位切换播放位置断言失败（0而非36.964）。该前端组件及测试未被本轮修改，之后补充提交的两次独立完整前端运行均803通过；本次未另改前端或把历史失败抹去，此间歇性失败列为后续工程稳定性观察项。
 
 ## 限制
 
