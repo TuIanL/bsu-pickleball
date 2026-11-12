@@ -4,6 +4,18 @@
 
 系统中所有按球员分侧的展示（`playerMarkers.team`、minimap、结构化可视化）SHALL 从同一份已确认的冻结名册读取 `Player_N → Team A/B → initial_team_a_end`，并结合 canonical 球场端位及当前视角朝向计算展示侧。双打 P1/P2 SHALL 属于用户确认的 Team A，P3/P4 SHALL 属于 Team B；Team A 可以在 `end_a` 或 `end_b`，不得把 P 编号固定等同于某摄像头的 near/far。前端 adapter 与后端 SHALL 使用同一语义。旧 Job 缺冻结名册时 SHALL 保留历史槽位映射并标注其来源，不得伪称为用户确认。
 
+#### Scenario: 双打侧映射一致
+
+- **WHEN** 双打模式下查询任意 `Player_N` 的展示侧别
+- **THEN** 侧别 SHALL 由冻结名册的 `Player_N → Team` 与 `initial_team_a_end` 结合当前视角朝向推导
+- **AND** 前端 adapter 与后端 SHALL 产出同一结果
+
+#### Scenario: 单打侧映射一致
+
+- **WHEN** 单打模式下查询任意 `Player_N` 的展示侧别
+- **THEN** 侧别 SHALL 由冻结端位与当前视角朝向推导，MUST NOT 由固定的 near/far 常量决定
+- **AND** 前端 adapter 与后端 SHALL 产出同一结果
+
 #### Scenario: 双打确认 A 队位于画面远端
 
 - **WHEN** 用户确认 P1/P2 为 Team A、`initial_team_a_end=end_a`，且当前摄像头的 end_a 在画面远端

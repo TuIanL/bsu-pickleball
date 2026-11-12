@@ -4,7 +4,7 @@
 
 overlay 的 `players` 中所有用户可见 P 身份 SHALL 为冻结名册审计已确认的 canonical `Player_1`..`Player_4`（展示为 P1-P4），MUST NOT 出现 `global_player_<id>`、局部 `track_id`，也不得把 `_build_roster_map` 的顺序 fallback 当作已确认身份。身份映射 SHALL 只读复用 `bootstrap-binding-audit` 与 Global Roster 的唯一绑定，overlay SHALL NOT 反写 roster、tracker 或 association。未确认但有真实观测的目标 SHALL 进入可选的匿名 `unconfirmed_observations`，不得占用 `players` 中的 P 编号；无可靠观测时不渲染目标。
 
-#### Scenario: 已确认身份标签统一
+#### Scenario: 身份标签统一
 
 - **WHEN** fused overlay 生成已通过冻结名册审计的球员
 - **THEN** `players[].player_id` SHALL 为其 canonical `Player_N`
