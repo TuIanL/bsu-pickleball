@@ -167,3 +167,161 @@ def import_four_player_quality(payload: Any) -> QualityRecord:
 def import_quality_report_file(path: Path) -> QualityRecord:
     """Import a quality report from disk, read-only."""
     return import_four_player_quality(load_json_read_only(path))
+
+
+@dataclass(frozen=True)
+class RunRange:
+    """The span a run actually covered.
+
+    ``derivation`` matters: ``result.json`` has never declared a start/end, so
+    the span is reconstructed from observed track timestamps. That is evidence of
+    coverage, not a declared analysis window, and must not be presented as one.
+    """
+
+    start_seconds: float
+    end_seconds: float
+    derivation: Literal["observed_tracks_span", "declared"]
+    sample_count: int
+
+    def contains(self, other: "RunRange") -> bool:
+        return (
+            self.start_seconds <= other.start_seconds
+            and self.end_seconds >= other.end_seconds
+        )
+
+    def overlaps(self, other: "RunRange") -> bool:
+        return not (
+            self.end_seconds < other.start_seconds
+            or other.end_seconds < self.start_seconds
+        )
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.end_seconds - self.start_seconds
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Declared analysis context of a run, when the artifact recorded one."""
+
+    schema_version: str | None
+    match_format: str | None
+    expected_player_count: int | None
+    players_per_side: int | None
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """One historical run: what it covered, under which context, and its verdict."""
+
+    job_id: str
+    status: str
+    generated_at: str | None
+    video_id: str | None
+    calibration_id: str | None
+    observed_player_count: int | None
+    range: RunRange | None
+    context: RunContext
+    missing_fields: tuple[str, ...]
+
+
+def _import_run_context(raw: Any, missing: list[str]) -> RunContext:
+    if not isinstance(raw, Mapping):
+        missing.append("match_context")
+        return RunContext(None, None, None, None)
+    return RunContext(
+        schema_version=_optional_str(raw, "schema_version", missing),
+        match_format=_optional_str(raw, "match_format", missing),
+        expected_player_count=_optional_int(raw, "expected_player_count", missing),
+        players_per_side=_optional_int(raw, "players_per_side", missing),
+    )
+
+
+def _observed_track_span(raw_tracks: Any) -> RunRange | None:
+    if not isinstance(raw_tracks, list):
+        return None
+    timestamps = [
+        float(track["timestamp_seconds"])
+        for track in raw_tracks
+        if isinstance(track, Mapping)
+        and isinstance(track.get("timestamp_seconds"), (int, float))
+    ]
+    if not timestamps:
+        return None
+    return RunRange(
+        start_seconds=min(timestamps),
+        end_seconds=max(timestamps),
+        derivation="observed_tracks_span",
+        sample_count=len(timestamps),
+    )
+
+
+def import_job_result(payload: Any) -> RunRecord:
+    """Normalise a ``result.json`` into a run record.
+
+    The range is reconstructed from track timestamps because the artifact has no
+    window field. ``code_revision`` and ``sync_digest`` are reported missing for
+    the same reason as in the quality importer: v1 results never carried them.
+    """
+    if not isinstance(payload, Mapping):
+        raise ArtifactImportError(f"运行结果应为对象，实际为 {type(payload).__name__}")
+
+    job_id = payload.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise ArtifactImportError("运行结果缺少 job_id")
+
+    missing: list[str] = list(NEVER_RECORDED_FIELDS)
+
+    range_ = _observed_track_span(payload.get("tracks"))
+    if range_ is None:
+        missing.append("range")
+
+    return RunRecord(
+        job_id=job_id,
+        status=str(payload.get("status") or "unknown"),
+        generated_at=_optional_str(payload, "generated_at", missing),
+        video_id=_optional_str(payload, "video_id", missing),
+        calibration_id=_optional_str(payload, "calibration_id", missing),
+        observed_player_count=_optional_int(payload, "observed_player_count", missing),
+        range=range_,
+        context=_import_run_context(payload.get("match_context"), missing),
+        missing_fields=tuple(missing),
+    )
+
+
+def import_job_result_file(path: Path) -> RunRecord:
+    """Import a ``result.json`` from disk, read-only."""
+    return import_job_result(load_json_read_only(path))
+
+
+@dataclass(frozen=True)
+class RunWithQuality:
+    """A run paired with the quality verdict recorded for it, if any."""
+
+    run: RunRecord
+    quality: QualityRecord | None
+
+    @property
+    def verdict(self) -> str:
+        return self.quality.verdict if self.quality else "unknown"
+
+    @property
+    def covers_whole_take(self) -> bool:
+        """A run can only speak for its own span; it never certifies the take."""
+        return False
+
+
+def pair_runs_with_quality(
+    runs: list[RunRecord], qualities: list[QualityRecord]
+) -> tuple[RunWithQuality, ...]:
+    """Pair runs to verdicts by job id, preserving each run as its own scope.
+
+    Deliberately performs no merging, no best-of selection and no promotion: a
+    passing 6-second run and a failing 200-second run coexist as two facts. Any
+    aggregate that reports "the take passed" would be an over-claim, which is why
+    this function returns a flat tuple rather than a summary verdict.
+    """
+    by_job = {quality.job_id: quality for quality in qualities}
+    return tuple(
+        RunWithQuality(run=run, quality=by_job.get(run.job_id)) for run in runs
+    )
