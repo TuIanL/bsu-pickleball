@@ -17,6 +17,15 @@ from .classification import (
     extension_matches_container,
     probe_container,
 )
+from .hashing import (
+    DEFAULT_CHUNK_SIZE,
+    FileInspection,
+    FileSnapshot,
+    HashOutcome,
+    inspect_file,
+    sha256_file,
+    snapshot_file,
+)
 from .identity import (
     ASSET_ID_HEX_CHARS,
     ASSET_ID_PREFIX,
@@ -39,20 +48,31 @@ from .locations import (
     parse_locator,
     resolve_locator,
 )
+from .media_probe import (
+    DEFAULT_PROBE_TIMEOUT_SECONDS,
+    MediaProbe,
+    probe_media,
+)
 
 __all__ = [
     "ASSET_ID_HEX_CHARS",
     "ASSET_ID_PREFIX",
+    "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_PROBE_TIMEOUT_SECONDS",
     "EXPECTED_CONTAINERS",
     "AdmissionError",
     "ClassificationError",
     "ClassificationEvidence",
+    "FileInspection",
+    "FileSnapshot",
+    "HashOutcome",
     "IdentityCollisionError",
     "IdentityError",
     "InvalidDigestError",
     "LOCATIONS_SCHEMA_VERSION",
     "LOCATOR_SCHEME",
     "LocationError",
+    "MediaProbe",
     "UnreadableMediaError",
     "assert_formal_input_eligible",
     "assert_no_local_paths",
@@ -64,9 +84,13 @@ __all__ = [
     "extension_matches_container",
     "find_local_paths",
     "group_by_content",
+    "inspect_file",
     "is_absolute_path",
     "normalize_sha256",
     "parse_locator",
     "probe_container",
+    "probe_media",
     "resolve_locator",
+    "sha256_file",
+    "snapshot_file",
 ]
