@@ -8,6 +8,8 @@ and a shareable manifest must never carry an absolute machine path.
 from __future__ import annotations
 
 import json
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,13 @@ DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
 DIGEST_COLLIDING_PREFIX = "a" * 12 + "f" * 52
 PACKAGE_ID = "pkg_0123456789ab"
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Override the plugin factory: its numbered mkdir collides with the sandbox shim."""
+    with tempfile.TemporaryDirectory(prefix="pe-locations-") as tmp:
+        yield Path(tmp)
 
 
 # --- content identity -------------------------------------------------------

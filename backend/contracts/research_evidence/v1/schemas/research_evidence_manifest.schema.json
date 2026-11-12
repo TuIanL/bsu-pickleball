@@ -83,6 +83,23 @@
   ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "usage_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "usage_kind 的判定依据。没有依据时不得默认为 real。",
+      "required": ["basis", "reason"],
+      "properties": {
+        "basis": {
+          "enum": [
+            "operator_declared",
+            "root_policy",
+            "container_unverified",
+            "no_evidence"
+          ]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
     "digest": {
       "type": "object",
       "additionalProperties": false,
@@ -281,6 +298,7 @@
             { "type": "null" }
           ]
         },
+        "usage_basis": { "$ref": "#/$defs/usage_basis" },
         "notes": { "type": "array", "items": { "type": "string" } }
       }
     },
