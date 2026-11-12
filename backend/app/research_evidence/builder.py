@@ -254,7 +254,11 @@ def _build_asset_entry(
     )
 
     warning: str | None = None
-    if spec.usage_kind == "real" and inspection.availability == "present":
+    if (
+        spec.kind == "source_video"
+        and spec.usage_kind == "real"
+        and inspection.availability == "present"
+    ):
         try:
             assert_formal_input_eligible(
                 usage_kind=usage.usage_kind,
@@ -380,6 +384,8 @@ def build_manifest(
     location_assets: dict[str, Any] = {}
     limitations: list[dict[str, Any]] = []
 
+    pending: dict[str, list[tuple[AssetSpec, dict[str, Any], list[dict[str, Any]], str | None]]] = {}
+
     for spec in config.assets:
         root = roots_by_key.get(spec.root_id)
         if root is None:
@@ -397,23 +403,45 @@ def build_manifest(
             timeout_seconds=timeout_seconds,
             cancel=cancel,
         )
+        pending.setdefault(entry["asset_id"], []).append(
+            (spec, entry, asset_checks, warning)
+        )
+
+    # 内容身份相同的多个位置归并为一个资产：路径不是 ID，副本不重复登记。
+    for asset_id, group in sorted(pending.items()):
+        group.sort(key=lambda item: item[1]["locator"])
+        spec, entry, asset_checks, warning = group[0]
+        alternates = [item[1]["locator"] for item in group[1:]]
+
+        kinds = {item[1]["kind"] for item in group}
+        if len(kinds) > 1:
+            raise BuildError(
+                f"同一内容 {asset_id} 被声明为不同 kind: {sorted(kinds)}；"
+                "请确认这是否其实是不同资产"
+            )
+
+        if alternates:
+            entry = dict(entry)
+            entry["notes"] = list(entry["notes"]) + [
+                f"同内容副本（未重复登记）：{locator}" for locator in alternates
+            ]
+
         assets.append(entry)
         checks.extend(asset_checks)
-
-        location_assets[entry["asset_id"]] = {
+        location_assets[asset_id] = {
             "locator": entry["locator"],
             "relative_path": spec.relative_path,
             "source_root_id": spec.root_id,
-            "alternate_locators": [],
+            "alternate_locators": alternates,
         }
 
         if warning:
             limitations.append(
                 {
                     "code": "formal_input_rejected",
-                    "message": f"{entry['asset_id']}: {warning}",
+                    "message": f"{asset_id}: {warning}",
                     "block_completeness": entry["requirement"] == "required",
-                    "affects": [entry["asset_id"]],
+                    "affects": [asset_id],
                     "notion_task": None,
                 }
             )
@@ -422,9 +450,9 @@ def build_manifest(
             limitations.append(
                 {
                     "code": f"asset_{entry['availability']}",
-                    "message": f"{entry['asset_id']} 不可用，未纳入核验",
+                    "message": f"{asset_id} 不可用，未纳入核验",
                     "block_completeness": entry["requirement"] == "required",
-                    "affects": [entry["asset_id"]],
+                    "affects": [asset_id],
                     "notion_task": None,
                 }
             )

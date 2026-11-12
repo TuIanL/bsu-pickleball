@@ -304,3 +304,88 @@ def test_build_does_not_import_database_models_or_lifespan(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert "RC 0" in completed.stdout, completed.stdout + completed.stderr
     assert 'HEAVY []' in completed.stdout, completed.stdout
+
+
+# --- real-data regressions --------------------------------------------------
+
+
+def test_identical_content_at_two_paths_collapses_to_one_asset(tmp_path):
+    """同一内容的两个副本只登记一个资产，另一个位置记为副本。
+
+    参考 take 的两个 PTS sidecar 内容完全相同，若不归并就会产生重复 asset_id。
+    """
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "a.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
+    (root / "b.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
+    config = _write_config(
+        tmp_path,
+        root,
+        assets=[
+            {
+                "root_id": "root_captures",
+                "relative_path": "a.mp4",
+                "kind": "source_video",
+                "usage_kind": "real",
+                "requirement": "required",
+            },
+            {
+                "root_id": "root_captures",
+                "relative_path": "b.mp4",
+                "kind": "source_video",
+                "usage_kind": "real",
+                "requirement": "required",
+            },
+        ],
+    )
+    output = tmp_path / "out"
+
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    locations = json.loads(
+        (output / "locations.local.json").read_text(encoding="utf-8")
+    )
+
+    assert len(manifest["assets"]) == 1
+    assert any("同内容副本" in note for note in manifest["assets"][0]["notes"])
+    (asset_id, mapping), = locations["assets"].items()
+    assert len(mapping["alternate_locators"]) == 1
+
+
+def test_non_media_assets_are_not_held_to_media_admission(tmp_path):
+    """JSON/PTH 不是视频，不应被媒体准入拒绝。
+
+    真实构建时 9 个 JSON/模型资产曾被误判为「伪视频」，这条防回归。
+    """
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "clip.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
+    (root / "roster.json").write_text('{"players": 4}', encoding="utf-8")
+    config = _write_config(
+        tmp_path,
+        root,
+        assets=[
+            {
+                "root_id": "root_captures",
+                "relative_path": "clip.mp4",
+                "kind": "source_video",
+                "usage_kind": "real",
+                "requirement": "required",
+            },
+            {
+                "root_id": "root_captures",
+                "relative_path": "roster.json",
+                "kind": "roster",
+                "usage_kind": "real",
+                "requirement": "required",
+            },
+        ],
+    )
+    output = tmp_path / "out"
+
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["completeness"] == "complete"
+    assert manifest["limitations"] == []
