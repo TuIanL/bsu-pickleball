@@ -4,6 +4,12 @@
 
 后端 SHALL 在 `/api/analysis/jobs/{job_id}/visualization-data` 端点中返回热力图结构化数据，包含 22 行 × 10 列的合并网格计数、最大计数值、球场几何信息，以及已由冻结名册审计确认的每名球员独立网格与展示标签。每个 `heatmaps.players` 元素的 `id` SHALL 为已确认的 canonical `Player_N`，`label` SHALL 为对应 P1..P4；未确认观测 MUST NOT 归入带 P 标签的个人网格。双打 Job SHALL 另提供四个冻结槽位的 `identity_slots` 状态、可用样本数和缺失/未确认原因，使页面能区分“没有识别到人”和“看到了人但无法确认是谁”。匿名有效观测可用于明确标注来源的合并图，MUST NOT 伪装成四人正式热力图。
 
+#### Scenario: 分析完成后返回热力图数据
+
+- **WHEN** 分析任务状态为 `completed`，且 `PositionVisualizer` 已生成 22×10 网格数据
+- **THEN** `/visualization-data` 返回的 JSON 中包含 `heatmaps` 对象，含合并 `visual_grid`（`rows: 22`、`cols: 10`、`max_count` 及 `cells: [{row, col, count}]`）与 `players` 数组，每个球员元素有 `id`、`label`、`color` 及独立 `grid`（同样含 `rows/cols/max_count/cells`）
+- **AND** 已确认球员的 `id` SHALL 为 canonical `Player_N`，`label` SHALL 为 `P1`..`P4`
+
 #### Scenario: 四人均已确认且有有效轨迹
 
 - **WHEN** 分析任务完成，四个 P 身份均通过审计，且 `PositionVisualizer` 已生成 22×10 网格数据

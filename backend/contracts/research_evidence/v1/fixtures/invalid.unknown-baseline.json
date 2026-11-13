@@ -1,0 +1,25 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_000000000005",
+  "generated_at": "2026-11-12T22:00:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "unknown",
+      "commit": null,
+      "worktree_clean": null,
+      "dirty_patch": {
+        "status": "unknown",
+        "sha256": null,
+        "reason": "候选基线版本未知。"
+      },
+      "note": "候选基线必须可定位到具体提交。"
+    },
+    "reference_revisions": []
+  },
+  "assets": [],
+  "run_refs": [],
+  "checks": [],
+  "completeness": "partial",
+  "limitations": []
+}

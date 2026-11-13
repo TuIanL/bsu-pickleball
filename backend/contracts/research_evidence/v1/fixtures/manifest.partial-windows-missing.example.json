@@ -1,0 +1,125 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_4b8d2e61c9a7",
+  "generated_at": "2026-11-12T21:55:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "reference_revisions": []
+  },
+  "assets": [
+    {
+      "asset_id": "a_src_174",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+      "size_bytes": 1237383185,
+      "digest": {
+        "status": "known",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": {
+        "duration_seconds": 698.8,
+        "width": 1920,
+        "height": 1080,
+        "fps_nominal": 60,
+        "frame_count": null,
+        "probe_status": "ok"
+      },
+      "notes": []
+    },
+    {
+      "asset_id": "a_src_175",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
+      "size_bytes": null,
+      "digest": {
+        "status": "unknown",
+        "sha256": null,
+        "reason": "本次索引未对该文件计算摘要。"
+      },
+      "availability": "unreachable",
+      "verification": "not_checked",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": ["不可达是 availability 结论，不是摘要不符；verification 保持 not_checked。"]
+    },
+    {
+      "asset_id": "a_win_artifacts",
+      "kind": "job_artifact",
+      "usage_kind": "unknown",
+      "requirement": "required",
+      "locator": "asset://root_windows_analysis/job-0d8ec77a76",
+      "size_bytes": null,
+      "digest": {
+        "status": "unknown",
+        "sha256": null,
+        "reason": "Windows 原始任务目录未在任何已授权来源根中定位到。"
+      },
+      "availability": "missing",
+      "verification": "unknown",
+      "provenance": {
+        "source_root_id": "root_windows_analysis",
+        "source_kind": "windows_machine",
+        "originated_at": null,
+        "note": "2026-11-12 外接盘挂载后全目录检索 job-0d8ec77a76 与 job-2b677c38af 均零命中；仓库内亦无引用。"
+      },
+      "media_metadata": null,
+      "notes": []
+    }
+  ],
+  "run_refs": [],
+  "checks": [
+    {
+      "check_id": "c_src_174_digest",
+      "target_asset_id": "a_src_174",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": null
+    },
+    {
+      "check_id": "c_win_artifacts_existence",
+      "target_asset_id": "a_win_artifacts",
+      "kind": "existence",
+      "status": "failed",
+      "scope": "三个授权来源根内路径检索",
+      "detail": "未定位到目录"
+    }
+  ],
+  "completeness": "partial",
+  "limitations": [
+    {
+      "code": "windows_job_evidence_missing",
+      "message": "最新 Windows 整段任务产物未取得，包只能声明 partial，并保留原始失败结论。",
+      "block_completeness": true,
+      "affects": ["a_win_artifacts"],
+      "notion_task": "PB-004"
+    }
+  ]
+}

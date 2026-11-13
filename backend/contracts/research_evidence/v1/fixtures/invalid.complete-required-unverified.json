@@ -1,0 +1,47 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_000000000006",
+  "generated_at": "2026-11-12T22:00:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "reference_revisions": []
+  },
+  "assets": [
+    {
+      "asset_id": "a_unverified_required",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_captures/take_x/174_merged.mp4",
+      "size_bytes": 1024,
+      "digest": {
+        "status": "known",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "availability": "present",
+      "verification": "not_checked",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": ["必需资产未核验却声明 complete。"]
+    }
+  ],
+  "run_refs": [],
+  "checks": [],
+  "completeness": "complete",
+  "limitations": []
+}

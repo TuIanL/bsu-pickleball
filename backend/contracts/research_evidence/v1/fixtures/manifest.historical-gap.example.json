@@ -1,0 +1,108 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_c1e5a79d3f28",
+  "generated_at": "2026-11-12T21:56:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "reference_revisions": [
+      {
+        "label": "legacy_runtime",
+        "status": "unknown",
+        "commit": null,
+        "worktree_clean": null,
+        "dirty_patch": {
+          "status": "unknown",
+          "sha256": null,
+          "reason": "旧 Job 产物未记录代码版本或工作区状态。"
+        },
+        "note": "禁止用当前 HEAD 回填历史运行版本。"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "asset_id": "a_legacy_quality_json",
+      "kind": "job_artifact",
+      "usage_kind": "real",
+      "requirement": "required",
+      "locator": "asset://root_analysis_legacy/outputs/job-036e491dbb/quality.json",
+      "size_bytes": null,
+      "digest": {
+        "status": "known",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_analysis_legacy",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": "legacy 归档目录，来源为 2026-09-27 导出。"
+      },
+      "media_metadata": null,
+      "notes": []
+    }
+  ],
+  "run_refs": [
+    {
+      "run_id": "job-036e491dbb",
+      "origin": "external",
+      "code_revision": {
+        "label": "runtime",
+        "status": "unknown",
+        "commit": null,
+        "worktree_clean": null,
+        "dirty_patch": {
+          "status": "unknown",
+          "sha256": null,
+          "reason": "旧 Job 未记录代码身份。"
+        },
+        "note": "外部历史产物，版本不可恢复。"
+      },
+      "consumes": ["a_legacy_quality_json"],
+      "range": {
+        "start_seconds": 0,
+        "end_seconds": 120,
+        "frame_start": null,
+        "frame_end": null,
+        "time_base": "cfr_nominal"
+      },
+      "algorithm_verdict": {
+        "result": "fail",
+        "scope": "0-120s 四人身份稳定性",
+        "recorded_source": "original_job",
+        "detail": "原结论原样照录，不因代码版本未知而降级或改写。"
+      }
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "c_legacy_quality_digest",
+      "target_asset_id": "a_legacy_quality_json",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件 SHA-256",
+      "detail": null
+    }
+  ],
+  "completeness": "partial",
+  "limitations": [
+    {
+      "code": "history_revision_unknown",
+      "message": "历史运行缺少代码版本与同步摘要，只能登记为 unknown。",
+      "block_completeness": true,
+      "affects": ["a_legacy_quality_json"],
+      "notion_task": null
+    }
+  ]
+}

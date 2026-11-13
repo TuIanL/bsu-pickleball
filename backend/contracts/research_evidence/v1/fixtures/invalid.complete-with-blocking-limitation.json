@@ -1,0 +1,32 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_000000000004",
+  "generated_at": "2026-11-12T22:00:00+08:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "reference_revisions": []
+  },
+  "assets": [],
+  "run_refs": [],
+  "checks": [],
+  "completeness": "complete",
+  "limitations": [
+    {
+      "code": "windows_job_evidence_missing",
+      "message": "声称完整却保留阻断性限制。",
+      "block_completeness": true,
+      "affects": [],
+      "notion_task": "PB-004"
+    }
+  ]
+}
