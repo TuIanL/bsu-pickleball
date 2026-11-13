@@ -63,6 +63,24 @@
 2. **源文件未被改写**：记录 10 个源文件的 `size` 与 `mtime_ns`，再执行一次完整 build（输出到另一目录），重新比对 —— **无一变化**。
 3. **分享包无本机路径**：`no_local_paths` 通过；`locations.local.json` 仅存在于本机包，`publish` 不导出。
 
+## 部分包验证（4.2）
+
+在同一 take 上追加一个缺失的 Windows 产物与两个历史 job，验证「缺必需来源只交付 partial」与「历史 fail 原样保留」。
+
+| 项 | 结果 |
+| --- | --- |
+| `completeness` | `partial` |
+| `a_win_job_0d8ec77a76` | `availability=missing`、`digest=unknown`、`usage_kind=unknown` |
+| 阻断限制 | `asset_missing`，`block_completeness=true`，`notion_task=PB-004` |
+| 历史 run 1 | `job-43e7475fd8`，1.1–210.0s，`fail`，`code_revision=unknown` |
+| 历史 run 2 | `job-7ab0b2ea60`，7.0–13.0s，`pass`，`code_revision=unknown` |
+| 历史失败限制 | `historical_run_failed`，`block_completeness=false` |
+| `verify` | 11 项全部通过（partial 是合法状态，不是校验失败） |
+
+两条限制刻意区别对待：**缺 Windows 产物阻断完整性声明**，**历史 fail 不阻断索引完整性**。后者属于算法质量结论，与「索引是否完整」正交；把它升级为阻断项会混淆两个维度，把它降级为静默则等于抹掉结论。
+
+历史 run 的 `code_revision` 一律为 `unknown`，不使用当前 HEAD 回填。`run_refs` 中的范围来自轨道时间戳推导，不是任务声明的分析窗口。
+
 ## 已知限制
 
 | 限制 | 影响 | 跟踪 |

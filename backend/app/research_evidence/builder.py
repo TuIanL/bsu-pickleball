@@ -30,6 +30,11 @@ from .classification import (
 )
 from .hashing import inspect_file
 from .identity import asset_id_from_digest
+from .importers import (
+    import_job_result_file,
+    import_quality_report_file,
+    iter_quality_reports,
+)
 from .locations import (
     LOCATIONS_SCHEMA_VERSION,
     SourceRoot,
@@ -86,7 +91,20 @@ class AssetSpec:
     usage_kind: Literal["real", "fixture", "unknown"]
     requirement: Literal["required", "optional"]
     asset_id: str | None = None
+    notion_task: str | None = None
     notes: tuple[str, ...] = ()
+
+    @property
+    def locator(self) -> str:
+        return build_locator(self.root_id, self.relative_path)
+
+
+@dataclass(frozen=True)
+class HistoricalJobSpec:
+    """A historical job directory whose range and verdict should be recorded."""
+
+    root_id: str
+    relative_path: str
 
     @property
     def locator(self) -> str:
@@ -101,6 +119,7 @@ class BuildConfig:
     source_roots: tuple[SourceRoot, ...]
     assets: tuple[AssetSpec, ...]
     baseline: dict[str, Any] = field(default_factory=dict)
+    historical_jobs: tuple[HistoricalJobSpec, ...] = ()
 
     def roots_by_id(self) -> dict[str, str]:
         return {root.root_id: root.path for root in self.source_roots}
@@ -159,12 +178,34 @@ def _load_assets(raw: Any) -> tuple[AssetSpec, ...]:
                     usage_kind=entry["usage_kind"],
                     requirement=entry["requirement"],
                     asset_id=entry.get("asset_id"),
+                    notion_task=entry.get("notion_task"),
                     notes=tuple(entry.get("notes") or ()),
                 )
             )
         except KeyError as error:
             raise BuildError(f"asset 缺少字段: {error}") from error
     return tuple(assets)
+
+
+def _load_historical_jobs(raw: Any) -> tuple[HistoricalJobSpec, ...]:
+    if not raw:
+        return ()
+    if not isinstance(raw, list):
+        raise BuildError("historical_jobs 应为数组")
+    jobs = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            raise BuildError("historical_jobs 条目应为对象")
+        try:
+            jobs.append(
+                HistoricalJobSpec(
+                    root_id=str(entry["root_id"]),
+                    relative_path=str(entry["relative_path"]),
+                )
+            )
+        except KeyError as error:
+            raise BuildError(f"historical_jobs 缺少字段: {error}") from error
+    return tuple(jobs)
 
 
 def load_build_config(path: Path) -> BuildConfig:
@@ -194,6 +235,7 @@ def load_build_config(path: Path) -> BuildConfig:
         source_roots=_load_source_roots(raw.get("source_roots")),
         assets=_load_assets(raw.get("assets")),
         baseline=baseline,
+        historical_jobs=_load_historical_jobs(raw.get("historical_jobs")),
     )
 
 
@@ -358,6 +400,103 @@ def _build_asset_entry(
 # --- build ------------------------------------------------------------------
 
 
+def _import_historical_runs(
+    jobs: tuple[HistoricalJobSpec, ...], roots: dict[str, str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Import historical verdicts as run refs. Never promotes and never erases them."""
+    run_refs: list[dict[str, Any]] = []
+    limitations: list[dict[str, Any]] = []
+
+    for job in jobs:
+        try:
+            job_dir = resolve_locator(job.locator, roots)
+        except Exception as error:
+            raise BuildError(f"无法解析历史任务 {job.locator}: {error}") from error
+
+        result_path = job_dir / "result.json"
+        if not result_path.is_file():
+            limitations.append(
+                {
+                    "code": "historical_run_missing",
+                    "message": f"{job.locator} 缺少 result.json，未纳入对照",
+                    "block_completeness": True,
+                    "affects": [],
+                    "notion_task": None,
+                }
+            )
+            continue
+
+        run = import_job_result_file(result_path)
+        reports = list(iter_quality_reports(job_dir))
+        quality = import_quality_report_file(reports[0]) if reports else None
+        verdict = quality.verdict if quality else "unknown"
+
+        if run.range is None:
+            limitations.append(
+                {
+                    "code": "historical_run_range_unknown",
+                    "message": (
+                        f"{run.job_id} 无轨道数据，原判定 {verdict}，"
+                        "范围未知，未写入 run_refs"
+                    ),
+                    "block_completeness": False,
+                    "affects": [],
+                    "notion_task": None,
+                }
+            )
+            continue
+
+        scope = f"观测覆盖 {run.range.start_seconds:.1f}–{run.range.end_seconds:.1f}s"
+        run_refs.append(
+            {
+                "run_id": run.job_id,
+                "origin": "product_job",
+                "code_revision": {
+                    "label": "runtime",
+                    "status": "unknown",
+                    "commit": None,
+                    "worktree_clean": None,
+                    "dirty_patch": {
+                        "status": "unknown",
+                        "sha256": None,
+                        "reason": "历史产物未记录代码版本，禁止用当前 HEAD 回填",
+                    },
+                    "note": None,
+                },
+                "consumes": [],
+                "range": {
+                    "start_seconds": run.range.start_seconds,
+                    "end_seconds": run.range.end_seconds,
+                    "frame_start": None,
+                    "frame_end": None,
+                    "time_base": "pts_actual",
+                },
+                "algorithm_verdict": {
+                    "result": verdict if verdict in {"pass", "fail"} else "unknown",
+                    "scope": scope,
+                    "recorded_source": "quality_report" if quality else "none",
+                    "detail": "范围由轨道时间戳推导，非任务声明窗口",
+                },
+            }
+        )
+
+        if verdict == "fail":
+            limitations.append(
+                {
+                    "code": "historical_run_failed",
+                    "message": (
+                        f"{run.job_id} 历史判定 fail（{scope}），"
+                        "原结论保留，不代表整段通过"
+                    ),
+                    "block_completeness": False,
+                    "affects": [],
+                    "notion_task": None,
+                }
+            )
+
+    return run_refs, limitations
+
+
 def _completeness(assets: list[dict[str, Any]], limitations: list[dict[str, Any]]) -> str:
     if any(limit["block_completeness"] for limit in limitations):
         return "partial"
@@ -442,7 +581,7 @@ def build_manifest(
                     "message": f"{asset_id}: {warning}",
                     "block_completeness": entry["requirement"] == "required",
                     "affects": [asset_id],
-                    "notion_task": None,
+                    "notion_task": spec.notion_task,
                 }
             )
 
@@ -453,9 +592,14 @@ def build_manifest(
                     "message": f"{asset_id} 不可用，未纳入核验",
                     "block_completeness": entry["requirement"] == "required",
                     "affects": [asset_id],
-                    "notion_task": None,
+                    "notion_task": spec.notion_task,
                 }
             )
+
+    run_refs, history_limitations = _import_historical_runs(
+        config.historical_jobs, roots
+    )
+    limitations.extend(history_limitations)
 
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -463,7 +607,7 @@ def build_manifest(
         "generated_at": _utc_now(),
         "baseline": config.baseline,
         "assets": assets,
-        "run_refs": [],
+        "run_refs": run_refs,
         "checks": checks,
         "completeness": _completeness(assets, limitations),
         "limitations": limitations,
