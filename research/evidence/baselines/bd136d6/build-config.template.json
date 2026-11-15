@@ -1,0 +1,151 @@
+{
+  "_note": "构建配置模板。将两个占位符替换为本机授权根后即可复现本包；替换路径不会改变 config_sha256，因为该摘要只覆盖 package_id / assets / historical_jobs / baseline。",
+  "package_id": "pkg_7f3a9c21b4de",
+  "source_roots": [
+    {
+      "root_id": "root_captures",
+      "path": "<CAPTURES_ROOT>",
+      "source_kind": "external_disk"
+    },
+    {
+      "root_id": "root_models",
+      "path": "<MODELS_ROOT>",
+      "source_kind": "repository"
+    }
+  ],
+  "assets": [
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "view_role": "cam1",
+      "time_base": "cfr_nominal"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "requirement": "required",
+      "view_role": "cam2",
+      "time_base": "cfr_nominal"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
+      "kind": "pts_sidecar",
+      "usage_kind": "real",
+      "requirement": "required",
+      "view_role": "cam1",
+      "time_base": "pts_actual"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl",
+      "kind": "pts_sidecar",
+      "usage_kind": "real",
+      "requirement": "required",
+      "view_role": "cam2",
+      "time_base": "pts_actual"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/manifest.json",
+      "kind": "sync_manifest",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/metadata/recording_session.json",
+      "kind": "roster",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/metadata/canonical_court_frame.json",
+      "kind": "calibration",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/metadata/metric-court-scene/current.json",
+      "kind": "calibration",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/timeline/sync_calibration.json",
+      "kind": "sync_manifest",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_models",
+      "relative_path": "rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
+      "kind": "model_weight",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_models",
+      "relative_path": "court-line/best.pt",
+      "kind": "model_weight",
+      "usage_kind": "real",
+      "requirement": "required"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "windows-analysis/job-0d8ec77a76",
+      "kind": "job_artifact",
+      "usage_kind": "unknown",
+      "requirement": "required",
+      "asset_id": "a_win_job_0d8ec77a76",
+      "notion_task": "PB-004",
+      "notes": [
+        "2026-11-12 外接盘挂载后全目录检索零命中；仓库内亦无引用。未取得即不得声明完整科研验收。"
+      ]
+    }
+  ],
+  "historical_jobs": [
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/analysis/job-43e7475fd8"
+    },
+    {
+      "root_id": "root_captures",
+      "relative_path": "2026-07-20/take_sync_20260720_122645_317228/analysis/job-7ab0b2ea60"
+    }
+  ],
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": "科研候选基线；合并提交 CI 43161071725 与最终主线 CI 43161180806 均通过。"
+    },
+    "reference_revisions": [
+      {
+        "label": "audit_snapshot",
+        "status": "known",
+        "commit": "99c0f19d1371bd76b8cc00654bbb8f0cc105aab8",
+        "worktree_clean": true,
+        "dirty_patch": {
+          "status": "known",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "note": "11/10 审计快照，仅作历史对照。"
+      }
+    ]
+  }
+}

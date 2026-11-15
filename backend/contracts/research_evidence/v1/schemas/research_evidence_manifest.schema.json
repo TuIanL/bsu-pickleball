@@ -1,0 +1,441 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teng-i.local/schemas/research-evidence/research-evidence-manifest.v1.json",
+  "title": "Research Evidence Manifest v1",
+  "description": "科研复盘资产索引。内容资产（asset）与其使用关系（usage）分离：同一份字节只登记一次，但每个机位、每种用途、每项必需性各自成条，任何一侧都不得被另一侧的代表值覆盖。本契约只表达身份与核验事实，不表达模型质量结论。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_id",
+    "generated_at",
+    "baseline",
+    "tooling",
+    "assets",
+    "run_refs",
+    "checks",
+    "completeness",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "pb.research-evidence-manifest.v1.0" },
+    "package_id": {
+      "type": "string",
+      "pattern": "^pkg_[0-9a-f]{12}$",
+      "description": "索引包标识，由基线 commit 与内容摘要派生，不随输出目录变化。"
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "baseline": { "$ref": "#/$defs/baseline" },
+    "tooling": { "$ref": "#/$defs/tooling" },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "run_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/run_ref" }
+    },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "completeness": {
+      "enum": ["complete", "partial"],
+      "description": "complete 仅当所有 requirement=required 的使用关系所指向的内容资产 availability=present 且 verification=verified，且不存在 block_completeness=true 的 limitation。"
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/limitation" }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "complete 与阻断性 limitation 不可共存。",
+      "if": { "properties": { "completeness": { "const": "complete" } }, "required": ["completeness"] },
+      "then": {
+        "properties": {
+          "limitations": {
+            "items": {
+              "properties": { "block_completeness": { "const": false } },
+              "required": ["block_completeness"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "complete 时，任何带 required 使用关系的资产都必须 present 且 verified。",
+      "if": { "properties": { "completeness": { "const": "complete" } }, "required": ["completeness"] },
+      "then": {
+        "properties": {
+          "assets": {
+            "items": {
+              "if": {
+                "properties": {
+                  "usages": {
+                    "contains": {
+                      "properties": { "requirement": { "const": "required" } },
+                      "required": ["requirement"]
+                    }
+                  }
+                },
+                "required": ["usages"]
+              },
+              "then": {
+                "properties": {
+                  "availability": { "const": "present" },
+                  "verification": { "const": "verified" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "内容摘要的显式在场表达。unknown 必须与 sha256=null 同时出现，禁止用空串或占位值冒充已知。",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["known", "unknown"] },
+        "sha256": {
+          "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "status=unknown 时的来源说明，例如历史产物未记录摘要。"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "known" } }, "required": ["status"] },
+          "then": {
+            "required": ["sha256"],
+            "properties": { "sha256": { "$ref": "#/$defs/sha256" } }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unknown" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sha256": { "type": "null" },
+              "reason": { "type": "string", "minLength": 1 }
+            },
+            "required": ["sha256", "reason"]
+          }
+        }
+      ]
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "代码身份。历史外部产物可能完全未记录版本，此时 status=unknown 且 commit=null，禁止用当前 HEAD 回填。",
+      "required": ["label", "status", "commit", "worktree_clean", "dirty_patch"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["known", "unknown"] },
+        "commit": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            { "type": "null" }
+          ]
+        },
+        "worktree_clean": {
+          "type": ["boolean", "null"],
+          "description": "null 表示未记录该信息，不等同于 clean。"
+        },
+        "dirty_patch": { "$ref": "#/$defs/digest" },
+        "note": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "known" } }, "required": ["status"] },
+          "then": {
+            "required": ["commit"],
+            "properties": { "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" } }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unknown" } }, "required": ["status"] },
+          "then": {
+            "required": ["commit"],
+            "properties": { "commit": { "type": "null" } }
+          }
+        }
+      ]
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_revision", "reference_revisions"],
+      "properties": {
+        "selected_revision": {
+          "$ref": "#/$defs/revision",
+          "description": "科研候选基线。只允许一个，避免同一包内出现两个可宣称的主基线。"
+        },
+        "reference_revisions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/revision" },
+          "description": "历史对照身份，仅作对照，不构成候选基线。"
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "候选基线必须可定位到具体提交。",
+          "properties": {
+            "selected_revision": {
+              "properties": { "status": { "const": "known" } },
+              "required": ["status"]
+            }
+          }
+        }
+      ]
+    },
+    "tooling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "索引工具自身版本与构建配置摘要，与科研分析基线分开记录。",
+      "required": ["name", "revision", "config_sha256"],
+      "properties": {
+        "name": { "const": "research_evidence" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "config_sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "构建配置核心部分的规范化摘要，不含 source_roots 的本机路径。"
+        }
+      }
+    },
+    "usage_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "usage_kind 的判定依据。没有依据时不得默认为 real。",
+      "required": ["basis", "reason"],
+      "properties": {
+        "basis": {
+          "enum": [
+            "operator_declared",
+            "root_policy",
+            "container_unverified",
+            "no_evidence"
+          ]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一个内容资产的一处使用关系。同一 asset_id 可有多条，各自独立表达机位、用途、必需性与来源，不因内容去重而合并。",
+      "required": [
+        "locator",
+        "view_role",
+        "usage_kind",
+        "requirement",
+        "source_root_id",
+        "source_kind",
+        "usage_basis"
+      ],
+      "properties": {
+        "locator": {
+          "type": "string",
+          "pattern": "^asset://[a-z0-9_]+/.+$",
+          "description": "可分享的逻辑定位串。"
+        },
+        "view_role": {
+          "enum": ["cam1", "cam2", "single_view", "unspecified"],
+          "description": "机位角色。内容相同但机位不同时必须分别记录。"
+        },
+        "usage_kind": {
+          "enum": ["real", "fixture", "unknown"],
+          "description": "本条使用关系的用途类型，不是内容属性。"
+        },
+        "requirement": {
+          "enum": ["required", "optional"],
+          "description": "本条使用关系相对包用途的必需性。complete 判定只聚合 required 条目。"
+        },
+        "source_root_id": {
+          "type": "string",
+          "pattern": "^root_[a-z0-9_]+$"
+        },
+        "source_kind": {
+          "enum": ["repository", "external_disk", "windows_machine", "derived"]
+        },
+        "usage_basis": { "$ref": "#/$defs/usage_basis" },
+        "time_base": {
+          "enum": ["cfr_nominal", "pts_actual", "take_unified", "not_applicable"],
+          "description": "该副本在分析中使用的时间基准。"
+        },
+        "context": { "type": ["string", "null"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "内容资产：只由字节决定身份，不携带任何单一使用关系的属性。",
+      "required": [
+        "asset_id",
+        "kind",
+        "digest",
+        "size_bytes",
+        "availability",
+        "verification",
+        "usages"
+      ],
+      "properties": {
+        "asset_id": { "type": "string", "pattern": "^a_[a-z0-9_]+$" },
+        "kind": {
+          "enum": [
+            "source_video",
+            "pts_sidecar",
+            "sync_manifest",
+            "calibration",
+            "roster",
+            "model_weight",
+            "model_config",
+            "model_package",
+            "job_artifact",
+            "annotation",
+            "other"
+          ]
+        },
+        "size_bytes": {
+          "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
+        },
+        "digest": { "$ref": "#/$defs/digest" },
+        "availability": {
+          "enum": ["present", "missing", "unreachable", "not_checked"],
+          "description": "内容可达性聚合：任一使用位置可达即 present。与 verification 正交。"
+        },
+        "verification": {
+          "enum": ["verified", "mismatch", "not_checked", "unknown"],
+          "description": "内容核验结论聚合：全部要求核验的维度通过才是 verified；媒体探测失败不得标为 verified。"
+        },
+        "media_metadata": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "duration_seconds": { "type": ["number", "null"] },
+                "width": { "type": ["integer", "null"] },
+                "height": { "type": ["integer", "null"] },
+                "fps_nominal": { "type": ["number", "null"] },
+                "frame_count": { "type": ["integer", "null"] },
+                "probe_status": { "enum": ["ok", "timeout", "error", "skipped"] }
+              },
+              "required": ["probe_status"]
+            },
+            { "type": "null" }
+          ]
+        },
+        "usages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/usage" }
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "run_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "origin",
+        "code_revision",
+        "consumes",
+        "range",
+        "algorithm_verdict"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "pattern": "^(job-[0-9a-f]{10}|run_[a-z0-9_]+)$"
+        },
+        "origin": {
+          "enum": ["product_job", "research_cli", "external"]
+        },
+        "code_revision": { "$ref": "#/$defs/revision" },
+        "consumes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^a_[a-z0-9_]+$" },
+          "description": "本次运行消费的 asset_id 列表，必须能在 assets 中解析。"
+        },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start_seconds", "end_seconds", "time_base"],
+          "properties": {
+            "start_seconds": { "type": "number", "minimum": 0 },
+            "end_seconds": { "type": "number", "minimum": 0 },
+            "frame_start": { "type": ["integer", "null"], "minimum": 0 },
+            "frame_end": { "type": ["integer", "null"], "minimum": 0 },
+            "time_base": {
+              "enum": ["cfr_nominal", "pts_actual", "take_unified"],
+              "description": "时间基准来源。名义 fps 不能替代实际 PTS。"
+            }
+          }
+        },
+        "algorithm_verdict": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result", "scope", "recorded_source"],
+          "properties": {
+            "result": { "enum": ["pass", "fail", "not_run", "unknown"] },
+            "scope": { "type": "string", "minLength": 1 },
+            "recorded_source": {
+              "enum": ["original_job", "quality_report", "manual_review", "none"]
+            },
+            "detail": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "target_asset_id", "kind", "status", "scope"],
+      "properties": {
+        "check_id": { "type": "string", "pattern": "^c_[a-z0-9_]+$" },
+        "target_asset_id": { "type": "string", "pattern": "^a_[a-z0-9_]+$" },
+        "kind": {
+          "enum": [
+            "existence",
+            "metadata_probe",
+            "digest",
+            "decode",
+            "alternate_digest",
+            "readonly"
+          ],
+          "description": "存在性、元数据探测、内容摘要、全解码、副本摘要与只读证据分别记录，互不升级。"
+        },
+        "status": { "enum": ["passed", "failed", "skipped", "unknown"] },
+        "scope": { "type": "string", "minLength": 1 },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "limitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "block_completeness"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "block_completeness": { "type": "boolean" },
+        "affects": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^a_[a-z0-9_]+$" }
+        },
+        "notion_task": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
