@@ -230,8 +230,11 @@ expected 36.964, received 0
 | 2 | `1209322` | PASS WITH CONCERNS | 确认四项实质关闭；新增 readonly 与 ffprobe 两项 → `8888d49` 修复 |
 | 3 | `bbafc52` | PASS WITH CONCERNS | 确认 A/B 关闭；三项收口（per-usage 检查、partial 阻断依据、版本说明）→ `3c3f3d7` 修复 |
 | 4 | `2aa82b6` | 三项中两项 PASS、一项收窄 | 同机位副本仍合并、文档表格被合并 → `bc931b1` 修复，含 `len(existence) == len(usages)` 断言 |
+| 5 | `bc931b1` | **PASS** | 最终工具版本通过独立复核，明确「可转 Ready」 |
 
 最终交付 SHA：`40d03e2`（工具版本 `bc931b1`，交付包在其后生成，工具代码未再改动）。
+
+**第五轮为最终工具版本的正式结论**：`bc931b1` 通过独立复核。该结论对应最后一次工具代码变更；其后的 `40d03e2`、`75fa80f`、`19a66d4` 仅涉及产物与文档，`git diff -- <TOOLING_PATHS>` 均为 0 个文件。
 
 四项原中等级别缺陷全部关闭，六项低级问题均有处置记录（3 项修复、1 项保留、4 项登记后续）。独立复核由未参与实现的 QA Agent 在独立工作树中完成，报告原文见 `independent-review-49767b9.md`，后续三轮结论见本节。
 
