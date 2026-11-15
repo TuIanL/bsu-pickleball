@@ -149,4 +149,36 @@ python scripts/research_evidence.py verify --package /tmp/pe-4-1-run/pkg_new --d
 | 原始资产修改 | 10 个文件两次构建后 size/mtime 完全一致；`inspect_file` 返回 `input_unchanged` |
 | 历史结论改写 | 历史 `fail` 原样进入 `run_refs` 与非阻断 limitation，未升级也未降级 |
 
-**独立复核状态：待安排。** 本文件由实施者自审产生，不构成独立复核结论。按 4.3 要求，需由未参与实现的复核者确认上述排除项；在此之前不应对外声称已通过独立验证。
+**独立复核状态：已由独立 QA Agent 于 `49767b9` 上完成，结论 PASS WITH CONCERNS，四项中等缺陷已在后续提交修复（见下节）。**
+
+## 评审修复（`49767b9` 之后）
+
+独立复核在 `49767b9` 上提出四项中等缺陷与六项低级问题。本节记录处理结论；复核报告原文见 `independent-review-49767b9.md`。
+
+### 四项中等缺陷
+
+| 缺陷 | 修复方式 | 回归测试 |
+| --- | --- | --- |
+| 去重吞语义 | 契约重构为「内容资产 + 使用关系」两层：`asset` 只由字节决定（`asset_id`/`kind`/`digest`/`size_bytes`/`availability`/`verification`），`usage` 各自携带 `locator`/`view_role`/`usage_kind`/`requirement`/`source_root_id`/`time_base`。`complete` 只聚合带 `required` 的使用关系。 | `test_dedup_keeps_each_usage_semantics` |
+| 伪视频误标 | `verification` 不再等同于「算出摘要」：容器不可识别记 `mismatch`，是媒体但探测失败或超时记 `not_checked`，并写入 `content_type_mismatch` / `media_probe_failed` 限制。optional 不阻断完整性，但绝不标 `verified`。 | `test_fake_video_optional_is_not_marked_verified` |
+| Job 报告错配 | 质量报告必须满足 `quality.job_id == run.job_id` 才被采用；不唯一匹配时判定为 `unknown` 并记 `historical_quality_unmatched`。 | `test_quality_report_for_another_job_is_not_applied` |
+| 深度校验漏副本 | `_deep_check` 遍历每条 usage 的 locator 逐一重算；无法解析或不可读全部记为未通过。便携包缺本机映射时新增 `deep_possible` 明确失败，不再与 `deep_digest_match` 混同。 | `test_deep_verify_covers_every_usage_location`、`test_shareable_deep_is_not_reported_as_passed` |
+
+### 六项低级问题分级
+
+| # | 问题 | 影响面 | 结论 |
+| --- | --- | --- | --- |
+| 5 | CLI 未捕获导入异常，抛栈且退出码错误 | 诊断与退出状态 | **已修**：捕获 `ArtifactImportError`，统一退出码 2 |
+| 6 | Schema 必填集与 verify 不一致 | 第三方仅按 Schema 校验会接受缺工具版本或缺使用关系的包 | **已修**：`tooling` 进入必填，`usages` 为 `minItems: 1` |
+| 7 | `completeness_consistent` 与 Schema `allOf` 等价 | 冗余但无害，属纵深防御 | 保留并登记 |
+| 8 | 只读证据未入包 | `input_unchanged` 被丢弃，无法审计读取期间是否被改动 | **已修**：新增 `readonly` 检查入包；同类检查去重改为「失败优先」 |
+| 9 | `publish` 不做源根包含检查 | 分享包可能被写进授权根内部 | 登记后续；CLI 已要求新目录，风险有限 |
+| 10 | `write_package` 只防同名文件 | 直接调用内部 API 时可写入含无关文件的目录 | 登记后续；CLI 层由 `assert_output_is_safe` 拦住 |
+| 11 | `run_refs[].consumes` 恒为空 | 运行与资产的关联只剩范围文字描述 | 登记后续；历史 job 与包内资产暂无确定对应 |
+| 12 | CLI 依赖 pydantic | 额外第三方依赖，但不触发应用栈 | 保留，`locations.py` 的模型校验需要 |
+
+未修项均不影响本轮证据正确性：9/10 属调用面限制，11 属信息完整度，12 是既有依赖选择。
+
+### 本轮测试结果
+
+`207 passed`（research_evidence 套件），ruff clean。

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://teng-i.local/schemas/research-evidence/research-evidence-manifest.v1.json",
   "title": "Research Evidence Manifest v1",
-  "description": "科研复盘资产索引。用于登记源媒体、侧车、标定、名册、模型与历史运行结果的版本身份和只读核验状态。本契约只表达身份与核验事实，不表达模型质量结论；算法 verdict 原样照录。",
+  "description": "科研复盘资产索引。内容资产（asset）与其使用关系（usage）分离：同一份字节只登记一次，但每个机位、每种用途、每项必需性各自成条，任何一侧都不得被另一侧的代表值覆盖。本契约只表达身份与核验事实，不表达模型质量结论。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,6 +10,7 @@
     "package_id",
     "generated_at",
     "baseline",
+    "tooling",
     "assets",
     "run_refs",
     "checks",
@@ -25,20 +26,7 @@
     },
     "generated_at": { "type": "string", "format": "date-time" },
     "baseline": { "$ref": "#/$defs/baseline" },
-    "tooling": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "索引工具自身的版本与构建配置摘要。与科研分析基线分开记录，避免把工具提交当成分析代码版本。",
-      "required": ["name", "revision"],
-      "properties": {
-        "name": { "const": "research_evidence" },
-        "revision": { "$ref": "#/$defs/revision" },
-        "config_sha256": {
-          "$ref": "#/$defs/sha256",
-          "description": "构建配置核心部分（package_id/assets/historical_jobs/baseline）的规范化摘要，不含 source_roots 的本机路径。"
-        }
-      }
-    },
+    "tooling": { "$ref": "#/$defs/tooling" },
     "assets": {
       "type": "array",
       "items": { "$ref": "#/$defs/asset" }
@@ -53,7 +41,7 @@
     },
     "completeness": {
       "enum": ["complete", "partial"],
-      "description": "complete 仅当所有 requirement=required 的资产 availability=present 且 verification=verified，且不存在 block_completeness=true 的 limitation。该聚合判定由 CLI 执行，Schema 只约束不可自相矛盾的组合。"
+      "description": "complete 仅当所有 requirement=required 的使用关系所指向的内容资产 availability=present 且 verification=verified，且不存在 block_completeness=true 的 limitation。"
     },
     "limitations": {
       "type": "array",
@@ -76,13 +64,23 @@
       }
     },
     {
-      "$comment": "asset_id 与 run_ref.run_id 在包内唯一，由 CLI 校验；Schema 约束引用形态。",
+      "$comment": "complete 时，任何带 required 使用关系的资产都必须 present 且 verified。",
       "if": { "properties": { "completeness": { "const": "complete" } }, "required": ["completeness"] },
       "then": {
         "properties": {
           "assets": {
             "items": {
-              "if": { "properties": { "requirement": { "const": "required" } }, "required": ["requirement"] },
+              "if": {
+                "properties": {
+                  "usages": {
+                    "contains": {
+                      "properties": { "requirement": { "const": "required" } },
+                      "required": ["requirement"]
+                    }
+                  }
+                },
+                "required": ["usages"]
+              },
               "then": {
                 "properties": {
                   "availability": { "const": "present" },
@@ -97,44 +95,6 @@
   ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "usage_basis": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "usage_kind 的判定依据。没有依据时不得默认为 real。",
-      "required": ["basis", "reason"],
-      "properties": {
-        "basis": {
-          "enum": [
-            "operator_declared",
-            "root_policy",
-            "container_unverified",
-            "no_evidence"
-          ]
-        },
-        "reason": { "type": "string", "minLength": 1 }
-      }
-    },
-    "occurrence": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "一个内容副本在具体机位上的使用关系。locator 相同的多个 occurrence 表示同一位置被多个角色引用。",
-      "required": ["locator", "view_role", "time_base"],
-      "properties": {
-        "locator": {
-          "type": "string",
-          "pattern": "^asset://[a-z0-9_]+/.+$"
-        },
-        "view_role": {
-          "enum": ["cam1", "cam2", "single_view", "unspecified"],
-          "description": "机位角色。内容相同但机位不同时必须分别记录，不能只留字符串副本列表。"
-        },
-        "time_base": {
-          "enum": ["cfr_nominal", "pts_actual", "take_unified", "not_applicable"],
-          "description": "该副本在分析中使用的时间基准。"
-        },
-        "note": { "type": ["string", "null"] }
-      }
-    },
     "digest": {
       "type": "object",
       "additionalProperties": false,
@@ -176,11 +136,7 @@
       "description": "代码身份。历史外部产物可能完全未记录版本，此时 status=unknown 且 commit=null，禁止用当前 HEAD 回填。",
       "required": ["label", "status", "commit", "worktree_clean", "dirty_patch"],
       "properties": {
-        "label": {
-          "type": "string",
-          "minLength": 1,
-          "description": "该 revision 在证据链中的角色，例如 selected_baseline、audit_snapshot、feature_line、runtime。"
-        },
+        "label": { "type": "string", "minLength": 1 },
         "status": { "enum": ["known", "unknown"] },
         "commit": {
           "anyOf": [
@@ -224,7 +180,7 @@
         "reference_revisions": {
           "type": "array",
           "items": { "$ref": "#/$defs/revision" },
-          "description": "历史对照身份，例如已保留的审计快照与功能线来源；仅作对照，不构成候选基线。"
+          "description": "历史对照身份，仅作对照，不构成候选基线。"
         }
       },
       "allOf": [
@@ -239,38 +195,96 @@
         }
       ]
     },
-    "provenance": {
+    "tooling": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_root_id", "source_kind"],
+      "description": "索引工具自身版本与构建配置摘要，与科研分析基线分开记录。",
+      "required": ["name", "revision", "config_sha256"],
       "properties": {
+        "name": { "const": "research_evidence" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "config_sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "构建配置核心部分的规范化摘要，不含 source_roots 的本机路径。"
+        }
+      }
+    },
+    "usage_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "usage_kind 的判定依据。没有依据时不得默认为 real。",
+      "required": ["basis", "reason"],
+      "properties": {
+        "basis": {
+          "enum": [
+            "operator_declared",
+            "root_policy",
+            "container_unverified",
+            "no_evidence"
+          ]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一个内容资产的一处使用关系。同一 asset_id 可有多条，各自独立表达机位、用途、必需性与来源，不因内容去重而合并。",
+      "required": [
+        "locator",
+        "view_role",
+        "usage_kind",
+        "requirement",
+        "source_root_id",
+        "source_kind",
+        "usage_basis"
+      ],
+      "properties": {
+        "locator": {
+          "type": "string",
+          "pattern": "^asset://[a-z0-9_]+/.+$",
+          "description": "可分享的逻辑定位串。"
+        },
+        "view_role": {
+          "enum": ["cam1", "cam2", "single_view", "unspecified"],
+          "description": "机位角色。内容相同但机位不同时必须分别记录。"
+        },
+        "usage_kind": {
+          "enum": ["real", "fixture", "unknown"],
+          "description": "本条使用关系的用途类型，不是内容属性。"
+        },
+        "requirement": {
+          "enum": ["required", "optional"],
+          "description": "本条使用关系相对包用途的必需性。complete 判定只聚合 required 条目。"
+        },
         "source_root_id": {
           "type": "string",
-          "pattern": "^root_[a-z0-9_]+$",
-          "description": "授权来源根的逻辑标识。绝对路径只保存在 locations.local.json，不进入可分享 manifest。"
+          "pattern": "^root_[a-z0-9_]+$"
         },
         "source_kind": {
-          "enum": ["repository", "external_disk", "windows_machine", "derived"],
-          "description": "资产原始所在环境类别，用于区分可复核位置与需人工取回的位置。"
+          "enum": ["repository", "external_disk", "windows_machine", "derived"]
         },
-        "originated_at": { "type": ["string", "null"], "format": "date-time" },
-        "note": { "type": ["string", "null"] }
+        "usage_basis": { "$ref": "#/$defs/usage_basis" },
+        "time_base": {
+          "enum": ["cfr_nominal", "pts_actual", "take_unified", "not_applicable"],
+          "description": "该副本在分析中使用的时间基准。"
+        },
+        "context": { "type": ["string", "null"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
       }
     },
     "asset": {
       "type": "object",
       "additionalProperties": false,
+      "description": "内容资产：只由字节决定身份，不携带任何单一使用关系的属性。",
       "required": [
         "asset_id",
         "kind",
-        "usage_kind",
-        "requirement",
-        "locator",
-        "size_bytes",
         "digest",
+        "size_bytes",
         "availability",
         "verification",
-        "provenance"
+        "usages"
       ],
       "properties": {
         "asset_id": { "type": "string", "pattern": "^a_[a-z0-9_]+$" },
@@ -289,32 +303,18 @@
             "other"
           ]
         },
-        "usage_kind": {
-          "enum": ["real", "fixture", "unknown"],
-          "description": "用途类型。工具不得仅凭扩展名或目录位置自动认证 real；无法确认时必须为 unknown。"
-        },
-        "requirement": {
-          "enum": ["required", "optional"],
-          "description": "相对包用途的必需性。complete 判定只聚合 required 资产。"
-        },
-        "locator": {
-          "type": "string",
-          "pattern": "^asset://[a-z0-9_]+/.+$",
-          "description": "可分享的逻辑定位串，形如 asset://root_captures/2026-07-20/take_x/174_merged.mp4。路径不是 ID。"
-        },
         "size_bytes": {
           "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
         },
         "digest": { "$ref": "#/$defs/digest" },
         "availability": {
           "enum": ["present", "missing", "unreachable", "not_checked"],
-          "description": "物理可达性。与 verification 正交：文件在但摘要不符属于 present+mismatch。"
+          "description": "内容可达性聚合：任一使用位置可达即 present。与 verification 正交。"
         },
         "verification": {
           "enum": ["verified", "mismatch", "not_checked", "unknown"],
-          "description": "内容核验结论。与 availability 正交：不可达是 unreachable+not_checked，不是 mismatch。"
+          "description": "内容核验结论聚合：全部要求核验的维度通过才是 verified；媒体探测失败不得标为 verified。"
         },
-        "provenance": { "$ref": "#/$defs/provenance" },
         "media_metadata": {
           "anyOf": [
             {
@@ -333,12 +333,10 @@
             { "type": "null" }
           ]
         },
-        "usage_basis": { "$ref": "#/$defs/usage_basis" },
-        "occurrences": {
+        "usages": {
           "type": "array",
           "minItems": 1,
-          "description": "同内容副本的全部使用位置。内容去重不删除上下文：每个副本的机位角色与时间基准必须保留。",
-          "items": { "$ref": "#/$defs/occurrence" }
+          "items": { "$ref": "#/$defs/usage" }
         },
         "notes": { "type": "array", "items": { "type": "string" } }
       }
@@ -360,8 +358,7 @@
           "pattern": "^(job-[0-9a-f]{10}|run_[a-z0-9_]+)$"
         },
         "origin": {
-          "enum": ["product_job", "research_cli", "external"],
-          "description": "该运行的产生方式。external 用于 Windows 等外部环境产物，缺失字段按 unknown 记录，不用当前 HEAD 补齐。"
+          "enum": ["product_job", "research_cli", "external"]
         },
         "code_revision": { "$ref": "#/$defs/revision" },
         "consumes": {
@@ -390,14 +387,9 @@
           "required": ["result", "scope", "recorded_source"],
           "properties": {
             "result": { "enum": ["pass", "fail", "not_run", "unknown"] },
-            "scope": {
-              "type": "string",
-              "minLength": 1,
-              "description": "该判定的实际作用范围，例如 30-587.15s strict four-player。"
-            },
+            "scope": { "type": "string", "minLength": 1 },
             "recorded_source": {
-              "enum": ["original_job", "quality_report", "manual_review", "none"],
-              "description": "原质量结论的来源。none 表示从未评估，不得当作 pass。"
+              "enum": ["original_job", "quality_report", "manual_review", "none"]
             },
             "detail": { "type": ["string", "null"] }
           }
@@ -412,15 +404,18 @@
         "check_id": { "type": "string", "pattern": "^c_[a-z0-9_]+$" },
         "target_asset_id": { "type": "string", "pattern": "^a_[a-z0-9_]+$" },
         "kind": {
-          "enum": ["existence", "metadata_probe", "digest", "decode"],
-          "description": "存在性、元数据探测、内容摘要与全解码分别记录，元数据成功不得升级为全解码成功。"
+          "enum": [
+            "existence",
+            "metadata_probe",
+            "digest",
+            "decode",
+            "alternate_digest",
+            "readonly"
+          ],
+          "description": "存在性、元数据探测、内容摘要、全解码、副本摘要与只读证据分别记录，互不升级。"
         },
         "status": { "enum": ["passed", "failed", "skipped", "unknown"] },
-        "scope": {
-          "type": "string",
-          "minLength": 1,
-          "description": "检查实际覆盖范围与限制，例如前 300 帧或探测 15 秒超时。"
-        },
+        "scope": { "type": "string", "minLength": 1 },
         "detail": { "type": ["string", "null"] }
       }
     },
@@ -431,22 +426,15 @@
       "properties": {
         "code": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "description": "机器可读的限制码，例如 windows_job_evidence_missing。"
+          "pattern": "^[a-z][a-z0-9_]*$"
         },
         "message": { "type": "string", "minLength": 1 },
-        "block_completeness": {
-          "type": "boolean",
-          "description": "true 表示该限制使包无法声明 complete。"
-        },
+        "block_completeness": { "type": "boolean" },
         "affects": {
           "type": "array",
           "items": { "type": "string", "pattern": "^a_[a-z0-9_]+$" }
         },
-        "notion_task": {
-          "type": ["string", "null"],
-          "description": "对应的外部跟踪编号，例如 PB-004。"
-        }
+        "notion_task": { "type": ["string", "null"] }
       }
     }
   }

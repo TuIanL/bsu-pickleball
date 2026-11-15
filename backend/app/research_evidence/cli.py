@@ -26,6 +26,7 @@ from .builder import (
     verify_package,
     write_package,
 )
+from .importers import ArtifactImportError
 
 EXIT_OK = 0
 EXIT_VERIFY_FAILED = 1
@@ -50,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=600.0,
         help="单个文件摘要计算超时（秒），默认 600",
+    )
+    build.add_argument(
+        "--probe-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="单个媒体元数据探测超时（秒），默认 60；大文件在慢速外接盘上需要放宽",
     )
 
     verify = subparsers.add_parser(
@@ -83,10 +90,12 @@ def _run_build(args: argparse.Namespace) -> int:
         config = load_build_config(args.config)
         assert_output_is_safe(args.output, config.roots_by_id())
         manifest, locations, _checks = build_manifest(
-            config, timeout_seconds=args.timeout_seconds
+            config,
+            timeout_seconds=args.timeout_seconds,
+            probe_timeout_seconds=args.probe_timeout_seconds,
         )
         write_package(args.output, manifest, locations)
-    except BuildError as error:
+    except (BuildError, ArtifactImportError) as error:
         print(f"build 失败: {error}", file=sys.stderr)
         return EXIT_ERROR
 

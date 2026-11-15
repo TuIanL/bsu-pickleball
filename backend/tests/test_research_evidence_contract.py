@@ -20,7 +20,7 @@ FIXTURES = CONTRACT_ROOT / "fixtures"
 INVALID_CASES = (
     ("invalid.known-digest-without-sha.json", ("assets", 0, "digest")),
     ("invalid.unknown-digest-with-sha.json", ("assets", 0, "digest", "sha256")),
-    ("invalid.absolute-path-locator.json", ("assets", 0, "locator")),
+    ("invalid.absolute-path-locator.json", ("assets", 0, "usages", 0, "locator")),
     ("invalid.complete-with-blocking-limitation.json", ("limitations", 0, "block_completeness")),
     ("invalid.unknown-baseline.json", ("baseline", "selected_revision", "status")),
     ("invalid.complete-required-unverified.json", ("assets", 0, "verification")),
@@ -126,23 +126,30 @@ def test_partial_package_requires_a_blocking_limitation():
 
 
 def test_optional_asset_does_not_block_completeness():
-    """complete 判定只聚合 required 资产；optional 未核验不应导致 partial。"""
+    """complete 判定只聚合 required 使用关系；optional 未核验不应导致 partial。"""
     manifest = _load("manifest.complete.example.json")
-    optional = [a for a in manifest["assets"] if a["requirement"] == "optional"]
+    optional = [
+        asset
+        for asset in manifest["assets"]
+        if any(usage.get("requirement") == "optional" for usage in asset["usages"])
+    ]
 
-    assert optional, "complete fixture 必须包含 optional 资产以验证聚合口径"
-    assert all(a["verification"] != "verified" for a in optional)
+    assert optional, "complete fixture 必须包含 optional 使用关系以验证聚合口径"
+    assert all(asset["verification"] != "verified" for asset in optional)
     assert manifest["completeness"] == "complete"
 
 
 def test_fixture_assets_are_distinguishable_from_real_assets():
     manifest = _load("manifest.fixture-present.example.json")
-    kinds = {a["usage_kind"] for a in manifest["assets"]}
+    usages = [
+        usage for asset in manifest["assets"] for usage in asset["usages"]
+    ]
+    kinds = {usage["usage_kind"] for usage in usages}
 
     assert "fixture" in kinds and "real" in kinds
-    fixture_assets = [a for a in manifest["assets"] if a["usage_kind"] == "fixture"]
-    for asset in fixture_assets:
-        assert asset["provenance"]["note"], "合成夹具必须说明来源，避免被当作正式素材"
+    fixture_usages = [usage for usage in usages if usage["usage_kind"] == "fixture"]
+    for usage in fixture_usages:
+        assert usage["source_root_id"], "合成夹具必须能追溯来源根"
 
 
 def test_locator_never_contains_absolute_path():
@@ -150,6 +157,7 @@ def test_locator_never_contains_absolute_path():
     for name in VALID_CASES:
         manifest = _load(name)
         for asset in manifest["assets"]:
-            locator = asset["locator"]
-            assert not locator.startswith("/"), f"{name} 泄露绝对路径: {locator}"
-            assert "asset://" in locator
+            for usage in asset["usages"]:
+                locator = usage["locator"]
+                assert not locator.startswith("/"), f"{name} 泄露绝对路径: {locator}"
+                assert "asset://" in locator

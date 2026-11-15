@@ -20,9 +20,6 @@
     {
       "asset_id": "a_synthetic_avi",
       "kind": "source_video",
-      "usage_kind": "fixture",
-      "requirement": "optional",
-      "locator": "asset://root_repo_tests/fixtures/synthetic_two_player.avi",
       "size_bytes": 20480,
       "digest": {
         "status": "known",
@@ -30,12 +27,6 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_repo_tests",
-        "source_kind": "repository",
-        "originated_at": null,
-        "note": "本地合成上传夹具，不是正式科研素材。"
-      },
       "media_metadata": {
         "duration_seconds": 2,
         "width": 320,
@@ -44,14 +35,30 @@
         "frame_count": 50,
         "probe_status": "ok"
       },
-      "notes": ["usage_kind=fixture 使其可被识别并排除在正式科研输入之外。"]
+      "notes": [
+        "usage_kind=fixture 使其可被识别并排除在正式科研输入之外。"
+      ],
+      "usages": [
+        {
+          "locator": "asset://root_repo_tests/fixtures/synthetic_two_player.avi",
+          "view_role": "unspecified",
+          "usage_kind": "fixture",
+          "requirement": "optional",
+          "source_root_id": "root_repo_tests",
+          "source_kind": "repository",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "示例分类依据"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ]
     },
     {
       "asset_id": "a_src_174",
       "kind": "source_video",
-      "usage_kind": "real",
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
       "size_bytes": 1237383185,
       "digest": {
         "status": "known",
@@ -59,12 +66,6 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": {
         "duration_seconds": 698.8,
         "width": 1920,
@@ -73,7 +74,24 @@
         "frame_count": null,
         "probe_status": "ok"
       },
-      "notes": []
+      "notes": [],
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "示例分类依据"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ]
     }
   ],
   "run_refs": [],
@@ -88,5 +106,20 @@
     }
   ],
   "completeness": "complete",
-  "limitations": []
+  "limitations": [],
+  "tooling": {
+    "name": "research_evidence",
+    "revision": {
+      "label": "tooling",
+      "status": "known",
+      "commit": "169c44d8b0c0eb6802c0aa06a596170780c494a5",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "config_sha256": "34244531ab1d5419c2b8ee6251175fa297391181478bbfe05014cdb8acfd4afb"
+  }
 }

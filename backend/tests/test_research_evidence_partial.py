@@ -8,6 +8,7 @@ promoted, erased, or allowed to contaminate index completeness.
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -17,6 +18,40 @@ import pytest
 from app.research_evidence.cli import EXIT_OK, main
 
 MP4_HEADER = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"
+
+_MP4_CACHE: bytes | None = None
+
+
+def _real_mp4_payload() -> bytes:
+    global _MP4_CACHE
+    if _MP4_CACHE is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "probe.mp4"
+            completed = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=160x120:d=1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(target),
+                ],
+                capture_output=True,
+            )
+            if completed.returncode != 0:
+                pytest.skip("ffmpeg 不可用，无法生成真实媒体夹具")
+            _MP4_CACHE = target.read_bytes()
+    return _MP4_CACHE
+
+
+def _write_real_mp4(path: Path) -> Path:
+    path.write_bytes(_real_mp4_payload())
+    return path
 
 BASELINE = {
     "selected_revision": {
@@ -75,7 +110,7 @@ def _video_asset() -> dict:
 def _source(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     root.mkdir()
-    (root / "clip.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
+    _write_real_mp4(root / "clip.mp4")
     return root
 
 
@@ -269,5 +304,66 @@ def test_historical_job_without_result_blocks_completeness(tmp_path):
     assert manifest["completeness"] == "partial"
     assert any(
         limit["code"] == "historical_run_missing" and limit["block_completeness"]
+        for limit in manifest["limitations"]
+    )
+
+
+def test_quality_report_for_another_job_is_not_applied(tmp_path):
+    """质量报告必须与运行的 job_id 精确匹配；不匹配时不得生成质量结论。"""
+    root = _source(tmp_path)
+    job = root / "job-aaaaaaaaaa"
+    job.mkdir()
+    (job / "result.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-aaaaaaaaaa",
+                "status": "completed",
+                "match_context": {
+                    "schema_version": "match-analysis-context.v1",
+                    "match_format": "doubles",
+                    "expected_player_count": 4,
+                    "players_per_side": 2,
+                },
+                "tracks": [
+                    {"timestamp_seconds": 1.0},
+                    {"timestamp_seconds": 10.0},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job / "four_player_identification_quality.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "four-player-identification-quality.v1",
+                "job_id": "job-bbbbbbbbbb",
+                "verdict": "pass",
+                "duration_seconds": 9.0,
+                "attempted_ticks": 10,
+                "confirmed_roster_count": 4,
+                "algorithm_version": "motion-aware-v1",
+                "config_signature": None,
+                "baseline_job_id": None,
+                "failure_reasons": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = _build(
+        tmp_path,
+        root,
+        assets=[_video_asset()],
+        historical_jobs=[
+            {"root_id": "root_captures", "relative_path": "job-aaaaaaaaaa"}
+        ],
+    )
+
+    run = manifest["run_refs"][0]
+    assert run["run_id"] == "job-aaaaaaaaaa"
+    assert run["algorithm_verdict"]["result"] == "unknown"
+    assert run["algorithm_verdict"]["recorded_source"] == "none"
+    assert any(
+        limit["code"] == "historical_quality_unmatched"
         for limit in manifest["limitations"]
     )

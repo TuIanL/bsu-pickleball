@@ -7,6 +7,7 @@ difference between a missing optional asset and a missing required one.
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,6 +22,40 @@ from app.research_evidence.builder import (
 from app.research_evidence.cli import EXIT_OK, main
 
 MP4_HEADER = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"
+
+_MP4_CACHE: bytes | None = None
+
+
+def _real_mp4_payload() -> bytes:
+    global _MP4_CACHE
+    if _MP4_CACHE is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "probe.mp4"
+            completed = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=160x120:d=1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(target),
+                ],
+                capture_output=True,
+            )
+            if completed.returncode != 0:
+                pytest.skip("ffmpeg 不可用，无法生成真实媒体夹具")
+            _MP4_CACHE = target.read_bytes()
+    return _MP4_CACHE
+
+
+def _write_real_mp4(path: Path) -> Path:
+    path.write_bytes(_real_mp4_payload())
+    return path
 
 BASELINE = {
     "selected_revision": {
@@ -78,7 +113,7 @@ def _default_assets() -> list[dict]:
 def _build(tmp_path: Path, assets: list[dict] | None = None) -> tuple[Path, Path]:
     root = tmp_path / "source"
     root.mkdir()
-    (root / "clip.mp4").write_bytes(MP4_HEADER + b"\x00" * 256)
+    _write_real_mp4(root / "clip.mp4")
     config = _write_config(tmp_path, root, assets or _default_assets())
     output = tmp_path / "out"
     assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
@@ -261,25 +296,20 @@ def test_missing_optional_asset_keeps_the_package_complete(tmp_path):
     )
 
 
-def test_occurrences_must_cover_the_canonical_locator(tmp_path):
-    """机位记录不能把规范位置排除在外，否则去重后无法定位主副本。"""
+def test_duplicate_locator_across_assets_is_rejected(tmp_path):
+    """同一位置不得被两个内容资产同时登记，否则引用无法唯一解析。"""
     _root, package = _build(tmp_path)
     manifest_path = package / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["assets"][0]["occurrences"] = [
-        {
-            "locator": "asset://root_captures/somewhere_else.mp4",
-            "view_role": "cam2",
-            "time_base": "pts_actual",
-        }
-    ]
+    first = manifest["assets"][0]
+    clone = json.loads(json.dumps(first))
+    clone["asset_id"] = "a_cloned_asset"
+    manifest["assets"].append(clone)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
 
     report = verify_package(package)
 
-    assert any(
-        check.name == "occurrences_cover_canonical" for check in report.failures
-    )
+    assert any(check.name == "unique_locators" for check in report.failures)
 
 
 def test_build_records_tooling_version_and_config_digest(tmp_path):
@@ -306,3 +336,124 @@ def test_verify_requires_a_tooling_record(tmp_path):
     report = verify_package(package)
 
     assert any(check.name == "tooling_recorded" for check in report.failures)
+
+
+# --- 评审四项缺陷的回归 ------------------------------------------------
+
+
+def _asset(
+    relative_path: str,
+    *,
+    kind: str = "source_video",
+    usage_kind: str = "real",
+    requirement: str = "required",
+    view_role: str = "cam1",
+) -> dict:
+    return {
+        "root_id": "root_captures",
+        "relative_path": relative_path,
+        "kind": kind,
+        "usage_kind": usage_kind,
+        "requirement": requirement,
+        "view_role": view_role,
+    }
+
+
+def test_dedup_keeps_each_usage_semantics(tmp_path):
+    """同一内容的两处使用，用途与必需性必须各自保留，不得由 locator 排序决定。"""
+    root = tmp_path / "source"
+    root.mkdir()
+    _write_real_mp4(root / "a.mp4")
+    (root / "b.mp4").write_bytes((root / "a.mp4").read_bytes())
+    config = _write_config(
+        tmp_path,
+        root,
+        [
+            _asset("a.mp4", usage_kind="real", requirement="required", view_role="cam1"),
+            _asset("b.mp4", usage_kind="fixture", requirement="optional", view_role="cam2"),
+        ],
+    )
+    output = tmp_path / "out"
+
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+
+    assert len(manifest["assets"]) == 1
+    pairs = {
+        (usage["usage_kind"], usage["requirement"])
+        for usage in manifest["assets"][0]["usages"]
+    }
+    assert pairs == {("real", "required"), ("fixture", "optional")}
+
+
+def test_fake_video_optional_is_not_marked_verified(tmp_path):
+    """optional 不阻断完整性，但伪视频绝不能被标为已验证的有效媒体。"""
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "fake.mp4").write_text("this is not a video", encoding="utf-8")
+    (root / "roster.json").write_text('{"players": 4}', encoding="utf-8")
+    config = _write_config(
+        tmp_path,
+        root,
+        [
+            _asset("roster.json", kind="roster", requirement="required", view_role="unspecified"),
+            _asset("fake.mp4", kind="source_video", requirement="optional", view_role="unspecified"),
+        ],
+    )
+    output = tmp_path / "out"
+
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    fake = next(
+        asset for asset in manifest["assets"] if asset["kind"] == "source_video"
+    )
+    codes = {
+        (limit["code"], limit["block_completeness"])
+        for limit in manifest["limitations"]
+    }
+
+    assert fake["verification"] == "mismatch"
+    assert ("content_type_mismatch", False) in codes
+    # optional 使用关系不阻断完整性
+    assert manifest["completeness"] == "complete"
+
+
+def test_deep_verify_covers_every_usage_location(tmp_path):
+    """去重后的每个副本都要参与摘要核验，改掉副本必须被发现。"""
+    root = tmp_path / "source"
+    root.mkdir()
+    _write_real_mp4(root / "a.mp4")
+    (root / "b.mp4").write_bytes((root / "a.mp4").read_bytes())
+    config = _write_config(
+        tmp_path,
+        root,
+        [
+            _asset("a.mp4", view_role="cam1"),
+            _asset("b.mp4", view_role="cam2"),
+        ],
+    )
+    output = tmp_path / "out"
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    tampered = bytearray((root / "b.mp4").read_bytes())
+    tampered[-1] ^= 0xFF
+    (root / "b.mp4").write_bytes(bytes(tampered))
+
+    report = verify_package(output, deep=True)
+    failed = {check.name for check in report.failures}
+
+    assert "deep_digest_match" in failed
+
+
+def test_shareable_deep_is_not_reported_as_passed(tmp_path):
+    """便携包没有本机映射，深度核验不可执行，不得记成通过。"""
+    _root, package = _build(tmp_path)
+    share = tmp_path / "share"
+    export_shareable_package(package, share)
+
+    report = verify_package(share, deep=True, require_locations=False)
+    failed = {check.name for check in report.failures}
+
+    assert "deep_possible" in failed

@@ -28,5 +28,20 @@
       "affects": [],
       "notion_task": "PB-004"
     }
-  ]
+  ],
+  "tooling": {
+    "name": "research_evidence",
+    "revision": {
+      "label": "tooling",
+      "status": "known",
+      "commit": "169c44d8b0c0eb6802c0aa06a596170780c494a5",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "config_sha256": "34244531ab1d5419c2b8ee6251175fa297391181478bbfe05014cdb8acfd4afb"
+  }
 }

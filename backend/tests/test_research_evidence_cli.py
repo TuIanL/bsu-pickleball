@@ -28,6 +28,41 @@ from app.research_evidence.cli import EXIT_ERROR, EXIT_OK, EXIT_VERIFY_FAILED, m
 BACKEND = Path(__file__).resolve().parents[1]
 MP4_HEADER = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"
 
+_MP4_CACHE: bytes | None = None
+
+
+def _real_mp4_payload() -> bytes:
+    """真实可探测的 MP4：伪容器会被正确判为 not_checked，不能用于正常路径测试。"""
+    global _MP4_CACHE
+    if _MP4_CACHE is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "probe.mp4"
+            completed = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=160x120:d=1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(target),
+                ],
+                capture_output=True,
+            )
+            if completed.returncode != 0:
+                pytest.skip("ffmpeg 不可用，无法生成真实媒体夹具")
+            _MP4_CACHE = target.read_bytes()
+    return _MP4_CACHE
+
+
+def _write_real_mp4(path: Path) -> Path:
+    path.write_bytes(_real_mp4_payload())
+    return path
+
 VALID_BASELINE = {
     "selected_revision": {
         "label": "selected_baseline",
@@ -54,7 +89,7 @@ def tmp_path() -> Iterator[Path]:
 def _source_root(tmp_path: Path, name: str = "source") -> Path:
     root = tmp_path / name
     root.mkdir()
-    (root / "clip.mp4").write_bytes(MP4_HEADER + b"\x00" * 256)
+    _write_real_mp4(root / "clip.mp4")
     return root
 
 
@@ -316,8 +351,8 @@ def test_identical_content_at_two_paths_collapses_to_one_asset(tmp_path):
     """
     root = tmp_path / "source"
     root.mkdir()
-    (root / "a.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
-    (root / "b.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
+    _write_real_mp4(root / "a.mp4")
+    (root / "b.mp4").write_bytes((root / "a.mp4").read_bytes())
     config = _write_config(
         tmp_path,
         root,
@@ -352,9 +387,11 @@ def test_identical_content_at_two_paths_collapses_to_one_asset(tmp_path):
     )
 
     assert len(manifest["assets"]) == 1
-    occurrences = manifest["assets"][0]["occurrences"]
-    assert {item["view_role"] for item in occurrences} == {"cam1", "cam2"}
-    assert {item["time_base"] for item in occurrences} == {"pts_actual"}
+    usages = manifest["assets"][0]["usages"]
+    assert {item["view_role"] for item in usages} == {"cam1", "cam2"}
+    assert {item["time_base"] for item in usages} == {"pts_actual"}
+    assert all(item["usage_kind"] == "real" for item in usages)
+    assert all(item["requirement"] == "required" for item in usages)
     (asset_id, mapping), = locations["assets"].items()
     assert len(mapping["alternate_locators"]) == 1
 
@@ -366,7 +403,7 @@ def test_non_media_assets_are_not_held_to_media_admission(tmp_path):
     """
     root = tmp_path / "source"
     root.mkdir()
-    (root / "clip.mp4").write_bytes(MP4_HEADER + b"\x00" * 64)
+    _write_real_mp4(root / "clip.mp4")
     (root / "roster.json").write_text('{"players": 4}', encoding="utf-8")
     config = _write_config(
         tmp_path,

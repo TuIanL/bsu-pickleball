@@ -42,7 +42,7 @@ from .locations import (
     find_local_paths,
     resolve_locator,
 )
-from .media_probe import DEFAULT_PROBE_TIMEOUT_SECONDS, probe_media
+from .media_probe import probe_media
 
 MANIFEST_SCHEMA_VERSION = "pb.research-evidence-manifest.v1.0"
 EMPTY_PATCH_SHA256 = (
@@ -285,9 +285,14 @@ def _build_asset_entry(
     resolved: Path,
     *,
     timeout_seconds: float,
+    probe_timeout_seconds: float = 60.0,
     cancel: Callable[[], bool] | None,
-) -> tuple[dict[str, Any], list[dict[str, Any]], str | None]:
-    """Return (asset entry, checks, admission warning)."""
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str | None]:
+    """Return (content, usage, checks, admission warning).
+
+    内容层与使用关系分开产出：同一个 asset_id 的多条 usage 各自保留机位、用途
+    与必需性，任何一侧都不得被另一侧的代表值覆盖。
+    """
     inspection = inspect_file(resolved, timeout_seconds=timeout_seconds, cancel=cancel)
     digest_status = "known" if inspection.sha256 else "unknown"
 
@@ -304,9 +309,9 @@ def _build_asset_entry(
     probe = None
     if inspection.availability == "present" and spec.kind == "source_video":
         container = probe_container(resolved)
-        probe = probe_media(resolved, timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS)
+        probe = probe_media(resolved, timeout_seconds=probe_timeout_seconds)
 
-    usage = classify_usage_kind(
+    usage_evidence = classify_usage_kind(
         declared=spec.usage_kind, root_policy=None, container=container or "unknown"
     )
 
@@ -318,7 +323,7 @@ def _build_asset_entry(
     ):
         try:
             assert_formal_input_eligible(
-                usage_kind=usage.usage_kind,
+                usage_kind=usage_evidence.usage_kind,
                 container=container or "unknown",
                 suffix=resolved.suffix,
                 digest_status=digest_status,
@@ -332,7 +337,7 @@ def _build_asset_entry(
             "target_asset_id": asset_id,
             "kind": "existence",
             "status": "passed" if inspection.availability == "present" else "failed",
-            "scope": "授权来源根内路径解析",
+            "scope": f"授权来源根内路径解析（{spec.view_role}）",
             "detail": inspection.detail,
         }
     ]
@@ -344,12 +349,28 @@ def _build_asset_entry(
                 "target_asset_id": asset_id,
                 "kind": "digest",
                 "status": "passed",
-                "scope": "全文件分块 SHA-256",
+                "scope": f"全文件分块 SHA-256（{spec.view_role}）",
                 "detail": inspection.detail,
             }
         )
 
+    # 只读证据入包：读取前后 size/mtime 是否被改动，必须可审计。
+    checks.append(
+        {
+            "check_id": f"c_{asset_id}_readonly",
+            "target_asset_id": asset_id,
+            "kind": "readonly",
+            "status": "passed" if inspection.input_unchanged else "failed",
+            "scope": f"读取前后 size/mtime 比对（{spec.view_role}）",
+            "detail": None
+            if inspection.input_unchanged
+            else "读取期间文件被修改，本次摘要不可作为稳定基准",
+        }
+    )
+
+    media_failed = False
     if probe is not None:
+        media_failed = probe.status != "ok"
         checks.append(
             {
                 "check_id": f"c_{asset_id}_probe",
@@ -361,30 +382,40 @@ def _build_asset_entry(
             }
         )
 
-    # 构建阶段的摘要计算即建立基准：算出完整摘要视为核验成功，
-    # 否则一律 not_checked/unknown，避免把「没比过」写成「比过了」。
+    # 摘要核验与媒体有效性是两件独立的事：
+    # - 文件根本不是受支持容器 → mismatch（内容与声明的媒体类型不符）
+    # - 是媒体但探测失败或超时 → not_checked（有效媒体性未确认）
+    # optional 只影响包完整性阻断，不影响本条结论；但绝不能标成 verified。
     if inspection.availability == "present":
-        verification = "verified" if inspection.sha256 else "not_checked"
+        if inspection.sha256 is None:
+            verification = "not_checked"
+        elif spec.kind == "source_video" and container == "unknown":
+            verification = "mismatch"
+        elif media_failed:
+            verification = "not_checked"
+        else:
+            verification = "verified"
     elif inspection.availability == "missing":
         verification = "unknown"
     else:
         verification = "not_checked"
 
-    entry: dict[str, Any] = {
+    media_metadata: dict[str, Any] | None = None
+    if probe is not None and probe.status == "ok":
+        media_metadata = {
+            "duration_seconds": probe.duration_seconds,
+            "width": probe.width,
+            "height": probe.height,
+            "fps_nominal": probe.fps_nominal,
+            "frame_count": probe.frame_count,
+            "probe_status": "ok",
+        }
+    elif probe is not None:
+        media_metadata = {"probe_status": probe.status}
+
+    content: dict[str, Any] = {
         "asset_id": asset_id,
         "kind": spec.kind,
-        "usage_kind": usage.usage_kind,
-        "usage_basis": usage.to_manifest_field(),
-        "occurrences": [
-            {
-                "locator": spec.locator,
-                "view_role": spec.view_role,
-                "time_base": spec.time_base,
-                "note": None,
-            }
-        ],
-        "requirement": spec.requirement,
-        "locator": spec.locator,
         "size_bytes": inspection.size_bytes,
         "digest": (
             {"status": "known", "sha256": inspection.sha256}
@@ -397,27 +428,23 @@ def _build_asset_entry(
         ),
         "availability": inspection.availability,
         "verification": verification,
-        "provenance": {
-            "source_root_id": root.root_id,
-            "source_kind": root.source_kind,
-            "originated_at": None,
-            "note": None,
-        },
-        "media_metadata": (
-            None
-            if probe is None or probe.status != "ok"
-            else {
-                "duration_seconds": probe.duration_seconds,
-                "width": probe.width,
-                "height": probe.height,
-                "fps_nominal": probe.fps_nominal,
-                "frame_count": probe.frame_count,
-                "probe_status": "ok",
-            }
-        ),
+        "media_metadata": media_metadata,
+        "notes": [],
+    }
+
+    usage: dict[str, Any] = {
+        "locator": spec.locator,
+        "view_role": spec.view_role,
+        "usage_kind": usage_evidence.usage_kind,
+        "requirement": spec.requirement,
+        "source_root_id": root.root_id,
+        "source_kind": root.source_kind,
+        "usage_basis": usage_evidence.to_manifest_field(),
+        "time_base": spec.time_base,
+        "context": None,
         "notes": list(spec.notes),
     }
-    return entry, checks, warning
+    return content, usage, checks, warning
 
 
 # --- build ------------------------------------------------------------------
@@ -451,7 +478,30 @@ def _import_historical_runs(
 
         run = import_job_result_file(result_path)
         reports = list(iter_quality_reports(job_dir))
-        quality = import_quality_report_file(reports[0]) if reports else None
+        quality = None
+        unmatched_job_ids: list[str] = []
+        for report_path in reports:
+            candidate = import_quality_report_file(report_path)
+            if candidate.job_id == run.job_id:
+                quality = candidate
+                break
+            unmatched_job_ids.append(candidate.job_id)
+
+        if reports and quality is None:
+            # 宁可没有质量结论，也不能把别的 job 的判定嫁给这次运行。
+            limitations.append(
+                {
+                    "code": "historical_quality_unmatched",
+                    "message": (
+                        f"{run.job_id} 目录内存在质量报告但 job_id 不匹配"
+                        f"（{sorted(set(unmatched_job_ids))}），未生成质量结论"
+                    ),
+                    "block_completeness": False,
+                    "affects": [],
+                    "notion_task": None,
+                }
+            )
+
         verdict = quality.verdict if quality else "unknown"
 
         if run.range is None:
@@ -520,11 +570,36 @@ def _import_historical_runs(
     return run_refs, limitations
 
 
+def _aggregate_availability(values: list[str]) -> str:
+    if any(value == "present" for value in values):
+        return "present"
+    if all(value == "missing" for value in values):
+        return "missing"
+    if any(value == "unreachable" for value in values):
+        return "unreachable"
+    return "not_checked"
+
+
+def _aggregate_verification(values: list[str]) -> str:
+    if any(value == "mismatch" for value in values):
+        return "mismatch"
+    if all(value == "verified" for value in values):
+        return "verified"
+    if any(value == "not_checked" for value in values):
+        return "not_checked"
+    return "unknown"
+
+
 def _completeness(assets: list[dict[str, Any]], limitations: list[dict[str, Any]]) -> str:
     if any(limit["block_completeness"] for limit in limitations):
         return "partial"
     for asset in assets:
-        if asset["requirement"] != "required":
+        required_usages = [
+            usage
+            for usage in asset.get("usages") or []
+            if usage.get("requirement") == "required"
+        ]
+        if not required_usages:
             continue
         if asset["availability"] != "present" or asset["verification"] != "verified":
             return "partial"
@@ -535,6 +610,7 @@ def build_manifest(
     config: BuildConfig,
     *,
     timeout_seconds: float = 600.0,
+    probe_timeout_seconds: float = 60.0,
     cancel: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     """Build (manifest, locations, extra checks) without touching the disk output."""
@@ -546,7 +622,7 @@ def build_manifest(
     location_assets: dict[str, Any] = {}
     limitations: list[dict[str, Any]] = []
 
-    pending: dict[str, list[tuple[AssetSpec, dict[str, Any], list[dict[str, Any]], str | None]]] = {}
+    pending: dict[str, list[dict[str, Any]]] = {}
 
     for spec in config.assets:
         root = roots_by_key.get(spec.root_id)
@@ -558,70 +634,156 @@ def build_manifest(
         except Exception as error:
             raise BuildError(f"无法解析 {spec.locator}: {error}") from error
 
-        entry, asset_checks, warning = _build_asset_entry(
+        content, usage, asset_checks, warning = _build_asset_entry(
             spec,
             root,
             resolved,
             timeout_seconds=timeout_seconds,
+            probe_timeout_seconds=probe_timeout_seconds,
             cancel=cancel,
         )
-        pending.setdefault(entry["asset_id"], []).append(
-            (spec, entry, asset_checks, warning)
+        pending.setdefault(content["asset_id"], []).append(
+            {
+                "spec": spec,
+                "content": content,
+                "usage": usage,
+                "checks": asset_checks,
+                "warning": warning,
+            }
         )
 
-    # 内容身份相同的多个位置归并为一个资产：路径不是 ID，副本不重复登记。
+    # 内容身份相同的多个位置聚合为一个内容资产，每个位置各自保留为一条使用关系。
     for asset_id, group in sorted(pending.items()):
-        group.sort(key=lambda item: item[1]["locator"])
-        spec, entry, asset_checks, warning = group[0]
-        alternates = [item[1]["locator"] for item in group[1:]]
+        group.sort(key=lambda item: item["usage"]["locator"])
+        contents = [item["content"] for item in group]
+        usages = [item["usage"] for item in group]
 
-        kinds = {item[1]["kind"] for item in group}
+        kinds = {content["kind"] for content in contents}
         if len(kinds) > 1:
             raise BuildError(
                 f"同一内容 {asset_id} 被声明为不同 kind: {sorted(kinds)}；"
                 "请确认这是否其实是不同资产"
             )
 
-        if alternates:
-            entry = dict(entry)
-            # 内容去重不等于删上下文：每个副本的机位角色与时间基准都要保留。
-            entry["occurrences"] = [item[1]["occurrences"][0] for item in group]
-            entry["notes"] = list(entry["notes"]) + [
-                f"与 {item[1]['locator']} 内容相同（同一 SHA-256），"
-                "按机位分别记录于 occurrences"
+        digests = {
+            content["digest"]["sha256"]
+            for content in contents
+            if content["digest"].get("sha256")
+        }
+        if len(digests) > 1:
+            raise BuildError(
+                f"同一内容身份 {asset_id} 出现不同摘要: {sorted(digests)}"
+            )
+
+        asset: dict[str, Any] = {
+            "asset_id": asset_id,
+            "kind": contents[0]["kind"],
+            "size_bytes": contents[0]["size_bytes"],
+            "digest": contents[0]["digest"],
+            "availability": _aggregate_availability(
+                [content["availability"] for content in contents]
+            ),
+            "verification": _aggregate_verification(
+                [content["verification"] for content in contents]
+            ),
+            "media_metadata": contents[0]["media_metadata"],
+            "usages": usages,
+            "notes": [],
+        }
+
+        if len(group) > 1:
+            asset["notes"] = [
+                f"内容与 {item['usage']['locator']} 相同（同一 SHA-256），"
+                "按使用关系分别记录于 usages"
                 for item in group[1:]
             ]
 
-        assets.append(entry)
-        checks.extend(asset_checks)
+        assets.append(asset)
+
+        # 同一内容的同类检查结果通常相同；但任一副本失败必须保留失败结论
+        seen_kinds: dict[tuple[str, str], int] = {}
+        for item in group:
+            for check in item["checks"]:
+                key = (check["target_asset_id"], check["kind"])
+                if key in seen_kinds:
+                    index = seen_kinds[key]
+                    if checks[index]["status"] == "failed":
+                        continue
+                    if check["status"] == "failed":
+                        checks[index] = check
+                    continue
+                seen_kinds[key] = len(checks)
+                checks.append(check)
+
         location_assets[asset_id] = {
-            "locator": entry["locator"],
-            "relative_path": spec.relative_path,
-            "source_root_id": spec.root_id,
-            "alternate_locators": alternates,
+            "locator": usages[0]["locator"],
+            "relative_path": group[0]["spec"].relative_path,
+            "source_root_id": group[0]["spec"].root_id,
+            "alternate_locators": [usage["locator"] for usage in usages[1:]],
         }
 
-        if warning:
-            limitations.append(
-                {
-                    "code": "formal_input_rejected",
-                    "message": f"{asset_id}: {warning}",
-                    "block_completeness": entry["requirement"] == "required",
-                    "affects": [asset_id],
-                    "notion_task": spec.notion_task,
-                }
-            )
+        # 每条使用关系独立评估阻断策略：required 阻断，optional 只记录。
+        for item in group:
+            usage = item["usage"]
+            content = item["content"]
+            blocking = usage["requirement"] == "required"
+            spec = item["spec"]
 
-        if entry["availability"] != "present":
-            limitations.append(
-                {
-                    "code": f"asset_{entry['availability']}",
-                    "message": f"{asset_id} 不可用，未纳入核验",
-                    "block_completeness": entry["requirement"] == "required",
-                    "affects": [asset_id],
-                    "notion_task": spec.notion_task,
-                }
-            )
+            if item["warning"]:
+                limitations.append(
+                    {
+                        "code": "formal_input_rejected",
+                        "message": (
+                            f"{asset_id}@{usage['view_role']}: {item['warning']}"
+                        ),
+                        "block_completeness": blocking,
+                        "affects": [asset_id],
+                        "notion_task": spec.notion_task,
+                    }
+                )
+
+            if content["availability"] != "present":
+                limitations.append(
+                    {
+                        "code": f"asset_{content['availability']}",
+                        "message": (
+                            f"{asset_id}@{usage['locator']} 不可用，未纳入核验"
+                        ),
+                        "block_completeness": blocking,
+                        "affects": [asset_id],
+                        "notion_task": spec.notion_task,
+                    }
+                )
+
+            if content["verification"] == "mismatch":
+                limitations.append(
+                    {
+                        "code": "content_type_mismatch",
+                        "message": (
+                            f"{asset_id}@{usage['locator']} 声明为媒体但容器不可识别"
+                        ),
+                        "block_completeness": blocking,
+                        "affects": [asset_id],
+                        "notion_task": spec.notion_task,
+                    }
+                )
+            elif (
+                content["kind"] == "source_video"
+                and content["availability"] == "present"
+                and content["verification"] == "not_checked"
+            ):
+                limitations.append(
+                    {
+                        "code": "media_probe_failed",
+                        "message": (
+                            f"{asset_id}@{usage['locator']} 容器元数据探测未通过，"
+                            "有效媒体性未确认"
+                        ),
+                        "block_completeness": blocking,
+                        "affects": [asset_id],
+                        "notion_task": spec.notion_task,
+                    }
+                )
 
     run_refs, history_limitations = _import_historical_runs(
         config.historical_jobs, roots
@@ -879,10 +1041,16 @@ def verify_package(
         )
     )
 
-    locators = [
-        asset.get("locator") for asset in assets if isinstance(asset, dict)
-    ]
-    duplicate_locators = sorted({loc for loc in locators if locators.count(loc) > 1})
+    all_locators: list[str] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        for usage in asset.get("usages") or []:
+            if isinstance(usage, dict) and usage.get("locator"):
+                all_locators.append(str(usage["locator"]))
+    duplicate_locators = sorted(
+        {locator for locator in all_locators if all_locators.count(locator) > 1}
+    )
     checks.append(
         VerifyCheck(
             "unique_locators",
@@ -913,27 +1081,17 @@ def verify_package(
         )
     )
 
-    occurrence_gaps: list[str] = []
+    usage_gaps: list[str] = []
     for asset in assets:
         if not isinstance(asset, dict):
             continue
-        occurrences = asset.get("occurrences") or []
-        if not occurrences:
-            continue
-        locators = {
-            item.get("locator") for item in occurrences if isinstance(item, dict)
-        }
-        if asset.get("locator") not in locators:
-            occurrence_gaps.append(str(asset.get("asset_id")))
+        if not asset.get("usages"):
+            usage_gaps.append(str(asset.get("asset_id")))
     checks.append(
         VerifyCheck(
-            "occurrences_cover_canonical",
-            not occurrence_gaps,
-            (
-                f"occurrences 未覆盖规范 locator: {occurrence_gaps[:3]}"
-                if occurrence_gaps
-                else None
-            ),
+            "usages_present",
+            not usage_gaps,
+            f"缺少使用关系: {usage_gaps[:3]}" if usage_gaps else None,
         )
     )
 
@@ -983,17 +1141,23 @@ def verify_package(
                 )
             )
 
-    # 必需项与非必需项必须区别对待：只有 required 不达标才否定 complete。
-    required_gaps = [
-        asset.get("asset_id")
-        for asset in assets
-        if isinstance(asset, dict)
-        and asset.get("requirement") == "required"
-        and (
+    # 必需项与非必需项必须区别对待：只有带 required 使用关系的资产才参与判定。
+    required_gaps: list[str] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        required_usages = [
+            usage
+            for usage in asset.get("usages") or []
+            if isinstance(usage, dict) and usage.get("requirement") == "required"
+        ]
+        if not required_usages:
+            continue
+        if (
             asset.get("availability") != "present"
             or asset.get("verification") != "verified"
-        )
-    ]
+        ):
+            required_gaps.append(str(asset.get("asset_id")))
     declared_complete = manifest.get("completeness") == "complete"
     checks.append(
         VerifyCheck(
@@ -1009,10 +1173,16 @@ def verify_package(
 
     if deep:
         if locations_payload is None:
+            # 没有本机映射就没有深度核验：不能把「无法访问」记成「已通过」。
             checks.append(
-                VerifyCheck("deep_digest_match", False, "缺少本机映射，无法重算摘要")
+                VerifyCheck(
+                    "deep_possible",
+                    False,
+                    "缺少本机映射，深度核验未执行；便携包不得声称已完成深度校验",
+                )
             )
         else:
+            checks.append(VerifyCheck("deep_possible", True))
             mismatched, unreadable = _deep_check(manifest, locations_payload)
             checks.append(
                 VerifyCheck(
@@ -1035,11 +1205,11 @@ def verify_package(
 def _deep_check(
     manifest: dict[str, Any], locations: dict[str, Any]
 ) -> tuple[list[str], list[str]]:
-    """Recompute digests from the local mapping.
+    """Recompute digests for every usage location, not one representative.
 
-    Returns (content changed, could not be verified). The two are deliberately
-    separated: a changed file is evidence of tampering, while an unreadable file
-    may simply be an unmounted disk.
+    Returns (content changed, could not be verified). A changed file is evidence
+    of drift; an unreadable location may simply be an unmounted disk. Both are
+    reported — neither is silently passed.
     """
     roots = {
         root_id: entry.get("path")
@@ -1052,24 +1222,34 @@ def _deep_check(
     for asset in manifest.get("assets") or []:
         if not isinstance(asset, dict):
             continue
-        if asset.get("availability") != "present":
-            continue
         expected = (asset.get("digest") or {}).get("sha256")
         if not expected:
             continue
 
         asset_id = str(asset.get("asset_id"))
-        try:
-            resolved = resolve_locator(asset.get("locator", ""), roots)
-        except Exception:
-            unreadable.append(f"{asset_id}:无法解析定位")
+        usages = asset.get("usages") or []
+        if not usages:
+            unreadable.append(f"{asset_id}:无使用关系，无法核验")
             continue
 
-        result = inspect_file(resolved, expected_sha256=expected)
-        if result.verification == "mismatch":
-            mismatched.append(asset_id)
-        elif result.verification != "verified":
-            unreadable.append(f"{asset_id}:{result.verification}")
+        for usage in usages:
+            if not isinstance(usage, dict):
+                continue
+            role = str(usage.get("view_role") or "unspecified")
+            locator = str(usage.get("locator") or "")
+            label = f"{asset_id}@{role}"
+
+            try:
+                resolved = resolve_locator(locator, roots)
+            except Exception:
+                unreadable.append(f"{label}:无法解析定位")
+                continue
+
+            result = inspect_file(resolved, expected_sha256=expected)
+            if result.verification == "mismatch":
+                mismatched.append(label)
+            elif result.verification != "verified":
+                unreadable.append(f"{label}:{result.verification}")
 
     return mismatched, unreadable
 

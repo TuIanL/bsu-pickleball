@@ -50,7 +50,7 @@
 | `kind` | `source_video` / `pts_sidecar` / `sync_manifest` / `calibration` / `roster` / `model_weight` / `model_config` / `model_package` / `job_artifact` / `annotation` / `other` | 资产类别 |
 | `usage_kind` | `real` / `fixture` / `unknown` | 用途类型，不等于质量 |
 | `usage_basis` | 见下节 | 分类依据，可省略但不应推测 |
-| `occurrences` | 数组 | 同内容副本的各机位使用关系，见下 |
+| `usages` | 数组 | 每条使用关系（机位 / 用途 / 必需性 / 来源），见下 |
 | `requirement` | `required` / `optional` | 只有 `required` 参与 `complete` 判定 |
 | `digest` | `{status, sha256, reason}` | `status=unknown` 时 `sha256` 必须为 `null` 且给出 `reason` |
 | `availability` | `present` / `missing` / `unreachable` / `not_checked` | 文件在不在 |
@@ -58,18 +58,44 @@
 
 `availability` 与 `verification` **正交**：文件不在是 `unreachable + not_checked`，不是 `mismatch`。`mismatch` 只用于「读到了，但摘要对不上」。
 
-### 内容去重不删除上下文
+### 内容资产与使用关系分离
 
-两份文件若 SHA-256 相同，只登记为一个资产（路径不是身份）。但**去重不等于抹掉使用关系**：每个副本的机位角色与时间基准必须写入 `occurrences`。
+资产分两层表达，**不允许任何一侧被另一侧的代表值覆盖**：
+
+| 层 | 携带 | 由什么决定 |
+| --- | --- | --- |
+| 内容资产 `asset` | `asset_id`、`kind`、`digest`、`size_bytes`、`availability`、`verification` | 只由字节决定 |
+| 使用关系 `usage` | `locator`、`view_role`、`usage_kind`、`requirement`、`source_root_id`、`time_base` | 由「谁在什么场景用它」决定 |
+
+两份文件若 SHA-256 相同，只登记为一个 `asset`；但每一处使用各自成一条 `usage`，机位、用途、必需性互不继承。
 
 ```json
-"occurrences": [
-  {"locator": "asset://root_captures/.../174_merged.mp4.pts.jsonl", "view_role": "cam1", "time_base": "pts_actual", "note": null},
-  {"locator": "asset://root_captures/.../175_merged.mp4.pts.jsonl", "view_role": "cam2", "time_base": "pts_actual", "note": null}
+"asset_id": "a_15c5d2b304d3",
+"usages": [
+  {"locator": "asset://root_captures/.../174_merged.mp4.pts.jsonl", "view_role": "cam1", "usage_kind": "real", "requirement": "required", "source_root_id": "root_captures", "source_kind": "external_disk", "time_base": "pts_actual"},
+  {"locator": "asset://root_captures/.../175_merged.mp4.pts.jsonl", "view_role": "cam2", "usage_kind": "real", "requirement": "required", "source_root_id": "root_captures", "source_kind": "external_disk", "time_base": "pts_actual"}
 ]
 ```
 
-约束：`occurrences` 必须至少包含一个与资产 `locator` 相同的条目（`verify` 的 `occurrences_cover_canonical` 会检查）。未声明机位的副本记为 `view_role=unspecified`，不得留空。
+规则：
+
+- `usages` 至少一条，`minItems: 1`。
+- 同一内容的不同副本若 `usage_kind` 或 `requirement` 不同，各自保留 —— **不得由 locator 排序决定谁代表整体**。
+- `complete` 判定只聚合带 `requirement=required` 的使用关系所指向的资产。
+- `verify` 的 `unique_locators` 跨全部 `usages` 检查，防止同一位置被登记两次。
+
+### 媒体探测失败必须反映在核验状态
+
+`verification=verified` 表示「内容已被核验为声明的类型且摘要一致」，不只看摘要是否算出：
+
+| 情形 | `verification` |
+| --- | --- |
+| 摘要算出，且媒体元数据探测通过 | `verified` |
+| 摘要算出，但声明为视频而容器不可识别 | `mismatch` |
+| 摘要算出，是媒体但探测失败或超时 | `not_checked` |
+| 摘要未算出 | `not_checked` / `unknown` |
+
+`optional` 只影响包完整性是否阻断，**不影响该条结论本身**：optional 的伪视频不会让包变 `partial`，但它的 `verification` 绝不会是 `verified`，并且会留下 `media_probe_failed` 或 `content_type_mismatch` 限制。
 
 ## 来源等级与 usage_kind 判定顺序
 
