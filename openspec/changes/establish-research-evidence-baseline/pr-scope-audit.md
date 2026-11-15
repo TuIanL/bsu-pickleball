@@ -1,7 +1,7 @@
 # PR #5 范围审计
 
-审计对象：`workbuddy/main-e3fcd91e` → `main`，15 个提交，head `714fda2`。
-审计日期：2026-11-15。执行人：实施者（非独立复核）。
+审计对象：`workbuddy/main-e3fcd91e` → `main`，**28 个提交**，head `75fa80f`。
+审计日期：2026-11-15（提交数增长后复核此结论，分类未变）。执行人：实施者（非独立复核）。
 
 ## 结论摘要
 
@@ -67,13 +67,15 @@ PR 内包含三类改动，其中只有第三类属于本 Change：
 
 四项均有覆盖，无需补写。该规格属于 `restore` Change，不在本 PR 的实现范围。
 
-## 附：评审第 5 条的实现缺口（必须补）
+## 附：评审第 5 条的实现缺口（已于 `e9288e5` 关闭）
 
 评审有条件批准「相同 SHA-256 的 PTS 归并」，条件为：
 
 > 必须完整保留 Cam1/Cam2 各自的使用关系、机位角色和时间映射，不得因内容去重而丢失上下文。
 
-**当前实现不满足该条件。** 现状：
+**该条件现已满足。** 契约在 `e9288e5` 重构为「内容资产 + 使用关系」两层：`asset` 只携带字节事实，`usage` 各自携带 `locator`/`view_role`/`usage_kind`/`requirement`/`source_root_id`/`time_base`。交付包中 `a_15c5d2b304d3` 保留两条 `usage`（cam1、cam2，均为 `real`/`required`/`pts_actual`）。
+
+以下为审计当时的记录，保留以便追溯问题演进：
 
 - manifest 的 `asset` 只有单个 `locator`；
 - 另一份副本仅以 `notes` 文本形式提及（「同内容副本（未重复登记）：asset://…」）；
@@ -81,12 +83,10 @@ PR 内包含三类改动，其中只有第三类属于本 Change：
 
 即：去重后**无法从产物判断哪一份是 Cam1、哪一份是 Cam2，也无法知道两者各自对应的时间基准**。这与评审条件冲突，属于必须修复项。
 
-**修复方案**：在 asset 上新增可选 `occurrences` 数组，每项记录 `locator`、`view_role`（cam1/cam2/unspecified）、`time_base` 与说明；`locator` 保留为规范主位置以兼容现有契约，`occurrences` 至少覆盖全部副本。Schema 增量、fixtures 补充、builder 填充、回归测试同步更新。
-
 ## 若必须拆分
 
 1. 从 `1100f47` 建分支 `chore/openspec-cleanup`，推送并开 PR；
 2. 在 `workbuddy/main-e3fcd91e` 执行 `git rebase --onto bd136d6 1100f47`；
 3. 强推分支，关闭 PR #5 并以新分支重建。
 
-代价：14 个提交 SHA 全部改写，PR #5 需重建，已有 CI 结果作废。**不建议在当前阶段执行。**
+代价：28 个提交 SHA 全部改写，PR #5 需重建，已有 CI 结果作废。**不建议在当前阶段执行。**

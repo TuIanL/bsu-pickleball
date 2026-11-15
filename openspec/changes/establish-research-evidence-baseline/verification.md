@@ -2,6 +2,18 @@
 
 对应 `establish-research-evidence-baseline` 任务 4.1。本文件记录一次真实构建的输入、范围、结果与独立检查。
 
+## 三个阶段的区分
+
+本文件记录三个不同阶段的构建，**数字不可互相引用**：
+
+| 阶段 | 目的 | 资产 | 完整性 | 输出位置 |
+| --- | --- | --- | --- | --- |
+| 1（任务 4.1） | 验证工具能在真实素材上跑通 | 10 | `complete` | 临时目录（已清理） |
+| 2（任务 4.2） | 验证缺失来源与历史判定的降级 | 8–10 | `partial` | 临时目录（已清理） |
+| 3（最终交付） | 契约重构后的正式交付 | 11 资产 / 12 使用位置 / 37 检查 | `partial` | `research/evidence/baselines/bd136d6/` |
+
+下文「环境与身份」「索引范围」「核验范围与等级」描述的是**阶段 1**，反映当时的工具能力与临时配置。阶段 2 见「部分包验证（4.2）」。阶段 3 的最终数字见「评审修复」「独立复核结论」两节，以及交付目录内的 `README.md` 与 `manifest.json`。
+
 ## 环境与身份
 
 | 项 | 值 |
@@ -183,7 +195,34 @@ python scripts/research_evidence.py verify --package /tmp/pe-4-1-run/pkg_new --d
 
 `207 passed`（research_evidence 套件），ruff clean。
 
-## 独立复核结论（三轮）
+## CI 前端测试失败调查（2026-11-15）
+
+PR 的 `quality` job 中 `frontend tests` 失败，报错为：
+
+```
+src/components/platform/VideoAnalysisCard.test.tsx
+keeps the current playhead when initial-seek callbacks refresh and when switching cameras
+expected 36.964, received 0
+```
+
+**结论：环境相关的偶发失败（flaky），不是本 PR 引入的回归。**
+
+证据：
+
+| 检查 | 结果 |
+| --- | --- |
+| 该测试文件在 `bd136d6..75fa80f` 内改动 | 0 次 |
+| 被测组件 `VideoAnalysisCard.tsx` 同上 | 0 次 |
+| `package.json` / `package-lock.json` 同上 | 0 次 |
+| 测试文件定稿提交 | `43b5727`（11-10，早于基线） |
+| 基线 `bd136d6` 上运行该文件 | 19/19 通过 |
+| 当前分支 `75fa80f` 上运行该文件 | 19/19 通过（重复三次） |
+
+该用例断言的是「切换机位后播放头映射到 36.964 秒」，依赖 `loadedMetadata` / `seeking` / `seeked` 事件与 effect 时序；jsdom 中 `currentTime` 默认 0，一旦事件顺序在 CI 的 `--maxWorkers=2` 下被打乱就会读到 0。本地与基线均无法复现。
+
+**处置**：不修改、不弱化该断言。CI 若重跑通过即可确认为偶发；若持续失败，应作为独立的前端稳定性问题单独立项，不并入本 Change。
+
+## 独立复核结论（四轮）
 
 | 轮次 | 被复核 SHA | 结论 | 处置 |
 | --- | --- | --- | --- |
