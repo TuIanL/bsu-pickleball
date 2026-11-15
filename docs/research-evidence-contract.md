@@ -31,8 +31,7 @@
 
 | 字段 | 含义 |
 | --- | --- |
-| `schema_version` | 固定 `pb.research-evidence-manifest.v1.0` |
-| `package_id` | `pkg_` + 12 位十六进制，标识一个索引包 |
+| `schema_version` | 固定 `pb.research-evidence-manifest.v1.0` || `package_id` | `pkg_` + 12 位十六进制，标识一个索引包 |
 | `baseline.selected_revision` | 科研候选基线，只允许一个，且必须 `status=known` 并钉到 40 位 commit |
 | `baseline.reference_revisions` | 历史对照，可含 `status=unknown`，不代表候选基线 |
 | `tooling.revision` | 索引工具自身版本，与科研基线分开记录 |
@@ -42,6 +41,8 @@
 | `checks[]` | 逐项核验结果 |
 | `completeness` | `complete` 或 `partial` |
 | `limitations[]` | 限制条款，含是否阻断完整声明 |
+
+> `v1.0` 尚未对外发布。本 PR 内把资产结构从 `occurrences` 调整为 `usages` 属于发布前结构调整，不构成兼容负担；正式发布后版本号冻结，再变更必须升版。
 
 ## 资产字段
 

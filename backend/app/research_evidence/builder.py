@@ -331,13 +331,15 @@ def _build_asset_entry(
         except AdmissionError as error:
             warning = str(error)
 
+    # 每条使用关系各自留痕：check_id 带机位标记，避免多个 locator 的核验记录被合并成一条。
+    role_tag = spec.view_role if spec.view_role != "unspecified" else "any"
     checks: list[dict[str, Any]] = [
         {
-            "check_id": f"c_{asset_id}_existence",
+            "check_id": f"c_{asset_id}_existence_{role_tag}",
             "target_asset_id": asset_id,
             "kind": "existence",
             "status": "passed" if inspection.availability == "present" else "failed",
-            "scope": f"授权来源根内路径解析（{spec.view_role}）",
+            "scope": f"授权来源根内路径解析（{spec.view_role}：{spec.relative_path}）",
             "detail": inspection.detail,
         }
     ]
@@ -345,7 +347,7 @@ def _build_asset_entry(
     if inspection.sha256:
         checks.append(
             {
-                "check_id": f"c_{asset_id}_digest",
+                "check_id": f"c_{asset_id}_digest_{role_tag}",
                 "target_asset_id": asset_id,
                 "kind": "digest",
                 "status": "passed",
@@ -357,7 +359,7 @@ def _build_asset_entry(
     # 只读证据入包：读取前后 size/mtime 是否被改动，必须可审计。
     checks.append(
         {
-            "check_id": f"c_{asset_id}_readonly",
+            "check_id": f"c_{asset_id}_readonly_{role_tag}",
             "target_asset_id": asset_id,
             "kind": "readonly",
             "status": "passed" if inspection.input_unchanged else "failed",
@@ -373,7 +375,7 @@ def _build_asset_entry(
         media_failed = probe.status != "ok"
         checks.append(
             {
-                "check_id": f"c_{asset_id}_probe",
+                "check_id": f"c_{asset_id}_probe_{role_tag}",
                 "target_asset_id": asset_id,
                 "kind": "metadata_probe",
                 "status": "passed" if probe.status == "ok" else "failed",
@@ -704,19 +706,20 @@ def build_manifest(
 
         assets.append(asset)
 
-        # 同一内容的同类检查结果通常相同；但任一副本失败必须保留失败结论
-        seen_kinds: dict[tuple[str, str], int] = {}
+        # 每个使用位置各自保留检查记录；仅当 check_id 完全相同时才去重，
+        # 且任一副本失败必须保留失败结论。
+        seen_checks: dict[str, int] = {}
         for item in group:
             for check in item["checks"]:
-                key = (check["target_asset_id"], check["kind"])
-                if key in seen_kinds:
-                    index = seen_kinds[key]
+                key = str(check["check_id"])
+                if key in seen_checks:
+                    index = seen_checks[key]
                     if checks[index]["status"] == "failed":
                         continue
                     if check["status"] == "failed":
                         checks[index] = check
                     continue
-                seen_kinds[key] = len(checks)
+                seen_checks[key] = len(checks)
                 checks.append(check)
 
         location_assets[asset_id] = {
@@ -752,6 +755,23 @@ def build_manifest(
                         "code": f"asset_{content['availability']}",
                         "message": (
                             f"{asset_id}@{usage['locator']} 不可用，未纳入核验"
+                        ),
+                        "block_completeness": blocking,
+                        "affects": [asset_id],
+                        "notion_task": spec.notion_task,
+                    }
+                )
+
+            # 摘要未完成（超时/取消）同样要留下阻断依据，不能只写进 digest.reason。
+            if (
+                content["digest"]["status"] == "unknown"
+                and content["availability"] == "present"
+            ):
+                limitations.append(
+                    {
+                        "code": "digest_unavailable",
+                        "message": (
+                            f"{asset_id}@{usage['locator']} 摘要未完成，内容未核验"
                         ),
                         "block_completeness": blocking,
                         "affects": [asset_id],
