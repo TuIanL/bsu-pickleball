@@ -92,6 +92,10 @@ class AssetSpec:
     requirement: Literal["required", "optional"]
     asset_id: str | None = None
     notion_task: str | None = None
+    view_role: Literal["cam1", "cam2", "single_view", "unspecified"] = "unspecified"
+    time_base: Literal[
+        "cfr_nominal", "pts_actual", "take_unified", "not_applicable"
+    ] = "not_applicable"
     notes: tuple[str, ...] = ()
 
     @property
@@ -179,6 +183,8 @@ def _load_assets(raw: Any) -> tuple[AssetSpec, ...]:
                     requirement=entry["requirement"],
                     asset_id=entry.get("asset_id"),
                     notion_task=entry.get("notion_task"),
+                    view_role=entry.get("view_role", "unspecified"),
+                    time_base=entry.get("time_base", "not_applicable"),
                     notes=tuple(entry.get("notes") or ()),
                 )
             )
@@ -360,6 +366,14 @@ def _build_asset_entry(
         "kind": spec.kind,
         "usage_kind": usage.usage_kind,
         "usage_basis": usage.to_manifest_field(),
+        "occurrences": [
+            {
+                "locator": spec.locator,
+                "view_role": spec.view_role,
+                "time_base": spec.time_base,
+                "note": None,
+            }
+        ],
         "requirement": spec.requirement,
         "locator": spec.locator,
         "size_bytes": inspection.size_bytes,
@@ -561,8 +575,12 @@ def build_manifest(
 
         if alternates:
             entry = dict(entry)
+            # 内容去重不等于删上下文：每个副本的机位角色与时间基准都要保留。
+            entry["occurrences"] = [item[1]["occurrences"][0] for item in group]
             entry["notes"] = list(entry["notes"]) + [
-                f"同内容副本（未重复登记）：{locator}" for locator in alternates
+                f"与 {item[1]['locator']} 内容相同（同一 SHA-256），"
+                "按机位分别记录于 occurrences"
+                for item in group[1:]
             ]
 
         assets.append(entry)
@@ -772,6 +790,30 @@ def verify_package(
             "references_resolve",
             not dangling,
             f"悬空引用: {dangling[:3]}" if dangling else None,
+        )
+    )
+
+    occurrence_gaps: list[str] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        occurrences = asset.get("occurrences") or []
+        if not occurrences:
+            continue
+        locators = {
+            item.get("locator") for item in occurrences if isinstance(item, dict)
+        }
+        if asset.get("locator") not in locators:
+            occurrence_gaps.append(str(asset.get("asset_id")))
+    checks.append(
+        VerifyCheck(
+            "occurrences_cover_canonical",
+            not occurrence_gaps,
+            (
+                f"occurrences 未覆盖规范 locator: {occurrence_gaps[:3]}"
+                if occurrence_gaps
+                else None
+            ),
         )
     )
 

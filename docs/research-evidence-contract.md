@@ -48,12 +48,26 @@
 | `kind` | `source_video` / `pts_sidecar` / `sync_manifest` / `calibration` / `roster` / `model_weight` / `model_config` / `model_package` / `job_artifact` / `annotation` / `other` | 资产类别 |
 | `usage_kind` | `real` / `fixture` / `unknown` | 用途类型，不等于质量 |
 | `usage_basis` | 见下节 | 分类依据，可省略但不应推测 |
+| `occurrences` | 数组 | 同内容副本的各机位使用关系，见下 |
 | `requirement` | `required` / `optional` | 只有 `required` 参与 `complete` 判定 |
 | `digest` | `{status, sha256, reason}` | `status=unknown` 时 `sha256` 必须为 `null` 且给出 `reason` |
 | `availability` | `present` / `missing` / `unreachable` / `not_checked` | 文件在不在 |
 | `verification` | `verified` / `mismatch` / `not_checked` / `unknown` | 内容对不对 |
 
 `availability` 与 `verification` **正交**：文件不在是 `unreachable + not_checked`，不是 `mismatch`。`mismatch` 只用于「读到了，但摘要对不上」。
+
+### 内容去重不删除上下文
+
+两份文件若 SHA-256 相同，只登记为一个资产（路径不是身份）。但**去重不等于抹掉使用关系**：每个副本的机位角色与时间基准必须写入 `occurrences`。
+
+```json
+"occurrences": [
+  {"locator": "asset://root_captures/.../174_merged.mp4.pts.jsonl", "view_role": "cam1", "time_base": "pts_actual", "note": null},
+  {"locator": "asset://root_captures/.../175_merged.mp4.pts.jsonl", "view_role": "cam2", "time_base": "pts_actual", "note": null}
+]
+```
+
+约束：`occurrences` 必须至少包含一个与资产 `locator` 相同的条目（`verify` 的 `occurrences_cover_canonical` 会检查）。未声明机位的副本记为 `view_role=unspecified`，不得留空。
 
 ## 来源等级与 usage_kind 判定顺序
 

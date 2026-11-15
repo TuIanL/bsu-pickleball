@@ -259,3 +259,24 @@ def test_missing_optional_asset_keeps_the_package_complete(tmp_path):
     assert not any(
         check.name == "completeness_consistent" for check in report.failures
     )
+
+
+def test_occurrences_must_cover_the_canonical_locator(tmp_path):
+    """机位记录不能把规范位置排除在外，否则去重后无法定位主副本。"""
+    _root, package = _build(tmp_path)
+    manifest_path = package / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["assets"][0]["occurrences"] = [
+        {
+            "locator": "asset://root_captures/somewhere_else.mp4",
+            "view_role": "cam2",
+            "time_base": "pts_actual",
+        }
+    ]
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    report = verify_package(package)
+
+    assert any(
+        check.name == "occurrences_cover_canonical" for check in report.failures
+    )

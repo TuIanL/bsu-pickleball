@@ -328,6 +328,8 @@ def test_identical_content_at_two_paths_collapses_to_one_asset(tmp_path):
                 "kind": "source_video",
                 "usage_kind": "real",
                 "requirement": "required",
+                "view_role": "cam1",
+                "time_base": "pts_actual",
             },
             {
                 "root_id": "root_captures",
@@ -335,6 +337,8 @@ def test_identical_content_at_two_paths_collapses_to_one_asset(tmp_path):
                 "kind": "source_video",
                 "usage_kind": "real",
                 "requirement": "required",
+                "view_role": "cam2",
+                "time_base": "pts_actual",
             },
         ],
     )
@@ -348,7 +352,9 @@ def test_identical_content_at_two_paths_collapses_to_one_asset(tmp_path):
     )
 
     assert len(manifest["assets"]) == 1
-    assert any("同内容副本" in note for note in manifest["assets"][0]["notes"])
+    occurrences = manifest["assets"][0]["occurrences"]
+    assert {item["view_role"] for item in occurrences} == {"cam1", "cam2"}
+    assert {item["time_base"] for item in occurrences} == {"pts_actual"}
     (asset_id, mapping), = locations["assets"].items()
     assert len(mapping["alternate_locators"]) == 1
 

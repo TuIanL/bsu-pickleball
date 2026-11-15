@@ -100,6 +100,27 @@
         "reason": { "type": "string", "minLength": 1 }
       }
     },
+    "occurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一个内容副本在具体机位上的使用关系。locator 相同的多个 occurrence 表示同一位置被多个角色引用。",
+      "required": ["locator", "view_role", "time_base"],
+      "properties": {
+        "locator": {
+          "type": "string",
+          "pattern": "^asset://[a-z0-9_]+/.+$"
+        },
+        "view_role": {
+          "enum": ["cam1", "cam2", "single_view", "unspecified"],
+          "description": "机位角色。内容相同但机位不同时必须分别记录，不能只留字符串副本列表。"
+        },
+        "time_base": {
+          "enum": ["cfr_nominal", "pts_actual", "take_unified", "not_applicable"],
+          "description": "该副本在分析中使用的时间基准。"
+        },
+        "note": { "type": ["string", "null"] }
+      }
+    },
     "digest": {
       "type": "object",
       "additionalProperties": false,
@@ -299,6 +320,12 @@
           ]
         },
         "usage_basis": { "$ref": "#/$defs/usage_basis" },
+        "occurrences": {
+          "type": "array",
+          "minItems": 1,
+          "description": "同内容副本的全部使用位置。内容去重不删除上下文：每个副本的机位角色与时间基准必须保留。",
+          "items": { "$ref": "#/$defs/occurrence" }
+        },
         "notes": { "type": "array", "items": { "type": "string" } }
       }
     },
