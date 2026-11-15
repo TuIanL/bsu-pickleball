@@ -35,6 +35,8 @@
 | `package_id` | `pkg_` + 12 位十六进制，标识一个索引包 |
 | `baseline.selected_revision` | 科研候选基线，只允许一个，且必须 `status=known` 并钉到 40 位 commit |
 | `baseline.reference_revisions` | 历史对照，可含 `status=unknown`，不代表候选基线 |
+| `tooling.revision` | 索引工具自身版本，与科研基线分开记录 |
+| `tooling.config_sha256` | 构建配置核心摘要（不含 `source_roots` 的本机路径） |
 | `assets[]` | 资产清单 |
 | `run_refs[]` | 运行记录 |
 | `checks[]` | 逐项核验结果 |

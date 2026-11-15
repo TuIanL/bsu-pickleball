@@ -280,3 +280,29 @@ def test_occurrences_must_cover_the_canonical_locator(tmp_path):
     assert any(
         check.name == "occurrences_cover_canonical" for check in report.failures
     )
+
+
+def test_build_records_tooling_version_and_config_digest(tmp_path):
+    """索引工具版本必须与科研基线分开记录，配置摘要不得含本机路径。"""
+    _root, package = _build(tmp_path)
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+
+    tooling = manifest["tooling"]
+    assert tooling["name"] == "research_evidence"
+    assert tooling["revision"]["label"] == "tooling"
+    assert tooling["revision"]["status"] in {"known", "unknown"}
+    assert len(tooling["config_sha256"]) == 64
+    # 工具版本与分析基线必须是两个不同的对象。
+    assert tooling["revision"] is not manifest["baseline"]["selected_revision"]
+
+
+def test_verify_requires_a_tooling_record(tmp_path):
+    _root, package = _build(tmp_path)
+    manifest_path = package / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("tooling", None)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    report = verify_package(package)
+
+    assert any(check.name == "tooling_recorded" for check in report.failures)

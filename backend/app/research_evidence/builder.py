@@ -45,6 +45,9 @@ from .locations import (
 from .media_probe import DEFAULT_PROBE_TIMEOUT_SECONDS, probe_media
 
 MANIFEST_SCHEMA_VERSION = "pb.research-evidence-manifest.v1.0"
+EMPTY_PATCH_SHA256 = (
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+)
 MANIFEST_FILENAME = "manifest.json"
 CHECKS_FILENAME = "checks.json"
 LOCATIONS_FILENAME = "locations.local.json"
@@ -624,6 +627,11 @@ def build_manifest(
         "package_id": config.package_id,
         "generated_at": _utc_now(),
         "baseline": config.baseline,
+        "tooling": {
+            "name": "research_evidence",
+            "revision": detect_tooling_revision(),
+            "config_sha256": config_core_digest(config),
+        },
         "assets": assets,
         "run_refs": run_refs,
         "checks": checks,
@@ -649,6 +657,96 @@ def build_manifest(
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _git_output(args: list[str]) -> str | None:
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            cwd=str(Path(__file__).resolve().parents[3]),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def detect_tooling_revision() -> dict[str, Any]:
+    """Record the indexing tool's own version, independently of the analysis baseline.
+
+    A missing git environment yields an explicit unknown rather than a guess.
+    """
+    commit = _git_output(["rev-parse", "HEAD"])
+    dirty = _git_output(["status", "--porcelain"])
+
+    if not commit:
+        return {
+            "label": "tooling",
+            "status": "unknown",
+            "commit": None,
+            "worktree_clean": None,
+            "dirty_patch": {
+                "status": "unknown",
+                "sha256": None,
+                "reason": "无法读取 git 版本，索引工具版本未知",
+            },
+            "note": None,
+        }
+
+    clean = dirty == ""
+    return {
+        "label": "tooling",
+        "status": "known",
+        "commit": commit,
+        "worktree_clean": clean,
+        "dirty_patch": (
+            {"status": "known", "sha256": EMPTY_PATCH_SHA256}
+            if clean
+            else {
+                "status": "unknown",
+                "sha256": None,
+                "reason": "工作区存在未提交改动，未记录 patch 摘要",
+            }
+        ),
+        "note": None,
+    }
+
+
+def config_core_digest(config: BuildConfig) -> str:
+    """Digest the portable part of the config: no local paths, no root ids mapping to paths."""
+    import hashlib
+
+    core = {
+        "package_id": config.package_id,
+        "assets": [
+            {
+                "root_id": spec.root_id,
+                "relative_path": spec.relative_path,
+                "kind": spec.kind,
+                "usage_kind": spec.usage_kind,
+                "requirement": spec.requirement,
+                "asset_id": spec.asset_id,
+                "notion_task": spec.notion_task,
+                "view_role": spec.view_role,
+                "time_base": spec.time_base,
+            }
+            for spec in config.assets
+        ],
+        "historical_jobs": [
+            {"root_id": job.root_id, "relative_path": job.relative_path}
+            for job in config.historical_jobs
+        ],
+        "baseline": config.baseline,
+    }
+    payload = json.dumps(core, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def write_package(
@@ -738,6 +836,22 @@ def verify_package(
     checks.append(VerifyCheck("manifest_json", True))
 
     checks.append(_check_schema(manifest))
+
+    tooling = manifest.get("tooling")
+    has_tooling = (
+        isinstance(tooling, dict)
+        and isinstance(tooling.get("revision"), dict)
+        and bool(tooling["revision"])
+    )
+    checks.append(
+        VerifyCheck(
+            "tooling_recorded",
+            has_tooling,
+            None
+            if has_tooling
+            else "缺少 tooling.revision：索引工具版本必须与科研基线分开记录",
+        )
+    )
 
     offenders = find_local_paths(manifest)
     checks.append(

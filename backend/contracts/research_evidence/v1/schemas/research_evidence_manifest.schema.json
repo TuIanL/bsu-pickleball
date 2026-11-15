@@ -25,6 +25,20 @@
     },
     "generated_at": { "type": "string", "format": "date-time" },
     "baseline": { "$ref": "#/$defs/baseline" },
+    "tooling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "索引工具自身的版本与构建配置摘要。与科研分析基线分开记录，避免把工具提交当成分析代码版本。",
+      "required": ["name", "revision"],
+      "properties": {
+        "name": { "const": "research_evidence" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "config_sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "构建配置核心部分（package_id/assets/historical_jobs/baseline）的规范化摘要，不含 source_roots 的本机路径。"
+        }
+      }
+    },
     "assets": {
       "type": "array",
       "items": { "$ref": "#/$defs/asset" }
