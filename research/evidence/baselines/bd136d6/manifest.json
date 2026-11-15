@@ -1,7 +1,7 @@
 {
   "schema_version": "pb.research-evidence-manifest.v1.0",
   "package_id": "pkg_7f3a9c21b4de",
-  "generated_at": "2026-11-15T01:29:52.980850+00:00",
+  "generated_at": "2026-11-15T01:52:04.216672+00:00",
   "baseline": {
     "selected_revision": {
       "label": "selected_baseline",
@@ -33,7 +33,7 @@
     "revision": {
       "label": "tooling",
       "status": "known",
-      "commit": "169c44d8b0c0eb6802c0aa06a596170780c494a5",
+      "commit": "e9288e5d7de31f05de1eb30a760ba073384ddf9f",
       "worktree_clean": true,
       "dirty_patch": {
         "status": "known",
@@ -47,27 +47,6 @@
     {
       "asset_id": "a_15c5d2b304d3",
       "kind": "pts_sidecar",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
-          "view_role": "cam1",
-          "time_base": "pts_actual",
-          "note": null
-        },
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl",
-          "view_role": "cam2",
-          "time_base": "pts_actual",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
       "size_bytes": 3578004,
       "digest": {
         "status": "known",
@@ -75,35 +54,46 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
+          "view_role": "cam1",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "pts_actual",
+          "context": null,
+          "notes": []
+        },
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl",
+          "view_role": "cam2",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "pts_actual",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": [
-        "与 asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl 内容相同（同一 SHA-256），按机位分别记录于 occurrences"
+        "内容与 asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl 相同（同一 SHA-256），按使用关系分别记录于 usages"
       ]
     },
     {
       "asset_id": "a_42f960449bad",
       "kind": "sync_manifest",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/timeline/sync_calibration.json",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/timeline/sync_calibration.json",
       "size_bytes": 3027,
       "digest": {
         "status": "known",
@@ -111,33 +101,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/timeline/sync_calibration.json",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_4d3e73ddd312",
       "kind": "model_weight",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
       "size_bytes": 55897557,
       "digest": {
         "status": "known",
@@ -145,33 +131,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_models",
-        "source_kind": "repository",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_models",
+          "source_kind": "repository",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_6399ff9fb89e",
       "kind": "roster",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/recording_session.json",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/recording_session.json",
       "size_bytes": 3679,
       "digest": {
         "status": "known",
@@ -179,33 +161,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/recording_session.json",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_a13afa56c259",
       "kind": "model_weight",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_models/court-line/best.pt",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_models/court-line/best.pt",
       "size_bytes": 20701717,
       "digest": {
         "status": "known",
@@ -213,33 +191,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_models",
-        "source_kind": "repository",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_models/court-line/best.pt",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_models",
+          "source_kind": "repository",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_bc957337e964",
       "kind": "source_video",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
-          "view_role": "cam2",
-          "time_base": "cfr_nominal",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
       "size_bytes": 1237170373,
       "digest": {
         "status": "known",
@@ -247,33 +221,36 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
+      "media_metadata": {
+        "duration_seconds": 698.8,
+        "width": 1920,
+        "height": 1080,
+        "fps_nominal": 60.0,
+        "frame_count": null,
+        "probe_status": "ok"
       },
-      "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
+          "view_role": "cam2",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "cfr_nominal",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_ca301b40c4b9",
       "kind": "calibration",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/metric-court-scene/current.json",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/metric-court-scene/current.json",
       "size_bytes": 7540,
       "digest": {
         "status": "known",
@@ -281,33 +258,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/metric-court-scene/current.json",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_d7c96c6f30ba",
       "kind": "calibration",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/canonical_court_frame.json",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/canonical_court_frame.json",
       "size_bytes": 348,
       "digest": {
         "status": "known",
@@ -315,33 +288,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/canonical_court_frame.json",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_efd2005d6d3c",
       "kind": "sync_manifest",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/manifest.json",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/manifest.json",
       "size_bytes": 681,
       "digest": {
         "status": "known",
@@ -349,33 +318,29 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/manifest.json",
+          "view_role": "unspecified",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_f16e5a2f015c",
       "kind": "source_video",
-      "usage_kind": "real",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=real"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
-          "view_role": "cam1",
-          "time_base": "cfr_nominal",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
       "size_bytes": 1237383185,
       "digest": {
         "status": "known",
@@ -383,33 +348,36 @@
       },
       "availability": "present",
       "verification": "verified",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
+      "media_metadata": {
+        "duration_seconds": 698.8,
+        "width": 1920,
+        "height": 1080,
+        "fps_nominal": 60.0,
+        "frame_count": null,
+        "probe_status": "ok"
       },
-      "media_metadata": null,
+      "usages": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+          "view_role": "cam1",
+          "usage_kind": "real",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=real"
+          },
+          "time_base": "cfr_nominal",
+          "context": null,
+          "notes": []
+        }
+      ],
       "notes": []
     },
     {
       "asset_id": "a_win_job_0d8ec77a76",
       "kind": "job_artifact",
-      "usage_kind": "unknown",
-      "usage_basis": {
-        "basis": "operator_declared",
-        "reason": "操作者显式声明 usage_kind=unknown"
-      },
-      "occurrences": [
-        {
-          "locator": "asset://root_captures/windows-analysis/job-0d8ec77a76",
-          "view_role": "unspecified",
-          "time_base": "not_applicable",
-          "note": null
-        }
-      ],
-      "requirement": "required",
-      "locator": "asset://root_captures/windows-analysis/job-0d8ec77a76",
       "size_bytes": null,
       "digest": {
         "status": "unknown",
@@ -418,16 +386,27 @@
       },
       "availability": "missing",
       "verification": "unknown",
-      "provenance": {
-        "source_root_id": "root_captures",
-        "source_kind": "external_disk",
-        "originated_at": null,
-        "note": null
-      },
       "media_metadata": null,
-      "notes": [
-        "2026-11-12 外接盘挂载后全目录检索零命中；仓库内亦无引用。未取得即不得声明完整科研验收。"
-      ]
+      "usages": [
+        {
+          "locator": "asset://root_captures/windows-analysis/job-0d8ec77a76",
+          "view_role": "unspecified",
+          "usage_kind": "unknown",
+          "requirement": "required",
+          "source_root_id": "root_captures",
+          "source_kind": "external_disk",
+          "usage_basis": {
+            "basis": "operator_declared",
+            "reason": "操作者显式声明 usage_kind=unknown"
+          },
+          "time_base": "not_applicable",
+          "context": null,
+          "notes": [
+            "2026-11-12 外接盘挂载后全目录检索零命中；仓库内亦无引用。未取得即不得声明完整科研验收。"
+          ]
+        }
+      ],
+      "notes": []
     }
   ],
   "run_refs": [
@@ -498,7 +477,7 @@
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（cam1）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -506,15 +485,23 @@
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（cam1）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_15c5d2b304d3_readonly",
+      "target_asset_id": "a_15c5d2b304d3",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（cam1）",
+      "detail": null
     },
     {
       "check_id": "c_a_42f960449bad_existence",
       "target_asset_id": "a_42f960449bad",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -522,15 +509,23 @@
       "target_asset_id": "a_42f960449bad",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_42f960449bad_readonly",
+      "target_asset_id": "a_42f960449bad",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_4d3e73ddd312_existence",
       "target_asset_id": "a_4d3e73ddd312",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -538,15 +533,23 @@
       "target_asset_id": "a_4d3e73ddd312",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_4d3e73ddd312_readonly",
+      "target_asset_id": "a_4d3e73ddd312",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_6399ff9fb89e_existence",
       "target_asset_id": "a_6399ff9fb89e",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -554,15 +557,23 @@
       "target_asset_id": "a_6399ff9fb89e",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_6399ff9fb89e_readonly",
+      "target_asset_id": "a_6399ff9fb89e",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_a13afa56c259_existence",
       "target_asset_id": "a_a13afa56c259",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -570,15 +581,23 @@
       "target_asset_id": "a_a13afa56c259",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_a13afa56c259_readonly",
+      "target_asset_id": "a_a13afa56c259",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_bc957337e964_existence",
       "target_asset_id": "a_bc957337e964",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（cam2）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -586,23 +605,31 @@
       "target_asset_id": "a_bc957337e964",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（cam2）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_readonly",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（cam2）",
+      "detail": null
     },
     {
       "check_id": "c_a_bc957337e964_probe",
       "target_asset_id": "a_bc957337e964",
       "kind": "metadata_probe",
-      "status": "failed",
+      "status": "passed",
       "scope": "只读容器元数据，未全解码",
-      "detail": "ffprobe 在 15 秒内未返回"
+      "detail": "仅读取容器元数据，未执行解码"
     },
     {
       "check_id": "c_a_ca301b40c4b9_existence",
       "target_asset_id": "a_ca301b40c4b9",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -610,15 +637,23 @@
       "target_asset_id": "a_ca301b40c4b9",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_ca301b40c4b9_readonly",
+      "target_asset_id": "a_ca301b40c4b9",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_d7c96c6f30ba_existence",
       "target_asset_id": "a_d7c96c6f30ba",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -626,15 +661,23 @@
       "target_asset_id": "a_d7c96c6f30ba",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_d7c96c6f30ba_readonly",
+      "target_asset_id": "a_d7c96c6f30ba",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_efd2005d6d3c_existence",
       "target_asset_id": "a_efd2005d6d3c",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -642,15 +685,23 @@
       "target_asset_id": "a_efd2005d6d3c",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（unspecified）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_efd2005d6d3c_readonly",
+      "target_asset_id": "a_efd2005d6d3c",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     },
     {
       "check_id": "c_a_f16e5a2f015c_existence",
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "existence",
       "status": "passed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（cam1）",
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
@@ -658,31 +709,47 @@
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "digest",
       "status": "passed",
-      "scope": "全文件分块 SHA-256",
+      "scope": "全文件分块 SHA-256（cam1）",
       "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_readonly",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（cam1）",
+      "detail": null
     },
     {
       "check_id": "c_a_f16e5a2f015c_probe",
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "metadata_probe",
-      "status": "failed",
+      "status": "passed",
       "scope": "只读容器元数据，未全解码",
-      "detail": "ffprobe 在 15 秒内未返回"
+      "detail": "仅读取容器元数据，未执行解码"
     },
     {
       "check_id": "c_a_win_job_0d8ec77a76_existence",
       "target_asset_id": "a_win_job_0d8ec77a76",
       "kind": "existence",
       "status": "failed",
-      "scope": "授权来源根内路径解析",
+      "scope": "授权来源根内路径解析（unspecified）",
       "detail": "路径不存在"
+    },
+    {
+      "check_id": "c_a_win_job_0d8ec77a76_readonly",
+      "target_asset_id": "a_win_job_0d8ec77a76",
+      "kind": "readonly",
+      "status": "passed",
+      "scope": "读取前后 size/mtime 比对（unspecified）",
+      "detail": null
     }
   ],
   "completeness": "partial",
   "limitations": [
     {
       "code": "asset_missing",
-      "message": "a_win_job_0d8ec77a76 不可用，未纳入核验",
+      "message": "a_win_job_0d8ec77a76@asset://root_captures/windows-analysis/job-0d8ec77a76 不可用，未纳入核验",
       "block_completeness": true,
       "affects": [
         "a_win_job_0d8ec77a76"

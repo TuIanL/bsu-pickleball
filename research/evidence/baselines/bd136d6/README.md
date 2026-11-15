@@ -8,7 +8,7 @@
 | --- | --- |
 | `package_id` | `pkg_7f3a9c21b4de` |
 | 生成时间 | 2026-11-15T01:29:52Z |
-| 索引工具版本 | `169c44d`（工具代码工作区干净） |
+| 索引工具版本 | `e9288e5`（工具代码工作区干净） |
 | 构建配置摘要 | `34244531ab1d5419c2b8ee6251175fa297391181478bbfe05014cdb8acfd4afb` |
 | 科研分析基线 | `bd136d6` |
 | 历史对照 | `99c0f19`（11/10 审计快照） |
@@ -16,7 +16,7 @@
 
 三个版本分开记录：分析基线看 `baseline.selected_revision`，工具版本看 `tooling.revision`，历史运行版本看 `run_refs[].code_revision`（一律 `unknown`，未用当前 HEAD 回填）。
 
-本目录的交付提交晚于工具版本提交 `169c44d`；两者之间工具代码未改动，因此 `tooling.revision` 仍然准确。
+本目录的交付提交晚于工具版本提交 `e9288e5`；两者之间工具代码未改动，因此 `tooling.revision` 仍然准确。
 
 ## 资产清单（11）
 
@@ -34,7 +34,7 @@
 | `a_a13afa56c259` | model_weight（court-line best.pt） | — | present | verified |
 | `a_win_job_0d8ec77a76` | job_artifact（Windows） | — | **missing** | unknown |
 
-**`a_15c5d2b304d3` 是两个机位共用的 PTS**：两份 `.pts.jsonl` 字节完全相同（同一 SHA-256），按内容身份归并为一个资产，但 `occurrences` 保留了两条记录 —— cam1 与 cam2 各自的定位串和时间基准（`pts_actual`）。去重没有抹掉机位语义。
+**`a_15c5d2b304d3` 是两个机位共用的 PTS**：两份 `.pts.jsonl` 字节完全相同（同一 SHA-256），按内容身份归并为一个内容资产，但它保留了两条 `usages` —— cam1 与 cam2 各自的定位串、用途、必需性和时间基准（`pts_actual`）。去重没有抹掉任何一侧的语义。
 
 ## 核验覆盖
 
