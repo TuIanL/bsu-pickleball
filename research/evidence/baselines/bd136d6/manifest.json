@@ -1,7 +1,7 @@
 {
   "schema_version": "pb.research-evidence-manifest.v1.0",
   "package_id": "pkg_7f3a9c21b4de",
-  "generated_at": "2026-11-15T01:52:04.216672+00:00",
+  "generated_at": "2026-11-15T02:02:31.749653+00:00",
   "baseline": {
     "selected_revision": {
       "label": "selected_baseline",
@@ -33,7 +33,7 @@
     "revision": {
       "label": "tooling",
       "status": "known",
-      "commit": "e9288e5d7de31f05de1eb30a760ba073384ddf9f",
+      "commit": "8888d49d36302ed635c6bb9a79743c07d543e47b",
       "worktree_clean": true,
       "dirty_patch": {
         "status": "known",

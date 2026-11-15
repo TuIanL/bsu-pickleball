@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,6 +22,35 @@ from app.research_evidence.hashing import snapshot_file
 REPO = Path(__file__).resolve().parents[2]
 DOC = REPO / "docs" / "research-evidence-cli.md"
 MP4_HEADER = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"
+
+_MP4_CACHE: bytes | None = None
+
+
+def _real_mp4_payload() -> bytes:
+    global _MP4_CACHE
+    if _MP4_CACHE is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "probe.mp4"
+            completed = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=160x120:d=1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(target),
+                ],
+                capture_output=True,
+            )
+            if completed.returncode != 0:
+                pytest.skip("ffmpeg 不可用，无法生成真实媒体夹具")
+            _MP4_CACHE = target.read_bytes()
+    return _MP4_CACHE
 
 BASELINE = {
     "selected_revision": {
@@ -70,7 +100,7 @@ def _config(tmp_path: Path, root: Path, *, baseline: dict | None = BASELINE) -> 
 def _source(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     root.mkdir()
-    (root / "clip.mp4").write_bytes(MP4_HEADER + b"\x00" * 256)
+    (root / "clip.mp4").write_bytes(_real_mp4_payload())
     return root
 
 
