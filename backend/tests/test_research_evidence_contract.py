@@ -149,7 +149,7 @@ def test_fixture_assets_are_distinguishable_from_real_assets():
     assert "fixture" in kinds and "real" in kinds
     fixture_usages = [usage for usage in usages if usage["usage_kind"] == "fixture"]
     for usage in fixture_usages:
-        assert usage["source_root_id"], "合成夹具必须能追溯来源根"
+        assert usage["notes"], "合成夹具必须说明来源，避免被当作正式素材"
 
 
 def test_locator_never_contains_absolute_path():

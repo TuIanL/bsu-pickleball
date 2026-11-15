@@ -385,6 +385,7 @@ def _build_asset_entry(
     # 摘要核验与媒体有效性是两件独立的事：
     # - 文件根本不是受支持容器 → mismatch（内容与声明的媒体类型不符）
     # - 是媒体但探测失败或超时 → not_checked（有效媒体性未确认）
+    # - 读取期间文件被改动 → not_checked（摘要不能作为稳定基准）
     # optional 只影响包完整性阻断，不影响本条结论；但绝不能标成 verified。
     if inspection.availability == "present":
         if inspection.sha256 is None:
@@ -392,6 +393,8 @@ def _build_asset_entry(
         elif spec.kind == "source_video" and container == "unknown":
             verification = "mismatch"
         elif media_failed:
+            verification = "not_checked"
+        elif not inspection.input_unchanged:
             verification = "not_checked"
         else:
             verification = "verified"
@@ -430,6 +433,7 @@ def _build_asset_entry(
         "verification": verification,
         "media_metadata": media_metadata,
         "notes": [],
+        "_readonly_ok": inspection.input_unchanged,
     }
 
     usage: dict[str, Any] = {
@@ -755,6 +759,22 @@ def build_manifest(
                     }
                 )
 
+            if not content.get("_readonly_ok", True):
+                limitations.append(
+                    {
+                        "code": "readonly_violation",
+                        "message": (
+                            f"{asset_id}@{usage['locator']} 读取期间被修改，"
+                            "本次摘要不可作为稳定基准"
+                        ),
+                        "block_completeness": blocking,
+                        "affects": [asset_id],
+                        "notion_task": spec.notion_task,
+                    }
+                )
+
+            probe_status = (content.get("media_metadata") or {}).get("probe_status")
+
             if content["verification"] == "mismatch":
                 limitations.append(
                     {
@@ -771,14 +791,24 @@ def build_manifest(
                 content["kind"] == "source_video"
                 and content["availability"] == "present"
                 and content["verification"] == "not_checked"
+                and probe_status in {"timeout", "error", "skipped"}
             ):
+                if probe_status == "skipped":
+                    code = "media_probe_unavailable"
+                    message = (
+                        f"{asset_id}@{usage['locator']} 环境缺少 ffprobe，"
+                        "媒体有效性未核验"
+                    )
+                else:
+                    code = "media_probe_failed"
+                    message = (
+                        f"{asset_id}@{usage['locator']} 容器元数据探测未通过，"
+                        "有效媒体性未确认"
+                    )
                 limitations.append(
                     {
-                        "code": "media_probe_failed",
-                        "message": (
-                            f"{asset_id}@{usage['locator']} 容器元数据探测未通过，"
-                            "有效媒体性未确认"
-                        ),
+                        "code": code,
+                        "message": message,
                         "block_completeness": blocking,
                         "affects": [asset_id],
                         "notion_task": spec.notion_task,

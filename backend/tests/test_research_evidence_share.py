@@ -457,3 +457,69 @@ def test_shareable_deep_is_not_reported_as_passed(tmp_path):
     failed = {check.name for check in report.failures}
 
     assert "deep_possible" in failed
+
+
+def test_readonly_violation_prevents_verified(tmp_path, monkeypatch):
+    """读取期间文件被改动时，摘要不能作为稳定基准，结论不得为 verified。"""
+    from app.research_evidence import builder as builder_mod
+    from app.research_evidence.hashing import FileInspection
+
+    root = tmp_path / "source"
+    root.mkdir()
+    _write_real_mp4(root / "clip.mp4")
+    config = _write_config(tmp_path, root, [_asset("clip.mp4")])
+    output = tmp_path / "out"
+
+    real_inspect = builder_mod.inspect_file
+
+    def fake_inspect(path, **kwargs):
+        result = real_inspect(path, **kwargs)
+        return FileInspection(
+            availability=result.availability,
+            verification=result.verification,
+            sha256=result.sha256,
+            size_bytes=result.size_bytes,
+            detail=result.detail,
+            input_unchanged=False,
+        )
+
+    monkeypatch.setattr(builder_mod, "inspect_file", fake_inspect)
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    asset = manifest["assets"][0]
+    codes = {limit["code"] for limit in manifest["limitations"]}
+
+    assert asset["verification"] == "not_checked"
+    assert "readonly_violation" in codes
+    assert manifest["completeness"] == "partial"
+
+
+def test_missing_ffprobe_is_reported_as_unavailable(tmp_path, monkeypatch):
+    """环境缺少 ffprobe 是「未核验」，与「探测失败」区分，且文案说明原因。"""
+    from app.research_evidence import builder as builder_mod
+    from app.research_evidence.media_probe import MediaProbe
+
+    root = tmp_path / "source"
+    root.mkdir()
+    _write_real_mp4(root / "clip.mp4")
+    config = _write_config(tmp_path, root, [_asset("clip.mp4")])
+    output = tmp_path / "out"
+
+    monkeypatch.setattr(
+        builder_mod,
+        "probe_media",
+        lambda *_args, **_kwargs: MediaProbe(
+            status="skipped", detail="环境中没有 ffprobe"
+        ),
+    )
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    codes = {
+        (limit["code"], limit["block_completeness"])
+        for limit in manifest["limitations"]
+    }
+
+    assert manifest["assets"][0]["verification"] == "not_checked"
+    assert ("media_probe_unavailable", True) in codes

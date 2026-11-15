@@ -56,7 +56,9 @@
 | `availability` | `present` / `missing` / `unreachable` / `not_checked` | 文件在不在 |
 | `verification` | `verified` / `mismatch` / `not_checked` / `unknown` | 内容对不对 |
 
-`availability` 与 `verification` **正交**：文件不在是 `unreachable + not_checked`，不是 `mismatch`。`mismatch` 只用于「读到了，但摘要对不上」。
+`availability` 与 `verification` **正交**：文件不在是 `unreachable + not_checked`，不是 `mismatch`。`mismatch` 只用于「读到了，但内容与声明不符」。
+
+`mismatch` 有两种来源、同一含义：摘要与期望值不符，或声明为媒体但容器不可识别。后者会同时写入 `content_type_mismatch` 限制，便于与「字节变了」区分。
 
 ### 内容资产与使用关系分离
 
@@ -116,7 +118,7 @@
 - 扩展名与实际容器不一致：疑似改名伪装。
 - `digest.status != known`：内容摘要未知。
 
-容器只读文件头判定，支持 mp4 / avi / matroska / mpegts。不调用 ffmpeg，不解码，因此大文件与慢速外接盘的开销相同。
+容器类型只读文件头判定，支持 mp4 / avi / matroska / mpegts；媒体元数据由 `ffprobe` 读取，**`ffprobe` 因此是构建依赖**，缺失时记为 `media_probe_unavailable`（未核验），而不是探测失败。全程不解码，因此大文件与慢速外接盘的开销主要在哈希，不在探测。
 
 **合成素材可以是完全合法的 AVI，仍然会被拒绝** —— 结构合法与科研可用是两件事。
 
