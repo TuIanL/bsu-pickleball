@@ -31,7 +31,8 @@
 
 | 字段 | 含义 |
 | --- | --- |
-| `schema_version` | 固定 `pb.research-evidence-manifest.v1.0` || `package_id` | `pkg_` + 12 位十六进制，标识一个索引包 |
+| `schema_version` | 固定 `pb.research-evidence-manifest.v1.0` |
+| `package_id` | `pkg_` + 12 位十六进制，标识一个索引包 |
 | `baseline.selected_revision` | 科研候选基线，只允许一个，且必须 `status=known` 并钉到 40 位 commit |
 | `baseline.reference_revisions` | 历史对照，可含 `status=unknown`，不代表候选基线 |
 | `tooling.revision` | 索引工具自身版本，与科研基线分开记录 |

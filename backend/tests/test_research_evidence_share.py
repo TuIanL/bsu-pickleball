@@ -523,3 +523,32 @@ def test_missing_ffprobe_is_reported_as_unavailable(tmp_path, monkeypatch):
 
     assert manifest["assets"][0]["verification"] == "not_checked"
     assert ("media_probe_unavailable", True) in codes
+
+
+def test_each_usage_gets_its_own_check_records(tmp_path):
+    """每个使用位置都要留痕，包括同机位的两个副本，不能被合并成一条。"""
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "a.jsonl").write_text('{"same":"bytes"}', encoding="utf-8")
+    (root / "b.jsonl").write_text('{"same":"bytes"}', encoding="utf-8")
+    config = _write_config(
+        tmp_path,
+        root,
+        [
+            _asset("a.jsonl", kind="pts_sidecar", view_role="unspecified"),
+            _asset("b.jsonl", kind="pts_sidecar", view_role="unspecified"),
+        ],
+    )
+    output = tmp_path / "out"
+
+    assert main(["build", "--config", str(config), "--output", str(output)]) == EXIT_OK
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    usage_count = sum(len(asset["usages"]) for asset in manifest["assets"])
+    existence = [
+        check for check in manifest["checks"] if check["kind"] == "existence"
+    ]
+
+    assert usage_count == 2
+    assert len(existence) == usage_count
+    assert len({check["check_id"] for check in existence}) == usage_count

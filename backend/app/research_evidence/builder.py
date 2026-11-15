@@ -15,6 +15,7 @@ lie about provenance.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -331,8 +332,9 @@ def _build_asset_entry(
         except AdmissionError as error:
             warning = str(error)
 
-    # 每条使用关系各自留痕：check_id 带机位标记，避免多个 locator 的核验记录被合并成一条。
-    role_tag = spec.view_role if spec.view_role != "unspecified" else "any"
+    # 每条使用关系各自留痕：check_id 由 locator 派生，同一位置唯一。
+    # 仅用 view_role 会把「同机位的两个副本」重新合并，仍属静默丢弃。
+    role_tag = hashlib.sha256(spec.locator.encode("utf-8")).hexdigest()[:8]
     checks: list[dict[str, Any]] = [
         {
             "check_id": f"c_{asset_id}_existence_{role_tag}",
