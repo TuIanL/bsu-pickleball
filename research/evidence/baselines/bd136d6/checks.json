@@ -1,7 +1,7 @@
 {
   "checks": [
     {
-      "check_id": "c_a_15c5d2b304d3_existence_cam1",
+      "check_id": "c_a_15c5d2b304d3_existence_a225899e",
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "existence",
       "status": "passed",
@@ -9,7 +9,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_15c5d2b304d3_digest_cam1",
+      "check_id": "c_a_15c5d2b304d3_digest_a225899e",
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "digest",
       "status": "passed",
@@ -17,7 +17,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_15c5d2b304d3_readonly_cam1",
+      "check_id": "c_a_15c5d2b304d3_readonly_a225899e",
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "readonly",
       "status": "passed",
@@ -25,7 +25,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_15c5d2b304d3_existence_cam2",
+      "check_id": "c_a_15c5d2b304d3_existence_72ac49c0",
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "existence",
       "status": "passed",
@@ -33,7 +33,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_15c5d2b304d3_digest_cam2",
+      "check_id": "c_a_15c5d2b304d3_digest_72ac49c0",
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "digest",
       "status": "passed",
@@ -41,7 +41,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_15c5d2b304d3_readonly_cam2",
+      "check_id": "c_a_15c5d2b304d3_readonly_72ac49c0",
       "target_asset_id": "a_15c5d2b304d3",
       "kind": "readonly",
       "status": "passed",
@@ -49,7 +49,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_42f960449bad_existence_any",
+      "check_id": "c_a_42f960449bad_existence_6358a107",
       "target_asset_id": "a_42f960449bad",
       "kind": "existence",
       "status": "passed",
@@ -57,7 +57,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_42f960449bad_digest_any",
+      "check_id": "c_a_42f960449bad_digest_6358a107",
       "target_asset_id": "a_42f960449bad",
       "kind": "digest",
       "status": "passed",
@@ -65,7 +65,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_42f960449bad_readonly_any",
+      "check_id": "c_a_42f960449bad_readonly_6358a107",
       "target_asset_id": "a_42f960449bad",
       "kind": "readonly",
       "status": "passed",
@@ -73,7 +73,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_4d3e73ddd312_existence_any",
+      "check_id": "c_a_4d3e73ddd312_existence_7725966b",
       "target_asset_id": "a_4d3e73ddd312",
       "kind": "existence",
       "status": "passed",
@@ -81,7 +81,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_4d3e73ddd312_digest_any",
+      "check_id": "c_a_4d3e73ddd312_digest_7725966b",
       "target_asset_id": "a_4d3e73ddd312",
       "kind": "digest",
       "status": "passed",
@@ -89,7 +89,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_4d3e73ddd312_readonly_any",
+      "check_id": "c_a_4d3e73ddd312_readonly_7725966b",
       "target_asset_id": "a_4d3e73ddd312",
       "kind": "readonly",
       "status": "passed",
@@ -97,7 +97,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_6399ff9fb89e_existence_any",
+      "check_id": "c_a_6399ff9fb89e_existence_febc8da8",
       "target_asset_id": "a_6399ff9fb89e",
       "kind": "existence",
       "status": "passed",
@@ -105,7 +105,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_6399ff9fb89e_digest_any",
+      "check_id": "c_a_6399ff9fb89e_digest_febc8da8",
       "target_asset_id": "a_6399ff9fb89e",
       "kind": "digest",
       "status": "passed",
@@ -113,7 +113,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_6399ff9fb89e_readonly_any",
+      "check_id": "c_a_6399ff9fb89e_readonly_febc8da8",
       "target_asset_id": "a_6399ff9fb89e",
       "kind": "readonly",
       "status": "passed",
@@ -121,7 +121,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_a13afa56c259_existence_any",
+      "check_id": "c_a_a13afa56c259_existence_8440bd06",
       "target_asset_id": "a_a13afa56c259",
       "kind": "existence",
       "status": "passed",
@@ -129,7 +129,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_a13afa56c259_digest_any",
+      "check_id": "c_a_a13afa56c259_digest_8440bd06",
       "target_asset_id": "a_a13afa56c259",
       "kind": "digest",
       "status": "passed",
@@ -137,7 +137,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_a13afa56c259_readonly_any",
+      "check_id": "c_a_a13afa56c259_readonly_8440bd06",
       "target_asset_id": "a_a13afa56c259",
       "kind": "readonly",
       "status": "passed",
@@ -145,7 +145,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_bc957337e964_existence_cam2",
+      "check_id": "c_a_bc957337e964_existence_22584de9",
       "target_asset_id": "a_bc957337e964",
       "kind": "existence",
       "status": "passed",
@@ -153,7 +153,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_bc957337e964_digest_cam2",
+      "check_id": "c_a_bc957337e964_digest_22584de9",
       "target_asset_id": "a_bc957337e964",
       "kind": "digest",
       "status": "passed",
@@ -161,7 +161,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_bc957337e964_readonly_cam2",
+      "check_id": "c_a_bc957337e964_readonly_22584de9",
       "target_asset_id": "a_bc957337e964",
       "kind": "readonly",
       "status": "passed",
@@ -169,7 +169,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_bc957337e964_probe_cam2",
+      "check_id": "c_a_bc957337e964_probe_22584de9",
       "target_asset_id": "a_bc957337e964",
       "kind": "metadata_probe",
       "status": "passed",
@@ -177,7 +177,7 @@
       "detail": "仅读取容器元数据，未执行解码"
     },
     {
-      "check_id": "c_a_ca301b40c4b9_existence_any",
+      "check_id": "c_a_ca301b40c4b9_existence_7f578238",
       "target_asset_id": "a_ca301b40c4b9",
       "kind": "existence",
       "status": "passed",
@@ -185,7 +185,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_ca301b40c4b9_digest_any",
+      "check_id": "c_a_ca301b40c4b9_digest_7f578238",
       "target_asset_id": "a_ca301b40c4b9",
       "kind": "digest",
       "status": "passed",
@@ -193,7 +193,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_ca301b40c4b9_readonly_any",
+      "check_id": "c_a_ca301b40c4b9_readonly_7f578238",
       "target_asset_id": "a_ca301b40c4b9",
       "kind": "readonly",
       "status": "passed",
@@ -201,7 +201,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_d7c96c6f30ba_existence_any",
+      "check_id": "c_a_d7c96c6f30ba_existence_72161fbf",
       "target_asset_id": "a_d7c96c6f30ba",
       "kind": "existence",
       "status": "passed",
@@ -209,7 +209,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_d7c96c6f30ba_digest_any",
+      "check_id": "c_a_d7c96c6f30ba_digest_72161fbf",
       "target_asset_id": "a_d7c96c6f30ba",
       "kind": "digest",
       "status": "passed",
@@ -217,7 +217,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_d7c96c6f30ba_readonly_any",
+      "check_id": "c_a_d7c96c6f30ba_readonly_72161fbf",
       "target_asset_id": "a_d7c96c6f30ba",
       "kind": "readonly",
       "status": "passed",
@@ -225,7 +225,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_efd2005d6d3c_existence_any",
+      "check_id": "c_a_efd2005d6d3c_existence_231cf960",
       "target_asset_id": "a_efd2005d6d3c",
       "kind": "existence",
       "status": "passed",
@@ -233,7 +233,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_efd2005d6d3c_digest_any",
+      "check_id": "c_a_efd2005d6d3c_digest_231cf960",
       "target_asset_id": "a_efd2005d6d3c",
       "kind": "digest",
       "status": "passed",
@@ -241,7 +241,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_efd2005d6d3c_readonly_any",
+      "check_id": "c_a_efd2005d6d3c_readonly_231cf960",
       "target_asset_id": "a_efd2005d6d3c",
       "kind": "readonly",
       "status": "passed",
@@ -249,7 +249,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_f16e5a2f015c_existence_cam1",
+      "check_id": "c_a_f16e5a2f015c_existence_fae4461a",
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "existence",
       "status": "passed",
@@ -257,7 +257,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_f16e5a2f015c_digest_cam1",
+      "check_id": "c_a_f16e5a2f015c_digest_fae4461a",
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "digest",
       "status": "passed",
@@ -265,7 +265,7 @@
       "detail": "已计算摘要，但无期望值可比对"
     },
     {
-      "check_id": "c_a_f16e5a2f015c_readonly_cam1",
+      "check_id": "c_a_f16e5a2f015c_readonly_fae4461a",
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "readonly",
       "status": "passed",
@@ -273,7 +273,7 @@
       "detail": null
     },
     {
-      "check_id": "c_a_f16e5a2f015c_probe_cam1",
+      "check_id": "c_a_f16e5a2f015c_probe_fae4461a",
       "target_asset_id": "a_f16e5a2f015c",
       "kind": "metadata_probe",
       "status": "passed",
@@ -281,7 +281,7 @@
       "detail": "仅读取容器元数据，未执行解码"
     },
     {
-      "check_id": "c_a_win_job_0d8ec77a76_existence_any",
+      "check_id": "c_a_win_job_0d8ec77a76_existence_bedaedd3",
       "target_asset_id": "a_win_job_0d8ec77a76",
       "kind": "existence",
       "status": "failed",
@@ -289,7 +289,7 @@
       "detail": "路径不存在"
     },
     {
-      "check_id": "c_a_win_job_0d8ec77a76_readonly_any",
+      "check_id": "c_a_win_job_0d8ec77a76_readonly_bedaedd3",
       "target_asset_id": "a_win_job_0d8ec77a76",
       "kind": "readonly",
       "status": "passed",
