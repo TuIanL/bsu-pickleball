@@ -182,3 +182,18 @@ python scripts/research_evidence.py verify --package /tmp/pe-4-1-run/pkg_new --d
 ### 本轮测试结果
 
 `207 passed`（research_evidence 套件），ruff clean。
+
+## 独立复核结论（三轮）
+
+| 轮次 | 被复核 SHA | 结论 | 处置 |
+| --- | --- | --- | --- |
+| 1 | `49767b9` | PASS WITH CONCERNS | 四项中等缺陷 → `e9288e5` 修复 |
+| 2 | `1209322` | PASS WITH CONCERNS | 确认四项实质关闭；新增 readonly 与 ffprobe 两项 → `8888d49` 修复 |
+| 3 | `bbafc52` | PASS WITH CONCERNS | 确认 A/B 关闭；三项收口（per-usage 检查、partial 阻断依据、版本说明）→ `3c3f3d7` 修复 |
+| 4 | `2aa82b6` | 三项中两项 PASS、一项收窄 | 同机位副本仍合并、文档表格被合并 → `bc931b1` 修复，含 `len(existence) == len(usages)` 断言 |
+
+最终交付 SHA：`40d03e2`（工具版本 `bc931b1`，交付包在其后生成，工具代码未再改动）。
+
+四项原中等级别缺陷全部关闭，六项低级问题均有处置记录（3 项修复、1 项保留、4 项登记后续）。独立复核由未参与实现的 QA Agent 在独立工作树中完成，报告原文见 `independent-review-49767b9.md`，后续三轮结论见本节。
+
+`210 passed`，`verify --shareable` 11 项全通过，交付包与真实素材逐 locator 比对 10/10 一致。
