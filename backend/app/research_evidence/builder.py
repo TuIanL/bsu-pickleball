@@ -48,6 +48,12 @@ MANIFEST_SCHEMA_VERSION = "pb.research-evidence-manifest.v1.0"
 EMPTY_PATCH_SHA256 = (
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
+# 只有工具自身代码参与「工作区是否干净」的判定，交付产物不影响工具版本可信度。
+TOOLING_PATHS = (
+    "backend/app/research_evidence",
+    "backend/contracts/research_evidence",
+    "backend/scripts/research_evidence.py",
+)
 MANIFEST_FILENAME = "manifest.json"
 CHECKS_FILENAME = "checks.json"
 LOCATIONS_FILENAME = "locations.local.json"
@@ -684,7 +690,7 @@ def detect_tooling_revision() -> dict[str, Any]:
     A missing git environment yields an explicit unknown rather than a guess.
     """
     commit = _git_output(["rev-parse", "HEAD"])
-    dirty = _git_output(["status", "--porcelain"])
+    dirty = _git_output(["status", "--porcelain", "--", *TOOLING_PATHS])
 
     if not commit:
         return {
