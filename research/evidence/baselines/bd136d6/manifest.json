@@ -1,0 +1,700 @@
+{
+  "schema_version": "pb.research-evidence-manifest.v1.0",
+  "package_id": "pkg_7f3a9c21b4de",
+  "generated_at": "2026-11-15T01:29:52.980850+00:00",
+  "baseline": {
+    "selected_revision": {
+      "label": "selected_baseline",
+      "status": "known",
+      "commit": "bd136d661bf391104b9193752f7c868878e63a48",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": "科研候选基线；合并提交 CI 43161071725 与最终主线 CI 43161180806 均通过。"
+    },
+    "reference_revisions": [
+      {
+        "label": "audit_snapshot",
+        "status": "known",
+        "commit": "99c0f19d1371bd76b8cc00654bbb8f0cc105aab8",
+        "worktree_clean": true,
+        "dirty_patch": {
+          "status": "known",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "note": "11/10 审计快照，仅作历史对照。"
+      }
+    ]
+  },
+  "tooling": {
+    "name": "research_evidence",
+    "revision": {
+      "label": "tooling",
+      "status": "known",
+      "commit": "169c44d8b0c0eb6802c0aa06a596170780c494a5",
+      "worktree_clean": true,
+      "dirty_patch": {
+        "status": "known",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "note": null
+    },
+    "config_sha256": "34244531ab1d5419c2b8ee6251175fa297391181478bbfe05014cdb8acfd4afb"
+  },
+  "assets": [
+    {
+      "asset_id": "a_15c5d2b304d3",
+      "kind": "pts_sidecar",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
+          "view_role": "cam1",
+          "time_base": "pts_actual",
+          "note": null
+        },
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl",
+          "view_role": "cam2",
+          "time_base": "pts_actual",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4.pts.jsonl",
+      "size_bytes": 3578004,
+      "digest": {
+        "status": "known",
+        "sha256": "15c5d2b304d31d4fd4c4bc15f1611ee269d169a7f6c93a39fd73a4d66b3bd2b1"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": [
+        "与 asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4.pts.jsonl 内容相同（同一 SHA-256），按机位分别记录于 occurrences"
+      ]
+    },
+    {
+      "asset_id": "a_42f960449bad",
+      "kind": "sync_manifest",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/timeline/sync_calibration.json",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/timeline/sync_calibration.json",
+      "size_bytes": 3027,
+      "digest": {
+        "status": "known",
+        "sha256": "42f960449badc7e1d06d29f1dbef4e4d8f92be8a099ac87d5e01d5974b8347b1"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_4d3e73ddd312",
+      "kind": "model_weight",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_models/rtmpose/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.pth",
+      "size_bytes": 55897557,
+      "digest": {
+        "status": "known",
+        "sha256": "4d3e73ddd31222b7b0db36caeda396af1d7630c3b5a60451bdfa99a79e8dbb90"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_models",
+        "source_kind": "repository",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_6399ff9fb89e",
+      "kind": "roster",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/recording_session.json",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/recording_session.json",
+      "size_bytes": 3679,
+      "digest": {
+        "status": "known",
+        "sha256": "6399ff9fb89e181640ac7a82c4371fa810ef0f8ff39aa9fb8a72ea8c320853b3"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_a13afa56c259",
+      "kind": "model_weight",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_models/court-line/best.pt",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_models/court-line/best.pt",
+      "size_bytes": 20701717,
+      "digest": {
+        "status": "known",
+        "sha256": "a13afa56c259c21f2dbf8a81eea5d49e84948cc3a1a5441752bfa36bc1d4140c"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_models",
+        "source_kind": "repository",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_bc957337e964",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
+          "view_role": "cam2",
+          "time_base": "cfr_nominal",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/175_merged.mp4",
+      "size_bytes": 1237170373,
+      "digest": {
+        "status": "known",
+        "sha256": "bc957337e964a78c3eac08b1d8326351fef7742db0c5041de7f78767bee698ef"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_ca301b40c4b9",
+      "kind": "calibration",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/metric-court-scene/current.json",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/metric-court-scene/current.json",
+      "size_bytes": 7540,
+      "digest": {
+        "status": "known",
+        "sha256": "ca301b40c4b903fd359402abc5c374ce3a58cf0642e71f9622abe33b0f09b07d"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_d7c96c6f30ba",
+      "kind": "calibration",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/canonical_court_frame.json",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/metadata/canonical_court_frame.json",
+      "size_bytes": 348,
+      "digest": {
+        "status": "known",
+        "sha256": "d7c96c6f30bae7b16f0da45b686c929cbe62b98fa2a52e1b84dfb2ff0a51eede"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_efd2005d6d3c",
+      "kind": "sync_manifest",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/manifest.json",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/manifest.json",
+      "size_bytes": 681,
+      "digest": {
+        "status": "known",
+        "sha256": "efd2005d6d3ccf23bf8d27c41f789fc1345233fce43f6f15ec36a381236cc037"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_f16e5a2f015c",
+      "kind": "source_video",
+      "usage_kind": "real",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=real"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+          "view_role": "cam1",
+          "time_base": "cfr_nominal",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/2026-07-20/take_sync_20260720_122645_317228/174_merged.mp4",
+      "size_bytes": 1237383185,
+      "digest": {
+        "status": "known",
+        "sha256": "f16e5a2f015ca9144122572bcd2f4c18772edcb757237a6bee4f4b36c1c655cc"
+      },
+      "availability": "present",
+      "verification": "verified",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": []
+    },
+    {
+      "asset_id": "a_win_job_0d8ec77a76",
+      "kind": "job_artifact",
+      "usage_kind": "unknown",
+      "usage_basis": {
+        "basis": "operator_declared",
+        "reason": "操作者显式声明 usage_kind=unknown"
+      },
+      "occurrences": [
+        {
+          "locator": "asset://root_captures/windows-analysis/job-0d8ec77a76",
+          "view_role": "unspecified",
+          "time_base": "not_applicable",
+          "note": null
+        }
+      ],
+      "requirement": "required",
+      "locator": "asset://root_captures/windows-analysis/job-0d8ec77a76",
+      "size_bytes": null,
+      "digest": {
+        "status": "unknown",
+        "sha256": null,
+        "reason": "路径不存在"
+      },
+      "availability": "missing",
+      "verification": "unknown",
+      "provenance": {
+        "source_root_id": "root_captures",
+        "source_kind": "external_disk",
+        "originated_at": null,
+        "note": null
+      },
+      "media_metadata": null,
+      "notes": [
+        "2026-11-12 外接盘挂载后全目录检索零命中；仓库内亦无引用。未取得即不得声明完整科研验收。"
+      ]
+    }
+  ],
+  "run_refs": [
+    {
+      "run_id": "job-43e7475fd8",
+      "origin": "product_job",
+      "code_revision": {
+        "label": "runtime",
+        "status": "unknown",
+        "commit": null,
+        "worktree_clean": null,
+        "dirty_patch": {
+          "status": "unknown",
+          "sha256": null,
+          "reason": "历史产物未记录代码版本，禁止用当前 HEAD 回填"
+        },
+        "note": null
+      },
+      "consumes": [],
+      "range": {
+        "start_seconds": 1.133333,
+        "end_seconds": 209.96666699999997,
+        "frame_start": null,
+        "frame_end": null,
+        "time_base": "pts_actual"
+      },
+      "algorithm_verdict": {
+        "result": "fail",
+        "scope": "观测覆盖 1.1–210.0s",
+        "recorded_source": "quality_report",
+        "detail": "范围由轨道时间戳推导，非任务声明窗口"
+      }
+    },
+    {
+      "run_id": "job-7ab0b2ea60",
+      "origin": "product_job",
+      "code_revision": {
+        "label": "runtime",
+        "status": "unknown",
+        "commit": null,
+        "worktree_clean": null,
+        "dirty_patch": {
+          "status": "unknown",
+          "sha256": null,
+          "reason": "历史产物未记录代码版本，禁止用当前 HEAD 回填"
+        },
+        "note": null
+      },
+      "consumes": [],
+      "range": {
+        "start_seconds": 7.0,
+        "end_seconds": 12.966667,
+        "frame_start": null,
+        "frame_end": null,
+        "time_base": "pts_actual"
+      },
+      "algorithm_verdict": {
+        "result": "pass",
+        "scope": "观测覆盖 7.0–13.0s",
+        "recorded_source": "quality_report",
+        "detail": "范围由轨道时间戳推导，非任务声明窗口"
+      }
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "c_a_15c5d2b304d3_existence",
+      "target_asset_id": "a_15c5d2b304d3",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_15c5d2b304d3_digest",
+      "target_asset_id": "a_15c5d2b304d3",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_42f960449bad_existence",
+      "target_asset_id": "a_42f960449bad",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_42f960449bad_digest",
+      "target_asset_id": "a_42f960449bad",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_4d3e73ddd312_existence",
+      "target_asset_id": "a_4d3e73ddd312",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_4d3e73ddd312_digest",
+      "target_asset_id": "a_4d3e73ddd312",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_6399ff9fb89e_existence",
+      "target_asset_id": "a_6399ff9fb89e",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_6399ff9fb89e_digest",
+      "target_asset_id": "a_6399ff9fb89e",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_a13afa56c259_existence",
+      "target_asset_id": "a_a13afa56c259",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_a13afa56c259_digest",
+      "target_asset_id": "a_a13afa56c259",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_existence",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_digest",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_probe",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "metadata_probe",
+      "status": "failed",
+      "scope": "只读容器元数据，未全解码",
+      "detail": "ffprobe 在 15 秒内未返回"
+    },
+    {
+      "check_id": "c_a_ca301b40c4b9_existence",
+      "target_asset_id": "a_ca301b40c4b9",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_ca301b40c4b9_digest",
+      "target_asset_id": "a_ca301b40c4b9",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_d7c96c6f30ba_existence",
+      "target_asset_id": "a_d7c96c6f30ba",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_d7c96c6f30ba_digest",
+      "target_asset_id": "a_d7c96c6f30ba",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_efd2005d6d3c_existence",
+      "target_asset_id": "a_efd2005d6d3c",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_efd2005d6d3c_digest",
+      "target_asset_id": "a_efd2005d6d3c",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_existence",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_digest",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_probe",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "metadata_probe",
+      "status": "failed",
+      "scope": "只读容器元数据，未全解码",
+      "detail": "ffprobe 在 15 秒内未返回"
+    },
+    {
+      "check_id": "c_a_win_job_0d8ec77a76_existence",
+      "target_asset_id": "a_win_job_0d8ec77a76",
+      "kind": "existence",
+      "status": "failed",
+      "scope": "授权来源根内路径解析",
+      "detail": "路径不存在"
+    }
+  ],
+  "completeness": "partial",
+  "limitations": [
+    {
+      "code": "asset_missing",
+      "message": "a_win_job_0d8ec77a76 不可用，未纳入核验",
+      "block_completeness": true,
+      "affects": [
+        "a_win_job_0d8ec77a76"
+      ],
+      "notion_task": "PB-004"
+    },
+    {
+      "code": "historical_run_failed",
+      "message": "job-43e7475fd8 历史判定 fail（观测覆盖 1.1–210.0s），原结论保留，不代表整段通过",
+      "block_completeness": false,
+      "affects": [],
+      "notion_task": null
+    }
+  ]
+}

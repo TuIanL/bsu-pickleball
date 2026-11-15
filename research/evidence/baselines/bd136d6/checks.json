@@ -1,0 +1,188 @@
+{
+  "checks": [
+    {
+      "check_id": "c_a_15c5d2b304d3_existence",
+      "target_asset_id": "a_15c5d2b304d3",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_15c5d2b304d3_digest",
+      "target_asset_id": "a_15c5d2b304d3",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_42f960449bad_existence",
+      "target_asset_id": "a_42f960449bad",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_42f960449bad_digest",
+      "target_asset_id": "a_42f960449bad",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_4d3e73ddd312_existence",
+      "target_asset_id": "a_4d3e73ddd312",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_4d3e73ddd312_digest",
+      "target_asset_id": "a_4d3e73ddd312",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_6399ff9fb89e_existence",
+      "target_asset_id": "a_6399ff9fb89e",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_6399ff9fb89e_digest",
+      "target_asset_id": "a_6399ff9fb89e",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_a13afa56c259_existence",
+      "target_asset_id": "a_a13afa56c259",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_a13afa56c259_digest",
+      "target_asset_id": "a_a13afa56c259",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_existence",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_digest",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_bc957337e964_probe",
+      "target_asset_id": "a_bc957337e964",
+      "kind": "metadata_probe",
+      "status": "failed",
+      "scope": "只读容器元数据，未全解码",
+      "detail": "ffprobe 在 15 秒内未返回"
+    },
+    {
+      "check_id": "c_a_ca301b40c4b9_existence",
+      "target_asset_id": "a_ca301b40c4b9",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_ca301b40c4b9_digest",
+      "target_asset_id": "a_ca301b40c4b9",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_d7c96c6f30ba_existence",
+      "target_asset_id": "a_d7c96c6f30ba",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_d7c96c6f30ba_digest",
+      "target_asset_id": "a_d7c96c6f30ba",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_efd2005d6d3c_existence",
+      "target_asset_id": "a_efd2005d6d3c",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_efd2005d6d3c_digest",
+      "target_asset_id": "a_efd2005d6d3c",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_existence",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "existence",
+      "status": "passed",
+      "scope": "授权来源根内路径解析",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_digest",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "digest",
+      "status": "passed",
+      "scope": "全文件分块 SHA-256",
+      "detail": "已计算摘要，但无期望值可比对"
+    },
+    {
+      "check_id": "c_a_f16e5a2f015c_probe",
+      "target_asset_id": "a_f16e5a2f015c",
+      "kind": "metadata_probe",
+      "status": "failed",
+      "scope": "只读容器元数据，未全解码",
+      "detail": "ffprobe 在 15 秒内未返回"
+    },
+    {
+      "check_id": "c_a_win_job_0d8ec77a76_existence",
+      "target_asset_id": "a_win_job_0d8ec77a76",
+      "kind": "existence",
+      "status": "failed",
+      "scope": "授权来源根内路径解析",
+      "detail": "路径不存在"
+    }
+  ]
+}
